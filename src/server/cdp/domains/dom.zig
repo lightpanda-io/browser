@@ -1418,31 +1418,37 @@ test "cdp.dom: remote object ids belong to the session that minted them" {
 
     const root = bc.mainFrame() orelse unreachable;
     const html = root.document.getDocumentElement() orelse unreachable;
-    const node = try bc.node_registry.register(html.asNode());
+    const html_node = try bc.node_registry.register(html.asNode());
+    const document_node = try bc.node_registry.register(root.document.asNode());
 
-    // The auxiliary session mints an id and resolves it.
-    try ctx.processMessage(.{ .id = 20, .method = "DOM.resolveNode", .sessionId = "SID-AUX", .params = .{ .backendNodeId = node.id } });
+    // The auxiliary session mints an id for <html> and resolves it.
+    try ctx.processMessage(.{ .id = 20, .method = "DOM.resolveNode", .sessionId = "SID-AUX", .params = .{ .backendNodeId = html_node.id } });
     const aux_object_id = try sentObjectId(&ctx, 20);
     try ctx.processMessage(.{ .id = 21, .method = "DOM.requestNode", .sessionId = "SID-AUX", .params = .{ .objectId = aux_object_id } });
-    try ctx.expectSentResult(.{ .nodeId = node.id }, .{ .id = 21, .session_id = "SID-AUX" });
-    try ctx.processMessage(.{ .id = 22, .method = "DOM.describeNode", .sessionId = "SID-AUX", .params = .{ .objectId = aux_object_id } });
-    try ctx.expectSentResult(.{ .node = .{ .nodeId = node.id, .localName = "html" } }, .{ .id = 22, .session_id = "SID-AUX" });
+    try ctx.expectSentResult(.{ .nodeId = html_node.id }, .{ .id = 21, .session_id = "SID-AUX" });
 
     // The primary has minted nothing yet: the auxiliary's id is not its.
-    try ctx.processMessage(.{ .id = 23, .method = "Runtime.callFunctionOn", .sessionId = "SID-PRIMARY", .params = .{
+    try ctx.processMessage(.{ .id = 22, .method = "Runtime.callFunctionOn", .sessionId = "SID-PRIMARY", .params = .{
         .objectId = aux_object_id,
         .functionDeclaration = "function() { return this.localName; }",
         .returnByValue = true,
     } });
-    try ctx.expectSentError(-32000, "Could not find object with given id", .{ .id = 23 });
+    try ctx.expectSentError(-32000, "Could not find object with given id", .{ .id = 22 });
 
-    // Each session's own ids keep working.
-    try ctx.processMessage(.{ .id = 24, .method = "DOM.resolveNode", .sessionId = "SID-PRIMARY", .params = .{ .backendNodeId = node.id } });
-    const primary_object_id = try sentObjectId(&ctx, 24);
-    try ctx.processMessage(.{ .id = 25, .method = "DOM.requestNode", .sessionId = "SID-PRIMARY", .params = .{ .objectId = primary_object_id } });
-    try ctx.expectSentResult(.{ .nodeId = node.id }, .{ .id = 25, .session_id = "SID-PRIMARY" });
-    try ctx.processMessage(.{ .id = 26, .method = "DOM.requestNode", .sessionId = "SID-AUX", .params = .{ .objectId = aux_object_id } });
-    try ctx.expectSentResult(.{ .nodeId = node.id }, .{ .id = 26, .session_id = "SID-AUX" });
+    // Each session numbers its ids by itself, so the primary's first id may
+    // well be the same string as the auxiliary's: the session a command comes
+    // through, not the id, tells the objects apart. Mint a different node on
+    // the primary and check that each id describes its own.
+    try ctx.processMessage(.{ .id = 23, .method = "DOM.resolveNode", .sessionId = "SID-PRIMARY", .params = .{ .backendNodeId = document_node.id } });
+    const primary_object_id = try sentObjectId(&ctx, 23);
+    try ctx.processMessage(.{ .id = 24, .method = "DOM.describeNode", .sessionId = "SID-PRIMARY", .params = .{ .objectId = primary_object_id } });
+    try ctx.expectSentResult(.{ .node = .{ .nodeId = document_node.id, .nodeName = "#document" } }, .{ .id = 24, .session_id = "SID-PRIMARY" });
+    try ctx.processMessage(.{ .id = 25, .method = "DOM.describeNode", .sessionId = "SID-AUX", .params = .{ .objectId = aux_object_id } });
+    try ctx.expectSentResult(.{ .node = .{ .nodeId = html_node.id, .localName = "html" } }, .{ .id = 25, .session_id = "SID-AUX" });
+    try ctx.processMessage(.{ .id = 26, .method = "DOM.requestNode", .sessionId = "SID-PRIMARY", .params = .{ .objectId = primary_object_id } });
+    try ctx.expectSentResult(.{ .nodeId = document_node.id }, .{ .id = 26, .session_id = "SID-PRIMARY" });
+    try ctx.processMessage(.{ .id = 27, .method = "DOM.requestNode", .sessionId = "SID-AUX", .params = .{ .objectId = aux_object_id } });
+    try ctx.expectSentResult(.{ .nodeId = html_node.id }, .{ .id = 27, .session_id = "SID-AUX" });
 }
 
 // The result.object.objectId of the response to command `msg_id`.
