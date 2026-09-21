@@ -99,3 +99,33 @@
     testing.expectEqual('escaped', escaped.id);
 }
 </script>
+
+<script id="lang">
+{
+    // No lang attribute anywhere: nothing has a language, so nothing matches.
+    testing.expectEqual(0, document.querySelectorAll(':lang(en)').length);
+
+    const outer = document.createElement('div');
+    outer.innerHTML = '<p lang="en-AU"><span id="inherits"></span><span id="fr" lang="fr"></span><span id="unknown" lang=""></span></p><i id="none"></i>';
+    const p = outer.querySelector('p');
+
+    testing.expectTrue(p.matches(':lang(en)'));
+    testing.expectTrue(p.matches(':lang(en-au)'));
+    testing.expectFalse(p.matches(':lang(en-US)'));
+    testing.expectFalse(p.matches(':lang(e)'));
+
+    testing.expectTrue(outer.querySelector('#inherits').matches(':lang(en)'));
+
+    // The nearest lang attribute wins, and an empty one means unknown.
+    testing.expectFalse(outer.querySelector('#fr').matches(':lang(en)'));
+    testing.expectTrue(outer.querySelector('#fr').matches(':lang(fr)'));
+    testing.expectFalse(outer.querySelector('#unknown').matches(':lang(en)'));
+
+    testing.expectFalse(outer.querySelector('#none').matches(':lang(en)'));
+    testing.expectEqual(2, outer.querySelectorAll(':lang(en)').length);
+
+    document.body.appendChild(outer);
+    testing.expectEqual(2, document.querySelectorAll(':lang(en)').length);
+    outer.remove();
+}
+</script>
