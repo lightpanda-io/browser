@@ -2221,6 +2221,232 @@ test "server: HTTP element commands" {
     }
 }
 
+test "server: HTTP execute script" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/webdriver/elements.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+
+    try testing.expectEqual(
+        "{\"value\":{\"script\":30000,\"pageLoad\":300000,\"implicit\":0}}",
+        responseBody(try sessionCommand(&c, "GET", &session_id, "/timeouts", "")),
+    );
+
+    // the script is a function body, so `arguments` is bound and `return` works
+    try testing.expectEqual("{\"value\":5}", try executeSync(&c, &session_id, "return arguments[0] + arguments[1];", "[2,3]"));
+    try testing.expectEqual("{\"value\":\"hi\"}", try executeSync(&c, &session_id, "return 'hi';", "[]"));
+    try testing.expectEqual("{\"value\":true}", try executeSync(&c, &session_id, "return 1 < 2;", "[]"));
+
+    // a whole number isn't 2e0, and what JSON can't hold is null
+    try testing.expectEqual("{\"value\":2}", try executeSync(&c, &session_id, "return 2.0;", "[]"));
+    try testing.expectEqual("{\"value\":1.5}", try executeSync(&c, &session_id, "return 1.5;", "[]"));
+    try testing.expectEqual("{\"value\":null}", try executeSync(&c, &session_id, "return 0/0;", "[]"));
+
+    // undefined, and a body that doesn't return at all
+    try testing.expectEqual("{\"value\":null}", try executeSync(&c, &session_id, "return undefined;", "[]"));
+    try testing.expectEqual("{\"value\":null}", try executeSync(&c, &session_id, "var x = 1;", "[]"));
+
+    try testing.expectEqual(
+        "{\"value\":{\"a\":1,\"b\":[true,null,\"x\"]}}",
+        try executeSync(&c, &session_id, "return {a: 1, b: [true, null, 'x']};", "[]"),
+    );
+
+    // a function has no own enumerable properties, so it clones to {}
+    try testing.expectEqual("{\"value\":{}}", try executeSync(&c, &session_id, "return function() {};", "[]"));
+
+    // toJSON wins over the property walk
+    try testing.expectEqual(
+        "{\"value\":\"1970-01-01T00:00:00.000Z\"}",
+        try executeSync(&c, &session_id, "return new Date(0);", "[]"),
+    );
+
+    // an element comes back as a reference, and goes back in as the node
+    {
+        const body = try executeSync(&c, &session_id, "return document.getElementById('msg');", "[]");
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, body, .{});
+        const reference = parsed.object.get("value").?.object.get(http_command.element_key).?.string;
+
+        // the same node the find endpoints hand out
+        try testing.expectEqual(reference, try findElement(&c, &session_id, "css selector", "#msg"));
+        try testing.expectEqual("{\"value\":\"hello\"}", try elementCommand(&c, &session_id, reference, "/text"));
+
+        const args = try std.fmt.allocPrint(testing.arena_allocator, "[{{\"" ++ http_command.element_key ++ "\":\"{s}\"}}]", .{reference});
+        try testing.expectEqual("{\"value\":\"msg\"}", try executeSync(&c, &session_id, "return arguments[0].id;", args));
+    }
+
+    // a collection is an array of references, a non-element node is a bare {}
+    {
+        const body = try executeSync(&c, &session_id, "return document.querySelectorAll('.item');", "[]");
+        try testing.expectEqual(2, (try elementReferences(body)).len);
+        try testing.expectEqual("{\"value\":[{}]}", try executeSync(&c, &session_id, "return [document.getElementById('msg').firstChild];", "[]"));
+    }
+
+    // a reference nothing handed out
+    {
+        const res = try executeRaw(&c, &session_id, "sync", "return 1;", "[{\"" ++ http_command.element_key ++ "\":\"99\"}]");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"no such element\"") != null);
+    }
+
+    // a throw fails the command; it isn't reported inside a successful result
+    {
+        const res = try executeRaw(&c, &session_id, "sync", "throw new Error('nope');", "[]");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 Internal Server Error\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "Error: nope") != null);
+    }
+
+    {
+        const res = try executeRaw(&c, &session_id, "sync", "return (", "[]");
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "SyntaxError") != null);
+    }
+
+    // a cycle is an error, not a collapsed value like a RemoteValue's
+    {
+        const res = try executeRaw(&c, &session_id, "sync", "var a = {}; a.self = a; return a;", "[]");
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "circular reference") != null);
+    }
+
+    // a returned promise is resolved before we answer
+    try testing.expectEqual("{\"value\":7}", try executeSync(&c, &session_id, "return Promise.resolve(7);", "[]"));
+    try testing.expectEqual(
+        "{\"value\":8}",
+        try executeSync(&c, &session_id, "return new Promise(function(r) { setTimeout(function() { r(8); }, 5); });", "[]"),
+    );
+    {
+        const res = try executeRaw(&c, &session_id, "sync", "return Promise.reject(new Error('late'));", "[]");
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "Error: late") != null);
+    }
+
+    // async: the callback is the last argument, and only its first call counts
+    try testing.expectEqual("{\"value\":42}", try executeAsync(&c, &session_id, "arguments[0](42);", "[]"));
+    try testing.expectEqual(
+        "{\"value\":42}",
+        try executeAsync(&c, &session_id, "var cb = arguments[arguments.length - 1]; cb(arguments[0] * 2);", "[21]"),
+    );
+    try testing.expectEqual(
+        "{\"value\":\"late\"}",
+        try executeAsync(&c, &session_id, "var cb = arguments[0]; setTimeout(function() { cb('late'); cb('again'); }, 5);", "[]"),
+    );
+    // what an async body returns is ignored
+    try testing.expectEqual("{\"value\":null}", try executeAsync(&c, &session_id, "arguments[0](); return 9;", "[]"));
+
+    // only the first call counts; the rest are a no-op on a settled promise
+    try testing.expectEqual("{\"value\":1}", try executeAsync(&c, &session_id, "arguments[0](1); arguments[0](2);", "[]"));
+
+    // The body is promise-called, so throwing rejects it and fails the
+    // command even though the callback already ran -- and that failure must
+    // not be a *second* answer on a connection we already handed back.
+    {
+        const res = try executeRaw(&c, &session_id, "async", "arguments[0](1); throw new Error('too late');", "[]");
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "Error: too late") != null);
+    }
+    try testing.expectEqual("{\"value\":2}", try executeSync(&c, &session_id, "return 2;", "[]"));
+
+    // a throw before the callback still fails the command
+    {
+        const res = try executeRaw(&c, &session_id, "async", "throw new Error('early');", "[]");
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "Error: early") != null);
+    }
+
+    // a script that never completes is answered by the script timeout
+    {
+        try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/timeouts", "{\"script\":50}")));
+        try testing.expectEqual(
+            "{\"value\":{\"script\":50,\"pageLoad\":300000,\"implicit\":0}}",
+            responseBody(try sessionCommand(&c, "GET", &session_id, "/timeouts", "")),
+        );
+
+        const res = try executeRaw(&c, &session_id, "async", "// never calls back", "[]");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 Internal Server Error\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"script timeout\"") != null);
+
+        // a sync script whose promise never settles times out the same way
+        const promise = try executeRaw(&c, &session_id, "sync", "return new Promise(function() {});", "[]");
+        try testing.expect(std.mem.indexOf(u8, promise, "\"error\":\"script timeout\"") != null);
+
+        // A script that resolves AFTER it timed out: answering is not the
+        // promise settling, so the Pending has to outlive its own answer.
+        // Freeing it on the timeout leaves V8 holding our callbacks on a
+        // live promise and the late resolve lands in freed memory -- which a
+        // release build segfaults on, but the debug allocator here does not
+        // trap, so this covers the path rather than proving the invariant.
+        // selenium/http/demo.js in ../demo is what actually catches it.
+        const late = try executeRaw(&c, &session_id, "async", "var cb = arguments[0]; setTimeout(function() { window.__late = true; cb('way late'); }, 150);", "[]");
+        try testing.expect(std.mem.indexOf(u8, late, "\"error\":\"script timeout\"") != null);
+        lp.io.sleep(.fromMilliseconds(400), .awake) catch {};
+        // the assertion only means anything if the stale resolve actually ran
+        try testing.expectEqual("{\"value\":true}", try executeSync(&c, &session_id, "return window.__late === true;", "[]"));
+        try testing.expectEqual("{\"value\":\"alive\"}", try executeSync(&c, &session_id, "return 'alive';", "[]"));
+    }
+
+    // null turns the script timeout off
+    {
+        try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/timeouts", "{\"script\":null}")));
+        try testing.expectEqual(
+            "{\"value\":{\"script\":null,\"pageLoad\":300000,\"implicit\":0}}",
+            responseBody(try sessionCommand(&c, "GET", &session_id, "/timeouts", "")),
+        );
+        try testing.expectEqual("{\"value\":1}", try executeSync(&c, &session_id, "return 1;", "[]"));
+    }
+
+    // Navigating out from under a running script answers it. The Pending
+    // stays alive past that answer -- V8 still holds its callback -- until
+    // the frame, and with it the context, is destroyed.
+    {
+        const handle = blk: {
+            const body = responseBody(try sessionCommand(&c, "GET", &session_id, "/window", ""));
+            break :blk try testing.arena_allocator.dupe(u8, body[10..46]);
+        };
+
+        var ws = try createTestClient();
+        defer ws.deinit();
+        var path_buf: [64]u8 = undefined;
+        try ws.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+
+        // the script never calls back, so its connection parks
+        var parked = try createTestClient();
+        defer parked.deinit();
+        try writeSessionCommand(&parked, "POST", &session_id, "/execute/async", "{\"script\":\"// never calls back\",\"args\":[]}");
+        lp.io.sleep(.fromMilliseconds(50), .awake) catch {};
+
+        try ws.bidiCommand(try std.fmt.allocPrint(testing.arena_allocator,
+            \\{{"id":1,"method":"browsingContext.navigate","params":{{"context":"{s}","url":"about:blank","wait":"complete"}}}}
+        , .{handle}));
+
+        const res = try parked.httpRequest("");
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "document was unloaded") != null);
+    }
+}
+
+// POST /execute/{sync,async}: the raw response, so a test can assert on an
+// error too.
+fn executeRaw(c: *TestClient, session_id: *const [36]u8, kind: []const u8, script: []const u8, args: []const u8) ![]const u8 {
+    const arena = testing.arena_allocator;
+    const quoted = try std.json.Stringify.valueAlloc(arena, script, .{});
+    const body = try std.fmt.allocPrint(arena, "{{\"script\":{s},\"args\":{s}}}", .{ quoted, args });
+    const path = try std.fmt.allocPrint(arena, "/execute/{s}", .{kind});
+    return sessionCommand(c, "POST", session_id, path, body);
+}
+
+fn executeSync(c: *TestClient, session_id: *const [36]u8, script: []const u8, args: []const u8) ![]const u8 {
+    return responseBody(try executeRaw(c, session_id, "sync", script, args));
+}
+
+fn executeAsync(c: *TestClient, session_id: *const [36]u8, script: []const u8, args: []const u8) ![]const u8 {
+    return responseBody(try executeRaw(c, session_id, "async", script, args));
+}
+
 fn findElement(c: *TestClient, session_id: *const [36]u8, using: []const u8, value: []const u8) ![]const u8 {
     const body = try std.fmt.allocPrint(testing.arena_allocator, "{{\"using\":\"{s}\",\"value\":\"{s}\"}}", .{ using, value });
     const res = responseBody(try sessionCommand(c, "POST", session_id, "/element", body));

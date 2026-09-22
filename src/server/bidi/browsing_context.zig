@@ -32,6 +32,7 @@ const Notification = @import("../../Notification.zig");
 
 const BiDi = @import("BiDi.zig");
 const script = @import("script.zig");
+const execute = @import("execute.zig");
 const remote_value = @import("remote_value.zig");
 
 const log = lp.log;
@@ -547,6 +548,7 @@ fn onFrameCreated(ptr: *anyopaque, frame: *Frame) !void {
 fn onFrameDestroyed(ptr: *anyopaque, frame: *const Frame) !void {
     const bidi: *BiDi = @ptrCast(@alignCast(ptr));
     script.Pending.contextDestroyed(bidi, frame.js.id);
+    execute.Pending.contextDestroyed(bidi, frame.js.id);
 }
 
 fn onFrameNavigate(ptr: *anyopaque, msg: *const Notification.FrameNavigate) !void {
