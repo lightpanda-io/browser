@@ -491,15 +491,11 @@ pub fn wheel(frame: *Frame, target: *Element, x: f64, y: f64, delta_x: f64, delt
     try scrollAxis(target, .height, deltaToScroll(delta_y), owner);
 }
 
-/// One axis' delta goes to the nearest ancestor-or-self scroll container that
-/// can still move along it, and to that one alone: a wheel latches to a single
-/// scroller and a delta is never split across two, matching Chrome's
-/// FindNodeToLatch (cc/input/input_handler.cc). A container whose
-/// overscroll-behavior doesn't propagate takes the latch even when it can't
-/// move, which ends the walk. The viewport terminates it otherwise.
-///
-/// Each axis walks on its own, so a wheel may latch to a different scroller per
-/// axis, unlike an absolute position.
+/// A wheel latches to a single scroller and a delta is never split across two,
+/// as in Chrome's FindNodeToLatch (cc/input/input_handler.cc): the whole delta
+/// goes to the nearest ancestor-or-self container that can still move along
+/// this axis. One whose overscroll-behavior doesn't propagate takes the latch
+/// even when it can't move, which ends the walk.
 fn scrollAxis(target: *Element, comptime axis: Element.Axis, delta: i32, frame: *Frame) !void {
     if (delta == 0) {
         return;
@@ -515,8 +511,8 @@ fn scrollAxis(target: *Element, comptime axis: Element.Axis, delta: i32, frame: 
             .container => |c| c,
             .viewport => break,
         };
-        if (container.canScrollAxis(axis, delta, frame)) {
-            return container.scrollByAxis(axis, delta, frame);
+        if (try container.scrollByAxis(axis, delta, frame)) {
+            return;
         }
         if (container.containsOverscroll(axes, frame)) {
             return;
