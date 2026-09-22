@@ -155,7 +155,7 @@ pub fn collect(arena: Allocator, state: RenderTree.State, frame: *Frame) ![]cons
 // Any non-zero rc means nothing usable was written, so the caller has to fail
 // rather than hand back a truncated file. WriteFailed is the only error
 // jsonStringify's signature can carry, hence the log line.
-fn renderFailed(what: []const u8, rc: i32) error{WriteFailed} {
+fn renderFailed(comptime what: []const u8, rc: i32) error{WriteFailed} {
     log.err(.browser, what, .{ .reason = switch (rc) {
         RC_WRITE_REFUSED => "write refused",
         RC_INVALID => "invalid options",
