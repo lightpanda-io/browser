@@ -147,8 +147,6 @@ pub const RobotStore = struct {
 
         if (try self.insert(url, .{ .present = robots })) return;
 
-        // cannot overwrite an existing value, if it was `present`, we'd have
-        // to free the value but it might be being used.
         var discarded = robots;
         discarded.deinit(self.allocator);
     }
