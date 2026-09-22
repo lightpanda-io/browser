@@ -262,7 +262,7 @@ pub fn pushEntry(
 
     if (should_dispatch) {
         if (previous) |p| {
-            self.fireCurrentEntryChangeEvent(p, .{ .push = state.value }, frame);
+            try self.fireCurrentEntryChangeEvent(p, .{ .push = state.value }, frame);
         }
     }
 
@@ -306,13 +306,13 @@ pub fn replaceEntry(
     };
 
     if (should_dispatch) {
-        self.fireCurrentEntryChangeEvent(previous, .{ .replace = state.value }, frame);
+        try self.fireCurrentEntryChangeEvent(previous, .{ .replace = state.value }, frame);
     }
 
     return entry;
 }
 
-fn fireNavigateSuccess(self: *Navigation, frame: *Frame) void {
+fn fireNavigateSuccess(self: *Navigation, frame: *Frame) !void {
     if (!frame.hasDirectListeners(
         self.asEventTarget(),
         "navigatesuccess",
@@ -330,9 +330,7 @@ fn fireNavigateSuccess(self: *Navigation, frame: *Frame) void {
         return;
     };
 
-    self.dispatch(self._on_navigatesuccess, event, frame) catch |err| {
-        log.warn(.event, "Navigation.fireNavigateSuccess dispatch", .{ .err = err });
-    };
+    try self.dispatch(self._on_navigatesuccess, event, frame);
 }
 
 fn fireCurrentEntryChangeEvent(
@@ -340,7 +338,7 @@ fn fireCurrentEntryChangeEvent(
     previous: *NavigationHistoryEntry,
     kind: ?NavigationKind,
     frame: *Frame,
-) void {
+) !void {
     if (!frame.hasDirectListeners(
         self.asEventTarget(),
         "currententrychange",
@@ -362,9 +360,7 @@ fn fireCurrentEntryChangeEvent(
             return;
         };
 
-    self.dispatch(self._on_currententrychange, event.asEvent(), frame) catch |err| {
-        log.warn(.event, "Navigation.fireCurrentEntryChange dispatch", .{ .err = err });
-    };
+    try self.dispatch(self._on_currententrychange, event.asEvent(), frame);
 }
 
 fn resolveFinished(
@@ -372,9 +368,9 @@ fn resolveFinished(
     resolver: js.PromiseResolver,
     comptime source: []const u8,
     frame: *Frame,
-) void {
+) !void {
     resolver.resolve(source, {});
-    self.fireNavigateSuccess(frame);
+    try self.fireNavigateSuccess(frame);
 }
 
 const NavigateOptions = struct {
@@ -424,7 +420,7 @@ pub fn navigateInner(
                 committed.resolve("navigation push", {});
                 // todo: Fire navigate event
                 _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, frame, true);
-                self.resolveFinished(finished, "navigation push", frame);
+                try self.resolveFinished(finished, "navigation push", frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
@@ -436,7 +432,7 @@ pub fn navigateInner(
                 committed.resolve("navigation replace", {});
                 // todo: Fire navigate event
                 _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, frame, true);
-                self.resolveFinished(finished, "navigation replace", frame);
+                try self.resolveFinished(finished, "navigation replace", frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
@@ -449,8 +445,8 @@ pub fn navigateInner(
 
                 committed.resolve("navigation traverse", {});
                 // todo: Fire navigate event
-                self.fireCurrentEntryChangeEvent(previous, kind, frame);
-                self.resolveFinished(finished, "navigation traverse", frame);
+                try self.fireCurrentEntryChangeEvent(previous, kind, frame);
+                try self.resolveFinished(finished, "navigation traverse", frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
@@ -501,7 +497,7 @@ pub fn reload(self: *Navigation, _opts: ?ReloadOptions, frame: *Frame) !Navigati
             .source = .navigation,
             .value = state.toJson(arena.allocator()) catch return error.DataClone,
         };
-        self.fireCurrentEntryChangeEvent(previous, .reload, frame);
+        try self.fireCurrentEntryChangeEvent(previous, .reload, frame);
     }
 
     return self.navigateInner(entry._url, .reload, frame);
@@ -538,7 +534,7 @@ fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions, fra
         .value = options.state.toJson(arena.allocator()) catch return error.DataClone,
     };
 
-    self.fireCurrentEntryChangeEvent(previous, null, frame);
+    try self.fireCurrentEntryChangeEvent(previous, null, frame);
 }
 
 pub fn dispatch(self: *Navigation, func: ?js.Function.Global, event: *Event, frame: *Frame) !void {
