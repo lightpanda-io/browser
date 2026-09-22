@@ -1092,7 +1092,7 @@ const api_engines = .{
         .init_options = brave.Client.InitOptions{},
         // text_decorations=false: no <strong> markup in model-read snippets.
         .options = brave.types.SearchOptions{ .count = 10, .text_decorations = false },
-        .format = formatBraveMarkdown,
+        .collect = collectBrave,
     },
     .{
         .tag = SearchEngine.tavily,
@@ -1100,7 +1100,7 @@ const api_engines = .{
         .Client = tavily.Client,
         .init_options = tavily.Client.InitOptions{},
         .options = tavily.types.SearchOptions{ .max_results = 10 },
-        .format = formatTavilyMarkdown,
+        .collect = collectTavily,
     },
     .{
         .tag = SearchEngine.exa,
@@ -1110,7 +1110,7 @@ const api_engines = .{
         // highlights: Exa returns no snippet text unless contents is requested;
         // capped at 3 sentences since the default excerpts run long.
         .options = exa.types.SearchOptions{ .numResults = 10, .contents = .{ .highlights = .{ .numSentences = 3 } } },
-        .format = formatExaMarkdown,
+        .collect = collectExa,
     },
     .{
         .tag = SearchEngine.keenable,
@@ -1120,7 +1120,7 @@ const api_engines = .{
         // snippet_max_length is a hint the API may round up to a word
         // boundary; 500 keeps ten results within a few KB of context.
         .options = keenable.types.SearchOptions{ .max_results = 10, .snippet_max_length = 500 },
-        .format = formatKeenableMarkdown,
+        .collect = collectKeenable,
     },
 };
 
@@ -1261,54 +1261,66 @@ fn apiSearch(
     };
     defer response.deinit();
 
+    return renderResults(arena, try engine.collect(arena, response.value));
+}
+
+pub const Hit = struct {
+    title: []const u8,
+    url: []const u8,
+    snippet: []const u8,
+};
+
+pub const SearchResults = struct {
+    /// Tavily's synthesized answer; empty for the engines that have none.
+    answer: []const u8 = "",
+    hits: []const Hit = &.{},
+};
+
+fn collectTavily(arena: std.mem.Allocator, resp: tavily.types.SearchResponse) !SearchResults {
+    const hits = try arena.alloc(Hit, resp.results.len);
+    for (resp.results, hits) |r, *hit| hit.* = .{ .title = r.title, .url = r.url, .snippet = r.content };
+    return .{ .answer = resp.answer orelse "", .hits = hits };
+}
+
+fn collectBrave(arena: std.mem.Allocator, resp: brave.types.SearchResponse) !SearchResults {
+    const results: []const brave.types.Result = if (resp.web) |web| web.results else &.{};
+    const hits = try arena.alloc(Hit, results.len);
+    for (results, hits) |r, *hit| hit.* = .{ .title = r.title, .url = r.url, .snippet = r.description };
+    return .{ .hits = hits };
+}
+
+fn collectExa(arena: std.mem.Allocator, resp: exa.types.SearchResponse) !SearchResults {
+    const hits = try arena.alloc(Hit, resp.results.len);
+    for (resp.results, hits) |r, *hit| {
+        const highlights = r.highlights orelse &[_][]const u8{};
+        hit.* = .{
+            .title = r.title orelse "",
+            .url = r.url,
+            .snippet = if (highlights.len > 0) highlights[0] else "",
+        };
+    }
+    return .{ .hits = hits };
+}
+
+fn collectKeenable(arena: std.mem.Allocator, resp: keenable.types.SearchResponse) !SearchResults {
+    const hits = try arena.alloc(Hit, resp.results.len);
+    // snippet carries the page text (the wire format's always-empty
+    // `description` is deliberately not even mapped by the client).
+    for (resp.results, hits) |r, *hit| hit.* = .{ .title = r.title, .url = r.url, .snippet = r.snippet };
+    return .{ .hits = hits };
+}
+
+fn renderResults(arena: std.mem.Allocator, results: SearchResults) ToolError![]const u8 {
+    if (results.answer.len == 0 and results.hits.len == 0) return "No results.";
     var aw: std.Io.Writer.Allocating = .init(arena);
-    try engine.format(&aw.writer, response.value);
+    const w = &aw.writer;
+    renderInto(w, results) catch return ToolError.OutOfMemory;
     return aw.written();
 }
 
-fn formatTavilyMarkdown(w: *std.Io.Writer, resp: tavily.types.SearchResponse) !void {
-    const answer = resp.answer orelse "";
-    if (answer.len == 0 and resp.results.len == 0) {
-        return w.writeAll("No results.");
-    }
-    if (answer.len > 0) {
-        try w.print("**Answer:** {s}\n\n", .{answer});
-    }
-    for (resp.results, 0..) |r, i| {
-        try writeResultItem(w, i, r.title, r.url, r.content);
-    }
-}
-
-fn formatBraveMarkdown(w: *std.Io.Writer, resp: brave.types.SearchResponse) !void {
-    const results: []const brave.types.Result = if (resp.web) |web| web.results else &.{};
-    if (results.len == 0) {
-        return w.writeAll("No results.");
-    }
-    for (results, 0..) |r, i| {
-        try writeResultItem(w, i, r.title, r.url, r.description);
-    }
-}
-
-fn formatExaMarkdown(w: *std.Io.Writer, resp: exa.types.SearchResponse) !void {
-    if (resp.results.len == 0) {
-        return w.writeAll("No results.");
-    }
-    for (resp.results, 0..) |r, i| {
-        const highlights = r.highlights orelse &[_][]const u8{};
-        const snippet = if (highlights.len > 0) highlights[0] else "";
-        try writeResultItem(w, i, r.title orelse "", r.url, snippet);
-    }
-}
-
-fn formatKeenableMarkdown(w: *std.Io.Writer, resp: keenable.types.SearchResponse) !void {
-    if (resp.results.len == 0) {
-        return w.writeAll("No results.");
-    }
-    for (resp.results, 0..) |r, i| {
-        // snippet carries the page text (the wire format's always-empty
-        // `description` is deliberately not even mapped by the client).
-        try writeResultItem(w, i, r.title, r.url, r.snippet);
-    }
+fn renderInto(w: *std.Io.Writer, results: SearchResults) !void {
+    if (results.answer.len > 0) try w.print("**Answer:** {s}\n\n", .{results.answer});
+    for (results.hits, 0..) |hit, i| try writeResultItem(w, i, hit.title, hit.url, hit.snippet);
 }
 
 /// An empty title (providers default it to "") would render as `****`.
@@ -2782,7 +2794,7 @@ test "formatLpEnvNames reports empty when no names" {
     try std.testing.expectEqualStrings("No LP_* environment variables are set.", r);
 }
 
-test "formatTavilyMarkdown renders answer and results" {
+test "collectTavily renders answer and results" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -2796,9 +2808,7 @@ test "formatTavilyMarkdown renders answer and results" {
         },
     };
 
-    var aw: std.Io.Writer.Allocating = .init(aa);
-    try formatTavilyMarkdown(&aw.writer, resp);
-    const md = aw.written();
+    const md = try renderResults(aa, try collectTavily(aa, resp));
     try std.testing.expect(std.mem.indexOf(u8, md, "**Answer:** Paris") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "1. **Paris - Wikipedia**") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
@@ -2806,17 +2816,15 @@ test "formatTavilyMarkdown renders answer and results" {
     try std.testing.expect(std.mem.indexOf(u8, md, "2. **France**") != null);
 }
 
-test "formatTavilyMarkdown handles empty results" {
+test "collectTavily handles empty results" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
-    var aw: std.Io.Writer.Allocating = .init(aa);
-    try formatTavilyMarkdown(&aw.writer, .{});
-    try std.testing.expectEqualStrings("No results.", aw.written());
+    try std.testing.expectEqualStrings("No results.", try renderResults(aa, try collectTavily(aa, .{})));
 }
 
-test "formatBraveMarkdown renders web results" {
+test "collectBrave renders web results" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -2830,30 +2838,24 @@ test "formatBraveMarkdown renders web results" {
         },
     };
 
-    var aw: std.Io.Writer.Allocating = .init(aa);
-    try formatBraveMarkdown(&aw.writer, resp);
-    const md = aw.written();
+    const md = try renderResults(aa, try collectBrave(aa, resp));
     try std.testing.expect(std.mem.indexOf(u8, md, "1. **Paris - Wikipedia**") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "Paris is the capital of France.") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "2. **France**") != null);
 }
 
-test "formatBraveMarkdown handles empty results" {
+test "collectBrave handles empty results" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
-    var no_web: std.Io.Writer.Allocating = .init(aa);
-    try formatBraveMarkdown(&no_web.writer, .{});
-    try std.testing.expectEqualStrings("No results.", no_web.written());
+    try std.testing.expectEqualStrings("No results.", try renderResults(aa, try collectBrave(aa, .{})));
 
-    var empty_web: std.Io.Writer.Allocating = .init(aa);
-    try formatBraveMarkdown(&empty_web.writer, .{ .web = .{} });
-    try std.testing.expectEqualStrings("No results.", empty_web.written());
+    try std.testing.expectEqualStrings("No results.", try renderResults(aa, try collectBrave(aa, .{ .web = .{} })));
 }
 
-test "formatKeenableMarkdown reads snippet" {
+test "collectKeenable reads snippet" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -2866,9 +2868,7 @@ test "formatKeenableMarkdown reads snippet" {
         },
     };
 
-    var aw: std.Io.Writer.Allocating = .init(aa);
-    try formatKeenableMarkdown(&aw.writer, resp);
-    const md = aw.written();
+    const md = try renderResults(aa, try collectKeenable(aa, resp));
     try std.testing.expect(std.mem.indexOf(u8, md, "1. **Zig (programming language)**") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "Zig is a system programming language.") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "2. **Zig guide**") != null);
@@ -2883,15 +2883,14 @@ test "writeResultItem uses the URL as title when the title is empty" {
     try std.testing.expectEqualStrings("1. **https://example.org/x.pdf** — https://example.org/x.pdf\n   snippet\n\n", aw.written());
 }
 
-test "formatKeenableMarkdown handles empty results" {
+test "collectKeenable handles empty results" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    var aw: std.Io.Writer.Allocating = .init(arena.allocator());
-    try formatKeenableMarkdown(&aw.writer, .{});
-    try std.testing.expectEqualStrings("No results.", aw.written());
+    const aa = arena.allocator();
+    try std.testing.expectEqualStrings("No results.", try renderResults(aa, try collectKeenable(aa, .{})));
 }
 
-test "formatBraveMarkdown flattens newlines in titles and descriptions" {
+test "collectBrave flattens newlines in titles and descriptions" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -2904,9 +2903,10 @@ test "formatBraveMarkdown flattens newlines in titles and descriptions" {
         },
     };
 
-    var aw: std.Io.Writer.Allocating = .init(aa);
-    try formatBraveMarkdown(&aw.writer, resp);
-    try std.testing.expectEqualStrings("1. **Multi line title** — https://example.org\n   line one line two\n\n", aw.written());
+    try std.testing.expectEqualStrings(
+        "1. **Multi line title** — https://example.org\n   line one line two\n\n",
+        try renderResults(aa, try collectBrave(aa, resp)),
+    );
 }
 
 test "isPathSafe: relative paths without traversal are accepted" {
