@@ -1303,12 +1303,6 @@ fn foldDeclarations(block: []const u8, customs: ?*CustomSink) !TrackedProperties
     return slots.props();
 }
 
-// The `<x> [<y>]` shorthands the cascade expands into the tracked longhands.
-const axis_shorthands = [_]struct { name: []const u8, x: []const u8, y: []const u8 }{
-    .{ .name = "overflow", .x = "overflow-x", .y = "overflow-y" },
-    .{ .name = "overscroll-behavior", .x = "overscroll-behavior-x", .y = "overscroll-behavior-y" },
-};
-
 /// One block's winning value per tracked property, folded in declaration
 /// order.
 const Slots = struct {
@@ -1332,13 +1326,11 @@ const Slots = struct {
     slots: [property_names.len]Slot = @splat(.{}),
 
     fn apply(self: *Slots, name: []const u8, value: []const u8, important: bool) void {
-        for (axis_shorthands) |shorthand| {
-            if (std.ascii.eqlIgnoreCase(name, shorthand.name)) {
-                const values = CssParser.splitAxisPair(value) orelse return;
-                self.apply(shorthand.x, values.x, important);
-                self.apply(shorthand.y, values.y, important);
-                return;
-            }
+        if (CssParser.axisShorthand(name)) |shorthand| {
+            const values = CssParser.splitAxisPair(value) orelse return;
+            self.apply(shorthand.x, values.x, important);
+            self.apply(shorthand.y, values.y, important);
+            return;
         }
         for (property_names, &self.slots) |tracked, *slot| {
             if (std.ascii.eqlIgnoreCase(name, tracked)) {
