@@ -1181,6 +1181,35 @@ pub fn remove(self: *Element, frame: *Frame) void {
     frame.removeNode(parent, node, .{ .reconnect_to = null });
 }
 
+// SVG 2 <a> links via `href`; xlink:href is the deprecated SVG 1.1 spelling.
+pub fn svgAnchorHref(self: *Element) ?[]const u8 {
+    return self.getAttributeInterned("href") orelse self.getAttributeSafe(comptime .wrap("xlink:href"));
+}
+
+pub fn isSvgLink(self: *Element) bool {
+    return self.is(Svg.Graphics.A) != null and self.svgAnchorHref() != null;
+}
+
+// An editing host takes focus like a form control does.
+pub fn isEditingHost(self: *Element) bool {
+    const value = self.getAttributeSafe(.wrap("contenteditable")) orelse return false;
+    return std.ascii.eqlIgnoreCase(value, "false") == false;
+}
+
+/// Focusable without a tabindex attribute.
+fn isNativelyFocusable(self: *Element) bool {
+    if (self.is(Html) == null) {
+        return self.isSvgLink();
+    }
+
+    return switch (self.getTag()) {
+        .button, .select, .textarea, .iframe => true,
+        .input => self.as(Html.Input)._input_type != .hidden,
+        .anchor, .area => self.getAttributeInterned("href") != null,
+        else => false,
+    };
+}
+
 // The tabindex of a focusable area, or null when the element can't take focus
 // at all. A negative value is still focusable, just skipped by sequential
 // focus navigation.
@@ -1189,20 +1218,19 @@ pub fn focusTabIndex(self: *Element) ?i32 {
     if (self.isDisabled()) {
         return null;
     }
-    if (self.is(Html) == null) {
-        return null;
-    }
 
     if (self.getAttributeInterned("tabindex")) |attr| {
-        return Html.parseInteger(attr) orelse 0;
+        if (Html.parseInteger(attr)) |tab_index| {
+            return tab_index;
+        } else {
+            // can't be parsed is treated the same as no tabindex
+        }
     }
 
-    return switch (self.getTag()) {
-        .button, .select, .textarea, .iframe => 0,
-        .input => if (self.as(Html.Input)._input_type != .hidden) 0 else null,
-        .anchor, .area => if (self.getAttributeInterned("href") != null) 0 else null,
-        else => null,
-    };
+    if (self.isNativelyFocusable() or self.isEditingHost()) {
+        return 0;
+    }
+    return null;
 }
 
 // A focusable area that can take focus right now: connected and being rendered.
@@ -1229,9 +1257,7 @@ pub fn focus(self: *Element, frame: *Frame) !void {
         return;
     }
 
-    // Per HTML spec §6.4.4, an element must be "being rendered" (not
-    // display:none on self or any ancestor) to be focusable.
-    if (!self.isVisible(owner)) {
+    if (self.isFocusable(owner) == false) {
         return;
     }
 
