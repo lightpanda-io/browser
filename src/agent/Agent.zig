@@ -159,6 +159,9 @@ model: []u8,
 /// Per-turn reasoning budget for LLM turns. Mutable at runtime via `/effort`.
 effort: Config.Effort,
 script_file: ?[]const u8,
+/// `--url`: opened before the first turn, in every mode. A `--task` run that
+/// starts on its page does not spend a model turn navigating to it.
+start_url: ?[:0]const u8,
 one_shot_task: ?[]const u8,
 one_shot_save: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
@@ -333,6 +336,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .effort = effort,
         .stream_enabled = stream_enabled,
         .script_file = opts.script_file,
+        .start_url = opts.url,
         .one_shot_task = opts.task,
         .one_shot_save = opts.save,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
@@ -513,6 +517,12 @@ const TurnInput = struct {
 
 /// Returns true on success.
 pub fn run(self: *Agent) bool {
+    if (self.start_url) |url| {
+        if (self.gotoStart(url, self.one_shot_save != null)) |err| {
+            self.terminal.printError("could not open {s}: {s}", .{ url, browser_tools.errorMessage(err) });
+            return false;
+        }
+    }
     if (self.one_shot_task) |task| {
         const saving = self.one_shot_save != null;
         const ok = self.runTurn(.{
@@ -540,6 +550,22 @@ pub fn run(self: *Agent) bool {
 /// `$usage` prefix. Stable key=value format:
 ///   $usage prompt=N completion=N total=N cached=N cache_creation=N
 /// Fields emit 0 when the provider didn't report them.
+/// Goes through the tool layer so a failed start reads like any other tool
+/// failure.
+fn gotoStart(self: *Agent, url: [:0]const u8, record: bool) ?browser_tools.ToolError {
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var object: std.json.ObjectMap = .empty;
+    object.put(a, "url", .{ .string = url }) catch return browser_tools.ToolError.OutOfMemory;
+    const args: std.json.Value = .{ .object = object };
+    _ = browser_tools.call(a, self.ts.session, &self.ts.registry, "goto", args, .{}) catch |err| return err;
+    // The opening navigation is the first line of any replayable script.
+    if (record) self.recordSaveCommand(Command.fromToolCall(.goto, args));
+    return null;
+}
+
 fn printUsageSummary(self: *Agent) void {
     const u = self.total_usage;
     std.debug.print(

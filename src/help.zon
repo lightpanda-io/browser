@@ -309,6 +309,10 @@
     \\           One-shot mode: run a single user turn, print the final answer
     \\           to stdout, and exit. Conflicts with the positional script. With
     \\           --save, the answer is suppressed and a script is written instead.
+    \\  --url <URL>
+    \\          Open this page before the first turn. With --task it saves the
+    \\          model a turn spent navigating; with --save the opening
+    \\          navigation is the first line of the script.
     \\  --verbosity <LEVEL>
     \\          Stderr chatter level. Default: high when --task captures stderr
     \\          to a pipe or file; low otherwise. low/medium also raise
