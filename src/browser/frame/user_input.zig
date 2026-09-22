@@ -509,7 +509,7 @@ fn deltaToScroll(d: f64) i32 {
 fn hasClickActivationBehavior(node: *Node) bool {
     const element = node.is(Element) orelse return false;
 
-    const html_element = element.is(Element.Html) orelse return isSvgLink(element);
+    const html_element = element.is(Element.Html) orelse return element.isSvgLink();
 
     return switch (html_element._type) {
         .anchor => element.getAttributeInterned("href") != null,
@@ -519,36 +519,11 @@ fn hasClickActivationBehavior(node: *Node) bool {
     };
 }
 
-// SVG 2 <a> links via `href`; xlink:href is the deprecated SVG 1.1 spelling.
-fn svgAnchorHref(element: *Element) ?[]const u8 {
-    return element.getAttributeInterned("href") orelse element.getAttributeSafe(comptime .wrap("xlink:href"));
-}
-
-fn isSvgLink(element: *Element) bool {
-    return element.is(Element.Svg.Graphics.A) != null and svgAnchorHref(element) != null;
-}
-
-/// Focusable without a tabindex attribute.
-fn isNativelyFocusable(el: *Element) bool {
-    if (el.is(Element.Html) == null) {
-        return isSvgLink(el);
-    }
-    return switch (el.getTag()) {
-        .button, .select, .textarea, .iframe => true,
-        .input => el.as(Element.Html.Input)._input_type != .hidden,
-        .anchor, .area => el.getAttributeInterned("href") != null,
-        else => false,
-    };
-}
-
 // Clicks on editable content are for editing: they don't activate the
 // element or any enclosing link.
-// "contenteditable" is 15 bytes — past the comptime SSO limit — so the
-// String wrap runs at runtime, mirroring Html.getIsContentEditable.
 fn isEditingHost(node: *Node) bool {
     const element = node.is(Element) orelse return false;
-    const value = element.getAttributeSafe(.wrap("contenteditable")) orelse return false;
-    return std.ascii.eqlIgnoreCase(value, "false") == false;
+    return element.isEditingHost();
 }
 
 fn outermostEditingHost(target: *Element) ?*Element {
@@ -570,17 +545,6 @@ fn outermostEditingHost(target: *Element) ?*Element {
     return host.is(Element);
 }
 
-/// Unlike sequential focus, a negative tabindex is still mouse-focusable, and
-/// an unparsable one counts as absent (HTML §6.6.3), not as "not focusable".
-fn isMouseFocusable(el: *Element) bool {
-    if (el.isDisabled()) return false;
-
-    if (el.getAttributeInterned("tabindex")) |attr| {
-        if (Element.Html.parseInteger(attr) != null) return true;
-    }
-    return isNativelyFocusable(el);
-}
-
 /// Mousedown default action. A mousedown outside any focusable element moves
 /// focus to the body.
 pub fn focusForMouseDown(frame: *Frame, target: *Element) !void {
@@ -592,7 +556,9 @@ pub fn focusForMouseDown(frame: *Frame, target: *Element) !void {
     var node: ?*Node = target.asNode();
     while (node) |n| : (node = n._parent) {
         const el = n.is(Element) orelse continue;
-        if (isMouseFocusable(el)) {
+        // Unlike sequential focus navigation, a negative tabindex is still
+        // mouse-focusable, so any focusable area qualifies.
+        if (el.focusTabIndex() != null) {
             try el.focus(frame);
             return;
         }
@@ -690,7 +656,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
     const element = target.is(Element) orelse return;
 
     if (element.is(Element.Svg.Graphics.A) != null) {
-        const href = svgAnchorHref(element) orelse return;
+        const href = element.svgAnchorHref() orelse return;
         const target_name = element.getAttributeInterned("target") orelse "";
         return followLink(frame, target, element, href, target_name);
     }
