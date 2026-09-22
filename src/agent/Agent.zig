@@ -159,8 +159,8 @@ model: []u8,
 /// Per-turn reasoning budget for LLM turns. Mutable at runtime via `/effort`.
 effort: Config.Effort,
 script_file: ?[]const u8,
-/// `--url`: opened before the first turn, in every mode. A `--task` run that
-/// starts on its page does not spend a model turn navigating to it.
+/// `--url`: opened before the first turn, so a `--task` run does not spend a
+/// model turn navigating to its own start page.
 start_url: ?[:0]const u8,
 one_shot_task: ?[]const u8,
 one_shot_save: ?[]const u8,
@@ -172,7 +172,6 @@ http_interrupt: zenai.http.Interrupt = .{},
 synthetic_tool_call_id: u32 = 0,
 /// Per-turn CSS selector for each tool call the model made, in call order, so
 /// `--save` can record a call that addressed its element by `backendNodeId`.
-/// Only filled while `capturing_for_save`.
 save_selectors: std.ArrayListUnmanaged(?[]const u8) = .empty,
 capturing_for_save: bool = false,
 /// Aggregate Anthropic/OpenAI/Gemini token usage across every model call.
@@ -293,9 +292,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const verbosity = settings.resolveVerbosity(opts, remembered);
     const stream_enabled = settings.resolveStream(remembered);
     browser_tools.search_engine = opts.search_engine orelse settings.resolveSearchEngine(remembered);
-    // Only the REPL's `/searchEngine` used to say this. A keyless engine that
-    // has hit its cap fails every search, and without a word here that reads
-    // as a bad agent rather than a missing key.
+    // A keyless engine over its cap fails every search; silence reads as a bad
+    // agent rather than a missing key.
     if (browser_tools.searchKeyStatus(browser_tools.search_engine)) |key| switch (key.state) {
         .set => {},
         .keyless => log.info(.app, "keyless search endpoint", .{ .env_var = key.env_var, .limit = "rate-limited per client IP" }),
@@ -518,10 +516,10 @@ const TurnInput = struct {
 /// Returns true on success.
 pub fn run(self: *Agent) bool {
     if (self.start_url) |url| {
-        if (self.gotoStart(url, self.one_shot_save != null)) |err| {
+        self.gotoStart(url, self.one_shot_save != null) catch |err| {
             self.terminal.printError("could not open {s}: {s}", .{ url, browser_tools.errorMessage(err) });
             return false;
-        }
+        };
     }
     if (self.one_shot_task) |task| {
         const saving = self.one_shot_save != null;
@@ -545,27 +543,23 @@ pub fn run(self: *Agent) bool {
     return true;
 }
 
-/// Print single-line cumulative token usage to stderr, so wrappers driving
-/// `lightpanda agent --task ...` can capture per-task cost by `grep`-ing the
-/// `$usage` prefix. Stable key=value format:
-///   $usage prompt=N completion=N total=N cached=N cache_creation=N
-/// Fields emit 0 when the provider didn't report them.
-/// Goes through the tool layer so a failed start reads like any other tool
-/// failure.
-fn gotoStart(self: *Agent, url: [:0]const u8, record: bool) ?browser_tools.ToolError {
+fn gotoStart(self: *Agent, url: [:0]const u8, record: bool) browser_tools.ToolError!void {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
     var object: std.json.ObjectMap = .empty;
-    object.put(a, "url", .{ .string = url }) catch return browser_tools.ToolError.OutOfMemory;
+    try object.put(a, "url", .{ .string = url });
     const args: std.json.Value = .{ .object = object };
-    _ = browser_tools.call(a, self.ts.session, &self.ts.registry, "goto", args, .{}) catch |err| return err;
-    // The opening navigation is the first line of any replayable script.
+    _ = try browser_tools.call(a, self.ts.session, &self.ts.registry, "goto", args, .{});
     if (record) self.recordSaveCommand(Command.fromToolCall(.goto, args));
-    return null;
 }
 
+/// Print single-line cumulative token usage to stderr, so wrappers driving
+/// `lightpanda agent --task ...` can capture per-task cost by `grep`-ing the
+/// `$usage` prefix. Stable key=value format:
+///   $usage prompt=N completion=N total=N cached=N cache_creation=N
+/// Fields emit 0 when the provider didn't report them.
 fn printUsageSummary(self: *Agent) void {
     const u = self.total_usage;
     std.debug.print(
@@ -1311,9 +1305,8 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
         return;
     }
 
-    // `stripCodeFence` accepts a block with no closing fence, so a script cut
-    // off mid-statement is indistinguishable from a complete one once it is on
-    // disk. Refuse rather than save something that will not replay.
+    // `stripCodeFence` accepts an unclosed block, so a truncated script is
+    // indistinguishable from a complete one once it is on disk.
     if (result.finish_reason == .max_tokens) {
         return self.abortSave(baseline, "the model ran out of output tokens mid-script");
     }
@@ -1376,8 +1369,7 @@ fn logSaveBufferError(self: *Agent, err: anyerror) void {
 }
 
 /// Swap a call's ephemeral `backendNodeId` for the selector the tool layer
-/// resolved, so the call can be replayed. Returns `args` untouched when there
-/// is nothing to swap.
+/// resolved, so the call can be replayed.
 fn withSelector(arena: std.mem.Allocator, args: ?std.json.Value, selector: ?[]const u8) ?std.json.Value {
     const sel = selector orelse return args;
     const original = args orelse return args;
@@ -1797,9 +1789,6 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             const args = browser_tools.normalizeArgKeys(ca, tool, tc.arguments) catch tc.arguments;
             // Fall back to the navigation a read tool performed, so a
             // markdown/tree-driven turn isn't lost from `/save`.
-            // A call that named its element by id is unreplayable as-is; the
-            // tool layer resolved a selector for it while the node still
-            // existed.
             const replayable = withSelector(ca, args, if (i < self.save_selectors.items.len) self.save_selectors.items[i] else null);
             const cmd = Command.fromToolCall(tool, replayable);
             const to_record = if (cmd.isRecorded())
@@ -1965,8 +1954,10 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     };
     if (self.capturing_for_save) {
         // One entry per call, errors included, so the index lines up with
-        // `RunToolsResult.tool_calls_made`.
-        const kept = if (selector) |sel| self.allocator.dupe(u8, sel) catch null else null;
+        // `RunToolsResult.tool_calls_made`. The conversation arena outlives the
+        // turn that reads them; `allocator` here is zenai's per-call arena.
+        const ca = self.conversation.arena.allocator();
+        const kept = if (selector) |sel| ca.dupe(u8, sel) catch null else null;
         self.save_selectors.append(self.allocator, kept) catch {};
     }
 

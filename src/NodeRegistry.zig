@@ -205,6 +205,5 @@ test "NodeRegistry: reset never reuses an id" {
 
     registry.reset();
     try testing.expectEqual(null, registry.lookup_by_id.get(first_id));
-    // A stale id stays a miss rather than resolving to whatever registers next.
     try testing.expect((try registry.register(dom_node)).id != first_id);
 }

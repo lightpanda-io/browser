@@ -69,7 +69,7 @@ pub fn init(arena: std.mem.Allocator, node: *Node, registry: *NodeRegistry, fram
 /// Walk the pruned tree with `visitor`: `visit(*Node, *NodeData) !bool`
 /// returns whether to descend into the children, `leave() !void` closes a
 /// visited node.
-pub fn visitAll(self: @This(), visitor: anytype) error{WriteFailed}!void {
+fn visitAll(self: @This(), visitor: anytype) error{WriteFailed}!void {
     var xpath_buffer: std.ArrayList(u8) = .empty;
     const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
         log.err(.app, "listener map failed", .{ .err = err });

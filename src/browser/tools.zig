@@ -825,9 +825,8 @@ pub const ToolResult = struct {
     is_error: bool = false,
     /// Only set when the caller passed `CallOpts.inline_image`.
     image: ?lp.screenshot.Prepared = null,
-    /// Only set when the caller passed `CallOpts.record` and the call named its
-    /// element by `backendNodeId`. Resolved before the action runs, because a
-    /// navigation takes the node with it.
+    /// Resolved before the action runs, because a navigation takes the node
+    /// with it.
     selector: ?[]const u8 = null,
 };
 
@@ -860,10 +859,8 @@ const NodeAndPage = struct { node: *DOMNode, page: *lp.Frame, target: ActionTarg
 pub const CallOpts = struct {
     /// The caller can hand an image to a model.
     inline_image: bool = false,
-    /// The caller is recording for `--save`/`/save`. A call that addresses its
-    /// element by `backendNodeId` gets `ToolResult.selector` filled in, since
-    /// a registry id means nothing in a later session and the node may be gone
-    /// by the time the caller wants to record it.
+    /// Fill in `ToolResult.selector`: a registry id means nothing in a later
+    /// session, so `--save` cannot replay a call that used one.
     record: bool = false,
 };
 
@@ -897,8 +894,14 @@ pub fn call(
     };
     const substituted = try substituteStringArgs(arena, tool, normalized);
 
-    // Before dispatch: after a navigation the node is gone.
-    const selector = if (opts.record) selectorForArgs(arena, session, registry, substituted) else null;
+    // Before dispatch, because a navigation takes the node with it. Gated on
+    // `isRecorded` because `SelectorPath.build` is the expensive part of a tool
+    // call and the read-only tools that take a `backendNodeId` -- tree,
+    // markdown, html, nodeDetails -- would only have it thrown away.
+    const selector = if (opts.record and tool.isRecorded())
+        selectorForArgs(arena, session, registry, substituted)
+    else
+        null;
 
     var result = dispatch(arena, session, registry, tool, substituted, opts) catch |err| {
         if (err == error.NavigationFailed) {
@@ -912,8 +915,7 @@ pub fn call(
 }
 
 /// The CSS selector for a call's `backendNodeId`, so the call can be recorded
-/// in a form that still resolves in a later session. Null when the arguments
-/// name no node, already carry a selector, or the node cannot be named.
+/// in a form that still resolves in a later session.
 fn selectorForArgs(
     arena: std.mem.Allocator,
     session: *lp.Session,
@@ -1168,13 +1170,24 @@ const KeyStatus = struct {
     state: enum { set, keyless, missing },
 };
 
-/// `null` for `.auto`, which has no key of its own.
+fn keyStatusOf(comptime e: anytype) KeyStatus {
+    return .{
+        .env_var = e.env_var,
+        .state = if (engineKey(e)) |key| (if (key != null) .set else .keyless) else |_| .missing,
+    };
+}
+
+/// For `.auto`, the rung the cascade would actually land on -- it has no key of
+/// its own, but "which engine is about to serve, and on what terms" is the
+/// question worth answering, and `.auto` is the default.
 pub fn searchKeyStatus(engine: SearchEngine) ?KeyStatus {
     inline for (api_engines) |e| {
-        if (engine == e.tag) return .{
-            .env_var = e.env_var,
-            .state = if (engineKey(e)) |key| (if (key != null) .set else .keyless) else |_| .missing,
-        };
+        if (engine == e.tag) return keyStatusOf(e);
+    }
+    if (engine != .auto) return null;
+    inline for (api_engines) |e| {
+        const status = keyStatusOf(e);
+        if (status.state != .missing) return status;
     }
     return null;
 }
@@ -1204,8 +1217,7 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
                     }
                 } else |_| {}
             }
-            // The last rung's reason, not a generic one: every engine having
-            // failed is usually one cause, and the model can act on it.
+            // The last engine's reason, not a generic one -- the model can act on it.
             return searchFailed(arena, last_label, last_err.?, last_detail);
         },
         inline else => |tag| {
@@ -1230,34 +1242,33 @@ fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, timeout_ms
     return .{ .text = markdown_ };
 }
 
-/// What the provider said, duped out of the client before `deinit` takes it.
-/// Without this the status and body survive only in a log line, and every
-/// failure reaches the model as the word `InternalError`.
+/// Duped out of the client before `deinit` takes it; otherwise the model sees
+/// only the error name.
 const Failure = struct {
     status: ?u10 = null,
     message: []const u8 = "",
 };
 
-/// A rate limit and a bad key need different reactions, so the model is told
-/// which it hit rather than just that the search failed.
 fn searchFailed(arena: std.mem.Allocator, label: []const u8, err: anyerror, detail: Failure) ToolError!ToolResult {
     var aw: std.Io.Writer.Allocating = .init(arena);
-    const w = &aw.writer;
-    w.print("{s} search failed: {s}", .{ label, @errorName(err) }) catch return ToolError.OutOfMemory;
-    if (detail.status) |status| w.print(" (HTTP {d})", .{status}) catch return ToolError.OutOfMemory;
-    if (detail.message.len > 0) {
-        w.writeAll(": ") catch return ToolError.OutOfMemory;
-        writeSingleLine(w, detail.message) catch return ToolError.OutOfMemory;
-    }
-    if (detail.status == 429) {
-        w.writeAll(". This engine is rate-limited right now; wait before retrying, or read the answer from a page instead.") catch
-            return ToolError.OutOfMemory;
-    }
+    writeFailure(&aw.writer, label, err, detail) catch return ToolError.OutOfMemory;
     return .{ .text = aw.written(), .is_error = true };
 }
 
-/// `arena` owns the returned slice. `detail` is filled on a non-2xx so the
-/// caller can say what actually happened.
+fn writeFailure(w: *std.Io.Writer, label: []const u8, err: anyerror, detail: Failure) !void {
+    try w.print("{s} search failed: {s}", .{ label, @errorName(err) });
+    if (detail.status) |status| try w.print(" (HTTP {d})", .{status});
+    if (detail.message.len > 0) {
+        try w.writeAll(": ");
+        try writeSingleLine(w, detail.message);
+    }
+    // The one failure where the right move is not "try another query".
+    if (detail.status == 429) {
+        try w.writeAll(". This engine is rate-limited right now; wait before retrying, or read the answer from a page instead.");
+    }
+}
+
+/// `arena` owns the returned slice.
 fn apiSearch(
     comptime engine: anytype,
     arena: std.mem.Allocator,
@@ -1285,7 +1296,6 @@ fn apiSearch(
                 .status = status,
                 .body = client.last_error.body,
             });
-            // `client.last_error` dies with the client on the deferred deinit.
             detail.* = .{
                 .status = status,
                 .message = if (client.last_error.body) |b| (arena.dupe(u8, b) catch "") else "",
@@ -1310,17 +1320,21 @@ pub const SearchResults = struct {
     hits: []const Hit = &.{},
 };
 
+/// The engines agree on title and url and disagree only on which field holds
+/// the snippet.
+fn collectHits(arena: std.mem.Allocator, results: anytype, comptime snippet: []const u8) ![]Hit {
+    const hits = try arena.alloc(Hit, results.len);
+    for (results, hits) |r, *hit| hit.* = .{ .title = r.title, .url = r.url, .snippet = @field(r, snippet) };
+    return hits;
+}
+
 fn collectTavily(arena: std.mem.Allocator, resp: tavily.types.SearchResponse) !SearchResults {
-    const hits = try arena.alloc(Hit, resp.results.len);
-    for (resp.results, hits) |r, *hit| hit.* = .{ .title = r.title, .url = r.url, .snippet = r.content };
-    return .{ .answer = resp.answer orelse "", .hits = hits };
+    return .{ .answer = resp.answer orelse "", .hits = try collectHits(arena, resp.results, "content") };
 }
 
 fn collectBrave(arena: std.mem.Allocator, resp: brave.types.SearchResponse) !SearchResults {
     const results: []const brave.types.Result = if (resp.web) |web| web.results else &.{};
-    const hits = try arena.alloc(Hit, results.len);
-    for (results, hits) |r, *hit| hit.* = .{ .title = r.title, .url = r.url, .snippet = r.description };
-    return .{ .hits = hits };
+    return .{ .hits = try collectHits(arena, results, "description") };
 }
 
 fn collectExa(arena: std.mem.Allocator, resp: exa.types.SearchResponse) !SearchResults {
@@ -1337,22 +1351,19 @@ fn collectExa(arena: std.mem.Allocator, resp: exa.types.SearchResponse) !SearchR
 }
 
 fn collectKeenable(arena: std.mem.Allocator, resp: keenable.types.SearchResponse) !SearchResults {
-    const hits = try arena.alloc(Hit, resp.results.len);
-    // snippet carries the page text (the wire format's always-empty
-    // `description` is deliberately not even mapped by the client).
-    for (resp.results, hits) |r, *hit| hit.* = .{ .title = r.title, .url = r.url, .snippet = r.snippet };
-    return .{ .hits = hits };
+    // `snippet` carries the page text; the wire format's always-empty
+    // `description` is deliberately not even mapped by the client.
+    return .{ .hits = try collectHits(arena, resp.results, "snippet") };
 }
 
 fn renderResults(arena: std.mem.Allocator, results: SearchResults) ToolError![]const u8 {
     if (results.answer.len == 0 and results.hits.len == 0) return "No results.";
     var aw: std.Io.Writer.Allocating = .init(arena);
-    const w = &aw.writer;
-    renderInto(w, results) catch return ToolError.OutOfMemory;
+    writeResults(&aw.writer, results) catch return ToolError.OutOfMemory;
     return aw.written();
 }
 
-fn renderInto(w: *std.Io.Writer, results: SearchResults) !void {
+fn writeResults(w: *std.Io.Writer, results: SearchResults) !void {
     if (results.answer.len > 0) try w.print("**Answer:** {s}\n\n", .{results.answer});
     for (results.hits, 0..) |hit, i| try writeResultItem(w, i, hit.title, hit.url, hit.snippet);
 }
@@ -2828,7 +2839,7 @@ test "formatLpEnvNames reports empty when no names" {
     try std.testing.expectEqualStrings("No LP_* environment variables are set.", r);
 }
 
-test "collectTavily renders answer and results" {
+test "tavily results render as markdown" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -2850,7 +2861,7 @@ test "collectTavily renders answer and results" {
     try std.testing.expect(std.mem.indexOf(u8, md, "2. **France**") != null);
 }
 
-test "collectTavily handles empty results" {
+test "tavily: no results render as a notice" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -2858,7 +2869,7 @@ test "collectTavily handles empty results" {
     try std.testing.expectEqualStrings("No results.", try renderResults(aa, try collectTavily(aa, .{})));
 }
 
-test "collectBrave renders web results" {
+test "brave results render as markdown" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -2879,7 +2890,7 @@ test "collectBrave renders web results" {
     try std.testing.expect(std.mem.indexOf(u8, md, "2. **France**") != null);
 }
 
-test "collectBrave handles empty results" {
+test "brave: no results render as a notice" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -2889,7 +2900,7 @@ test "collectBrave handles empty results" {
     try std.testing.expectEqualStrings("No results.", try renderResults(aa, try collectBrave(aa, .{ .web = .{} })));
 }
 
-test "collectKeenable reads snippet" {
+test "keenable results render the snippet as the body" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -2917,14 +2928,14 @@ test "writeResultItem uses the URL as title when the title is empty" {
     try std.testing.expectEqualStrings("1. **https://example.org/x.pdf** — https://example.org/x.pdf\n   snippet\n\n", aw.written());
 }
 
-test "collectKeenable handles empty results" {
+test "keenable: no results render as a notice" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
     try std.testing.expectEqualStrings("No results.", try renderResults(aa, try collectKeenable(aa, .{})));
 }
 
-test "collectBrave flattens newlines in titles and descriptions" {
+test "brave titles and descriptions render on one line" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -2953,12 +2964,9 @@ test "searchFailed: a rate limit says so, a bare failure stays short" {
         .message = "Public API hourly limit reached.\nWait 2 minutes to continue.",
     });
     try std.testing.expect(limited.is_error);
-    // The status and the provider's own words, which previously reached the
-    // model only as the word "ApiError".
     try std.testing.expect(std.mem.indexOf(u8, limited.text, "(HTTP 429)") != null);
     try std.testing.expect(std.mem.indexOf(u8, limited.text, "Public API hourly limit reached.") != null);
     try std.testing.expect(std.mem.indexOf(u8, limited.text, "rate-limited right now") != null);
-    // Flattened: a newline would break the numbered-list markdown around it.
     try std.testing.expect(std.mem.indexOf(u8, limited.text, "\n") == null);
 
     const bare = try searchFailed(aa, "web", error.ConnectionRefused, .{});
