@@ -420,6 +420,13 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(self._easy, .connect_only, value);
     }
 
+    // Close this connection when the transfer ends instead of returning it to
+    // libcurl's keepalive pool. Read by libcurl when the transfer completes,
+    // so it can be set while the response is being received.
+    pub fn setForbidReuse(self: *const Connection) !void {
+        try libcurl.curl_easy_setopt(self._easy, .forbid_reuse, true);
+    }
+
     pub fn setWriteCallback(
         self: *Connection,
         comptime data_cb: libcurl.CurlWriteFunction,
