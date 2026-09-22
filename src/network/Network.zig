@@ -121,7 +121,7 @@ pub fn init(app: *App) !Network {
         .connections = connections,
 
         .cache = cache,
-        .robot_store = RobotStore.init(allocator),
+        .robot_store = RobotStore.init(allocator, config.robotStoreEntryLimit()),
         .web_bot_auth = web_bot_auth,
         .rate_limiter = if (config.httpNavDelay()) |ms| RateLimiter.init(allocator, ms, config.httpNavBurst()) else null,
         .adblocker = adblocker,
