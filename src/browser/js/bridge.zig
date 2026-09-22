@@ -1271,6 +1271,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/XPathExpression.zig"),
     @import("../webapi/XPathEvaluator.zig"),
     @import("../webapi/collections/DOMStringList.zig"),
+    @import("../webapi/Sanitizer.zig"),
 });
 
 // APIs available on EVERY worker global — dedicated, shared and service. This

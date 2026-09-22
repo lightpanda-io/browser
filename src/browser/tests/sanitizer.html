@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+<body></body>
+
+<script id=constructor>
+{
+  testing.expectEqual('function', typeof Sanitizer);
+  testing.expectEqual(true, new Sanitizer() instanceof Sanitizer);
+  testing.expectEqual(true, new Sanitizer({}) instanceof Sanitizer);
+  testing.expectEqual(true, new Sanitizer(null) instanceof Sanitizer);
+  testing.expectEqual(true, new Sanitizer(undefined) instanceof Sanitizer);
+  testing.expectEqual(true, new Sanitizer('default') instanceof Sanitizer);
+  testing.expectEqual(true, new Sanitizer({unknown: [1, 2]}) instanceof Sanitizer);
+  testing.expectError('TypeError', () => new Sanitizer('nope'));
+}
+</script>
+
+<script id=emptyConfig>
+{
+  // Neither half of a pair given: canonicalization fills in the empty
+  // remove-lists, which is what "allow everything" looks like.
+  testing.expectEqual({
+    removeElements: [],
+    removeAttributes: [],
+    removeProcessingInstructions: [],
+    comments: true,
+    javascriptURLs: true,
+  }, new Sanitizer({}).get());
+}
+</script>
+
+<script id=canonicalization>
+{
+  const get = (config) => new Sanitizer(config).get();
+
+  testing.expectEqual([{name: 'div', namespace: 'http://www.w3.org/1999/xhtml', removeAttributes: []}],
+                      get({elements: ['div']}).elements);
+  testing.expectEqual([{name: 'b', namespace: 'http://www.w3.org/1999/xhtml'}],
+                      get({removeElements: [{name: 'b'}]}).removeElements);
+  testing.expectEqual([{name: 'b', namespace: null}],
+                      get({removeElements: [{name: 'b', namespace: null}]}).removeElements);
+  // An empty namespace is the null namespace.
+  testing.expectEqual([{name: 'b', namespace: null}],
+                      get({removeElements: [{name: 'b', namespace: ''}]}).removeElements);
+
+  // Attributes default to the null namespace, elements to XHTML.
+  testing.expectEqual([{name: 'href', namespace: null}], get({attributes: ['href']}).attributes);
+  testing.expectEqual([{target: 'xml-stylesheet'}],
+                      get({processingInstructions: ['xml-stylesheet']}).processingInstructions);
+}
+</script>
+
+<script id=sorting>
+{
+  // Namespace first, with null below every URI; then local name.
+  const config = new Sanitizer({attributes: [
+    {name: 'b', namespace: 'http://example.org/'},
+    {name: 'z'},
+    {name: 'a', namespace: 'http://example.org/'},
+    {name: 'a'},
+  ]}).get();
+
+  testing.expectEqual([
+    {name: 'a', namespace: null},
+    {name: 'z', namespace: null},
+    {name: 'a', namespace: 'http://example.org/'},
+    {name: 'b', namespace: 'http://example.org/'},
+  ], config.attributes);
+}
+</script>
+
+<script id=booleanDefaults>
+{
+  testing.expectEqual(false, new Sanitizer().get().comments);
+  testing.expectEqual(true, new Sanitizer({}).get().comments);
+  testing.expectEqual(false, new Sanitizer({comments: false}).get().comments);
+
+  testing.expectEqual(false, new Sanitizer().get().dataAttributes);
+  testing.expectEqual(true, new Sanitizer({attributes: []}).get().dataAttributes);
+  // dataAttributes only exists alongside an attribute allow-list.
+  testing.expectEqual(false, 'dataAttributes' in new Sanitizer({}).get());
+  testing.expectEqual(false, 'dataAttributes' in new Sanitizer({removeAttributes: []}).get());
+
+  // Web IDL: an explicit null is ToBoolean(null) = false, while an explicit
+  // undefined leaves the member absent and so takes the default.
+  testing.expectEqual(false, new Sanitizer({comments: null}).get().comments);
+  testing.expectEqual(true, new Sanitizer({comments: 'abc'}).get().comments);
+
+  // The setters report whether they changed anything.
+  const s = new Sanitizer();
+  testing.expectEqual(true, s.setComments(true));
+  testing.expectEqual(false, s.setComments(true));
+  testing.expectEqual(true, s.get().comments);
+
+  testing.expectEqual(true, s.setDataAttributes(true));
+  testing.expectEqual(false, s.setDataAttributes(true));
+  testing.expectEqual(true, s.get().dataAttributes);
+
+  // Without an attribute allow-list there is no dataAttributes to set.
+  testing.expectEqual(false, new Sanitizer({removeAttributes: []}).setDataAttributes(true));
+}
+</script>
+
+<script id=javascriptUrls>
+{
+  testing.expectEqual(false, new Sanitizer().get().javascriptURLs);
+  testing.expectEqual(true, new Sanitizer({}).get().javascriptURLs);
+  testing.expectEqual(false, new Sanitizer({javascriptURLs: false}).get().javascriptURLs);
+  testing.expectEqual(false, new Sanitizer({javascriptURLs: null}).get().javascriptURLs);
+  testing.expectEqual(true, new Sanitizer({javascriptURLs: undefined}).get().javascriptURLs);
+
+  const s = new Sanitizer();
+  testing.expectEqual(true, s.setJavascriptURLs(true));
+  testing.expectEqual(false, s.setJavascriptURLs(true));
+  testing.expectEqual(true, s.get().javascriptURLs);
+  // removeUnsafe turns them back off, and reports that it changed something.
+  testing.expectEqual(true, s.removeUnsafe());
+  testing.expectEqual(false, s.get().javascriptURLs);
+}
+
+{
+  // Allowing every data attribute subsumes any named individually, and the
+  // config has to stay valid.
+  const s = new Sanitizer({attributes: ['data-x', 'id'], elements: [{name: 'div', attributes: ['data-y']}]});
+  testing.expectEqual(true, s.setDataAttributes(true));
+  testing.expectEqual([{name: 'id', namespace: null}], s.get().attributes);
+  testing.expectEqual([], s.get().elements[0].attributes);
+}
+</script>
+
+<script id=invalidConfigs>
+{
+  // Each pair is mutually exclusive.
+  testing.expectError('TypeError', () => new Sanitizer({elements: [], removeElements: []}));
+  testing.expectError('TypeError', () => new Sanitizer({attributes: [], removeAttributes: []}));
+
+  // No duplicates, whichever spelling they arrive in.
+  testing.expectError('TypeError', () => new Sanitizer({elements: ['abc', 'abc']}));
+  testing.expectError('TypeError', () => new Sanitizer({elements: ['abc', {name: 'abc'}]}));
+  testing.expectError('TypeError', () => new Sanitizer({attributes: ['abc', {name: 'abc', namespace: null}]}));
+
+  // <html>, <svg> and <math> can never be replaced with their children.
+  testing.expectError('TypeError', () => new Sanitizer({replaceWithChildrenElements: ['html']}));
+  testing.expectError('TypeError', () => new Sanitizer({
+    replaceWithChildrenElements: [{name: 'svg', namespace: 'http://www.w3.org/2000/svg'}],
+  }));
+  // ... but in another namespace it is just an element.
+  testing.expectEqual(1, new Sanitizer({replaceWithChildrenElements: ['svg']}).get().replaceWithChildrenElements.length);
+
+  testing.expectError('TypeError', () => new Sanitizer({elements: ['p'], replaceWithChildrenElements: ['p']}));
+  testing.expectError('TypeError', () => new Sanitizer({removeElements: ['p'], replaceWithChildrenElements: ['p']}));
+
+  // A per-element list may not restate a global one.
+  testing.expectError('TypeError', () => new Sanitizer({
+    attributes: ['id'],
+    elements: [{name: 'div', attributes: ['id']}],
+  }));
+  // A per-element removeAttributes must be a subset of the global allow-list.
+  testing.expectError('TypeError', () => new Sanitizer({
+    attributes: ['class'],
+    elements: [{name: 'div', removeAttributes: ['title']}],
+  }));
+  testing.expectError('TypeError', () => new Sanitizer({
+    attributes: ['data-bar'],
+    dataAttributes: true,
+  }));
+  testing.expectError('TypeError', () => new Sanitizer({removeAttributes: [], dataAttributes: false}));
+  testing.expectError('TypeError', () => new Sanitizer({
+    removeAttributes: [],
+    elements: [{name: 'div', attributes: [], removeAttributes: []}],
+  }));
+
+  testing.expectError('TypeError', () => new Sanitizer({processingInstructions: [], removeProcessingInstructions: []}));
+  testing.expectError('TypeError', () => new Sanitizer({removeProcessingInstructions: ['x', {target: 'x'}]}));
+}
+</script>
+
+<script id=perElementAttributes>
+{
+  {
+    const s = new Sanitizer({elements: [{name: 'div', attributes: ['href', 'src']}]});
+    testing.expectEqual(true, 'attributes' in s.get().elements[0]);
+    testing.expectEqual(false, 'removeAttributes' in s.get().elements[0]);
+    testing.expectEqual(2, s.get().elements[0].attributes.length);
+
+    // allowElement overwrites the per-element list rather than merging.
+    s.allowElement({name: 'div', namespace: 'http://www.w3.org/1999/xhtml', attributes: ['class']});
+    testing.expectEqual([{name: 'class', namespace: null}], s.get().elements[0].attributes);
+  }
+
+  {
+    // An element with neither list still reports an empty remove-list.
+    const s = new Sanitizer({elements: ['div']});
+    testing.expectEqual([], s.get().elements[0].removeAttributes);
+    testing.expectEqual(false, 'attributes' in s.get().elements[0]);
+  }
+}
+</script>
+
+<script id=elementModifiers>
+{
+  const s = new Sanitizer({elements: ['div', 'p']});
+  testing.expectEqual(2, s.get().elements.length);
+  testing.expectEqual(true, s.allowElement('bla'));
+  testing.expectEqual(false, s.allowElement('bla'));
+  testing.expectEqual(3, s.get().elements.length);
+  testing.expectEqual(true, s.removeElement({name: 'div'}));
+  testing.expectEqual(2, s.get().elements.length);
+  testing.expectEqual(true, s.replaceElementWithChildren({name: 'p', namespace: 'http://www.w3.org/1999/xhtml'}));
+  testing.expectEqual([{name: 'bla', namespace: 'http://www.w3.org/1999/xhtml', removeAttributes: []}],
+                      s.get().elements);
+  testing.expectEqual([{name: 'p', namespace: 'http://www.w3.org/1999/xhtml'}],
+                      s.get().replaceWithChildrenElements);
+  testing.expectEqual(false, s.replaceElementWithChildren('html'));
+}
+
+{
+  // With a remove-list the same calls flip meaning.
+  const s = new Sanitizer({removeElements: ['div', 'p']});
+  testing.expectEqual(true, s.removeElement('bla'));
+  testing.expectEqual(3, s.get().removeElements.length);
+  testing.expectEqual(true, s.allowElement('p'));
+  testing.expectEqual(2, s.get().removeElements.length);
+  // A remove-list config has nowhere to put per-element attributes.
+  testing.expectEqual(false, s.allowElement({name: 'div', attributes: ['id']}));
+}
+
+{
+  // An element with neither attribute list is the same as one with an empty
+  // removeAttributes, so re-allowing it either way is not a change.
+  const s = new Sanitizer({elements: ['div', {name: 'p', removeAttributes: []}]});
+  testing.expectEqual(false, s.allowElement({name: 'div', removeAttributes: []}));
+  testing.expectEqual(false, s.allowElement('p'));
+  testing.expectEqual(true, s.allowElement('span'));
+  testing.expectEqual(false, s.allowElement({name: 'span', removeAttributes: []}));
+  testing.expectEqual(true, s.allowElement({name: 'span', attributes: []}));
+}
+</script>
+
+<script id=attributeModifiers>
+{
+  const s = new Sanitizer({attributes: ['href', 'src']});
+  testing.expectEqual(true, s.allowAttribute('id'));
+  testing.expectEqual(false, s.allowAttribute('id'));
+  testing.expectEqual(3, s.get().attributes.length);
+  // A different namespace is a different attribute.
+  testing.expectEqual(false, s.removeAttribute({name: 'href', namespace: 'http://example.org/'}));
+  testing.expectEqual(true, s.removeAttribute({name: 'href'}));
+  testing.expectEqual(true, s.removeAttribute({name: 'src', namespace: null}));
+  testing.expectEqual([{name: 'id', namespace: null}], s.get().attributes);
+}
+
+{
+  const s = new Sanitizer({removeAttributes: ['href', 'src']});
+  testing.expectEqual(true, s.removeAttribute('id'));
+  testing.expectEqual(3, s.get().removeAttributes.length);
+  testing.expectEqual(false, s.allowAttribute({name: 'href', namespace: 'http://example.org/'}));
+  testing.expectEqual(true, s.allowAttribute('href'));
+  testing.expectEqual(true, s.allowAttribute({name: 'src', namespace: null}));
+  testing.expectEqual([{name: 'id', namespace: null}], s.get().removeAttributes);
+}
+
+{
+  // A global allow subsumes the per-element lists.
+  const s = new Sanitizer({
+    attributes: ['id', 'title'],
+    elements: [{name: 'div', attributes: ['class', 'dir'], removeAttributes: ['title']}],
+  });
+  testing.expectEqual(true, s.removeAttribute('dir'));
+  testing.expectEqual([{name: 'class', namespace: null}], s.get().elements[0].attributes);
+  testing.expectEqual(true, s.removeAttribute('title'));
+  testing.expectEqual([{name: 'id', namespace: null}], s.get().attributes);
+  testing.expectEqual([], s.get().elements[0].removeAttributes);
+}
+</script>
+
+<script id=processingInstructionModifiers>
+{
+  const s = new Sanitizer({processingInstructions: ['target-1', 'target-2']});
+  testing.expectEqual(true, s.allowProcessingInstruction('target-3'));
+  testing.expectEqual(false, s.allowProcessingInstruction('target-3'));
+  testing.expectEqual(false, s.removeProcessingInstruction({target: 'target-4'}));
+  testing.expectEqual(true, s.removeProcessingInstruction({target: 'target-1'}));
+  testing.expectEqual(true, s.removeProcessingInstruction({target: 'target-2'}));
+  testing.expectEqual([{target: 'target-3'}], s.get().processingInstructions);
+}
+</script>
+
+<script id=removeUnsafe>
+{
+  const s = new Sanitizer({});
+  testing.expectEqual(true, s.removeUnsafe());
+  testing.expectEqual(false, s.removeUnsafe());
+
+  const config = s.get();
+  testing.expectEqual(false, 'elements' in config);
+  testing.expectEqual(false, 'attributes' in config);
+  testing.expectEqual([
+    {name: 'base', namespace: 'http://www.w3.org/1999/xhtml'},
+    {name: 'embed', namespace: 'http://www.w3.org/1999/xhtml'},
+    {name: 'frame', namespace: 'http://www.w3.org/1999/xhtml'},
+    {name: 'iframe', namespace: 'http://www.w3.org/1999/xhtml'},
+    {name: 'object', namespace: 'http://www.w3.org/1999/xhtml'},
+    {name: 'script', namespace: 'http://www.w3.org/1999/xhtml'},
+    {name: 'script', namespace: 'http://www.w3.org/2000/svg'},
+    {name: 'use', namespace: 'http://www.w3.org/2000/svg'},
+  ], config.removeElements);
+
+  const names = config.removeAttributes.map((a) => a.name);
+  testing.expectEqual(true, names.length > 0);
+  for (const attribute of config.removeAttributes) {
+    testing.expectEqual(null, attribute.namespace);
+    testing.expectEqual(true, attribute.name.startsWith('on'));
+  }
+  testing.expectEqual(true, names.every((n, i) => i === 0 || names[i - 1] < n));
+
+  testing.expectEqual(true, names.includes('onclick'));
+}
+
+{
+  // Nothing in the default config is unsafe, so removeUnsafe is a no-op on it.
+  const before = new Sanitizer('default').get();
+  const after = new Sanitizer('default');
+  testing.expectEqual(false, after.removeUnsafe());
+
+  testing.expectEqual(true, before.elements.length > 0);
+  testing.expectEqual(before.elements.length, after.get().elements.length);
+  testing.expectEqual(before.attributes.length, after.get().attributes.length);
+  testing.expectEqual(false, 'removeElements' in after.get());
+  testing.expectEqual(false, 'removeAttributes' in after.get());
+}
+
+{
+  // lightpanda-specific: our event handler list is HTML's merged with the
+  // handlers we compile ourselves, so neither side can go missing. Another
+  // engine ships only its own set and is expected to fail this.
+  const s = new Sanitizer({});
+  s.removeUnsafe();
+  const names = s.get().removeAttributes.map((a) => a.name);
+  for (const name of ['onunload', 'onmouseenter', 'onbeforematch', 'onfullscreenchange']) {
+    testing.expectEqual(true, names.includes(name), {script_id: 'removeUnsafe'});
+  }
+}
+</script>
+
+<script id=defaultConfig>
+{
+  const config = new Sanitizer().get();
+
+  testing.expectEqual(121, config.elements.length);
+  testing.expectEqual(58, config.attributes.length);
+  testing.expectEqual(false, config.comments);
+  testing.expectEqual(false, config.dataAttributes);
+
+  // Sorted by namespace URI, which puts MathML (1998) first and SVG (2000) last.
+  testing.expectEqual({name: 'math', namespace: 'http://www.w3.org/1998/Math/MathML', attributes: []},
+                      config.elements[0]);
+  testing.expectEqual('http://www.w3.org/2000/svg', config.elements[config.elements.length - 1].namespace);
+
+  // Nothing that runs script is in there.
+  const names = config.elements.map((e) => e.name);
+  for (const unsafe of ['script', 'iframe', 'object', 'embed', 'frame']) {
+    testing.expectEqual(false, names.includes(unsafe));
+  }
+  testing.expectEqual(false, config.attributes.some((a) => a.name.startsWith('on')));
+
+  testing.expectEqual([], config.processingInstructions);
+  testing.expectEqual(false, config.javascriptURLs);
+}
+</script>
