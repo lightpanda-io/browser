@@ -1187,19 +1187,26 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
     switch (search_engine) {
         .auto => {
             var last_err: ?anyerror = null;
+            var last_label: []const u8 = "web";
+            var last_detail: Failure = .{};
             inline for (api_engines) |engine| {
                 if (engineKey(engine)) |api_key| {
                     // Fall through on any failure so one outage doesn't kill
                     // a whole benchmark run.
-                    if (apiSearch(engine, arena, api_key, timeout_ms, args.query)) |markdown_| {
+                    var detail: Failure = .{};
+                    if (apiSearch(engine, arena, api_key, timeout_ms, args.query, &detail)) |markdown_| {
                         return .{ .text = markdown_ };
                     } else |err| {
                         last_err = err;
+                        last_label = @tagName(engine.tag);
+                        last_detail = detail;
                         log.warn(.browser, @tagName(engine.tag) ++ " fallback", .{ .err = err });
                     }
                 } else |_| {}
             }
-            return searchFailed(arena, "web", last_err.?);
+            // The last rung's reason, not a generic one: every engine having
+            // failed is usually one cause, and the model can act on it.
+            return searchFailed(arena, last_label, last_err.?, last_detail);
         },
         inline else => |tag| {
             inline for (api_engines) |engine| {
@@ -1217,25 +1224,47 @@ fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, timeout_ms
         .text = "web search engine is set to " ++ label ++ " but " ++ engine.env_var ++ " is not set in the environment",
         .is_error = true,
     };
-    const markdown_ = apiSearch(engine, arena, api_key, timeout_ms, query) catch |err|
-        return searchFailed(arena, label, err);
+    var detail: Failure = .{};
+    const markdown_ = apiSearch(engine, arena, api_key, timeout_ms, query, &detail) catch |err|
+        return searchFailed(arena, label, err, detail);
     return .{ .text = markdown_ };
 }
 
-fn searchFailed(arena: std.mem.Allocator, comptime label: []const u8, err: anyerror) ToolError!ToolResult {
-    return .{
-        .text = try std.fmt.allocPrint(arena, label ++ " search failed: {s}", .{@errorName(err)}),
-        .is_error = true,
-    };
+/// What the provider said, duped out of the client before `deinit` takes it.
+/// Without this the status and body survive only in a log line, and every
+/// failure reaches the model as the word `InternalError`.
+const Failure = struct {
+    status: ?u10 = null,
+    message: []const u8 = "",
+};
+
+/// A rate limit and a bad key need different reactions, so the model is told
+/// which it hit rather than just that the search failed.
+fn searchFailed(arena: std.mem.Allocator, label: []const u8, err: anyerror, detail: Failure) ToolError!ToolResult {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    const w = &aw.writer;
+    w.print("{s} search failed: {s}", .{ label, @errorName(err) }) catch return ToolError.OutOfMemory;
+    if (detail.status) |status| w.print(" (HTTP {d})", .{status}) catch return ToolError.OutOfMemory;
+    if (detail.message.len > 0) {
+        w.writeAll(": ") catch return ToolError.OutOfMemory;
+        writeSingleLine(w, detail.message) catch return ToolError.OutOfMemory;
+    }
+    if (detail.status == 429) {
+        w.writeAll(". This engine is rate-limited right now; wait before retrying, or read the answer from a page instead.") catch
+            return ToolError.OutOfMemory;
+    }
+    return .{ .text = aw.written(), .is_error = true };
 }
 
-/// `arena` owns the returned slice.
+/// `arena` owns the returned slice. `detail` is filled on a non-2xx so the
+/// caller can say what actually happened.
 fn apiSearch(
     comptime engine: anytype,
     arena: std.mem.Allocator,
     api_key: ?[]const u8,
     timeout_ms: u32,
     query: []const u8,
+    detail: *Failure,
 ) ![]const u8 {
     var init_options = engine.init_options;
     // The cascade (or the model) is the retry; honoring a Retry-After (60 s
@@ -1256,6 +1285,11 @@ fn apiSearch(
                 .status = status,
                 .body = client.last_error.body,
             });
+            // `client.last_error` dies with the client on the deferred deinit.
+            detail.* = .{
+                .status = status,
+                .message = if (client.last_error.body) |b| (arena.dupe(u8, b) catch "") else "",
+            };
         }
         return err;
     };
@@ -2907,6 +2941,29 @@ test "collectBrave flattens newlines in titles and descriptions" {
         "1. **Multi line title** — https://example.org\n   line one line two\n\n",
         try renderResults(aa, try collectBrave(aa, resp)),
     );
+}
+
+test "searchFailed: a rate limit says so, a bare failure stays short" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const limited = try searchFailed(aa, "keenable", error.ApiError, .{
+        .status = 429,
+        .message = "Public API hourly limit reached.\nWait 2 minutes to continue.",
+    });
+    try std.testing.expect(limited.is_error);
+    // The status and the provider's own words, which previously reached the
+    // model only as the word "ApiError".
+    try std.testing.expect(std.mem.indexOf(u8, limited.text, "(HTTP 429)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, limited.text, "Public API hourly limit reached.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, limited.text, "rate-limited right now") != null);
+    // Flattened: a newline would break the numbered-list markdown around it.
+    try std.testing.expect(std.mem.indexOf(u8, limited.text, "\n") == null);
+
+    const bare = try searchFailed(aa, "web", error.ConnectionRefused, .{});
+    try std.testing.expectEqualStrings("web search failed: ConnectionRefused", bare.text);
+    try std.testing.expect(bare.is_error);
 }
 
 test "isPathSafe: relative paths without traversal are accepted" {
