@@ -489,11 +489,13 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
     // Chrome's DOM.scrollIntoViewIfNeeded actually scrolls the element into
     // the viewport. Drivers (Playwright) call it before reading the quads and
     // then verify the element is in view; a no-op leaves the element outside
-    // and makes the click retry until it times out.
+    // and makes the click retry until it times out. Resolve the element's own
+    // frame: a child-frame element must be judged and scrolled against that
+    // frame's window, not the top-level one.
     if (node.dom.is(DOMNode.Element)) |element| {
-        if (bc.mainFrame()) |frame| {
-            element.scrollIntoViewIfNeeded(null, frame);
-        }
+        const root = bc.mainFrame() orelse return error.FrameNotLoaded;
+        const frame = node.dom.ownerFrame(root) orelse root;
+        element.scrollIntoViewIfNeeded(null, frame);
     }
 
     return cmd.sendResult(null, .{});
@@ -1467,4 +1469,54 @@ test "cdp.dom: getBoxModel" {
         .width = 5,
         .height = 5,
     } }, .{ .id = 5 });
+}
+
+test "cdp.dom: scrollIntoViewIfNeeded scrolls a below-fold element into view" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/scroll_into_view.html" });
+    const frame = bc.mainFrame().?;
+
+    try ctx.processMessage(.{ // Hacky way to make sure nodeId 1 exists in the registry
+        .id = 3,
+        .method = "DOM.getDocument",
+    });
+
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "DOM.querySelector",
+        .params = .{ .nodeId = 1, .selector = "#target" },
+    });
+    try ctx.expectSentResult(.{ .nodeId = 3 }, .{ .id = 4 });
+
+    // The element sits below the fold to start with (faux layout is document
+    // absolute, so it doesn't move until we scroll). At scrollY 0 the
+    // viewport-relative rect equals the document position.
+    const target = frame.document.getElementById("target", frame).?;
+    const document_y = target.boundingClientRectValues(frame).y;
+    try testing.expect(document_y > @as(f64, @floatFromInt(frame.window.getInnerHeight(frame))));
+    try testing.expectEqual(0, frame.window.getScrollY());
+
+    // Chrome's DOM.scrollIntoViewIfNeeded (and Playwright's click actionability)
+    // expect this to actually scroll the element into the viewport.
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "DOM.scrollIntoViewIfNeeded",
+        .params = .{ .nodeId = 3 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+
+    try testing.expectEqual(@as(u32, @intFromFloat(document_y)), frame.window.getScrollY());
+
+    // With the window scrolled, the quads are viewport-relative and now fall
+    // inside the viewport.
+    try ctx.processMessage(.{
+        .id = 6,
+        .method = "DOM.getContentQuads",
+        .params = .{ .nodeId = 3 },
+    });
+    try ctx.expectSentResult(.{ .quads = &.{Quad{
+        0.0, 0.0, 5.0, 0.0, 5.0, 5.0, 0.0, 5.0,
+    }} }, .{ .id = 6 });
 }

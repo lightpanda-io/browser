@@ -2000,10 +2000,16 @@ pub fn clone(self: *Element, deep: bool, document: *const Node.Document, frame: 
 
 pub fn scrollIntoViewIfNeeded(self: *Element, center_if_needed: ?bool, frame: *Frame) void {
     _ = center_if_needed;
+    const owner = self.ownerFrame(frame) orelse return;
+    const x = horizontalPosition(self, frame);
     const y = calculateDocumentPosition(self.asNode());
-    const scroll_y: f64 = @floatFromInt(frame.window.getScrollY());
-    const viewport_height: f64 = @floatFromInt(frame.window.getInnerHeight(frame));
-    if (y >= scroll_y and y <= scroll_y + viewport_height) {
+    const scroll_x: f64 = @floatFromInt(owner.window.getScrollX());
+    const scroll_y: f64 = @floatFromInt(owner.window.getScrollY());
+    const viewport_width: f64 = @floatFromInt(owner.page.getViewport().width);
+    const viewport_height: f64 = @floatFromInt(owner.window.getInnerHeight(frame));
+    const x_in_view = x >= scroll_x and x <= scroll_x + viewport_width;
+    const y_in_view = y >= scroll_y and y <= scroll_y + viewport_height;
+    if (x_in_view and y_in_view) {
         return;
     }
     self.scrollIntoView(null, frame);
@@ -2015,11 +2021,19 @@ const ScrollIntoViewOpts = union {
 };
 pub fn scrollIntoView(self: *Element, opts: ?ScrollIntoViewOpts, frame: *Frame) void {
     _ = opts;
-    // Scroll the window so the element's top is brought into the viewport.
-    // Positions come from the faux-layout document position (top = preorder
-    // depth-scaled y), the same source getBoundingClientRect uses.
+    const owner = self.ownerFrame(frame) orelse return;
+    // Scroll the window so the element's box is brought into the viewport. The
+    // positions come from the faux layout (top = preorder depth-scaled y, left
+    // = summed preceding sibling widths), the same source the bounding rect
+    // uses. Both axes are moved: a horizontally off-screen element is as
+    // unreachable as a vertically off-screen one, and pinning x to 0 would also
+    // reset an existing horizontal scroll.
+    const x = horizontalPosition(self, frame);
     const y = calculateDocumentPosition(self.asNode());
-    frame.window.scrollTo(.{ .x = 0 }, @trunc(@max(0, y)), frame) catch {};
+    owner.window.scrollTo(.{ .opts = .{
+        .left = @intFromFloat(@trunc(@max(0, x))),
+        .top = @intFromFloat(@trunc(@max(0, y))),
+    } }, null, owner) catch {};
 }
 
 // The scrollTo/scrollBy argument shape shared with Window: positional (x, y)

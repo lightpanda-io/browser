@@ -1,0 +1,16 @@
+<!doctype html>
+<body style="height:4000px;width:4000px">
+<script>
+  // Put #target well below the viewport: the faux layout advances 5px per
+  // node, so 200 hidden pads push it past 1000px while the viewport stays
+  // above it. Hidden pads keep the horizontal position at 0.
+  for (let i = 0; i < 200; i++) {
+    const pad = document.createElement('div');
+    pad.style.display = 'none';
+    document.body.appendChild(pad);
+  }
+  const target = document.createElement('div');
+  target.id = 'target';
+  document.body.appendChild(target);
+</script>
+</body>

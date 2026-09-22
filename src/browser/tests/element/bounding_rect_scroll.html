@@ -9,18 +9,38 @@
   // with the window scroll. The faux layout computes document positions that
   // never move, so this guards the scroll subtraction (CDP drivers rely on it:
   // Playwright times out with "element is outside of the viewport" otherwise).
+  //
+  // Precede the target with enough nodes that its document y is well below the
+  // viewport. The faux layout advances 5px per node, so 200 nodes put it past
+  // 1000px while the viewport stays above it. They are display:none so they
+  // don't also push the target horizontally (horizontal position skips hidden
+  // siblings), keeping the hit-test point near x=0.
+  for (let i = 0; i < 200; i++) {
+    const pad = document.createElement('div');
+    pad.style.display = 'none';
+    document.body.appendChild(pad);
+  }
   const el = document.createElement('div');
   document.body.appendChild(el);
 
   const before = el.getBoundingClientRect();
-  window.scrollTo(0, 200);
+  testing.expectTrue(before.y > 0);
+
+  // Scroll so the element lands inside the viewport (100px from the top),
+  // rather than off the top edge. Use the element's own document position so
+  // the target offset does not depend on the node count above.
+  const scroll = before.y - 100;
+  window.scrollTo(0, scroll);
   const after = el.getBoundingClientRect();
 
-  testing.expectEqual(before.y - 200, after.y);
+  testing.expectEqual(before.y - scroll, after.y);
   testing.expectEqual(before.x, after.x);
 
-  // The hit test takes a viewport-relative point, so it must agree with the
-  // (also viewport-relative) rect after scrolling.
+  // The element is now inside the viewport, and the hit test takes a
+  // viewport-relative point, so it must agree with the (also viewport-relative)
+  // rect.
+  testing.expectTrue(after.y >= 0);
+  testing.expectTrue(after.y < window.innerHeight);
   testing.expectEqual(document.elementFromPoint(after.x + 1, after.y + 1), el);
 
   window.scrollTo(0, 0);
