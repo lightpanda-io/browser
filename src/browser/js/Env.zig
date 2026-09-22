@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
 const Context = @import("Context.zig");
+const WasmStreaming = @import("WasmStreaming.zig");
 const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");
 const Inspector = @import("Inspector.zig");
@@ -161,6 +162,8 @@ pub fn init(app: *App, opts: InitOpts) !Env {
 
     v8.v8__Isolate__SetHostImportModuleDynamicallyCallback(isolate_handle, Context.dynamicModuleCallback);
     v8.v8__Isolate__SetPromiseRejectCallback(isolate_handle, promiseRejectCallback);
+    // Also set on the snapshot isolate, see Snapshot.create.
+    v8.v8__Isolate__SetWasmStreamingCallback(isolate_handle, WasmStreaming.callback);
     v8.v8__Isolate__SetMicrotasksPolicy(isolate_handle, v8.kExplicit);
     v8.v8__Isolate__SetFatalErrorHandler(isolate_handle, fatalCallback);
     v8.v8__Isolate__SetOOMErrorHandler(isolate_handle, oomCallback);

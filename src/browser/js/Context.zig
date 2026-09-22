@@ -24,6 +24,7 @@ const Env = @import("Env.zig");
 const Origin = @import("Origin.zig");
 const Scheduler = @import("Scheduler.zig");
 const Execution = @import("Execution.zig");
+const WasmStreaming = @import("WasmStreaming.zig");
 
 const Frame = @import("../Frame.zig");
 const Page = @import("../Page.zig");
@@ -103,6 +104,9 @@ identity_arena: Allocator,
 // Unlike other v8 types, like functions or objects, modules are not shared
 // across origins.
 global_modules: std.ArrayList(v8.Global) = .empty,
+
+// WebAssembly streaming compilations still waiting on their Response.
+wasm_streams: std.ArrayList(*WasmStreaming) = .empty,
 
 // Our module cache: normalized module specifier => module.
 module_cache: std.StringHashMapUnmanaged(ModuleEntry) = .empty,
@@ -199,6 +203,10 @@ pub fn deinit(self: *Context) void {
 
     for (self.global_modules.items) |*global| {
         v8.v8__Global__Reset(global);
+    }
+
+    while (self.wasm_streams.pop()) |stream| {
+        stream.abort(null);
     }
 
     self.page.releaseOrigin(self.origin);

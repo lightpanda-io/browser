@@ -326,7 +326,7 @@ fn lockStream(stream: *ReadableStream, exec: *const Execution) !void {
     stream._disturbed = true;
 }
 
-fn isOK(self: *const Response) bool {
+pub fn isOK(self: *const Response) bool {
     return self._status >= 200 and self._status <= 299;
 }
 
