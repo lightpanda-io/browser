@@ -25,11 +25,59 @@ pub const Declaration = struct {
     important: bool,
 };
 
-pub const OverflowValues = struct { x: []const u8, y: []const u8 };
+pub const AxisPair = struct { x: []const u8, y: []const u8 };
 
-/// `overflow: <x> [<y>]`; a single value applies to both axes. More than two
-/// values is invalid and null, as is an empty declaration.
-pub fn splitOverflow(value: []const u8) ?OverflowValues {
+pub const AxisShorthand = struct {
+    name: []const u8,
+    x: []const u8,
+    y: []const u8,
+};
+
+// The `<x> [<y>]` shorthands whose longhands the style cascade tracks. Both the
+// CSSOM object and the cascade store these expanded: setting one sets both
+// longhands, reading or serializing it recombines them.
+pub const axis_shorthands = [_]AxisShorthand{
+    .{ .name = "overflow", .x = "overflow-x", .y = "overflow-y" },
+    .{ .name = "overscroll-behavior", .x = "overscroll-behavior-x", .y = "overscroll-behavior-y" },
+};
+
+/// The axis shorthand `name` names, if it names one.
+pub fn axisShorthand(name: []const u8) ?AxisShorthand {
+    for (axis_shorthands) |shorthand| {
+        if (std.ascii.eqlIgnoreCase(name, shorthand.name)) {
+            return shorthand;
+        }
+    }
+    return null;
+}
+
+pub const AxisLonghand = struct {
+    shorthand: AxisShorthand,
+    is_x: bool,
+
+    /// The longhand on the other axis.
+    pub fn partner(self: AxisLonghand) []const u8 {
+        return if (self.is_x) self.shorthand.y else self.shorthand.x;
+    }
+};
+
+/// The axis shorthand `name` is a longhand of, if it is one.
+pub fn axisLonghand(name: []const u8) ?AxisLonghand {
+    for (axis_shorthands) |shorthand| {
+        if (std.ascii.eqlIgnoreCase(name, shorthand.x)) {
+            return .{ .shorthand = shorthand, .is_x = true };
+        }
+        if (std.ascii.eqlIgnoreCase(name, shorthand.y)) {
+            return .{ .shorthand = shorthand, .is_x = false };
+        }
+    }
+    return null;
+}
+
+/// An `<x> [<y>]` axis shorthand such as `overflow` or `overscroll-behavior`;
+/// a single value applies to both axes. More than two values is invalid and
+/// null, as is an empty declaration.
+pub fn splitAxisPair(value: []const u8) ?AxisPair {
     var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
     const x = it.next() orelse return null;
     const y = it.next() orelse x;

@@ -654,7 +654,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
 /// Own-element cascade result, resolved for every property at once so one
 /// entry serves any probe.
-const Props = packed struct(u8) {
+const Props = packed struct(u10) {
     // Author value (inline or sheet). Without `author_display` it's the UA
     // fallback: .none when matchesUaDisplayNoneRule, else .other.
     display: Display = .other,
@@ -664,6 +664,8 @@ const Props = packed struct(u8) {
     pointer_events_none: bool = false,
     overflow_x_scrolls: bool = false,
     overflow_y_scrolls: bool = false,
+    overscroll_x_contains: bool = false,
+    overscroll_y_contains: bool = false,
 
     fn probe(self: Props, comptime what: Probe, options: CheckVisibilityOptions) bool {
         return switch (what) {
@@ -737,6 +739,15 @@ pub fn overflowAxes(self: *StyleManager, el: *Element) Element.ScrollAxes {
     return .{ .x = p.overflow_x_scrolls, .y = p.overflow_y_scrolls };
 }
 
+/// The axes along which `el` keeps a scroll from chaining out of it: its own
+/// computed overscroll-behavior on that axis is contain or none. No ancestor
+/// walk.
+pub fn overscrollContainAxes(self: *StyleManager, el: *Element) Element.ScrollAxes {
+    self.rebuildIfDirty() catch return .{};
+    const p = self.ownProps(el);
+    return .{ .x = p.overscroll_x_contains, .y = p.overscroll_y_contains };
+}
+
 fn anyInChain(self: *StyleManager, el: *Element, comptime what: Probe, options: CheckVisibilityOptions) bool {
     var current: ?*Element = el;
     while (current) |elem| : (current = elem.parentElement()) {
@@ -776,6 +787,8 @@ const Priorities = struct {
     pointer_events_none: u64 = 0,
     overflow_x_scrolls: u64 = 0,
     overflow_y_scrolls: u64 = 0,
+    overscroll_x_contains: u64 = 0,
+    overscroll_y_contains: u64 = 0,
 };
 
 fn compute(self: *StyleManager, el: *Element) Props {
@@ -1020,7 +1033,7 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
 }
 
 // The declaration names behind TrackedProperties, in field order.
-const property_names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events", "overflow-x", "overflow-y" };
+const property_names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events", "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y" };
 
 /// Extracts the tracked properties from a style declaration. The object holds
 /// one entry per name in first-declared order, so folding it in order gives a
@@ -1113,6 +1126,8 @@ const TrackedProperties = struct {
     pointer_events_none: ?bool = null,
     overflow_x_scrolls: ?bool = null,
     overflow_y_scrolls: ?bool = null,
+    overscroll_x_contains: ?bool = null,
+    overscroll_y_contains: ?bool = null,
 
     fn apply(self: *TrackedProperties, name: []const u8, value: []const u8) void {
         if (std.ascii.eqlIgnoreCase(name, "display")) {
@@ -1127,6 +1142,10 @@ const TrackedProperties = struct {
             self.overflow_x_scrolls = overflowScrolls(value);
         } else if (std.ascii.eqlIgnoreCase(name, "overflow-y")) {
             self.overflow_y_scrolls = overflowScrolls(value);
+        } else if (std.ascii.eqlIgnoreCase(name, "overscroll-behavior-x")) {
+            self.overscroll_x_contains = overscrollContains(value);
+        } else if (std.ascii.eqlIgnoreCase(name, "overscroll-behavior-y")) {
+            self.overscroll_y_contains = overscrollContains(value);
         }
     }
 
@@ -1135,6 +1154,13 @@ const TrackedProperties = struct {
         return std.ascii.eqlIgnoreCase(value, "auto") or
             std.ascii.eqlIgnoreCase(value, "scroll") or
             std.ascii.eqlIgnoreCase(value, "overlay");
+    }
+
+    // `contain` keeps the scroll in the box, `none` also kills the bounce we
+    // don't render anyway; only `auto` lets a scroll chain outward.
+    fn overscrollContains(value: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(value, "contain") or
+            std.ascii.eqlIgnoreCase(value, "none");
     }
 
     fn isRelevant(self: TrackedProperties) bool {
@@ -1300,10 +1326,10 @@ const Slots = struct {
     slots: [property_names.len]Slot = @splat(.{}),
 
     fn apply(self: *Slots, name: []const u8, value: []const u8, important: bool) void {
-        if (std.ascii.eqlIgnoreCase(name, "overflow")) {
-            const values = CssParser.splitOverflow(value) orelse return;
-            self.apply("overflow-x", values.x, important);
-            self.apply("overflow-y", values.y, important);
+        if (CssParser.axisShorthand(name)) |shorthand| {
+            const values = CssParser.splitAxisPair(value) orelse return;
+            self.apply(shorthand.x, values.x, important);
+            self.apply(shorthand.y, values.y, important);
             return;
         }
         for (property_names, &self.slots) |tracked, *slot| {
@@ -1751,6 +1777,15 @@ test "StyleManager: memo: reuse and invalidation" {
     try testing.expectEqual(Element.ScrollAxes{ .x = false, .y = true }, sm.overflowAxes(b));
     try (try b.getOrCreateStyle(frame)).asCSSStyleDeclaration().setProperty("overflow", "hidden", null, frame);
     try testing.expectEqual(Element.ScrollAxes{}, sm.overflowAxes(b));
+
+    // overscroll-behavior expands the same way; only `auto` chains outward.
+    try b.setStyle("overscroll-behavior: contain auto", frame);
+    try testing.expectEqual(Element.ScrollAxes{ .x = true, .y = false }, sm.overscrollContainAxes(b));
+    try testing.expectEqual(Element.ScrollAxes{}, sm.overscrollContainAxes(p));
+    try b.setStyle("overscroll-behavior-y: none", frame);
+    try testing.expectEqual(Element.ScrollAxes{ .x = false, .y = true }, sm.overscrollContainAxes(b));
+    try b.setStyle("overscroll-behavior: contain; overscroll-behavior-x: auto", frame);
+    try testing.expectEqual(Element.ScrollAxes{ .x = false, .y = true }, sm.overscrollContainAxes(b));
 
     // A stylesheet change resets the memo
     sm.sheetModified();

@@ -600,3 +600,32 @@
   testing.expectEqual(targetY, window.scrollY);
 }
 </script>
+
+<div id="clampBox" style="width: 100px; height: 100px; overflow: scroll;">
+  <div style="width: 500px; height: 500px;">content</div>
+</div>
+
+<script id="scrollClampsToExtent">
+{
+  // The limit is scrollHeight - clientHeight, whatever those measure: a real
+  // browser reserves scrollbar space in clientHeight and lands a few px lower.
+  const box = $('#clampBox');
+  const maxTop = box.scrollHeight - box.clientHeight;
+  const maxLeft = box.scrollWidth - box.clientWidth;
+  testing.expectTrue(maxTop > 0);
+
+  box.scrollTop = 9999;
+  box.scrollLeft = 9999;
+  testing.expectEqual(maxTop, box.scrollTop);
+  testing.expectEqual(maxLeft, box.scrollLeft);
+
+  box.scrollTo(10, 10);
+  box.scrollBy(9999, 9999);
+  testing.expectEqual(maxTop, box.scrollTop);
+  testing.expectEqual(maxLeft, box.scrollLeft);
+
+  box.scrollBy(-9999, -9999);
+  testing.expectEqual(0, box.scrollTop);
+  testing.expectEqual(0, box.scrollLeft);
+}
+</script>
