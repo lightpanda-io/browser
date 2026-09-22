@@ -196,7 +196,7 @@ const RobotsContext = struct {
             200 => {
                 if (self.buffer.items.len == 0) {
                     // Empty robots.txt means we can short-circuit the allowed path.
-                    self.settle(.{ .decision = .allowed });
+                    self.settle(.{ .outcome = .{ .decision = .allowed } });
                     return;
                 }
 
@@ -208,12 +208,12 @@ const RobotsContext = struct {
                     // Our parser does already leniently handle malformed input and takes whichever rules it can parse.
                     // On this case of an allocation failure, it is our fault so we put it as disallowed.
                     log.warn(.browser, "error while parsing robots.txt", .{ .robots_url = robots_url, .err = err });
-                    self.settle(.{ .decision = .blocked });
+                    self.settle(.{ .outcome = .{ .decision = .blocked } });
                     return;
                 };
 
                 // BE CAREFUL: robots can be invalidated after this call
-                self.settle(.{ .robots = robots });
+                self.settle(.{ .outcome = .{ .robots = robots } });
             },
             // Unauthorized/Forbidden: treat as fully disallowed since we can't verify permissions.
             401, 403 => {
@@ -221,12 +221,12 @@ const RobotsContext = struct {
                     .url = robots_url,
                     .status = self.status,
                 });
-                self.settle(.{ .decision = .blocked });
+                self.settle(.{ .outcome = .{ .decision = .blocked } });
             },
             // RFC9309: Unavailable (400-499) means that we may access any resources on the server.
             400, 402, 404...499 => {
                 log.debug(.http, "robots.txt unavailable", .{ .url = robots_url });
-                self.settle(.{ .decision = .allowed });
+                self.settle(.{ .outcome = .{ .decision = .allowed } });
             },
             // RFC9309: Unreachable (500-599) means that we are completely disallowed.
             500...599 => {
@@ -234,14 +234,14 @@ const RobotsContext = struct {
                     .url = robots_url,
                     .status = self.status,
                 });
-                self.settle(.{ .decision = .blocked });
+                self.settle(.{ .outcome = .{ .decision = .blocked } });
             },
             else => {
                 log.debug(.http, "unexpected status on robots", .{
                     .url = robots_url,
                     .status = self.status,
                 });
-                self.settle(.{ .decision = .blocked });
+                self.settle(.{ .outcome = .{ .decision = .blocked } });
             },
         }
     }
@@ -250,7 +250,10 @@ const RobotsContext = struct {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
 
         log.warn(.http, "robots fetch failed", .{ .err = err });
-        self.settle(.{ .decision = .allowed });
+        self.settle(.{
+            .outcome = .{ .decision = .allowed },
+            .cache = false,
+        });
     }
 
     fn shutdownCallback(ctx_ptr: *anyopaque) void {
@@ -263,27 +266,34 @@ const RobotsContext = struct {
         arena.release();
     }
 
-    fn settle(self: *RobotsContext, outcome: RobotsGate.Outcome) void {
+    const SettleOptions = struct {
+        outcome: RobotsGate.Outcome,
+        cache: bool = true,
+    };
+
+    fn settle(self: *RobotsContext, options: SettleOptions) void {
         const arena = self.arena;
         defer arena.release();
 
         const gate = self.gate;
         const network = gate.network;
 
-        gate.flushPending(self.robots_url, outcome);
+        gate.flushPending(self.robots_url, options.outcome);
 
-        switch (outcome) {
-            .decision => |d| switch (d) {
-                .allowed => network.robot_store.putAllowed(self.robots_url) catch |err| {
-                    log.warn(.browser, "failed to cache robots decision", .{ .url = self.robots_url, .err = err });
+        if (options.cache) {
+            switch (options.outcome) {
+                .decision => |d| switch (d) {
+                    .allowed => network.robot_store.putAllowed(self.robots_url) catch |err| {
+                        log.warn(.browser, "failed to cache robots decision", .{ .url = self.robots_url, .err = err });
+                    },
+                    .blocked => network.robot_store.putDisallowed(self.robots_url) catch |err| {
+                        log.warn(.browser, "failed to cache robots decision", .{ .url = self.robots_url, .err = err });
+                    },
                 },
-                .blocked => network.robot_store.putDisallowed(self.robots_url) catch |err| {
-                    log.warn(.browser, "failed to cache robots decision", .{ .url = self.robots_url, .err = err });
+                .robots => |r| network.robot_store.put(self.robots_url, r) catch |err| {
+                    log.warn(.browser, "failed to cache robots rules", .{ .url = self.robots_url, .err = err });
                 },
-            },
-            .robots => |r| network.robot_store.put(self.robots_url, r) catch |err| {
-                log.warn(.browser, "failed to cache robots rules", .{ .url = self.robots_url, .err = err });
-            },
+            }
         }
     }
 };
