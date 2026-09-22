@@ -68,13 +68,13 @@ fn getTargets(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse {
         return cmd.sendResult(.{
             .targetInfos = [_]TargetInfo{},
-        }, .{ .include_session_id = false });
+        }, .{});
     };
 
     const target_id = &(bc.target_id orelse {
         return cmd.sendResult(.{
             .targetInfos = [_]TargetInfo{},
-        }, .{ .include_session_id = false });
+        }, .{});
     });
 
     return cmd.sendResult(.{
@@ -86,7 +86,7 @@ fn getTargets(cmd: *CDP.Command) !void {
             .attached = true,
             .canAccessOpener = false,
         }},
-    }, .{ .include_session_id = false });
+    }, .{});
 }
 
 fn getBrowserContexts(cmd: *CDP.Command) !void {
@@ -99,7 +99,7 @@ fn getBrowserContexts(cmd: *CDP.Command) !void {
 
     return cmd.sendResult(.{
         .browserContextIds = browser_context_ids,
-    }, .{ .include_session_id = false });
+    }, .{});
 }
 
 fn createBrowserContext(cmd: *CDP.Command) !void {
@@ -316,7 +316,7 @@ fn closeTarget(cmd: *CDP.Command) !void {
     // can't be null if we have a target_id
     lp.assert(bc.session.hasPage(), "CDP.target.closeTarget null frame", .{});
 
-    try cmd.sendResult(.{ .success = true }, .{ .include_session_id = false });
+    try cmd.sendResult(.{ .success = true }, .{});
 
     for (bc.attached_sessions.items) |session| {
         bc.fetchDisableForSession(session.id);
@@ -382,7 +382,7 @@ fn getTargetInfo(cmd: *CDP.Command) !void {
                 .attached = true,
                 .canAccessOpener = false,
             },
-        }, .{ .include_session_id = false });
+        }, .{});
     }
 
     return cmd.sendResult(.{
@@ -394,7 +394,7 @@ fn getTargetInfo(cmd: *CDP.Command) !void {
             .attached = true,
             .canAccessOpener = false,
         },
-    }, .{ .include_session_id = false });
+    }, .{});
 }
 
 fn sendMessageToTarget(cmd: *CDP.Command) !void {

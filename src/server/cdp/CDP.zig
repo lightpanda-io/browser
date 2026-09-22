@@ -1397,14 +1397,12 @@ pub const Command = struct {
         return self.browser_context.?;
     }
 
-    const SendResultOpts = struct {
-        include_session_id: bool = true,
-    };
-    pub fn sendResult(self: *Command, result: anytype, opts: SendResultOpts) !void {
+    const SendResultOpts = struct {};
+    pub fn sendResult(self: *Command, result: anytype, _: SendResultOpts) !void {
         return self.sender.sendJSON(.{
             .id = self.input.id,
             .result = if (comptime @typeInfo(@TypeOf(result)) == .null) struct {}{} else result,
-            .sessionId = if (opts.include_session_id) self.input.session_id else null,
+            .sessionId = self.input.session_id,
         });
     }
 
@@ -1413,14 +1411,12 @@ pub const Command = struct {
         return self.cdp.sendEvent(method, p, opts);
     }
 
-    const SendErrorOpts = struct {
-        include_session_id: bool = true,
-    };
-    pub fn sendError(self: *Command, code: i32, message: []const u8, opts: SendErrorOpts) !void {
+    const SendErrorOpts = struct {};
+    pub fn sendError(self: *Command, code: i32, message: []const u8, _: SendErrorOpts) !void {
         return self.sender.sendJSON(.{
             .id = self.input.id,
             .@"error" = .{ .code = code, .message = message },
-            .sessionId = if (opts.include_session_id) self.input.session_id else null,
+            .sessionId = self.input.session_id,
         });
     }
 
