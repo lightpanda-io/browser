@@ -43,6 +43,44 @@
   testing.expectTrue(after.y < window.innerHeight);
   testing.expectEqual(document.elementFromPoint(after.x + 1, after.y + 1), el);
 
+  // Points outside the viewport must still return null now that we are
+  // scrolled: the scroll offset must not translate an out-of-viewport point
+  // onto a valid document position. (Before the scroll the offset is zero, so
+  // this can only be checked while scrolled.)
+  testing.expectEqual(null, document.elementFromPoint(after.x + 1, -1));
+  testing.expectEqual(null, document.elementFromPoint(after.x + 1, window.innerHeight + 1));
+  testing.expectEqual(null, document.elementFromPoint(-1, after.y + 1));
+  testing.expectEqual(null, document.elementFromPoint(window.innerWidth + 1, after.y + 1));
+
   window.scrollTo(0, 0);
+}
+</script>
+
+<script id="horizontal_scroll_into_view">
+{
+  // scrollIntoView moves both axes. Put enough visible siblings before the
+  // target that its horizontal position (sum of preceding visible sibling
+  // widths, 5px each) is well past the viewport, then bring it back with
+  // scrollIntoView. Guards the x-axis branch that a y-only implementation
+  // would leave at 0.
+  for (let i = 0; i < 600; i++) {
+    document.body.appendChild(document.createElement('div'));
+  }
+  const el = document.createElement('div');
+  document.body.appendChild(el);
+
+  const before = el.getBoundingClientRect();
+  testing.expectTrue(before.x > window.innerWidth);
+  testing.expectEqual(0, window.scrollX);
+
+  el.scrollIntoView();
+  const after = el.getBoundingClientRect();
+
+  // The window scrolled horizontally to the element's document x, and the
+  // viewport-relative rect moved with it. Everything before the target is
+  // inline-ish (block boxes), so the document y is finite and shared.
+  testing.expectEqual(before.x, window.scrollX);
+  testing.expectEqual(0, after.x);
+  testing.expectTrue(after.x < window.innerWidth);
 }
 </script>

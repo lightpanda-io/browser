@@ -893,8 +893,22 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
     const style_manager = &owner._style_manager;
 
     // The point is viewport-relative (CSSOM-View), while faux-layout positions
-    // are document-absolute. Shift the query by the window scroll so the two
-    // spaces agree; otherwise a click on a scrolled element misses the target.
+    // are document-absolute. Reject points that fall outside the viewport
+    // before translating them: after a scroll an out-of-viewport point (e.g.
+    // y = -1) would otherwise shift onto a valid document position and match an
+    // element. The spec only hit-tests inside the viewport.
+    const viewport = owner.page.getViewport();
+    const viewport_width: f64 = @floatFromInt(viewport.width);
+    const viewport_height: f64 = @floatFromInt(viewport.height);
+    if (y < 0 or y > viewport_height) {
+        return null;
+    }
+    if (!ignore_x and (x < 0 or x > viewport_width)) {
+        return null;
+    }
+
+    // Shift the query by the window scroll so the two spaces agree; otherwise a
+    // click on a scrolled element misses the target.
     const qx = x + @as(f64, @floatFromInt(owner.window.getScrollX()));
     const qy = y + @as(f64, @floatFromInt(owner.window.getScrollY()));
 
