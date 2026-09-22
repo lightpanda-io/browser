@@ -35,8 +35,8 @@ pub const LockMode = enum {
     pub const js_enum_from_string = true;
 };
 
-fn getMode(self: *const Lock) LockMode {
-    return self._mode;
+fn getMode(self: *const Lock) []const u8 {
+    return @tagName(self._mode);
 }
 
 fn getName(self: *const Lock) lp.String {
