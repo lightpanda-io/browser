@@ -121,6 +121,18 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
     // attached targets.
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
+    // Like Chrome, report the initial about:blank as loaded. Its state is left
+    // as is, since the first navigation reuses it (see canNavigateInPlace).
+    if (frame._load_state == .waiting) {
+        const frame_id = &id.toFrameId(frame._frame_id);
+        const loader_id = &id.toLoaderId(frame._loader_id);
+
+        const now = lp.datetime.timestamp(.boot);
+        try sendPageLifecycle(bc, "DOMContentLoaded", now, frame_id, loader_id);
+        try sendPageLifecycle(bc, "load", now, frame_id, loader_id);
+        return cmd.sendResult(null, .{});
+    }
+
     if (frame._load_state == .complete) {
         const frame_id = &id.toFrameId(frame._frame_id);
         const loader_id = &id.toLoaderId(frame._loader_id);
@@ -1502,6 +1514,22 @@ test "cdp.frame: a worldName preload script seeds every frame" {
         .expression = "typeof globalThis.__seeded",
     } });
     try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "undefined" } }, .{ .id = 34 });
+}
+
+// The initial about:blank is reported as loaded, but stays pristine.
+test "cdp.page: setLifecycleEventsEnabled reports the initial about:blank as loaded" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const session_id = bc.session_id.?;
+
+    try ctx.processMessage(.{ .id = 3, .method = "Page.setLifecycleEventsEnabled", .sessionId = session_id, .params = .{ .enabled = true } });
+    try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "DOMContentLoaded", .frameId = bc.target_id.? }, .{ .session_id = session_id });
+    try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "load", .frameId = bc.target_id.? }, .{ .session_id = session_id });
+    try testing.expectEqual(.waiting, bc.mainFrame().?._load_state);
 }
 
 // puppeteer: the utility world is created on the bootstrap about:blank and
