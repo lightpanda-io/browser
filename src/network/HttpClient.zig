@@ -3312,6 +3312,7 @@ pub const Transfer = struct {
 
         // Set callbacks and per-client settings on the pooled connection.
         try conn.setWriteCallback(Transfer.dataCallback);
+        try conn.setHeaderCallback(Transfer.headerCallback);
         try conn.setFollowLocation(false);
         try conn.setProxy(client.http_proxy);
         try conn.setTlsVerify(client.tls_verify, client.use_proxy);
@@ -3744,6 +3745,57 @@ pub const Transfer = struct {
 
         // The transfer is still .parked(.intercept_auth)
         self.abortParked(error.AbortAuthChallenge);
+    }
+
+    // The only reason we hook into this is to try to detect bad responses which
+    // makes it so we can't re-use the connection. We're quick to return a
+    // connection to the pool, so this is the first and last place we can check
+    // this in all cases
+    fn headerCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) callconv(.c) usize {
+        if (comptime lp.IS_DEBUG) {
+            // libcurl emits 1 header line at a time
+            std.debug.assert(chunk_count == 1);
+        }
+
+        if (announcesBody(buffer[0..chunk_len]) == false) {
+            return chunk_len;
+        }
+
+        // If we're here, then the header line announces a body.Let's make sure
+        // the rest of the header agrees that this should have a body
+
+        const conn: *http.Connection = @ptrCast(@alignCast(data));
+        const status = conn.getResponseCode() catch |err| {
+            log.err(.http, "getResponseCode", .{ .err = err, .source = "header callback" });
+            return chunk_len;
+        };
+
+        if ((status >= 100 and status < 200) or status == 204 or status == 304) {
+            // We received a response with a body-less status code but that says
+            // it has a body. This connection isn't safe to re-use.
+            conn.setForbidReuse() catch |err| {
+                log.err(.http, "forbid reuse", .{ .err = err, .source = "header callback" });
+            };
+        }
+
+        return chunk_len;
+    }
+
+    // Whether this response header line claims the message has a body.
+    fn announcesBody(line: []const u8) bool {
+        if (std.ascii.startsWithIgnoreCase(line, "transfer-encoding:")) {
+            return true;
+        }
+        const prefix = "content-length:";
+        if (std.ascii.startsWithIgnoreCase(line, prefix) == false) {
+            return false;
+        }
+        const value = std.mem.trim(u8, line[prefix.len..], " \t\r\n");
+        // If we can't parse it, treat it as though it announces a body. This is
+        // safer as we're using this to determine if the connection can be
+        // kept-alive.
+        const length = std.fmt.parseInt(u64, value, 10) catch return true;
+        return length > 0;
     }
 
     fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) callconv(.c) usize {
@@ -5891,4 +5943,16 @@ test "HttpClient: throttled navigations wait for their per-host slot" {
     try testing.expectEqual(0, client.delayed_count);
     try testing.expectEqual(null, client.delayed_queue.first);
     try testing.expectEqual(null, client.pending_queue.first);
+}
+
+test "HttpClient: bodyless status announcing a body" {
+    try testing.expectEqual(true, Transfer.announcesBody("Content-Length: 11\r\n"));
+    try testing.expectEqual(true, Transfer.announcesBody("content-length:11\r\n"));
+    try testing.expectEqual(true, Transfer.announcesBody("Transfer-Encoding: chunked\r\n"));
+    // Nothing good comes of reusing a connection whose framing we can't read.
+    try testing.expectEqual(true, Transfer.announcesBody("Content-Length: nope\r\n"));
+
+    try testing.expectEqual(false, Transfer.announcesBody("Content-Length: 0\r\n"));
+    try testing.expectEqual(false, Transfer.announcesBody("Content-Type: text/html\r\n"));
+    try testing.expectEqual(false, Transfer.announcesBody("\r\n"));
 }
