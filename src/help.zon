@@ -490,7 +490,7 @@
     \\          Fetches and obeys robots.txt of the target page.
     \\          Defaults to false.
     \\  --robot-store-entry-limit <INT>
-    \\          Maximum number of entries kept in the RobotStore.
+    \\          Maximum number of entries kept in the RobotStore. 0 means no limit.
     \\          Defaults to 1000.
     \\  --proxy-bearer-token <TOKEN>
     \\          Token sent for bearer authentication with the proxy:

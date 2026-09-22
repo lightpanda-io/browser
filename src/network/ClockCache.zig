@@ -38,13 +38,13 @@ pub fn ClockCache(comptime V: type) type {
         };
 
         allocator: Allocator,
-        capacity: usize,
+        capacity: ?usize,
         map: Map = .empty,
         hand: usize = 0,
 
         pub fn init(allocator: Allocator, capacity: usize) Self {
-            std.debug.assert(capacity > 0);
-            return .{ .allocator = allocator, .capacity = capacity };
+            const true_capacity = if (capacity == 0) null else capacity;
+            return .{ .allocator = allocator, .capacity = true_capacity };
         }
 
         pub fn deinit(self: *Self) void {
@@ -72,8 +72,13 @@ pub fn ClockCache(comptime V: type) type {
             gop.key_ptr.* = try self.allocator.dupe(u8, key);
             gop.value_ptr.* = .{ .value = value, .referenced = true };
 
-            if (self.map.count() <= self.capacity) return .{ .inserted = null };
-            return .{ .inserted = self.evictOne() };
+            if (self.capacity) |cap| {
+                if (self.map.count() > cap) {
+                    return .{ .inserted = self.evictOne() };
+                }
+            }
+
+            return .{ .inserted = null };
         }
 
         fn evictOne(self: *Self) V {
