@@ -249,6 +249,16 @@ test "cdp.browser: getVersion" {
     }, .{ .id = 32, .index = 0, .session_id = null });
 }
 
+// Clients route replies by (sessionId, id): a reply must echo the sessionId of its command.
+test "cdp.browser: replies echo the sessionId" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .session_id = "SID-X" });
+    try ctx.processMessage(.{ .id = 1, .method = "Browser.getVersion", .sessionId = "SID-X" });
+    try ctx.expectSentResult(.{ .product = PRODUCT }, .{ .id = 1, .session_id = "SID-X" });
+}
+
 test "cdp.browser: getWindowForTarget" {
     var ctx = try testing.context();
     defer ctx.deinit();
