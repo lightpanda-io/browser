@@ -115,10 +115,13 @@ fn abortTypeError(self: *WasmStreaming, local: *const js.Local, message: []const
     self.abort(local.isolate.createTypeError(message));
 }
 
-// Body accessors report a TypeError through the context's error_message,
-// the same way the bridge surfaces it to JS.
+/// Body accessors report a TypeError through the context's error_message,
+/// the same way the bridge surfaces it to JS.
 fn abortZigError(self: *WasmStreaming, local: *const js.Local, err: anyerror) void {
     switch (err) {
+        // An exception is already pending, or the script is being killed.
+        // Aborting would re-enter V8 and replace it with a catchable error.
+        error.TryCatchRethrow, error.JsException, error.ExecutionTerminated => self.release(),
         error.TypeError => {
             const env = local.ctx.env;
             self.abortTypeError(local, env.error_message orelse "Response body is not usable");
