@@ -369,8 +369,8 @@ pub fn resolveStream(remembered: ?Remembered) bool {
     return true;
 }
 
-/// Precedence: remembered `.lp-agent.zon` value > default (auto). No CLI
-/// flag — the REPL `/searchEngine` command sets and persists it.
+/// Precedence: `--search-engine` > remembered `.lp-agent.zon` value >
+/// default (auto). The REPL `/searchEngine` command also sets and persists it.
 pub fn resolveSearchEngine(remembered: ?Remembered) lp.tools.SearchEngine {
     if (remembered) |r| if (r.search_engine) |e| return e;
     return .auto;

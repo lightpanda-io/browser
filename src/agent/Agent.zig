@@ -289,7 +289,15 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credential.provider else null);
     const verbosity = settings.resolveVerbosity(opts, remembered);
     const stream_enabled = settings.resolveStream(remembered);
-    browser_tools.search_engine = settings.resolveSearchEngine(remembered);
+    browser_tools.search_engine = opts.search_engine orelse settings.resolveSearchEngine(remembered);
+    // Only the REPL's `/searchEngine` used to say this. A keyless engine that
+    // has hit its cap fails every search, and without a word here that reads
+    // as a bad agent rather than a missing key.
+    if (browser_tools.searchKeyStatus(browser_tools.search_engine)) |key| switch (key.state) {
+        .set => {},
+        .keyless => log.info(.app, "keyless search endpoint", .{ .env_var = key.env_var, .limit = "rate-limited per client IP" }),
+        .missing => log.warn(.app, "search key missing", .{ .env_var = key.env_var, .engine = @tagName(browser_tools.search_engine) }),
+    };
 
     if (resolved) |r| {
         if (r.source == .picked) {

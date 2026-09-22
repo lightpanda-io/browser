@@ -297,6 +297,12 @@
     \\          it to PATH, instead of printing the answer. Replay it later with
     \\          `run PATH` (no LLM calls). Overwrites PATH if it exists.
     \\          Requires --task.
+    \\  --search-engine <ENGINE>
+    \\          Which web search API the `search` tool uses. Default: auto,
+    \\          which takes the first with a key in the environment, in the
+    \\          order brave, tavily, exa, keenable. `keenable` also works with
+    \\          no key at all, through a rate-limited public endpoint.
+    \\          Allowed values: auto, brave, tavily, exa, keenable.
     \\  --system-prompt <STRING>
     \\          Override the default system prompt.
     \\  --task <STRING>
