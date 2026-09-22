@@ -1294,11 +1294,11 @@ fn apiSearch(
         if (client.last_error.status) |status| {
             log.warn(.browser, @tagName(engine.tag) ++ " non-2xx", .{
                 .status = status,
-                .body = client.last_error.body,
+                .message = client.last_error.message,
             });
             detail.* = .{
                 .status = status,
-                .message = if (client.last_error.body) |b| (arena.dupe(u8, b) catch "") else "",
+                .message = if (client.last_error.message) |m| (arena.dupe(u8, m) catch "") else "",
             };
         }
         return err;
