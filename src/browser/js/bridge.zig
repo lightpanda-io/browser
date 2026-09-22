@@ -1331,6 +1331,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/collections/DOMStringList.zig"),
     @import("../webapi/Sanitizer.zig"),
     @import("../webapi/Lock.zig"),
+    @import("../webapi/LockManager.zig"),
 });
 
 // APIs available on EVERY worker global — dedicated, shared and service. This
@@ -1417,6 +1418,7 @@ const worker_common_apis = [_]type{
     @import("../webapi/MessagePort.zig"),
     @import("../webapi/collections/DOMStringList.zig"),
     @import("../webapi/Lock.zig"),
+    @import("../webapi/LockManager.zig"),
 };
 
 // Additionally available on a dedicated or shared worker, but NOT on a service
