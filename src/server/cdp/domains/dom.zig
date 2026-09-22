@@ -1484,29 +1484,48 @@ test "cdp.dom: scrollIntoViewIfNeeded scrolls a below-fold element into view" {
     // The element sits below the fold to start with (faux layout is document
     // absolute, so it doesn't move until we scroll). At scrollY 0 the
     // viewport-relative rect equals the document position.
-    const document_y = target.boundingClientRectValues(frame).y;
-    try testing.expect(document_y > @as(f64, @floatFromInt(frame.window.getInnerHeight(frame))));
+    const before = target.boundingClientRectValues(frame);
+    try testing.expect(before.y > @as(f64, @floatFromInt(frame.window.getInnerHeight(frame))));
     try testing.expectEqual(0, frame.window.getScrollY());
+
+    // The quads agree with the (viewport-relative) rect before scrolling.
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "DOM.getContentQuads",
+        .params = .{ .nodeId = target_node.id },
+    });
+    try ctx.expectSentResult(.{ .quads = &.{rectToQuad(before)} }, .{ .id = 5 });
 
     // Chrome's DOM.scrollIntoViewIfNeeded (and Playwright's click actionability)
     // expect this to actually scroll the element into the viewport.
     try ctx.processMessage(.{
-        .id = 5,
+        .id = 6,
         .method = "DOM.scrollIntoViewIfNeeded",
         .params = .{ .nodeId = target_node.id },
     });
-    try ctx.expectSentResult(null, .{ .id = 5 });
+    try ctx.expectSentResult(null, .{ .id = 6 });
 
-    try testing.expectEqual(@as(u32, @intFromFloat(document_y)), frame.window.getScrollY());
+    // scrollIntoViewIfNeeded scrolled the element to its document position.
+    // (That this is non-zero follows from before.y being below the fold; we
+    // assert the exact target rather than "some scroll happened", so a correct
+    // no-op-when-already-visible implementation would not be misjudged.)
+    const scroll_y = frame.window.getScrollY();
+    try testing.expectEqual(@as(u32, @intFromFloat(before.y)), scroll_y);
 
-    // With the window scrolled, the quads are viewport-relative and now fall
-    // inside the viewport.
+    // The rect is viewport-relative, so it shifts up by exactly the scroll
+    // amount, and so do the quads (which still agree with the rect).
+    const after = target.boundingClientRectValues(frame);
+    try testing.expectEqual(before.x, after.x);
+    try testing.expectEqual(before.y - @as(f64, @floatFromInt(scroll_y)), after.y);
+
     try ctx.processMessage(.{
-        .id = 6,
+        .id = 7,
         .method = "DOM.getContentQuads",
         .params = .{ .nodeId = target_node.id },
     });
-    try ctx.expectSentResult(.{ .quads = &.{Quad{
-        0.0, 0.0, 5.0, 0.0, 5.0, 5.0, 0.0, 5.0,
-    }} }, .{ .id = 6 });
+    try ctx.expectSentResult(.{ .quads = &.{rectToQuad(after)} }, .{ .id = 7 });
+
+    // The element is now inside the viewport.
+    try testing.expect(after.y >= 0);
+    try testing.expect(after.y < @as(f64, @floatFromInt(frame.window.getInnerHeight(frame))));
 }

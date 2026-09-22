@@ -2005,8 +2005,9 @@ pub fn scrollIntoViewIfNeeded(self: *Element, center_if_needed: ?bool, frame: *F
     const y = calculateDocumentPosition(self.asNode());
     const scroll_x: f64 = @floatFromInt(owner.window.getScrollX());
     const scroll_y: f64 = @floatFromInt(owner.window.getScrollY());
-    const viewport_width: f64 = @floatFromInt(owner.page.getViewport().width);
-    const viewport_height: f64 = @floatFromInt(owner.window.getInnerHeight(frame));
+    const viewport = owner.page.getViewport();
+    const viewport_width: f64 = @floatFromInt(viewport.width);
+    const viewport_height: f64 = @floatFromInt(viewport.height);
     const x_in_view = x >= scroll_x and x <= scroll_x + viewport_width;
     const y_in_view = y >= scroll_y and y <= scroll_y + viewport_height;
     if (x_in_view and y_in_view) {
