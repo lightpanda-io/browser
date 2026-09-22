@@ -24,6 +24,8 @@ const NodeRegistry = @import("../NodeRegistry.zig");
 
 const DOMNode = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
+const SelectorPath = @import("SelectorPath.zig");
+const Element = @import("webapi/Element.zig");
 
 const log = lp.log;
 const tavily = zenai.search.tavily;
@@ -823,6 +825,10 @@ pub const ToolResult = struct {
     is_error: bool = false,
     /// Only set when the caller passed `CallOpts.inline_image`.
     image: ?lp.screenshot.Prepared = null,
+    /// Only set when the caller passed `CallOpts.record` and the call named its
+    /// element by `backendNodeId`. Resolved before the action runs, because a
+    /// navigation takes the node with it.
+    selector: ?[]const u8 = null,
 };
 
 const GotoParams = struct {
@@ -854,6 +860,11 @@ const NodeAndPage = struct { node: *DOMNode, page: *lp.Frame, target: ActionTarg
 pub const CallOpts = struct {
     /// The caller can hand an image to a model.
     inline_image: bool = false,
+    /// The caller is recording for `--save`/`/save`. A call that addresses its
+    /// element by `backendNodeId` gets `ToolResult.selector` filled in, since
+    /// a registry id means nothing in a later session and the node may be gone
+    /// by the time the caller wants to record it.
+    record: bool = false,
 };
 
 // An inline screenshot is re-sent on every turn; keep it within what models
@@ -886,13 +897,39 @@ pub fn call(
     };
     const substituted = try substituteStringArgs(arena, tool, normalized);
 
-    return dispatch(arena, session, registry, tool, substituted, opts) catch |err| {
+    // Before dispatch: after a navigation the node is gone.
+    const selector = if (opts.record) selectorForArgs(arena, session, registry, substituted) else null;
+
+    var result = dispatch(arena, session, registry, tool, substituted, opts) catch |err| {
         if (err == error.NavigationFailed) {
             if (formatNavigationError(arena, session)) |text|
                 return .{ .text = text, .is_error = true };
         }
         return err;
     };
+    result.selector = selector;
+    return result;
+}
+
+/// The CSS selector for a call's `backendNodeId`, so the call can be recorded
+/// in a form that still resolves in a later session. Null when the arguments
+/// name no node, already carry a selector, or the node cannot be named.
+fn selectorForArgs(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    arguments: ?std.json.Value,
+) ?[]const u8 {
+    const args = arguments orelse return null;
+    if (args != .object) return null;
+    if (args.object.contains("selector")) return null;
+    const id = args.object.get("backendNodeId") orelse return null;
+    if (id != .integer) return null;
+
+    const node = registry.lookup_by_id.get(std.math.cast(NodeRegistry.Id, id.integer) orelse return null) orelse return null;
+    const el = node.dom.is(Element) orelse return null;
+    const frame = session.currentFrame() orelse return null;
+    return SelectorPath.init(arena, frame).build(el) catch null;
 }
 
 fn dispatch(

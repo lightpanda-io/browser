@@ -167,6 +167,11 @@ cancel_requested: std.atomic.Value(bool) = .init(false),
 /// mid-request instead of blocking until the model's full response arrives.
 http_interrupt: zenai.http.Interrupt = .{},
 synthetic_tool_call_id: u32 = 0,
+/// Per-turn CSS selector for each tool call the model made, in call order, so
+/// `--save` can record a call that addressed its element by `backendNodeId`.
+/// Only filled while `capturing_for_save`.
+save_selectors: std.ArrayListUnmanaged(?[]const u8) = .empty,
+capturing_for_save: bool = false,
 /// Aggregate Anthropic/OpenAI/Gemini token usage across every model call.
 /// Printed as a structured `$usage ...` line on stderr at the end of `--task`
 /// (one-shot) mode so wrappers can capture per-task cost.
@@ -355,6 +360,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 pub fn deinit(self: *Agent) void {
     self.terminal.uninstallLogSink();
     self.save_buffer.deinit();
+    self.save_selectors.deinit(self.allocator);
     if (self.save_path) |p| self.allocator.free(p);
     self.terminal.deinit();
     self.conversation.deinit();
@@ -1328,6 +1334,21 @@ fn logSaveBufferError(self: *Agent, err: anyerror) void {
     self.terminal.printError("save buffer disabled: {s}", .{@errorName(err)});
 }
 
+/// Swap a call's ephemeral `backendNodeId` for the selector the tool layer
+/// resolved, so the call can be replayed. Returns `args` untouched when there
+/// is nothing to swap.
+fn withSelector(arena: std.mem.Allocator, args: ?std.json.Value, selector: ?[]const u8) ?std.json.Value {
+    const sel = selector orelse return args;
+    const original = args orelse return args;
+    if (original != .object) return args;
+    if (!original.object.contains("backendNodeId")) return args;
+
+    var rewritten = original.object.clone(arena) catch return args;
+    _ = rewritten.swapRemove("backendNodeId");
+    rewritten.put(arena, "selector", .{ .string = sel }) catch return args;
+    return .{ .object = rewritten };
+}
+
 fn recordSaveCommand(self: *Agent, cmd: Command) void {
     self.save_buffer.record(cmd) catch |err| self.logSaveBufferError(err);
 }
@@ -1671,6 +1692,10 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     const provider_client = self.ai_client orelse return error.NoAiClient;
     self.refreshAuthIfNeeded();
 
+    self.capturing_for_save = input.capture_for_save;
+    defer self.capturing_for_save = false;
+    self.save_selectors.clearRetainingCapacity();
+
     self.terminal.spinner.start();
     var result = provider_client.runTools(
         self.model,
@@ -1731,11 +1756,15 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             const args = browser_tools.normalizeArgKeys(ca, tool, tc.arguments) catch tc.arguments;
             // Fall back to the navigation a read tool performed, so a
             // markdown/tree-driven turn isn't lost from `/save`.
-            const cmd = Command.fromToolCall(tool, args);
+            // A call that named its element by id is unreplayable as-is; the
+            // tool layer resolved a selector for it while the node still
+            // existed.
+            const replayable = withSelector(ca, args, if (i < self.save_selectors.items.len) self.save_selectors.items[i] else null);
+            const cmd = Command.fromToolCall(tool, replayable);
             const to_record = if (cmd.isRecorded())
                 cmd
             else
-                navigationGoto(ca, tool, args) orelse continue;
+                navigationGoto(ca, tool, replayable) orelse continue;
             if (!recorded_any) {
                 if (input.record_comment) |c| self.recordSaveComment(c);
                 recorded_any = true;
@@ -1888,10 +1917,17 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    const outcome = self.toolOutcome(allocator, tool_name, arguments) catch |err| zenai.provider.Client.ToolHandler.Result{
+    var selector: ?[]const u8 = null;
+    const outcome = self.toolOutcome(allocator, tool_name, arguments, &selector) catch |err| zenai.provider.Client.ToolHandler.Result{
         .content = std.fmt.allocPrint(allocator, "Error: {s}", .{browser_tools.errorMessage(err)}) catch "Error: tool execution failed",
         .is_error = true,
     };
+    if (self.capturing_for_save) {
+        // One entry per call, errors included, so the index lines up with
+        // `RunToolsResult.tool_calls_made`.
+        const kept = if (selector) |sel| self.allocator.dupe(u8, sel) catch null else null;
+        self.save_selectors.append(self.allocator, kept) catch {};
+    }
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
     if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, outcome.content, outcome.is_error);
@@ -1899,8 +1935,12 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
 }
 
 /// The text plus the rendered PNG, for backends that can show the model an image.
-fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) browser_tools.ToolError!zenai.provider.Client.ToolHandler.Result {
-    const result = try browser_tools.call(allocator, self.ts.session, &self.ts.registry, tool_name, arguments, .{ .inline_image = true });
+fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value, selector: *?[]const u8) browser_tools.ToolError!zenai.provider.Client.ToolHandler.Result {
+    const result = try browser_tools.call(allocator, self.ts.session, &self.ts.registry, tool_name, arguments, .{
+        .inline_image = true,
+        .record = self.capturing_for_save,
+    });
+    selector.* = result.selector;
     const content = capToolOutput(allocator, tool_name, result.text);
     return .{
         .content = content,
