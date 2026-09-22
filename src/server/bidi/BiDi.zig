@@ -36,6 +36,7 @@ const Server = @import("../Server.zig");
 
 const script = @import("script.zig");
 const http_command = @import("http_command.zig");
+const execute = @import("execute.zig");
 const remote_value = @import("remote_value.zig");
 
 const posix = std.posix;
@@ -84,6 +85,13 @@ handles: remote_value.Handles,
 // Commands awaiting promise resolution
 pending: std.ArrayList(*script.Pending) = .empty,
 
+// The HTTP session's execute/sync and execute/async, awaiting a promise or
+// the callback an async script was handed.
+execute_pending: std.ArrayList(*execute.Pending) = .empty,
+
+// The HTTP session's timeouts. BiDi has no equivalent.
+timeouts: Timeouts = .{},
+
 input_state: @import("input.zig").State = .{},
 
 subscriptions: std.ArrayList(Subscription) = .empty,
@@ -119,6 +127,12 @@ pub const Origin = union(enum) {
 const InputMessage = struct {
     id: ?u64 = null,
     method: ?[]const u8 = null,
+};
+
+pub const Timeouts = struct {
+    script: ?u32 = 30_000,
+    pageLoad: u32 = 300_000,
+    implicit: u32 = 0,
 };
 
 pub fn init(self: *BiDi, app: *App, inbox: *Inbox, origin: Origin) !void {
@@ -176,11 +190,14 @@ pub fn deinit(self: *BiDi) void {
 
     // Cancel first, so that any completions during session teardown are still valid
     script.Pending.cancelAll(self);
+    execute.Pending.cancelAll(self);
     self.handles.deinit();
     self.browser.closeSession();
     // Now we can destroy
     script.Pending.destroyAll(self);
+    execute.Pending.destroyAll(self);
     self.pending.deinit(allocator);
+    self.execute_pending.deinit(allocator);
     self.input_state.deinit(allocator);
 
     self.node_registry.deinit();
@@ -262,6 +279,7 @@ const UserContext = struct {
 
 pub fn resetRealm(self: *BiDi) void {
     script.Pending.realmReset(self);
+    execute.Pending.realmReset(self);
     self.handles.releaseAll();
     self.node_registry.reset();
     if (self.browsing_context) |*ctx| {
