@@ -1311,6 +1311,13 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
         return;
     }
 
+    // `stripCodeFence` accepts a block with no closing fence, so a script cut
+    // off mid-statement is indistinguishable from a complete one once it is on
+    // disk. Refuse rather than save something that will not replay.
+    if (result.finish_reason == .max_tokens) {
+        return self.abortSave(baseline, "the model ran out of output tokens mid-script");
+    }
+
     const raw = result.text orelse return self.abortSave(baseline, "the model returned no script");
 
     // `result.text` lives in the conversation arena, freed by the rollback
