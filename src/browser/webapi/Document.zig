@@ -1163,6 +1163,9 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
         try frame._script_created_parser_docs.append(frame.arena, self);
     }
     self._script_created_parser = Parser.Streaming.init(frame.arena, doc_node, frame, .{ .allow_declarative_shadow = true });
+    // on start() failure the internal `handle` isn't yet create. So we can't
+    // call done() and we don't want any subsequent cleanup to call done().
+    errdefer self._script_created_parser = null;
     try self._script_created_parser.?.start();
     frame._parse_mode = .document;
 
