@@ -146,6 +146,8 @@ _queued_events_1: std.ArrayList(QueuedEvent) = .empty,
 _queued_events_2: std.ArrayList(QueuedEvent) = .empty,
 _queued_events: *std.ArrayList(QueuedEvent) = undefined,
 
+_focus_fixup_pending: bool = false,
+
 _style_manager: StyleManager,
 _script_manager: ScriptManager,
 
@@ -2356,6 +2358,25 @@ pub fn queueElementEvent(self: *Frame, element: *Element.Html, kind: QueuedEvent
     }
 }
 
+// An element that becomes inert can't stay focused. Fire its blur on the next tick
+fn scheduleFocusFixup(self: *Frame) !void {
+    if (self._focus_fixup_pending or self.document._active_element == null) {
+        return;
+    }
+    try self.js.scheduler.add(self, struct {
+        fn run(ctx: *anyopaque) !?u32 {
+            const f: *Frame = @ptrCast(@alignCast(ctx));
+            f._focus_fixup_pending = false;
+            const active = f.document._active_element orelse return null;
+            if (active.asNode().isInert(f)) {
+                try active.blur(f);
+            }
+            return null;
+        }
+    }.run, 5, .{ .name = "frame.focusFixup" });
+    self._focus_fixup_pending = true;
+}
+
 const HashChangeCallback = struct {
     frame: *Frame,
     old_url: []const u8,
@@ -3135,6 +3156,10 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
     } else if (name.eql(comptime .wrap("style"))) {
         element._flags.has_inline_style = true;
         self.styleAttributeChanged(element, value.str());
+    } else if (name.eql(comptime .wrap("inert"))) {
+        self.scheduleFocusFixup() catch |err| {
+            log.err(.frame, "scheduleFocusFixup", .{ .err = err, .type = self._type, .url = self.url });
+        };
     }
 }
 
