@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <script src="testing.js"></script>
 
+<!-- Room to scroll: the document can't scroll past its bottom -->
+<div style="height: 10000px"></div>
+
 <script id=scrollBy_exists>
   testing.expectEqual('function', typeof window.scrollBy);
 </script>
@@ -43,6 +46,28 @@
   window.scrollBy(-100, -100);
   testing.expectEqual(0, window.scrollX);
   testing.expectEqual(0, window.scrollY);
+</script>
+
+<script id=scrollTo_clamps_to_document>
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  testing.expectTrue(max > 0);
+  window.scrollTo(0, 99999999);
+  testing.expectEqual(max, window.scrollY);
+  window.scrollBy(0, 100);
+  testing.expectEqual(max, window.scrollY);
+
+  // The document has no honest width, so x isn't bounded
+  window.scrollTo(99999, 0);
+  testing.expectEqual(99999, window.scrollX);
+
+  // Content added at the bottom extends the limit
+  const more = document.createElement('div');
+  more.style.height = '5000px';
+  document.body.appendChild(more);
+  window.scrollTo(0, 99999999);
+  testing.expectEqual(max + 5000, window.scrollY);
+  more.remove();
+  window.scrollTo(0, 0);
 </script>
 
 <script id=element_scroll_events_coalesce_and_preserve_reentrancy type=module>

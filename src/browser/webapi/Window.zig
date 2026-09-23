@@ -952,7 +952,12 @@ fn getDevicePixelRatio(_: *const Window, frame: *Frame) f32 {
 pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts.offsets(y);
     const new_x: u32 = if (o.left) |left| @intCast(@max(0, left)) else self._scroll_pos.x;
-    const new_y: u32 = if (o.top) |top| @intCast(@max(0, top)) else self._scroll_pos.y;
+    var new_y: u32 = if (o.top) |top| @intCast(@max(0, top)) else self._scroll_pos.y;
+
+    // The document can't scroll past its bottom. It has no honest width
+    // (children don't lie side by side), so x stays unbounded.
+    const max_y = Element.documentHeight(self._frame) - @as(f64, @floatFromInt(self.getInnerHeight(self._frame)));
+    new_y = @min(new_y, @as(u32, @intFromFloat(@max(0, @min(max_y, std.math.maxInt(u32))))));
 
     if (new_x == self._scroll_pos.x and new_y == self._scroll_pos.y) {
         return;

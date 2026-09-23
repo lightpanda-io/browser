@@ -1500,12 +1500,12 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
         }
     }
 
-    // Root containers get large default size to contain descendant positions.
-    // With calculateDocumentPosition using linear depth scaling (100px per level),
-    // even very deep trees (100 levels) stay within 10,000px.
-    // 100M pixels is plausible for very long documents.
+    // Root containers span the document, see documentHeight.
     if (root) {
-        return .{ .value = if (axis == .width) 1920.0 else 100_000_000.0 };
+        return .{ .value = switch (axis) {
+            .width => 1920.0,
+            .height => if (self.ownerFrame(frame)) |owner| documentHeight(owner) else 0.0,
+        } };
     }
 
     // Presentational attributes lose to CSS sizes.
@@ -1679,8 +1679,7 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
     const height = self.getElementAxis(frame, .height).value;
 
     const tag = self.getTag();
-    // As in getScrollWidth: the root containers carry artificial giant
-    // defaults, and page-level overflow checks read them.
+    // The root containers already span the document.
     if (tag == .html or tag == .body) {
         return height;
     }
@@ -1696,9 +1695,9 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
     const width = self.getElementAxis(frame, .width).value;
 
     const tag = self.getTag();
-    // The root containers carry artificial giant defaults (1920 and
-    // 100_000_000, see getElementAxis). Stacking their children on
-    // top would inflate a value sites read to detect page overflow.
+    // The root containers span the document (see getElementAxis), and
+    // their children don't lie side by side on one row: stacking them
+    // would inflate a value sites read to detect page overflow.
     if (tag == .html or tag == .body) {
         return width;
     }
@@ -1708,9 +1707,9 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 
 /// Null where we can't prove a limit, which leaves the offset unbounded:
 /// without an explicit size the client and content measurements collapse onto
-/// the same sum, and html and body carry giant defaults that would fabricate
-/// an extent against the real viewport. Refusing a scroll we can't prove
-/// impossible is worse than allowing one too many.
+/// the same sum. html and body scroll the viewport, which Window.scrollTo
+/// clamps. Refusing a scroll we can't prove impossible is worse than allowing
+/// one too many.
 fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
     if (self.scrollsViewport() or !self.getElementAxis(frame, axis).explicit) {
         return null;
@@ -1781,8 +1780,8 @@ fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     return total;
 }
 
-// Unlike clientHeight, the root's offsetHeight is its box (the document
-// extent), so it stays on the synthetic root default.
+// Unlike clientHeight, the root's offsetHeight is its box: the document
+// height.
 pub fn getOffsetHeight(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
@@ -1911,6 +1910,37 @@ fn calculateDocumentPosition(node: *Node) f64 {
     }
 
     return position * 5.0; // 5px per node
+}
+
+/// The document's height, which html and body span and the viewport scrolls
+/// over. Tall enough for every synthetic position (calculateDocumentPosition's
+/// 5px per node), for body's children stacked on top of each other, and never
+/// shorter than the viewport, like the root's scrollHeight.
+pub fn documentHeight(frame: *Frame) f64 {
+    const version = frame.page.style_version;
+    const viewport = frame.page.getViewport().height;
+    if (frame._document_height) |cached| {
+        if (cached.version == version and cached.viewport == viewport) {
+            return cached.value;
+        }
+    }
+
+    const doc = frame.document;
+    var height = @max(@as(f64, @floatFromInt(viewport)), countSubtreeNodes(doc.asNode()) * 5.0);
+    if (doc.getDocumentElement()) |root| {
+        var child = root.asNode().firstChild();
+        while (child) |node| : (child = node.nextSibling()) {
+            if (node.is(Html.Body)) |body| {
+                height = @max(height, body.asElement().contentAxis(frame, .height));
+                break;
+            }
+        }
+    }
+
+    // Whole pixels, like the scroll offsets clamped against it
+    height = @ceil(height);
+    frame._document_height = .{ .version = version, .viewport = viewport, .value = height };
+    return height;
 }
 
 // Counts total nodes in a subtree (node + all descendants)

@@ -154,6 +154,10 @@ _queued_events: *std.ArrayList(QueuedEvent) = undefined,
 _focus_fixup_pending: bool = false,
 
 _style_manager: StyleManager,
+
+// Element.documentHeight, valid while the style version and viewport height
+// it was computed for hold.
+_document_height: ?struct { version: usize, viewport: u32, value: f64 } = null,
 _script_manager: ScriptManager,
 
 _http_owner: HttpClient.Owner,

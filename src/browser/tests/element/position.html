@@ -337,17 +337,17 @@
   testing.expectEqual(0, panel.clientHeight);
   testing.expectTrue(panel.scrollHeight > 0);
 
-  // The root containers keep their synthetic size rather than summing
-  // children. The root element's clientHeight is the viewport (CSSOM View):
-  // jstracker tiles clientWidth/10 cells over clientHeight and calls
-  // elementFromPoint per cell, which the 100M px box turned into ~5M walks.
+  // The root containers span the document rather than summing children.
+  // The root element's clientHeight is the viewport (CSSOM View): jstracker
+  // tiles clientWidth/10 cells over clientHeight and calls elementFromPoint
+  // per cell, which a document-sized box turned into ~5M walks.
   testing.expectEqual(document.body.clientHeight, document.body.scrollHeight);
   testing.expectEqual(window.innerHeight, document.documentElement.clientHeight);
   testing.expectEqual(
     document.documentElement.offsetHeight,
     document.documentElement.scrollHeight,
   );
-  testing.expectTrue(document.documentElement.scrollHeight > document.documentElement.clientHeight);
+  testing.expectTrue(document.documentElement.scrollHeight >= document.documentElement.clientHeight);
 }
 </script>
 
@@ -577,6 +577,11 @@
   const deep = document.createElement('div');
   deep.id = 'deep';
   document.body.appendChild(deep);
+
+  // Room below it, or the viewport couldn't bring its top up
+  const room = document.createElement('div');
+  room.style.height = '10000px';
+  document.body.appendChild(room);
 
   const targetY = deep.getBoundingClientRect().y;
   testing.expectTrue(targetY > 0);
