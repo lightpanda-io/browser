@@ -326,7 +326,7 @@ fn fireNavigateSuccess(self: *Navigation, frame: *Frame) !void {
         null,
         frame.page,
     ) catch |err| {
-        log.warn(.event, "Navigation.fireNavigateSuccess", .{ .err = err });
+        log.warn(.event, "Navigation.navigatesuccess", .{ .err = err });
         return;
     };
 
@@ -356,7 +356,7 @@ fn fireCurrentEntryChangeEvent(
             },
             frame,
         ) catch |err| {
-            log.warn(.event, "Navigation.fireCurrentEntryChange", .{ .err = err });
+            log.warn(.event, "Navigation.currententrychange", .{ .err = err });
             return;
         };
 

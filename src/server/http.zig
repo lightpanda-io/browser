@@ -1036,7 +1036,7 @@ pub fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
         // advertiseHost() falls back to 127.0.0.1 so clients can still
         // connect locally. Surface the trade-off so users running
         // outside the same host know they have to opt in.
-        log.note(.cdp, "advertising loopback for wildcard bind", .{
+        log.note(.cdp, "wildcard bind advertise", .{
             .message = "--host is a wildcard (0.0.0.0 / ::) without --advertise-host; clients on other hosts will need --advertise-host to reach the CDP endpoint",
         });
     }

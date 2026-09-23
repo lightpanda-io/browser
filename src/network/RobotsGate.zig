@@ -284,14 +284,14 @@ const RobotsContext = struct {
             switch (options.outcome) {
                 .decision => |d| switch (d) {
                     .allowed => network.robot_store.putAllowed(self.robots_url) catch |err| {
-                        log.warn(.browser, "failed to cache robots decision", .{ .url = self.robots_url, .err = err });
+                        log.warn(.browser, "cache robots decision", .{ .url = self.robots_url, .err = err });
                     },
                     .blocked => network.robot_store.putDisallowed(self.robots_url) catch |err| {
-                        log.warn(.browser, "failed to cache robots decision", .{ .url = self.robots_url, .err = err });
+                        log.warn(.browser, "cache robots decision", .{ .url = self.robots_url, .err = err });
                     },
                 },
                 .robots => |r| network.robot_store.put(self.robots_url, r) catch |err| {
-                    log.warn(.browser, "failed to cache robots rules", .{ .url = self.robots_url, .err = err });
+                    log.warn(.browser, "cache robots rules", .{ .url = self.robots_url, .err = err });
                 },
             }
         }

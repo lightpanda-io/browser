@@ -102,14 +102,14 @@ fn storeFromSystemCA(allocator: Allocator) !*crypto.X509_STORE {
                 // advances `ptr` past it, so we just hand it the rest of the buffer.
                 var ptr: [*]const u8 = bytes.ptr + index.*;
                 const x509 = crypto.d2i_X509(null, &ptr, @intCast(bytes.len - index.*)) orelse {
-                    log.warn(.app, "Skipping unparseable system cert", .{});
+                    log.warn(.app, "Skipping unparseable cert", .{});
                     continue;
                 };
                 defer crypto.X509_free(x509); // add_cert takes its own ref; drop ours.
 
                 const result = crypto.X509_STORE_add_cert(store, x509);
                 if (result != 1) {
-                    log.warn(.app, "Failed to add X509 cert to store", .{});
+                    log.warn(.app, "Failed to add X509 cert", .{});
                 }
                 count += 1;
             }

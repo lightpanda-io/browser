@@ -443,7 +443,7 @@ pub fn hideServiceWorker(self: *const Env, comptime is_frame: bool, v8_context: 
     var deleted: v8.MaybeBool = undefined;
     v8.v8__Object__Delete(global_obj, v8_context, @ptrCast(self.disabled_api_names.get(self.isolate.handle, "caches")), &deleted);
     if (deleted.has_value == false or deleted.value == false) {
-        log.warn(.js, "failed to hide experimental API", .{ .interface = "global", .member = "caches" });
+        log.warn(.js, "experimental API not hidden", .{ .interface = "global", .member = "caches" });
     }
 }
 
@@ -457,7 +457,7 @@ fn deletePrototypeMember(self: *const Env, v8_context: *const v8.Context, global
     var deleted: v8.MaybeBool = undefined;
     v8.v8__Object__Delete(@ptrCast(prototype), v8_context, @ptrCast(names.get(isolate, member)), &deleted);
     if (deleted.has_value == false or deleted.value == false) {
-        log.warn(.js, "failed to hide experimental API", .{ .interface = interface, .member = member });
+        log.warn(.js, "experimental API not hidden", .{ .interface = interface, .member = member });
     }
 }
 

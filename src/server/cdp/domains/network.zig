@@ -105,7 +105,7 @@ fn emulateNetworkConditions(cmd: *CDP.Command) !void {
     }
     // -1 disables a throughput limit.
     if (params.latency > 0 or params.downloadThroughput > 0 or params.uploadThroughput > 0) {
-        log.warn(.not_implemented, "Network.emulateNetworkConditions", .{ .param = "throttling" });
+        log.warn(.not_implemented, "Network.emulateConditions", .{ .param = "throttling" });
     }
     return cmd.sendResult(null, .{});
 }
