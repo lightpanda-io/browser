@@ -1699,6 +1699,27 @@ pub fn assignedSlot(self: *Node, frame: *const Frame) ?*Element.Html.Slot {
     return frame.page._assigned_slots.get(self);
 }
 
+// An inert element applies to all its chidren, so walk up to see if we have
+// an inert parent
+pub fn isInert(self: *Node, frame: *const Frame) bool {
+    var current: ?*Node = self;
+    while (current) |node| {
+        if (node.is(Element)) |el| {
+            if (el._namespace == .html and el.hasAttributeSafe(comptime .wrap("inert"))) {
+                return true;
+            }
+        }
+        if (node.assignedSlot(frame)) |slot| {
+            current = slot.asNode();
+        } else if (node.is(ShadowRoot)) |shadow| {
+            current = shadow._host.asNode();
+        } else {
+            current = node._parent;
+        }
+    }
+    return false;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Node);
 

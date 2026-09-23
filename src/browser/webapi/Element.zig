@@ -1233,12 +1233,17 @@ pub fn focusTabIndex(self: *Element) ?i32 {
     return null;
 }
 
-// A focusable area that can take focus right now: connected and being rendered.
+// A focusable area that can take focus right now: connected, not inert and
+// being rendered.
 pub fn isFocusable(self: *Element, frame: *Frame) bool {
     if (self.focusTabIndex() == null) {
         return false;
     }
-    if (self.asNode().isConnected() == false) {
+    const node = self.asNode();
+    if (node.isConnected() == false) {
+        return false;
+    }
+    if (node.isInert(frame)) {
         return false;
     }
     return self.isVisible(frame);
