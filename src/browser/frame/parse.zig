@@ -123,13 +123,5 @@ pub fn xmlDocument(frame: *Frame, xml: []const u8) !?*Document.XMLDocument {
     if (parser.err != null or parser.xml_error or doc_node.firstChild() == null) {
         return null;
     }
-
-    // If first node is a `ProcessingInstruction` (e.g. the <?xml?>
-    // declaration), skip it.
-    const first_child = doc_node.firstChild().?;
-    if (first_child.getNodeType() == 7) {
-        _ = try doc_node.removeChild(first_child, frame);
-    }
-
     return doc;
 }

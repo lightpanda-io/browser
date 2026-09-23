@@ -874,6 +874,17 @@ impl<'arena> xml5ever::tokenizer::TokenSink for UnclosedTagSink<'arena> {
                         .parse_error(std::borrow::Cow::Borrowed("Unclosed element at EOF"));
                 }
             }
+            // The XML declaration isn't a processing instruction, so no node
+            // is created for it. xml5ever doesn't validate it.
+            Token::ProcessingInstruction(pi) if &*pi.target == "xml" => {
+                if !is_valid_xml_declaration(&pi.data) {
+                    use xml5ever::tree_builder::TreeSink;
+                    self.tb
+                        .sink
+                        .parse_error(std::borrow::Cow::Borrowed("Invalid XML declaration"));
+                }
+                return xml5ever::tokenizer::ProcessResult::Continue;
+            }
             _ => {}
         }
         self.tb.process_token(token)
@@ -881,6 +892,30 @@ impl<'arena> xml5ever::tokenizer::TokenSink for UnclosedTagSink<'arena> {
 
     fn end(&self) {
         self.tb.end()
+    }
+}
+
+// The declaration must start with `version="1.x"`: browsers accept any 1.x
+// (XML 1.0 5th edition's VersionNum is `1.[0-9]+`) and reject everything else.
+fn is_valid_xml_declaration(data: &str) -> bool {
+    fn trim(s: &str) -> &str {
+        s.trim_start_matches([' ', '\t', '\r', '\n'])
+    }
+    let Some(rest) = trim(data).strip_prefix("version").map(trim) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix('=').map(trim) else {
+        return false;
+    };
+    let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+        return false;
+    };
+    let Some((version, _)) = rest[1..].split_once(quote) else {
+        return false;
+    };
+    match version.strip_prefix("1.") {
+        Some(minor) => !minor.is_empty() && minor.bytes().all(|b| b.is_ascii_digit()),
+        None => false,
     }
 }
 
