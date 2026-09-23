@@ -516,10 +516,7 @@ const TurnInput = struct {
 /// Returns true on success.
 pub fn run(self: *Agent) bool {
     if (self.start_url) |url| {
-        self.gotoStart(url, self.one_shot_save != null) catch |err| {
-            self.terminal.printError("could not open {s}: {s}", .{ url, browser_tools.errorMessage(err) });
-            return false;
-        };
+        if (!self.gotoStart(url, self.one_shot_save != null)) return false;
     }
     if (self.one_shot_task) |task| {
         const saving = self.one_shot_save != null;
@@ -543,16 +540,27 @@ pub fn run(self: *Agent) bool {
     return true;
 }
 
-fn gotoStart(self: *Agent, url: [:0]const u8, record: bool) browser_tools.ToolError!void {
+/// Opens `--url` through the tool layer, so a bad URL fails like any other
+/// tool call.
+fn gotoStart(self: *Agent, url: [:0]const u8, record: bool) bool {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
     var object: std.json.ObjectMap = .empty;
-    try object.put(a, "url", .{ .string = url });
+    object.put(a, "url", .{ .string = url }) catch return false;
     const args: std.json.Value = .{ .object = object };
-    _ = try browser_tools.call(a, self.ts.session, &self.ts.registry, "goto", args, .{});
+    const result = browser_tools.call(a, self.ts.session, &self.ts.registry, "goto", args, .{}) catch |err| {
+        self.terminal.printError("could not open {s}: {s}", .{ url, browser_tools.errorMessage(err) });
+        return false;
+    };
+    // `call` reports a failed navigation in-band, not as an error.
+    if (result.is_error) {
+        self.terminal.printError("could not open {s}: {s}", .{ url, result.text });
+        return false;
+    }
     if (record) self.recordSaveCommand(Command.fromToolCall(.goto, args));
+    return true;
 }
 
 /// Print single-line cumulative token usage to stderr, so wrappers driving
