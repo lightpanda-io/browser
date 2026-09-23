@@ -274,6 +274,8 @@ jobs:
       # $ sudo chmod o+w /sys/fs/cgroup/cgroup.procs
       # $ sudo mkdir -p /sys/fs/cgroup/actions-runner
       # $ sudo chown -R actions-runner:actions-runner /sys/fs/cgroup/actions-runner
+      # $ echo +memory | sudo tee /sys/fs/cgroup/actions-runner/cgroup.subtree_control
+      # /sys/fs/cgroup is reset on reboot: run these again after a host restart.
       CG_ROOT: /sys/fs/cgroup
       CG: actions-runner/lpd_${{ github.run_id }}_${{ github.run_attempt }}
 
