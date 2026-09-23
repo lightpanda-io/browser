@@ -567,10 +567,14 @@ extern "c" fn lp_layout_new(
 extern "c" fn lp_layout_free(h: *LayoutHandle) void;
 extern "c" fn lp_render_abi(out: *LpAbi) void;
 
+// Iterative else large trees will stackoverflow
 const Builder = struct {
     frame: *Frame,
     arena: Allocator,
     tree: RenderTree,
+
+    // Content still to render, followed by what closes the element.
+    stack: std.ArrayList(Open) = .empty,
 
     blocks: std.ArrayList(LpBlock) = .empty,
 
@@ -616,6 +620,30 @@ const Builder = struct {
     const ListState = struct {
         ordered: bool,
         index: u32,
+    };
+
+    const Open = struct {
+        iter: RenderTree.Slotted,
+        epilogue: Epilogue,
+    };
+
+    // what follows after the children
+    const Epilogue = union(enum) {
+        none,
+        block,
+        pre: ?*Node,
+        list: bool,
+        list_item: bool,
+        blockquote,
+        anchor: Anchor,
+        cell: bool,
+        element: Element.Tag,
+
+        const Anchor = struct {
+            linked: bool,
+            prev_href: []const u8,
+            standalone: bool,
+        };
     };
 
     const Error = Allocator.Error;
@@ -758,9 +786,23 @@ const Builder = struct {
 
     fn render(self: *Builder, node: *Node) Error!void {
         switch (node._type) {
-            .document, .document_fragment => try self.renderChildren(node, false),
+            .document, .document_fragment => try self.open(.init(self.tree.children(node, false)), .none),
             else => if (self.tree.classify(node, .{})) |child| try self.renderChild(child),
         }
+
+        while (self.stack.items.len > 0) {
+            // renderChild can grow the stack, so we can't re-use top on continue
+            const top = &self.stack.items[self.stack.items.len - 1];
+            if (top.iter.next()) |child| {
+                try self.renderChild(child);
+                continue;
+            }
+            try self.close(self.stack.pop().?.epilogue);
+        }
+    }
+
+    fn open(self: *Builder, iter: RenderTree.Slotted, epilogue: Epilogue) Error!void {
+        return self.stack.append(self.arena, .{ .iter = iter, .epilogue = epilogue });
     }
 
     fn renderChild(self: *Builder, child: RenderTree.Child) Error!void {
@@ -769,21 +811,6 @@ const Builder = struct {
             .element => |display| try self.renderElement(child.node.subtype(Node.Element), display),
             .text => |text| try self.renderText(text),
         }
-    }
-
-    fn renderChildren(self: *Builder, parent: *Node, boxed: bool) Error!void {
-        var it = self.tree.children(parent, boxed);
-        while (it.next()) |child| try self.renderChild(child);
-    }
-
-    fn renderContent(self: *Builder, el: *Element, boxed: bool) Error!void {
-        var it = self.tree.content(el, boxed);
-        while (it.next()) |child| try self.renderChild(child);
-    }
-
-    fn renderSlotContent(self: *Builder, slot: *Slot) Error!void {
-        var it = self.tree.slotted(slot);
-        while (it.next()) |child| try self.renderChild(child);
     }
 
     fn renderText(self: *Builder, text: []const u8) Error!void {
@@ -824,16 +851,13 @@ const Builder = struct {
                     else => 6,
                 };
                 try self.openBlock(.heading, level);
-                try self.renderContent(el, boxed);
-                return self.closeBlock();
+                return self.open(.init(self.tree.content(el, boxed)), .block);
             },
             .pre => {
                 try self.openBlock(.pre, 0);
                 const prev = self.pre_node;
                 self.pre_node = el.asNode();
-                try self.renderContent(el, boxed);
-                self.pre_node = prev;
-                return self.closeBlock();
+                return self.open(.init(self.tree.content(el, boxed)), .{ .pre = prev });
             },
             .hr => {
                 try self.openBlock(.rule, 0);
@@ -854,10 +878,7 @@ const Builder = struct {
                     self.list_stack[self.list_depth] = .{ .ordered = tag == .ol, .index = 1 };
                     self.list_depth += 1;
                 }
-                try self.renderContent(el, boxed);
-                try self.closeBlock();
-                if (pushed) self.list_depth -= 1;
-                return;
+                return self.open(.init(self.tree.content(el, boxed)), .{ .list = pushed });
             },
             .li => {
                 try self.closeBlock();
@@ -871,19 +892,12 @@ const Builder = struct {
                 } else {
                     self.pending_marker = "•";
                 }
-                try self.renderContent(el, boxed);
-                try self.closeBlock();
-                self.pending_marker = "";
-                if (stray) self.list_depth = 0;
-                return;
+                return self.open(.init(self.tree.content(el, boxed)), .{ .list_item = stray });
             },
             .blockquote => {
                 try self.closeBlock();
                 self.quote_depth +|= 1;
-                try self.renderContent(el, boxed);
-                try self.closeBlock();
-                self.quote_depth -= 1;
-                return;
+                return self.open(.init(self.tree.content(el, boxed)), .blockquote);
             },
             .img => {
                 const alt = el.getAttributeInterned("alt") orelse return;
@@ -926,24 +940,19 @@ const Builder = struct {
                     // point outside the document.
                     self.href = URL.resolve(self.arena, self.frame.base(), h, .{ .encoding = self.frame.charset }) catch h;
                 }
+
+                const epilogue: Epilogue = .{ .anchor = .{
+                    .linked = href != null,
+                    .prev_href = prev_href,
+                    .standalone = standalone,
+                } };
                 if (info.has_visible) {
-                    try self.renderContent(el, boxed);
-                } else {
-                    try self.renderText(label.?);
+                    return self.open(.init(self.tree.content(el, boxed)), epilogue);
                 }
-                if (href != null) {
-                    self.link -= 1;
-                    self.href = prev_href;
-                }
-                if (standalone) {
-                    try self.closeBlock();
-                    self.tight -= 1;
-                } else {
-                    self.after_anchor = true;
-                }
-                return;
+                try self.renderText(label.?);
+                return self.close(epilogue);
             },
-            .slot => return self.renderSlotContent(el.as(Slot)),
+            .slot => return self.open(self.tree.slotted(el.as(Slot)), .none),
             .td, .th => {
                 if (self.has_content) {
                     self.pending_space = true;
@@ -953,19 +962,12 @@ const Builder = struct {
                     self.pending_space = true;
                 }
                 if (tag == .th) self.bold += 1;
-                try self.renderContent(el, boxed);
-                if (tag == .th) self.bold -= 1;
-                self.pending_space = true;
-                return;
+                return self.open(.init(self.tree.content(el, boxed)), .{ .cell = tag == .th });
             },
             else => {},
         }
 
-        const block = tag.isBlock() or switch (tag) {
-            .tr, .dt, .dd, .details, .summary, .caption, .legend, .option, .textarea => true,
-            else => false,
-        };
-        if (block) try self.closeBlock();
+        if (isBlockTag(tag)) try self.closeBlock();
 
         switch (tag) {
             .b, .strong => self.bold += 1,
@@ -975,21 +977,69 @@ const Builder = struct {
             .code => self.mono += 1,
             else => {},
         }
-        try self.renderContent(el, boxed);
-        switch (tag) {
-            .b, .strong => self.bold -= 1,
-            .i, .em, .dfn => self.italic -= 1,
-            .ins => self.underline -= 1,
-            .s, .del => self.strike -= 1,
-            .code => self.mono -= 1,
-            else => {},
-        }
+        return self.open(.init(self.tree.content(el, boxed)), .{ .element = tag });
+    }
 
-        if (block) {
-            try self.closeBlock();
+    // Finish the element after renderElement has written the children
+    fn close(self: *Builder, epilogue: Epilogue) Error!void {
+        switch (epilogue) {
+            .none => {},
+            .block => try self.closeBlock(),
+            .pre => |prev| {
+                self.pre_node = prev;
+                try self.closeBlock();
+            },
+            .list => |pushed| {
+                try self.closeBlock();
+                if (pushed) self.list_depth -= 1;
+            },
+            .list_item => |stray| {
+                try self.closeBlock();
+                self.pending_marker = "";
+                if (stray) self.list_depth = 0;
+            },
+            .blockquote => {
+                try self.closeBlock();
+                self.quote_depth -= 1;
+            },
+            .anchor => |anchor| {
+                if (anchor.linked) {
+                    self.link -= 1;
+                    self.href = anchor.prev_href;
+                }
+                if (anchor.standalone) {
+                    try self.closeBlock();
+                    self.tight -= 1;
+                } else {
+                    self.after_anchor = true;
+                }
+            },
+            .cell => |header| {
+                if (header) self.bold -= 1;
+                self.pending_space = true;
+            },
+            .element => |tag| {
+                switch (tag) {
+                    .b, .strong => self.bold -= 1,
+                    .i, .em, .dfn => self.italic -= 1,
+                    .ins => self.underline -= 1,
+                    .s, .del => self.strike -= 1,
+                    .code => self.mono -= 1,
+                    else => {},
+                }
+                if (isBlockTag(tag)) try self.closeBlock();
+            },
         }
     }
 };
+
+// Tags that get a block of their own, beyond the ones CSS calls blocks.
+fn isBlockTag(tag: Element.Tag) bool {
+    return tag.isBlock() or switch (tag) {
+        .tr, .dt, .dd, .details, .summary, .caption, .legend, .option, .textarea => true,
+        else => false,
+    };
+}
 
 const testing = @import("../testing.zig");
 test "browser.screenshot: rust abi matches" {
@@ -1534,4 +1584,28 @@ test "browser.screenshot: collect honours strip flags" {
     const stripped = try collect(arena, .{ .root = div.asNode(), .strip = .{ .shell = true, .ui = true } }, frame);
     try testing.expectEqual(1, stripped.len);
     try testing.expectEqual("Body text", try S.text(stripped[0], arena));
+}
+
+test "browser.screenshot: deep nesting doesn't overflow the native stack" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+
+    // <div>, not an inline tag: the inline style counters are u8, and nesting
+    // one 256 deep overflows them long before the walk is the problem.
+    const depth = 50_000;
+    const doc = frame.window._document;
+    const innermost = (try doc.createElement("div", null, frame)).asNode();
+    _ = try innermost.appendChild(try doc.createTextNode("deep"), frame);
+
+    var top = innermost;
+    for (1..depth) |_| {
+        const parent = (try doc.createElement("div", null, frame)).asNode();
+        _ = try parent.appendChild(top, frame);
+        top = parent;
+    }
+
+    const blocks = try collect(testing.arena_allocator, .{ .root = top }, frame);
+    try testing.expectEqual(1, blocks.len);
+    try testing.expectEqual(1, blocks[0].spans_len);
+    try testing.expectEqual("deep", blocks[0].spans[0].text[0..blocks[0].spans[0].len]);
 }

@@ -83,6 +83,10 @@ pub const Slotted = struct {
     assigned: []const *Node,
     fallback: Children,
 
+    pub fn init(children_: Children) Slotted {
+        return .{ .tree = children_.tree, .assigned = &.{}, .fallback = children_ };
+    }
+
     pub fn next(self: *Slotted) ?Child {
         while (self.assigned.len > 0) {
             const node = self.assigned[0];
