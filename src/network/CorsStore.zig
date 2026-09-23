@@ -135,13 +135,8 @@ pub fn deinit(self: *CorsStore) void {
     self.map.deinit();
 }
 
-pub fn get(self: *CorsStore, key: Key) !?Entry {
-    const cache_key = try key.build(self.allocator);
-    defer self.allocator.free(cache_key);
-
-    self.mutex.lockUncancelable(lp.io);
-    defer self.mutex.unlock(lp.io);
-
+// Caller is expected to be holding mutex.
+fn getWithExpiration(self: *CorsStore, cache_key: []const u8) ?*Entry {
     const entry = self.map.get(cache_key) orelse return null;
 
     if (entry.expires_at <= lp.datetime.milliTimestamp(.real)) {
@@ -152,6 +147,17 @@ pub fn get(self: *CorsStore, key: Key) !?Entry {
         return null;
     }
 
+    return entry;
+}
+
+pub fn get(self: *CorsStore, key: Key) !?Entry {
+    const cache_key = try key.build(self.allocator);
+    defer self.allocator.free(cache_key);
+
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
+
+    const entry = self.getWithExpiration(cache_key) orelse return null;
     return try entry.dupe(self.allocator);
 }
 
@@ -170,7 +176,7 @@ pub fn put(self: *CorsStore, key: Key, entry: Entry) !void {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
 
-    if (self.map.get(cache_key)) |existing| {
+    if (self.getWithExpiration(cache_key)) |existing| {
         const merged = try existing.merge(self.allocator, entry);
         existing.deinit(self.allocator);
         existing.* = merged;
