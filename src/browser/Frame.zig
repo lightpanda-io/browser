@@ -134,6 +134,10 @@ _event_target_attr_listeners: GlobalEventHandlersLookup = .empty,
 // File objects (reference counted via their Blob proto); released at teardown.
 _file_lists: std.ArrayList(*FileList) = .empty,
 
+// List of Documents which called document.open() and potentially need to have
+// the parser freed.
+_script_created_parser_docs: std.ArrayList(*Document) = .empty,
+
 // Every matchMedia() result of this document, so a viewport change can fire
 // their `change`.
 _media_query_lists: std.ArrayList(*MediaQueryList) = .empty,
@@ -458,6 +462,16 @@ pub fn deinit(self: *Frame) void {
     }
 
     self._parse_state.deinit(self);
+
+    for (self._script_created_parser_docs.items) |doc| {
+        const parser = &(doc._script_created_parser orelse continue);
+        if (parser.parser.frame != self) {
+            // The document was closed and re-opened on another frame
+            continue;
+        }
+        parser.deinit();
+        doc._script_created_parser = null;
+    }
 
     // Unregister CookieStore from session notifications before the JS
     // context (and thus the scheduler) is destroyed, otherwise a late
