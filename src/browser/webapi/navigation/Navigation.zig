@@ -26,6 +26,7 @@ const Factory = @import("../../Factory.zig");
 
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
+const ErrorEvent = @import("../event/ErrorEvent.zig");
 
 const log = lp.log;
 
@@ -44,6 +45,8 @@ const NavigationCurrentEntryChangeEvent = @import("../event/NavigationCurrentEnt
 
 _proto: *EventTarget,
 _on_currententrychange: ?js.Function.Global = null,
+_on_navigatesuccess: ?js.Function.Global = null,
+_on_navigateerror: ?js.Function.Global = null,
 
 _current_navigation_kind: ?NavigationKind = null,
 
@@ -65,6 +68,12 @@ fn asEventTarget(self: *Navigation) *EventTarget {
 pub fn onRemoveFrame(self: *Navigation) void {
     if (self._on_currententrychange) |cb| cb.release();
     self._on_currententrychange = null;
+
+    if (self._on_navigatesuccess) |cb| cb.release();
+    self._on_navigatesuccess = null;
+
+    if (self._on_navigateerror) |cb| cb.release();
+    self._on_navigateerror = null;
 
     for (self._entries.items) |entry| {
         if (entry._on_dispose) |cb| cb.release();
@@ -144,10 +153,20 @@ pub fn updateEntries(
 ) !void {
     switch (kind) {
         .replace => |state| {
-            _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, frame, should_dispatch);
+            _ = try self.replaceEntry(
+                url,
+                .{ .source = .navigation, .value = state },
+                frame,
+                should_dispatch,
+            );
         },
         .push => |state| {
-            _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, frame, should_dispatch);
+            _ = try self.pushEntry(
+                url,
+                .{ .source = .navigation, .value = state },
+                frame,
+                should_dispatch,
+            );
         },
         .traverse => |index| {
             self._index = index;
@@ -241,14 +260,9 @@ pub fn pushEntry(
     try self._entries.append(arena.allocator(), entry);
     self._index = index;
 
-    if (previous != null and should_dispatch) {
-        if (self._on_currententrychange) |cec| {
-            const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-                .wrap("currententrychange"),
-                .{ .from = previous.?, .navigationType = @tagName(.push) },
-                frame,
-            )).asEvent();
-            try self.dispatch(cec, event, frame);
+    if (should_dispatch) {
+        if (previous) |p| {
+            try self.fireCurrentEntryChangeEvent(p, .{ .push = state.value }, frame);
         }
     }
 
@@ -292,17 +306,71 @@ pub fn replaceEntry(
     };
 
     if (should_dispatch) {
-        if (self._on_currententrychange) |cec| {
-            const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-                .wrap("currententrychange"),
-                .{ .from = previous, .navigationType = @tagName(.replace) },
-                frame,
-            )).asEvent();
-            try self.dispatch(cec, event, frame);
-        }
+        try self.fireCurrentEntryChangeEvent(previous, .{ .replace = state.value }, frame);
     }
 
     return entry;
+}
+
+fn fireNavigateSuccess(self: *Navigation, frame: *Frame) !void {
+    if (!frame.hasDirectListeners(
+        self.asEventTarget(),
+        "navigatesuccess",
+        self._on_navigatesuccess,
+    )) {
+        return;
+    }
+
+    const event = Event.initTrusted(
+        .wrap("navigatesuccess"),
+        null,
+        frame.page,
+    ) catch |err| {
+        log.warn(.event, "Navigation.fireNavigateSuccess", .{ .err = err });
+        return;
+    };
+
+    try self.dispatch(self._on_navigatesuccess, event, frame);
+}
+
+fn fireCurrentEntryChangeEvent(
+    self: *Navigation,
+    previous: *NavigationHistoryEntry,
+    kind: ?NavigationKind,
+    frame: *Frame,
+) !void {
+    if (!frame.hasDirectListeners(
+        self.asEventTarget(),
+        "currententrychange",
+        self._on_currententrychange,
+    )) {
+        return;
+    }
+
+    const event =
+        NavigationCurrentEntryChangeEvent.initTrusted(
+            .wrap("currententrychange"),
+            .{
+                .from = previous,
+                .navigationType = if (kind) |k| @tagName(k) else null,
+            },
+            frame,
+        ) catch |err| {
+            log.warn(.event, "Navigation.fireCurrentEntryChange", .{ .err = err });
+            return;
+        };
+
+    try self.dispatch(self._on_currententrychange, event.asEvent(), frame);
+}
+
+fn resolveFinished(
+    self: *Navigation,
+    resolver: js.PromiseResolver,
+    comptime source: []const u8,
+    frame: *Frame,
+) !void {
+    resolver.resolve(source, {});
+    try self.fireNavigateSuccess(frame);
 }
 
 const NavigateOptions = struct {
@@ -351,9 +419,8 @@ pub fn navigateInner(
 
                 committed.resolve("navigation push", {});
                 // todo: Fire navigate event
-                finished.resolve("navigation push", {});
-
                 _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, frame, true);
+                try self.resolveFinished(finished, "navigation push", frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
@@ -364,9 +431,8 @@ pub fn navigateInner(
 
                 committed.resolve("navigation replace", {});
                 // todo: Fire navigate event
-                finished.resolve("navigation replace", {});
-
                 _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, frame, true);
+                try self.resolveFinished(finished, "navigation replace", frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
@@ -379,7 +445,8 @@ pub fn navigateInner(
 
                 committed.resolve("navigation traverse", {});
                 // todo: Fire navigate event
-                finished.resolve("navigation traverse", {});
+                try self.fireCurrentEntryChangeEvent(previous, kind, frame);
+                try self.resolveFinished(finished, "navigation traverse", frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
@@ -391,16 +458,6 @@ pub fn navigateInner(
 
     if (is_same_document and !std.mem.eql(u8, old_url, new_url)) {
         try frame.queueHashChange(old_url, new_url);
-    }
-
-    if (self._on_currententrychange) |cec| {
-        // If we haven't navigated off, let us fire off an a currententrychange.
-        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-            .wrap("currententrychange"),
-            .{ .from = previous, .navigationType = @tagName(kind) },
-            frame,
-        )).asEvent();
-        try self.dispatch(cec, event, frame);
     }
 
     _ = try committed.persist();
@@ -436,14 +493,11 @@ pub fn reload(self: *Navigation, _opts: ?ReloadOptions, frame: *Frame) !Navigati
     const entry = self.getCurrentEntry();
     if (opts.state) |state| {
         const previous = entry;
-        entry._state = .{ .source = .navigation, .value = state.toJson(arena) catch return error.DataClone };
-
-        const event = try NavigationCurrentEntryChangeEvent.initTrusted(
-            .wrap("currententrychange"),
-            .{ .from = previous, .navigationType = @tagName(.reload) },
-            frame,
-        );
-        try self.dispatch(.{ .currententrychange = event }, frame);
+        entry._state = .{
+            .source = .navigation,
+            .value = state.toJson(arena.allocator()) catch return error.DataClone,
+        };
+        try self.fireCurrentEntryChangeEvent(previous, .reload, frame);
     }
 
     return self.navigateInner(entry._url, .reload, frame);
@@ -480,18 +534,11 @@ fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions, fra
         .value = options.state.toJson(arena.allocator()) catch return error.DataClone,
     };
 
-    if (self._on_currententrychange) |cec| {
-        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-            .wrap("currententrychange"),
-            .{ .from = previous, .navigationType = null },
-            frame,
-        )).asEvent();
-        try self.dispatch(cec, event, frame);
-    }
+    try self.fireCurrentEntryChangeEvent(previous, null, frame);
 }
 
-pub fn dispatch(self: *Navigation, func: js.Function.Global, event: *Event, frame: *Frame) !void {
-    return frame._event_manager.dispatchDirect(
+pub fn dispatch(self: *Navigation, func: ?js.Function.Global, event: *Event, frame: *Frame) !void {
+    return frame.dispatch(
         self.asEventTarget(),
         event,
         func,
@@ -512,6 +559,24 @@ fn setOnCurrentEntryChange(self: *Navigation, listener: ?js.Function) !void {
     }
 }
 
+fn getOnNavigateSuccess(self: *Navigation) ?js.Function.Global {
+    return self._on_navigatesuccess;
+}
+
+fn setOnNavigateSuccess(self: *Navigation, listener: ?js.Function) !void {
+    if (self._on_navigatesuccess) |old| old.release();
+    self._on_navigatesuccess = if (listener) |l| try l.persistWithThis(self) else null;
+}
+
+fn getOnNavigateError(self: *Navigation) ?js.Function.Global {
+    return self._on_navigateerror;
+}
+
+fn setOnNavigateError(self: *Navigation, listener: ?js.Function) !void {
+    if (self._on_navigateerror) |old| old.release();
+    self._on_navigateerror = if (listener) |l| try l.persistWithThis(self) else null;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Navigation);
 
@@ -530,12 +595,23 @@ pub const JsApi = struct {
     pub const entries = bridge.function(Navigation.entries, .{});
     pub const forward = bridge.function(Navigation.forward, .{});
     pub const navigate = bridge.function(Navigation.navigate, .{});
+    pub const reload = bridge.function(Navigation.reload, .{});
     pub const traverseTo = bridge.function(Navigation.traverseTo, .{});
     pub const updateCurrentEntry = bridge.function(Navigation.updateCurrentEntry, .{});
 
     pub const oncurrententrychange = bridge.accessor(
         Navigation.getOnCurrentEntryChange,
         Navigation.setOnCurrentEntryChange,
+        .{},
+    );
+    pub const onnavigatesuccess = bridge.accessor(
+        Navigation.getOnNavigateSuccess,
+        Navigation.setOnNavigateSuccess,
+        .{},
+    );
+    pub const onnavigateerror = bridge.accessor(
+        Navigation.getOnNavigateError,
+        Navigation.setOnNavigateError,
         .{},
     );
 };
