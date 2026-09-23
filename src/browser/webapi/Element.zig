@@ -1500,11 +1500,11 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
         }
     }
 
-    // Root containers span the document, see documentHeight.
+    // Root containers span the document, see documentExtent.
     if (root) {
         return .{ .value = switch (axis) {
             .width => 1920.0,
-            .height => if (self.ownerFrame(frame)) |owner| documentHeight(owner) else 0.0,
+            .height => if (self.ownerFrame(frame)) |owner| documentExtent(owner).height else 0.0,
         } };
     }
 
@@ -1537,6 +1537,13 @@ fn clientAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
         return 0.0;
     }
     return self.viewportAxis(frame, axis) orelse self.boxAxis(frame, axis);
+}
+
+/// documentScrollSize, when self is the root scroller (see viewportAxis).
+fn rootScrollSize(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
+    _ = self.viewportAxis(frame, axis) orelse return null;
+    const owner = self.ownerFrame(frame) orelse return null;
+    return @field(documentScrollSize(owner), @tagName(axis));
 }
 
 fn viewportAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
@@ -1679,9 +1686,10 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
     const height = self.getElementAxis(frame, .height).value;
 
     const tag = self.getTag();
-    // The root containers already span the document.
+    // The root containers already span the document. The one scrolling the
+    // viewport reports what the viewport scrolls over.
     if (tag == .html or tag == .body) {
-        return height;
+        return self.rootScrollSize(frame, .height) orelse height;
     }
 
     return @max(height, self.contentAxis(frame, .height));
@@ -1695,11 +1703,12 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
     const width = self.getElementAxis(frame, .width).value;
 
     const tag = self.getTag();
-    // The root containers span the document (see getElementAxis), and
-    // their children don't lie side by side on one row: stacking them
-    // would inflate a value sites read to detect page overflow.
+    // The root containers keep their box: their children don't lie side by
+    // side on one row, and stacking them would inflate a value sites read to
+    // detect page overflow. The one scrolling the viewport reports what the
+    // viewport scrolls over.
     if (tag == .html or tag == .body) {
-        return width;
+        return self.rootScrollSize(frame, .width) orelse width;
     }
 
     return @max(width, self.contentAxis(frame, .width));
@@ -1912,35 +1921,68 @@ fn calculateDocumentPosition(node: *Node) f64 {
     return position * 5.0; // 5px per node
 }
 
-/// The document's height, which html and body span and the viewport scrolls
-/// over. Tall enough for every synthetic position (calculateDocumentPosition's
-/// 5px per node), for body's children stacked on top of each other, and never
-/// shorter than the viewport, like the root's scrollHeight.
-pub fn documentHeight(frame: *Frame) f64 {
+pub const DocumentExtent = struct { width: f64, height: f64 };
+
+/// The document's extent. Its height, which html and body span, fits every
+/// synthetic position (calculateDocumentPosition's 5px per node) and body's
+/// children stacked on top of each other. Its width is body's widest child:
+/// block children don't lie side by side on one row. An inline size on body
+/// stretches both.
+pub fn documentExtent(frame: *Frame) DocumentExtent {
     const version = frame.page.style_version;
-    const viewport = frame.page.getViewport().height;
-    if (frame._document_height) |cached| {
-        if (cached.version == version and cached.viewport == viewport) {
-            return cached.value;
+    const viewport = frame.page.getViewport();
+    if (frame._document_extent) |cached| {
+        if (cached.version == version and cached.viewport_width == viewport.width and cached.viewport_height == viewport.height) {
+            return cached.extent;
         }
     }
 
     const doc = frame.document;
-    var height = @max(@as(f64, @floatFromInt(viewport)), countSubtreeNodes(doc.asNode()) * 5.0);
-    if (doc.getDocumentElement()) |root| {
-        var child = root.asNode().firstChild();
+    var extent: DocumentExtent = .{ .width = 0, .height = countSubtreeNodes(doc.asNode()) * 5.0 };
+    if (findBody(doc)) |body| {
+        const style_manager = &frame._style_manager;
+        extent.height = @max(extent.height, body.contentAxis(frame, .height), style_manager.inlineSize(body, .height) orelse 0);
+        extent.width = style_manager.inlineSize(body, .width) orelse 0;
+        var child = body.asNode().firstChild();
         while (child) |node| : (child = node.nextSibling()) {
-            if (node.is(Html.Body)) |body| {
-                height = @max(height, body.asElement().contentAxis(frame, .height));
-                break;
+            const el = node.is(Element) orelse continue;
+            if (!style_manager.hasDisplayNone(el)) {
+                extent.width = @max(extent.width, el.getElementAxis(frame, .width).value);
             }
         }
     }
 
     // Whole pixels, like the scroll offsets clamped against it
-    height = @ceil(height);
-    frame._document_height = .{ .version = version, .viewport = viewport, .value = height };
-    return height;
+    extent = .{ .width = @ceil(extent.width), .height = @ceil(extent.height) };
+    frame._document_extent = .{
+        .version = version,
+        .viewport_width = viewport.width,
+        .viewport_height = viewport.height,
+        .extent = extent,
+    };
+    return extent;
+}
+
+/// What the viewport scrolls over: the document, but never less than the
+/// viewport itself, like the root scroller's scrollWidth and scrollHeight.
+pub fn documentScrollSize(frame: *Frame) DocumentExtent {
+    const extent = documentExtent(frame);
+    const viewport = frame.page.getViewport();
+    return .{
+        .width = @max(extent.width, @as(f64, @floatFromInt(viewport.width))),
+        .height = @max(extent.height, @as(f64, @floatFromInt(viewport.height))),
+    };
+}
+
+fn findBody(doc: *Node.Document) ?*Element {
+    const root = doc.getDocumentElement() orelse return null;
+    var child = root.asNode().firstChild();
+    while (child) |node| : (child = node.nextSibling()) {
+        if (node.is(Html.Body)) |body| {
+            return body.asElement();
+        }
+    }
+    return null;
 }
 
 // Counts total nodes in a subtree (node + all descendants)

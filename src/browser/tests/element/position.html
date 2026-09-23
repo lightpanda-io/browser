@@ -343,11 +343,11 @@
   // per cell, which a document-sized box turned into ~5M walks.
   testing.expectEqual(document.body.clientHeight, document.body.scrollHeight);
   testing.expectEqual(window.innerHeight, document.documentElement.clientHeight);
+  // What the viewport scrolls over: the document, or the viewport itself
   testing.expectEqual(
-    document.documentElement.offsetHeight,
+    Math.max(document.documentElement.offsetHeight, document.documentElement.clientHeight),
     document.documentElement.scrollHeight,
   );
-  testing.expectTrue(document.documentElement.scrollHeight >= document.documentElement.clientHeight);
 }
 </script>
 

@@ -155,9 +155,14 @@ _focus_fixup_pending: bool = false,
 
 _style_manager: StyleManager,
 
-// Element.documentHeight, valid while the style version and viewport height
-// it was computed for hold.
-_document_height: ?struct { version: usize, viewport: u32, value: f64 } = null,
+// Element.documentExtent, valid while the style version and viewport it was
+// computed for hold.
+_document_extent: ?struct {
+    version: usize,
+    viewport_width: u32,
+    viewport_height: u32,
+    extent: Element.DocumentExtent,
+} = null,
 _script_manager: ScriptManager,
 
 _http_owner: HttpClient.Owner,

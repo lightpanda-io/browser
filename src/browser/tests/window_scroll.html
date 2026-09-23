@@ -2,7 +2,7 @@
 <script src="testing.js"></script>
 
 <!-- Room to scroll: the document can't scroll past its bottom -->
-<div style="height: 10000px"></div>
+<div style="height: 10000px; width: 10000px"></div>
 
 <script id=scrollBy_exists>
   testing.expectEqual('function', typeof window.scrollBy);
@@ -56,9 +56,11 @@
   window.scrollBy(0, 100);
   testing.expectEqual(max, window.scrollY);
 
-  // The document has no honest width, so x isn't bounded
-  window.scrollTo(99999, 0);
-  testing.expectEqual(99999, window.scrollX);
+  // x clamps the same way, against the widest content
+  const maxX = document.documentElement.scrollWidth - window.innerWidth;
+  testing.expectTrue(maxX > 0);
+  window.scrollTo(99999999, 0);
+  testing.expectEqual(maxX, window.scrollX);
 
   // Content added at the bottom extends the limit
   const more = document.createElement('div');
