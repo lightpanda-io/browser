@@ -1746,11 +1746,8 @@ fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
 // `scrollWidth` passes a threshold (the infinite-marquee idiom) never
 // terminates when the metric ignores what it just inserted.
 //
-// Text children count only toward the height, and only under an explicit
-// width: that is a line length to wrap at, and wrapped text never overflows
-// sideways. Without one, a few words would already exceed the default box and
-// report overflow for practically every element containing text. The advance
-// tracks the font size, so "shrink the font until it fits" loops converge.
+// Text children add height only under an explicit width to wrap at.
+// Otherwise almost every element with text would report overflow.
 fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     var total: f64 = 0;
     const owner = self.ownerFrame(frame) orelse return 0;
@@ -1778,7 +1775,7 @@ fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     }
 
     if (wrap) |w| {
-        // Whole pixels, like the scroll offsets clamped against it
+        // Whole pixels, like scroll offsets
         total += @ceil(w.height());
     }
     return total;

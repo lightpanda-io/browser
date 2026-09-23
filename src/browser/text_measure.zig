@@ -66,17 +66,15 @@ pub fn substringWidth(text: []const u8, charnum: u32, nchars: u32, font_size: f6
 /// Line height for `line-height: normal`, in em.
 pub const LINE_HEIGHT = 1.2;
 
-/// Greedy line breaking under `white-space: normal`: whitespace runs collapse
-/// to one space, lines break between words, and a word wider than the line
-/// overflows it rather than splitting. Text can arrive in pieces, one per text
-/// node, and flows on from where the previous piece stopped.
+/// Greedy line breaking under `white-space: normal`. Text can be added in
+/// pieces (one per text node) that flow on from each other.
 pub const LineWrap = struct {
     line_width: f64,
     font_size: f64,
     lines: u32 = 0,
-    // Width already taken on the current line.
+    // Width used on the current line.
     x: f64 = 0,
-    // A collapsed space is due before the next word.
+    // A space is due before the next word.
     space: bool = false,
 
     pub fn add(self: *LineWrap, text: []const u8) void {
@@ -157,22 +155,20 @@ test "fallback metrics count utf-16 units and ignore combining marks" {
 }
 
 test "LineWrap: collapses whitespace and breaks between words" {
-    // At 10px a letter is 6px and a space 3.3px: "aaaa" is 24px wide
+    // At 10px: a letter is 6px, a space 3.3px
     var wrap: LineWrap = .{ .line_width = 60, .font_size = 10 };
     try std.testing.expectEqual(0, wrap.height());
 
-    // Two words and a space fit in 60px, the third wraps
     wrap.add("  aaaa \n\t  aaaa   aaaa ");
     try std.testing.expectEqual(2, wrap.lines);
 
-    // The next piece flows on after the trailing space
     wrap.add("aaaa");
     try std.testing.expectEqual(2, wrap.lines);
     wrap.add("aaaa");
     try std.testing.expectEqual(3, wrap.lines);
     try std.testing.expectApproxEqAbs(36, wrap.height(), 0.0001);
 
-    // A word wider than the line takes a line of its own, unsplit
+    // Long words aren't split
     var narrow: LineWrap = .{ .line_width = 10, .font_size = 10 };
     narrow.add("aaaa aaaa");
     try std.testing.expectEqual(2, narrow.lines);
