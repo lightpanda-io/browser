@@ -1686,8 +1686,7 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
     const height = self.getElementAxis(frame, .height).value;
 
     const tag = self.getTag();
-    // The root containers already span the document. The one scrolling the
-    // viewport reports what the viewport scrolls over.
+    // The root scroller reports what the viewport scrolls over.
     if (tag == .html or tag == .body) {
         return self.rootScrollSize(frame, .height) orelse height;
     }
@@ -1703,10 +1702,8 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
     const width = self.getElementAxis(frame, .width).value;
 
     const tag = self.getTag();
-    // The root containers keep their box: their children don't lie side by
-    // side on one row, and stacking them would inflate a value sites read to
-    // detect page overflow. The one scrolling the viewport reports what the
-    // viewport scrolls over.
+    // Roots don't sum their children side by side. The root scroller
+    // reports what the viewport scrolls over.
     if (tag == .html or tag == .body) {
         return self.rootScrollSize(frame, .width) orelse width;
     }
@@ -1716,9 +1713,7 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 
 /// Null where we can't prove a limit, which leaves the offset unbounded:
 /// without an explicit size the client and content measurements collapse onto
-/// the same sum. html and body scroll the viewport, which Window.scrollTo
-/// clamps. Refusing a scroll we can't prove impossible is worse than allowing
-/// one too many.
+/// the same sum. html and body scroll the viewport, clamped by Window.
 fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
     if (self.scrollsViewport() or !self.getElementAxis(frame, axis).explicit) {
         return null;
@@ -1789,8 +1784,7 @@ fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     return total;
 }
 
-// Unlike clientHeight, the root's offsetHeight is its box: the document
-// height.
+// Unlike clientHeight, the root's offsetHeight is the document height.
 pub fn getOffsetHeight(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
@@ -1923,11 +1917,9 @@ fn calculateDocumentPosition(node: *Node) f64 {
 
 pub const DocumentExtent = struct { width: f64, height: f64 };
 
-/// The document's extent. Its height, which html and body span, fits every
-/// synthetic position (calculateDocumentPosition's 5px per node) and body's
-/// children stacked on top of each other. Its width is body's widest child:
-/// block children don't lie side by side on one row. An inline size on body
-/// stretches both.
+/// The document's size. Height: enough for every synthetic position (5px per
+/// node) and body's stacked children. Width: body's widest child. An inline
+/// size on body stretches both.
 pub fn documentExtent(frame: *Frame) DocumentExtent {
     const version = frame.page.style_version;
     const viewport = frame.page.getViewport();
@@ -1952,7 +1944,7 @@ pub fn documentExtent(frame: *Frame) DocumentExtent {
         }
     }
 
-    // Whole pixels, like the scroll offsets clamped against it
+    // Whole pixels, like scroll offsets
     extent = .{ .width = @ceil(extent.width), .height = @ceil(extent.height) };
     frame._document_extent = .{
         .version = version,
@@ -1963,8 +1955,7 @@ pub fn documentExtent(frame: *Frame) DocumentExtent {
     return extent;
 }
 
-/// What the viewport scrolls over: the document, but never less than the
-/// viewport itself, like the root scroller's scrollWidth and scrollHeight.
+/// What the viewport scrolls over: the document, at least viewport-sized.
 pub fn documentScrollSize(frame: *Frame) DocumentExtent {
     const extent = documentExtent(frame);
     const viewport = frame.page.getViewport();

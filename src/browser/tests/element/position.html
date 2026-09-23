@@ -337,13 +337,10 @@
   testing.expectEqual(0, panel.clientHeight);
   testing.expectTrue(panel.scrollHeight > 0);
 
-  // The root containers span the document rather than summing children.
-  // The root element's clientHeight is the viewport (CSSOM View): jstracker
-  // tiles clientWidth/10 cells over clientHeight and calls elementFromPoint
-  // per cell, which a document-sized box turned into ~5M walks.
+  // The root element's clientHeight is the viewport (CSSOM View); jstracker
+  // tiles it with elementFromPoint calls.
   testing.expectEqual(document.body.clientHeight, document.body.scrollHeight);
   testing.expectEqual(window.innerHeight, document.documentElement.clientHeight);
-  // What the viewport scrolls over: the document, or the viewport itself
   testing.expectEqual(
     Math.max(document.documentElement.offsetHeight, document.documentElement.clientHeight),
     document.documentElement.scrollHeight,
@@ -578,7 +575,7 @@
   deep.id = 'deep';
   document.body.appendChild(deep);
 
-  // Room below it, or the viewport couldn't bring its top up
+  // Room to scroll it to the top
   const room = document.createElement('div');
   room.style.height = '10000px';
   document.body.appendChild(room);

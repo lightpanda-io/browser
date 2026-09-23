@@ -155,8 +155,7 @@ _focus_fixup_pending: bool = false,
 
 _style_manager: StyleManager,
 
-// Element.documentExtent, valid while the style version and viewport it was
-// computed for hold.
+// Element.documentExtent cache, keyed on style version and viewport.
 _document_extent: ?struct {
     version: usize,
     viewport_width: u32,

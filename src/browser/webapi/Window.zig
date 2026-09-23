@@ -951,7 +951,6 @@ fn getDevicePixelRatio(_: *const Window, frame: *Frame) f32 {
 
 pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts.offsets(y);
-    // The viewport can't scroll past the document's edges
     const size = Element.documentScrollSize(self._frame);
     const max_x = scrollLimit(size.width, self.getInnerWidth(self._frame));
     const max_y = scrollLimit(size.height, self.getInnerHeight(self._frame));
