@@ -42,10 +42,20 @@ pub const LockManagerState = struct {
     pending: []const LockInfo,
 };
 
+pub const Options = struct {
+    mode: Lock.LockMode = .exclusive,
+};
+
+const CallbackOrOptions = union(enum) {
+    callback: js.Function,
+    options: Options,
+};
+
 // A pending or in-flight lock request
 const Waiter = struct {
     manager: *LockManager,
     name: lp.String,
+    options: Options,
     cb: js.Function.Global,
     resolver: js.PromiseResolver.Global,
     exec: *Execution,
@@ -67,11 +77,27 @@ fn isHeld(self: *const LockManager, name: lp.String) bool {
 pub fn request(
     self: *LockManager,
     name: []const u8,
-    cb: js.Function,
+    arg2: CallbackOrOptions,
+    cb3: ?js.Function,
     exec: *Execution,
 ) !js.Promise {
     const resolver = exec.js.local.?.createPromiseResolver();
     const promise = resolver.promise();
+
+    const options, const cb = switch (arg2) {
+        .callback => |c| .{ Options{}, c },
+        .options => |o| blk: {
+            const c = cb3 orelse {
+                resolver.rejectError(
+                    "LockManager.request",
+                    .{ .type_error = "callback must be a function" },
+                );
+                return promise;
+            };
+
+            break :blk .{ o, c };
+        },
+    };
 
     if (name.len > 0 and name[0] == '-') {
         resolver.rejectError(
@@ -87,6 +113,7 @@ pub fn request(
     waiter.* = .{
         .manager = self,
         .name = owned_name,
+        .options = options,
         .cb = try cb.persist(),
         .resolver = try resolver.persist(),
         .exec = exec,
@@ -97,7 +124,10 @@ pub fn request(
         return promise;
     }
 
-    try self._held_locks.append(exec.arena, .{ .name = owned_name, .mode = .exclusive });
+    try self._held_locks.append(exec.arena, .{
+        .name = owned_name,
+        .mode = options.mode,
+    });
     grant(waiter);
     return promise;
 }
@@ -115,18 +145,17 @@ fn grant(waiter: *Waiter) void {
     const local = &ls.local;
     const resolver = waiter.resolver.local(local);
 
-    const result = ls.toLocal(waiter.cb).call(js.Value, .{Lock{
-        ._mode = .exclusive,
-        ._name = waiter.name,
-    }}) catch |err| {
+    const result = ls.toLocal(waiter.cb).call(js.Value, .{
+        Lock{
+            ._mode = waiter.options.mode,
+            ._name = waiter.name,
+        },
+    }) catch |err| {
         resolver.rejectError("Lock callback", .{ .generic_error = @errorName(err) });
         waiter.manager.releaseLock(waiter);
         return;
     };
 
-    // Resolve with the raw result: V8's own Promise Resolution Procedure
-    // chases it if it's a promise/thenable. This is independent of when we
-    // release the lock below.
     resolver.resolve("Lock callback result", result);
 
     if (result.isPromise() == false) {
@@ -158,7 +187,11 @@ fn releaseLock(self: *LockManager, waiter: *Waiter) void {
     for (self._pending_locks.items, 0..) |w, i| {
         if (w.name.eql(waiter.name) == false) continue;
         _ = self._pending_locks.orderedRemove(i);
-        self._held_locks.append(w.exec.arena, .{ .name = w.name, .mode = .exclusive }) catch |err| {
+
+        self._held_locks.append(w.exec.arena, .{
+            .name = w.name,
+            .mode = w.options.mode,
+        }) catch |err| {
             var ls: js.Local.Scope = undefined;
             w.exec.js.localScope(&ls);
             defer ls.deinit();
@@ -166,6 +199,7 @@ fn releaseLock(self: *LockManager, waiter: *Waiter) void {
             w.deinit();
             return;
         };
+
         grant(w);
         return;
     }
