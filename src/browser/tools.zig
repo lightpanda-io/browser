@@ -562,13 +562,14 @@ pub const Tool = enum {
                 ),
             },
             .scroll => .{
-                .description = "Scroll the page or a specific element. Returns the scroll position and current page URL and title.",
+                .description = "Scroll the page or a specific element. Provide a CSS selector (preferred for reproducibility) or a backendNodeId to scroll an element; omit both to scroll the window. Returns the scroll position and current page URL and title.",
                 .summary = "Scroll the page or an element",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If the element is not itself a scroll container, its nearest scrollable ancestor is scrolled instead. If omitted (or 0), scrolls the window." },
+                    \\    "selector": { "type": "string", "description": "Optional: CSS selector of the element to scroll. Preferred over backendNodeId. If the element is not itself a scroll container, its nearest scrollable ancestor is scrolled instead." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If the element is not itself a scroll container, its nearest scrollable ancestor is scrolled instead. If neither this nor selector is given (or it is 0), scrolls the window." },
                     \\    "x": { "type": "integer", "description": "Optional: The horizontal scroll offset." },
                     \\    "y": { "type": "integer", "description": "Optional: The vertical scroll offset." }
                     \\  }
@@ -1964,20 +1965,24 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
 fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         backendNodeId: ?NodeRegistry.Id = null,
+        selector: ?[]const u8 = null,
         x: ?i32 = null,
         y: ?i32 = null,
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
     const scope = beginAction(session);
-    const page = try requireFrame(session);
-    const target_node = try resolveOptionalNode(registry, args.backendNodeId);
+    const resolved: ?NodeAndPage = if (args.selector != null or args.backendNodeId != null)
+        try resolveTarget(session, registry, args.selector, args.backendNodeId)
+    else
+        null;
+    const page = if (resolved) |r| r.page else try requireFrame(session);
 
-    const result = lp.actions.scroll(target_node, args.x, args.y, page) catch |err| return mapActionError(err);
+    const result = lp.actions.scroll(if (resolved) |r| r.node else null, args.x, args.y, page) catch |err| return mapActionError(err);
 
     const body = (switch (result.target) {
         .window => std.fmt.allocPrint(arena, "Scrolled window to x: {d}, y: {d}", .{ result.x, result.y }),
         .node => std.fmt.allocPrint(arena, "Scrolled element ({f}) to x: {d}, y: {d}", .{
-            ActionTarget{ .backend_node_id = args.backendNodeId.? },
+            resolved.?.target,
             result.x,
             result.y,
         }),
@@ -1985,7 +1990,7 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeReg
             const registered = registry.register(container) catch return ToolError.InternalError;
             break :blk std.fmt.allocPrint(arena, "Scrolled scroll container ({f}) of element ({f}) to x: {d}, y: {d}", .{
                 ActionTarget{ .backend_node_id = registered.id },
-                ActionTarget{ .backend_node_id = args.backendNodeId.? },
+                resolved.?.target,
                 result.x,
                 result.y,
             });
