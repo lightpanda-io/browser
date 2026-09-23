@@ -220,11 +220,21 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
     const wants_credentials = req.credentials_mode == .include;
 
     const authored = try collectAuthoredHeaders(transfer, transfer.arena.allocator());
-    if (try self.network.cors_store.covers(.{
+
+    var covered = try self.network.cors_store.covers(.{
         .origin = origin,
         .target = req.url,
         .credentials = wants_credentials,
-    }, req.method, authored.items)) {
+    }, req.method, authored.items);
+    if (!covered and !wants_credentials) {
+        covered = try self.network.cors_store.covers(.{
+            .origin = origin,
+            .target = req.url,
+            .credentials = true,
+        }, req.method, authored.items);
+    }
+
+    if (covered) {
         log.debug(.cors, "cross origin", .{
             .url = req.url,
             .origin = origin,
