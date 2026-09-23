@@ -149,6 +149,9 @@ pub fn getName(self: *CustomElementRegistry, constructor: js.Function) ?[]const 
 }
 
 pub fn upgrade(self: *CustomElementRegistry, root: *Node, frame: *Frame) !void {
+    if (root.getDocument(frame)._frame == null) {
+        return;
+    }
     try upgradeNode(self, root, frame);
 }
 
@@ -186,10 +189,6 @@ fn upgradeNode(self: *CustomElementRegistry, node: *Node, frame: *Frame) !void {
 }
 
 fn upgradeElement(self: *CustomElementRegistry, element: *Element, frame: *Frame) !void {
-    if (element.asNode().getDocument(frame)._frame == null) {
-        return;
-    }
-
     const custom = element.is(Custom) orelse {
         return Custom.checkAndAttachBuiltIn(element, frame);
     };
