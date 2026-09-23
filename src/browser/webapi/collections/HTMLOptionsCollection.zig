@@ -104,6 +104,41 @@ pub fn remove(self: *HTMLOptionsCollection, index: i32, frame: *Frame) void {
     }
 }
 
+// Chrome's cap (kMaxListItems): padding up to a huge index would otherwise
+// create that many options.
+const max_list_items = 100_000;
+
+// The indexed setter: null removes the option at index; an index past the
+// end pads with blank options and then appends; otherwise the option at
+// index is replaced.
+fn setAtIndex(self: *HTMLOptionsCollection, index: u32, option_: ?*Option, frame: *Frame) !void {
+    const existing = self.getAtIndex(index, frame);
+    const option = (option_ orelse {
+        if (existing) |element| {
+            element.remove(frame);
+        }
+        return;
+    }).asElement().asNode();
+
+    if (existing) |element| {
+        const old = element.asNode();
+        _ = try old.parentNode().?.replaceChild(option, old, frame);
+        return;
+    }
+
+    if (index >= max_list_items) {
+        return;
+    }
+
+    const select_node = self._select.asNode();
+    const doc = select_node.ownerDocument(frame).?;
+    for (self.length(frame)..index) |_| {
+        const blank = try doc.createElementNS("http://www.w3.org/1999/xhtml", "option", frame);
+        _ = try select_node.appendChild(blank.asNode(), frame);
+    }
+    _ = try select_node.appendChild(option, frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(HTMLOptionsCollection);
 
@@ -117,7 +152,7 @@ pub const JsApi = struct {
     pub const length = bridge.accessor(HTMLOptionsCollection.length, null, .{});
 
     // Indexed access
-    pub const @"[int]" = bridge.indexed(HTMLOptionsCollection.getAtIndex, null, .{ .null_as_undefined = true });
+    pub const @"[int]" = bridge.indexedReadWrite(HTMLOptionsCollection.getAtIndex, setAtIndex, null, null, null, .{ .null_as_undefined = true, .ce_reactions = true });
     pub const @"[str]" = bridge.namedIndexed(HTMLOptionsCollection.getByName, null, null, null, struct {
         fn wrap(self: *HTMLOptionsCollection, name: []const u8, frame: *Frame) !u32 {
             if (self.getByName(name, frame) != null) {

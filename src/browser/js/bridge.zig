@@ -398,20 +398,25 @@ pub const Indexed = struct {
             }.wrap;
         }
 
-        if (@typeInfo(@TypeOf(query)) != .null) {
-            indexed.query = struct {
-                fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
-                    const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
-                    var caller: Caller = undefined;
-                    if (!caller.init(v8_isolate)) {
-                        return js.Intercepted.no;
-                    }
-                    defer caller.deinit();
+        const query_func = if (@typeInfo(@TypeOf(query)) != .null)
+            query
+        else
+            // Generate a Query handler by wrapping getter. With no setter, this
+            // gets the ReadOnly attribute
+            GetterQuery(getter, if (@typeInfo(@TypeOf(setter)) == .null) v8.ReadOnly else v8.None).query;
 
-                    return caller.getIndexQuery(T, query, idx, handle.?);
+        indexed.query = struct {
+            fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                var caller: Caller = undefined;
+                if (!caller.init(v8_isolate)) {
+                    return js.Intercepted.no;
                 }
-            }.wrap;
-        }
+                defer caller.deinit();
+
+                return caller.getIndexQuery(T, query_func, idx, handle.?);
+            }
+        }.wrap;
 
         if (@typeInfo(@TypeOf(definer)) != .null) {
             indexed.definer = struct {
@@ -432,6 +437,35 @@ pub const Indexed = struct {
         return indexed;
     }
 };
+
+// Default index query if one isn't provided. Uses the getter to determine the result
+fn GetterQuery(comptime getter: anytype, comptime attrs: u32) type {
+    const params = @typeInfo(@TypeOf(getter)).@"fn".params;
+    const Self = params[0].type.?;
+    const Index = params[1].type.?;
+    return struct {
+        const query = if (params.len == 3) withGlobal else plain;
+
+        fn plain(self: Self, idx: Index) !u32 {
+            return attributes(getter(self, idx));
+        }
+
+        fn withGlobal(self: Self, idx: Index, global: params[2].type.?) !u32 {
+            return attributes(getter(self, idx, global));
+        }
+
+        fn attributes(ret: anytype) !u32 {
+            const value = switch (@typeInfo(@TypeOf(ret))) {
+                .error_union => try ret,
+                else => ret,
+            };
+            if (@typeInfo(@TypeOf(value)) == .optional and value == null) {
+                return error.NotHandled;
+            }
+            return attrs;
+        }
+    };
+}
 
 pub const NamedIndexed = struct {
     getter: *const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32,
