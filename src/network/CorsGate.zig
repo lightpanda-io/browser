@@ -312,6 +312,9 @@ const CorsPreflightContext = struct {
     wants_credentials: bool,
 
     allowed: bool = false,
+    acam: ?[]const u8 = null,
+    acah: ?[]const u8 = null,
+    acma: ?[]const u8 = null,
 
     fn validateHeaders(
         self: *CorsPreflightContext,
@@ -509,15 +512,20 @@ const CorsPreflightContext = struct {
 
         self.allowed = self.validateHeaders(acao, acam, acah, acac);
         if (self.allowed) {
-            self.cacheGrant(acam, acah, acma) catch |err| {
-                log.warn(.cors, "preflight cache store failed", .{ .url = self.url, .err = err });
-            };
+            self.acam = acam;
+            self.acah = acah;
+            self.acma = acma;
         }
         return .proceed;
     }
 
     fn doneCallback(ctx_ptr: *anyopaque) anyerror!void {
         const self: *CorsPreflightContext = @ptrCast(@alignCast(ctx_ptr));
+        if (self.allowed) {
+            self.cacheGrant(self.acam, self.acah, self.acma) catch |err| {
+                log.warn(.cors, "preflight cache store failed", .{ .url = self.url, .err = err });
+            };
+        }
         self.resolve(self.allowed);
     }
 
