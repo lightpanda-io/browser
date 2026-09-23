@@ -30,7 +30,7 @@ const Lock = @import("Lock.zig");
 const LockManager = @This();
 
 _held_locks: std.ArrayList(LockInfo) = .empty,
-_pending_locks: std.ArrayList(*Waiter) = .empty,
+_pending_locks: std.ArrayList(*LockRequest) = .empty,
 
 pub const LockInfo = struct {
     name: lp.String,
@@ -43,6 +43,7 @@ pub const LockManagerState = struct {
 };
 
 pub const Options = struct {
+    ifAvailable: bool = false,
     mode: Lock.LockMode = .exclusive,
 };
 
@@ -52,7 +53,7 @@ const CallbackOrOptions = union(enum) {
 };
 
 // A pending or in-flight lock request
-const Waiter = struct {
+const LockRequest = struct {
     manager: *LockManager,
     name: lp.String,
     options: Options,
@@ -60,9 +61,64 @@ const Waiter = struct {
     resolver: js.PromiseResolver.Global,
     exec: *Execution,
 
-    fn deinit(self: *Waiter) void {
+    granted: bool,
+
+    fn deinit(self: *LockRequest) void {
         self.cb.release();
         self.resolver.release();
+    }
+
+    fn finish(self: *LockRequest) void {
+        if (self.granted) {
+            self.manager.releaseLock(self);
+        } else {
+            self.deinit();
+        }
+    }
+
+    fn onSettled(self: *LockRequest, _: ?js.Value) void {
+        self.finish();
+    }
+
+    fn grantWith(self: *LockRequest, lock: ?Lock) void {
+        self.granted = lock != null;
+
+        const exec = self.exec;
+
+        var ls: js.Local.Scope = undefined;
+        exec.js.localScope(&ls);
+        defer ls.deinit();
+
+        const local = &ls.local;
+        const resolver = self.resolver.local(local);
+
+        const result = ls.toLocal(self.cb).call(
+            js.Value,
+            .{lock},
+        ) catch |err| {
+            resolver.rejectError("Lock callback", .{ .generic_error = @errorName(err) });
+            self.finish();
+            return;
+        };
+
+        resolver.resolve("Lock callback result", result);
+
+        if (result.isPromise() == false) {
+            self.finish();
+            return;
+        }
+
+        const settled = local.newCallback(LockRequest.onSettled, self);
+        _ = result.toPromise().thenAndCatch(settled, settled) catch {
+            self.finish();
+        };
+    }
+
+    fn grant(self: *LockRequest) void {
+        self.grantWith(Lock{
+            ._mode = self.options.mode,
+            ._name = self.name,
+        });
     }
 };
 
@@ -109,7 +165,7 @@ pub fn request(
 
     const owned_name = try lp.String.init(exec.arena, name, .{});
 
-    const waiter = try exec.arena.create(Waiter);
+    const waiter = try exec.arena.create(LockRequest);
     waiter.* = .{
         .manager = self,
         .name = owned_name,
@@ -117,9 +173,18 @@ pub fn request(
         .cb = try cb.persist(),
         .resolver = try resolver.persist(),
         .exec = exec,
+        .granted = false,
     };
 
-    if (self.isHeld(owned_name)) {
+    const held = self.isHeld(owned_name);
+
+    // ifAvailable and held means we fire the callback with null.
+    if (options.ifAvailable and held) {
+        waiter.grantWith(null);
+        return promise;
+    }
+
+    if (held) {
         try self._pending_locks.append(exec.arena, waiter);
         return promise;
     }
@@ -128,54 +193,13 @@ pub fn request(
         .name = owned_name,
         .mode = options.mode,
     });
-    grant(waiter);
+    waiter.grant();
     return promise;
-}
-
-// Invokes a waiter's callback with a Lock, resolves its request() promise
-// with (or, if it's a promise/thenable, chases) the callback's return value,
-// and releases the lock once that value has settled.
-fn grant(waiter: *Waiter) void {
-    const exec = waiter.exec;
-
-    var ls: js.Local.Scope = undefined;
-    exec.js.localScope(&ls);
-    defer ls.deinit();
-
-    const local = &ls.local;
-    const resolver = waiter.resolver.local(local);
-
-    const result = ls.toLocal(waiter.cb).call(js.Value, .{
-        Lock{
-            ._mode = waiter.options.mode,
-            ._name = waiter.name,
-        },
-    }) catch |err| {
-        resolver.rejectError("Lock callback", .{ .generic_error = @errorName(err) });
-        waiter.manager.releaseLock(waiter);
-        return;
-    };
-
-    resolver.resolve("Lock callback result", result);
-
-    if (result.isPromise() == false) {
-        waiter.manager.releaseLock(waiter);
-        return;
-    }
-
-    const settled = local.newCallback(onSettled, waiter);
-    _ = result.toPromise().thenAndCatch(settled, settled) catch {
-        waiter.manager.releaseLock(waiter);
-    };
-}
-
-fn onSettled(waiter: *Waiter, _: ?js.Value) void {
-    waiter.manager.releaseLock(waiter);
 }
 
 // Frees the given waiter's held lock, then grants it to the next queued
 // waiter for that name (if any).
-fn releaseLock(self: *LockManager, waiter: *Waiter) void {
+fn releaseLock(self: *LockManager, waiter: *LockRequest) void {
     for (self._held_locks.items, 0..) |li, i| {
         if (li.name.eql(waiter.name)) {
             _ = self._held_locks.orderedRemove(i);
@@ -200,7 +224,7 @@ fn releaseLock(self: *LockManager, waiter: *Waiter) void {
             return;
         };
 
-        grant(w);
+        w.grant();
         return;
     }
 }
