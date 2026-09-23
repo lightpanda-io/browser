@@ -138,9 +138,16 @@ fn disposeBrowserContext(cmd: *CDP.Command) !void {
         browserContextId: []const u8,
     })) orelse return error.InvalidParams;
 
-    if (cmd.cdp.disposeBrowserContext(params.browserContextId) == false) {
+    const bc = cmd.browser_context orelse {
+        return cmd.sendError(-32602, "No browser context with the given id found", .{});
+    };
+    if (std.mem.eql(u8, bc.id, params.browserContextId) == false) {
         return cmd.sendError(-32602, "No browser context with the given id found", .{});
     }
+
+    // Disposing a context closes its target; drivers wait on those events.
+    try bc.closeTarget();
+    cmd.cdp.disposeBrowserContext();
     try cmd.sendResult(null, .{});
 }
 
@@ -317,47 +324,7 @@ fn closeTarget(cmd: *CDP.Command) !void {
     lp.assert(bc.session.hasPage(), "CDP.target.closeTarget null frame", .{});
 
     try cmd.sendResult(.{ .success = true }, .{});
-
-    for (bc.attached_sessions.items) |session| {
-        bc.fetchDisableForSession(session.id);
-        try cmd.sendEvent("Inspector.detached", .{
-            .reason = "Render process gone.",
-        }, .{ .session_id = session.id });
-        try cmd.sendEvent("Target.detachedFromTarget", .{
-            .targetId = target_id,
-            .sessionId = session.id,
-            .reason = "Render process gone.",
-        }, .{ .session_id = session.parent_id });
-    }
-    bc.attached_sessions.clearRetainingCapacity();
-
-    // could be null, created but never attached
-    if (bc.session_id) |session_id| {
-        bc.fetchDisableForSession(session_id);
-        // Inspector.detached event
-        try cmd.sendEvent("Inspector.detached", .{
-            .reason = "Render process gone.",
-        }, .{ .session_id = session_id });
-
-        // detachedFromTarget event
-        try cmd.sendEvent("Target.detachedFromTarget", .{
-            .targetId = target_id,
-            .sessionId = session_id,
-            .reason = "Render process gone.",
-        }, .{});
-
-        bc.session_id = null;
-    }
-
-    if (bc.page_handle) |handle| {
-        handle.close();
-        bc.page_handle = null;
-    }
-    for (bc.isolated_worlds.items) |world| {
-        world.deinit();
-    }
-    bc.isolated_worlds.clearRetainingCapacity();
-    bc.target_id = null;
+    try bc.closeTarget();
 }
 
 fn getTargetInfo(cmd: *CDP.Command) !void {
@@ -643,6 +610,90 @@ test "cdp.target: disposeBrowserContext" {
         try ctx.expectSentResult(null, .{ .id = 9 });
         try testing.expectEqual(null, ctx.cdp().browser_context);
     }
+}
+
+test "cdp.target: disposeBrowserContext detaches target sessions" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const target_id = bc.target_id.?;
+    const context_id = try testing.arena_allocator.dupe(u8, bc.id);
+    const primary_id = try testing.arena_allocator.dupe(u8, bc.session_id.?);
+    try ctx.processMessage(.{ .id = 3, .method = "Target.attachToBrowserTarget" });
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Target.attachToTarget",
+        .sessionId = "BSID-1",
+        .params = .{ .targetId = target_id },
+    });
+    const auxiliary_id = try testing.arena_allocator.dupe(u8, bc.attached_sessions.items[0].id);
+
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "Target.disposeBrowserContext",
+        .params = .{ .browserContextId = context_id },
+    });
+    // Playwright waits for detachedFromTarget to resolve Page.closedPromise,
+    // even if Target.disposeBrowserContext itself has already replied.
+    try ctx.expectSentEvent("Target.detachedFromTarget", .{
+        .targetId = target_id,
+        .sessionId = auxiliary_id,
+        .reason = "Render process gone.",
+    }, .{ .session_id = "BSID-1" });
+    try ctx.expectSentEvent("Target.detachedFromTarget", .{
+        .targetId = target_id,
+        .sessionId = primary_id,
+        .reason = "Render process gone.",
+    }, .{});
+    try ctx.expectSentEvent("Target.targetDestroyed", .{ .targetId = target_id }, .{});
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try testing.expectEqual(null, ctx.cdp().browser_context);
+
+    // The connection remains usable; stale target/session IDs are not reused.
+    try ctx.processMessage(.{ .id = 6, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    try testing.expect(!std.mem.eql(u8, &target_id, &ctx.cdp().browser_context.?.target_id.?));
+    try testing.expect(!std.mem.eql(u8, primary_id, ctx.cdp().browser_context.?.session_id.?));
+}
+
+test "cdp.target: disposeBrowserContext destroys an unattached target" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const target_id = bc.target_id.?;
+    const context_id = try testing.arena_allocator.dupe(u8, bc.id);
+
+    // An invalid context ID must leave the live target untouched.
+    try ctx.processMessage(.{ .id = 2, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-UNKNOWN" } });
+    try ctx.expectSentError(-32602, "No browser context with the given id found", .{ .id = 2 });
+    try ctx.expectSentCount(3);
+    try testing.expectEqual(&target_id, bc.target_id.?);
+
+    try ctx.processMessage(.{ .id = 3, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = context_id } });
+    try ctx.expectSentEvent("Target.targetDestroyed", .{ .targetId = target_id }, .{ .index = 3 });
+    try ctx.expectSentResult(null, .{ .id = 3, .index = 4 });
+    try ctx.expectSentCount(5);
+}
+
+test "cdp.target: disposeBrowserContext after closeTarget does not repeat events" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const target_id = bc.target_id.?;
+    const context_id = try testing.arena_allocator.dupe(u8, bc.id);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Target.closeTarget", .params = .{ .targetId = target_id } });
+    try ctx.expectSentEvent("Target.targetDestroyed", .{ .targetId = target_id }, .{ .index = 3 });
+    try ctx.expectSentCount(4);
+    try ctx.processMessage(.{ .id = 3, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = context_id } });
+    try ctx.expectSentResult(null, .{ .id = 3, .index = 4 });
+    try ctx.expectSentCount(5);
 }
 
 // Issue #2472: CDP target IDs (`FID-{d:0>10}`) must stay unique for the
