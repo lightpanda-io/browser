@@ -541,7 +541,7 @@ const CorsPreflightContext = struct {
 
 fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
     const url = transfer.req.url;
-    const origin = transfer.req.origin orelse "null";
+    const origin = transfer.effectiveOrigin();
 
     var header_names: std.ArrayList([]const u8) = .empty;
     for (transfer.req_headers.items) |hdr| {
@@ -625,11 +625,7 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
     errdefer fetch_transfer.deinit();
 
     // Origin
-    try fetch_transfer.setHeader(
-        ORIGIN,
-        transfer.req.origin orelse "null",
-        .{},
-    );
+    try fetch_transfer.setHeader(ORIGIN, transfer.effectiveOrigin(), .{});
 
     if (referer) |r| {
         try fetch_transfer.setHeader("Referer", r, .{});
