@@ -165,5 +165,47 @@ customElements.define('tpl-element', TplElement);
     customElements.define('late-tpl-element', LateTplElement);
     testing.expectFalse(tpl.content.firstChild instanceof LateTplElement);
     testing.expectEqual('[]', JSON.stringify(calls));
+
+    // Nor does an explicit upgrade.
+    customElements.upgrade(tpl.content);
+    testing.expectFalse(tpl.content.firstChild instanceof LateTplElement);
+    testing.expectEqual('[]', JSON.stringify(calls));
+}
+</script>
+
+<script>
+let adopted = 0;
+
+class AdoptElement extends HTMLElement {
+    adoptedCallback() {
+        adopted += 1;
+    }
+}
+
+customElements.define('adopt-element', AdoptElement);
+</script>
+
+<div id="adoption"><a><b><div><adopt-element></adopt-element><template>t</template></a></div></b></div>
+
+<script id="adoption_agency">
+{
+    // The parser creates an element in the document of the last insertion
+    // point, here the <template>'s content (hence the "t"). </a> then runs
+    // the adoption agency algorithm, which creates a clone of <b> (in that
+    // wrong document) and moves the <div>, already in this document, into
+    // it. The clone must join the <div>'s document, not the other way
+    // around, so nothing that was placed gets adopted.
+    const root = document.getElementById('adoption');
+    const shape = (el) => el.tagName + (el.children.length ? `(${[...el.children].map(shape).join(',')})` : '');
+    testing.expectEqual('DIV(A(B),B(DIV(A(ADOPT-ELEMENT,TEMPLATE))))', shape(root));
+    testing.expectEqual(0, adopted);
+    for (const el of root.querySelectorAll('*')) {
+        testing.expectTrue(el.ownerDocument === document);
+    }
+    testing.expectTrue(root.querySelector('adopt-element') instanceof AdoptElement);
+
+    const tpl = root.querySelector('template');
+    testing.expectTrue(tpl.content.ownerDocument !== document);
+    testing.expectEqual('t', tpl.content.textContent);
 }
 </script>
