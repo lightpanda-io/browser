@@ -121,7 +121,7 @@ pub fn newCallback(
 
 pub fn runMacrotasks(self: *const Local) void {
     const env = self.ctx.env;
-    env.pumpMessageLoop();
+    _ = env.pumpMessageLoop();
     env.runMicrotasks(); // macrotasks can cause microtasks to queue
 }
 

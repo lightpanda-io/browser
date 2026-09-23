@@ -567,14 +567,18 @@ pub fn msToNextTask(self: *Env) ?u64 {
     return if (next_task == std.math.maxInt(u64)) null else next_task;
 }
 
-pub fn pumpMessageLoop(self: *const Env) void {
+pub fn pumpMessageLoop(self: *const Env) bool {
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate.handle);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
     const isolate = self.isolate.handle;
     const platform = self.platform.handle;
-    while (v8.v8__Platform__PumpMessageLoop(platform, isolate, false)) {}
+    var ran = false;
+    while (v8.v8__Platform__PumpMessageLoop(platform, isolate, false)) {
+        ran = true;
+    }
+    return ran;
 }
 
 pub fn hasBackgroundTasks(self: *const Env) bool {

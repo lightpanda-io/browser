@@ -35,6 +35,7 @@ const Runner = @This();
 session: *Session,
 browser: *Browser,
 http_client: *HttpClient,
+background_poll_ms: u32 = 0,
 
 pub const Opts = struct {};
 
@@ -223,8 +224,9 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
 
     const has_runnable_page = hasRunnablePage(session);
 
+    var ran_platform_task = false;
     if (has_runnable_page) {
-        try browser.runMacrotasks();
+        ran_platform_task = try browser.runMacrotasks();
     }
 
     const activity = http_client.activity();
@@ -318,8 +320,16 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                 break :blk 200;
             }
             if (browser.hasBackgroundTasks()) {
+                // if our last runMacrotasks() ran something and we now have
+                // a background, then don't linger in the http client waiting
+                // for I/O, instead, hurry back to run more tasks.
+                // Else, backoff to 10ms between runs.
+                // TODO: this is a temporary solution to ensuring background
+                // tasks are run promptly.The better solution is to have v8
+                // wakeup the http client when there's work to do.
+                self.background_poll_ms = if (ran_platform_task) 0 else @min(10, @max(1, self.background_poll_ms * 2));
                 // msToNextTask could be less than this, but 10ms drift is ok
-                break :blk 10;
+                break :blk self.background_poll_ms;
             }
             break :blk browser.msToNextTask() orelse 200;
         };

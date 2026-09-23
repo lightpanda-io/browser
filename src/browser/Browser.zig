@@ -262,14 +262,15 @@ pub fn runMicrotasks(self: *Browser) void {
     self.env.runMicrotasks();
 }
 
-pub fn runMacrotasks(self: *Browser) !void {
+pub fn runMacrotasks(self: *Browser) !bool {
     const env = &self.env;
 
     try self.env.runMacrotasks();
-    env.pumpMessageLoop();
+    const ran_platform_task = env.pumpMessageLoop();
 
     // either of the above could have queued more microtasks
     env.runMicrotasks();
+    return ran_platform_task;
 }
 
 pub fn hasBackgroundTasks(self: *Browser) bool {
