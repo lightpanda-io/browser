@@ -71,6 +71,7 @@ const GlobalScope = @import("global_scope.zig").GlobalScope;
 
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
+const framing = @import("frame/framing.zig");
 pub const parse = @import("frame/parse.zig");
 pub const preload = @import("frame/preload.zig");
 pub const resource_load = @import("frame/resource_load.zig");
@@ -1444,6 +1445,15 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
         self.url = try self.arena.dupeZ(u8, response_url);
         self.origin = try URL.getOrigin(self.arena, self.url);
     }
+
+    if (self.parent != null and framing.allowed(self, transfer) == false) {
+        log.warn(.frame, "x-frame-options blocked", .{ .url = self.url });
+        // give this an opaque origin so that any request to the error page
+        // is treated as being cross-origin
+        self.origin = null;
+        try self.js.setOrigin(null);
+        return error.XFrameOptionsDenied;
+    }
     try self.js.setOrigin(self.origin);
 
     // After any redirect, drop the original method/body/header so a later
@@ -2040,6 +2050,9 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
 
     try Frame.init(new_frame, frame_id, self.page, .{ .parent = self });
     errdefer new_frame.deinit();
+
+    // until the navigate commits, the iframe is about:blank and inherits the parent's origin
+    try new_frame.js.setOrigin(self.origin);
 
     const delays_load = iframe.isLazyLoading() == false;
     new_frame._delays_parent_load = delays_load;
