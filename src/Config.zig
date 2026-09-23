@@ -254,6 +254,7 @@ pub const ExperimentalFeatures = packed struct(u2) {
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
     .{ .name = "robot_store_entry_limit", .type = ?u32, .default = 1000 },
+    .{ .name = "cors_store_entry_limit", .type = ?u32, .default = 1000 },
     .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
     .{ .name = "http_proxy", .type = ?[:0]const u8 },
     .{ .name = "http_max_concurrent", .type = ?u8 },
@@ -566,6 +567,13 @@ pub fn obeyRobots(self: *const Config) bool {
 pub fn robotStoreEntryLimit(self: *const Config) u32 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.robot_store_entry_limit.?,
+        else => 1000,
+    };
+}
+
+pub fn corsStoreEntryLimit(self: *const Config) u32 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.cors_store_entry_limit.?,
         else => 1000,
     };
 }
