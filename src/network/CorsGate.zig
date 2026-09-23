@@ -419,8 +419,6 @@ const CorsPreflightContext = struct {
         const capped_s: u64 = @min(max_age_s, 7200);
         const capped_ms = capped_s * 1000;
 
-        const allocator = self.arena.allocator();
-
         const methods_wildcard = acam != null and std.mem.eql(u8, acam.?, "*") and !self.wants_credentials;
         var methods = std.EnumSet(http.Method).initEmpty();
         if (!methods_wildcard) {
@@ -434,14 +432,6 @@ const CorsPreflightContext = struct {
         }
 
         const headers_wildcard = acah != null and std.mem.eql(u8, acah.?, "*") and !self.wants_credentials;
-        var owned_headers: []const []const u8 = &.{};
-        if (!headers_wildcard and self.request_headers.len > 0) {
-            const dup = try allocator.alloc([]const u8, self.request_headers.len);
-            for (self.request_headers, 0..) |src, i| {
-                dup[i] = try allocator.dupe(u8, src);
-            }
-            owned_headers = dup;
-        }
 
         try self.gate.network.cors_store.put(
             .{ .origin = self.origin, .target = self.url, .credentials = self.wants_credentials },
@@ -449,7 +439,7 @@ const CorsPreflightContext = struct {
                 .methods_wildcard = methods_wildcard,
                 .methods = methods,
                 .headers_wildcard = headers_wildcard,
-                .headers = owned_headers,
+                .headers = if (headers_wildcard) &.{} else self.request_headers,
                 .expires_at = lp.datetime.milliTimestamp(.real) + capped_ms,
             },
         );
