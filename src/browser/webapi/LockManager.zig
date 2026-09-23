@@ -122,10 +122,31 @@ const LockRequest = struct {
     }
 };
 
-fn isHeld(self: *const LockManager, name: lp.String) bool {
+fn heldConflicts(self: *const LockManager, name: lp.String, mode: Lock.LockMode) bool {
     for (self._held_locks.items) |li| {
-        if (li.name.eql(name)) return true;
+        if (li.name.eql(name)) switch (mode) {
+            .exclusive => return true,
+            .shared => if (li.mode == .exclusive) {
+                return true;
+            },
+        };
     }
+
+    return false;
+}
+
+fn mustQueue(self: *const LockManager, name: lp.String, mode: Lock.LockMode) bool {
+    if (self.heldConflicts(name, mode)) {
+        return true;
+    }
+
+    // If any are pending with the same name, we must queue behind them.
+    for (self._pending_locks.items) |w| {
+        if (w.name.eql(name)) {
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -176,15 +197,15 @@ pub fn request(
         .granted = false,
     };
 
-    const held = self.isHeld(owned_name);
+    const must_queue_request = self.mustQueue(owned_name, options.mode);
 
     // ifAvailable and held means we fire the callback with null.
-    if (options.ifAvailable and held) {
+    if (options.ifAvailable and must_queue_request) {
         waiter.grantWith(null);
         return promise;
     }
 
-    if (held) {
+    if (must_queue_request) {
         try self._pending_locks.append(exec.arena, waiter);
         return promise;
     }
@@ -197,8 +218,9 @@ pub fn request(
     return promise;
 }
 
-// Frees the given waiter's held lock, then grants it to the next queued
-// waiter for that name (if any).
+// Frees the given waiter's held lock, then grants it to as many queued
+// waiters for that name as are compatible (e.g. several shared requests
+// queued back-to-back are all granted, not just the first).
 fn releaseLock(self: *LockManager, waiter: *LockRequest) void {
     for (self._held_locks.items, 0..) |li, i| {
         if (li.name.eql(waiter.name)) {
@@ -208,8 +230,23 @@ fn releaseLock(self: *LockManager, waiter: *LockRequest) void {
     }
     waiter.deinit();
 
-    for (self._pending_locks.items, 0..) |w, i| {
-        if (w.name.eql(waiter.name) == false) continue;
+    while (true) {
+        var idx: ?usize = null;
+        for (self._pending_locks.items, 0..) |w, i| {
+            if (w.name.eql(waiter.name)) {
+                idx = i;
+                break;
+            }
+        }
+        const i = idx orelse return;
+        const w = self._pending_locks.items[i];
+
+        // w is the earliest still-pending request for this name, so only
+        // what's currently held can block it.
+        if (self.heldConflicts(w.name, w.options.mode)) {
+            return;
+        }
+
         _ = self._pending_locks.orderedRemove(i);
 
         self._held_locks.append(w.exec.arena, .{
@@ -225,7 +262,6 @@ fn releaseLock(self: *LockManager, waiter: *LockRequest) void {
         };
 
         w.grant();
-        return;
     }
 }
 
