@@ -438,6 +438,15 @@ pub const Indexed = struct {
     }
 };
 
+fn hasNotHandled(comptime E: type) bool {
+    // anyerror includes it
+    const errors = @typeInfo(E).error_set orelse return true;
+    for (errors) |e| {
+        if (std.mem.eql(u8, e.name, "NotHandled")) return true;
+    }
+    return false;
+}
+
 // Default index query if one isn't provided. Uses the getter to determine the result
 fn GetterQuery(comptime getter: anytype, comptime attrs: u32) type {
     const params = @typeInfo(@TypeOf(getter)).@"fn".params;
@@ -446,9 +455,13 @@ fn GetterQuery(comptime getter: anytype, comptime attrs: u32) type {
 
     // A getter that can return neither null nor error.NotHandled would report
     // every index as present.
-    switch (@typeInfo(@typeInfo(@TypeOf(getter)).@"fn".return_type.?)) {
-        .optional, .error_union => {},
-        else => @compileError(@typeName(Self) ++ ": an indexed getter that can't return null or error.NotHandled needs an explicit query"),
+    const can_be_absent = switch (@typeInfo(@typeInfo(@TypeOf(getter)).@"fn".return_type.?)) {
+        .optional => true,
+        .error_union => |eu| @typeInfo(eu.payload) == .optional or hasNotHandled(eu.error_set),
+        else => false,
+    };
+    if (can_be_absent == false) {
+        @compileError(@typeName(Self) ++ ": an indexed getter that can't return null or error.NotHandled needs an explicit query");
     }
 
     return struct {
