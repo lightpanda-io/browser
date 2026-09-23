@@ -141,15 +141,13 @@ fn disposeBrowserContext(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse {
         return cmd.sendError(-32602, "No browser context with the given id found", .{});
     };
-    if (!std.mem.eql(u8, bc.id, params.browserContextId)) {
+    if (std.mem.eql(u8, bc.id, params.browserContextId) == false) {
         return cmd.sendError(-32602, "No browser context with the given id found", .{});
     }
 
-    // Disposing a context closes its target too. Clients use these events to
-    // settle page.close() and remove the page from their target/session maps;
-    // replying to disposeBrowserContext alone leaves them waiting forever.
-    try detachTarget(cmd, bc);
-    _ = cmd.cdp.disposeBrowserContext(params.browserContextId);
+    // Disposing a context closes its target; drivers wait on those events.
+    try bc.closeTarget();
+    cmd.cdp.disposeBrowserContext();
     try cmd.sendResult(null, .{});
 }
 
@@ -326,53 +324,7 @@ fn closeTarget(cmd: *CDP.Command) !void {
     lp.assert(bc.session.hasPage(), "CDP.target.closeTarget null frame", .{});
 
     try cmd.sendResult(.{ .success = true }, .{});
-    try detachTarget(cmd, bc);
-
-    if (bc.page_handle) |handle| {
-        handle.close();
-        bc.page_handle = null;
-    }
-    for (bc.isolated_worlds.items) |world| {
-        world.deinit();
-    }
-    bc.isolated_worlds.clearRetainingCapacity();
-    bc.target_id = null;
-}
-
-fn detachTarget(cmd: *CDP.Command, bc: *CDP.BrowserContext) !void {
-    const target_id = bc.target_id orelse return;
-    for (bc.attached_sessions.items) |session| {
-        bc.fetchDisableForSession(session.id);
-        try cmd.sendEvent("Inspector.detached", .{
-            .reason = "Render process gone.",
-        }, .{ .session_id = session.id });
-        try cmd.sendEvent("Target.detachedFromTarget", .{
-            .targetId = target_id,
-            .sessionId = session.id,
-            .reason = "Render process gone.",
-        }, .{ .session_id = session.parent_id });
-    }
-    bc.attached_sessions.clearRetainingCapacity();
-
-    // could be null, created but never attached
-    if (bc.session_id) |session_id| {
-        bc.fetchDisableForSession(session_id);
-        // Inspector.detached event
-        try cmd.sendEvent("Inspector.detached", .{
-            .reason = "Render process gone.",
-        }, .{ .session_id = session_id });
-
-        // detachedFromTarget event
-        try cmd.sendEvent("Target.detachedFromTarget", .{
-            .targetId = target_id,
-            .sessionId = session_id,
-            .reason = "Render process gone.",
-        }, .{});
-
-        bc.session_id = null;
-    }
-
-    try cmd.sendEvent("Target.targetDestroyed", .{ .targetId = target_id }, .{});
+    try bc.closeTarget();
 }
 
 fn getTargetInfo(cmd: *CDP.Command) !void {
