@@ -187,6 +187,32 @@ pub fn covers(
     return matches(entry.*, method, authored_headers);
 }
 
+pub fn coversRequest(
+    self: *CorsStore,
+    allocator: std.mem.Allocator,
+    key: Key,
+    method: http.Method,
+    authored_headers: []const []const u8,
+) !bool {
+    const primary_key = try key.build(allocator);
+    defer allocator.free(primary_key);
+
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
+
+    if (self.getWithExpiration(primary_key)) |entry| {
+        if (matches(entry.*, method, authored_headers)) return true;
+    }
+
+    if (key.credentials) return false;
+
+    const cred_key = try (Key{ .origin = key.origin, .target = key.target, .credentials = true }).build(allocator);
+    defer allocator.free(cred_key);
+
+    const entry = self.getWithExpiration(cred_key) orelse return false;
+    return matches(entry.*, method, authored_headers);
+}
+
 /// Insert or merge a CORS grant for (origin, target). `entry` is not
 /// consumed: `put` copies whatever it needs (via `dupe`/`merge`, which
 /// always allocate their own copies) and never takes ownership of

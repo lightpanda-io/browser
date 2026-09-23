@@ -221,18 +221,12 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
 
     const authored = try collectAuthoredHeaders(transfer, transfer.arena.allocator());
 
-    var covered = try self.network.cors_store.covers(.{
-        .origin = origin,
-        .target = req.url,
-        .credentials = wants_credentials,
-    }, req.method, authored.items);
-    if (!covered and !wants_credentials) {
-        covered = try self.network.cors_store.covers(.{
-            .origin = origin,
-            .target = req.url,
-            .credentials = true,
-        }, req.method, authored.items);
-    }
+    const covered = try self.network.cors_store.coversRequest(
+        transfer.arena.allocator(),
+        .{ .origin = origin, .target = req.url, .credentials = wants_credentials },
+        req.method,
+        authored.items,
+    );
 
     if (covered) {
         log.debug(.cors, "cross origin", .{
