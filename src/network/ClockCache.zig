@@ -64,6 +64,15 @@ pub fn ClockCache(comptime V: type) type {
             return &entry.value;
         }
 
+        pub fn remove(self: *Self, key: []const u8) ?V {
+            const index = self.map.getIndex(key) orelse return null;
+            const owned_key = self.map.keys()[index];
+            const value = self.map.values()[index].value;
+            self.map.swapRemoveAt(index);
+            self.allocator.free(owned_key);
+            return value;
+        }
+
         pub fn insert(self: *Self, key: []const u8, value: V) !InsertResult {
             const gop = try self.map.getOrPut(self.allocator, key);
             if (gop.found_existing) return .exists;

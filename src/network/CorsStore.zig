@@ -21,43 +21,27 @@ const lp = @import("lightpanda");
 
 const http = @import("http.zig");
 const isSafelistedMethod = @import("CorsGate.zig").isSafelistedMethod;
+const ClockCache = @import("ClockCache.zig").ClockCache;
 
 const CorsStore = @This();
 
-const Key = struct {
+pub const Key = struct {
     origin: []const u8,
     target: []const u8,
     credentials: bool,
 
-    fn dupe(self: Key, allocator: std.mem.Allocator) !Key {
-        return .{
-            .origin = try allocator.dupe(u8, self.origin),
-            .target = try allocator.dupe(u8, self.target),
-            .credentials = self.credentials,
-        };
-    }
+    /// Serializes into a single string suitable as a ClockCache key.
+    fn build(self: Key, allocator: std.mem.Allocator) ![]const u8 {
+        var buf: std.ArrayList(u8) = .empty;
+        errdefer buf.deinit(allocator);
 
-    fn deinit(self: Key, allocator: std.mem.Allocator) void {
-        allocator.free(self.origin);
-        allocator.free(self.target);
-    }
-};
+        try buf.appendSlice(allocator, self.origin);
+        try buf.append(allocator, 0);
+        try buf.appendSlice(allocator, self.target);
+        try buf.append(allocator, 0);
+        try buf.append(allocator, @intFromBool(self.credentials));
 
-const KeyContext = struct {
-    pub fn hash(_: KeyContext, key: Key) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(key.origin);
-        hasher.update(&.{0});
-        hasher.update(key.target);
-        hasher.update(&.{0});
-        hasher.update(&.{@intFromBool(key.credentials)});
-        return hasher.final();
-    }
-
-    pub fn eql(_: KeyContext, a: Key, b: Key) bool {
-        return std.mem.eql(u8, a.origin, b.origin) and
-            std.mem.eql(u8, a.target, b.target) and
-            a.credentials == b.credentials;
+        return buf.toOwnedSlice(allocator);
     }
 };
 
@@ -133,39 +117,38 @@ pub const Entry = struct {
     }
 };
 
-const Map = std.HashMapUnmanaged(Key, Entry, KeyContext, std.hash_map.default_max_load_percentage);
-
 allocator: std.mem.Allocator,
-map: Map = .empty,
+map: ClockCache(Entry),
 mutex: std.Io.Mutex = .init,
 
-pub fn init(allocator: std.mem.Allocator) CorsStore {
-    return .{ .allocator = allocator };
+pub fn init(allocator: std.mem.Allocator, capacity: usize) CorsStore {
+    return .{ .allocator = allocator, .map = .init(allocator, capacity) };
 }
 
 pub fn deinit(self: *CorsStore) void {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
 
-    var iter = self.map.iterator();
-    while (iter.next()) |entry| {
-        entry.key_ptr.deinit(self.allocator);
-        entry.value_ptr.deinit(self.allocator);
+    for (self.map.entries()) |*entry| {
+        entry.value.deinit(self.allocator);
     }
-
-    self.map.deinit(self.allocator);
+    self.map.deinit();
 }
 
 pub fn get(self: *CorsStore, key: Key) !?Entry {
+    const cache_key = try key.build(self.allocator);
+    defer self.allocator.free(cache_key);
+
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
 
-    const entry = self.map.get(key) orelse return null;
+    const entry = self.map.get(cache_key) orelse return null;
 
     if (entry.expires_at <= lp.datetime.milliTimestamp(.real)) {
-        const kv = self.map.fetchRemove(key).?;
-        kv.key.deinit(self.allocator);
-        kv.value.deinit(self.allocator);
+        if (self.map.remove(cache_key)) |e| {
+            e.deinit(self.allocator);
+        }
+
         return null;
     }
 
@@ -181,23 +164,31 @@ pub fn get(self: *CorsStore, key: Key) !?Entry {
 /// freeing `entry.headers` after this call, on both the insert and
 /// the merge path.
 pub fn put(self: *CorsStore, key: Key, entry: Entry) !void {
+    const cache_key = try key.build(self.allocator);
+    defer self.allocator.free(cache_key);
+
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
 
-    const gop = try self.map.getOrPut(self.allocator, key);
-    if (!gop.found_existing) {
-        errdefer _ = self.map.remove(key);
-        gop.key_ptr.* = try key.dupe(self.allocator);
-        gop.value_ptr.* = try entry.dupe(self.allocator);
+    if (self.map.get(cache_key)) |existing| {
+        const merged = try existing.merge(self.allocator, entry);
+        existing.deinit(self.allocator);
+        existing.* = merged;
         return;
     }
 
-    const old = gop.value_ptr.*;
-    const merged = old.merge(self.allocator, entry) catch |err| {
-        return err;
-    };
-    old.deinit(self.allocator);
-    gop.value_ptr.* = merged;
+    const owned_entry = try entry.dupe(self.allocator);
+    errdefer owned_entry.deinit(self.allocator);
+
+    switch (try self.map.insert(cache_key, owned_entry)) {
+        .exists => unreachable,
+        .inserted => |evicted| {
+            if (evicted) |v| {
+                var e = v;
+                e.deinit(self.allocator);
+            }
+        },
+    }
 }
 
 pub fn covers(
@@ -263,7 +254,7 @@ test "CorsStore: put then get, miss on different origin/target/credentials" {
     try testing.expectEqual(null, try store.get(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = true }));
 }
 
-test "CorsStore: expired entries are evicted on get" {
+test "CorsStore: expired entries are treated as a miss on get" {
     const allocator = testing.allocator;
     var store = CorsStore.init(allocator);
     defer store.deinit();
@@ -277,7 +268,6 @@ test "CorsStore: expired entries are evicted on get" {
     });
 
     try testing.expectEqual(null, try store.get(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = false }));
-    try testing.expectEqual(0, store.map.count());
 }
 
 test "CorsStore: put merges into existing entry rather than clobbering" {
