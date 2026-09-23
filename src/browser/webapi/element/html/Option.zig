@@ -79,7 +79,7 @@ pub fn getSelected(self: *const Option) bool {
     return self._selected;
 }
 
-fn setSelected(self: *Option, selected: bool, frame: *Frame) !void {
+pub fn setSelected(self: *Option, selected: bool, frame: *Frame) !void {
     self.setSelectedness(selected);
     frame.domChanged();
 }
@@ -96,7 +96,7 @@ fn setSelectedness(self: *Option, selected: bool) void {
 }
 
 /// The <select> this option belongs to, directly or through an <optgroup>.
-fn ownerSelect(self: *Option) ?*Select {
+pub fn ownerSelect(self: *Option) ?*Select {
     var node = self.asNode().parentNode();
     while (node) |n| : (node = n.parentNode()) {
         if (n.is(Select)) |select| return select;

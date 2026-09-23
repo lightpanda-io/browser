@@ -268,6 +268,16 @@ fn startNavigation(cmd: *BiDi.Command, ctx: *Context, frame: *Frame, url: [:0]co
     }
 }
 
+// For commands that start a navigation, e.g. clicking a link.
+pub fn answerAfterNavigation(cmd: *BiDi.Command, ctx: *Context, frame: *const Frame) !void {
+    if (frame._queued_navigation == null) {
+        return cmd.sendDone();
+    }
+    // There was an already queued navigation, reject the previous pending command
+    try rejectPending(cmd.bidi, ctx, "navigation superseded");
+    ctx.pending_navigate = .{ .reply = cmd.takeReply(), .until = .complete };
+}
+
 fn close(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         context: []const u8,

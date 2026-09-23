@@ -75,9 +75,9 @@ pub fn run(cmd: *BiDi.Command, p: Script, mode: Mode) !void {
     const extra = @intFromBool(mode == .async);
     const arguments = try cmd.arena.alloc(js.Value, p.args.len + extra);
     for (p.args, arguments[0..p.args.len]) |argument, *js_argument| {
-        js_argument.* = fromJson(local, &bidi.node_registry, argument) catch |err| switch (err) {
+        js_argument.* = fromJson(local, &bidi.node_registry, argument, frame) catch |err| switch (err) {
             error.NoSuchElement => return cmd.sendError("no such element", "unknown element reference"),
-            error.StaleElement => return cmd.sendError("stale element reference", "element is no longer attached to the document"),
+            error.StaleElement => return cmd.sendError("stale element reference", "element is not in the current document"),
             error.InvalidArgument => return cmd.sendError("invalid argument", "cannot deserialize an argument"),
             else => return err,
         };
@@ -539,6 +539,7 @@ fn fromJson(
     local: *const js.Local,
     registry: *const NodeRegistry,
     value: std.json.Value,
+    frame: *const Frame,
 ) !js.Value {
     switch (value) {
         .null => return local.zigValueToJs(null, .{}),
@@ -550,7 +551,7 @@ fn fromJson(
         .array => |v| {
             var array = local.newArray(@intCast(v.items.len));
             for (v.items, 0..) |item, i| {
-                if (try array.set(@intCast(i), try fromJson(local, registry, item), .{}) == false) {
+                if (try array.set(@intCast(i), try fromJson(local, registry, item, frame), .{}) == false) {
                     return error.InvalidArgument;
                 }
             }
@@ -562,14 +563,14 @@ fn fromJson(
                     .string => |s| s,
                     else => return error.NoSuchElement,
                 };
-                const element = try http_command.elementFromReference(registry, shared_id);
+                const element = try http_command.elementFromReference(registry, shared_id, frame);
                 return local.zigValueToJs(element.asNode(), .{});
             }
 
             const object = local.newObject();
             var it = fields.iterator();
             while (it.next()) |entry| {
-                const item = try fromJson(local, registry, entry.value_ptr.*);
+                const item = try fromJson(local, registry, entry.value_ptr.*, frame);
                 if (try object.set(entry.key_ptr.*, item, .{}) == false) {
                     return error.InvalidArgument;
                 }
