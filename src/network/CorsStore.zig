@@ -87,7 +87,7 @@ pub const Entry = struct {
             .methods = self.methods.unionWith(new.methods),
             .headers_wildcard = self.headers_wildcard or new.headers_wildcard,
             .headers = try unionHeaders(allocator, self.headers, new.headers),
-            .expires_at = @max(self.expires_at, new.expires_at),
+            .expires_at = @min(self.expires_at, new.expires_at),
         };
     }
 
