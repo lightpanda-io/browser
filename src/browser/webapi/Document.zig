@@ -1157,6 +1157,11 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     // gone for good, as in Chrome.
     frame.cancelQueuedNavigation();
 
+    if (std.mem.indexOfScalar(*Document, frame._script_created_parser_docs.items, self) == null) {
+        // have the page track this document (if it isn't already)
+        // so that, on shutdown, it can close the parser if needed.
+        try frame._script_created_parser_docs.append(frame.arena, self);
+    }
     self._script_created_parser = Parser.Streaming.init(frame.arena, doc_node, frame, .{ .allow_declarative_shadow = true });
     try self._script_created_parser.?.start();
     frame._parse_mode = .document;
