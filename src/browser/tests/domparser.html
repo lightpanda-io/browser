@@ -521,6 +521,11 @@
     '<a>&#0;</a>',
     '<a><?1x?></a>',             // invalid processing instruction target
     '<?1x?><a/>',
+    '<?xml version="2.0"?><a/>', // only 1.x versions are accepted
+    '<?xml version="10.0"?><a/>',
+    '<?xml version="1."?><a/>',
+    '<?xml version=1.0?><a/>',
+    '<?xml encoding="UTF-8"?><a/>', // version is required
   ]) {
     testing.expectEqual(bad + ' -> error', bad + (isError(p.parseFromString(bad, 'text/xml')) ? ' -> error' : ' -> ok'));
   }
@@ -529,6 +534,8 @@
   for (const good of [
     '<a/>',
     '<?xml version="1.0" encoding="UTF-8"?>\n<a/>\n',
+    "<?xml version = '1.1075' ?><a/>",
+    '<?xml version="1.000" standalone="yes"?><a/>',
     '\uFEFF<a/>',
     '<a><![CDATA[<x>]]><!-- c --><?pi d?></a><!-- trailing -->',
     '<a b="x&quot;y&apos;&lt;&#169;"/>',
@@ -548,6 +555,12 @@
   testing.expectEqual('svg', svg.doctype.name);
   testing.expectEqual('-//W3C//DTD SVG 1.1//EN', svg.doctype.publicId);
   testing.expectEqual('svg', svg.documentElement.localName);
+
+  // the XML declaration creates no node, a leading processing instruction does
+  const decl = p.parseFromString('<?xml version="1.0"?><?xml-stylesheet href="a.css"?><a/>', 'text/xml');
+  testing.expectEqual(2, decl.childNodes.length);
+  testing.expectEqual('xml-stylesheet', decl.firstChild.target);
+  testing.expectEqual('xml-stylesheet', p.parseFromString('<?xml-stylesheet href="a.css"?><a/>', 'text/xml').firstChild.target);
 }
 </script>
 
