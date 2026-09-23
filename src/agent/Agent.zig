@@ -516,7 +516,7 @@ const TurnInput = struct {
 /// Returns true on success.
 pub fn run(self: *Agent) bool {
     if (self.start_url) |url| {
-        if (!self.gotoStart(url, self.one_shot_save != null)) return false;
+        if (!self.gotoStart(url)) return false;
     }
     if (self.one_shot_task) |task| {
         const saving = self.one_shot_save != null;
@@ -541,8 +541,8 @@ pub fn run(self: *Agent) bool {
 }
 
 /// Opens `--url` through the tool layer, so a bad URL fails like any other
-/// tool call.
-fn gotoStart(self: *Agent, url: [:0]const u8, record: bool) bool {
+/// tool call and `/save` replays the opening navigation.
+fn gotoStart(self: *Agent, url: [:0]const u8) bool {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -559,7 +559,7 @@ fn gotoStart(self: *Agent, url: [:0]const u8, record: bool) bool {
         self.terminal.printError("could not open {s}: {s}", .{ url, result.text });
         return false;
     }
-    if (record) self.recordSaveCommand(Command.fromToolCall(.goto, args));
+    self.recordSaveCommand(Command.fromToolCall(.goto, args));
     return true;
 }
 
