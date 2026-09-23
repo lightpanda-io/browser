@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
@@ -105,7 +107,8 @@ pub fn remove(self: *HTMLOptionsCollection, index: i32, frame: *Frame) void {
 }
 
 // Chrome's cap (kMaxListItems): padding up to a huge index would otherwise
-// create that many options.
+// create that many options. Past it, Chrome ignores the set (with a console
+// warning); Firefox has no cap.
 const max_list_items = 100_000;
 
 // The indexed setter: null removes the option at index; an index past the
@@ -127,14 +130,22 @@ fn setAtIndex(self: *HTMLOptionsCollection, index: u32, option_: ?*Option, frame
     }
 
     if (index >= max_list_items) {
+        lp.log.warn(.js, "select overflow", .{ .max_list_items = max_list_items, .request = index });
         return;
     }
 
     const select_node = self._select.asNode();
-    const doc = select_node.ownerDocument(frame).?;
-    for (self.length(frame)..index) |_| {
-        const blank = try doc.createElementNS("http://www.w3.org/1999/xhtml", "option", frame);
-        _ = try select_node.appendChild(blank.asNode(), frame);
+    const len = self.length(frame);
+    if (index > len) {
+        // Per spec, the padding goes in as one DocumentFragment, so observers
+        // get one record rather than one per blank option.
+        const doc = select_node.ownerDocument(frame).?;
+        const fragment = (try Node.DocumentFragment.init(doc, frame)).asNode();
+        for (len..index) |_| {
+            const blank = try doc.createElementNS("http://www.w3.org/1999/xhtml", "option", frame);
+            _ = try fragment.appendChild(blank.asNode(), frame);
+        }
+        _ = try select_node.appendChild(fragment, frame);
     }
     _ = try select_node.appendChild(option, frame);
 }

@@ -443,6 +443,14 @@ fn GetterQuery(comptime getter: anytype, comptime attrs: u32) type {
     const params = @typeInfo(@TypeOf(getter)).@"fn".params;
     const Self = params[0].type.?;
     const Index = params[1].type.?;
+
+    // A getter that can return neither null nor error.NotHandled would report
+    // every index as present.
+    switch (@typeInfo(@typeInfo(@TypeOf(getter)).@"fn".return_type.?)) {
+        .optional, .error_union => {},
+        else => @compileError(@typeName(Self) ++ ": an indexed getter that can't return null or error.NotHandled needs an explicit query"),
+    }
+
     return struct {
         const query = if (params.len == 3) withGlobal else plain;
 

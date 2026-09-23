@@ -313,6 +313,25 @@
   }
 </script>
 
+<script id="options_indexed_setter_padding">
+  {
+    const sel = document.createElement('select')
+    const make = (v) => { const o = document.createElement('option'); o.value = v; return o }
+    const records = []
+    new MutationObserver((r) => records.push(...r)).observe(sel, { childList: true })
+
+    // The spec pads with one DocumentFragment (we do, so 2 records); Chrome
+    // appends each blank option on its own. Only what was added is common.
+    sel.options[3] = make('d')
+    testing.expectEqual(4, sel.options.length)
+
+    testing.onload(() => {
+      const added = records.flatMap((r) => Array.from(r.addedNodes, (n) => n.value))
+      testing.expectEqual(['', '', '', 'd'], added)
+    })
+  }
+</script>
+
 <script id="select_add">
   {
     const sel = document.createElement('select')
