@@ -23,6 +23,7 @@ const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
+const text_measure = @import("../text_measure.zig");
 
 const CSS = @import("CSS.zig");
 const Node = @import("Node.zig");
@@ -1745,16 +1746,23 @@ fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
 // `scrollWidth` passes a threshold (the infinite-marquee idiom) never
 // terminates when the metric ignores what it just inserted.
 //
-// Text children are not measured. Estimating a text run from its length would
-// need a per-character advance, which in turn has to track font-size or
-// "shrink the font until it fits" loops stop converging — and it would report
-// overflow for practically every element containing text, since a few words
-// already exceed the default box. Element children are what content grown by
-// script actually consists of.
+// Text children count only toward the height, and only under an explicit
+// width: that is a line length to wrap at, and wrapped text never overflows
+// sideways. Without one, a few words would already exceed the default box and
+// report overflow for practically every element containing text. The advance
+// tracks the font size, so "shrink the font until it fits" loops converge.
 fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     var total: f64 = 0;
     const owner = self.ownerFrame(frame) orelse return 0;
     const style_manager = &owner._style_manager;
+
+    var wrap: ?text_measure.LineWrap = null;
+    if (axis == .height) {
+        const width = self.getElementAxis(frame, .width);
+        if (width.explicit) {
+            wrap = .{ .line_width = width.value, .font_size = style_manager.computedFontSize(self) };
+        }
+    }
 
     var child = self.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
@@ -1762,9 +1770,17 @@ fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
             if (!style_manager.hasDisplayNone(el)) {
                 total += el.getElementAxis(frame, axis).value;
             }
+        } else if (wrap) |*w| {
+            if (node.is(Node.CData.Text)) |text| {
+                w.add(text.ownData());
+            }
         }
     }
 
+    if (wrap) |w| {
+        // Whole pixels, like the scroll offsets clamped against it
+        total += @ceil(w.height());
+    }
     return total;
 }
 
