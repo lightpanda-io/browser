@@ -36,6 +36,7 @@ const execute = @import("execute.zig");
 const remote_value = @import("remote_value.zig");
 const browsing_context = @import("browsing_context.zig");
 
+const Html = Node.Element.Html;
 const Allocator = std.mem.Allocator;
 
 // The key of a WebDriver element reference: {"element-6066-…": "<sharedId>"}
@@ -65,6 +66,9 @@ pub const Command = union(enum) {
     get_element_rect: ElementId,
     is_element_enabled: ElementId,
     is_element_selected: ElementId,
+    element_click: ElementId,
+    element_clear: ElementId,
+    element_send_keys: SendKeys,
     execute_script: execute.Script,
     execute_async_script: execute.Script,
     get_timeouts,
@@ -223,6 +227,9 @@ const routes = [_]Route{
     .init(.GET, "/element/{id}/rect", .get_element_rect),
     .init(.GET, "/element/{id}/enabled", .is_element_enabled),
     .init(.GET, "/element/{id}/selected", .is_element_selected),
+    .init(.POST, "/element/{id}/click", .element_click),
+    .init(.POST, "/element/{id}/clear", .element_clear),
+    .init(.POST, "/element/{id}/value", .element_send_keys),
     .init(.GET, "/element/{id}/attribute/{name}", .get_element_attribute),
     .init(.GET, "/element/{id}/property/{name}", .get_element_property),
     .init(.GET, "/element/{id}/css/{name}", .get_element_css_value),
@@ -325,6 +332,9 @@ pub fn process(cmd: *BiDi.Command) !void {
         .get_element_rect => |p| return getElementRect(cmd, p),
         .is_element_enabled => |p| return isElementEnabled(cmd, p),
         .is_element_selected => |p| return isElementSelected(cmd, p),
+        .element_click => |p| return elementClick(cmd, p),
+        .element_clear => |p| return elementClear(cmd, p),
+        .element_send_keys => |p| return elementSendKeys(cmd, p),
         .execute_script => |p| return executeScript(cmd, p, .sync),
         .execute_async_script => |p| return executeScript(cmd, p, .async),
         .get_timeouts => return getTimeouts(cmd),
@@ -429,7 +439,7 @@ fn findElements(cmd: *BiDi.Command, using: Using, value: []const u8, from: ?[]co
 // The document, or the element a "from element" search starts at.
 fn findRoot(cmd: *BiDi.Command, frame: *Frame, from: ?[]const u8) !?*Node {
     const id = from orelse return frame.window._document.asNode();
-    const element = (try requireElement(cmd, id)) orelse return null;
+    const element = (try requireElement(cmd, id, frame)) orelse return null;
     return element.asNode();
 }
 
@@ -459,7 +469,7 @@ fn getActiveElement(cmd: *BiDi.Command) !void {
 // GET /session/{id}/element/{id}/text.
 fn getElementText(cmd: *BiDi.Command, p: ElementId) !void {
     const frame = (try currentFrame(cmd)) orelse return;
-    const element = (try requireElement(cmd, p.id)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
 
     var aw: std.Io.Writer.Allocating = .init(cmd.arena);
     element.getInnerText(&aw.writer, frame) catch |err| switch (err) {
@@ -471,14 +481,15 @@ fn getElementText(cmd: *BiDi.Command, p: ElementId) !void {
 
 // GET /session/{id}/element/{id}/name. Lowercase, like every other driver.
 fn getElementTagName(cmd: *BiDi.Command, p: ElementId) !void {
-    const element = (try requireElement(cmd, p.id)) orelse return;
+    const frame = (try currentFrame(cmd)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
     return cmd.sendResult(element.getTagNameLower());
 }
 
 // GET /session/{id}/element/{id}/attribute/{name}
 fn getElementAttribute(cmd: *BiDi.Command, p: ElementName) !void {
     const frame = (try currentFrame(cmd)) orelse return;
-    const element = (try requireElement(cmd, p.id)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
 
     if (isBooleanAttribute(p.name)) {
         // a boolean attribute is "true" or nothing at all, never its value
@@ -496,7 +507,7 @@ fn getElementAttribute(cmd: *BiDi.Command, p: ElementName) !void {
 // GET /session/{id}/element/{id}/property/{name}
 fn getElementProperty(cmd: *BiDi.Command, p: ElementName) !void {
     const frame = (try currentFrame(cmd)) orelse return;
-    const element = (try requireElement(cmd, p.id)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
 
     var scope: js.Local.Scope = undefined;
     frame.js.localScope(&scope);
@@ -522,7 +533,7 @@ fn getElementProperty(cmd: *BiDi.Command, p: ElementName) !void {
 // GET /session/{id}/element/{id}/css/{name}
 fn getElementCssValue(cmd: *BiDi.Command, p: ElementName) !void {
     const frame = (try currentFrame(cmd)) orelse return;
-    const element = (try requireElement(cmd, p.id)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
     const style = try frame.window.getComputedStyle(element, null, frame);
     return cmd.sendResult(style.asCSSStyleDeclaration().getPropertyValue(p.name, frame));
 }
@@ -531,7 +542,7 @@ fn getElementCssValue(cmd: *BiDi.Command, p: ElementName) !void {
 // however far the page is scrolled.
 fn getElementRect(cmd: *BiDi.Command, p: ElementId) !void {
     const frame = (try currentFrame(cmd)) orelse return;
-    const element = (try requireElement(cmd, p.id)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
     const rect = try element.getBoundingClientRect(frame);
     const window = frame.window;
     return cmd.sendResult(.{
@@ -544,13 +555,15 @@ fn getElementRect(cmd: *BiDi.Command, p: ElementId) !void {
 
 // GET /session/{id}/element/{id}/enabled
 fn isElementEnabled(cmd: *BiDi.Command, p: ElementId) !void {
-    const element = (try requireElement(cmd, p.id)) orelse return;
+    const frame = (try currentFrame(cmd)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
     return cmd.sendResult(element.isDisabled() == false);
 }
 
 // GET /session/{id}/element/{id}/selected
 fn isElementSelected(cmd: *BiDi.Command, p: ElementId) !void {
-    const element = (try requireElement(cmd, p.id)) orelse return;
+    const frame = (try currentFrame(cmd)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
 
     if (element.is(Node.Element.Html.Input)) |input_element| {
         return cmd.sendResult(switch (input_element._input_type) {
@@ -562,6 +575,148 @@ fn isElementSelected(cmd: *BiDi.Command, p: ElementId) !void {
         return cmd.sendResult(option.getSelected());
     }
     return cmd.sendResult(false);
+}
+
+// POST /session/{id}/element/{id}/click.
+fn elementClick(cmd: *BiDi.Command, p: ElementId) !void {
+    const ctx = (try currentContext(cmd)) orelse return;
+    const frame = (try currentFrame(cmd)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
+
+    if (element.is(Html.Input)) |input_element| {
+        if (input_element._input_type == .file) {
+            return cmd.sendError("invalid argument", "a file input can't be clicked");
+        }
+    }
+    if ((try requireInteractable(cmd, element, frame)) == false) {
+        return;
+    }
+
+    if (element.is(Html.Option)) |option| blk: {
+        const select = option.ownerSelect() orelse break :blk;
+        const select_element = select.asElement();
+        if (select_element.isDisabled() or element.isDisabled()) {
+            break :blk;
+        }
+
+        Frame.user_input.updateHoverTarget(frame, element, .{ .with_pointer = true });
+        try Frame.user_input.triggerClick(frame, element, .{});
+
+        // a multiple <select> toggles the option, any other selects it
+        const selected = if (select.getMultiple()) option.getSelected() == false else true;
+        if (option.getSelected() == selected) {
+            break :blk;
+        }
+        try option.setSelected(selected, frame);
+        try lp.actions.dispatchInputAndChangeEvents(select_element, frame);
+    } else if (element.isDisabled() == false) {
+        Frame.user_input.updateHoverTarget(frame, element, .{ .with_pointer = true });
+        try Frame.user_input.triggerClick(frame, element, .{});
+    }
+    return browsing_context.answerAfterNavigation(cmd, ctx, frame);
+}
+
+// POST /session/{id}/element/{id}/clear
+fn elementClear(cmd: *BiDi.Command, p: ElementId) !void {
+    const frame = (try currentFrame(cmd)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
+
+    if (isEditable(element) == false) {
+        return cmd.sendError("invalid element state", "element is not editable");
+    }
+    if ((try requireInteractable(cmd, element, frame)) == false) {
+        return;
+    }
+
+    if (element.is(Html.Input)) |input_element| {
+        try clearControl(input_element, frame);
+    } else if (element.is(Html.TextArea)) |textarea| {
+        try clearControl(textarea, frame);
+    } else {
+        try element.asNode().setTextContent("", frame);
+    }
+    return cmd.sendDone();
+}
+
+fn clearControl(ctl: anytype, frame: *Frame) !void {
+    if (ctl.getValue().len == 0) {
+        return;
+    }
+
+    const element = ctl.asElement();
+    // give it focus
+    try element.focus(frame);
+    // clear it
+    try ctl.setValue("", frame);
+    try lp.actions.dispatchInputAndChangeEvents(element, frame);
+    // remove focus
+    try element.blur(frame);
+}
+
+fn isEditable(element: *Node.Element) bool {
+    if (element.is(Html.Input)) |input_element| {
+        switch (input_element._input_type) {
+            .hidden, .checkbox, .radio, .submit, .reset, .button, .image => return false,
+            else => {},
+        }
+    } else if (element.is(Html.TextArea) == null) {
+        return element.isEditingHost();
+    }
+    return element.isDisabled() == false and element.getAttributeSafe(comptime .wrap("readonly")) == null;
+}
+
+// POST /session/{id}/element/{id}/value.
+pub const SendKeys = struct {
+    id: []const u8,
+    text: []const u8,
+};
+fn elementSendKeys(cmd: *BiDi.Command, p: SendKeys) !void {
+    const ctx = (try currentContext(cmd)) orelse return;
+    const frame = (try currentFrame(cmd)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
+
+    if (element.is(Html.Input)) |input_element| {
+        if (input_element._input_type == .file) {
+            return cmd.sendError("unsupported operation", "file upload is not supported");
+        }
+    }
+    element.scrollIntoView(null, frame);
+
+    const document = frame.window._document;
+    if (document.getActiveElement() != element) {
+        try element.focus(frame);
+        if (document.getActiveElement() != element) {
+            return cmd.sendError("element not interactable", "element can't be focused");
+        }
+        if (element.is(Html.Input)) |input_element| {
+            try caretToEnd(input_element, frame);
+        } else if (element.is(Html.TextArea)) |textarea| {
+            try caretToEnd(textarea, frame);
+        }
+    }
+
+    input.typeText(frame, p.text) catch |err| switch (err) {
+        error.InvalidUtf8 => return cmd.sendError("invalid argument", "text is not valid UTF-8"),
+        else => return err,
+    };
+    return browsing_context.answerAfterNavigation(cmd, ctx, frame);
+}
+
+fn caretToEnd(ctl: anytype, frame: *Frame) !void {
+    if (ctl.selectionAvailable() == false) {
+        return;
+    }
+    const len: u32 = @intCast(ctl.getValue().len);
+    try ctl.setSelectionRange(len, len, null, frame);
+}
+
+fn requireInteractable(cmd: *BiDi.Command, element: *Node.Element, frame: *Frame) !bool {
+    element.scrollIntoView(null, frame);
+    if (element.checkVisibility(.{}, frame)) {
+        return true;
+    }
+    try cmd.sendError("element not interactable", "element is not displayed");
+    return false;
 }
 
 // POST /session/{id}/execute/sync, POST /session/{id}/execute/async
@@ -638,27 +793,26 @@ pub const ReferenceError = error{
     StaleElement,
 };
 
-// A reference's element, or why it doesn't resolve. Shared with execute.zig,
-// which resolves the references a script is called with.
-pub fn elementFromReference(registry: *const NodeRegistry, id: []const u8) ReferenceError!*Node.Element {
-    // ids are dropped on navigation, so a stale one is unknown by then
+pub fn elementFromReference(registry: *const NodeRegistry, id: []const u8, frame: *const Frame) ReferenceError!*Node.Element {
+    // ids are dropped on navigation
     const node = remote_value.nodeFromSharedId(registry, .{ .string = id }) catch return error.NoSuchElement;
     const element = node.is(Node.Element) orelse return error.NoSuchElement;
-    if (node.isConnected() == false) {
+    if (node.isConnected() == false or node.getDocument(frame) != frame.window._document) {
+        // disconnected or one from a document different than the current one
         return error.StaleElement;
     }
     return element;
 }
 
 // Answers the command and returns null when the reference doesn't resolve.
-fn requireElement(cmd: *BiDi.Command, id: []const u8) !?*Node.Element {
-    return elementFromReference(&cmd.bidi.node_registry, id) catch |err| switch (err) {
+fn requireElement(cmd: *BiDi.Command, id: []const u8, frame: *const Frame) !?*Node.Element {
+    return elementFromReference(&cmd.bidi.node_registry, id, frame) catch |err| switch (err) {
         error.NoSuchElement => {
             try cmd.sendError("no such element", "unknown element reference");
             return null;
         },
         error.StaleElement => {
-            try cmd.sendError("stale element reference", "element is no longer attached to the document");
+            try cmd.sendError("stale element reference", "element is not in the current document");
             return null;
         },
     };
@@ -771,6 +925,16 @@ test "bidi.http_command: parse" {
         try testing.expect((try parse(arena, .POST, "/timeouts", "{\"script\":null}")).set_timeouts.script == .disabled);
         try testing.expectEqual(50, (try parse(arena, .POST, "/timeouts", "{\"script\":50}")).set_timeouts.script.ms);
     }
+
+    {
+        // Selenium sends the legacy `value` array next to `text`
+        const command = try parse(arena, .POST, "/element/7/value", "{\"text\":\"ab\",\"value\":[\"a\",\"b\"]}");
+        try testing.expectEqual("7", command.element_send_keys.id);
+        try testing.expectEqual("ab", command.element_send_keys.text);
+    }
+    try testing.expectEqual("7", (try parse(arena, .POST, "/element/7/click", "{}")).element_click.id);
+    try testing.expectEqual("7", (try parse(arena, .POST, "/element/7/clear", "{}")).element_clear.id);
+    try testing.expectError(error.InvalidArgument, parse(arena, .POST, "/element/7/value", "{}"));
 
     try testing.expect(try parse(arena, .GET, "/timeouts", "") == .get_timeouts);
     try testing.expectError(error.InvalidArgument, parse(arena, .POST, "/execute/sync", "{}"));

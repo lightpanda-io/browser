@@ -2221,6 +2221,103 @@ test "server: HTTP element commands" {
     }
 }
 
+test "server: HTTP element input" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/webdriver/input.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+
+    const take_events = "var e = window.events.join(' '); window.events = []; return e;";
+
+    const btn = try findElement(&c, &session_id, "css selector", "#btn");
+    try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, btn, "/click", "{}")));
+    try testing.expectEqual("{\"value\":\"focus@btn click@btn\"}", try executeSync(&c, &session_id, take_events, "[]"));
+
+    {
+        const gone = try findElement(&c, &session_id, "css selector", "#gone");
+        const res = try elementPost(&c, &session_id, gone, "/click", "{}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"element not interactable\"") != null);
+    }
+
+    // clear: focus, the edit's input and change, blur
+    const name = try findElement(&c, &session_id, "css selector", "#name");
+    try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, name, "/clear", "{}")));
+    try testing.expectEqual("{\"value\":\"\"}", try elementCommand(&c, &session_id, name, "/property/value"));
+    try testing.expectEqual("{\"value\":\"blur@btn focus@name input@name change@name blur@name\"}", try executeSync(&c, &session_id, take_events, "[]"));
+
+    // already empty: nothing happens at all
+    try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, name, "/clear", "{}")));
+    try testing.expectEqual("{\"value\":\"\"}", try executeSync(&c, &session_id, take_events, "[]"));
+
+    for ([_][]const u8{ "#ro", "#check" }) |selector| {
+        const element = try findElement(&c, &session_id, "css selector", selector);
+        const res = try elementPost(&c, &session_id, element, "/clear", "{}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"invalid element state\"") != null);
+    }
+
+    // a modifier stays down until it's typed again
+    try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, name, "/value", "{\"text\":\"\\uE008a\\uE008b\"}")));
+    try testing.expectEqual("{\"value\":\"Ab\"}", try elementCommand(&c, &session_id, name, "/property/value"));
+    try testing.expectEqual(
+        "{\"value\":\"focus@name keydown:S-Shift@name keydown:S-A@name input@name keydown:b@name input@name\"}",
+        try executeSync(&c, &session_id, take_events, "[]"),
+    );
+
+    // focusing puts the caret at the end
+    {
+        const area = try findElement(&c, &session_id, "css selector", "#area");
+        try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, area, "/value", "{\"text\":\"!\"}")));
+        try testing.expectEqual("{\"value\":\"text!\"}", try elementCommand(&c, &session_id, area, "/property/value"));
+    }
+
+    {
+        const plain = try findElement(&c, &session_id, "css selector", "#plain");
+        const res = try elementPost(&c, &session_id, plain, "/value", "{\"text\":\"x\"}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"element not interactable\"") != null);
+    }
+
+    // an option is clicked by selecting it
+    {
+        _ = try executeSync(&c, &session_id, take_events, "[]");
+        const opt_b = try findElement(&c, &session_id, "css selector", "#opt_b");
+        try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, opt_b, "/click", "{}")));
+        try testing.expectEqual("{\"value\":true}", try elementCommand(&c, &session_id, opt_b, "/selected"));
+        const opt_a = try findElement(&c, &session_id, "css selector", "#opt_a");
+        try testing.expectEqual("{\"value\":false}", try elementCommand(&c, &session_id, opt_a, "/selected"));
+        try testing.expectEqual("{\"value\":\"blur@area focus@pick click@opt_b input@pick change@pick\"}", try executeSync(&c, &session_id, take_events, "[]"));
+    }
+
+    // a click that navigates is answered once the new page has loaded
+    {
+        const next = try findElement(&c, &session_id, "css selector", "#next");
+        try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, next, "/click", "{}")));
+        try testing.expectEqual("{\"value\":\"webdriver elements\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/title", "")));
+    }
+
+    // and so is Enter in a form
+    {
+        try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+        const q = try findElement(&c, &session_id, "css selector", "#q");
+        try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, q, "/value", "{\"text\":\"hi\\n\"}")));
+        try testing.expectEqual(
+            "{\"value\":\"http://127.0.0.1:9582/src/browser/tests/webdriver/elements.html?q=hi\"}",
+            responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")),
+        );
+    }
+}
+
+fn elementPost(c: *TestClient, session_id: *const [36]u8, id: []const u8, suffix: []const u8, body: []const u8) ![]const u8 {
+    const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}{s}", .{ id, suffix });
+    return sessionCommand(c, "POST", session_id, path, body);
+}
+
 test "server: HTTP execute script" {
     const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
     defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
@@ -2290,6 +2387,22 @@ test "server: HTTP execute script" {
         const res = try executeRaw(&c, &session_id, "sync", "return 1;", "[{\"" ++ http_command.element_key ++ "\":\"99\"}]");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
         try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"no such element\"") != null);
+    }
+
+    // a node in another document is stale, connected or not
+    {
+        const body = try executeSync(&c, &session_id, "return document.getElementById('child').contentDocument.getElementById('inner');", "[]");
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, body, .{});
+        const reference = parsed.object.get("value").?.object.get(http_command.element_key).?.string;
+
+        const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}/text", .{reference});
+        const res = try sessionCommand(&c, "GET", &session_id, path, "");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"stale element reference\"") != null);
+
+        const args = try std.fmt.allocPrint(testing.arena_allocator, "[{{\"" ++ http_command.element_key ++ "\":\"{s}\"}}]", .{reference});
+        const arg_res = try executeRaw(&c, &session_id, "sync", "return 1;", args);
+        try testing.expect(std.mem.indexOf(u8, arg_res, "\"error\":\"stale element reference\"") != null);
     }
 
     // a throw fails the command; it isn't reported inside a successful result
