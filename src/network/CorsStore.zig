@@ -150,15 +150,41 @@ fn getWithExpiration(self: *CorsStore, cache_key: []const u8) ?*Entry {
     return entry;
 }
 
-pub fn get(self: *CorsStore, key: Key) !?Entry {
+fn matches(entry: Entry, method: http.Method, authored_headers: []const []const u8) bool {
+    if (!isSafelistedMethod(method) and !entry.methods_wildcard and !entry.methods.contains(method)) {
+        return false;
+    }
+    for (authored_headers) |name| {
+        const is_authorization = std.ascii.eqlIgnoreCase(name, "authorization");
+        if (entry.headers_wildcard and !is_authorization) continue;
+        var found = false;
+        for (entry.headers) |allowed| {
+            if (std.ascii.eqlIgnoreCase(allowed, name)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+/// Whether a cached grant for `key` covers this method/headers combination.
+/// A miss (expired or absent entry) is treated as not covered.
+pub fn covers(
+    self: *CorsStore,
+    key: Key,
+    method: http.Method,
+    authored_headers: []const []const u8,
+) !bool {
     const cache_key = try key.build(self.allocator);
     defer self.allocator.free(cache_key);
 
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
 
-    const entry = self.getWithExpiration(cache_key) orelse return null;
-    return try entry.dupe(self.allocator);
+    const entry = self.getWithExpiration(cache_key) orelse return false;
+    return matches(entry.*, method, authored_headers);
 }
 
 /// Insert or merge a CORS grant for (origin, target). `entry` is not
@@ -195,32 +221,6 @@ pub fn put(self: *CorsStore, key: Key, entry: Entry) !void {
             }
         },
     }
-}
-
-pub fn covers(
-    entry: Entry,
-    method: http.Method,
-    authored_headers: []const []const u8,
-) bool {
-    if (!isSafelistedMethod(method) and !entry.methods_wildcard and !entry.methods.contains(method)) {
-        return false;
-    }
-
-    for (authored_headers) |name| {
-        const is_authorization = std.ascii.eqlIgnoreCase(name, "authorization");
-        if (entry.headers_wildcard and !is_authorization) continue;
-
-        var found = false;
-        for (entry.headers) |allowed| {
-            if (std.ascii.eqlIgnoreCase(allowed, name)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) return false;
-    }
-
-    return true;
 }
 
 const testing = @import("../testing.zig");

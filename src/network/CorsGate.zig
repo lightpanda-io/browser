@@ -219,23 +219,20 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
 
     const wants_credentials = req.credentials_mode == .include;
 
-    if (try self.network.cors_store.get(.{
+    const authored = try collectAuthoredHeaders(transfer, transfer.arena.allocator());
+    if (try self.network.cors_store.covers(.{
         .origin = origin,
         .target = req.url,
         .credentials = wants_credentials,
-    })) |cached| {
-        defer cached.deinit(self.network.cors_store.allocator);
-        const authored = try collectAuthoredHeaders(transfer, transfer.arena.allocator());
-        if (CorsStore.covers(cached, req.method, authored.items)) {
-            log.debug(.cors, "cross origin", .{
-                .url = req.url,
-                .origin = origin,
-                .preflight = false,
-                .cached = true,
-            });
-            lp.metrics.cors_check.incr(.cached);
-            return .allowed;
-        }
+    }, req.method, authored.items)) {
+        log.debug(.cors, "cross origin", .{
+            .url = req.url,
+            .origin = origin,
+            .preflight = false,
+            .cached = true,
+        });
+        lp.metrics.cors_check.incr(.cached);
+        return .allowed;
     }
 
     log.debug(.cors, "cross origin", .{
