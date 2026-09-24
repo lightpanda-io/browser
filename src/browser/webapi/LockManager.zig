@@ -79,11 +79,22 @@ const LockRequest = struct {
         const local = &ls.local;
         const resolver = self.resolver.local(local);
 
-        const result = ls.toLocal(self.cb).call(
-            js.Value,
-            .{lock},
-        ) catch |err| {
-            resolver.rejectError("Lock callback", .{ .generic_error = @errorName(err) });
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(local);
+        defer try_catch.deinit();
+
+        const callback_fn: js.Function = ls.toLocal(self.cb);
+
+        const result = callback_fn.callRethrow(js.Value, .{lock}) catch |err| {
+            if (err == error.ExecutionTerminated) {
+                self.finish();
+                return;
+            }
+            if (try_catch.exceptionValue()) |exception| {
+                resolver.reject("Lock callback", exception);
+            } else {
+                resolver.rejectError("Lock callback", .{ .generic_error = @errorName(err) });
+            }
             self.finish();
             return;
         };
