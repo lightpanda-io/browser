@@ -2496,9 +2496,16 @@ test "server: HTTP execute script" {
         // selenium/http/demo.js in ../demo is what actually catches it.
         const late = try executeRaw(&c, &session_id, "async", "var cb = arguments[0]; setTimeout(function() { window.__late = true; cb('way late'); }, 150);", "[]");
         try testing.expect(std.mem.indexOf(u8, late, "\"error\":\"script timeout\"") != null);
-        lp.io.sleep(.fromMilliseconds(400), .awake) catch {};
         // the assertion only means anything if the stale resolve actually ran
-        try testing.expectEqual("{\"value\":true}", try executeSync(&c, &session_id, "return window.__late === true;", "[]"));
+        var ran = false;
+        for (0..200) |_| {
+            if (std.mem.eql(u8, "{\"value\":true}", try executeSync(&c, &session_id, "return window.__late === true;", "[]"))) {
+                ran = true;
+                break;
+            }
+            lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
+        }
+        try testing.expect(ran);
         try testing.expectEqual("{\"value\":\"alive\"}", try executeSync(&c, &session_id, "return 'alive';", "[]"));
     }
 
@@ -3112,6 +3119,9 @@ fn createTestClient() !TestClient {
     });
     try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
     try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
+    if (@hasDecl(posix.TCP, "NODELAY")) {
+        try posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+    }
     return .{
         .socket = socket,
         .reader = .{
