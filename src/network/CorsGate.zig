@@ -427,13 +427,25 @@ const CorsPreflightContext = struct {
 
         const headers_wildcard = acah != null and std.mem.eql(u8, acah.?, "*") and !self.wants_credentials;
 
+        var allowed_headers: std.ArrayList([]const u8) = .empty;
+        if (!headers_wildcard) {
+            if (acah) |list| {
+                var it = std.mem.splitScalar(u8, list, ',');
+                while (it.next()) |raw| {
+                    const token = std.mem.trim(u8, raw, &std.ascii.whitespace);
+                    if (token.len == 0) continue;
+                    try allowed_headers.append(self.arena.allocator(), token);
+                }
+            }
+        }
+
         try self.gate.network.cors_store.put(
             .{ .origin = self.origin, .target = self.url, .credentials = self.wants_credentials },
             .{
                 .methods_wildcard = methods_wildcard,
                 .methods = methods,
                 .headers_wildcard = headers_wildcard,
-                .headers = if (headers_wildcard) &.{} else self.request_headers,
+                .headers = allowed_headers.items,
                 .expires_at = lp.datetime.milliTimestamp(.real) + capped_ms,
             },
         );
