@@ -275,10 +275,11 @@ fn createSnapshotContext(
             .data = null,
             .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
         });
+        const window_index = @import("../webapi/Window.zig").JsApi.index;
         v8.v8__ObjectTemplate__SetIndexedHandler(global_template, &.{
-            .getter = @import("../webapi/Window.zig").JsApi.index.getter,
+            .getter = window_index.getter,
             .setter = null,
-            .query = null,
+            .query = window_index.query,
             .deleter = null,
             .enumerator = null,
             .definer = null,
