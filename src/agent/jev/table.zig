@@ -170,22 +170,29 @@ pub const Table = struct {
         return &self.elements[slot];
     }
 
-    /// The `"<index>"` or `"<index>:<option>"` ids offered for `op`. The table
-    /// is already bounded, so this only filters and formats -- except for
+    /// The criteria offered for `op`: the `"<index>"` or `"<index>:<option>"`
+    /// id the decider answers with, and the description it chooses on. The
+    /// table is already bounded, so this only filters and formats -- except for
     /// `<select>`, where one element contributes a target per option and can
     /// overflow a head on its own.
-    pub fn targets(self: Table, arena: std.mem.Allocator, op: Operation) ![]const []const u8 {
-        var out: std.ArrayList([]const u8) = .empty;
+    pub fn criteria(self: Table, arena: std.mem.Allocator, op: Operation) ![]const ChoiceEntry {
+        var out: std.ArrayList(ChoiceEntry) = .empty;
         for (self.elements) |el| {
             if (!el.ops.has(op)) continue;
             if (out.items.len >= max_offered) break;
             if (op == .SELECT) {
                 for (el.options) |option| {
                     if (out.items.len >= max_offered) break;
-                    try out.append(arena, try std.fmt.allocPrint(arena, "{d}:{s}", .{ @intFromEnum(el.index), option }));
+                    try out.append(arena, .{
+                        .key = try std.fmt.allocPrint(arena, "{d}:{s}", .{ @intFromEnum(el.index), option }),
+                        .value = try describeOption(arena, el, option),
+                    });
                 }
             } else {
-                try out.append(arena, try std.fmt.allocPrint(arena, "{d}", .{@intFromEnum(el.index)}));
+                try out.append(arena, .{
+                    .key = try std.fmt.allocPrint(arena, "{d}", .{@intFromEnum(el.index)}),
+                    .value = try describeElement(arena, el),
+                });
             }
         }
         return out.items;
@@ -601,17 +608,17 @@ pub fn ask(arena: std.mem.Allocator, observed: Table, opts: AskOpts) std.mem.All
     var entries: std.ArrayList(QuestionEntry) = .empty;
 
     inline for (.{ Operation.CLICK, Operation.TYPE_TEXT, Operation.SELECT }) |op| {
-        const candidates = if (op == .TYPE_TEXT and !opts.can_type)
+        const candidates: []const ChoiceEntry = if (op == .TYPE_TEXT and !opts.can_type)
             &.{}
         else
-            try observed.targets(arena, op);
+            try observed.criteria(arena, op);
         if (candidates.len > 0) {
             try operations.append(arena, describe(op));
             try entries.append(arena, .{
                 .key = op.targetQuestion().?,
                 .value = .{ .choice = .{
                     .instructions = .{ .text = target_instructions[@intFromEnum(op)] },
-                    .criteria = .init(try bareOptions(arena, candidates)),
+                    .criteria = .init(candidates),
                 } },
             });
         }
@@ -632,6 +639,7 @@ pub fn ask(arena: std.mem.Allocator, observed: Table, opts: AskOpts) std.mem.All
 }
 
 const ChoiceEntry = zenai.typesafe.types.ChoiceCriteria.Entry;
+const Content = zenai.typesafe.types.Content;
 
 fn describe(comptime op: Operation) ChoiceEntry {
     return .{ .key = @tagName(op), .value = .{ .text = prompts.describe(op) } };
@@ -650,10 +658,28 @@ const target_instructions = blk: {
 };
 
 /// Target ids carry their own meaning, so their criteria descriptions are null.
-fn bareOptions(arena: std.mem.Allocator, ids: []const []const u8) std.mem.Allocator.Error![]const ChoiceEntry {
-    const out = try arena.alloc(ChoiceEntry, ids.len);
-    for (ids, 0..) |id, i| out[i] = .{ .key = id, .value = null };
-    return out;
+/// What the decider sees beside an id. Upstream sends the same facts as a
+/// small object; one line carries them for a third of the bytes and a single
+/// allocation, and the wire accepts either.
+///
+/// The index leads on purpose: two controls with one name stay apart from the
+/// criteria alone, without cross-referencing the element table.
+fn describeElement(arena: std.mem.Allocator, el: Element) !?Content {
+    var line: std.ArrayList(u8) = .empty;
+    try line.print(arena, "[{d}] {s} ({s})", .{ @intFromEnum(el.index), el.label, el.role });
+    if (el.value) |value| {
+        if (value.len > 0) try line.print(arena, " = {s}", .{value});
+    }
+    if (el.checked) |checked| try line.appendSlice(arena, if (checked) " [checked]" else " [unchecked]");
+    return .{ .text = line.items };
+}
+
+/// Upstream names an option `"<field> -> <option>"`. It has the option's label;
+/// the collector keeps only its value, so that is what goes here.
+fn describeOption(arena: std.mem.Allocator, el: Element, option: []const u8) !?Content {
+    return .{ .text = try std.fmt.allocPrint(arena, "[{d}:{s}] {s} -> {s} ({s})", .{
+        @intFromEnum(el.index), option, el.label, option, el.role,
+    }) };
 }
 
 const testing = @import("../../testing.zig");
@@ -863,14 +889,37 @@ test "targets: no head can exceed what a choice question accepts" {
 
     var t = fixtureTable();
     t.elements = &picker;
-    const select = try t.targets(a, .SELECT);
+    const select = try t.criteria(a, .SELECT);
     try std.testing.expectEqual(max_offered, select.len);
-    try std.testing.expectEqualStrings("1:opt0", select[0]);
+    try std.testing.expectEqualStrings("1:opt0", select[0].key);
 
     const ask_result = try ask(a, t, .{});
     try std.testing.expectEqual(max_offered, ask_result.questions.get("select_target").?.choice.criteria.count());
     // The API rejects a choice question with more than 255 options outright.
     try std.testing.expect(max_offered <= 255);
+}
+
+test "criteria: a candidate is described, not just numbered" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const typed = try fixtureTable().criteria(a, .TYPE_TEXT);
+    try std.testing.expectEqual(@as(usize, 1), typed.len);
+    try std.testing.expectEqualStrings("1", typed[0].key);
+
+    // The index leads so two controls with one name stay apart from the
+    // criteria alone.
+    try std.testing.expectEqualStrings("[1] Search (searchbox) = ramen", typed[0].value.?.text);
+
+    // Nothing is emitted for a field with no value.
+    const clicked = try fixtureTable().criteria(a, .CLICK);
+    try std.testing.expectEqualStrings("[2] Go (button)", clicked[0].value.?.text);
+
+    // A select option names its field as well as itself.
+    const picked = try fixtureTable().criteria(a, .SELECT);
+    try std.testing.expectEqualStrings("3:1", picked[0].key);
+    try std.testing.expectEqualStrings("[3:1] Party size -> 1 (combobox)", picked[0].value.?.text);
 }
 
 test "bound: one entry per distinct label, since we cannot ask what is on screen" {
