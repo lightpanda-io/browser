@@ -161,7 +161,7 @@ _http_owner: HttpClient.Owner,
 // List of active live ranges (for mutation updates per DOM spec)
 _live_ranges: std.DoublyLinkedList = .{},
 // Live NodeIterators for the DOM pre-removing steps. Iterators are
-// slab-allocated (frame lifetime) and never unlinked.
+// factory-allocated (frame lifetime) and never unlinked.
 _live_node_iterators: std.DoublyLinkedList = .{},
 
 // List of open BroadcastChannels, used to route postMessage between same-named
@@ -453,12 +453,6 @@ pub fn deinit(self: *Frame) void {
 
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame.deinit", .{ .url = self.url, .type = self._type });
-
-        // Uncomment if you want slab statistics to print.
-        // const stats = self._factory._slab.getStats(self.arena) catch unreachable;
-        // var buffer: [256]u8 = undefined;
-        // var stream = std.Io.File.stderr().writerStreaming(lp.io, &buffer).interface;
-        // stats.print(&stream) catch unreachable;
     }
 
     self._parse_state.deinit(self);
