@@ -27,6 +27,7 @@ const text_measure = @import("../text_measure.zig");
 
 const CSS = @import("CSS.zig");
 const Node = @import("Node.zig");
+const TreeWalker = @import("TreeWalker.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
 const EventTarget = @import("EventTarget.zig");
 const collections = @import("collections.zig");
@@ -1917,14 +1918,11 @@ fn calculateDocumentPosition(node: *Node) f64 {
 
 // Counts total nodes in a subtree (node + all descendants)
 pub fn countSubtreeNodes(node: *Node) f64 {
-    var count: f64 = 1.0; // Count this node
-
-    var child = node.firstChild();
-    while (child) |c| {
-        count += countSubtreeNodes(c);
-        child = c.nextSibling();
+    var count: f64 = 0;
+    var tw = TreeWalker.Full.init(node, .{});
+    while (tw.next()) |_| {
+        count += 1;
     }
-
     return count;
 }
 
