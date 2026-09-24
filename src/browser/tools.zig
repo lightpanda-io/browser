@@ -1214,7 +1214,7 @@ fn apiSearch(
         if (client.last_error.status) |status| {
             log.warn(.browser, @tagName(engine.tag) ++ " non-2xx", .{
                 .status = status,
-                .body = client.last_error.body,
+                .message = client.last_error.message,
             });
         }
         return err;
