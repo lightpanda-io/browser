@@ -39,6 +39,26 @@ _value: ?[]const u8 = null,
 _selected: bool = false,
 _default_selected: bool = false,
 
+pub fn constructor(text_: ?js.NullableString, value_: ?js.NullableString, default_selected_: ?bool, selected_: ?bool, frame: *Frame) !*Option {
+    const node = try Frame.node_factory.createElementNS(frame.document, .html, "option", null);
+    const el = node.as(Element);
+
+    const text = if (text_) |t| t.value else "";
+    if (text.len > 0) {
+        _ = try node.appendChild(try frame.document.createTextNode(text), frame);
+    }
+    if (value_) |v| {
+        try el.setAttributeSafe(comptime .wrap("value"), .wrap(v.value), frame);
+    }
+    if (default_selected_ orelse false) {
+        try el.setAttributeSafe(comptime .wrap("selected"), comptime .wrap(""), frame);
+    }
+
+    const self = el.as(Option);
+    self._selected = selected_ orelse false;
+    return self;
+}
+
 pub fn asElement(self: *Option) *Element {
     return Factory.protoOf(self).asElement();
 }
@@ -135,12 +155,14 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "HTMLOptionElement";
+        pub const constructor_alias = "Option";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
     const reflect = Element.Reflect(Option);
 
+    pub const constructor = bridge.constructor(Option.constructor, .{});
     pub const value = bridge.accessor(Option.getValue, Option.setValue, .{ .ce_reactions = true });
     pub const text = bridge.accessor(Option.getText, Option.setText, .{ .ce_reactions = true });
     pub const label = bridge.accessor(Option.getLabel, Option.setLabel, .{ .ce_reactions = true });
