@@ -193,7 +193,7 @@ pub const Runner = struct {
                 continue;
             }
 
-            const invocation = try toolCall(arena, before, decision.operation, target, typed);
+            const invocation = try toolCall(arena, decision.operation, target, typed);
             const result = lp.tools.call(arena, self.session, self.registry, invocation.tool, invocation.arguments, .{}) catch |err| blk: {
                 break :blk lp.tools.ToolResult{ .text = lp.tools.errorMessage(err), .is_error = true };
             };
@@ -303,7 +303,6 @@ pub const Invocation = struct {
 /// registry reset on a frame swap and the `$LP_*` substitution.
 pub fn toolCall(
     arena: std.mem.Allocator,
-    observed: Table,
     op: Operation,
     target: ?table.Target,
     typed: ?[]const u8,
@@ -326,10 +325,6 @@ pub fn toolCall(
             try object.put(arena, "backendNodeId", .{ .integer = target.?.element.node_id });
             try object.put(arena, "value", .{ .string = target.?.option.? });
             return .{ .tool = "selectOption", .arguments = .{ .object = object } };
-        },
-        .SCROLL_UP, .SCROLL_DOWN => {
-            try object.put(arena, "y", .{ .integer = observed.scrollTarget(op) });
-            return .{ .tool = "scroll", .arguments = .{ .object = object } };
         },
         .WAIT => {
             try object.put(arena, "state", .{ .string = "networkidle" });
@@ -408,49 +403,27 @@ test "toolCall: each operation lands on the tool that carries the guards" {
         .ops = .{ .click = true, .type_text = true, .select = true },
         .options = &.{"6"},
     };
-    const observed: Table = .{
-        .url = "https://example.com/",
-        .title = "",
-        .text = "",
-        .elements = &.{element},
-        .dropped = 0,
-        .scroll = .{ .y = 1000, .viewport = 500 },
-        .fingerprint = 0,
-        .style_version = 0,
-    };
     const target: table.Target = .{ .element = &element, .option = "6" };
 
-    const click = try toolCall(a, observed, .CLICK, target, null);
+    const click = try toolCall(a, .CLICK, target, null);
     try std.testing.expectEqualStrings("click", click.tool);
     try std.testing.expectEqualStrings(
         \\{"backendNodeId":42}
     , try std.json.Stringify.valueAlloc(a, click.arguments, .{}));
 
-    const fill = try toolCall(a, observed, .TYPE_TEXT, target, "ramen");
+    const fill = try toolCall(a, .TYPE_TEXT, target, "ramen");
     try std.testing.expectEqualStrings("fill", fill.tool);
     try std.testing.expectEqualStrings(
         \\{"backendNodeId":42,"value":"ramen"}
     , try std.json.Stringify.valueAlloc(a, fill.arguments, .{}));
 
-    const select = try toolCall(a, observed, .SELECT, target, null);
+    const select = try toolCall(a, .SELECT, target, null);
     try std.testing.expectEqualStrings("selectOption", select.tool);
     try std.testing.expectEqualStrings(
         \\{"backendNodeId":42,"value":"6"}
     , try std.json.Stringify.valueAlloc(a, select.arguments, .{}));
 
-    // Scrolling is a destination, not a delta.
-    const down = try toolCall(a, observed, .SCROLL_DOWN, null, null);
-    try std.testing.expectEqualStrings("scroll", down.tool);
-    try std.testing.expectEqualStrings(
-        \\{"y":1400}
-    , try std.json.Stringify.valueAlloc(a, down.arguments, .{}));
-
-    const up = try toolCall(a, observed, .SCROLL_UP, null, null);
-    try std.testing.expectEqualStrings(
-        \\{"y":600}
-    , try std.json.Stringify.valueAlloc(a, up.arguments, .{}));
-
-    const wait = try toolCall(a, observed, .WAIT, null, null);
+    const wait = try toolCall(a, .WAIT, null, null);
     try std.testing.expectEqualStrings("waitForState", wait.tool);
     try std.testing.expectEqualStrings(
         \\{"state":"networkidle","timeout":3000}

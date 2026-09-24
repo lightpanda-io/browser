@@ -51,8 +51,6 @@ pub fn describe(op: @import("table.zig").Operation) []const u8 {
         .CLICK => "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
         .TYPE_TEXT => "Enter or replace text in an editable field. A small LLM will supply the value from the goal.",
         .SELECT => "Select an observed dropdown value.",
-        .SCROLL_UP => "Scroll up",
-        .SCROLL_DOWN => "Scroll down",
         .WAIT => "Wait for the page to update",
         .DONE => "Every requirement is visibly satisfied.",
         .BLOCKED => "No supported operation can progress.",

@@ -47,8 +47,6 @@ pub const Operation = enum {
     CLICK,
     TYPE_TEXT,
     SELECT,
-    SCROLL_UP,
-    SCROLL_DOWN,
     WAIT,
     DONE,
     BLOCKED,
@@ -118,16 +116,6 @@ pub const Element = struct {
     options: []const []const u8,
 };
 
-pub const Scroll = struct {
-    y: u32,
-    viewport: u32,
-
-    /// How far one scroll operation travels.
-    pub fn step(self: Scroll) u32 {
-        return @max(1, self.viewport * scroll_step_num / scroll_step_den);
-    }
-};
-
 /// What the decider picked.
 pub const Target = Element.Choice;
 
@@ -149,10 +137,6 @@ const max_collected = 5000;
 /// echoed back to the decider every turn.
 const max_label_bytes = 120;
 
-/// Fraction of a viewport a scroll operation travels.
-const scroll_step_num = 4;
-const scroll_step_den = 5;
-
 pub const Table = struct {
     url: []const u8,
     title: []const u8,
@@ -162,7 +146,6 @@ pub const Table = struct {
     /// dedupe cap. Sent to the decider: a table that silently stops is one it
     /// reads as the whole page.
     dropped: u32,
-    scroll: Scroll,
     /// Hash of the url and every element's identity and current state. Cheap
     /// enough to recompute mid-turn to catch a page that moved under a
     /// decision.
@@ -185,17 +168,6 @@ pub const Table = struct {
         const slot = index.slot();
         if (slot >= self.elements.len) return null;
         return &self.elements[slot];
-    }
-
-    /// Absolute scroll destination for a scroll operation, since
-    /// `lp.actions.scroll` takes a position rather than a delta.
-    pub fn scrollTarget(self: Table, op: Operation) u32 {
-        const step = self.scroll.step();
-        return switch (op) {
-            .SCROLL_DOWN => self.scroll.y +| step,
-            .SCROLL_UP => self.scroll.y -| step,
-            else => self.scroll.y,
-        };
     }
 
     /// The `"<index>"` or `"<index>:<option>"` ids offered for `op`. The table
@@ -271,7 +243,6 @@ pub fn observe(
         .text = "",
         .elements = &.{},
         .dropped = 0,
-        .scroll = .{ .y = 0, .viewport = 0 },
         .fingerprint = 0,
         .style_version = 0,
     };
@@ -282,11 +253,6 @@ pub fn observe(
         .interactive_only = true,
     }) catch return error.ObserveFailed;
     tree.visitAll(&collector) catch return error.ObserveFailed;
-
-    const scroll: Scroll = .{
-        .y = frame.window.getScrollY(),
-        .viewport = frame.window.getInnerHeight(frame),
-    };
 
     // Bound the table here, once, so the state and every target head agree on
     // what exists. Doing it only in `targets` left the decider reading 521
@@ -301,7 +267,6 @@ pub fn observe(
         .text = if (opts.text_bytes > 0) try renderText(arena, frame, opts.text_bytes) else "",
         .elements = offered,
         .dropped = collector.dropped + @as(u32, @intCast(elements.items.len - offered.len)),
-        .scroll = scroll,
         .fingerprint = 0,
         .style_version = frame.page.style_version,
     };
@@ -366,13 +331,8 @@ fn fingerprint(table: Table) u64 {
     var hasher: std.hash.Wyhash = .init(0);
     hasher.update(table.url);
     hasher.update(table.title);
-    // Not the scroll position: `window.scrollTo` is unclamped here, so a
-    // scroll always moves `y` whether or not anything follows, and hashing it
-    // would make scrolling look like progress for ever. Not the page text
-    // either -- `moved` compares a text-free observation against a full one,
-    // and they have to agree. What is left is the right answer anyway: a
-    // scroll that loads new controls shows up, and one that reveals nothing
-    // counts as no progress and trips the stuck detector after three.
+    // Not the page text: `moved` compares a text-free observation against a
+    // full one, and the two have to agree.
     for (table.elements) |el| {
         // Deliberately not `node_id`: a registry id is identity, not
         // appearance, and navigating to the same page again mints fresh ones.
@@ -657,12 +617,6 @@ pub fn ask(arena: std.mem.Allocator, observed: Table, opts: AskOpts) std.mem.All
         }
     }
 
-    // Upstream gates these on `scrollY` against the document height. We know
-    // the first half and not the second -- there is no layout to ask how tall
-    // the page is -- so down is always offered and a scroll that reveals
-    // nothing is caught by the stuck detector instead.
-    if (observed.scroll.y > 0) try operations.append(arena, describe(.SCROLL_UP));
-    try operations.append(arena, describe(.SCROLL_DOWN));
     inline for (.{ Operation.WAIT, Operation.DONE, Operation.BLOCKED }) |op| {
         try operations.append(arena, describe(op));
     }
@@ -756,7 +710,6 @@ fn fixtureTable() Table {
         .text = "Reserve a table",
         .elements = &elements,
         .dropped = 0,
-        .scroll = .{ .y = 0, .viewport = 800 },
         .fingerprint = 0,
         .style_version = 0,
     };
@@ -850,17 +803,6 @@ test "parseTarget: only an offered index, for an operation the element accepts" 
     try std.testing.expectError(error.InvalidTarget, t.parseTarget(.CLICK, ""));
 }
 
-test "scrollTarget: an absolute destination, clamped at the top" {
-    var t = fixtureTable();
-    // Four fifths of the viewport.
-    try std.testing.expectEqual(@as(u32, 640), t.scrollTarget(.SCROLL_DOWN));
-    try std.testing.expectEqual(@as(u32, 0), t.scrollTarget(.SCROLL_UP));
-
-    t.scroll.y = 1000;
-    try std.testing.expectEqual(@as(u32, 1640), t.scrollTarget(.SCROLL_DOWN));
-    try std.testing.expectEqual(@as(u32, 360), t.scrollTarget(.SCROLL_UP));
-}
-
 test "stateJson: the decider sees indices, never node ids" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
@@ -888,9 +830,8 @@ test "ask: an operation with no candidates loses its head and its option" {
     // The operation head comes first so the answer is easy to find.
     try std.testing.expectEqualStrings("operation", full.entries()[0].key);
     try std.testing.expectEqual(@as(usize, 4), full.entries().len);
-    // At the top of the page, so only down is offered.
     try expectOptions(&.{
-        "CLICK", "TYPE_TEXT", "SELECT", "SCROLL_DOWN", "WAIT", "DONE", "BLOCKED",
+        "CLICK", "TYPE_TEXT", "SELECT", "WAIT", "DONE", "BLOCKED",
     }, full.questions.get("operation"));
 
     var narrow = fixtureTable();
@@ -986,7 +927,7 @@ test "ask: TYPE_TEXT is not offered without a model to write the value" {
 
     const typeless = try ask(a, fixtureTable(), .{ .can_type = false });
     try expectOptions(&.{
-        "CLICK", "SELECT", "SCROLL_DOWN", "WAIT", "DONE", "BLOCKED",
+        "CLICK", "SELECT", "WAIT", "DONE", "BLOCKED",
     }, typeless.questions.get("operation"));
     // Its head goes with it, so there is nothing to select even speculatively.
     try std.testing.expectEqual(@as(?zenai.typesafe.types.Question, null), typeless.questions.get("type_text_target"));
