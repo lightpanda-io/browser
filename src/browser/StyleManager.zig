@@ -798,7 +798,7 @@ fn Group(comptime Spec: type) type {
             }
         }
 
-        fn ownProps(self: *Self, allocator: Allocator, frame: *Frame, el: *Element) Computed {
+        fn ownProps(self: *Self, allocator: Allocator, el: *Element, frame: *Frame) Computed {
             const version = frame.page.style_version;
             if (self.memo_version != version) {
                 self.memo.clearRetainingCapacity();
@@ -816,7 +816,7 @@ fn Group(comptime Spec: type) type {
             return gop.value_ptr.*;
         }
 
-        fn compute(self: *const Self, frame: *Frame, el: *Element) Computed {
+        fn compute(self: *const Self, el: *Element, frame: *Frame) Computed {
             var p: Computed = .{};
             var priorities: Priorities(Declared) = .initFill(0);
 
