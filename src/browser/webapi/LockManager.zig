@@ -29,34 +29,21 @@ const Lock = @import("Lock.zig");
 // https://w3c.github.io/web-locks/#api-lock-manager
 const LockManager = @This();
 
-_held_locks: std.ArrayList(LockInfo) = .empty,
-_pending_locks: std.ArrayList(*LockRequest) = .empty,
-
-pub const LockInfo = struct {
-    name: lp.String,
-    mode: Lock.LockMode,
-};
-
-pub const LockManagerState = struct {
-    held: []const LockInfo,
-    pending: []const LockInfo,
-};
+_locks: std.ArrayList(*LockRequest) = .empty,
 
 pub const Options = struct {
     ifAvailable: bool = false,
     mode: Lock.LockMode = .exclusive,
 };
 
-const CallbackOrOptions = union(enum) {
-    callback: js.Function,
-    options: Options,
-};
+const LockState = enum { pending, held };
 
 // A pending or in-flight lock request
 const LockRequest = struct {
     manager: *LockManager,
     name: lp.String,
     options: Options,
+    state: LockState,
     cb: js.Function.Global,
     resolver: js.PromiseResolver.Global,
     exec: *Execution,
@@ -80,7 +67,7 @@ const LockRequest = struct {
         self.finish();
     }
 
-    fn grantWith(self: *LockRequest, lock: ?Lock) void {
+    fn fireCallbackWith(self: *LockRequest, lock: ?Lock) void {
         self.granted = lock != null;
 
         const exec = self.exec;
@@ -114,8 +101,8 @@ const LockRequest = struct {
         };
     }
 
-    fn grant(self: *LockRequest) void {
-        self.grantWith(Lock{
+    fn fireCallback(self: *LockRequest) void {
+        self.fireCallbackWith(Lock{
             ._mode = self.options.mode,
             ._name = self.name,
         });
@@ -123,10 +110,10 @@ const LockRequest = struct {
 };
 
 fn heldConflicts(self: *const LockManager, name: lp.String, mode: Lock.LockMode) bool {
-    for (self._held_locks.items) |li| {
-        if (li.name.eql(name)) switch (mode) {
+    for (self._locks.items) |li| {
+        if (li.state == .held and li.name.eql(name)) switch (mode) {
             .exclusive => return true,
-            .shared => if (li.mode == .exclusive) {
+            .shared => if (li.options.mode == .exclusive) {
                 return true;
             },
         };
@@ -141,14 +128,19 @@ fn mustQueue(self: *const LockManager, name: lp.String, mode: Lock.LockMode) boo
     }
 
     // If any are pending with the same name, we must queue behind them.
-    for (self._pending_locks.items) |w| {
-        if (w.name.eql(name)) {
+    for (self._locks.items) |lr| {
+        if (lr.state == .pending and lr.name.eql(name)) {
             return true;
         }
     }
 
     return false;
 }
+
+const CallbackOrOptions = union(enum) {
+    callback: js.Function,
+    options: Options,
+};
 
 // https://w3c.github.io/web-locks/#dom-lockmanager-request
 pub fn request(
@@ -186,11 +178,12 @@ pub fn request(
 
     const owned_name = try lp.String.init(exec.arena, name, .{});
 
-    const waiter = try exec.arena.create(LockRequest);
-    waiter.* = .{
+    const lock_request = try exec.arena.create(LockRequest);
+    lock_request.* = .{
         .manager = self,
         .name = owned_name,
         .options = options,
+        .state = .pending,
         .cb = try cb.persist(),
         .resolver = try resolver.persist(),
         .exec = exec,
@@ -201,67 +194,45 @@ pub fn request(
 
     // ifAvailable and held means we fire the callback with null.
     if (options.ifAvailable and must_queue_request) {
-        waiter.grantWith(null);
+        lock_request.fireCallbackWith(null);
         return promise;
     }
 
     if (must_queue_request) {
-        try self._pending_locks.append(exec.arena, waiter);
+        try self._locks.append(exec.arena, lock_request);
         return promise;
     }
 
-    try self._held_locks.append(exec.arena, .{
-        .name = owned_name,
-        .mode = options.mode,
-    });
-    waiter.grant();
+    lock_request.state = .held;
+    try self._locks.append(exec.arena, lock_request);
+    lock_request.fireCallback();
     return promise;
 }
 
-// Frees the given waiter's held lock, then grants it to as many queued
-// waiters for that name as are compatible (e.g. several shared requests
-// queued back-to-back are all granted, not just the first).
-fn releaseLock(self: *LockManager, waiter: *LockRequest) void {
-    for (self._held_locks.items, 0..) |li, i| {
-        if (li.name.eql(waiter.name)) {
-            _ = self._held_locks.orderedRemove(i);
+fn releaseLock(self: *LockManager, lock_request: *LockRequest) void {
+    // Find and remove us from the list of locks.
+    for (self._locks.items, 0..) |lr, i| {
+        if (lr == lock_request) {
+            _ = self._locks.orderedRemove(i);
             break;
         }
     }
-    waiter.deinit();
+    defer lock_request.deinit();
 
-    while (true) {
-        var idx: ?usize = null;
-        for (self._pending_locks.items, 0..) |w, i| {
-            if (w.name.eql(waiter.name)) {
-                idx = i;
-                break;
-            }
-        }
-        const i = idx orelse return;
-        const w = self._pending_locks.items[i];
+    var to_grant: std.ArrayList(*LockRequest) = .empty;
+    for (self._locks.items) |lr| {
+        if (lr.state != .pending or !lr.name.eql(lock_request.name)) continue;
+        if (self.heldConflicts(lr.name, lr.options.mode)) break;
 
-        // w is the earliest still-pending request for this name, so only
-        // what's currently held can block it.
-        if (self.heldConflicts(w.name, w.options.mode)) {
-            return;
-        }
-
-        _ = self._pending_locks.orderedRemove(i);
-
-        self._held_locks.append(w.exec.arena, .{
-            .name = w.name,
-            .mode = w.options.mode,
-        }) catch |err| {
-            var ls: js.Local.Scope = undefined;
-            w.exec.js.localScope(&ls);
-            defer ls.deinit();
-            w.resolver.local(&ls.local).rejectError("Lock grant", .{ .generic_error = @errorName(err) });
-            w.deinit();
-            return;
+        lr.state = .held;
+        to_grant.append(lock_request.exec.arena, lr) catch {
+            lr.state = .pending;
+            break;
         };
+    }
 
-        w.grant();
+    for (to_grant.items) |lr| {
+        lr.fireCallback();
     }
 }
 
