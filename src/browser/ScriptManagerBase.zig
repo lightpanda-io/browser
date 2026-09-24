@@ -253,8 +253,14 @@ pub fn preloadModuleHint(self: *ScriptManagerBase, element: ?*Element.Html, url:
 
 // A <script type=module src=...> whose URL was hinted (modulepreload link or
 // prescan)
-pub fn takeModuleHint(self: *ScriptManagerBase, url: [:0]const u8) ?*Script {
+pub fn takeModuleHint(self: *ScriptManagerBase, url: [:0]const u8) !?*Script {
     const entry = self.imported_modules.getEntry(url) orelse return null;
+    if (entry.value_ptr.state == .err) {
+        // for loading/done, we'll remove the entry (because the script will
+        // get consumed). For err, we can keep the failure in the map to
+        // prevent a 2nd loader from needlessly trying to load this script
+        return try self.failedScript(url, .import);
+    }
     if (entry.value_ptr.hint == false) {
         // The script was preloaded, but not because of a hint. It came from v8
         // telling us to preload the module. We cannot take it here because we know
@@ -268,12 +274,28 @@ pub fn takeModuleHint(self: *ScriptManagerBase, url: [:0]const u8) ?*Script {
             break :blk script;
         },
         .done => |script| script,
-        // The hint's fetch failed; give the script its own attempt.
-        // I'm not sure if this is the right behavior. Why would a preload fail
-        // but the "real" load work? But it's definetly safer.
-        .err => return null,
+        .err => unreachable, // handled above
     };
     self.imported_modules.removeByPtr(entry.key_ptr);
+    return script;
+}
+
+// A dummy script for a module whose fetch already failed, to trigger the
+// consumer's failure path (Script.eval fails on status == 0)
+fn failedScript(self: *ScriptManagerBase, url: [:0]const u8, extra: Script.Extra) !*Script {
+    const arena = try self.acquireArena(.tiny, "SM.failedScript");
+    errdefer arena.release();
+    const script = try arena.create(Script);
+    script.* = .{
+        .arena = arena,
+        .url = url,
+        .status = 0,
+        .node = .{},
+        .manager = self,
+        .complete = true,
+        .source = .{ .remote = .empty },
+        .extra = extra,
+    };
     return script;
 }
 
@@ -354,6 +376,12 @@ pub fn releaseImport(self: *ScriptManagerBase, url: [:0]const u8) void {
 pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsync.Callback, cb_data: *anyopaque, referrer: []const u8) !void {
     // A <link rel=modulepreload> hint may already be fetching/fetched this module
     if (self.imported_modules.getEntry(url)) |entry| {
+        if (entry.value_ptr.state == .err) {
+            const script = try self.failedScript(url, .{ .import_async = .{ .callback = cb, .data = cb_data } });
+            self.ready_scripts.append(&script.node);
+            self.evaluate();
+            return;
+        }
         if (entry.value_ptr.hint) {
             switch (entry.value_ptr.state) {
                 .loading => |script| {
@@ -381,8 +409,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
                     self.evaluate();
                     return;
                 },
-                // The hint's fetch failed; give the import its own attempt.
-                .err => {},
+                .err => unreachable, // handled above
             }
         }
     }
@@ -849,6 +876,12 @@ pub const Script = struct {
 
         if (frame.isGoingAway()) {
             // don't evaluate scripts for a dying frame.
+            return;
+        }
+
+        if (self.source == .remote and (self.status < 200 or self.status > 299)) {
+            // An adopted preload / module hint that had already failed.
+            self.executeCallback(comptime .wrap("error"));
             return;
         }
 
