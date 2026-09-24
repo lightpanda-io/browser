@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const Execution = @import("../js/Execution.zig");
+const AbortSignal = @import("AbortSignal.zig");
 
 const Lock = @import("Lock.zig");
 
@@ -34,6 +35,8 @@ _locks: std.ArrayList(*LockRequest) = .empty,
 pub const Options = struct {
     ifAvailable: bool = false,
     mode: Lock.LockMode = .exclusive,
+    signal: ?*AbortSignal = null,
+    steal: bool = false,
 };
 
 const LockState = enum { pending, held };
@@ -78,6 +81,16 @@ const LockRequest = struct {
 
         const local = &ls.local;
         const resolver = self.resolver.local(local);
+
+        if (self.granted) {
+            if (self.options.signal) |signal| {
+                if (signal._aborted) {
+                    resolver.reject("LockManager.signal.aborted", signal._reason);
+                    self.finish();
+                    return;
+                }
+            }
+        }
 
         var try_catch: js.TryCatch = undefined;
         try_catch.init(local);
@@ -179,12 +192,23 @@ pub fn request(
         },
     };
 
-    if (name.len > 0 and name[0] == '-') {
+    if ((name.len > 0 and name[0] == '-') or
+        (options.steal and options.ifAvailable) or
+        (options.steal and options.mode != .exclusive) or
+        (options.signal != null and (options.steal or options.ifAvailable)))
+    {
         resolver.rejectError(
             "LockManager.request",
             .{ .dom_exception = .{ .err = error.NotSupported } },
         );
         return promise;
+    }
+
+    if (options.signal) |signal| {
+        if (signal._aborted) {
+            resolver.reject("LockManager.signal.aborted", signal._reason);
+            return promise;
+        }
     }
 
     const owned_name = try lp.String.init(exec.arena, name, .{});
