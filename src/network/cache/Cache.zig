@@ -320,33 +320,33 @@ const ResponseHeaders = struct {
 
         for (headers) |h| {
             switch (h.name.len) {
-                3 => if (std.ascii.eqlIgnoreCase(h.name, "Age")) {
+                3 => if (std.mem.eql(u8, h.name, "age")) {
                     self.age = h.value;
                 },
                 4 => {
-                    if (std.ascii.eqlIgnoreCase(h.name, "Date")) {
+                    if (std.mem.eql(u8, h.name, "date")) {
                         self.date = h.value;
-                    } else if (std.ascii.eqlIgnoreCase(h.name, "ETag")) {
+                    } else if (std.mem.eql(u8, h.name, "etag")) {
                         self.etag = h.value;
-                    } else if (std.ascii.eqlIgnoreCase(h.name, "Vary")) {
+                    } else if (std.mem.eql(u8, h.name, "vary")) {
                         self.vary = h.value;
                     }
                 },
-                7 => if (std.ascii.eqlIgnoreCase(h.name, "Expires")) {
+                7 => if (std.mem.eql(u8, h.name, "expires")) {
                     self.expires = h.value;
                 },
-                10 => if (std.ascii.eqlIgnoreCase(h.name, "Set-Cookie")) {
+                10 => if (std.mem.eql(u8, h.name, "set-cookie")) {
                     self.has_set_cookie = true;
                 },
-                12 => if (std.ascii.eqlIgnoreCase(h.name, "Content-Type")) {
+                12 => if (std.mem.eql(u8, h.name, "content-type")) {
                     self.content_type = h.value;
                 },
                 13 => {
-                    if (std.ascii.eqlIgnoreCase(h.name, "Cache-Control")) {
+                    if (std.mem.eql(u8, h.name, "cache-control")) {
                         self.directives = .parse(h.value);
-                    } else if (std.ascii.eqlIgnoreCase(h.name, "Last-Modified")) {
+                    } else if (std.mem.eql(u8, h.name, "last-modified")) {
                         self.last_modified = h.value;
-                    } else if (std.ascii.eqlIgnoreCase(h.name, "Authorization")) {
+                    } else if (std.mem.eql(u8, h.name, "authorization")) {
                         self.has_authorization = true;
                     }
                 },
@@ -576,11 +576,11 @@ const TestResponse = struct {
     fn run(self: TestResponse, arena: std.mem.Allocator) !?CachePutRequest {
         var headers: std.ArrayList(Http.Header) = .empty;
         inline for (.{
-            .{ "Cache-Control", self.cache_control },
-            .{ "Expires", self.expires },
-            .{ "Date", self.date },
-            .{ "ETag", self.etag },
-            .{ "Last-Modified", self.last_modified },
+            .{ "cache-control", self.cache_control },
+            .{ "expires", self.expires },
+            .{ "date", self.date },
+            .{ "etag", self.etag },
+            .{ "last-modified", self.last_modified },
         }) |field| {
             if (field[1]) |value| {
                 try headers.append(arena, .{ .name = field[0], .value = value });
@@ -721,8 +721,8 @@ test "Cache: tryCache vary headers" {
         .status = 200,
         .content_type = "text/html",
         .headers = &.{
-            .{ .name = "Cache-Control", .value = "max-age=300" },
-            .{ .name = "Vary", .value = "accept-encoding, accept-language" },
+            .{ .name = "cache-control", .value = "max-age=300" },
+            .{ .name = "vary", .value = "accept-encoding, accept-language" },
         },
         .request_headers = &request_headers,
     });
@@ -738,8 +738,8 @@ test "Cache: tryCache vary headers" {
         .status = 200,
         .content_type = "text/html",
         .headers = &.{
-            .{ .name = "Cache-Control", .value = "max-age=300" },
-            .{ .name = "Vary", .value = "*" },
+            .{ .name = "cache-control", .value = "max-age=300" },
+            .{ .name = "vary", .value = "*" },
         },
         .request_headers = &request_headers,
     });

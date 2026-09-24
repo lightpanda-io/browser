@@ -26,12 +26,12 @@ pub fn allowed(frame: *const Frame, transfer: *HttpClient.Transfer) bool {
     var options: XFrameOptions = .{};
     var it = transfer.responseHeaderIterator();
     while (it.next()) |hdr| {
-        if (std.ascii.eqlIgnoreCase(hdr.name, "content-security-policy")) {
+        if (std.mem.eql(u8, hdr.name, "content-security-policy")) {
             if (hasFrameAncestors(hdr.value)) {
                 // has priority over any x-frame-options
                 return true;
             }
-        } else if (std.ascii.eqlIgnoreCase(hdr.name, "x-frame-options")) {
+        } else if (std.mem.eql(u8, hdr.name, "x-frame-options")) {
             options.add(hdr.value);
         }
     }

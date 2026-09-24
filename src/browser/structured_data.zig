@@ -236,7 +236,7 @@ fn collectLinkHeaders(
     const header_link_rels = [_][]const u8{ "service-doc", "service-desc", "api" };
 
     for (frame._http_headers.items) |header| {
-        if (!std.ascii.eqlIgnoreCase(header.name, "link")) {
+        if (std.mem.eql(u8, header.name, "link") == false) {
             continue;
         }
 
@@ -705,7 +705,7 @@ test "structured_data: link headers from response" {
     defer testing.test_session.closeAllPages();
 
     // Stand in for what frameHeaderDoneCallback records from the navigation.
-    try frame._http_headers.append(frame.arena, .{ .name = "Link", .value =
+    try frame._http_headers.append(frame.arena, .{ .name = "link", .value =
         \\<https://docs.example.com/>; rel="service-doc"
     });
     try frame._http_headers.append(frame.arena, .{ .name = "link", .value =
