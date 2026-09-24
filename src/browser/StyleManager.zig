@@ -41,8 +41,7 @@ const Allocator = std.mem.Allocator;
 
 // Tracks the CSS properties the renderless layout acts on (display, visibility,
 // opacity, pointer-events, overflow) from <style> elements.
-// Each property group keeps its own rules, bucketed by their rightmost
-// selector part for fast lookup, and its own memo.
+// Rules are bucketed by their rightmost selector part for fast lookup.
 const StyleManager = @This();
 
 const Tag = Element.Tag;
@@ -577,8 +576,10 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     self.dirty = false;
     errdefer self.dirty = true;
-    const visibility_caps = self.visibility.capacities();
-    const geometry_caps = self.geometry.capacities();
+    var caps: [group_fields.len]Capacities = undefined;
+    inline for (group_fields, &caps) |field, *c| {
+        c.* = @field(self, field).capacities();
+    }
     const custom_rules_count = self.custom_rules.count();
 
     self.arena.resetRetain();
@@ -587,8 +588,9 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.rule_layers = .empty;
     self.last_rule_sheet = null;
 
-    try self.visibility.reset(self.arena.allocator(), visibility_caps);
-    try self.geometry.reset(self.arena.allocator(), geometry_caps);
+    inline for (group_fields, caps) |field, c| {
+        try @field(self, field).reset(self.arena.allocator(), c);
+    }
 
     self.custom_rules = .empty;
     try self.custom_rules.ensureTotalCapacity(self.arena.allocator(), custom_rules_count);
@@ -686,18 +688,25 @@ fn anyInChain(self: *StyleManager, el: *Element, comptime what: Visibility.Probe
 
 /// Callers must have run rebuildIfDirty, which resets the memo.
 fn visibilityProps(self: *StyleManager, el: *Element) Visibility.Computed {
-    return self.visibility.ownProps(self.arena.allocator(), self.frame, el);
+    return self.visibility.ownProps(self.arena.allocator(), el, self.frame);
 }
 
 /// Callers must have run rebuildIfDirty, which resets the memo.
 fn geometryProps(self: *StyleManager, el: *Element) Geometry.Computed {
-    return self.geometry.ownProps(self.arena.allocator(), self.frame, el);
+    return self.geometry.ownProps(self.arena.allocator(), el, self.frame);
 }
 
-/// The cascade of one property group: its rules, bucketed by their rightmost
-/// selector part, and a memo of its own-element results. A rule joins only the
-/// groups it declares something in, so a group never matches a rule that
-/// can't change its answer, and its memo entry holds only its own properties.
+/// Taken before the arena resets, to presize the new containers.
+const Capacities = struct {
+    id_rules: u32,
+    class_rules: u32,
+    tag_rules: u32,
+    other_rules: usize,
+    memo: u32,
+};
+
+/// One property group's rules and memo. A rule joins only the groups it
+/// declares something in.
 fn Group(comptime Spec: type) type {
     return struct {
         const Self = @This();
@@ -735,16 +744,6 @@ fn Group(comptime Spec: type) type {
         memo: std.AutoHashMapUnmanaged(*Element, Computed) = .empty,
         memo_version: usize = 0,
 
-        const Capacities = struct {
-            id_rules: u32,
-            class_rules: u32,
-            tag_rules: u32,
-            other_rules: usize,
-            memo: u32,
-        };
-
-        /// Taken before the arena resets, so reset can presize the new
-        /// containers.
         fn capacities(self: *const Self) Capacities {
             return .{
                 .id_rules = self.id_rules.count(),
@@ -807,12 +806,12 @@ fn Group(comptime Spec: type) type {
 
             const gop = self.memo.getOrPut(allocator, el) catch |err| {
                 log.warn(.browser, "StyleManager memo", .{ .err = err });
-                return self.compute(frame, el);
+                return self.compute(el, frame);
             };
             if (gop.found_existing) {
                 return gop.value_ptr.*;
             }
-            gop.value_ptr.* = self.compute(frame, el);
+            gop.value_ptr.* = self.compute(el, frame);
             return gop.value_ptr.*;
         }
 
@@ -1135,8 +1134,7 @@ pub const Display = enum(u2) {
     }
 };
 
-/// Whether an element is rendered and takes pointer input. The hot path:
-/// every visibility check walks the ancestor chain through this group.
+/// Whether an element is rendered and takes pointer input.
 const Visibility = struct {
     const Declared = struct {
         const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events" };
@@ -1815,7 +1813,6 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         const el = node.is(Element) orelse continue;
         const scanned = inlineDeclared(Declarations, el, frame);
         try testing.expectEqual(expected[i], scanned);
-        // a group's own scan folds only its names, to the same result
         try testing.expectEqual(expected[i].visibility, inlineDeclared(Visibility.Declared, el, frame));
         try testing.expectEqual(expected[i].geometry, inlineDeclared(Geometry.Declared, el, frame));
         // scanning never creates the style object
@@ -1842,7 +1839,6 @@ test "StyleManager: memo: reuse and invalidation" {
     // The walk memoizes the element and every ancestor
     try testing.expectEqual(false, sm.isHidden(b, .{}));
     try testing.expectEqual(3, sm.visibility.memo.count());
-    // Only the probed group memoizes
     try testing.expectEqual(0, sm.geometry.memo.count());
     try testing.expectEqual(false, sm.isHidden(b, .{}));
     try testing.expectEqual(3, sm.visibility.memo.count());
