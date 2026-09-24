@@ -154,14 +154,6 @@ _queued_events: *std.ArrayList(QueuedEvent) = undefined,
 _focus_fixup_pending: bool = false,
 
 _style_manager: StyleManager,
-
-// Element.documentExtent cache, keyed on style version and viewport.
-_document_extent: ?struct {
-    version: usize,
-    viewport_width: u32,
-    viewport_height: u32,
-    extent: Element.DocumentExtent,
-} = null,
 _script_manager: ScriptManager,
 
 _http_owner: HttpClient.Owner,

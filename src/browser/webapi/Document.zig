@@ -82,6 +82,13 @@ _script_created_parser: ?Parser.Streaming = null,
 _close_requested: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
+// extent() cache, keyed on style version and viewport.
+_extent: ?struct {
+    version: usize,
+    viewport_width: u32,
+    viewport_height: u32,
+    extent: Extent,
+} = null,
 // Ordered stack of currently-showing popovers
 _open_popovers: std.ArrayList(*Element) = .empty,
 
@@ -493,6 +500,61 @@ pub fn getDocumentElement(self: *Document) ?*Element {
         child = node.nextSibling();
     }
     return null;
+}
+
+pub const Extent = struct { width: f64, height: f64 };
+
+/// The document's size. Height: enough for every synthetic position (5px per
+/// node) and body's stacked children. Width: body's widest child. An inline
+/// size on body stretches both. A document without a frame isn't rendered,
+/// so it has no size.
+pub fn extent(self: *Document) Extent {
+    const frame = self._frame orelse return .{ .width = 0, .height = 0 };
+    const version = frame.page.style_version;
+    const viewport = frame.page.getViewport();
+    if (self._extent) |cached| {
+        if (cached.version == version and cached.viewport_width == viewport.width and cached.viewport_height == viewport.height) {
+            return cached.extent;
+        }
+    }
+
+    var size: Extent = .{ .width = 0, .height = Element.countSubtreeNodes(self.asNode()) * 5.0 };
+    if (self.is(HTMLDocument)) |html_doc| {
+        if (html_doc.getBody()) |html_body| {
+            const body = html_body.asElement();
+            const style_manager = &frame._style_manager;
+            size.height = @max(size.height, body.contentAxis(frame, .height), style_manager.inlineSize(body, .height) orelse 0);
+            size.width = style_manager.inlineSize(body, .width) orelse 0;
+            var child = body.asNode().firstChild();
+            while (child) |node| : (child = node.nextSibling()) {
+                const el = node.is(Element) orelse continue;
+                if (!style_manager.hasDisplayNone(el)) {
+                    size.width = @max(size.width, el.getElementAxis(frame, .width).value);
+                }
+            }
+        }
+    }
+
+    // Whole pixels, like scroll offsets
+    size = .{ .width = @ceil(size.width), .height = @ceil(size.height) };
+    self._extent = .{
+        .version = version,
+        .viewport_width = viewport.width,
+        .viewport_height = viewport.height,
+        .extent = size,
+    };
+    return size;
+}
+
+/// What the viewport scrolls over: the document, at least viewport-sized.
+pub fn scrollSize(self: *Document) Extent {
+    const frame = self._frame orelse return .{ .width = 0, .height = 0 };
+    const size = self.extent();
+    const viewport = frame.page.getViewport();
+    return .{
+        .width = @max(size.width, @as(f64, @floatFromInt(viewport.width))),
+        .height = @max(size.height, @as(f64, @floatFromInt(viewport.height))),
+    };
 }
 
 fn getSelection(self: *Document) *Selection {
