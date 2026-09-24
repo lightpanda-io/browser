@@ -80,7 +80,10 @@ pub const Writer = struct {
     }
 
     fn toJSON(self: *const Writer, w: anytype) !void {
-        var ignore_cache: IgnoreCache = .empty;
+        const cache_arena = try self.frame.getArena(.medium, "AXNode.IgnoreCache");
+        defer cache_arena.release();
+        var ignore_cache: IgnoreCache = .{ .allocator = cache_arena.allocator() };
+
         try w.beginArray();
         if (self.filter != null) {
             try self.walkQuery(self.root.dom, &ignore_cache, w);
@@ -119,18 +122,8 @@ pub const Writer = struct {
 
     fn writeTree(self: *const Writer, root: AXNode, root_hidden: bool, ignore_cache: *IgnoreCache, w: anytype) !void {
         var walker: Walker = .init(root.dom);
-        var axn = root;
         var descend = try self.writeNode(self.root.id, root, false, root_hidden, ignore_cache, w);
-        while (true) {
-            if (descend) {
-                if (axn.dom.is(DOMNode.Element)) |el| {
-                    if (el.getTag() == .li) {
-                        try self.writeListMarker(axn.dom, w);
-                    }
-                }
-            }
-
-            const dom_node = walker.next(descend) orelse return;
+        while (walker.next(descend)) |dom_node| {
             descend = false;
             switch (dom_node._type) {
                 .cdata => {
@@ -154,8 +147,7 @@ pub const Writer = struct {
             }
 
             const node = try self.registry.register(dom_node);
-            axn = AXNode.fromNode(node.dom);
-            descend = try self.writeNode(node.id, axn, walker.inAriaHidden(), false, ignore_cache, w);
+            descend = try self.writeNode(node.id, .fromNode(dom_node), walker.inAriaHidden(), false, ignore_cache, w);
         }
     }
 
@@ -492,7 +484,6 @@ pub const Writer = struct {
 
     // write a node. returns true if children must be written.
     fn writeNode(self: *const Writer, id: u32, axn: AXNode, in_aria_hidden: bool, hidden: bool, ignore_cache: *IgnoreCache, w: anytype) !bool {
-        // ignore empty texts
         try w.beginObject();
 
         try w.objectField("nodeId");
@@ -602,6 +593,14 @@ pub const Writer = struct {
 
         try w.endObject();
 
+        if (write_children) {
+            if (n.is(DOMNode.Element)) |el| {
+                if (el.getTag() == .li) {
+                    try self.writeListMarker(n, w);
+                }
+            }
+        }
+
         return write_children;
     }
 
@@ -646,19 +645,19 @@ pub const Writer = struct {
     // ones, per the queryAXTree spec) and defers emission to emitMatch.
     fn walkQuery(self: *const Writer, root: *DOMNode, ignore_cache: *IgnoreCache, w: anytype) !void {
         var walker: Walker = .init(root);
-        var node = root;
-        while (true) {
-            const axn = AXNode.fromNode(node);
+        const root_axn: AXNode = .fromNode(root);
+        try self.emitMatch(root_axn, false, ignore_cache, w);
+        // <head>, <script>, <style> never expose AX content — skip their children.
+        var descend = !root_axn.ignoreChildren();
+        while (walker.next(descend)) |node| {
+            descend = false;
+            switch (node._type) {
+                .element, .cdata => {},
+                else => continue,
+            }
+            const axn: AXNode = .fromNode(node);
             try self.emitMatch(axn, walker.inAriaHidden(), ignore_cache, w);
-
-            // <head>, <script>, <style> never expose AX content — skip their children.
-            var descend = !axn.ignoreChildren();
-            node = while (walker.next(descend)) |next| {
-                switch (next._type) {
-                    .element, .cdata => break next,
-                    else => descend = false,
-                }
-            } else return;
+            descend = !axn.ignoreChildren();
         }
     }
 
@@ -1123,9 +1122,8 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer) !void {
     }
 }
 
-/// Pre-order walk of a subtree's descendants that tracks whether one of the
-/// current node's ancestors (the root included) is aria-hidden. Iterative, so
-/// a deep DOM can't overflow the native stack.
+/// Pre-order walk counting aria-hidden ancestors (root included), which
+/// TreeWalker can't: it leaves subtrees without saying so.
 const Walker = struct {
     root: *DOMNode,
     current: *DOMNode,
@@ -1135,7 +1133,7 @@ const Walker = struct {
         return .{ .root = root, .current = root };
     }
 
-    /// The node after the current one, entering its children only if `descend`.
+    /// `descend` false skips the current node's children.
     fn next(self: *Walker, descend: bool) ?*DOMNode {
         if (descend) {
             if (self.current.firstChild()) |child| {
@@ -1154,7 +1152,6 @@ const Walker = struct {
             node = node._parent.?;
             if (isAriaHidden(node)) self.aria_hidden_ancestors -= 1;
         }
-        self.current = self.root;
         return null;
     }
 
@@ -1359,64 +1356,59 @@ fn ignoreChildren(self: AXNode) bool {
     };
 }
 
-// Generic containers are ignored unless a non-ignored node sits under them
-// through other generic containers. Asking that of every node in a deep chain
-// is quadratic, so the answers are memoized for the duration of one walk.
-const IgnoreCache = std.AutoHashMapUnmanaged(*DOMNode, bool);
+// A generic container's answer depends on the ones below it; without a memo,
+// a walk asking about every node of a deep chain is O(depth²).
+const IgnoreCache = struct {
+    allocator: std.mem.Allocator,
+    map: std.AutoHashMapUnmanaged(*DOMNode, bool) = .empty,
 
-// `hidden` comes from the caller: the tree walk prunes, so its children never
-// are; the root and the query walk probe the whole chain.
+    /// Keyed on the node alone: never reached under aria-hidden (ignoreSelf
+    /// says .ignored). `root` isn't cached, walks ask about each node once.
+    fn isGenericIgnored(self: *IgnoreCache, root: *DOMNode, frame: *Frame) !bool {
+        if (self.map.get(root)) |ignored| return ignored;
+
+        var tw = TreeWalker.FullExcludeSelf.init(root, .{});
+        const exposed = while (tw.next()) |node| {
+            const node_hidden = if (node.is(DOMNode.Element)) |el| isHidden(el, frame, .{ .ancestors = false }) else false;
+            switch (AXNode.fromNode(node).ignoreSelf(false, node_hidden)) {
+                .ignored => tw.skipChildren(),
+                .exposed => break node,
+                .generic => {
+                    // Until an exposed node turns up under it.
+                    const gop = try self.map.getOrPut(self.allocator, node);
+                    if (!gop.found_existing) {
+                        gop.value_ptr.* = true;
+                    } else if (gop.value_ptr.*) {
+                        tw.skipChildren();
+                    } else {
+                        break node;
+                    }
+                },
+            }
+        } else return true;
+
+        var node = exposed._parent.?;
+        while (node != root) : (node = node._parent.?) {
+            self.map.getPtr(node).?.* = false;
+        }
+        return false;
+    }
+};
+
+/// `hidden` comes from the caller: the tree walk prunes, so its children never
+/// are; the root and the query walk probe the whole chain.
 fn isIgnore(self: AXNode, frame: *Frame, in_aria_hidden: bool, hidden: bool, cache: *IgnoreCache) !bool {
     return switch (self.ignoreSelf(in_aria_hidden, hidden)) {
         .ignored => true,
         .exposed => false,
-        .generic => isGenericIgnored(self.dom, frame, cache),
+        .generic => cache.isGenericIgnored(self.dom, frame),
     };
-}
-
-/// Only reached outside aria-hidden (ignoreSelf would have said .ignored), so
-/// the answer depends on the node alone.
-fn isGenericIgnored(root: *DOMNode, frame: *Frame, cache: *IgnoreCache) !bool {
-    const allocator = frame.call_arena;
-    if (cache.get(root)) |ignored| return ignored;
-    // Every generic container the scan enters is provisionally ignored: it is
-    // unless it's an ancestor of the exposed node that ends the scan.
-    try cache.put(allocator, root, true);
-
-    var tw = TreeWalker.FullExcludeSelf.init(root, .{});
-    const exposed = while (tw.next()) |node| {
-        const node_hidden = if (node.is(DOMNode.Element)) |el| isHidden(el, frame, .{ .ancestors = false }) else false;
-        switch (AXNode.fromNode(node).ignoreSelf(false, node_hidden)) {
-            .ignored => tw.skipChildren(),
-            .exposed => break node,
-            .generic => {
-                const gop = try cache.getOrPut(allocator, node);
-                if (!gop.found_existing) {
-                    gop.value_ptr.* = true;
-                } else if (gop.value_ptr.*) {
-                    tw.skipChildren();
-                } else {
-                    break node;
-                }
-            },
-        }
-    } else return true;
-
-    var node = exposed;
-    while (node != root) {
-        node = node._parent.?;
-        try cache.put(allocator, node, false);
-    }
-    return false;
 }
 
 /// isIgnore for `self` alone, leaving generic containers to the caller.
 fn ignoreSelf(self: AXNode, in_aria_hidden: bool, hidden: bool) enum { ignored, exposed, generic } {
-    const node = self.dom;
-    const role_attr = self.role_attr;
-
     // Don't ignore non-Element node: CData, Document...
-    const elt = node.is(DOMNode.Element) orelse return if (in_aria_hidden) .ignored else .exposed;
+    const elt = self.dom.is(DOMNode.Element) orelse return if (in_aria_hidden) .ignored else .exposed;
     // Ignore non-HTML elements: svg...
     if (elt._type != .html) {
         return .ignored;
@@ -1447,7 +1439,7 @@ fn ignoreSelf(self: AXNode, in_aria_hidden: bool, hidden: bool) enum { ignored, 
         else => {},
     }
 
-    if (role_attr) |role| {
+    if (self.role_attr) |role| {
         if (std.ascii.eqlIgnoreCase(role, "none") or std.ascii.eqlIgnoreCase(role, "presentation")) {
             return .ignored;
         }
@@ -2116,29 +2108,25 @@ test "AXNode: writer prunes children when root is hidden" {
 }
 
 test "AXNode: generic containers share memoized ignore answers" {
-    var registry = NodeRegistry.init(testing.allocator);
-    defer registry.deinit();
-
     const frame = try testing.base.createFrame();
     defer testing.base.test_session.closeAllPages();
 
     const root = try frame.window._document.createElement("div", null, frame);
-    // Scanning #a provisionally ignores #b, #c and #d; the text under #d then
-    // flips #c and #d, while #b (only a decorative image) stays ignored.
+    // #b holds only a decorative image; the text under #d exposes #c and #d.
     try root.setInnerHTML(
         \\<div id="a"><div id="b"><img></div><div id="c"><span id="d">text</span></div></div>
     , frame);
 
-    var cache: IgnoreCache = .empty;
+    var cache: IgnoreCache = .{ .allocator = testing.arena_allocator };
     const expected = [_]struct { []const u8, bool }{ .{ "#a", false }, .{ "#b", true }, .{ "#c", false }, .{ "#d", false } };
     for (expected) |e| {
         const el = (try root.querySelector(e[0], frame)).?;
         try testing.expectEqual(e[1], try AXNode.fromNode(el.asNode()).isIgnore(frame, false, false, &cache));
     }
-    // Every answer after #a's came from the one scan.
-    try testing.expectEqual(4, cache.count());
+    // Filled by #a's scan.
+    try testing.expectEqual(3, cache.map.count());
 
-    var fresh: IgnoreCache = .empty;
+    var fresh: IgnoreCache = .{ .allocator = testing.arena_allocator };
     for (expected[1..]) |e| {
         const el = (try root.querySelector(e[0], frame)).?;
         try testing.expectEqual(e[1], try AXNode.fromNode(el.asNode()).isIgnore(frame, false, false, &fresh));
