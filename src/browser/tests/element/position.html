@@ -629,3 +629,38 @@
   testing.expectEqual(0, box.scrollLeft);
 }
 </script>
+
+<style>
+  .sheetBox { height: 100px; overflow: auto; }
+  #sheetAuto { height: auto; }
+  .sheetVh { height: 10vh; }
+</style>
+<div id="sheetBox" class="sheetBox"><div style="height: 500px;">content</div></div>
+<div id="sheetAuto" class="sheetBox"><div style="height: 500px;">content</div></div>
+<div id="inlineAuto" class="sheetBox" style="height: 50%"><div style="height: 500px;">content</div></div>
+<div id="sheetVh" class="sheetVh"></div>
+
+<script id="sheetSizedBox">
+{
+  // A sheet size is as explicit as an inline one
+  const box = $('#sheetBox');
+  testing.expectEqual(100, box.clientHeight);
+  testing.expectEqual(500, box.scrollHeight);
+  testing.expectEqual('100px', getComputedStyle(box).height);
+
+  box.scrollTop = 9999;
+  testing.expectEqual(400, box.scrollTop);
+
+  // A stronger rule's `auto` wins, leaving no size to clamp to. Chrome
+  // clamps to 0; we can't tell auto from max-height, so we don't clamp.
+  const auto = $('#sheetAuto');
+  testing.expectEqual(500, auto.clientHeight);
+  auto.scrollTop = 9999;
+  testing.expectEqual(9999, auto.scrollTop);
+
+  // So does an unresolvable inline value
+  testing.expectEqual(500, $('#inlineAuto').clientHeight);
+
+  testing.expectEqual(window.innerHeight / 10, $('#sheetVh').clientHeight);
+}
+</script>

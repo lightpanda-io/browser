@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Frame = @import("Frame.zig");
+const Viewport = @import("Viewport.zig");
 
 const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
@@ -40,7 +41,7 @@ const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 // Tracks the CSS properties the renderless layout acts on (display, visibility,
-// opacity, pointer-events, overflow) from <style> elements.
+// opacity, pointer-events, overflow, width, height) from <style> elements.
 // Rules are bucketed by their rightmost selector part for fast lookup.
 const StyleManager = @This();
 
@@ -676,6 +677,22 @@ pub fn overscrollContainAxes(self: *StyleManager, el: *Element) Element.ScrollAx
     return .{ .x = p.overscroll_x_contains, .y = p.overscroll_y_contains };
 }
 
+/// Own computed width or height in px, from inline style or a sheet rule.
+/// Null when undeclared or when it needs layout to resolve.
+pub fn declaredSize(self: *StyleManager, el: *Element, comptime axis: Element.Axis) ?f64 {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
+    const length = @field(self.geometryProps(el), @tagName(axis));
+    return length.resolve(self.frame.page.getViewport());
+}
+
+/// Like declaredSize, but only the inline style counts.
+pub fn inlineSize(self: *StyleManager, el: *Element, comptime axis: Element.Axis) ?f64 {
+    self.assertOwns(el);
+    const length = @field(inlineDeclared(Geometry.Declared, el, self.frame), @tagName(axis)) orelse return null;
+    return length.resolve(self.frame.page.getViewport());
+}
+
 fn anyInChain(self: *StyleManager, el: *Element, comptime what: Visibility.Probe, options: CheckVisibilityOptions) bool {
     var current: ?*Element = el;
     while (current) |elem| : (current = elem.parentElement()) {
@@ -1134,6 +1151,38 @@ pub const Display = enum(u2) {
     }
 };
 
+/// A declared width or height. Values that need layout (auto, %, em) are
+/// `auto`: they win the cascade but give no size.
+pub const Length = packed struct(u34) {
+    value: f32 = 0,
+    unit: Unit = .auto,
+
+    const Unit = enum(u2) { auto, px, vw, vh };
+
+    fn parse(text: []const u8) Length {
+        const parsed = units.parse(text) catch return .{};
+        if (parsed.value < 0) {
+            return .{};
+        }
+        return switch (parsed.unit) {
+            inline .vw, .vh => |unit| .{ .value = @floatCast(parsed.value), .unit = @field(Unit, @tagName(unit)) },
+            else => .{
+                .value = @floatCast(parsed.value * (units.absoluteLengthFactor(parsed.unit) orelse return .{})),
+                .unit = .px,
+            },
+        };
+    }
+
+    fn resolve(self: Length, viewport: Viewport) ?f64 {
+        const value: f64 = self.value;
+        return switch (self.unit) {
+            .auto => null,
+            .px => value,
+            .vw, .vh => value * @as(f64, @floatFromInt(if (self.unit == .vw) viewport.width else viewport.height)) / 100.0,
+        };
+    }
+};
+
 /// Whether an element is rendered and takes pointer input.
 const Visibility = struct {
     const Declared = struct {
@@ -1192,15 +1241,17 @@ const Visibility = struct {
     }
 };
 
-/// How an element's box scrolls.
+/// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height" };
 
         overflow_x_scrolls: ?bool = null,
         overflow_y_scrolls: ?bool = null,
         overscroll_x_contains: ?bool = null,
         overscroll_y_contains: ?bool = null,
+        width: ?Length = null,
+        height: ?Length = null,
 
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "overflow-x")) {
@@ -1211,6 +1262,10 @@ const Geometry = struct {
                 self.overscroll_x_contains = overscrollContains(value);
             } else if (std.ascii.eqlIgnoreCase(name, "overscroll-behavior-y")) {
                 self.overscroll_y_contains = overscrollContains(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "width")) {
+                self.width = Length.parse(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "height")) {
+                self.height = Length.parse(value);
             }
         }
 
@@ -1229,11 +1284,13 @@ const Geometry = struct {
         }
     };
 
-    const Computed = packed struct(u4) {
+    const Computed = packed struct(u72) {
         overflow_x_scrolls: bool = false,
         overflow_y_scrolls: bool = false,
         overscroll_x_contains: bool = false,
         overscroll_y_contains: bool = false,
+        width: Length = .{},
+        height: Length = .{},
     };
 };
 
@@ -1786,6 +1843,10 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         \\<i style="overflow-y: auto !important; overflow: hidden"></i>
         \\<i style="overflow-x: overlay"></i>
         \\<i style="overflow:"></i>
+        \\<i style="width: 100px; height: 1in"></i>
+        \\<i style="height: 10vh; height: auto"></i>
+        \\<i style="width: 50%; height: -5px"></i>
+        \\<i style="width: 2em !important; width: 10vw"></i>
     );
     const expected = [_]Declarations{
         .{ .visibility = .{ .display = .none } },
@@ -1805,20 +1866,25 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_y_scrolls = true } },
         .{ .geometry = .{ .overflow_x_scrolls = true } },
         .{},
+        .{ .geometry = .{ .width = .{ .value = 100, .unit = .px }, .height = .{ .value = 96, .unit = .px } } },
+        .{ .geometry = .{ .height = .{} } },
+        .{ .geometry = .{ .width = .{}, .height = .{} } },
+        .{ .geometry = .{ .width = .{} } },
     };
 
     var i: usize = 0;
     var child = div.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
         const el = node.is(Element) orelse continue;
+        // std's expectEqual: testing's can't compare an optional struct
         const scanned = inlineDeclared(Declarations, el, frame);
-        try testing.expectEqual(expected[i], scanned);
-        try testing.expectEqual(expected[i].visibility, inlineDeclared(Visibility.Declared, el, frame));
-        try testing.expectEqual(expected[i].geometry, inlineDeclared(Geometry.Declared, el, frame));
+        try std.testing.expectEqual(expected[i], scanned);
+        try std.testing.expectEqual(expected[i].visibility, inlineDeclared(Visibility.Declared, el, frame));
+        try std.testing.expectEqual(expected[i].geometry, inlineDeclared(Geometry.Declared, el, frame));
         // scanning never creates the style object
         try testing.expectEqual(null, el.existingStyle(frame));
         const materialized = extractDeclared(Declarations, try el.getOrCreateStyle(frame));
-        try testing.expectEqual(expected[i], materialized);
+        try std.testing.expectEqual(expected[i], materialized);
         i += 1;
     }
     try testing.expectEqual(expected.len, i);
