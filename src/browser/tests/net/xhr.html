@@ -36,7 +36,7 @@
       testing.expectEqual(200, req.status);
       testing.expectEqual('OK', req.statusText);
       testing.expectEqual('text/html; charset=utf-8', req.getResponseHeader('Content-Type'));
-      testing.expectEqual('content-length: 100\r\nContent-Type: text/html; charset=utf-8\r\n', req.getAllResponseHeaders());
+      testing.expectEqual('content-length: 100\r\ncontent-type: text/html; charset=utf-8\r\n', req.getAllResponseHeaders());
       testing.expectEqual(100, req.responseText.length);
       testing.expectEqual(req.responseText.length, req.response.length);
       testing.expectEqual('http://127.0.0.1:9582/xhr', req.responseURL);

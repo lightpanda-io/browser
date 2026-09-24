@@ -396,13 +396,13 @@ const CorsPreflightContext = struct {
 
         var iter = transfer.responseHeaderIterator();
         while (iter.next()) |hdr| {
-            if (std.ascii.eqlIgnoreCase(ACCESS_CONTROL_ALLOW_ORIGIN, hdr.name)) {
+            if (std.mem.eql(u8, hdr.name, ACCESS_CONTROL_ALLOW_ORIGIN)) {
                 acao = hdr.value;
-            } else if (std.ascii.eqlIgnoreCase(ACCESS_CONTROL_ALLOW_METHODS, hdr.name)) {
+            } else if (std.mem.eql(u8, hdr.name, ACCESS_CONTROL_ALLOW_METHODS)) {
                 acam = hdr.value;
-            } else if (std.ascii.eqlIgnoreCase(ACCESS_CONTROL_ALLOW_HEADERS, hdr.name)) {
+            } else if (std.mem.eql(u8, hdr.name, ACCESS_CONTROL_ALLOW_HEADERS)) {
                 acah = hdr.value;
-            } else if (std.ascii.eqlIgnoreCase(ACCESS_CONTROL_ALLOW_CREDENTIALS, hdr.name)) {
+            } else if (std.mem.eql(u8, hdr.name, ACCESS_CONTROL_ALLOW_CREDENTIALS)) {
                 acac = hdr.value;
             }
         }

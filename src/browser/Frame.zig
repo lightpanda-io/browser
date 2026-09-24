@@ -1513,7 +1513,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
             .name = try self.arena.dupe(u8, hdr.name),
             .value = try self.arena.dupe(u8, hdr.value),
         });
-        if (std.ascii.eqlIgnoreCase(hdr.name, "referrer-policy")) {
+        if (std.mem.eql(u8, hdr.name, "referrer-policy")) {
             if (referrer.parseHeader(hdr.value)) |rp| {
                 self.referrer_policy = rp;
             }
@@ -1559,7 +1559,7 @@ fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
     const disposition: HttpClient.Header = blk: {
         var it = transfer.responseHeaderIterator();
         while (it.next()) |hdr| {
-            if (std.ascii.eqlIgnoreCase(hdr.name, "content-disposition")) {
+            if (std.mem.eql(u8, hdr.name, "content-disposition")) {
                 break :blk hdr;
             }
         }
