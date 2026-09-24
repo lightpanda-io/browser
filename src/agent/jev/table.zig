@@ -54,10 +54,7 @@ pub const Operation = enum {
     BLOCKED,
 
     pub fn needsTarget(self: Operation) bool {
-        return switch (self) {
-            .CLICK, .TYPE_TEXT, .SELECT => true,
-            else => false,
-        };
+        return self.targetQuestion() != null;
     }
 
     /// The question id carrying this operation's candidates.
@@ -125,13 +122,7 @@ pub const Scroll = struct {
     y: u32,
     viewport: u32,
 
-    /// How far down the document the observation window sits, counted in
-    /// screens. `window.scrollTo` is the only thing that moves `y` and it
-    /// always moves it by `step`, so this is simply the number of scrolls.
-    pub fn view(self: Scroll) u32 {
-        return self.y / self.step();
-    }
-
+    /// How far one scroll operation travels.
     pub fn step(self: Scroll) u32 {
         return @max(1, self.viewport * scroll_step_num / scroll_step_den);
     }
@@ -139,11 +130,6 @@ pub const Scroll = struct {
 
 /// What the decider picked.
 pub const Target = Element.Choice;
-
-/// A System One `choice` question takes at most 255 options, so no target head
-/// may offer more than that — the API rejects the whole request otherwise.
-/// jev-ultrafast's 250 is the same ceiling, not a token budget.
-pub const max_targets = 250;
 
 /// Upstream's page-text budget.
 pub const default_text_bytes = 6000;
@@ -191,9 +177,8 @@ pub const Table = struct {
     /// one probe answers for the batch: a registry reset evicts every id at
     /// once, and ids are never reused.
     pub fn live(self: Table, registry: *NodeRegistry) bool {
-        const first = self.elements[0..@min(1, self.elements.len)];
-        for (first) |el| return registry.lookup_by_id.contains(el.node_id);
-        return true;
+        if (self.elements.len == 0) return true;
+        return registry.lookup_by_id.contains(self.elements[0].node_id);
     }
 
     pub fn byIndex(self: Table, index: Index) ?*const Element {
@@ -205,7 +190,7 @@ pub const Table = struct {
     /// Absolute scroll destination for a scroll operation, since
     /// `lp.actions.scroll` takes a position rather than a delta.
     pub fn scrollTarget(self: Table, op: Operation) u32 {
-        const step = @max(1, self.scroll.viewport * scroll_step_num / scroll_step_den);
+        const step = self.scroll.step();
         return switch (op) {
             .SCROLL_DOWN => self.scroll.y +| step,
             .SCROLL_UP => self.scroll.y -| step,
@@ -241,11 +226,8 @@ pub const Table = struct {
         const index_text = if (sep) |i| raw[0..i] else raw;
         const option = if (sep) |i| raw[i + 1 ..] else null;
 
-        if (op == .SELECT) {
-            if (option == null) return error.InvalidTarget;
-        } else if (option != null) {
-            return error.InvalidTarget;
-        }
+        // An option belongs to SELECT and to nothing else.
+        if ((op == .SELECT) != (option != null)) return error.InvalidTarget;
 
         const number = std.fmt.parseInt(u16, index_text, 10) catch return error.InvalidTarget;
         if (number == 0) return error.InvalidTarget;
@@ -271,7 +253,7 @@ pub const ObserveOpts = struct {
     text_bytes: u32 = default_text_bytes,
 };
 
-pub const ObserveError = error{ FrameNotLoaded, ObserveFailed, OutOfMemory };
+pub const ObserveError = error{ ObserveFailed, OutOfMemory };
 
 /// Snapshot the current page into an action space. Everything is allocated
 /// from `arena`, which the caller resets each turn.
@@ -281,9 +263,8 @@ pub fn observe(
     registry: *NodeRegistry,
     opts: ObserveOpts,
 ) ObserveError!Table {
-    // No page yet — a run that starts from a goal rather than a URL. That is
-    // an observation, not a failure: the action space then offers nothing but
-    // WAIT and BLOCKED, and says exactly that.
+    // A frame can go missing mid-run. That is an observation, not a failure:
+    // the action space then offers nothing but WAIT and BLOCKED.
     const frame = session.currentFrame() orelse return .{
         .url = "",
         .title = "",
@@ -342,13 +323,17 @@ pub fn observe(
 /// page carries fifty-eight nameless upvote arrows and the row is the point of
 /// them -- so those are kept and the cap is what bounds them.
 fn bound(arena: std.mem.Allocator, all: []Element) ![]Element {
-    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    // Hashed rather than printed: a duplicate would otherwise allocate its key
+    // only to discard it, once per repeated control on the page.
+    var seen: std.AutoHashMapUnmanaged(u64, void) = .empty;
     var kept: usize = 0;
     for (all) |el| {
         if (kept >= max_offered) break;
         if (el.label.len > 0) {
-            const key = try std.fmt.allocPrint(arena, "{s}\x00{s}", .{ el.role, el.label });
-            if ((try seen.getOrPut(arena, key)).found_existing) continue;
+            var hasher: std.hash.Wyhash = .init(0);
+            hasher.update(el.role);
+            hasher.update(el.label);
+            if ((try seen.getOrPut(arena, hasher.final())).found_existing) continue;
         }
         all[kept] = el;
         kept += 1;
@@ -486,7 +471,7 @@ fn ariaDisabled(node: *Node) bool {
     var current: ?*Node = node;
     while (current) |n| : (current = n._parent) {
         const el = n.is(DomElement) orelse continue;
-        if (el.getAttributeSafe(.wrap("aria-disabled"))) |value| {
+        if (el.getAttributeInterned("aria-disabled")) |value| {
             if (std.ascii.eqlIgnoreCase(value, "true")) return true;
         }
     }
@@ -513,10 +498,7 @@ pub const Step = struct {
 /// How many executed steps the decider sees.
 pub const recent_actions = 10;
 
-/// Whether anything the decider can see moved. A scroll counts now that it
-/// changes the screen: the fingerprint covers the windowed elements, and a
-/// scroll with nothing left below is not offered in the first place, so a run
-/// can no longer scroll forever without looking stuck.
+/// Whether anything the decider can see moved.
 pub fn changed(before: Table, after: Table) bool {
     return before.fingerprint != after.fingerprint or
         !std.mem.eql(u8, before.url, after.url);

@@ -16,9 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  See <https://www.gnu.org/licenses/>.
 
-//! Instructions for the decision heads and the text helper. Adapted from
-//! browser-use/jev-ultrafast's `questions.py` (MIT), with the operation names
-//! and the datalist/scroll wording changed to match this action space.
+//! Instructions for the decision heads and the text helper, from
+//! browser-use/jev-ultrafast's `questions.py` (MIT). `next_action` and
+//! `target` are upstream's verbatim; only `text_value` differs, by the `$LP_*`
+//! secret-placeholder clause this browser needs.
 
 /// Attached to the operation head and, as context, to every target head.
 pub const next_action =
@@ -29,18 +30,11 @@ pub const next_action =
     \\Set every requested filter/control; a matching result alone does not prove a requested filter was set.
     \\Do not toggle a checkbox, switch, or radio already in the requested state.
     \\Submit populated search fields before opening a result; a populated field alone is not an applied search.
-    \\WAIT only when the needed control is absent or disabled, or submitted results are still loading.
+    \\WAIT only when the needed control is absent/disabled, or submitted results are still loading.
+    \\If Search/Submit is visible and the required fields are ready, CLICK it immediately.
     \\Recent WAIT actions are not evidence of loading. Prefer a useful visible control over WAIT.
-    \\SEARCH when the goal needs a site this page does not reach; then OPEN the result that fits.
-    \\Prefer a result whose title and snippet answer the goal over one that merely mentions it.
-    \\A page that came back empty or refused you answers nothing: OPEN another result, or SEARCH
-    \\again with different words. Neither DONE nor BLOCKED while an unopened result is offered.
-    \\Never scroll in order to read: `page.text` already holds the page, and the whole page is
-    \\read again when you finish. SCROLL only to reach a control the element list does not show —
-    \\that list is one screen, and `elements_above`/`elements_below` count what it leaves out.
-    \\DONE requires the answer to be visible in the page text you were given, not merely likely to
-    \\exist somewhere. If asked to open a result, a matching link is not enough. BLOCKED means no
-    \\supported operation can make progress.
+    \\DONE requires visible evidence that ALL requirements are satisfied. If asked to open a result,
+    \\a matching link is not enough. BLOCKED means no supported operation can make progress.
 ;
 
 /// Attached to each target head, alongside `next_action`.

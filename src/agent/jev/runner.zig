@@ -78,7 +78,6 @@ pub const Runner = struct {
     generator: ?text.Generator = null,
     goal: []const u8,
     max_actions: u32 = 60,
-    text_bytes: u32 = table.default_text_bytes,
     hooks: ?Hooks = null,
 
     /// Decider tokens across the whole run, for the `$usage` line.
@@ -127,7 +126,7 @@ pub const Runner = struct {
             const arena = arenas[scratch].allocator();
 
             const before = carried orelse
-                try table.observe(arena, self.session, self.registry, .{ .text_bytes = self.text_bytes });
+                try table.observe(arena, self.session, self.registry, .{ .text_bytes = table.default_text_bytes });
             const ask = try table.ask(arena, before, .{ .can_type = self.generator != null });
             const state = try table.stateJson(arena, before, self.goal, @intCast(self.history.items.len + 1), self.history.items);
 
@@ -205,7 +204,7 @@ pub const Runner = struct {
             // model round to discover the page was mid-update.
             self.settle();
 
-            const after = try table.observe(arena, self.session, self.registry, .{ .text_bytes = self.text_bytes });
+            const after = try table.observe(arena, self.session, self.registry, .{ .text_bytes = table.default_text_bytes });
             const made_progress = table.changed(before, after);
             const kept = self.history_arena.allocator();
             try self.record(.{
@@ -253,15 +252,15 @@ pub const Runner = struct {
         return hook(hooks.context);
     }
 
-    /// Give the page a brief turn to answer the action before observing it.
-    /// Upstream waits two animation frames; the equivalent here is one bounded
-    /// tick of the io loop.
+    /// Drain whatever the action set in motion before observing the result.
+    /// With no conditions the tick waits on nothing: it runs pending tasks,
+    /// waits out v8's background work, and returns. The timeout is a ceiling
+    /// that is never reached, not a sleep.
     ///
     /// Deliberately not `waitForState`: that waits on a frame reaching a
     /// navigation state, which a click that only mutates the DOM never
     /// reaches, so it blocks until its own timeout — or, where no frame event
-    /// is coming at all, indefinitely. An unconditioned tick just lets pending
-    /// work run and returns.
+    /// is coming at all, indefinitely.
     fn settle(self: *Runner) void {
         var pump = self.session.runner(.{});
         _ = pump.tick(settle_timeout_ms, &.{}) catch {};
@@ -345,9 +344,7 @@ pub fn toolCall(
 /// cycle, so it should return to the decider quickly.
 const wait_timeout_ms = 3000;
 
-/// The post-action settle, upstream's non-autocomplete bound. A whole model
-/// round costs several hundred milliseconds, so this buys back far more than
-/// it spends when an update is in flight, and costs little when none is.
+/// Ceiling on the post-action drain, upstream's non-autocomplete bound.
 const settle_timeout_ms = 50;
 
 const testing = @import("../../testing.zig");
@@ -621,33 +618,3 @@ test "run: the action budget stops a decider that never finishes" {
     try std.testing.expectEqual(Outcome.budget, result.outcome);
     try std.testing.expectEqual(@as(u32, 3), result.steps);
 }
-
-const Recorded = struct {
-    tool: []const u8,
-    selector: ?[]const u8,
-    value: ?[]const u8,
-};
-
-const ScriptedRecorder = struct {
-    allocator: std.mem.Allocator,
-    entries: std.ArrayList(Recorded) = .empty,
-
-    fn deinit(self: *ScriptedRecorder) void {
-        for (self.entries.items) |e| {
-            self.allocator.free(e.tool);
-            if (e.selector) |s| self.allocator.free(s);
-            if (e.value) |v| self.allocator.free(v);
-        }
-        self.entries.deinit(self.allocator);
-    }
-
-    fn record(context: *anyopaque, invocation: Invocation, selector: ?[]const u8) void {
-        const self: *ScriptedRecorder = @ptrCast(@alignCast(context));
-        const value = invocation.arguments.object.get("value");
-        self.entries.append(self.allocator, .{
-            .tool = self.allocator.dupe(u8, invocation.tool) catch return,
-            .selector = if (selector) |s| self.allocator.dupe(u8, s) catch null else null,
-            .value = if (value) |v| self.allocator.dupe(u8, v.string) catch null else null,
-        }) catch {};
-    }
-};
