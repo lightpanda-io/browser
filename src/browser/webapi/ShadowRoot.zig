@@ -24,6 +24,7 @@ const Frame = @import("../Frame.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
+const Sanitizer = @import("Sanitizer.zig");
 const DocumentFragment = @import("DocumentFragment.zig");
 
 const ShadowRoot = @This();
@@ -110,8 +111,12 @@ fn getSerializable(self: *const ShadowRoot) bool {
     return self._serializable;
 }
 
-pub fn setHTMLUnsafe(self: *ShadowRoot, html: []const u8, frame: *Frame) !void {
-    return self.asDocumentFragment().setHTMLUnsafe(html, frame);
+pub fn setHTML(self: *ShadowRoot, html: []const u8, options: ?Sanitizer.Options, frame: *Frame) !void {
+    return Sanitizer.setAndFilterHTML(self.asNode(), self._host, html, options, true, frame);
+}
+
+pub fn setHTMLUnsafe(self: *ShadowRoot, html: []const u8, options: ?Sanitizer.Options, frame: *Frame) !void {
+    return Sanitizer.setAndFilterHTML(self.asNode(), self._host, html, options, false, frame);
 }
 
 pub fn getHTML(self: *ShadowRoot, opts: dump.Opts.Shadow.Declarative, writer: *std.Io.Writer, frame: *Frame) !void {
@@ -219,6 +224,7 @@ pub const JsApi = struct {
         return self.getElementById(try value.toZig([]const u8), frame);
     }
     pub const adoptedStyleSheets = bridge.accessor(ShadowRoot.getAdoptedStyleSheets, ShadowRoot.setAdoptedStyleSheets, .{});
+    pub const setHTML = bridge.function(ShadowRoot.setHTML, .{ .ce_reactions = true });
     pub const setHTMLUnsafe = bridge.function(ShadowRoot.setHTMLUnsafe, .{ .ce_reactions = true });
     pub const getHTML = bridge.function(_getHTML, .{});
     const GetHTMLOpts = struct {

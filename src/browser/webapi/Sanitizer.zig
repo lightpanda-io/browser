@@ -30,7 +30,11 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 
+const Node = @import("Node.zig");
+const Element = @import("Element.zig");
+const TreeWalker = @import("TreeWalker.zig");
 const defaults = @import("sanitizer_defaults.zig");
 
 const String = lp.String;
@@ -221,6 +225,10 @@ const Config = struct {
 
 // ?js.Value because not provided, undefined and null are all handled differently
 pub fn init(configuration_: ?js.Value, exec: *const Execution) !*Sanitizer {
+    return create(configuration_, true, exec);
+}
+
+fn create(configuration_: ?js.Value, permissive_defaults: bool, exec: *const Execution) !*Sanitizer {
     const arena = try exec.getPinnedArena(.small, "Sanitizer");
     errdefer arena.release();
 
@@ -247,7 +255,7 @@ pub fn init(configuration_: ?js.Value, exec: *const Execution) !*Sanitizer {
         }
 
         const config: Config = if (configuration.isNull()) .{} else try configuration.toZig(Config);
-        if (try self.setFromConfig(config) == false) {
+        if (try self.setFromConfig(config, permissive_defaults) == false) {
             return exec.js.typeError("invalid Sanitizer configuration");
         }
     }
@@ -301,7 +309,7 @@ fn setFromDefault(self: *Sanitizer) !void {
     self._javascript_urls = false;
 }
 
-fn setFromConfig(self: *Sanitizer, config: Config) !bool {
+fn setFromConfig(self: *Sanitizer, config: Config, permissive_defaults: bool) !bool {
     var all_new = true;
 
     const arena = self._arena;
@@ -348,11 +356,11 @@ fn setFromConfig(self: *Sanitizer, config: Config) !bool {
         self._remove_processing_instructions = try self.targetSet(pis, &all_new);
     }
 
-    self._comments = Config.boolean(config.comments, true);
+    self._comments = Config.boolean(config.comments, permissive_defaults);
     if (self._allow_attributes != null or config.dataAttributes != null) {
-        self._data_attributes = Config.boolean(config.dataAttributes, true);
+        self._data_attributes = Config.boolean(config.dataAttributes, permissive_defaults);
     }
-    self._javascript_urls = Config.boolean(config.javascriptURLs, true);
+    self._javascript_urls = Config.boolean(config.javascriptURLs, permissive_defaults);
 
     if (config.elements == null and config.removeElements == null) {
         self._remove_elements = .empty;
@@ -361,7 +369,11 @@ fn setFromConfig(self: *Sanitizer, config: Config) !bool {
         self._remove_attributes = .empty;
     }
     if (self._allow_processing_instructions == null and self._remove_processing_instructions == null) {
-        self._remove_processing_instructions = .empty;
+        if (permissive_defaults) {
+            self._remove_processing_instructions = .empty;
+        } else {
+            self._allow_processing_instructions = .empty;
+        }
     }
 
     return all_new and self.isValid();
@@ -986,6 +998,379 @@ fn isSubset(subset: NameSet, superset: NameSet) bool {
 fn hasDataAttribute(set: NameSet) bool {
     for (set.keys()) |key| {
         if (key.isDataAttribute()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Like init: we need to tell the difference between not-set, null and  undefined
+// AND, this can actually be a Sanitizer config already.
+pub const Options = struct {
+    sanitizer: ?js.Value = null,
+};
+
+const FromOptions = struct {
+    owned: bool,
+    sanitizer: *Sanitizer,
+
+    fn release(self: FromOptions, page: *Page) void {
+        if (self.owned) {
+            // We have to free a Sanitizer we created, versus a Sanitizer that
+            // was passed to use from JS.
+            self.sanitizer.deinit(page);
+        }
+    }
+};
+
+fn fromOptions(options: ?Options, safe: bool, exec: *const Execution) !?FromOptions {
+    const spec = blk: {
+        const o = options orelse break :blk null;
+        const spec = o.sanitizer orelse break :blk null;
+        if (spec.isUndefined()) {
+            break :blk null;
+        }
+        if (spec.toZig(*Sanitizer)) |sanitizer| {
+            return .{ .sanitizer = sanitizer, .owned = false };
+        } else |_| {}
+        break :blk spec;
+    };
+
+    if (spec == null and safe == false) {
+        return null;
+    }
+    // A missing spec takes the "default" preset
+    return .{ .sanitizer = try create(spec, safe == false, exec), .owned = true };
+}
+
+pub fn setAndFilterHTML(target: *Node, context: *Element, html: []const u8, options: ?Options, safe: bool, frame: *Frame) !void {
+    if (safe and std.mem.eql(u8, context.getLocalName(), "script")) {
+        if (context._namespace == .html or context._namespace == .svg) {
+            // hahaha, nice try!
+            return;
+        }
+    }
+
+    const resolved = try fromOptions(options, safe, &frame.js.execution);
+    defer if (resolved) |r| r.release(frame.page);
+
+    // Parsed into a detached fragment, so that nothing is connected (no fetch,
+    // no custom element reaction) until it's been sanitized.
+    const fragment = (try Node.DocumentFragment.init(target.getDocument(frame), frame)).asNode();
+    if (html.len > 0) {
+        try Frame.parse.fragment(frame, fragment, html, .{ .context = context, .allow_declarative_shadow = true });
+    }
+    if (resolved) |r| {
+        try r.sanitizer.sanitize(fragment, safe, frame);
+    }
+    try target.replaceAllWithFragment(fragment, frame);
+}
+
+pub fn parseHTML(html: []const u8, options: ?Options, safe: bool, frame: *Frame) !*Node.Document {
+    const resolved = try fromOptions(options, safe, &frame.js.execution);
+    defer if (resolved) |r| r.release(frame.page);
+
+    const document = (try Frame.parse.htmlDocument(frame, html, .{ .allow_declarative_shadow = true })).asDocument();
+    document._url = "about:blank";
+    if (resolved) |r| {
+        try r.sanitizer.sanitize(document.asNode(), safe, frame);
+    }
+    return document;
+}
+
+fn sanitize(self: *const Sanitizer, root: *Node, safe: bool, frame: *Frame) !void {
+    const arena = frame.call_arena;
+
+    // A template's contents and a shadow root are trees of their own
+    var trees: std.ArrayList(*Node) = .empty;
+    try trees.append(arena, root);
+
+    var remove_attributes: std.ArrayList([]const u8) = .empty;
+
+    // Parents that lost a child, whose text nodes might now be adjacent.
+    var touched: std.ArrayList(*Node) = .empty;
+
+    while (trees.pop()) |tree| {
+        var tw = TreeWalker.FullExcludeSelf.init(tree, .{});
+        while (tw.next()) |node| {
+            const parent = node._parent.?;
+            const element = node.is(Element) orelse {
+                if (self.keepNonElement(node) == false) {
+                    tw.skipChildren();
+                    frame.removeNode(parent, node, .{ .reconnect_to = null });
+                    try touch(&touched, parent, arena);
+                }
+                continue;
+            };
+
+            const element_name: Name = .{ .name = .wrap(element.getLocalName()), .namespace = elementNamespace(element, frame) };
+            switch (self.elementAction(element_name, safe)) {
+                .keep => {},
+                .remove => {
+                    tw.skipChildren();
+                    frame.removeNode(parent, node, .{ .reconnect_to = null });
+                    try touch(&touched, parent, arena);
+                    continue;
+                },
+                .replace => {
+                    // Move the children up; the walker's next node is the
+                    // first of them (or, if there are none, what follows).
+                    // run_ready = false: nothing gets to act on them until
+                    // they've been sanitized.
+                    if (node.firstChild() != null) {
+                        const previous_root = node.getRootNode(.{});
+                        while (node.firstChild()) |child| {
+                            frame.removeNode(node, child, .{ .reconnect_to = parent });
+                            try frame.insertNodeRelative(parent, child, .{ .before = node }, .{ .previous_root = previous_root, .run_ready = false });
+                        }
+                    }
+                    frame.removeNode(parent, node, .{ .reconnect_to = null });
+                    try touch(&touched, parent, arena);
+                    continue;
+                },
+            }
+
+            if (element.is(Element.Html.Template)) |template| {
+                try trees.append(arena, template.getContent().asNode());
+            }
+            if (element.hostedShadowRoot(frame)) |shadow_root| {
+                try trees.append(arena, shadow_root.asNode());
+            }
+
+            // Collected first: removing one can run script (attributeChangedCallback)
+            remove_attributes.clearRetainingCapacity();
+            for (element.attributeEntries()) |*entry| {
+                if (self.keepAttribute(element_name, entry.name(), entry.value(), safe) == false) {
+                    try remove_attributes.append(arena, entry.name());
+                }
+            }
+            for (remove_attributes.items) |name| {
+                element.removeAttributeSafe(.wrap(name), frame);
+            }
+        }
+    }
+
+    var buffer: std.ArrayList(u8) = .empty;
+    for (touched.items) |parent| {
+        try mergeAdjacentText(parent, &buffer, frame);
+    }
+}
+
+fn touch(touched: *std.ArrayList(*Node), parent: *Node, arena: Allocator) !void {
+    // Siblings are removed one after another, so this catches most repeats.
+    // Those it misses just get a second, no-op, merge.
+    if (touched.getLastOrNull() != parent) {
+        try touched.append(arena, parent);
+    }
+}
+
+// if we removed a node between two text nodes, we need to merge the text ndoes
+
+fn mergeAdjacentText(parent: *Node, buffer: *std.ArrayList(u8), frame: *Frame) !void {
+    var child = parent.firstChild();
+    while (child) |node| {
+        var next = node.nextSibling();
+        const text = node.is(Node.CData.Text) orelse {
+            child = next;
+            continue;
+        };
+        if (next == null or next.?.is(Node.CData.Text) == null) {
+            child = next;
+            continue;
+        }
+
+        buffer.clearRetainingCapacity();
+        try buffer.appendSlice(frame.call_arena, text.ownData());
+        while (next) |sibling| {
+            const sibling_text = sibling.is(Node.CData.Text) orelse break;
+            try buffer.appendSlice(frame.call_arena, sibling_text.ownData());
+            next = sibling.nextSibling();
+            frame.removeNode(parent, sibling, .{ .reconnect_to = null });
+        }
+        text.asCData()._data = try frame.dupeSSO(buffer.items);
+        child = next;
+    }
+}
+
+fn keepNonElement(self: *const Sanitizer, node: *Node) bool {
+    const cdata = node.is(Node.CData) orelse return true; // doctype
+    return switch (cdata._type) {
+        .text, .cdata_section => true,
+        .comment => self._comments == true,
+        .processing_instruction => {
+            const target = cdata.subtype(Node.CData.ProcessingInstruction)._target;
+            if (self._allow_processing_instructions) |allowed| {
+                return allowed.contains(target);
+            }
+            return self._remove_processing_instructions.?.contains(target) == false;
+        },
+    };
+}
+
+fn elementAction(self: *const Sanitizer, name: Name, safe: bool) enum { keep, remove, replace } {
+    if (safe) {
+        for (defaults.baseline_remove_elements) |unsafe| {
+            if (staticName(unsafe).eql(name)) {
+                return .remove;
+            }
+        }
+    }
+    if (self._replace_elements) |replace| {
+        if (replace.contains(name)) {
+            return .replace;
+        }
+    }
+    if (self._allow_elements) |allowed| {
+        return if (allowed.contains(name)) .keep else .remove;
+    }
+    return if (self._remove_elements.?.contains(name)) .remove else .keep;
+}
+
+fn keepAttribute(self: *const Sanitizer, element: Name, qualified_name: []const u8, value: []const u8, safe: bool) bool {
+    const name = attributeName(element.namespace, qualified_name);
+
+    const element_allowed = self._element_allow_attributes.getPtr(element);
+    if (self._element_remove_attributes.getPtr(element)) |removed| {
+        if (removed.contains(name)) {
+            return false;
+        }
+    }
+
+    if (self._allow_attributes) |allowed| {
+        if (allowed.contains(name) == false and
+            (element_allowed == null or element_allowed.?.contains(name) == false) and
+            (self._data_attributes != true or name.isDataAttribute() == false))
+        {
+            return false;
+        }
+    } else {
+        if (element_allowed) |set| {
+            if (set.contains(name) == false) {
+                return false;
+            }
+        } else if (self._remove_attributes.?.contains(name)) {
+            return false;
+        }
+    }
+
+    if (safe and name.namespace == .none and isEventHandler(qualified_name)) {
+        return false;
+    }
+
+    if (safe or self._javascript_urls != true) {
+        if (isNavigatingURLAttribute(element, name) and isJavascriptURL(value)) {
+            return false;
+        }
+        if (isAnimatingURLAttribute(element, name) and (std.mem.eql(u8, value, "href") or std.mem.eql(u8, value, "xlink:href"))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn elementNamespace(element: *Element, frame: *Frame) Namespace {
+    return switch (element._namespace) {
+        .html => .xhtml,
+        .svg => .svg,
+        .mathml => .mathml,
+        .xml => .xml,
+        .null => .none,
+        .unknown => .intern(element.getNamespaceUri(frame)),
+    };
+}
+
+// Attributes' namespaces aren't tracked, but the HTML parser only ever gives a
+// namespace to these attributes of foreign (SVG/MathML) elements.
+// https://html.spec.whatwg.org/#adjust-foreign-attributes
+const foreign_attributes = std.StaticStringMap(defaults.Name).initComptime(.{
+    .{ "xlink:actuate", defaults.Name{ .name = "actuate", .namespace = .xlink } },
+    .{ "xlink:arcrole", defaults.Name{ .name = "arcrole", .namespace = .xlink } },
+    .{ "xlink:href", defaults.Name{ .name = "href", .namespace = .xlink } },
+    .{ "xlink:role", defaults.Name{ .name = "role", .namespace = .xlink } },
+    .{ "xlink:show", defaults.Name{ .name = "show", .namespace = .xlink } },
+    .{ "xlink:title", defaults.Name{ .name = "title", .namespace = .xlink } },
+    .{ "xlink:type", defaults.Name{ .name = "type", .namespace = .xlink } },
+    .{ "xml:lang", defaults.Name{ .name = "lang", .namespace = .xml } },
+    .{ "xml:space", defaults.Name{ .name = "space", .namespace = .xml } },
+    .{ "xmlns", defaults.Name{ .name = "xmlns", .namespace = .xmlns } },
+    .{ "xmlns:xlink", defaults.Name{ .name = "xlink", .namespace = .xmlns } },
+});
+
+fn attributeName(element_namespace: Namespace, qualified_name: []const u8) Name {
+    if (element_namespace == .svg or element_namespace == .mathml) {
+        if (foreign_attributes.get(qualified_name)) |name| {
+            return staticName(name);
+        }
+    }
+    return .{ .name = .wrap(qualified_name), .namespace = .none };
+}
+
+fn isEventHandler(name: []const u8) bool {
+    if (std.mem.startsWith(u8, name, "on") == false) {
+        return false;
+    }
+    return std.sort.binarySearch([]const u8, defaults.event_handler_attributes, name, struct {
+        fn order(key: []const u8, item: []const u8) std.math.Order {
+            return std.mem.order(u8, key, item);
+        }
+    }.order) != null;
+}
+
+// https://html.spec.whatwg.org/#built-in-navigating-url-attributes-list
+fn isNavigatingURLAttribute(element: Name, attribute: Name) bool {
+    const local = attribute.name.str();
+    switch (element.namespace) {
+        .xhtml => {
+            if (attribute.namespace != .none) {
+                return false;
+            }
+            const tag = element.name.str();
+            if (std.mem.eql(u8, tag, "a") or std.mem.eql(u8, tag, "area")) {
+                return std.mem.eql(u8, local, "href");
+            }
+            if (std.mem.eql(u8, tag, "form")) {
+                return std.mem.eql(u8, local, "action");
+            }
+            if (std.mem.eql(u8, tag, "button") or std.mem.eql(u8, tag, "input")) {
+                return std.mem.eql(u8, local, "formaction");
+            }
+            return false;
+        },
+        // any MathML element, not just <a>
+        .svg, .mathml => {
+            if (element.namespace == .svg and std.mem.eql(u8, element.name.str(), "a") == false) {
+                return false;
+            }
+            return (attribute.namespace == .none or attribute.namespace == .xlink) and std.mem.eql(u8, local, "href");
+        },
+        else => return false,
+    }
+}
+
+fn isAnimatingURLAttribute(element: Name, attribute: Name) bool {
+    if (element.namespace != .svg or attribute.namespace != .none) {
+        return false;
+    }
+    if (std.mem.eql(u8, attribute.name.str(), "attributeName") == false) {
+        return false;
+    }
+    const tag = element.name.str();
+    return std.mem.eql(u8, tag, "animate") or std.mem.eql(u8, tag, "animateTransform") or std.mem.eql(u8, tag, "set");
+}
+
+fn isJavascriptURL(value: []const u8) bool {
+    const trimmed = std.mem.trimStart(u8, value, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f ");
+    const scheme = "javascript:";
+    var i: usize = 0;
+    for (trimmed) |c| {
+        if (c == '\t' or c == '\n' or c == '\r') {
+            continue;
+        }
+        if (std.ascii.toLower(c) != scheme[i]) {
+            return false;
+        }
+        i += 1;
+        if (i == scheme.len) {
             return true;
         }
     }

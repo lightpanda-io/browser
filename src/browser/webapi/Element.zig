@@ -29,6 +29,7 @@ const Node = @import("Node.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
 const EventTarget = @import("EventTarget.zig");
 const collections = @import("collections.zig");
+const Sanitizer = @import("Sanitizer.zig");
 
 const Selector = @import("selector/Selector.zig");
 const Animation = @import("animation/Animation.zig");
@@ -627,10 +628,20 @@ pub fn setInnerHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     return parent.setHTML(html, .{}, frame);
 }
 
+pub fn setHTML(self: *Element, html: []const u8, options: ?Sanitizer.Options, frame: *Frame) !void {
+    return Sanitizer.setAndFilterHTML(self.htmlTarget(), self, html, options, true, frame);
+}
+
 /// allows declarative shadow dom
-pub fn setHTMLUnsafe(self: *Element, html: []const u8, frame: *Frame) !void {
-    const parent = self.asNode();
-    return parent.setHTML(html, .{ .allow_declarative_shadow = true }, frame);
+pub fn setHTMLUnsafe(self: *Element, html: []const u8, options: ?Sanitizer.Options, frame: *Frame) !void {
+    return Sanitizer.setAndFilterHTML(self.htmlTarget(), self, html, options, false, frame);
+}
+
+fn htmlTarget(self: *Element) *Node {
+    if (self.is(Html.Template)) |template| {
+        return template.getContent().asNode();
+    }
+    return self.asNode();
 }
 
 pub fn getId(self: *const Element) ?[]const u8 {
@@ -2662,6 +2673,7 @@ pub const JsApi = struct {
     pub const assignedSlot = bridge.accessor(Element.getAssignedSlot, null, .{});
     pub const attachShadow = bridge.function(_attachShadow, .{});
     pub const insertAdjacentHTML = bridge.function(Element.insertAdjacentHTML, .{ .ce_reactions = true });
+    pub const setHTML = bridge.function(Element.setHTML, .{ .ce_reactions = true });
     pub const setHTMLUnsafe = bridge.function(Element.setHTMLUnsafe, .{ .ce_reactions = true });
     pub const insertAdjacentElement = bridge.function(Element.insertAdjacentElement, .{ .ce_reactions = true });
     pub const insertAdjacentText = bridge.function(Element.insertAdjacentText, .{ .ce_reactions = true });
