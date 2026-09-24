@@ -106,9 +106,7 @@ pub const driver_guidance =
     \\- Triage from `search` snippets before opening links; open only the few
     \\  most promising. Don't re-run a search you already ran, and skip
     \\  near-duplicate sources that repeat the same announcement verbatim.
-    \\- Stop once the gathered material answers the question. For opinion or
-    \\  discussion questions, a couple of high-signal threads (e.g. Hacker
-    \\  News, Reddit) usually beat scraping a dozen news sites.
+    \\- Stop once the gathered material answers the question.
     \\
     \\Selector rules:
     \\- NEVER pass backendNodeId to click/fill/hover/selectOption/setChecked.
@@ -179,9 +177,8 @@ pub const save_synthesis_prompt =
     \\list, fan out to detail pages, aggregate, return) stating what that block
     \\accomplishes toward the goal — NOT restating the API call. One comment per
     \\step, not per line; skip self-evident lines.
-    \\Output ONLY JavaScript source — no markdown fences and no prose outside the
-    \\code, but DO annotate the script with the `//` intent comments described
-    \\above.
+    \\Output the JavaScript source alone, with no markdown fences or prose
+    \\around it.
 ;
 
 /// Script-language rules for consumers that never see the full
@@ -345,7 +342,7 @@ pub const Tool = enum {
     pub fn definition(self: Tool) Definition {
         return switch (self) {
             .goto => .{
-                .description = "Navigate to a specified URL and load the page in memory so it can be reused later for info extraction.",
+                .description = "Navigate the current page to a URL. Returns a short status once `waitUntil` fires (default `load`), or a timeout notice; content rendered by post-load JavaScript may not be there yet (see `waitForState`). The page stays loaded for later reads and actions. To navigate and read in one call, pass `url` to `markdown`, `tree` or `html` instead; use `goto` when the next step is an action or `extract`.",
                 .summary = "Open a URL and keep the page in memory",
                 .input_schema = minify(
                     \\{
