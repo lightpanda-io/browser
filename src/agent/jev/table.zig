@@ -213,30 +213,21 @@ pub const Table = struct {
         };
     }
 
-    /// The `"<index>"` or `"<index>:<option>"` ids offered for `op`, one per
-    /// distinct label. Upstream never sees a page's repeated controls because
-    /// they are off its viewport; with no layout to ask, the label is the only
-    /// signal that two entries are the same control to a reader.
+    /// The `"<index>"` or `"<index>:<option>"` ids offered for `op`. The table
+    /// is already bounded, so this only filters and formats -- except for
+    /// `<select>`, where one element contributes a target per option and can
+    /// overflow a head on its own.
     pub fn targets(self: Table, arena: std.mem.Allocator, op: Operation) ![]const []const u8 {
         var out: std.ArrayList([]const u8) = .empty;
-        var seen: std.StringHashMapUnmanaged(void) = .empty;
         for (self.elements) |el| {
             if (!el.ops.has(op)) continue;
             if (out.items.len >= max_offered) break;
             if (op == .SELECT) {
-                // A `<select>` contributes one target per option, so this head
-                // overflows on an element count fine everywhere else.
                 for (el.options) |option| {
                     if (out.items.len >= max_offered) break;
-                    if ((try seen.getOrPut(arena, option)).found_existing) continue;
                     try out.append(arena, try std.fmt.allocPrint(arena, "{d}:{s}", .{ @intFromEnum(el.index), option }));
                 }
             } else {
-                // An unnamed control is not a duplicate of the next unnamed
-                // control -- a page of upvote arrows has 58 of them and one
-                // per row matters. They stay individually reachable, and the
-                // cap is what bounds them.
-                if (el.label.len > 0 and (try seen.getOrPut(arena, el.label)).found_existing) continue;
                 try out.append(arena, try std.fmt.allocPrint(arena, "{d}", .{@intFromEnum(el.index)}));
             }
         }
@@ -316,20 +307,53 @@ pub fn observe(
         .viewport = frame.window.getInnerHeight(frame),
     };
 
-    for (elements.items, 1..) |*el, i| el.index = @enumFromInt(@as(u16, @intCast(i)));
+    // Bound the table here, once, so the state and every target head agree on
+    // what exists. Doing it only in `targets` left the decider reading 521
+    // element records while it could choose among 128 of them.
+    const offered = try bound(arena, elements.items);
+
+    for (offered, 1..) |*el, i| el.index = @enumFromInt(@as(u16, @intCast(i)));
 
     var table: Table = .{
         .url = frame.url,
         .title = (frame.getTitle() catch null) orelse "",
         .text = if (opts.text_bytes > 0) try renderText(arena, frame, opts.text_bytes) else "",
-        .elements = elements.items,
-        .dropped = collector.dropped,
+        .elements = offered,
+        .dropped = collector.dropped + @as(u32, @intCast(elements.items.len - offered.len)),
         .scroll = scroll,
         .fingerprint = 0,
         .style_version = frame.page.style_version,
     };
     table.fingerprint = fingerprint(table);
     return table;
+}
+
+/// Upstream keeps its table small by capturing only elements whose centre is
+/// inside the viewport. With no layout to ask, role and label together are the
+/// signal that two entries are the same control to a reader: a comment
+/// thread's fifty identical `reply` links are one choice, not fifty.
+///
+/// Role matters as much as the label. A `<label for=q>Search</label>` names
+/// its input "Search" and the submit `<button>Search</button>` next to it
+/// carries the same name -- collapsing those two would delete the type-then-
+/// submit pattern that most forms are.
+///
+/// An unnamed control is not a duplicate of the next unnamed one -- an item
+/// page carries fifty-eight nameless upvote arrows and the row is the point of
+/// them -- so those are kept and the cap is what bounds them.
+fn bound(arena: std.mem.Allocator, all: []Element) ![]Element {
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    var kept: usize = 0;
+    for (all) |el| {
+        if (kept >= max_offered) break;
+        if (el.label.len > 0) {
+            const key = try std.fmt.allocPrint(arena, "{s}\x00{s}", .{ el.role, el.label });
+            if ((try seen.getOrPut(arena, key)).found_existing) continue;
+        }
+        all[kept] = el;
+        kept += 1;
+    }
+    return all[0..kept];
 }
 
 fn renderText(arena: std.mem.Allocator, frame: *lp.Frame, max_bytes: u32) ObserveError![]const u8 {
@@ -926,7 +950,7 @@ test "targets: no head can exceed what a choice question accepts" {
     try std.testing.expect(max_offered <= 255);
 }
 
-test "targets: one entry per distinct label, since we cannot ask what is on screen" {
+test "bound: one entry per distinct label, since we cannot ask what is on screen" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -943,26 +967,34 @@ test "targets: one entry per distinct label, since we cannot ask what is on scre
         .ops = .{ .click = true },
         .options = &.{},
     };
-    var t = fixtureTable();
-    t.elements = &rows;
 
     // Upstream never sees these: all but the first few are outside its
     // viewport. With no layout to ask, the label is what tells them apart.
-    const clicks = try t.targets(a, .CLICK);
-    try std.testing.expectEqual(@as(usize, 1), clicks.len);
-    try std.testing.expectEqualStrings("1", clicks[0]);
+    var once = rows;
+    try std.testing.expectEqual(@as(usize, 1), (try bound(a, &once)).len);
 
     // Distinct labels all survive.
-    rows[7].label = "permalink";
-    const two = try t.targets(a, .CLICK);
-    try std.testing.expectEqual(@as(usize, 2), two.len);
-    try std.testing.expectEqualStrings("8", two[1]);
+    var two = rows;
+    two[7].label = "permalink";
+    try std.testing.expectEqual(@as(usize, 2), (try bound(a, &two)).len);
+
+    // Same label, different control: a search field and the button that
+    // submits it are both named "Search", and losing either breaks the form.
+    var same_name = rows;
+    same_name[0].role = "searchbox";
+    same_name[0].label = "Search";
+    same_name[1].role = "button";
+    same_name[1].label = "Search";
+    const both = try bound(a, &same_name);
+    try std.testing.expectEqual(@as(usize, 3), both.len);
+    try std.testing.expectEqualStrings("searchbox", both[0].role);
+    try std.testing.expectEqualStrings("button", both[1].role);
 
     // Unnamed controls are not duplicates of each other: an upvote arrow per
     // row has no name, and the row is the whole point.
-    for (&rows) |*el| el.label = "";
-    const unnamed = try t.targets(a, .CLICK);
-    try std.testing.expectEqual(rows.len, unnamed.len);
+    var unnamed = rows;
+    for (&unnamed) |*el| el.label = "";
+    try std.testing.expectEqual(rows.len, (try bound(a, &unnamed)).len);
 }
 
 test "ask: TYPE_TEXT is not offered without a model to write the value" {
