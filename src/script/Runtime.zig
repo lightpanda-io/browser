@@ -975,7 +975,8 @@ fn stringToOwned(
         self.env.isolate.handle,
         buf.ptr,
         buf.len,
-        v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8,
+        v8.WRITE_REPLACE_INVALID_UTF8,
+        null,
     );
     return buf[0..written];
 }

@@ -668,7 +668,7 @@ fn illegalConstructorCallback(raw_info: ?*const v8.FunctionCallbackInfo) callcon
             if (v8.v8__Function__GetName(func)) |name_value| {
                 if (v8.v8__Value__IsString(name_value)) {
                     const str: *const v8.String = @ptrCast(name_value);
-                    const n = v8.v8__String__WriteUtf8(str, isolate, &name_buf, name_buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+                    const n = v8.v8__String__WriteUtf8(str, isolate, &name_buf, name_buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
                     name = name_buf[0..@intCast(n)];
                 }
             }

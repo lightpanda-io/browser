@@ -65,7 +65,7 @@ fn _toSlice(self: String, comptime null_terminate: bool, allocator: Allocator) !
 
     const l = v8.v8__String__Utf8Length(handle, isolate);
     const buf = try (if (comptime null_terminate) allocator.allocSentinel(u8, @intCast(l), 0) else allocator.alloc(u8, @intCast(l)));
-    const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+    const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
     if (comptime lp.IS_DEBUG) {
         std.debug.assert(n == l);
     }
@@ -87,7 +87,7 @@ pub fn toSSOWithAlloc(self: String, allocator: Allocator) !lp.String {
 
     if (l <= 12) {
         var content: [12]u8 = undefined;
-        const n = v8.v8__String__WriteUtf8(handle, isolate, &content[0], content.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+        const n = v8.v8__String__WriteUtf8(handle, isolate, &content[0], content.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
         if (comptime lp.IS_DEBUG) {
             std.debug.assert(n == l);
         }
@@ -103,7 +103,7 @@ pub fn toSSOWithAlloc(self: String, allocator: Allocator) !lp.String {
     }
 
     const buf = try allocator.alloc(u8, l);
-    const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+    const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
     if (comptime lp.IS_DEBUG) {
         std.debug.assert(n == l);
     }
@@ -124,7 +124,7 @@ pub fn format(self: String, writer: *std.Io.Writer) !void {
     const l = v8.v8__String__Utf8Length(handle, isolate);
     var buf = if (l < 1024) &small else local.call_arena.alloc(u8, @intCast(l)) catch return error.WriteFailed;
 
-    const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+    const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
     return writer.writeAll(buf[0..n]);
 }
 
