@@ -246,7 +246,7 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
     });
     lp.metrics.cors_check.incr(.preflight);
 
-    try self.fetchThenResume(transfer);
+    try self.fetchThenResume(transfer, authored.items);
     return .pending;
 }
 
@@ -538,31 +538,16 @@ const CorsPreflightContext = struct {
     }
 };
 
-fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
+fn fetchThenResume(self: *CorsGate, transfer: *Transfer, authored_headers: []const []const u8) !void {
     const url = transfer.req.url;
     const origin = transfer.effectiveOrigin();
-
-    var header_names: std.ArrayList([]const u8) = .empty;
-    for (transfer.req_headers.items) |hdr| {
-        if (hdr.source != .author) continue;
-        if (isSafelistedHeader(hdr.name, hdr.value)) continue;
-        try header_names.append(
-            transfer.arena.allocator(),
-            try std.ascii.allocLowerString(transfer.arena.allocator(), hdr.name),
-        );
-    }
-    std.mem.sort([]const u8, header_names.items, {}, struct {
-        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
-        }
-    }.lessThan);
 
     const cors_key = CorsKey{
         .url = url,
         .origin = origin,
         .method = transfer.req.method,
         .wants_credentials = transfer.req.credentials_mode == .include,
-        .authored_headers = header_names.items,
+        .authored_headers = authored_headers,
     };
     const key = try cors_key.build(transfer.arena.allocator());
 
@@ -585,8 +570,8 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
 
     const referer: ?[]const u8 = transfer.findRequestHeader("referer");
 
-    const owned_header_names = try arena.alloc([]const u8, header_names.items.len);
-    for (header_names.items, 0..) |name, i| {
+    const owned_header_names = try arena.alloc([]const u8, authored_headers.len);
+    for (authored_headers, 0..) |name, i| {
         owned_header_names[i] = try arena.dupe(u8, name);
     }
 
@@ -642,8 +627,8 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
     );
 
     // Access-Control-Allow-Headers
-    if (header_names.items.len > 0) {
-        const request_headers_value = try std.mem.join(arena.allocator(), ",", header_names.items);
+    if (authored_headers.len > 0) {
+        const request_headers_value = try std.mem.join(arena.allocator(), ",", authored_headers);
         try fetch_transfer.setHeader(
             ACCESS_CONTROL_REQUEST_HEADERS,
             request_headers_value,
