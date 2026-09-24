@@ -79,7 +79,7 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
         .listener_targets = listener_targets,
         .label_index = &label_index,
     };
-    self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
+    self.walk(&ctx, &visitor) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -98,7 +98,7 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
         .listener_targets = listener_targets,
         .label_index = &label_index,
     };
-    self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
+    self.walk(&ctx, &visitor) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -130,15 +130,60 @@ const WalkContext = struct {
     label_index: *Label.LabelByForIndex,
 };
 
-fn walk(
+// A node whose children are still being walked
+const Open = struct {
+    next_child: ?*Node,
+    // for the children's xpath index
+    tag_counts: std.StringArrayHashMapUnmanaged(usize) = .empty,
+    name: ?[]const u8, // The children's parent_name
+    xpath_len: usize,
+    visited: bool,
+};
+
+fn walk(self: @This(), ctx: *WalkContext, visitor: anytype) !void {
+    var stack: std.ArrayList(Open) = .empty;
+    defer stack.deinit(self.arena);
+
+    try self.visitNode(ctx, &stack, self.dom_node, null, visitor, 1);
+    while (stack.items.len > 0) {
+        // Everything read from `top` is read before visitNode, which can grow (move) the stack.
+        const top = &stack.items[stack.items.len - 1];
+        if (top.next_child) |child| {
+            top.next_child = child._next;
+
+            var tag: []const u8 = "text()";
+            if (child.is(Element)) |el| {
+                tag = el.getTagNameLower();
+            }
+            const gop = try top.tag_counts.getOrPut(self.arena, tag);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = 0;
+            }
+            gop.value_ptr.* += 1;
+
+            try self.visitNode(ctx, &stack, child, top.name, visitor, gop.value_ptr.*);
+            continue;
+        }
+
+        const done = stack.pop().?;
+        if (done.visited) {
+            try visitor.leave();
+        }
+        ctx.xpath_buffer.shrinkRetainingCapacity(done.xpath_len);
+    }
+}
+
+// Every ancestor of `node` below the root is open, so the stack's length is its depth.
+fn visitNode(
     self: @This(),
     ctx: *WalkContext,
+    stack: *std.ArrayList(Open),
     node: *Node,
     parent_name: ?[]const u8,
     visitor: anytype,
     index: usize,
-    current_depth: u32,
 ) !void {
+    const current_depth = stack.items.len;
     if (current_depth > self.max_depth) return;
 
     // 1. Skip non-content nodes
@@ -216,8 +261,6 @@ fn walk(
     try appendXPathSegment(node, ctx.xpath_buffer, self.arena, index);
     const xpath = ctx.xpath_buffer.items;
 
-    var name = try axn.getName(self.frame, self.arena, ctx.label_index);
-
     const has_explicit_label = if (node.is(Element)) |el|
         el.getAttributeInterned("aria-label") != null or el.getAttributeInterned("title") != null
     else
@@ -225,12 +268,14 @@ fn walk(
 
     const structural = isStructuralRole(role);
 
-    // Filter out computed concatenated names for generic containers without explicit labels.
+    // No computed concatenated names for generic containers without explicit labels.
     // This prevents token bloat and ensures their StaticText children aren't incorrectly pruned.
     // We ignore interactivity because a generic wrapper with an event listener still shouldn't hoist all text.
-    if (name != null and structural and !has_explicit_label) {
-        name = null;
-    }
+    // Not computing it also keeps a deep chain of containers from being O(depth²).
+    const name = if (structural and !has_explicit_label)
+        null
+    else
+        try axn.getName(self.frame, self.arena, ctx.label_index);
 
     var should_visit = true;
     if (self.interactive_only) {
@@ -285,32 +330,12 @@ fn walk(
         did_visit = false;
     }
 
-    if (should_walk_children) {
-        // If we are printing this node normally OR skipping it and unrolling its children,
-        // we walk the children iterator.
-        var it = node.childrenIterator();
-        var tag_counts: std.StringArrayHashMapUnmanaged(usize) = .empty;
-        while (it.next()) |child| {
-            var tag: []const u8 = "text()";
-            if (child.is(Element)) |el| {
-                tag = el.getTagNameLower();
-            }
-
-            const gop = try tag_counts.getOrPut(self.arena, tag);
-            if (!gop.found_existing) {
-                gop.value_ptr.* = 0;
-            }
-            gop.value_ptr.* += 1;
-
-            try self.walk(ctx, child, name, visitor, gop.value_ptr.*, current_depth + 1);
-        }
-    }
-
-    if (did_visit) {
-        try visitor.leave();
-    }
-
-    ctx.xpath_buffer.shrinkRetainingCapacity(initial_xpath_len);
+    try stack.append(self.arena, .{
+        .next_child = if (should_walk_children) node._first_child else null,
+        .name = name,
+        .xpath_len = initial_xpath_len,
+        .visited = did_visit,
+    });
 }
 
 fn extractSelectOptions(node: *Node, frame: *Frame, arena: std.mem.Allocator) ![]OptionData {
@@ -786,4 +811,35 @@ test "SemanticTree max_depth" {
     const text_str = aw.written();
 
     try testing.expect(std.mem.indexOf(u8, text_str, "other") == null);
+}
+
+test "SemanticTree: deep nesting doesn't overflow the native stack" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    // The link's name comes from its content: the whole chain. The <g>s are
+    // pruned, so the JSON only nests link > text. SVG, as an HTML element's
+    // pointer-events lookup walks its ancestors: O(depth²).
+    const depth = 50_000;
+    const doc = frame.window._document;
+    var top = try doc.createTextNode("deep");
+    for (0..depth) |_| {
+        const parent = (try doc.createElementNS("http://www.w3.org/2000/svg", "g", frame)).asNode();
+        _ = try parent.appendChild(top, frame);
+        top = parent;
+    }
+    const link = try doc.createElement("a", null, frame);
+    try link.setAttribute(.wrap("href"), .wrap("#"), frame);
+    _ = try link.asNode().appendChild(top, frame);
+
+    const st: Self = try .init(testing.arena_allocator, link.asNode(), &registry, frame, .{});
+    const json_str = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
+    defer testing.allocator.free(json_str);
+
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"role\":\"link\",\"name\":\"deep\"") != null);
+    try testing.expectEqual(depth, std.mem.count(u8, json_str, "/g[1]"));
+    try testing.expect(std.mem.endsWith(u8, json_str, "/text()[1]\",\"nodeType\":3,\"nodeValue\":\"deep\",\"children\":[]}]}"));
 }
