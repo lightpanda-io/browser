@@ -1468,7 +1468,7 @@ test "browser.screenshot: shadow dom and slots" {
     const div = try doc.createElement("div", null, frame);
     try div.setHTMLUnsafe(
         \\<x-host><template shadowrootmode="open"><p>shadow <slot></slot></p></template>light</x-host>
-    , frame);
+    , null, frame);
 
     var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame, .tree = .{ .frame = frame, .state = .{ .root = div.asNode() } } };
     try builder.render(div.asNode());
