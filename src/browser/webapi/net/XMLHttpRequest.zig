@@ -400,6 +400,20 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     self._response_url = self._url;
     self._response_len = resp.body.items.len;
 
+    for (resp.headers) |hdr| {
+        if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) {
+            self.applyContentType(hdr.value) catch |e| {
+                log.info(.http, "invalid content type", .{
+                    .content_Type = hdr.value,
+                    .err = e,
+                    .url = self._url,
+                });
+            };
+            break;
+        }
+    }
+    try self.applyResponseHeaders(.{ .list = .{ .list = resp.headers } });
+
     try self._response_data.appendSlice(self._arena.allocator(), resp.body.items);
 
     var ls: js.Local.Scope = undefined;
@@ -627,6 +641,22 @@ fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Documen
     }
 }
 
+fn applyContentType(self: *XMLHttpRequest, content_type: []const u8) !void {
+    self._response_mime = try Mime.parse(content_type);
+    self._response_mime_raw = try self._arena.dupe(u8, std.mem.trim(u8, content_type, &std.ascii.whitespace));
+}
+
+fn applyResponseHeaders(self: *XMLHttpRequest, headers: http.HeaderIterator) !void {
+    var it = headers;
+    while (it.next()) |hdr| {
+        if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
+            continue;
+        }
+        const joined = try std.fmt.allocPrint(self._arena.allocator(), "{s}: {s}", .{ hdr.name, hdr.value });
+        try self._response_headers.append(self._arena.allocator(), joined);
+    }
+}
+
 fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.req.ctx));
 
@@ -639,7 +669,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     }
 
     if (transfer.contentType()) |ct| {
-        self._response_mime = Mime.parse(ct) catch |e| {
+        self.applyContentType(ct) catch |e| {
             log.info(.http, "invalid content type", .{
                 .content_Type = ct,
                 .err = e,
@@ -647,17 +677,9 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
             });
             return .abort;
         };
-        self._response_mime_raw = try self._arena.dupe(u8, std.mem.trim(u8, ct, &std.ascii.whitespace));
     }
 
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
-        if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
-            continue;
-        }
-        const joined = try std.fmt.allocPrint(self._arena.allocator(), "{s}: {s}", .{ hdr.name, hdr.value });
-        try self._response_headers.append(self._arena.allocator(), joined);
-    }
+    try self.applyResponseHeaders(transfer.responseHeaderIterator());
 
     self._response_status = transfer.responseStatus().?;
     if (transfer.getContentLength()) |cl| {
