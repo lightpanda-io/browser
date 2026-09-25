@@ -71,7 +71,9 @@ Verify the binary before running anything:
 
 [Linux aarch64 is also available](https://github.com/lightpanda-io/browser/releases/tag/nightly)
 
-> **Note:** The Linux release binaries are linked against glibc. On musl-based distros (Alpine, etc.) the binary fails with `cannot execute: required file not found` because the glibc dynamic linker is missing. Use a glibc-based base image (e.g., `FROM debian:bookworm-slim` or `FROM ubuntu:24.04`) or [build from sources](#build-from-sources).
+> **Note:** The Linux release binaries are linked against glibc. On musl-based Linux distributions (Alpine, etc.) the binary fails with `cannot execute: required file not found` because the glibc dynamic linker is missing. Use a glibc-based base image (e.g., `FROM debian:bookworm-slim` or `FROM ubuntu:24.04`) or [build from sources](#build-from-sources).
+>
+> **Android / Termux:** The Linux aarch64 download is incompatible with the native Android and Termux Bionic runtime. Bionic is distinct from glibc and from musl, and a matching aarch64 CPU does not make that binary compatible. The binary's interpreter is `/lib/ld-linux-aarch64.so.1`; when that loader is missing, execution fails with `cannot execute: required file not found`. The project currently publishes no native Android binary. The Alpine guidance above applies to musl-based Linux distributions.
 
 *For MacOS*
 ```console
