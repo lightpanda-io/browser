@@ -258,7 +258,7 @@ Set `LIGHTPANDA_DISABLE_CORE_DUMP` (to any value) to suppress crash core dumps b
 Here are the key features we have implemented.
 For full details, see our [Web Platform Tests results](https://perf.lightpanda.io/wpt).
 
-- [x] CORS (enable with `--experimental-features cors`)
+- [x] CORS
 - [x] HTTP loader ([Libcurl](https://curl.se/libcurl/))
 - [x] HTML parser ([html5ever](https://github.com/servo/html5ever))
 - [x] DOM tree

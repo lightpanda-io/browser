@@ -239,7 +239,7 @@ pub const LoadResources = packed struct(u4) {
 };
 
 pub const ExperimentalFeatures = packed struct(u2) {
-    cors: bool = false,
+    cors: bool = false, // ignored, kept only for backward compatibility.
     serviceworker: bool = false,
 };
 
@@ -248,6 +248,7 @@ const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
     .{ .name = "robot_store_entry_limit", .type = ?u32, .default = 1000 },
     .{ .name = "cors_store_entry_limit", .type = ?u32, .default = 1000 },
+    .{ .name = "disable_cors", .type = bool, .default = false },
     .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
     .{ .name = "http_proxy", .type = ?[:0]const u8 },
     .{ .name = "http_max_concurrent", .type = ?u8 },
@@ -548,6 +549,13 @@ pub fn tlsVerifyHost(self: *const Config) bool {
         inline .serve, .fetch, .mcp, .agent => |opts| !opts.insecure_disable_tls_host_verification,
         // `version --check` talks to the release endpoint; always verify.
         .version => true,
+        else => unreachable,
+    };
+}
+
+pub fn obeyCors(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_cors == false,
         else => unreachable,
     };
 }
