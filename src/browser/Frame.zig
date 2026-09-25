@@ -2004,7 +2004,10 @@ pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *El
     }
 
     self._script_manager.addFromElement(from_parser, script, "parsing") catch |err| {
-        const level: log.Level = if (err == error.UrlBlocked) .warn else .err;
+        const level: log.Level = switch (err) {
+            error.UrlBlocked, error.RobotsBlocked => .warn,
+            else => .err,
+        };
         log.log(.frame, level, "frame.scriptAddedCallback", .{
             .err = err,
             .url = self.url,
