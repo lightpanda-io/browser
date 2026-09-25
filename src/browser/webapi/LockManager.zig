@@ -50,6 +50,7 @@ const LockRequest = struct {
     cb: js.Function.Global,
     resolver: js.PromiseResolver.Global,
     exec: *Execution,
+    client_id: []const u8,
 
     granted: bool,
 
@@ -222,6 +223,7 @@ pub fn request(
         .cb = try cb.persist(),
         .resolver = try resolver.persist(),
         .exec = exec,
+        .client_id = try std.fmt.allocPrint(exec.arena, "{d}", .{exec.frameId()}),
         .granted = false,
     };
 
@@ -243,6 +245,43 @@ pub fn request(
     lock_request.fireCallback();
     return promise;
 }
+
+// https://w3c.github.io/web-locks/#dom-lockmanager-query
+pub fn query(self: *const LockManager, exec: *Execution) !js.Promise {
+    var held: std.ArrayList(LockInfo) = .empty;
+    var pending: std.ArrayList(LockInfo) = .empty;
+    for (self._locks.items) |lr| {
+        const info = LockInfo{
+            .name = lr.name,
+            .mode = @tagName(lr.options.mode),
+            .clientId = lr.client_id,
+        };
+        switch (lr.state) {
+            .held => try held.append(exec.arena, info),
+            .pending => try pending.append(exec.arena, info),
+        }
+    }
+
+    const snapshot = LockManagerSnapshot{
+        .held = held.items,
+        .pending = pending.items,
+    };
+
+    return exec.js.local.?.resolvePromise(snapshot);
+}
+
+// https://w3c.github.io/web-locks/#lockinfo
+const LockInfo = struct {
+    name: lp.String,
+    mode: []const u8,
+    clientId: []const u8,
+};
+
+// https://w3c.github.io/web-locks/#lockmanagersnapshot
+const LockManagerSnapshot = struct {
+    held: []const LockInfo,
+    pending: []const LockInfo,
+};
 
 fn releaseLock(self: *LockManager, lock_request: *LockRequest) void {
     // Find and remove us from the list of locks.
@@ -281,4 +320,5 @@ pub const JsApi = struct {
     };
 
     pub const request = bridge.function(LockManager.request, .{});
+    pub const query = bridge.function(LockManager.query, .{});
 };
