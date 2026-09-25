@@ -32,7 +32,7 @@ version: usize = 0,
 
 // Null: no sized ancestor, so the text isn't measured.
 line_widths: std.AutoHashMapUnmanaged(*Element, ?f64) = .empty,
-text_heights: std.AutoHashMapUnmanaged(*Element, f64) = .empty,
+content_heights: std.AutoHashMapUnmanaged(*Element, f64) = .empty,
 
 pub fn init(frame: *Frame) !LayoutMemo {
     return .{ .arena = try frame.getArena(.medium, "LayoutMemo") };
@@ -49,17 +49,13 @@ pub fn sync(self: *LayoutMemo, frame: *Frame) void {
         return;
     }
     self.line_widths.clearRetainingCapacity();
-    self.text_heights.clearRetainingCapacity();
+    self.content_heights.clearRetainingCapacity();
     self.version = version;
 }
 
 // A failed put only costs a recompute.
 pub fn putLineWidth(self: *LayoutMemo, el: *Element, width: ?f64) void {
     self.line_widths.put(self.arena.allocator(), el, width) catch {};
-}
-
-pub fn putTextHeight(self: *LayoutMemo, el: *Element, height: f64) void {
-    self.text_heights.put(self.arena.allocator(), el, height) catch {};
 }
 
 const testing = @import("../testing.zig");
@@ -70,19 +66,22 @@ test "LayoutMemo: reuse and invalidation" {
 
     const div = try frame.window._document.createElement("div", null, frame);
     try Frame.parse.htmlAsChildren(frame, div.asNode(),
-        \\<div style="width: 100px"><p>one two three</p></div>
+        \\<div style="width: 100px"><div><p>one two three</p></div></div>
     );
     const box = div.asNode().firstChild().?.as(Element);
-    const p = box.asNode().firstChild().?.as(Element);
+    const wrapper = box.asNode().firstChild().?.as(Element);
+    const p = wrapper.asNode().firstChild().?.as(Element);
 
-    const short = p.getElementAxis(frame, .height).value;
-    try testing.expectEqual(1, memo.text_heights.count());
-    // The walk stops at the sized box
-    try testing.expectEqual(2, memo.line_widths.count());
+    // The wrapper is as tall as its paragraph, measured first
+    const short = wrapper.getElementAxis(frame, .height).value;
+    try testing.expectEqual(2, memo.content_heights.count());
     try testing.expectEqual(short, p.getElementAxis(frame, .height).value);
-    try testing.expectEqual(1, memo.text_heights.count());
+    try testing.expectEqual(2, memo.content_heights.count());
+
+    // The line width walk stops at the sized box
+    try testing.expectEqual(3, memo.line_widths.count());
 
     // Editing the text bumps the style version, so nothing stale is served
     try p.asNode().setTextContent("one two three four five six seven eight nine ten", frame);
-    try testing.expect(p.getElementAxis(frame, .height).value > short);
+    try testing.expect(wrapper.getElementAxis(frame, .height).value > short);
 }

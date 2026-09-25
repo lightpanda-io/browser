@@ -700,6 +700,7 @@
 <div id="nestedBox" style="height: 100px; width: 200px; overflow: auto;">
   <p id="nestedText">one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty<b>!</b></p>
 </div>
+<div id="wrappedBox" style="height: 100px; width: 200px; overflow: auto;"><div><div><p>one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty</p></div></div></div>
 <div id="inlineBox" style="height: 100px; width: 200px; overflow: auto;"><span>one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twenty-one twenty-two</span></div>
 <div style="width: 200px">
   <div><div><p id="deepText">one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty</p></div></div>
@@ -716,8 +717,9 @@
   testing.expectTrue($('#nestedText').offsetHeight > 2 * line);
   testing.expectTrue($('#deepText').offsetHeight > 2 * line);
 
-  // and its text scrolls that ancestor, as does an inline child's
-  for (const box of [$('#nestedBox'), $('#inlineBox')]) {
+  // and its text scrolls that ancestor, through wrapper blocks too, as does
+  // an inline child's
+  for (const box of [$('#nestedBox'), $('#wrappedBox'), $('#inlineBox')]) {
     box.scrollTop = 9999;
     testing.expectTrue(box.scrollTop > 0);
     testing.expectEqual(box.scrollHeight - box.clientHeight, box.scrollTop);
