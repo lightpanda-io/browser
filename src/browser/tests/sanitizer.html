@@ -368,3 +368,236 @@
   testing.expectEqual(false, config.javascriptURLs);
 }
 </script>
+
+<script id=setHTML>
+{
+  const div = document.createElement('div');
+  div.setHTML('<p id=a onclick="x()" title=t data-x=1>hi<script>boom()<\/script><!-- c --></p><iframe></iframe>');
+  testing.expectEqual('<p title="t">hi</p>', div.innerHTML);
+
+  // an explicit "default" is the same thing
+  div.setHTML('<b onclick="x()">b</b>', {sanitizer: 'default'});
+  testing.expectEqual('<b>b</b>', div.innerHTML);
+
+  testing.expectError('TypeError', () => div.setHTML('x', {sanitizer: 'nope'}));
+  testing.expectError('TypeError', () => div.setHTML('x', {sanitizer: {elements: [], removeElements: []}}));
+
+  div.setHTML('');
+  testing.expectEqual('', div.innerHTML);
+}
+</script>
+
+<script id=setHTMLConfig>
+{
+  const div = document.createElement('div');
+
+  // A dictionary on a safe method defaults to not keeping comments or data-*.
+  div.setHTML('<p data-x=1 id=i>a<!--c--></p>', {sanitizer: {attributes: ['id']}});
+  testing.expectEqual('<p id="i">a</p>', div.innerHTML);
+
+  // ... but unsafe methods, like the constructor, default to keeping them.
+  div.setHTMLUnsafe('<p data-x=1 id=i>a<!--c--></p>', {sanitizer: {attributes: ['id']}});
+  testing.expectEqual('<p data-x="1" id="i">a<!--c--></p>', div.innerHTML);
+
+  div.setHTML('<div><p>a<b>b</b></p><i>i</i></div>', {sanitizer: {elements: ['div', 'p']}});
+  testing.expectEqual('<div><p>a</p></div>', div.innerHTML);
+
+  div.setHTML('<div><p>a<b>b<i>i</i></b>c</p></div>', {sanitizer: {replaceWithChildrenElements: ['b', 'p']}});
+  testing.expectEqual('<div>ab<i>i</i>c</div>', div.innerHTML);
+
+  div.setHTML('<div><span>s</span><em>e</em></div>', {sanitizer: {removeElements: ['span']}});
+  testing.expectEqual('<div><em>e</em></div>', div.innerHTML);
+
+  // per-element attribute lists
+  div.setHTML('<p id=1 title=2>a</p><em id=3 title=4>b</em>', {sanitizer: {
+    elements: [{name: 'p', attributes: ['id']}, {name: 'em', removeAttributes: ['title']}],
+    attributes: ['title'],
+  }});
+  testing.expectEqual('<p id="1" title="2">a</p><em>b</em>', div.innerHTML);
+
+  // an element's removeAttributes must be a subset of the global attributes
+  testing.expectError('TypeError', () => div.setHTML('x', {sanitizer: {
+    elements: [{name: 'em', removeAttributes: ['id']}],
+    attributes: ['title'],
+  }}));
+
+  // A safe method still removes unsafe markup the config allows.
+  div.setHTML('<script>x()<\/script><b onclick=x()>b</b>', {sanitizer: {elements: ['script', 'b'], attributes: ['onclick']}});
+  testing.expectEqual('<b>b</b>', div.innerHTML);
+}
+</script>
+
+<script id=setHTMLUnsafe>
+{
+  const div = document.createElement('div');
+  div.setHTMLUnsafe('<b onclick="x()">b</b><script>x()<\/script><!--c-->');
+  testing.expectEqual('<b onclick="x()">b</b><script>x()<\/script><!--c-->', div.innerHTML);
+
+  // The sanitizer's own configuration is used as-is.
+  const sanitizer = new Sanitizer({removeElements: ['i']});
+  const before = sanitizer.get();
+  div.setHTMLUnsafe('<b onclick="x()">b</b><i>i</i>', {sanitizer});
+  testing.expectEqual('<b onclick="x()">b</b>', div.innerHTML);
+
+  // A safe method must not remove unsafe from the caller's Sanitizer.
+  div.setHTML('<b onclick="x()">b</b><i>i</i>', {sanitizer});
+  testing.expectEqual('<b>b</b>', div.innerHTML);
+  testing.expectEqual(before, sanitizer.get());
+
+  // The default configuration on an unsafe method is still the default one
+  div.setHTMLUnsafe('<b onclick="x()">b</b><script><\/script>', {sanitizer: 'default'});
+  testing.expectEqual('<b>b</b>', div.innerHTML);
+}
+</script>
+
+<script id=textMerge>
+{
+  // Text left adjacent by a removal is merged, as it would be had the node
+  // never been parsed.
+  const div = document.createElement('div');
+  div.setHTML('a <!-- c --> b');
+  testing.expectEqual(1, div.childNodes.length);
+  testing.expectEqual('a  b', div.firstChild.data);
+
+  div.setHTML('<p>x<script>s<\/script>y<!--c-->z<b>b</b></p>');
+  testing.expectEqual(2, div.firstChild.childNodes.length);
+  testing.expectEqual('xyz', div.firstChild.firstChild.data);
+
+  // replaced elements merge at both edges
+  div.setHTML('<p>x<span>y<i>i</i>z</span>w</p>', {sanitizer: {replaceWithChildrenElements: ['span']}});
+  const p = div.firstChild;
+  testing.expectEqual(3, p.childNodes.length);
+  testing.expectEqual('xy', p.childNodes[0].data);
+  testing.expectEqual('zw', p.childNodes[2].data);
+
+  div.setHTML('<p>x<b><i>y</i></b>z</p>', {sanitizer: {replaceWithChildrenElements: ['b', 'i']}});
+  testing.expectEqual(1, div.firstChild.childNodes.length);
+  testing.expectEqual('xyz', div.firstChild.firstChild.data);
+
+  // nothing removed: nothing touched
+  div.setHTMLUnsafe('<p>x<!--c-->y</p>');
+  testing.expectEqual(3, div.firstChild.childNodes.length);
+
+  // in the other trees too
+  const doc = Document.parseHTML('a<!--c-->b<template>c<!--c-->d</template>', {sanitizer: {elements: ['html', 'head', 'body', 'template']}});
+  testing.expectEqual(2, doc.body.childNodes.length);
+  testing.expectEqual('ab', doc.body.firstChild.data);
+  testing.expectEqual(1, doc.body.lastChild.content.childNodes.length);
+  testing.expectEqual('cd', doc.body.lastChild.content.firstChild.data);
+}
+</script>
+
+<script id=scriptContext>
+{
+  const script = document.createElement('script');
+  script.textContent = 'untouched';
+  script.setHTML('<b>b</b>');
+  testing.expectEqual('untouched', script.textContent);
+
+  script.setHTMLUnsafe('<b>b</b>');
+  testing.expectEqual('<b>b</b>', script.innerHTML);
+}
+</script>
+
+<script id=javascriptURLs>
+{
+  const div = document.createElement('div');
+
+  // safe: always removed, whatever the config says
+  div.setHTML('<a href="javascript:x()">a</a><a href="https://x/">b</a>', {sanitizer: {javascriptURLs: true}});
+  testing.expectEqual('<a>a</a><a href="https://x/">b</a>', div.innerHTML);
+
+  // unsafe: removed only when the config says so
+  div.setHTMLUnsafe('<a href="javascript:x()">a</a>', {sanitizer: {}});
+  testing.expectEqual('<a href="javascript:x()">a</a>', div.innerHTML);
+
+  const off = {sanitizer: {javascriptURLs: false}};
+  for (const url of ['javascript:x()', ' JaVaScRiPt:x()', '\x01java\nscript:x()', 'java\tscript:x()']) {
+    const a = document.createElement('a');
+    a.setAttribute('href', url);
+    div.setHTMLUnsafe(a.outerHTML, off);
+    testing.expectEqual(null, div.firstChild.getAttribute('href'), {script_id: 'javascriptURLs'});
+  }
+  div.setHTMLUnsafe('<a href="javascriptx:x()">a</a><a href="xjavascript:x()">b</a><p href="javascript:x()"></p>', off);
+  testing.expectEqual('<a href="javascriptx:x()">a</a><a href="xjavascript:x()">b</a><p href="javascript:x()"></p>', div.innerHTML);
+
+  div.setHTMLUnsafe('<area href="javascript:x()"><form action="javascript:x()"><button formaction="javascript:x()"></button></form>', off);
+  testing.expectEqual('<area><form><button></button></form>', div.innerHTML);
+
+  div.setHTMLUnsafe('<svg><a href="javascript:x()"></a><a xlink:href="javascript:x()"></a></svg>', off);
+  testing.expectEqual('<svg><a></a><a></a></svg>', div.innerHTML);
+
+  div.setHTMLUnsafe('<math><mi href="javascript:x()"></mi></math>', off);
+  testing.expectEqual('<math><mi></mi></math>', div.innerHTML);
+
+  div.setHTMLUnsafe('<svg><animate attributeName="href"></animate><set attributeName="xlink:href"></set><animate attributeName="x"></animate></svg>', off);
+  testing.expectEqual('<svg><animate></animate><set></set><animate attributeName="x"></animate></svg>', div.innerHTML);
+}
+</script>
+
+<script id=nestedTrees>
+{
+  const div = document.createElement('div');
+  div.setHTML('<template><b onclick=x()>b</b><script><\/script></template>', {sanitizer: {elements: ['template', 'b', 'script']}});
+  testing.expectEqual('<b>b</b>', div.firstChild.innerHTML);
+
+  const host = document.createElement('div');
+  host.setHTMLUnsafe('<div><template shadowrootmode=open><i onclick=x()>i</i><script><\/script></template></div>', {sanitizer: {removeElements: ['script'], removeAttributes: ['onclick']}});
+  testing.expectEqual('<i>i</i>', host.firstChild.shadowRoot.innerHTML);
+
+  // setHTML on a template sets its contents
+  const template = document.createElement('template');
+  template.setHTML('<b onclick=x()>b</b>');
+  testing.expectEqual(0, template.childNodes.length);
+  testing.expectEqual('<b>b</b>', template.content.firstChild.outerHTML);
+}
+</script>
+
+<script id=shadowRoot>
+{
+  const host = document.createElement('div');
+  const root = host.attachShadow({mode: 'open'});
+  root.setHTML('<b onclick=x()>b</b><script><\/script>');
+  testing.expectEqual('<b>b</b>', root.innerHTML);
+
+  root.setHTMLUnsafe('<b onclick=x()>b</b>');
+  testing.expectEqual('<b onclick="x()">b</b>', root.innerHTML);
+
+  root.setHTMLUnsafe('<b onclick=x()>b</b>', {sanitizer: {}});
+  testing.expectEqual('<b onclick="x()">b</b>', root.innerHTML);
+}
+</script>
+
+<script id=mutationRecord>
+{
+  const div = document.createElement('div');
+  div.innerHTML = '<p>old</p>';
+  const observer = new MutationObserver(() => {});
+  observer.observe(div, {childList: true});
+  div.setHTML('<b>a</b><i>b</i><script><\/script>');
+  const records = observer.takeRecords();
+  testing.expectEqual(1, records.length);
+  testing.expectEqual(1, records[0].removedNodes.length);
+  testing.expectEqual(2, records[0].addedNodes.length);
+}
+</script>
+
+<script id=parseHTML>
+{
+  const doc = Document.parseHTML('<title>t</title><p onclick=x() data-x=1>a<script>x()<\/script></p>');
+  testing.expectEqual(true, doc instanceof Document);
+  testing.expectEqual('about:blank', doc.URL);
+  testing.expectEqual('<p>a</p>', doc.body.innerHTML);
+  testing.expectEqual('t', doc.title);
+
+  const unsafe = Document.parseHTMLUnsafe('<p onclick=x()>a<script>x()<\/script></p>');
+  testing.expectEqual('<p onclick="x()">a<script>x()<\/script></p>', unsafe.body.innerHTML);
+
+  const filtered = Document.parseHTMLUnsafe('<p>a<i>b</i></p>', {sanitizer: {removeElements: ['i']}});
+  testing.expectEqual('<p>a</p>', filtered.body.innerHTML);
+
+  // html isn't allowed, so it all goes
+  testing.expectEqual(null, Document.parseHTML('<div>text', {sanitizer: {elements: ['body', 'div']}}).documentElement);
+  testing.expectError('TypeError', () => Document.parseHTML('x', {sanitizer: {replaceWithChildrenElements: ['html']}}));
+}
+</script>

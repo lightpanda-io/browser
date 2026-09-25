@@ -190,3 +190,20 @@ test "NodeRegistry: resetFrame" {
     try testing.expectEqual(rb, registry.lookup_by_id.get(rb.id).?);
     try testing.expectEqual(b_node, registry.lookup_by_node.get(b_node).?.dom);
 }
+
+test "NodeRegistry: reset never reuses an id" {
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/registry1.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const dom_node = (try frame.window._document.querySelector(.wrap("#a1"), frame)).?.asNode();
+    // The pool recycles the `Node` itself, so keep the id, not the pointer.
+    const first_id = (try registry.register(dom_node)).id;
+
+    registry.reset();
+    try testing.expectEqual(null, registry.lookup_by_id.get(first_id));
+    try testing.expect((try registry.register(dom_node)).id != first_id);
+}

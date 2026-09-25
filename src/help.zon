@@ -297,12 +297,22 @@
     \\          it to PATH, instead of printing the answer. Replay it later with
     \\          `run PATH` (no LLM calls). Overwrites PATH if it exists.
     \\          Requires --task.
+    \\  --search-engine <ENGINE>
+    \\          Which web search API the `search` tool uses. Default: auto,
+    \\          which takes the first with a key in the environment, in the
+    \\          order brave, tavily, exa, keenable. `keenable` also works with
+    \\          no key at all, through a rate-limited public endpoint.
+    \\          Allowed values: auto, brave, tavily, exa, keenable.
     \\  --system-prompt <STRING>
     \\          Override the default system prompt.
     \\  --task <STRING>
     \\           One-shot mode: run a single user turn, print the final answer
     \\           to stdout, and exit. Conflicts with the positional script. With
     \\           --save, the answer is suppressed and a script is written instead.
+    \\  --url <URL>
+    \\          Open this page before the first turn. With --task it saves the
+    \\          model a turn spent navigating; with --save the opening
+    \\          navigation is the first line of the script.
     \\  --verbosity <LEVEL>
     \\          Stderr chatter level. Default: high when --task captures stderr
     \\          to a pipe or file; low otherwise. low/medium also raise
@@ -396,6 +406,9 @@
     \\  --cookie-jar <PATH>
     \\          Path to a JSON file to save cookies to on exit (write-only).
     \\          Defaults to no cookie saving.
+    \\  --cors-store-entry-limit <INT>
+    \\          Maximum number of entries kept in the CorsStore. 0 means no limit.
+    \\          Defaults to 1000.
     \\  --experimental-features <FEATURE>
     \\          Enable an experimental, unstable feature. Can be passed multiple times.
     \\          Behavior may change or be removed without notice.
@@ -502,12 +515,12 @@
     \\  --obey-robots
     \\          Fetches and obeys robots.txt of the target page.
     \\          Defaults to false.
-    \\  --robot-store-entry-limit <INT>
-    \\          Maximum number of entries kept in the RobotStore. 0 means no limit.
-    \\          Defaults to 1000.
     \\  --proxy-bearer-token <TOKEN>
     \\          Token sent for bearer authentication with the proxy:
     \\          Proxy-Authorization: Bearer <token>.
+    \\  --robot-store-entry-limit <INT>
+    \\          Maximum number of entries kept in the RobotStore. 0 means no limit.
+    \\          Defaults to 1000.
     \\  --timezone <IANA>
     \\          Time zone used by Date and Intl, e.g. Europe/Paris or UTC.
     \\          Defaults to the host time zone.

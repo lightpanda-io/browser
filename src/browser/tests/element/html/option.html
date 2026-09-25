@@ -257,3 +257,23 @@
     testing.expectEqual(1, select.selectedIndex)
   }
 </script>
+
+<script id="legacy_factory_function">
+  // https://webidl.spec.whatwg.org/#legacy-factory-functions
+  testing.expectEqual(true, Option !== HTMLOptionElement)
+  testing.expectEqual('Option', Option.name)
+  testing.expectEqual(0, Option.length)
+  testing.expectEqual(HTMLOptionElement.prototype, Option.prototype)
+  testing.expectEqual(HTMLOptionElement, new Option().constructor)
+  testing.expectEqual('option', new Option().localName)
+  testing.expectError('TypeError', () => new HTMLOptionElement())
+  testing.expectError('TypeError', () => Option())
+
+  const desc = Object.getOwnPropertyDescriptor(Option, 'prototype')
+  testing.expectEqual(false, desc.writable)
+  testing.expectEqual(false, desc.enumerable)
+  testing.expectEqual(false, desc.configurable)
+
+  testing.expectEqual(false, Object.keys(window).includes('Option'))
+  testing.expectEqual(false, Object.keys(window).includes('HTMLOptionElement'))
+</script>

@@ -179,3 +179,23 @@
   img.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
   testing.expectEqual(undefined, await img.decode());
 </script>
+
+<script id="legacy_factory_function">
+  // https://webidl.spec.whatwg.org/#legacy-factory-functions
+  testing.expectEqual(true, Image !== HTMLImageElement)
+  testing.expectEqual('Image', Image.name)
+  testing.expectEqual(0, Image.length)
+  testing.expectEqual(HTMLImageElement.prototype, Image.prototype)
+  testing.expectEqual(HTMLImageElement, new Image().constructor)
+  testing.expectEqual('img', new Image().localName)
+  testing.expectError('TypeError', () => new HTMLImageElement())
+  testing.expectError('TypeError', () => Image())
+
+  const desc = Object.getOwnPropertyDescriptor(Image, 'prototype')
+  testing.expectEqual(false, desc.writable)
+  testing.expectEqual(false, desc.enumerable)
+  testing.expectEqual(false, desc.configurable)
+
+  testing.expectEqual(false, Object.keys(window).includes('Image'))
+  testing.expectEqual(false, Object.keys(window).includes('HTMLImageElement'))
+</script>

@@ -1196,6 +1196,18 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         out.clearRetainingCapacity();
     }
 
+    // A selector targets the element as a backendNodeId does.
+    {
+        const outer = frame.document.getElementById("outerscroll", frame).?.asNode();
+        const outer_id = (try server.active_session.registry.register(outer)).id;
+        try router.handleMessage(server, aa,
+            \\{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"scroll","arguments":{"selector":"#innerleaf","y":30}}}
+        );
+        const expected = try std.fmt.allocPrint(aa, "Scrolled scroll container (backendNodeId: {d}) of element (selector: #innerleaf) to x: 0, y: 30", .{outer_id});
+        try testing.expect(std.mem.indexOf(u8, out.written(), expected) != null);
+        out.clearRetainingCapacity();
+    }
+
     // The container may be declared in a stylesheet rather than inline.
     {
         const leaf = frame.document.getElementById("sheetleaf", frame).?.asNode();

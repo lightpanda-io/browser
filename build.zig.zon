@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/d3d7b41677a0015fdfa55a8b1caa4f214de6d209.tar.gz",
-            .hash = "v8-0.0.0-xddH624yAwC5_H_8T303uTxiSAnAu2zrxv6MHLhvLo6t",
+            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/ebd2fabfb001294ed43ef65286c7db17245416e9.tar.gz",
+            .hash = "v8-0.0.0-xddH66lEAwB-5Ec92QAp19-aZ6-oB8UnnUm-w3fBUEaX",
         },
         // .v8 = .{ .path = "../zig-v8-fork" },
         .brotli = .{
@@ -40,8 +40,8 @@
             .hash = "zenai-0.0.0-iOY_VKquBgBT36nAFRpM4tQki3JNZgFvTwQY6Pz-wiQx",
         },
         .isocline = .{
-            .url = "git+https://github.com/arrufat/isocline#ec538faf435c616a6b38716f53980b5815c30f8a",
-            .hash = "N-V-__8AAHhtEwBIqx5nOoiGo_FLAG8gpiVC6XzZn1teMKd0",
+            .url = "git+https://github.com/arrufat/isocline#4a99434bee4a5ed04c1639514224d48cd55e1405",
+            .hash = "N-V-__8AAHxtEwB16xj2Xz-zx_uklGdTP5C2-GHXDoSzah-8",
         },
         .pcre2 = .{
             .url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.48/pcre2-10.48.tar.gz",

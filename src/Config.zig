@@ -254,6 +254,7 @@ pub const ExperimentalFeatures = packed struct(u2) {
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
     .{ .name = "robot_store_entry_limit", .type = ?u32, .default = 1000 },
+    .{ .name = "cors_store_entry_limit", .type = ?u32, .default = 1000 },
     .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
     .{ .name = "http_proxy", .type = ?[:0]const u8 },
     .{ .name = "http_max_concurrent", .type = ?u8 },
@@ -348,6 +349,7 @@ pub const AiProvider = std.meta.Tag(zenai.provider.Client);
 /// in `Agent.init` (explicit flag > remembered > mode default), so there is
 /// no Config-level accessor like `agentVerbosity`.
 pub const Effort = zenai.provider.Effort;
+pub const SearchEngine = @import("browser/tools.zig").SearchEngine;
 
 /// Controls how chatty `agent` mode is on stderr.
 pub const AgentVerbosity = enum {
@@ -471,6 +473,8 @@ const Commands = cli.Builder(.{
             .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true },
             .{ .name = "verbosity", .type = ?AgentVerbosity },
             .{ .name = "effort", .type = ?Effort },
+            .{ .name = "search_engine", .type = ?SearchEngine },
+            .{ .name = "url", .type = ?[:0]const u8 },
             .{ .name = "list_models", .type = bool },
             .{ .name = "no_llm", .type = bool },
         },
@@ -566,6 +570,13 @@ pub fn obeyRobots(self: *const Config) bool {
 pub fn robotStoreEntryLimit(self: *const Config) u32 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.robot_store_entry_limit.?,
+        else => 1000,
+    };
+}
+
+pub fn corsStoreEntryLimit(self: *const Config) u32 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.cors_store_entry_limit.?,
         else => 1000,
     };
 }

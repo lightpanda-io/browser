@@ -952,7 +952,7 @@ test "browser.markdown: declarative shadow DOM renders through piercing" {
     const host = try doc.createElement("div", null, frame);
     try host.setHTMLUnsafe(
         \\<div><template shadowrootmode="open"><p>shadow content</p></template></div>
-    , frame);
+    , null, frame);
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
