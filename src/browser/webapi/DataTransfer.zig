@@ -53,7 +53,7 @@ _arena: *lp.Arena,
 _rc: lp.RC = .{},
 _items: std.ArrayList(*DataTransferItem) = .empty,
 _item_list: *DataTransferItemList,
-// FileList lives on the factory slab and is frame-tracked, so each File ref it
+// FileList lives on the factory allocator and is frame-tracked, so each File ref it
 // holds is released at frame teardown (same path as `<input type=file>`).
 _files: *FileList,
 _drop_effect: []const u8 = "none",
