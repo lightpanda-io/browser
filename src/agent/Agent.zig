@@ -588,8 +588,8 @@ test {
 /// Validate the `--policy jev` flag set and fold it into a `jev.Config`.
 fn resolvePolicy(opts: Config.Agent) !?jev.Config {
     _ = opts.policy orelse {
-        if (opts.jev_model != null or opts.jev_base_url != null or opts.max_actions != null) {
-            log.warn(.app, "ignoring policy options", .{ .reason = "--jev-*/--max-actions need --policy" });
+        if (opts.jev_model != null or opts.jev_base_url != null or opts.jev_max_actions != null) {
+            log.warn(.app, "ignoring policy options", .{ .reason = "--jev-* needs --policy" });
         }
         return null;
     };
@@ -607,9 +607,9 @@ fn resolvePolicy(opts: Config.Agent) !?jev.Config {
         });
         return error.ConflictingFlags;
     }
-    if (opts.script_file != null or opts.list_models) {
+    if (opts.script_file != null or opts.list_models or opts.save != null) {
         log.fatal(.app, "conflicting flags", .{
-            .hint = "--policy conflicts with a script file and --list-models",
+            .hint = "--policy conflicts with a script file, --list-models and --save",
         });
         return error.ConflictingFlags;
     }
@@ -625,7 +625,7 @@ fn resolvePolicy(opts: Config.Agent) !?jev.Config {
         .api_key = api_key,
         .model = opts.jev_model orelse zenai.typesafe.types.default_model,
         .base_url = opts.jev_base_url orelse zenai.typesafe.Client.default_base_url,
-        .max_actions = opts.max_actions orelse jev.default_max_actions,
+        .max_actions = opts.jev_max_actions orelse jev.default_max_actions,
     };
 }
 

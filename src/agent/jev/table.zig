@@ -383,7 +383,7 @@ const Collector = struct {
         // both agent views name an element alike.
         var label = string.truncateUtf8(data.name orelse "", max_label_bytes);
         if (label.len == 0) {
-            const text = (try interactive.getTextContent(node, self.arena)) orelse "";
+            const text = (try interactive.getTextContent(node, self.arena, max_label_bytes)) orelse "";
             label = string.truncateUtf8(text, max_label_bytes);
         }
 

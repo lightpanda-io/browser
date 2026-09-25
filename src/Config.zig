@@ -481,7 +481,7 @@ const Commands = cli.Builder(.{
             .{ .name = "policy", .type = ?Policy },
             .{ .name = "jev_model", .type = ?[:0]const u8 },
             .{ .name = "jev_base_url", .type = ?[:0]const u8 },
-            .{ .name = "max_actions", .type = ?u32 },
+            .{ .name = "jev_max_actions", .type = ?u32 },
             .{ .name = "list_models", .type = bool },
             .{ .name = "no_llm", .type = bool },
         },
