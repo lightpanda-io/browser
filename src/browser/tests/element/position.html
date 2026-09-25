@@ -664,3 +664,33 @@
   testing.expectEqual(window.innerHeight / 10, $('#sheetVh').clientHeight);
 }
 </script>
+
+<div id="textBox" style="height: 100px; width: 200px; overflow: auto;">
+  one two three four five six seven eight nine ten eleven twelve thirteen
+  fourteen fifteen sixteen seventeen eighteen nineteen twenty twenty-one
+  twenty-two twenty-three twenty-four twenty-five twenty-six twenty-seven
+</div>
+<div id="textFree">one two three four five six seven eight nine ten eleven twelve</div>
+<div id="textSmall" style="width: 200px; font-size: 8px">one two three four five six seven eight nine ten eleven twelve</div>
+
+<script id="textWrapsAtExplicitWidth">
+{
+  // Text wraps at an explicit width
+  const box = $('#textBox');
+  testing.expectEqual(100, box.clientHeight);
+  testing.expectEqual(200, box.scrollWidth);
+  testing.expectTrue(box.scrollHeight > box.clientHeight);
+
+  box.scrollTop = 9999;
+  testing.expectTrue(box.scrollTop > 0);
+  testing.expectEqual(box.scrollHeight - box.clientHeight, box.scrollTop);
+
+  // Without one, it isn't measured
+  testing.expectEqual(5, $('#textFree').scrollHeight);
+
+  const small = $('#textSmall');
+  const before = small.clientHeight;
+  small.style.fontSize = '4px';
+  testing.expectTrue(small.clientHeight < before);
+}
+</script>
