@@ -1436,6 +1436,7 @@ const SyncContext = struct {
     status: u16 = 0,
     status_text: http.StatusText = .{},
     body: std.ArrayList(u8),
+    headers: std.ArrayList(http.Header) = .empty,
 
     // Acquired on the first byte we have to buffer, so a bodyless response
     // never takes one. Ownership moves to the SyncResponse.
@@ -1447,8 +1448,18 @@ const SyncContext = struct {
         self.status = transfer.responseStatus().?;
         self.status_text = transfer.res.status_text;
         const body_len = transfer.bodyLen();
+        const allocator = try self.bodyAllocator(body_len);
+
+        var it = transfer.responseHeaderIterator();
+        while (it.next()) |hdr| {
+            try self.headers.append(allocator, .{
+                .name = try allocator.dupe(u8, hdr.name),
+                .value = try allocator.dupe(u8, hdr.value),
+            });
+        }
+
         if (body_len > 0) {
-            try self.body.ensureTotalCapacityPrecise(try self.bodyAllocator(body_len), body_len);
+            try self.body.ensureTotalCapacityPrecise(allocator, body_len);
         }
         return .proceed;
     }
@@ -2115,6 +2126,7 @@ const SyncResponse = struct {
     status: u16,
     body: std.ArrayList(u8),
     status_text: http.StatusText,
+    headers: []const http.Header,
 
     // Owns `body`. Null when the response had nothing to buffer. Callers that
     // keep `body` past this call take the arena instead of releasing it.
@@ -2676,6 +2688,7 @@ pub const Transfer = struct {
                 .status = sync_ctx.status,
                 .status_text = sync_ctx.status_text,
                 .body = sync_ctx.body,
+                .headers = sync_ctx.headers.items,
                 .arena = sync_ctx.arena,
             },
             .err => |e| return e,
