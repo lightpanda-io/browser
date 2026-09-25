@@ -349,6 +349,7 @@ pub const AiProvider = std.meta.Tag(zenai.provider.Client);
 /// in `Agent.init` (explicit flag > remembered > mode default), so there is
 /// no Config-level accessor like `agentVerbosity`.
 pub const Effort = zenai.provider.Effort;
+pub const SearchEngine = @import("browser/tools.zig").SearchEngine;
 
 /// Controls how chatty `agent` mode is on stderr.
 pub const AgentVerbosity = enum {
@@ -472,6 +473,8 @@ const Commands = cli.Builder(.{
             .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true },
             .{ .name = "verbosity", .type = ?AgentVerbosity },
             .{ .name = "effort", .type = ?Effort },
+            .{ .name = "search_engine", .type = ?SearchEngine },
+            .{ .name = "url", .type = ?[:0]const u8 },
             .{ .name = "list_models", .type = bool },
             .{ .name = "no_llm", .type = bool },
         },

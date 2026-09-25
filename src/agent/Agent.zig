@@ -159,6 +159,9 @@ model: []u8,
 /// Per-turn reasoning budget for LLM turns. Mutable at runtime via `/effort`.
 effort: Config.Effort,
 script_file: ?[]const u8,
+/// `--url`: opened before the first turn, so a `--task` run does not spend a
+/// model turn navigating to its own start page.
+start_url: ?[:0]const u8,
 one_shot_task: ?[]const u8,
 one_shot_save: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
@@ -167,6 +170,10 @@ cancel_requested: std.atomic.Value(bool) = .init(false),
 /// mid-request instead of blocking until the model's full response arrives.
 http_interrupt: zenai.http.Interrupt = .{},
 synthetic_tool_call_id: u32 = 0,
+/// Per-turn CSS selector for each tool call the model made, in call order, so
+/// `--save` can record a call that addressed its element by `backendNodeId`.
+save_selectors: std.ArrayListUnmanaged(?[]const u8) = .empty,
+capturing_for_save: bool = false,
 /// Aggregate Anthropic/OpenAI/Gemini token usage across every model call.
 /// Printed as a structured `$usage ...` line on stderr at the end of `--task`
 /// (one-shot) mode so wrappers can capture per-task cost.
@@ -284,7 +291,14 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credential.provider else null);
     const verbosity = settings.resolveVerbosity(opts, remembered);
     const stream_enabled = settings.resolveStream(remembered);
-    browser_tools.search_engine = settings.resolveSearchEngine(remembered);
+    browser_tools.search_engine = opts.search_engine orelse settings.resolveSearchEngine(remembered);
+    // A keyless engine over its cap fails every search; silence reads as a bad
+    // agent rather than a missing key.
+    if (browser_tools.searchKeyStatus(browser_tools.search_engine)) |key| switch (key.state) {
+        .set => {},
+        .keyless => log.info(.app, "keyless search endpoint", .{ .env_var = key.env_var, .limit = "rate-limited per client IP" }),
+        .missing => log.warn(.app, "search key missing", .{ .env_var = key.env_var, .engine = @tagName(browser_tools.search_engine) }),
+    };
 
     if (resolved) |r| {
         if (r.source == .picked) {
@@ -320,6 +334,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .effort = effort,
         .stream_enabled = stream_enabled,
         .script_file = opts.script_file,
+        .start_url = opts.url,
         .one_shot_task = opts.task,
         .one_shot_save = opts.save,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
@@ -355,6 +370,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 pub fn deinit(self: *Agent) void {
     self.terminal.uninstallLogSink();
     self.save_buffer.deinit();
+    self.save_selectors.deinit(self.allocator);
     if (self.save_path) |p| self.allocator.free(p);
     self.terminal.deinit();
     self.conversation.deinit();
@@ -499,6 +515,9 @@ const TurnInput = struct {
 
 /// Returns true on success.
 pub fn run(self: *Agent) bool {
+    if (self.start_url) |url| {
+        if (!self.gotoStart(url)) return false;
+    }
     if (self.one_shot_task) |task| {
         const saving = self.one_shot_save != null;
         const ok = self.runTurn(.{
@@ -518,6 +537,29 @@ pub fn run(self: *Agent) bool {
         return self.runScript(path);
     }
     self.runRepl();
+    return true;
+}
+
+/// Opens `--url` through the tool layer, so a bad URL fails like any other
+/// tool call and `/save` replays the opening navigation.
+fn gotoStart(self: *Agent, url: [:0]const u8) bool {
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var object: std.json.ObjectMap = .empty;
+    object.put(a, "url", .{ .string = url }) catch return false;
+    const args: std.json.Value = .{ .object = object };
+    const result = browser_tools.call(a, self.ts.session, &self.ts.registry, "goto", args, .{}) catch |err| {
+        self.terminal.printError("could not open {s}: {s}", .{ url, browser_tools.errorMessage(err) });
+        return false;
+    };
+    // `call` reports a failed navigation in-band, not as an error.
+    if (result.is_error) {
+        self.terminal.printError("could not open {s}: {s}", .{ url, result.text });
+        return false;
+    }
+    self.recordSaveCommand(Command.fromToolCall(.goto, args));
     return true;
 }
 
@@ -671,7 +713,8 @@ fn runRepl(self: *Agent) void {
                 self.terminal.endTool();
                 self.printCommandResult(tc, result);
                 if (!result.is_error) {
-                    self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args) orelse cmd);
+                    const replayable = Command.fromToolCall(tc.tool, withSelector(aa, tc.args, result.selector));
+                    self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args) orelse replayable);
                 }
                 self.recordSlashToolCall(command_text, tc.name(), tc.args, result) catch |err| {
                     self.terminal.printWarning("LLM conversation out of sync (/{s}: {s}); next prompt may not see this action", .{ tc.name(), @errorName(err) });
@@ -1271,6 +1314,12 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
         return;
     }
 
+    // `stripCodeFence` accepts an unclosed block, so a truncated script is
+    // indistinguishable from a complete one once it is on disk.
+    if (result.finish_reason == .max_tokens) {
+        return self.abortSave(baseline, "the model ran out of output tokens mid-script");
+    }
+
     const raw = result.text orelse return self.abortSave(baseline, "the model returned no script");
 
     // `result.text` lives in the conversation arena, freed by the rollback
@@ -1326,6 +1375,20 @@ fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, path: []con
 
 fn logSaveBufferError(self: *Agent, err: anyerror) void {
     self.terminal.printError("save buffer disabled: {s}", .{@errorName(err)});
+}
+
+/// Swap a call's ephemeral `backendNodeId` for the selector the tool layer
+/// resolved, so the call can be replayed.
+fn withSelector(arena: std.mem.Allocator, args: ?std.json.Value, selector: ?[]const u8) ?std.json.Value {
+    const sel = selector orelse return args;
+    const original = args orelse return args;
+    if (original != .object) return args;
+    if (!original.object.contains("backendNodeId")) return args;
+
+    var rewritten = original.object.clone(arena) catch return args;
+    _ = rewritten.swapRemove("backendNodeId");
+    rewritten.put(arena, "selector", .{ .string = sel }) catch return args;
+    return .{ .object = rewritten };
 }
 
 fn recordSaveCommand(self: *Agent, cmd: Command) void {
@@ -1444,7 +1507,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
 
 fn runCommand(self: *Agent, arena: std.mem.Allocator, tc: Command.ToolCall) browser_tools.ToolResult {
     // The terminal can't show an image, but the conversation can.
-    return browser_tools.call(arena, self.ts.session, &self.ts.registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null }) catch |err| .{
+    return browser_tools.call(arena, self.ts.session, &self.ts.registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null, .record = true }) catch |err| .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
@@ -1671,6 +1734,10 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     const provider_client = self.ai_client orelse return error.NoAiClient;
     self.refreshAuthIfNeeded();
 
+    self.capturing_for_save = input.capture_for_save;
+    defer self.capturing_for_save = false;
+    self.save_selectors.clearRetainingCapacity();
+
     self.terminal.spinner.start();
     var result = provider_client.runTools(
         self.model,
@@ -1731,11 +1798,12 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             const args = browser_tools.normalizeArgKeys(ca, tool, tc.arguments) catch tc.arguments;
             // Fall back to the navigation a read tool performed, so a
             // markdown/tree-driven turn isn't lost from `/save`.
-            const cmd = Command.fromToolCall(tool, args);
+            const replayable = withSelector(ca, args, if (i < self.save_selectors.items.len) self.save_selectors.items[i] else null);
+            const cmd = Command.fromToolCall(tool, replayable);
             const to_record = if (cmd.isRecorded())
                 cmd
             else
-                navigationGoto(ca, tool, args) orelse continue;
+                navigationGoto(ca, tool, replayable) orelse continue;
             if (!recorded_any) {
                 if (input.record_comment) |c| self.recordSaveComment(c);
                 recorded_any = true;
@@ -1888,10 +1956,19 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    const outcome = self.toolOutcome(allocator, tool_name, arguments) catch |err| zenai.provider.Client.ToolHandler.Result{
+    var selector: ?[]const u8 = null;
+    const outcome = self.toolOutcome(allocator, tool_name, arguments, &selector) catch |err| zenai.provider.Client.ToolHandler.Result{
         .content = std.fmt.allocPrint(allocator, "Error: {s}", .{browser_tools.errorMessage(err)}) catch "Error: tool execution failed",
         .is_error = true,
     };
+    if (self.capturing_for_save) {
+        // One entry per call, errors included, so the index lines up with
+        // `RunToolsResult.tool_calls_made`. The conversation arena outlives the
+        // turn that reads them; `allocator` here is zenai's per-call arena.
+        const ca = self.conversation.arena.allocator();
+        const kept = if (selector) |sel| ca.dupe(u8, sel) catch null else null;
+        self.save_selectors.append(self.allocator, kept) catch {};
+    }
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
     if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, outcome.content, outcome.is_error);
@@ -1899,8 +1976,12 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
 }
 
 /// The text plus the rendered PNG, for backends that can show the model an image.
-fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) browser_tools.ToolError!zenai.provider.Client.ToolHandler.Result {
-    const result = try browser_tools.call(allocator, self.ts.session, &self.ts.registry, tool_name, arguments, .{ .inline_image = true });
+fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value, selector: *?[]const u8) browser_tools.ToolError!zenai.provider.Client.ToolHandler.Result {
+    const result = try browser_tools.call(allocator, self.ts.session, &self.ts.registry, tool_name, arguments, .{
+        .inline_image = true,
+        .record = self.capturing_for_save,
+    });
+    selector.* = result.selector;
     const content = capToolOutput(allocator, tool_name, result.text);
     return .{
         .content = content,

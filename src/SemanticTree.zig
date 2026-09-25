@@ -66,8 +66,10 @@ pub fn init(arena: std.mem.Allocator, node: *Node, registry: *NodeRegistry, fram
     };
 }
 
-pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
-    var visitor = JsonVisitor{ .jw = jw, .tree = self };
+/// Walk the pruned tree with `visitor`: `visit(*Node, *NodeData) !bool`
+/// returns whether to descend into the children, `leave() !void` closes a
+/// visited node.
+fn visitAll(self: @This(), visitor: anytype) error{WriteFailed}!void {
     var xpath_buffer: std.ArrayList(u8) = .empty;
     const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
         log.err(.app, "listener map failed", .{ .err = err });
@@ -79,29 +81,20 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
         .listener_targets = listener_targets,
         .label_index = &label_index,
     };
-    self.walk(&ctx, &visitor) catch |err| {
-        log.err(.app, "semantic tree json dump failed", .{ .err = err });
+    self.walk(&ctx, visitor) catch |err| {
+        log.err(.app, "semantic tree walk failed", .{ .err = err });
         return error.WriteFailed;
     };
 }
 
+pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
+    var visitor = JsonVisitor{ .jw = jw, .tree = self };
+    return self.visitAll(&visitor);
+}
+
 pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
     var visitor = TextVisitor{ .writer = writer, .tree = self, .depth = 0 };
-    var xpath_buffer: std.ArrayList(u8) = .empty;
-    const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
-        log.err(.app, "listener map failed", .{ .err = err });
-        return error.WriteFailed;
-    };
-    var label_index: Label.LabelByForIndex = .{};
-    var ctx: WalkContext = .{
-        .xpath_buffer = &xpath_buffer,
-        .listener_targets = listener_targets,
-        .label_index = &label_index,
-    };
-    self.walk(&ctx, &visitor) catch |err| {
-        log.err(.app, "semantic tree text dump failed", .{ .err = err });
-        return error.WriteFailed;
-    };
+    return self.visitAll(&visitor);
 }
 
 const OptionData = struct {
