@@ -191,3 +191,89 @@
   $('#opt4').disabled = false
   testing.expectEqual(false, $('#opt4').disabled)
 </script>
+
+<script id="constructor">
+  {
+    const opt = new Option()
+    testing.expectEqual('OPTION', opt.tagName)
+    testing.expectEqual(true, opt instanceof HTMLOptionElement)
+    testing.expectEqual(0, opt.childNodes.length)
+    testing.expectEqual(false, opt.hasAttribute('value'))
+    testing.expectEqual(false, opt.defaultSelected)
+    testing.expectEqual(false, opt.selected)
+  }
+
+  {
+    const opt = new Option('Label', 'v1')
+    testing.expectEqual('Label', opt.text)
+    testing.expectEqual(1, opt.childNodes.length)
+    testing.expectEqual('v1', opt.getAttribute('value'))
+    testing.expectEqual('v1', opt.value)
+  }
+
+  {
+    // An empty text appends no Text node; null is stringified.
+    testing.expectEqual(0, new Option('').childNodes.length)
+    testing.expectEqual('null', new Option(null).text)
+    testing.expectEqual('', new Option('x', '').value)
+
+    const undef = new Option(undefined, undefined)
+    testing.expectEqual(0, undef.childNodes.length)
+    testing.expectEqual(false, undef.hasAttribute('value'))
+
+    const falsy = new Option(false, false)
+    testing.expectEqual('false', falsy.text)
+    testing.expectEqual('false', falsy.getAttribute('value'))
+  }
+
+  {
+    // WebIDL boolean conversion
+    const falsy = new Option('text', 'value', 0, '')
+    testing.expectEqual(false, falsy.hasAttribute('selected'))
+    testing.expectEqual(false, falsy.selected)
+
+    const truthy = new Option('text', 'value', {}, 1)
+    testing.expectEqual(true, truthy.hasAttribute('selected'))
+    testing.expectEqual(true, truthy.selected)
+  }
+
+  {
+    // defaultSelected sets the attribute, selectedness comes from `selected` only.
+    const opt = new Option('a', 'b', true)
+    testing.expectEqual(true, opt.defaultSelected)
+    testing.expectEqual('', opt.getAttribute('selected'))
+    testing.expectEqual(false, opt.selected)
+
+    const opt2 = new Option('a', 'b', false, true)
+    testing.expectEqual(false, opt2.defaultSelected)
+    testing.expectEqual(true, opt2.selected)
+  }
+
+  {
+    const select = document.createElement('select')
+    select.add(new Option('One', '1'))
+    select.add(new Option('Two', '2', false, true))
+    testing.expectEqual('2', select.value)
+    testing.expectEqual(1, select.selectedIndex)
+  }
+</script>
+
+<script id="legacy_factory_function">
+  // https://webidl.spec.whatwg.org/#legacy-factory-functions
+  testing.expectEqual(true, Option !== HTMLOptionElement)
+  testing.expectEqual('Option', Option.name)
+  testing.expectEqual(0, Option.length)
+  testing.expectEqual(HTMLOptionElement.prototype, Option.prototype)
+  testing.expectEqual(HTMLOptionElement, new Option().constructor)
+  testing.expectEqual('option', new Option().localName)
+  testing.expectError('TypeError', () => new HTMLOptionElement())
+  testing.expectError('TypeError', () => Option())
+
+  const desc = Object.getOwnPropertyDescriptor(Option, 'prototype')
+  testing.expectEqual(false, desc.writable)
+  testing.expectEqual(false, desc.enumerable)
+  testing.expectEqual(false, desc.configurable)
+
+  testing.expectEqual(false, Object.keys(window).includes('Option'))
+  testing.expectEqual(false, Object.keys(window).includes('HTMLOptionElement'))
+</script>

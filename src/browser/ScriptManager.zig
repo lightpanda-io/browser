@@ -199,7 +199,7 @@ fn waitForPreload(self: *ScriptManager, url: [:0]const u8) ?*Script {
                 _ = client.tickSync(200) catch return null;
                 continue;
             },
-            .done => |script| {
+            .done, .failed => |script| {
                 // Preload scripts are single-use. We return it and it becomes
                 // the caller's responsibility to free.
                 _ = self.preloaded_scripts.remove(url);
@@ -318,7 +318,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     if (mode != .normal) {
         var preloaded = self.takePreload(remote_url);
         if (preloaded == null and kind == .module) {
-            preloaded = self.base.takeModuleHint(remote_url);
+            preloaded = try self.base.takeModuleHint(remote_url);
         }
         if (preloaded) |pre| {
             if (comptime lp.IS_DEBUG) {
@@ -545,6 +545,7 @@ const PreloadedScript = struct {
     const State = union(enum) {
         loading: *Script,
         done: *Script,
+        failed: *Script,
     };
 
     pub fn deinit(self: PreloadedScript) void {
@@ -583,10 +584,12 @@ const PreloadedScript = struct {
             log.warn(.http, "script fetch error", .{ .err = err, .req = script.url, .extra = "preload", .status = script.status });
         }
 
+        script.status = 0; // status == 0 is correctly treated as an error throughout
+        script.complete = true;
+
         const self: *ScriptManager = @fieldParentPtr("base", script.manager);
-        _ = self.preloaded_scripts.remove(script.url);
+        self.preloaded_scripts.getPtr(script.url).?.state = .{ .failed = script };
         script.queueHintEvent(.@"error");
-        script.deinit();
     }
 
     // Owner-driven teardown killed this preload fetch via Transfer.kill, which
@@ -726,6 +729,52 @@ test "ScriptManager: preload whose submit fails synchronously releases its arena
     const url = "http://127.0.0.1:9582/fails-at-submit.js";
     // A fetch was started (and failed), so the hint's error event fires.
     try testing.expectEqual(true, try sm.preloadScript(null, url));
-    // errorCallback consumed the entry; nothing dangles in the map.
-    try testing.expectEqual(false, sm.preloaded_scripts.contains(url));
+    // The failed entry stays for a <script> to consume; reset() frees it.
+    try testing.expect(sm.preloaded_scripts.getPtr(url).?.state == .failed);
+}
+
+// A failed preload used to be dropped, so the <script> consuming it fetched
+// again: a blocked script logged "blocked url" and counted in
+// adblock_verdicts twice. Unblocking before the <script>s and import() run
+// makes a refetch observable: it would succeed and run the script.
+test "ScriptManager: a failed preload is consumed, not refetched" {
+    const client = &testing.test_session.browser.http_client;
+    try client.setBlockedUrls(&.{ "*/preload_failed.js", "*/preload_failed_module.js" });
+    defer client.setBlockedUrls(&.{}) catch unreachable;
+
+    // Both hints' fetch errors, and nothing else.
+    testing.expectLog(&.{ .http, .http });
+
+    const page = try testing.pageTest("fixtures/preload_failed.html", .{});
+    defer page.close();
+    try client.setBlockedUrls(&.{});
+
+    {
+        const frame = page.frame().?;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        try ls.local.eval(
+            \\const classic = document.createElement('script');
+            \\classic.src = 'preload_failed.js';
+            \\classic.onerror = () => window.classic_error = true;
+            \\document.head.appendChild(classic);
+            \\const module = document.createElement('script');
+            \\module.type = 'module';
+            \\module.src = 'preload_failed_module.js';
+            \\module.onerror = () => window.module_error = true;
+            \\document.head.appendChild(module);
+            \\const dynamic = document.createElement('script');
+            \\dynamic.textContent = "import('./preload_failed_module.js').catch(() => window.import_error = true);";
+            \\document.head.appendChild(dynamic);
+        , null);
+    }
+
+    var runner = testing.test_session.runner(.{});
+    try runner.waitForScript(page.frame_id,
+        \\window.classic_hint_error && window.module_hint_error &&
+        \\window.classic_error && window.module_error && window.import_error &&
+        \\!window.failed_classic_ran && !window.failed_module_ran
+    , 2000);
 }

@@ -71,6 +71,7 @@ const GlobalScope = @import("global_scope.zig").GlobalScope;
 
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
+const framing = @import("frame/framing.zig");
 pub const parse = @import("frame/parse.zig");
 pub const preload = @import("frame/preload.zig");
 pub const resource_load = @import("frame/resource_load.zig");
@@ -133,6 +134,10 @@ _event_target_attr_listeners: GlobalEventHandlersLookup = .empty,
 // File objects (reference counted via their Blob proto); released at teardown.
 _file_lists: std.ArrayList(*FileList) = .empty,
 
+// List of Documents which called document.open() and potentially need to have
+// the parser freed.
+_script_created_parser_docs: std.ArrayList(*Document) = .empty,
+
 // Every matchMedia() result of this document, so a viewport change can fire
 // their `change`.
 _media_query_lists: std.ArrayList(*MediaQueryList) = .empty,
@@ -145,6 +150,8 @@ _media_query_lists: std.ArrayList(*MediaQueryList) = .empty,
 _queued_events_1: std.ArrayList(QueuedEvent) = .empty,
 _queued_events_2: std.ArrayList(QueuedEvent) = .empty,
 _queued_events: *std.ArrayList(QueuedEvent) = undefined,
+
+_focus_fixup_pending: bool = false,
 
 _style_manager: StyleManager,
 _script_manager: ScriptManager,
@@ -455,6 +462,16 @@ pub fn deinit(self: *Frame) void {
     }
 
     self._parse_state.deinit(self);
+
+    for (self._script_created_parser_docs.items) |doc| {
+        const parser = &(doc._script_created_parser orelse continue);
+        if (parser.parser.frame != self) {
+            // The document was closed and re-opened on another frame
+            continue;
+        }
+        parser.deinit();
+        doc._script_created_parser = null;
+    }
 
     // Unregister CookieStore from session notifications before the JS
     // context (and thus the scheduler) is destroyed, otherwise a late
@@ -1444,6 +1461,15 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
         self.url = try self.arena.dupeZ(u8, response_url);
         self.origin = try URL.getOrigin(self.arena, self.url);
     }
+
+    if (self.parent != null and framing.allowed(self, transfer) == false) {
+        log.warn(.frame, "x-frame-options blocked", .{ .url = self.url });
+        // give this an opaque origin so that any request to the error page
+        // is treated as being cross-origin
+        self.origin = null;
+        try self.js.setOrigin(null);
+        return error.XFrameOptionsDenied;
+    }
     try self.js.setOrigin(self.origin);
 
     // After any redirect, drop the original method/body/header so a later
@@ -1487,7 +1513,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
             .name = try self.arena.dupe(u8, hdr.name),
             .value = try self.arena.dupe(u8, hdr.value),
         });
-        if (std.ascii.eqlIgnoreCase(hdr.name, "referrer-policy")) {
+        if (std.mem.eql(u8, hdr.name, "referrer-policy")) {
             if (referrer.parseHeader(hdr.value)) |rp| {
                 self.referrer_policy = rp;
             }
@@ -1533,7 +1559,7 @@ fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
     const disposition: HttpClient.Header = blk: {
         var it = transfer.responseHeaderIterator();
         while (it.next()) |hdr| {
-            if (std.ascii.eqlIgnoreCase(hdr.name, "content-disposition")) {
+            if (std.mem.eql(u8, hdr.name, "content-disposition")) {
                 break :blk hdr;
             }
         }
@@ -2041,6 +2067,9 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     try Frame.init(new_frame, frame_id, self.page, .{ .parent = self });
     errdefer new_frame.deinit();
 
+    // until the navigate commits, the iframe is about:blank and inherits the parent's origin
+    try new_frame.js.setOrigin(self.origin);
+
     const delays_load = iframe.isLazyLoading() == false;
     new_frame._delays_parent_load = delays_load;
     if (delays_load) {
@@ -2354,6 +2383,25 @@ pub fn queueElementEvent(self: *Frame, element: *Element.Html, kind: QueuedEvent
             }
         }.cleanup, 0, .{ .name = "frame.dispatchQueuedEvents" });
     }
+}
+
+// An element that becomes inert can't stay focused. Fire its blur on the next tick
+fn scheduleFocusFixup(self: *Frame) !void {
+    if (self._focus_fixup_pending or self.document._active_element == null) {
+        return;
+    }
+    try self.js.scheduler.add(self, struct {
+        fn run(ctx: *anyopaque) !?u32 {
+            const f: *Frame = @ptrCast(@alignCast(ctx));
+            f._focus_fixup_pending = false;
+            const active = f.document._active_element orelse return null;
+            if (active.asNode().isInert(f)) {
+                try active.blur(f);
+            }
+            return null;
+        }
+    }.run, 5, .{ .name = "frame.focusFixup" });
+    self._focus_fixup_pending = true;
 }
 
 const HashChangeCallback = struct {
@@ -3135,6 +3183,10 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
     } else if (name.eql(comptime .wrap("style"))) {
         element._flags.has_inline_style = true;
         self.styleAttributeChanged(element, value.str());
+    } else if (name.eql(comptime .wrap("inert"))) {
+        self.scheduleFocusFixup() catch |err| {
+            log.err(.frame, "scheduleFocusFixup", .{ .err = err, .type = self._type, .url = self.url });
+        };
     }
 }
 
@@ -3282,10 +3334,13 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
     // Scripts, iframes, links and styles activate on becoming connected;
     // appending them to a detached parent does nothing (they run/load later
     // if the subtree gets inserted into the document).
-    if (comptime from_parser == false) {
-        switch (node._type) {
-            .element => if (!node.isConnected()) return,
-            else => {},
+    if (node._type == .element) {
+        if (comptime from_parser) {
+            if (node.getDocument(self)._frame == null) {
+                return;
+            }
+        } else if (!node.isConnected()) {
+            return;
         }
     }
 

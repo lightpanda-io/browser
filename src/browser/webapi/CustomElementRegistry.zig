@@ -149,6 +149,9 @@ pub fn getName(self: *CustomElementRegistry, constructor: js.Function) ?[]const 
 }
 
 pub fn upgrade(self: *CustomElementRegistry, root: *Node, frame: *Frame) !void {
+    if (root.getDocument(frame)._frame == null) {
+        return;
+    }
     try upgradeNode(self, root, frame);
 }
 

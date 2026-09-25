@@ -364,16 +364,12 @@ pub fn createBrowserContext(self: *CDP) ![]const u8 {
     return id;
 }
 
-pub fn disposeBrowserContext(self: *CDP, browser_context_id: []const u8) bool {
-    const bc = &(self.browser_context orelse return false);
-    if (std.mem.eql(u8, bc.id, browser_context_id) == false) {
-        return false;
-    }
+pub fn disposeBrowserContext(self: *CDP) void {
+    const bc = &(self.browser_context orelse return);
     bc.deinit();
     self.browser.closeSession();
     self.browser_context = null;
     _ = self.browser_context_arena.reset(.{ .retain_with_limit = 1024 * 16 });
-    return true;
 }
 
 const SendEventOpts = struct {
@@ -838,6 +834,52 @@ pub const BrowserContext = struct {
         if (authRequests) {
             try self.notification.register(.http_request_auth_required, self, onHttpRequestAuthRequired);
         }
+    }
+
+    // Shared by Target.closeTarget, Page.close and Target.disposeBrowserContext.
+    // Drivers settle page.close() on detachedFromTarget and drop the target
+    // on targetDestroyed, so both are sent even when nothing was attached.
+    pub fn closeTarget(self: *BrowserContext) !void {
+        const target_id = self.target_id orelse return;
+        const cdp = self.cdp;
+        for (self.attached_sessions.items) |session| {
+            self.fetchDisableForSession(session.id);
+            try cdp.sendEvent("Inspector.detached", .{
+                .reason = "Render process gone.",
+            }, .{ .session_id = session.id });
+            try cdp.sendEvent("Target.detachedFromTarget", .{
+                .targetId = target_id,
+                .sessionId = session.id,
+                .reason = "Render process gone.",
+            }, .{ .session_id = session.parent_id });
+        }
+        self.attached_sessions.clearRetainingCapacity();
+
+        // could be null, created but never attached
+        if (self.session_id) |session_id| {
+            self.fetchDisableForSession(session_id);
+            try cdp.sendEvent("Inspector.detached", .{
+                .reason = "Render process gone.",
+            }, .{ .session_id = session_id });
+            try cdp.sendEvent("Target.detachedFromTarget", .{
+                .targetId = target_id,
+                .sessionId = session_id,
+                .reason = "Render process gone.",
+            }, .{});
+            self.session_id = null;
+        }
+
+        try cdp.sendEvent("Target.targetDestroyed", .{ .targetId = target_id }, .{});
+
+        if (self.page_handle) |handle| {
+            handle.close();
+            self.page_handle = null;
+        }
+        for (self.isolated_worlds.items) |world| {
+            world.deinit();
+        }
+        self.isolated_worlds.clearRetainingCapacity();
+        self.target_id = null;
     }
 
     pub fn fetchDisableForSession(self: *BrowserContext, session_id: []const u8) void {
@@ -1397,14 +1439,12 @@ pub const Command = struct {
         return self.browser_context.?;
     }
 
-    const SendResultOpts = struct {
-        include_session_id: bool = true,
-    };
-    pub fn sendResult(self: *Command, result: anytype, opts: SendResultOpts) !void {
+    const SendResultOpts = struct {};
+    pub fn sendResult(self: *Command, result: anytype, _: SendResultOpts) !void {
         return self.sender.sendJSON(.{
             .id = self.input.id,
             .result = if (comptime @typeInfo(@TypeOf(result)) == .null) struct {}{} else result,
-            .sessionId = if (opts.include_session_id) self.input.session_id else null,
+            .sessionId = self.input.session_id,
         });
     }
 
@@ -1413,14 +1453,12 @@ pub const Command = struct {
         return self.cdp.sendEvent(method, p, opts);
     }
 
-    const SendErrorOpts = struct {
-        include_session_id: bool = true,
-    };
-    pub fn sendError(self: *Command, code: i32, message: []const u8, opts: SendErrorOpts) !void {
+    const SendErrorOpts = struct {};
+    pub fn sendError(self: *Command, code: i32, message: []const u8, _: SendErrorOpts) !void {
         return self.sender.sendJSON(.{
             .id = self.input.id,
             .@"error" = .{ .code = code, .message = message },
-            .sessionId = if (opts.include_session_id) self.input.session_id else null,
+            .sessionId = self.input.session_id,
         });
     }
 

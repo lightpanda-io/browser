@@ -319,7 +319,7 @@ fn releaseScriptArena(self: *SharedWorkerGlobalScope) void {
 fn drainPendingConnects(self: *SharedWorkerGlobalScope) void {
     for (self._pending_connects.items) |port| {
         self.scheduleConnect(port) catch |err| {
-            log.warn(.browser, "shared worker drain connect failed", .{ .err = err });
+            log.warn(.browser, "shared worker drain failed", .{ .err = err });
         };
     }
     self._pending_connects.clearRetainingCapacity();
@@ -382,7 +382,7 @@ const ConnectCallback = struct {
             .cancelable = false,
         }, wgs.page)).asEvent();
 
-        try wgs.dispatch(target, event, on_connect, .{ .context = "SharedWorkerGlobalScope.connect" });
+        try wgs.dispatch(target, event, on_connect, .{ .context = "shared worker connect" });
         return null;
     }
 };

@@ -165,12 +165,6 @@ pub fn setInnerHTML(self: *DocumentFragment, html: []const u8, frame: *Frame) !v
     return parent.setHTML(html, .{}, frame);
 }
 
-/// allows declarative shadow dom
-pub fn setHTMLUnsafe(self: *DocumentFragment, html: []const u8, frame: *Frame) !void {
-    const parent = self.asNode();
-    return parent.setHTML(html, .{ .allow_declarative_shadow = true }, frame);
-}
-
 pub fn cloneFragment(self: *DocumentFragment, deep: bool, document: *const Node.Document, frame: *Frame) !*Node {
     const fragment = try DocumentFragment.init(document, frame);
     const fragment_node = fragment.asNode();

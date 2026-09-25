@@ -719,11 +719,19 @@ fn createContextualFragment(self: *const Range, html: []const u8, frame: *Frame)
 pub fn toString(self: *const Range, frame: *Frame) ![]const u8 {
     // Simplified implementation: just extract text content
     var buf = std.Io.Writer.Allocating.init(frame.local_arena);
-    try self.writeTextContent(&buf.writer);
+    try self.writeTextContent(&buf.writer, null);
     return buf.written();
 }
 
-fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
+// Selection.toString is almost like Range.toString, except it does not include
+// the text that an inert element hides.
+pub fn toSelectionString(self: *const Range, frame: *Frame) ![]const u8 {
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+    try self.writeTextContent(&buf.writer, frame);
+    return buf.written();
+}
+
+fn writeTextContent(self: *const Range, writer: *std.Io.Writer, skip_inert: ?*const Frame) !void {
     if (self._proto.getCollapsed()) return;
 
     const start_node = self._proto._start_container;
@@ -734,7 +742,7 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
     // Same text node — just substring
     if (start_node == end_node) {
         if (start_node.is(Node.CData)) |cdata| {
-            if (!isCommentOrPI(cdata)) {
+            if (includeText(cdata, skip_inert)) {
                 const data = cdata.getData().str();
                 const s = byteOffset(data, start_offset);
                 const e = byteOffset(data, end_offset);
@@ -748,7 +756,7 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
 
     // Partial start: if start container is a text node, write from offset to end
     if (start_node.is(Node.CData)) |cdata| {
-        if (!isCommentOrPI(cdata)) {
+        if (includeText(cdata, skip_inert)) {
             const data = cdata.getData().str();
             const s = byteOffset(data, start_offset);
             try writer.writeAll(data[s..]);
@@ -775,7 +783,7 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
                 if (n == we) break;
             }
             if (n.is(Node.CData)) |cdata| {
-                if (!isCommentOrPI(cdata)) {
+                if (includeText(cdata, skip_inert)) {
                     try writer.writeAll(cdata.getData().str());
                 }
             }
@@ -786,13 +794,21 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
     // Partial end: if end container is a different text node, write from start to offset
     if (start_node != end_node) {
         if (end_node.is(Node.CData)) |cdata| {
-            if (!isCommentOrPI(cdata)) {
+            if (includeText(cdata, skip_inert)) {
                 const data = cdata.getData().str();
                 const e = byteOffset(data, end_offset);
                 try writer.writeAll(data[0..e]);
             }
         }
     }
+}
+
+fn includeText(cdata: *Node.CData, skip_inert: ?*const Frame) bool {
+    if (isCommentOrPI(cdata)) {
+        return false;
+    }
+    const frame = skip_inert orelse return true;
+    return cdata.asNode().isInert(frame) == false;
 }
 
 fn isCommentOrPI(cdata: *Node.CData) bool {

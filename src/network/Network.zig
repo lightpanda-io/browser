@@ -27,6 +27,7 @@ const libcurl = @import("../sys/libcurl.zig");
 const http = @import("http.zig");
 const IpFilter = @import("IpFilter.zig");
 const RobotStore = @import("Robots.zig").RobotStore;
+const CorsStore = @import("CorsStore.zig");
 const WebBotAuth = @import("WebBotAuth.zig");
 const RateLimiter = @import("RateLimiter.zig");
 const Certificates = @import("Certificates.zig");
@@ -43,6 +44,7 @@ cache: Cache,
 allocator: Allocator,
 config: *const Config,
 robot_store: RobotStore,
+cors_store: CorsStore,
 web_bot_auth: ?WebBotAuth,
 rate_limiter: ?RateLimiter,
 certificates: Certificates,
@@ -121,7 +123,8 @@ pub fn init(app: *App) !Network {
         .connections = connections,
 
         .cache = cache,
-        .robot_store = RobotStore.init(allocator),
+        .robot_store = RobotStore.init(allocator, config.robotStoreEntryLimit()),
+        .cors_store = CorsStore.init(allocator, config.corsStoreEntryLimit()),
         .web_bot_auth = web_bot_auth,
         .rate_limiter = if (config.httpNavDelay()) |ms| RateLimiter.init(allocator, ms, config.httpNavBurst()) else null,
         .adblocker = adblocker,
@@ -144,6 +147,8 @@ pub fn deinit(self: *Network) void {
     self.ws_pool.deinit(self.allocator);
 
     self.robot_store.deinit();
+    self.cors_store.deinit();
+
     if (self.rate_limiter) |*rl| {
         rl.deinit();
     }

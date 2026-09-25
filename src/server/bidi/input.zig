@@ -609,6 +609,56 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
     }
 }
 
+// WebDriver's Element Send Keys, into whatever has focus. Every code point is a
+// press and release, except a modifier, which stays down until it's typed
+// again, U+E000 releases everything, or the text ends. It's a keyboard of its
+// own: the actions' held keys don't apply.
+pub fn typeText(frame: *Frame, text: []const u8) !void {
+    const view = std.unicode.Utf8View.init(text) catch return error.InvalidUtf8;
+
+    var modifiers: Modifiers = .{};
+    // there are 8 modifier code points, and each is held at most once
+    var held_buf: [8]u21 = undefined;
+    var held: std.ArrayList(u21) = .initBuffer(&held_buf);
+
+    var it = view.iterator();
+    while (it.nextCodepoint()) |c| {
+        // like chromedriver, a newline is the Enter key
+        const cp: u21 = if (c == '\n' or c == '\r') 0xE006 else c;
+        if (cp == 0xE000) {
+            try releaseHeld(frame, &held, &modifiers);
+            continue;
+        }
+
+        const info = keyInfo(cp, modifiers.shift);
+        if (info.modifier == null) {
+            try dispatchKey(frame, "keydown", &info, &modifiers);
+            try dispatchKey(frame, "keyup", &info, &modifiers);
+            continue;
+        }
+
+        if (std.mem.indexOfScalar(u21, held.items, cp)) |i| {
+            _ = held.orderedRemove(i);
+            setModifier(&modifiers, info.modifier, false);
+            try dispatchKey(frame, "keyup", &info, &modifiers);
+        } else {
+            held.appendAssumeCapacity(cp);
+            setModifier(&modifiers, info.modifier, true);
+            try dispatchKey(frame, "keydown", &info, &modifiers);
+        }
+    }
+    try releaseHeld(frame, &held, &modifiers);
+}
+
+// in reverse press order
+fn releaseHeld(frame: *Frame, held: *std.ArrayList(u21), modifiers: *Modifiers) !void {
+    while (held.pop()) |cp| {
+        const info = keyInfo(cp, modifiers.shift);
+        setModifier(modifiers, info.modifier, false);
+        try dispatchKey(frame, "keyup", &info, modifiers);
+    }
+}
+
 const Point = struct { x: f64, y: f64 };
 
 fn resolveOrigin(bidi: *BiDi, frame: *Frame, source: *const Source, origin: Origin, x: f64, y: f64) !Point {

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<title>webdriver input</title>
+<button id=btn>go</button>
+<button id=gone style="display: none">hidden</button>
+<input id=name value="old">
+<input id=ro value="fixed" readonly>
+<input id=check type=checkbox>
+<textarea id=area>text</textarea>
+<div id=plain>not focusable</div>
+<select id=pick>
+  <option id=opt_a value=a selected>A</option>
+  <option id=opt_b value=b>B</option>
+</select>
+<a id=next href="elements.html">next</a>
+<form action="elements.html">
+  <input id=q name=q>
+</form>
+<script>
+  window.events = [];
+  for (const type of ['click', 'input', 'change', 'keydown', 'focus', 'blur']) {
+    document.addEventListener(type, (e) => {
+      const key = type === 'keydown' ? ':' + (e.shiftKey ? 'S-' : '') + e.key : '';
+      window.events.push(type + key + '@' + e.target.id);
+    }, true);
+  }
+</script>

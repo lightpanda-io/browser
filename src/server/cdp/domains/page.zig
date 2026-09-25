@@ -121,6 +121,18 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
     // attached targets.
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
+    // Like Chrome, report the initial about:blank as loaded. Its state is left
+    // as is, since the first navigation reuses it (see canNavigateInPlace).
+    if (frame._load_state == .waiting) {
+        const frame_id = &id.toFrameId(frame._frame_id);
+        const loader_id = &id.toLoaderId(frame._loader_id);
+
+        const now = lp.datetime.timestamp(.boot);
+        try sendPageLifecycle(bc, "DOMContentLoaded", now, frame_id, loader_id);
+        try sendPageLifecycle(bc, "load", now, frame_id, loader_id);
+        return cmd.sendResult(null, .{});
+    }
+
     if (frame._load_state == .complete) {
         const frame_id = &id.toFrameId(frame._frame_id);
         const loader_id = &id.toLoaderId(frame._loader_id);
@@ -226,41 +238,15 @@ fn removeScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
 fn close(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    const target_id = bc.target_id orelse return error.TargetNotLoaded;
+    if (bc.target_id == null) {
+        return error.TargetNotLoaded;
+    }
 
     // can't be null if we have a target_id
     lp.assert(bc.session.hasPage(), "CDP.frame.close null frame", .{});
 
-    try cmd.sendResult(.{}, .{});
-
-    // Following code is similar to target.closeTarget
-    //
-    // could be null, created but never attached
-    if (bc.session_id) |session_id| {
-        // Inspector.detached event
-        try cmd.sendEvent("Inspector.detached", .{
-            .reason = "Render process gone.",
-        }, .{ .session_id = session_id });
-
-        // detachedFromTarget event
-        try cmd.sendEvent("Target.detachedFromTarget", .{
-            .targetId = target_id,
-            .sessionId = session_id,
-            .reason = "Render process gone.",
-        }, .{});
-
-        bc.session_id = null;
-    }
-
-    if (bc.page_handle) |handle| {
-        handle.close();
-    }
-    bc.page_handle = null;
-    for (bc.isolated_worlds.items) |world| {
-        world.deinit();
-    }
-    bc.isolated_worlds.clearRetainingCapacity();
-    bc.target_id = null;
+    try cmd.sendResult(null, .{});
+    try bc.closeTarget();
 }
 
 fn createIsolatedWorld(cmd: *CDP.Command) !void {
@@ -1222,6 +1208,29 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
 }
 
 const testing = @import("../testing.zig");
+
+test "cdp.page: close detaches the target like Target.closeTarget" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const target_id = bc.target_id.?;
+    const session_id = try testing.arena_allocator.dupe(u8, bc.session_id.?);
+
+    try ctx.processMessage(.{ .id = 3, .method = "Page.close", .sessionId = session_id });
+    try ctx.expectSentResult(null, .{ .id = 3, .session_id = session_id });
+    try ctx.expectSentEvent("Inspector.detached", .{ .reason = "Render process gone." }, .{ .session_id = session_id });
+    try ctx.expectSentEvent("Target.detachedFromTarget", .{
+        .targetId = target_id,
+        .sessionId = session_id,
+        .reason = "Render process gone.",
+    }, .{});
+    try ctx.expectSentEvent("Target.targetDestroyed", .{ .targetId = target_id }, .{});
+    try testing.expectEqual(null, bc.target_id);
+    try testing.expectEqual(null, bc.session_id);
+}
 test "cdp.frame: setup no-ops" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1502,6 +1511,22 @@ test "cdp.frame: a worldName preload script seeds every frame" {
         .expression = "typeof globalThis.__seeded",
     } });
     try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "undefined" } }, .{ .id = 34 });
+}
+
+// The initial about:blank is reported as loaded, but stays pristine.
+test "cdp.page: setLifecycleEventsEnabled reports the initial about:blank as loaded" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const session_id = bc.session_id.?;
+
+    try ctx.processMessage(.{ .id = 3, .method = "Page.setLifecycleEventsEnabled", .sessionId = session_id, .params = .{ .enabled = true } });
+    try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "DOMContentLoaded", .frameId = bc.target_id.? }, .{ .session_id = session_id });
+    try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "load", .frameId = bc.target_id.? }, .{ .session_id = session_id });
+    try testing.expectEqual(.waiting, bc.mainFrame().?._load_state);
 }
 
 // puppeteer: the utility world is created on the bootstrap about:blank and

@@ -113,6 +113,25 @@
 }
 </script>
 
+<script id="overscrollBehaviorShorthand">
+{
+  const div = document.createElement('div');
+  div.style.cssText = 'overscroll-behavior: contain auto';
+  testing.expectEqual('contain', div.style.overscrollBehaviorX);
+  testing.expectEqual('auto', div.style.overscrollBehaviorY);
+  testing.expectEqual('contain auto', div.style.overscrollBehavior);
+  testing.expectEqual(2, div.style.length);
+
+  div.style.overscrollBehaviorY = 'contain';
+  testing.expectEqual('contain', div.style.overscrollBehavior);
+  testing.expectEqual('overscroll-behavior: contain;', div.style.cssText);
+
+  div.style.setProperty('overscroll-behavior', 'none');
+  testing.expectEqual('none', div.style.overscrollBehaviorX);
+  testing.expectEqual('none', div.style.overscrollBehaviorY);
+}
+</script>
+
 <script id="overflowShorthand">
 {
   const div = document.createElement('div');

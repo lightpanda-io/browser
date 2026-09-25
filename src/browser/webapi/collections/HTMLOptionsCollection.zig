@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
@@ -104,6 +106,50 @@ pub fn remove(self: *HTMLOptionsCollection, index: i32, frame: *Frame) void {
     }
 }
 
+// Chrome's cap (kMaxListItems): padding up to a huge index would otherwise
+// create that many options. Past it, Chrome ignores the set (with a console
+// warning); Firefox has no cap.
+const max_list_items = 100_000;
+
+// The indexed setter: null removes the option at index; an index past the
+// end pads with blank options and then appends; otherwise the option at
+// index is replaced.
+fn setAtIndex(self: *HTMLOptionsCollection, index: u32, option_: ?*Option, frame: *Frame) !void {
+    const existing = self.getAtIndex(index, frame);
+    const option = (option_ orelse {
+        if (existing) |element| {
+            element.remove(frame);
+        }
+        return;
+    }).asElement().asNode();
+
+    if (existing) |element| {
+        const old = element.asNode();
+        _ = try old.parentNode().?.replaceChild(option, old, frame);
+        return;
+    }
+
+    if (index >= max_list_items) {
+        lp.log.warn(.js, "select overflow", .{ .max_list_items = max_list_items, .request = index });
+        return;
+    }
+
+    const select_node = self._select.asNode();
+    const len = self.length(frame);
+    if (index > len) {
+        // Per spec, the padding goes in as one DocumentFragment, so observers
+        // get one record rather than one per blank option.
+        const doc = select_node.ownerDocument(frame).?;
+        const fragment = (try Node.DocumentFragment.init(doc, frame)).asNode();
+        for (len..index) |_| {
+            const blank = try doc.createElementNS("http://www.w3.org/1999/xhtml", "option", frame);
+            _ = try fragment.appendChild(blank.asNode(), frame);
+        }
+        _ = try select_node.appendChild(fragment, frame);
+    }
+    _ = try select_node.appendChild(option, frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(HTMLOptionsCollection);
 
@@ -117,7 +163,7 @@ pub const JsApi = struct {
     pub const length = bridge.accessor(HTMLOptionsCollection.length, null, .{});
 
     // Indexed access
-    pub const @"[int]" = bridge.indexed(HTMLOptionsCollection.getAtIndex, null, .{ .null_as_undefined = true });
+    pub const @"[int]" = bridge.indexedReadWrite(HTMLOptionsCollection.getAtIndex, setAtIndex, null, null, null, .{ .null_as_undefined = true, .ce_reactions = true });
     pub const @"[str]" = bridge.namedIndexed(HTMLOptionsCollection.getByName, null, null, null, struct {
         fn wrap(self: *HTMLOptionsCollection, name: []const u8, frame: *Frame) !u32 {
             if (self.getByName(name, frame) != null) {

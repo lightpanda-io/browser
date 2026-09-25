@@ -617,7 +617,7 @@ fn scheduleBufferFull(self: *Performance) !void {
                 const exec = perf._exec;
                 const event = try Event.initTrusted(.wrap(BUFFER_FULL), .{}, exec.page);
                 try exec.dispatch(perf.asEventTarget(), event, perf._on_buffer_full, .{
-                    .context = "Performance.resourcetimingbufferfull",
+                    .context = "Performance.bufferfull",
                 });
                 return null;
             }

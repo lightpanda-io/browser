@@ -16,12 +16,15 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+
 const Frame = @import("../Frame.zig");
 const Parser = @import("../parser/Parser.zig");
 
 const Node = @import("../webapi/Node.zig");
 const Element = @import("../webapi/Element.zig");
 const Document = @import("../webapi/Document.zig");
+const HTMLDocument = @import("../webapi/HTMLDocument.zig");
 const ShadowRoot = @import("../webapi/ShadowRoot.zig");
 const slotting = @import("../webapi/element/slotting.zig");
 
@@ -101,6 +104,44 @@ pub fn fragment(frame: *Frame, node: *Node, html: []const u8, opts: FragmentPars
     try Element.Html.Picture.childrenInserted(node, frame);
 }
 
+pub const HtmlDocumentOpts = struct {
+    allow_declarative_shadow: bool = false,
+};
+
+// Build a detached HTMLDocument from `html` (DOMParser.parseFromString and
+// Document.parseHTML). The caller sets its URL.
+pub fn htmlDocument(frame: *Frame, html: []const u8, opts: HtmlDocumentOpts) !*HTMLDocument {
+    const arena = try frame.getArena(.medium, "parse.htmlDocument");
+    defer arena.release();
+
+    // Frame-side hooks triggered from `Build.created` / `nodeIsReady`
+    // (external stylesheet fetches, script execution, mutation-observer
+    // fan-out, default-script injection) treat the parsed nodes as detached
+    // and skip side effects on the live document.
+    const previous_parse_mode = frame._parse_mode;
+    frame._parse_mode = .fragment;
+    defer frame._parse_mode = previous_parse_mode;
+
+    const doc = try frame._factory.document(HTMLDocument{ ._proto = undefined });
+
+    var normalized = std.mem.trim(u8, html, &std.ascii.whitespace);
+    if (normalized.len == 0) {
+        normalized = "<html></html>";
+    }
+
+    var parser = Parser.init(arena.allocator(), doc.asNode(), frame, .{
+        .allow_declarative_shadow = opts.allow_declarative_shadow,
+    });
+    parser.parse(normalized);
+    if (parser.terminated) {
+        return error.ExecutionTerminated;
+    }
+    if (parser.err) |pe| {
+        return pe.err;
+    }
+    return doc;
+}
+
 // Build a detached XMLDocument from `xml` (DOMParser.parseFromString and
 // XMLHttpRequest.responseXML). Returns null when the input isn't well-formed
 // XML.
@@ -123,13 +164,5 @@ pub fn xmlDocument(frame: *Frame, xml: []const u8) !?*Document.XMLDocument {
     if (parser.err != null or parser.xml_error or doc_node.firstChild() == null) {
         return null;
     }
-
-    // If first node is a `ProcessingInstruction` (e.g. the <?xml?>
-    // declaration), skip it.
-    const first_child = doc_node.firstChild().?;
-    if (first_child.getNodeType() == 7) {
-        _ = try doc_node.removeChild(first_child, frame);
-    }
-
     return doc;
 }

@@ -404,7 +404,7 @@ fn dispatchExtendable(
     self._pending_event = event;
     errdefer self.releasePendingEvent();
 
-    try wgs.dispatch(wgs.asEventTarget(), base, handler, .{ .context = "ServiceWorkerGlobalScope lifecycle" });
+    try wgs.dispatch(wgs.asEventTarget(), base, handler, .{ .context = "service worker lifecycle" });
 
     // Seal only after the handlers have run, so a synchronous waitUntil is
     // counted before an empty pending set can complete the phase.

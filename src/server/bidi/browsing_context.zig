@@ -32,6 +32,7 @@ const Notification = @import("../../Notification.zig");
 
 const BiDi = @import("BiDi.zig");
 const script = @import("script.zig");
+const execute = @import("execute.zig");
 const remote_value = @import("remote_value.zig");
 
 const log = lp.log;
@@ -265,6 +266,16 @@ fn startNavigation(cmd: *BiDi.Command, ctx: *Context, frame: *Frame, url: [:0]co
     if (wait == .none) {
         return cmd.sendResult(.{ .navigation = &ctx.navigation_id, .url = url });
     }
+}
+
+// For commands that start a navigation, e.g. clicking a link.
+pub fn answerAfterNavigation(cmd: *BiDi.Command, ctx: *Context, frame: *const Frame) !void {
+    if (frame._queued_navigation == null) {
+        return cmd.sendDone();
+    }
+    // There was an already queued navigation, reject the previous pending command
+    try rejectPending(cmd.bidi, ctx, "navigation superseded");
+    ctx.pending_navigate = .{ .reply = cmd.takeReply(), .until = .complete };
 }
 
 fn close(cmd: *BiDi.Command) !void {
@@ -547,6 +558,7 @@ fn onFrameCreated(ptr: *anyopaque, frame: *Frame) !void {
 fn onFrameDestroyed(ptr: *anyopaque, frame: *const Frame) !void {
     const bidi: *BiDi = @ptrCast(@alignCast(ptr));
     script.Pending.contextDestroyed(bidi, frame.js.id);
+    execute.Pending.contextDestroyed(bidi, frame.js.id);
 }
 
 fn onFrameNavigate(ptr: *anyopaque, msg: *const Notification.FrameNavigate) !void {

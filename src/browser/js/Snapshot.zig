@@ -275,10 +275,11 @@ fn createSnapshotContext(
             .data = null,
             .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
         });
+        const window_index = @import("../webapi/Window.zig").JsApi.index;
         v8.v8__ObjectTemplate__SetIndexedHandler(global_template, &.{
-            .getter = @import("../webapi/Window.zig").JsApi.index.getter,
+            .getter = window_index.getter,
             .setter = null,
-            .query = null,
+            .query = window_index.query,
             .deleter = null,
             .enumerator = null,
             .definer = null,
@@ -325,22 +326,18 @@ fn createSnapshotContext(
         const template_index = comptime bridge.JsApiLookup.getId(JsApi);
         const func = v8.v8__FunctionTemplate__GetFunction(templates[template_index], context);
         if (@hasDecl(JsApi.Meta, "name")) {
+            const name = JsApi.Meta.name;
+            const v8_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
+            var maybe_result: v8.MaybeBool = undefined;
+            // Web IDL: interface objects on the global are non-enumerable.
+            v8.v8__Object__DefineOwnProperty(global_obj, context, v8_class_name, func, v8.DontEnum, &maybe_result);
+
             if (@hasDecl(JsApi.Meta, "constructor_alias")) {
                 const alias = JsApi.Meta.constructor_alias;
-                const v8_class_name = v8.v8__String__NewFromUtf8(isolate, alias.ptr, v8.kNormal, @intCast(alias.len));
-                var maybe_result: v8.MaybeBool = undefined;
-                v8.v8__Object__Set(global_obj, context, v8_class_name, func, &maybe_result);
-
-                const name = JsApi.Meta.name;
-                const illegal_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
-                var maybe_result2: v8.MaybeBool = undefined;
-                v8.v8__Object__DefineOwnProperty(global_obj, context, illegal_class_name, func, 0, &maybe_result2);
-            } else {
-                const name = JsApi.Meta.name;
-                const v8_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
-                var maybe_result: v8.MaybeBool = undefined;
-                // Web IDL: interface objects on the global are non-enumerable.
-                v8.v8__Object__DefineOwnProperty(global_obj, context, v8_class_name, func, v8.DontEnum, &maybe_result);
+                const alias_func = generateLegacyFactoryFunction(JsApi, isolate, templates[template_index], func.?, context.?);
+                const v8_alias_name = v8.v8__String__NewFromUtf8(isolate, alias.ptr, v8.kNormal, @intCast(alias.len));
+                var maybe_alias_result: v8.MaybeBool = undefined;
+                v8.v8__Object__DefineOwnProperty(global_obj, context, v8_alias_name, @ptrCast(alias_func), v8.DontEnum, &maybe_alias_result);
             }
         }
 
@@ -671,7 +668,7 @@ fn illegalConstructorCallback(raw_info: ?*const v8.FunctionCallbackInfo) callcon
             if (v8.v8__Function__GetName(func)) |name_value| {
                 if (v8.v8__Value__IsString(name_value)) {
                     const str: *const v8.String = @ptrCast(name_value);
-                    const n = v8.v8__String__WriteUtf8(str, isolate, &name_buf, name_buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+                    const n = v8.v8__String__WriteUtf8(str, isolate, &name_buf, name_buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
                     name = name_buf[0..@intCast(n)];
                 }
             }
@@ -720,7 +717,9 @@ fn protoIndexLookup(comptime JsApi: type) ?u16 {
 // Generate a constructor template for a JsApi type (public for reuse)
 fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8.FunctionTemplate {
     const callback, const arity = comptime blk: {
-        if (@hasDecl(JsApi, "constructor")) {
+        // The constructor belongs to the legacy factory function (`Image`),
+        // see generateLegacyFactoryFunction.
+        if (@hasDecl(JsApi, "constructor") and !@hasDecl(JsApi.Meta, "constructor_alias")) {
             break :blk .{ JsApi.constructor.func, JsApi.constructor.arity };
         }
         if (inheritsFromHtmlElement(JsApi)) {
@@ -746,6 +745,38 @@ fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8.Fun
     // Web IDL: interface object's `prototype` property is non-writable/non-configurable.
     v8.v8__FunctionTemplate__ReadOnlyPrototype(template);
     return template;
+}
+
+// https://webidl.spec.whatwg.org/#legacy-factory-functions
+// `Image`, `Audio`, `Option`: a function distinct from the interface object
+// (so `new HTMLImageElement()` stays illegal and `Image.name` is "Image"),
+// whose `prototype` is the interface's prototype object.
+fn generateLegacyFactoryFunction(comptime JsApi: type, isolate: *v8.Isolate, interface_template: *const v8.FunctionTemplate, interface_func: *const v8.Function, context: *const v8.Context) *const v8.Function {
+    const alias = JsApi.Meta.constructor_alias;
+    const template = v8.v8__FunctionTemplate__New__Config(isolate, &.{
+        .length = JsApi.constructor.arity,
+        .callback = JsApi.constructor.func,
+        .behavior = v8.kConstructorBehavior_Allow,
+    }).?;
+    // Inherit so that the objects we construct pass the interface's
+    // accessor and method signature checks.
+    v8.v8__FunctionTemplate__Inherit(template, interface_template);
+    {
+        const internal_field_count = comptime countInternalFields(JsApi);
+        if (internal_field_count > 0) {
+            const instance_template = v8.v8__FunctionTemplate__InstanceTemplate(template);
+            v8.v8__ObjectTemplate__SetInternalFieldCount(instance_template, internal_field_count);
+        }
+    }
+    const class_name = v8.v8__String__NewFromUtf8(isolate, alias.ptr, v8.kNormal, @intCast(alias.len));
+    v8.v8__FunctionTemplate__SetClassName(template, class_name);
+
+    const func = v8.v8__FunctionTemplate__GetFunction(template, context).?;
+    const prototype_key = v8.v8__String__NewFromUtf8(isolate, "prototype", v8.kNormal, 9);
+    const interface_prototype = v8.v8__Object__Get(@ptrCast(interface_func), context, prototype_key).?;
+    var maybe_result: v8.MaybeBool = undefined;
+    v8.v8__Object__DefineOwnProperty(@ptrCast(func), context, prototype_key, interface_prototype, v8.ReadOnly + v8.DontEnum + v8.DontDelete, &maybe_result);
+    return func;
 }
 
 // hard-coded special case for HtmlElement which can be extended but not
