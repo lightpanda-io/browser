@@ -951,8 +951,11 @@ fn getDevicePixelRatio(_: *const Window, frame: *Frame) f32 {
 
 pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts.offsets(y);
-    const new_x: u32 = if (o.left) |left| @intCast(@max(0, left)) else self._scroll_pos.x;
-    const new_y: u32 = if (o.top) |top| @intCast(@max(0, top)) else self._scroll_pos.y;
+    const size = self._frame.document.scrollSize();
+    const max_x = scrollLimit(size.width, self.getInnerWidth(self._frame));
+    const max_y = scrollLimit(size.height, self.getInnerHeight(self._frame));
+    const new_x: u32 = if (o.left) |left| @min(@as(u32, @intCast(@max(0, left))), max_x) else self._scroll_pos.x;
+    const new_y: u32 = if (o.top) |top| @min(@as(u32, @intCast(@max(0, top))), max_y) else self._scroll_pos.y;
 
     if (new_x == self._scroll_pos.x and new_y == self._scroll_pos.y) {
         return;
@@ -1012,6 +1015,11 @@ pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Fram
         20,
         .{ .blocks_done = false },
     );
+}
+
+fn scrollLimit(size: f64, visible: u32) u32 {
+    const limit = size - @as(f64, @floatFromInt(visible));
+    return @intFromFloat(std.math.clamp(limit, 0, std.math.maxInt(u32)));
 }
 
 pub fn scrollBy(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {

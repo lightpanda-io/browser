@@ -27,6 +27,7 @@ const text_measure = @import("../text_measure.zig");
 
 const CSS = @import("CSS.zig");
 const Node = @import("Node.zig");
+const TreeWalker = @import("TreeWalker.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
 const EventTarget = @import("EventTarget.zig");
 const collections = @import("collections.zig");
@@ -1511,12 +1512,12 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
         }
     }
 
-    // Root containers get large default size to contain descendant positions.
-    // With calculateDocumentPosition using linear depth scaling (100px per level),
-    // even very deep trees (100 levels) stay within 10,000px.
-    // 100M pixels is plausible for very long documents.
+    // Root containers span the document, see Document.extent.
     if (root) {
-        return .{ .value = if (axis == .width) 1920.0 else 100_000_000.0 };
+        return .{ .value = switch (axis) {
+            .width => 1920.0,
+            .height => if (self.asNode().ownerDocument(frame)) |doc| doc.extent().height else 0.0,
+        } };
     }
 
     // Presentational attributes lose to CSS sizes.
@@ -1548,6 +1549,13 @@ fn clientAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
         return 0.0;
     }
     return self.viewportAxis(frame, axis) orelse self.boxAxis(frame, axis);
+}
+
+/// Document.scrollSize, when self is the root scroller (see viewportAxis).
+fn rootScrollSize(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
+    _ = self.viewportAxis(frame, axis) orelse return null;
+    const doc = self.asNode().ownerDocument(frame) orelse return null;
+    return @field(doc.scrollSize(), @tagName(axis));
 }
 
 fn viewportAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
@@ -1690,10 +1698,9 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
     const height = self.getElementAxis(frame, .height).value;
 
     const tag = self.getTag();
-    // As in getScrollWidth: the root containers carry artificial giant
-    // defaults, and page-level overflow checks read them.
+    // The root scroller reports what the viewport scrolls over.
     if (tag == .html or tag == .body) {
-        return height;
+        return self.rootScrollSize(frame, .height) orelse height;
     }
 
     return @max(height, self.contentAxis(frame, .height));
@@ -1707,11 +1714,10 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
     const width = self.getElementAxis(frame, .width).value;
 
     const tag = self.getTag();
-    // The root containers carry artificial giant defaults (1920 and
-    // 100_000_000, see getElementAxis). Stacking their children on
-    // top would inflate a value sites read to detect page overflow.
+    // Roots don't sum their children side by side. The root scroller
+    // reports what the viewport scrolls over.
     if (tag == .html or tag == .body) {
-        return width;
+        return self.rootScrollSize(frame, .width) orelse width;
     }
 
     return @max(width, self.contentAxis(frame, .width));
@@ -1719,9 +1725,7 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 
 /// Null where we can't prove a limit, which leaves the offset unbounded:
 /// without an explicit size the client and content measurements collapse onto
-/// the same sum, and html and body carry giant defaults that would fabricate
-/// an extent against the real viewport. Refusing a scroll we can't prove
-/// impossible is worse than allowing one too many.
+/// the same sum. html and body scroll the viewport, clamped by Window.
 fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
     if (self.scrollsViewport() or !self.getElementAxis(frame, axis).explicit) {
         return null;
@@ -1759,7 +1763,7 @@ fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
 //
 // Text children add height only under an explicit width to wrap at.
 // Otherwise almost every element with text would report overflow.
-fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
+pub fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     var total: f64 = 0;
     const owner = self.ownerFrame(frame) orelse return 0;
     const style_manager = &owner._style_manager;
@@ -1792,8 +1796,7 @@ fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     return total;
 }
 
-// Unlike clientHeight, the root's offsetHeight is its box (the document
-// extent), so it stays on the synthetic root default.
+// Unlike clientHeight, the root's offsetHeight is the document height.
 pub fn getOffsetHeight(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
@@ -1925,15 +1928,12 @@ fn calculateDocumentPosition(node: *Node) f64 {
 }
 
 // Counts total nodes in a subtree (node + all descendants)
-fn countSubtreeNodes(node: *Node) f64 {
-    var count: f64 = 1.0; // Count this node
-
-    var child = node.firstChild();
-    while (child) |c| {
-        count += countSubtreeNodes(c);
-        child = c.nextSibling();
+pub fn countSubtreeNodes(node: *Node) f64 {
+    var count: f64 = 0;
+    var tw = TreeWalker.Full.init(node, .{});
+    while (tw.next()) |_| {
+        count += 1;
     }
-
     return count;
 }
 
