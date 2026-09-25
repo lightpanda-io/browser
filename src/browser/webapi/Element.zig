@@ -23,6 +23,7 @@ const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
+const StyleManager = @import("../StyleManager.zig");
 const text_measure = @import("../text_measure.zig");
 
 const CSS = @import("CSS.zig");
@@ -35,6 +36,7 @@ const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
 const Animation = @import("animation/Animation.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
+const CSSStyleDeclaration = @import("css/CSSStyleDeclaration.zig");
 
 const slotting = @import("element/slotting.zig");
 const DOMStringMap = @import("element/DOMStringMap.zig");
@@ -1488,37 +1490,181 @@ pub const Axis = enum {
 };
 
 pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.State {
-    const tag = self.getTag();
-    const root = tag == .html or tag == .body;
-
-    if (self.ownerFrame(frame)) |owner| {
-        const style_manager = &owner._style_manager;
-        // Roots take only an inline size: a sheet's `height: 100vh` on body
-        // would shrink the box every synthetic position must fit in.
-        const size = if (root) style_manager.inlineSize(self, axis) else style_manager.declaredSize(self, axis);
-        if (size) |v| {
-            return .{ .value = v, .explicit = true };
-        }
+    if (self.explicitAxis(frame, axis)) |v| {
+        return .{ .value = v, .explicit = true };
     }
 
     // Root containers span the document, see Document.extent.
-    if (root) {
+    if (self.scrollsViewport()) {
         return .{ .value = switch (axis) {
             .width => 1920.0,
             .height => if (self.asNode().ownerDocument(frame)) |doc| doc.extent().height else 0.0,
         } };
     }
 
-    // Presentational attributes lose to CSS sizes.
-    if (tag == .img or tag == .iframe) {
-        if (self.getAttributeSafe(comptime .wrap(@tagName(axis)))) |attr| {
-            if (std.fmt.parseFloat(f64, attr)) |parsed| {
-                return .{ .value = parsed, .explicit = true };
-            } else |_| {}
-        }
+    // An auto-height block is as tall as its content.
+    if (axis == .height and !self.isInlineLevel() and self.lineWidth(frame) != null) {
+        return .{ .value = @max(5.0, self.contentHeight(frame)) };
     }
 
     return .{ .value = 5.0 };
+}
+
+fn explicitAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
+    if (self.ownerFrame(frame)) |owner| {
+        const style_manager = &owner._style_manager;
+        // Roots take only an inline size: a sheet's `height: 100vh` on body
+        // would shrink the box every synthetic position must fit in.
+        const size = if (self.scrollsViewport()) style_manager.inlineSize(self, axis) else style_manager.declaredSize(self, axis);
+        if (size) |v| {
+            return v;
+        }
+    }
+
+    // Presentational attributes lose to CSS sizes.
+    const tag = self.getTag();
+    if (tag == .img or tag == .iframe) {
+        if (self.getAttributeSafe(comptime .wrap(@tagName(axis)))) |attr| {
+            return std.fmt.parseFloat(f64, attr) catch null;
+        }
+    }
+    return null;
+}
+
+/// The width self's text wraps at: its own, else the nearest sized
+/// ancestor's, since an auto-width block fills its container. Null under an
+/// unsized root, where text isn't measured.
+fn lineWidth(self: *Element, frame: *Frame) ?f64 {
+    const owner = self.ownerFrame(frame) orelse return null;
+    const memo = &owner._layout_memo;
+    memo.sync(owner);
+
+    if (memo.line_widths.get(self)) |known| {
+        return known;
+    }
+
+    var resolved: ?f64 = null;
+    var stop: ?*Element = self;
+    while (stop) |el| {
+        if (memo.line_widths.get(el)) |known| {
+            resolved = known;
+            break;
+        }
+        const width = el.getElementAxis(frame, .width);
+        if (width.explicit) {
+            resolved = width.value;
+            break;
+        }
+        if (el.scrollsViewport()) {
+            break;
+        }
+        stop = el.parentElement();
+    }
+
+    // Everything walked shares the width, so a sibling or child stops at the
+    // first step.
+    var fill: ?*Element = self;
+    while (fill) |el| : (fill = el.parentElement()) {
+        memo.putLineWidth(el, resolved);
+        if (el == stop) {
+            break;
+        }
+    }
+    return resolved;
+}
+
+/// Text plus stacked block children, for an element under a line width. An
+/// auto-height child is as tall as its own content, so the subtree is
+/// measured bottom-up: every child before its parent, each once per style
+/// version, and without recursing.
+fn contentHeight(self: *Element, frame: *Frame) f64 {
+    const owner = self.ownerFrame(frame) orelse return 0;
+    const memo = &owner._layout_memo;
+    memo.sync(owner);
+    if (memo.content_heights.get(self)) |height| {
+        return height;
+    }
+    const style_manager = &owner._style_manager;
+
+    var el = self;
+    var next = self.asNode().firstChild();
+    while (true) {
+        while (next) |node| : (next = node.nextSibling()) {
+            const child = node.is(Element) orelse continue;
+            if (child.isContentSized(frame, style_manager) and !memo.content_heights.contains(child)) {
+                break;
+            }
+        }
+        if (next) |node| {
+            el = node.as(Element);
+            next = node.firstChild();
+            continue;
+        }
+
+        var height: f64 = 0;
+        if (el.lineWidth(frame)) |line_width| {
+            height = el.textHeight(frame, line_width);
+        }
+        var child = el.asNode().firstChild();
+        while (child) |node| : (child = node.nextSibling()) {
+            const c = node.is(Element) orelse continue;
+            if (c.isInlineLevel() or style_manager.hasDisplayNone(c)) {
+                continue;
+            }
+            height += c.getElementAxis(frame, .height).value;
+        }
+        // A child missing from the memo would be measured again forever.
+        memo.content_heights.put(memo.arena.allocator(), el, height) catch |err| {
+            log.warn(.browser, "LayoutMemo", .{ .err = err });
+            return height;
+        };
+        if (el == self) {
+            return height;
+        }
+        next = el.asNode().nextSibling();
+        el = el.parentElement().?;
+    }
+}
+
+/// Whether el's height is its content height: a shown block, sized by
+/// neither CSS nor attributes.
+fn isContentSized(el: *Element, frame: *Frame, style_manager: *StyleManager) bool {
+    if (el.isInlineLevel() or el.scrollsViewport() or style_manager.hasDisplayNone(el)) {
+        return false;
+    }
+    return el.explicitAxis(frame, .height) == null;
+}
+
+/// The height of self's text and its inline descendants' text, wrapped at
+/// line_width. Block descendants measure their own.
+fn textHeight(self: *Element, frame: *Frame, line_width: f64) f64 {
+    const owner = self.ownerFrame(frame) orelse return 0;
+    const style_manager = &owner._style_manager;
+
+    var wrap: text_measure.LineWrap = .{ .line_width = line_width, .font_size = style_manager.computedFontSize(self) };
+    var tw = TreeWalker.FullExcludeSelf.init(self.asNode(), .{});
+    while (tw.next()) |node| {
+        if (node.is(Node.CData.Text)) |text| {
+            wrap.add(text.ownData());
+            continue;
+        }
+        const el = node.is(Element) orelse {
+            tw.skipChildren();
+            continue;
+        };
+        if (el.getTag() == .br) {
+            wrap.breakLine();
+        } else if (!el.isInlineLevel() or style_manager.hasDisplayNone(el)) {
+            tw.skipChildren();
+        }
+    }
+    // Whole pixels, like scroll offsets
+    return @ceil(wrap.height());
+}
+
+// SVG content is laid out in its own box, never in the parent's lines.
+fn isInlineLevel(self: *const Element) bool {
+    return self._type == .html and CSSStyleDeclaration.isInlineHtml(self);
 }
 
 // We can't do this correctly without full styles and more rendering. We also
@@ -1740,47 +1886,35 @@ fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
 // the inline `style=` attribute, and the computed cascade resolves stylesheet
 // rules for `display:none` and `visibility` alone.
 //
-// Only direct children are measured, never the whole subtree. This runs on
-// every size read, and recursing would make an element's cost O(subtree)
-// rather than O(fan-out). It also keeps an ancestor from growing in lockstep
-// with its descendants, so "append until the track outgrows its shell" still
-// crosses the threshold.
+// Otherwise only direct children are measured, never the whole subtree. This
+// runs on every size read, and recursing would make an element's cost
+// O(subtree) rather than O(fan-out). It also keeps an ancestor from growing in
+// lockstep with its descendants, so "append until the track outgrows its
+// shell" still crosses the threshold.
 //
 // Growing with the child count is the point: JS that appends content until
 // `scrollWidth` passes a threshold (the infinite-marquee idiom) never
 // terminates when the metric ignores what it just inserted.
 //
-// Text children add height only under an explicit width to wrap at.
-// Otherwise almost every element with text would report overflow.
+// Under a line width (see lineWidth), the height is contentHeight instead:
+// text, and auto-height blocks as tall as their own content, memoized per
+// style version. Without one, text isn't measured: almost every element with
+// text would report overflow.
 pub fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
+    if (axis == .height and self.lineWidth(frame) != null) {
+        return self.contentHeight(frame);
+    }
+
     var total: f64 = 0;
     const owner = self.ownerFrame(frame) orelse return 0;
     const style_manager = &owner._style_manager;
 
-    var wrap: ?text_measure.LineWrap = null;
-    if (axis == .height) {
-        const width = self.getElementAxis(frame, .width);
-        if (width.explicit) {
-            wrap = .{ .line_width = width.value, .font_size = style_manager.computedFontSize(self) };
-        }
-    }
-
     var child = self.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
-        if (node.is(Element)) |el| {
-            if (!style_manager.hasDisplayNone(el)) {
-                total += el.getElementAxis(frame, axis).value;
-            }
-        } else if (wrap) |*w| {
-            if (node.is(Node.CData.Text)) |text| {
-                w.add(text.ownData());
-            }
+        const el = node.is(Element) orelse continue;
+        if (!style_manager.hasDisplayNone(el)) {
+            total += el.getElementAxis(frame, axis).value;
         }
-    }
-
-    if (wrap) |w| {
-        // Whole pixels, like scroll offsets
-        total += @ceil(w.height());
     }
     return total;
 }

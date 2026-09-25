@@ -82,11 +82,9 @@ _script_created_parser: ?Parser.Streaming = null,
 _close_requested: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
-// extent() cache, keyed on style version and viewport.
+// extent() cache, keyed on style version.
 _extent: ?struct {
     version: usize,
-    viewport_width: u32,
-    viewport_height: u32,
     extent: Extent,
 } = null,
 // Ordered stack of currently-showing popovers
@@ -511,9 +509,8 @@ pub const Extent = struct { width: f64, height: f64 };
 pub fn extent(self: *Document) Extent {
     const frame = self._frame orelse return .{ .width = 0, .height = 0 };
     const version = frame.page.style_version;
-    const viewport = frame.page.getViewport();
     if (self._extent) |cached| {
-        if (cached.version == version and cached.viewport_width == viewport.width and cached.viewport_height == viewport.height) {
+        if (cached.version == version) {
             return cached.extent;
         }
     }
@@ -537,12 +534,7 @@ pub fn extent(self: *Document) Extent {
 
     // Whole pixels, like scroll offsets
     size = .{ .width = @ceil(size.width), .height = @ceil(size.height) };
-    self._extent = .{
-        .version = version,
-        .viewport_width = viewport.width,
-        .viewport_height = viewport.height,
-        .extent = size,
-    };
+    self._extent = .{ .version = version, .extent = size };
     return size;
 }
 

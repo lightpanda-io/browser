@@ -238,6 +238,8 @@ pub fn getViewport(self: *const Page) Viewport {
 }
 
 pub fn viewportChanged(self: *Page) void {
+    // vw/vh sizes, and the text they wrap, depend on the viewport
+    self.style_version += 1;
     self.frame.viewportChanged();
     var i: usize = 0;
     while (i < self.popups.items.len) : (i += 1) {
