@@ -23,15 +23,12 @@ const Frame = @import("Frame.zig");
 const Element = @import("webapi/Element.zig");
 
 // Per-element layout values that take a walk to derive. They hold while the
-// style version and the viewport do: DOM, text and style changes all bump the
-// version.
+// style version does: DOM, text, style and viewport changes all bump it.
 const LayoutMemo = @This();
 
 arena: *lp.Arena,
 
 version: usize = 0,
-viewport_width: u32 = 0,
-viewport_height: u32 = 0,
 
 // Null: no sized ancestor, so the text isn't measured.
 line_widths: std.AutoHashMapUnmanaged(*Element, ?f64) = .empty,
@@ -48,15 +45,12 @@ pub fn deinit(self: *LayoutMemo) void {
 /// Drops every entry stored before the page last changed.
 pub fn sync(self: *LayoutMemo, frame: *Frame) void {
     const version = frame.page.style_version;
-    const viewport = frame.page.getViewport();
-    if (self.version == version and self.viewport_width == viewport.width and self.viewport_height == viewport.height) {
+    if (self.version == version) {
         return;
     }
     self.line_widths.clearRetainingCapacity();
     self.text_heights.clearRetainingCapacity();
     self.version = version;
-    self.viewport_width = viewport.width;
-    self.viewport_height = viewport.height;
 }
 
 // A failed put only costs a recompute.
