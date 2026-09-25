@@ -350,9 +350,9 @@ fn corsAllowed(self: *const EventSource, transfer: *Transfer) bool {
     var allow_credentials: ?[]const u8 = null;
     var it = transfer.responseHeaderIterator();
     while (it.next()) |hdr| {
-        if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-origin")) {
+        if (std.mem.eql(u8, hdr.name, "access-control-allow-origin")) {
             allow_origin = hdr.value;
-        } else if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-credentials")) {
+        } else if (std.mem.eql(u8, hdr.name, "access-control-allow-credentials")) {
             allow_credentials = hdr.value;
         }
     }

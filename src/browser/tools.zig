@@ -108,9 +108,7 @@ pub const driver_guidance =
     \\- Triage from `search` snippets before opening links; open only the few
     \\  most promising. Don't re-run a search you already ran, and skip
     \\  near-duplicate sources that repeat the same announcement verbatim.
-    \\- Stop once the gathered material answers the question. For opinion or
-    \\  discussion questions, a couple of high-signal threads (e.g. Hacker
-    \\  News, Reddit) usually beat scraping a dozen news sites.
+    \\- Stop once the gathered material answers the question.
     \\
     \\Selector rules:
     \\- NEVER pass backendNodeId to click/fill/hover/selectOption/setChecked.
@@ -181,9 +179,8 @@ pub const save_synthesis_prompt =
     \\list, fan out to detail pages, aggregate, return) stating what that block
     \\accomplishes toward the goal — NOT restating the API call. One comment per
     \\step, not per line; skip self-evident lines.
-    \\Output ONLY JavaScript source — no markdown fences and no prose outside the
-    \\code, but DO annotate the script with the `//` intent comments described
-    \\above.
+    \\Output the JavaScript source alone, with no markdown fences or prose
+    \\around it.
 ;
 
 /// Script-language rules for consumers that never see the full
@@ -347,7 +344,7 @@ pub const Tool = enum {
     pub fn definition(self: Tool) Definition {
         return switch (self) {
             .goto => .{
-                .description = "Navigate to a specified URL and load the page in memory so it can be reused later for info extraction.",
+                .description = "Navigate the current page to a URL. Returns a short status once `waitUntil` fires (default `load`), or a timeout notice; content rendered by post-load JavaScript may not be there yet (see `waitForState`). The page stays loaded for later reads and actions. To navigate and read in one call, pass `url` to `markdown`, `tree` or `html` instead; use `goto` when the next step is an action or `extract`.",
                 .summary = "Open a URL and keep the page in memory",
                 .input_schema = minify(
                     \\{
@@ -450,7 +447,7 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "script": { "type": "string" },
+                    \\    "script": { "type": "string", "description": "JavaScript run in the page context. A bare trailing expression, or `return` with top-level `await`, is the result." },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
                     \\    "save": { "type": "string", "description": "Optional bridge-store key. The evaluate's return value is stored under this name and re-exposed as `lp.<name>` to subsequent evaluates. Objects, arrays, and strings are serialized automatically — no JSON.stringify needed." }
@@ -491,7 +488,7 @@ pub const Tool = enum {
                 ),
             },
             .tree => .{
-                .description = "Simplified semantic DOM tree (role, name, value, backendNodeId per node). Pass `backendNodeId` to scope, `maxDepth` to limit depth.",
+                .description = "Semantic outline of the page as indented text: one node per line with its role, accessible name, value and backendNodeId, plus checked state and select options with the selected one marked. The default first read of an unfamiliar page; input and select values are already here, so no `nodeDetails` call is needed to read them. Pass `backendNodeId` to scope to a subtree and `maxDepth` to survey structure before going deeper. Read it again after any page-changing action, since the DOM it describes may have changed; use `nodeDetails` to turn a backendNodeId into a CSS selector for actions.",
                 .summary = "Semantic DOM tree of the page",
                 .input_schema = minify(
                     \\{
@@ -519,17 +516,17 @@ pub const Tool = enum {
                 ),
             },
             .interactiveElements => .{
-                .description = "Extract interactive elements from the opened page. If a url is provided, it navigates to that url first.",
+                .description = "List every visible interactive element on the page as a JSON array: native controls, ARIA widgets, contenteditable regions, elements with event listeners, and focusable elements. Each entry has `backendNodeId`, `tagName`, `role`, `name`, `type` (why it counts as interactive), `tabIndex`, and when present `listeners`, `disabled`, `id`, `class`, `href`, `inputType`, `value`, `elementName` and `placeholder`. Use it to survey what can be acted on; to locate one element by role or name, `findElement` is cheaper. If a url is provided, it navigates there first.",
                 .summary = "List interactive elements on the page",
                 .input_schema = url_params_schema,
             },
             .structuredData => .{
-                .description = "Extract structured data (like JSON-LD, OpenGraph, etc) from the opened page. If a url is provided, it navigates to that url first.",
+                .description = "Page metadata as JSON: `jsonLd` (each JSON-LD block as a string), `openGraph`, `twitterCard`, `meta` and `links` (key/value lists), plus `alternate` (hreflang variants) and `linkHeaders` (relations from the HTTP Link header) when present. Empty sections come back as empty arrays. Use it for publisher-declared facts such as product price, article author or canonical URL before scraping the visible text for them. If a url is provided, it navigates there first.",
                 .summary = "Extract JSON-LD / OpenGraph data",
                 .input_schema = url_params_schema,
             },
             .detectForms => .{
-                .description = "Detect all forms on the page and return their structure including fields, types, and required status. If a url is provided, it navigates to that url first.",
+                .description = "List the forms on the page as JSON: each form's `backendNodeId`, `action`, `method` and `fields`, where each field has `backendNodeId`, `tagName`, `name`, `inputType`, `required`, `disabled`, and when present `value`, `placeholder` and select `options`. Use it before filling a form to see every field it expects. It returns no CSS selectors; get one per field with `nodeDetails` so the fill calls stay replayable. If a url is provided, it navigates there first.",
                 .summary = "List forms and their fields",
                 .input_schema = url_params_schema,
             },
@@ -562,13 +559,14 @@ pub const Tool = enum {
                 ),
             },
             .scroll => .{
-                .description = "Scroll the page or a specific element. Returns the scroll position and current page URL and title.",
+                .description = "Scroll the window, or an element's scroll container, to an absolute position; an omitted axis keeps its current offset. Target an element with a CSS selector (preferred for reproducibility) or a backendNodeId; omit both to scroll the window. Page scripts receive a `scroll` event, so content that loads on scroll (infinite feeds, lazy lists) may appear: read the page again afterwards, with `waitForState` if it is still loading. Returns the final scroll position and the current page URL and title.",
                 .summary = "Scroll the page or an element",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If the element is not itself a scroll container, its nearest scrollable ancestor is scrolled instead. If omitted (or 0), scrolls the window." },
+                    \\    "selector": { "type": "string", "description": "Optional: CSS selector of the element to scroll. Preferred over backendNodeId. If the element is not itself a scroll container, its nearest scrollable ancestor is scrolled instead." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If the element is not itself a scroll container, its nearest scrollable ancestor is scrolled instead. If neither this nor selector is given (or it is 0), scrolls the window." },
                     \\    "x": { "type": "integer", "description": "Optional: The horizontal scroll offset." },
                     \\    "y": { "type": "integer", "description": "Optional: The vertical scroll offset." }
                     \\  }
@@ -1964,20 +1962,24 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
 fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         backendNodeId: ?NodeRegistry.Id = null,
+        selector: ?[]const u8 = null,
         x: ?i32 = null,
         y: ?i32 = null,
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
     const scope = beginAction(session);
-    const page = try requireFrame(session);
-    const target_node = try resolveOptionalNode(registry, args.backendNodeId);
+    const resolved: ?NodeAndPage = if (args.selector != null or args.backendNodeId != null)
+        try resolveTarget(session, registry, args.selector, args.backendNodeId)
+    else
+        null;
+    const page = if (resolved) |r| r.page else try requireFrame(session);
 
-    const result = lp.actions.scroll(target_node, args.x, args.y, page) catch |err| return mapActionError(err);
+    const result = lp.actions.scroll(if (resolved) |r| r.node else null, args.x, args.y, page) catch |err| return mapActionError(err);
 
     const body = (switch (result.target) {
         .window => std.fmt.allocPrint(arena, "Scrolled window to x: {d}, y: {d}", .{ result.x, result.y }),
         .node => std.fmt.allocPrint(arena, "Scrolled element ({f}) to x: {d}, y: {d}", .{
-            ActionTarget{ .backend_node_id = args.backendNodeId.? },
+            resolved.?.target,
             result.x,
             result.y,
         }),
@@ -1985,7 +1987,7 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeReg
             const registered = registry.register(container) catch return ToolError.InternalError;
             break :blk std.fmt.allocPrint(arena, "Scrolled scroll container ({f}) of element ({f}) to x: {d}, y: {d}", .{
                 ActionTarget{ .backend_node_id = registered.id },
-                ActionTarget{ .backend_node_id = args.backendNodeId.? },
+                resolved.?.target,
                 result.x,
                 result.y,
             });

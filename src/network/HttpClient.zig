@@ -243,7 +243,10 @@ pub fn init(self: *Client, app: *lp.App) !void {
             .network = network,
             .single_flight = .init(allocator),
         },
-        .cors = .{ .single_flight = .init(allocator) },
+        .cors = .{
+            .network = network,
+            .single_flight = .init(allocator),
+        },
         .url_blocklist = url_blocklist,
         .arena_pool = &app.arena_pool,
     };
@@ -1207,9 +1210,18 @@ pub fn resumeAfterCors(self: *Client, transfer: *Transfer) !void {
     return self.pipeline(transfer, .after_cors);
 }
 
+// `headers` are response headers (lowercased names); `name` must be lowercase.
 pub fn findHeader(headers: []const http.Header, name: []const u8) ?[]const u8 {
+    if (comptime lp.IS_DEBUG) {
+        for (name) |c| {
+            if (std.ascii.isUpper(c)) {
+                log.fatal(.bug, "non-lowercase header", .{ .name = name });
+                @panic("non-lowercase-header");
+            }
+        }
+    }
     for (headers) |hdr| {
-        if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
+        if (std.mem.eql(u8, hdr.name, name)) {
             return hdr.value;
         }
     }
@@ -2118,12 +2130,19 @@ pub fn fulfillIntercepted(
 
     transfer.unpark();
 
+    // Copied into the transfer arena with lowercased names, like headers
+    // materialized from curl.
+    const owned = transfer.dupeHeadersLower(headers) catch |err| {
+        transfer.abortPipelineError(err);
+        return err;
+    };
+
     const followed = blk: {
         if (isRedirectStatus(status) == false) {
             break :blk false;
         }
-        const location = findHeader(headers, "location") orelse break :blk false;
-        try self.fulfillRedirect(transfer, status, headers, location);
+        const location = findHeader(owned, "location") orelse break :blk false;
+        try self.fulfillRedirect(transfer, status, owned, location);
         break :blk true;
     };
 
@@ -2131,7 +2150,7 @@ pub fn fulfillIntercepted(
         return;
     }
 
-    transfer.bufferFulfilled(status, headers, body) catch |err| {
+    transfer.bufferFulfilled(status, owned, body) catch |err| {
         transfer.abortPipelineError(err);
         return err;
     };
@@ -2150,7 +2169,7 @@ fn fulfillRedirect(
     if (transfer.req.credentialsAllowed()) {
         if (transfer.cookie_jar) |jar| {
             for (headers) |hdr| {
-                if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
+                if (std.mem.eql(u8, hdr.name, "set-cookie")) {
                     try jar.populateFromResponse(transfer.req.url, hdr.value);
                 }
             }
@@ -3064,7 +3083,7 @@ pub const Transfer = struct {
             return true;
         }
         for (headers) |hdr| {
-            if (!std.ascii.eqlIgnoreCase(hdr.name, "timing-allow-origin")) {
+            if (std.mem.eql(u8, hdr.name, "timing-allow-origin") == false) {
                 continue;
             }
             var it = std.mem.splitScalar(u8, hdr.value, ',');
@@ -3192,6 +3211,18 @@ pub const Transfer = struct {
         self.scheduleDispatch();
     }
 
+    // Response header names are lowercase, so lookups use std.mem.eql.
+    fn setResponseHeaders(self: *Transfer, headers: []const http.Header) void {
+        if (comptime lp.IS_DEBUG) {
+            for (headers) |hdr| {
+                for (hdr.name) |c| {
+                    std.debug.assert(std.ascii.isUpper(c) == false);
+                }
+            }
+        }
+        self.res.headers = headers;
+    }
+
     fn setResponseHead(self: *Transfer, status: u16, content_type: ?[]const u8) void {
         self.res.header = .{
             .url = self.req.url.ptr,
@@ -3214,7 +3245,7 @@ pub const Transfer = struct {
         };
 
         self.setResponseHead(cached.status, cached.content_type);
-        self.res.headers = cached.headers;
+        self.setResponseHeaders(cached.headers);
         self._from_cache = true;
         self._timing.cache = cache_state;
         self._content_length = body.len;
@@ -3222,27 +3253,29 @@ pub const Transfer = struct {
     }
 
     // Materialize an interceptor-supplied response (CDP fulfillRequest).
-    // `headers` and `body` are caller-owned; copy everything that must
-    // survive until dispatch.
+    fn dupeHeadersLower(self: *Transfer, headers: []const http.Header) ![]const http.Header {
+        const allocator = self.arena.allocator();
+        const owned = try allocator.alloc(http.Header, headers.len);
+        for (headers, owned) |hdr, *o| {
+            o.* = try hdr.normalize(allocator);
+        }
+        return owned;
+    }
+
+    // our arena already owns `header` but not `body`. Why so complicated?
     fn bufferFulfilled(self: *Transfer, status: u16, headers: []const http.Header, body: ?[]const u8) !void {
         const arena = self.arena;
-
-        const owned = try arena.alloc(http.Header, headers.len);
         var content_type: ?[]const u8 = null;
-        for (headers, 0..) |hdr, i| {
-            owned[i] = .{
-                .name = try arena.dupe(u8, hdr.name),
-                .value = try arena.dupe(u8, hdr.value),
-            };
-            if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) {
-                content_type = owned[i].value;
+        for (headers) |hdr| {
+            if (std.mem.eql(u8, hdr.name, "content-type")) {
+                content_type = hdr.value;
             }
         }
 
         const owned_body: []const u8 = if (body) |b| try arena.dupe(u8, b) else "";
 
         self.setResponseHead(status, content_type);
-        self.res.headers = owned;
+        self.setResponseHeaders(headers);
         self._content_length = owned_body.len;
         try self.bufferEvents(owned_body);
     }
@@ -3278,12 +3311,12 @@ pub const Transfer = struct {
 
         var it = HeaderIterator{ .curl = .{ .conn = conn } };
         const headers = try it.collect(arena.allocator());
-        self.res.headers = headers.items;
+        self.setResponseHeaders(headers.items);
 
         if (self.req.credentialsAllowed()) {
             if (self.cookie_jar) |jar| {
                 for (self.res.headers) |hdr| {
-                    if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
+                    if (std.mem.eql(u8, hdr.name, "set-cookie")) {
                         jar.populateFromResponse(self.req.url, hdr.value) catch |err| {
                             log.err(.http, "set cookie", .{ .err = err, .req = self });
                             return err;
@@ -3973,7 +4006,7 @@ pub const Transfer = struct {
     fn getContentLengthRawValue(self: *const Transfer) ?[]const u8 {
         // Materialized headers (dispatch time, any source).
         for (self.res.headers) |hdr| {
-            if (std.ascii.eqlIgnoreCase(hdr.name, "content-length")) {
+            if (std.mem.eql(u8, hdr.name, "content-length")) {
                 return hdr.value;
             }
         }
@@ -4178,7 +4211,8 @@ const Response = struct {
     header: ?http.ResponseHead = null,
 
     // Full response headers, materialized into the transfer arena at
-    // completion (or set directly by cache / synthetic / fulfill).
+    // completion (or set directly by cache / synthetic / fulfill). Names are
+    // lowercased.
     headers: []const http.Header = &.{},
 
     // total bytes received in the response, including the response status
@@ -4285,7 +4319,7 @@ const Synthetic = struct {
         if (content_type.len > 0) {
             const h = try arena.alloc(http.Header, 1);
             h[0] = .{ .name = "content-type", .value = content_type };
-            transfer.res.headers = h;
+            transfer.setResponseHeaders(h);
         }
         transfer._content_length = body.len;
         try transfer.bufferEvents(body);

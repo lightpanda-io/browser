@@ -171,7 +171,7 @@ pub fn scheduleIntersectionChecks(frame: *Frame) void {
     frame._intersection.check_scheduled = true;
     frame.js.queueIntersectionChecks() catch |err| {
         frame._intersection.check_scheduled = false;
-        log.err(.frame, "frame.scheduleIntersectionChecks", .{ .err = err, .type = frame._type, .url = frame.url });
+        log.err(.frame, "scheduleIntersectionChecks", .{ .err = err, .type = frame._type, .url = frame.url });
     };
 }
 

@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const Frame = @import("../../browser/Frame.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
 const Label = @import("../../browser/webapi/element/html/Label.zig");
+const TreeWalker = @import("../../browser/webapi/TreeWalker.zig");
 const interactive = @import("../../browser/interactive.zig");
 
 const NodeRegistry = @import("../../NodeRegistry.zig");
@@ -1058,7 +1059,7 @@ fn writeName(
 
             if (use_name_for_content) {
                 var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, frame));
-                try writeAccessibleNameFallback(node, &buf.writer, frame);
+                try writeAccessibleNameFallback(node, &buf.writer);
                 if (buf.written().len > 0) {
                     try writeString(buf.written(), w);
                     return .contents;
@@ -1085,9 +1086,22 @@ fn writeName(
     };
 }
 
-fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, frame: *Frame) !void {
-    var it = node.childrenIterator();
-    while (it.next()) |child| {
+fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer) !void {
+    var tw = TreeWalker.FullExcludeSelf.init(node, .{});
+    while (tw.next()) |child| {
+        const parent = child._parent.?;
+        const in_svg = if (parent.is(DOMNode.Element)) |p| p.getTag() == .svg else false;
+        if (in_svg and parent != node) {
+            // Inside an SVG, only a <title> names it
+            const is_title = if (child.is(DOMNode.Element)) |el| std.mem.eql(u8, el.getTagNameLower(), "title") else false;
+            if (is_title) {
+                try writer.writeByte(' ');
+            } else {
+                tw.skipChildren();
+            }
+            continue;
+        }
+
         switch (child._type) {
             .cdata => {
                 const cd = child.subtype(DOMNode.CData);
@@ -1101,26 +1115,15 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, frame: *F
             },
             .element => {
                 const el = child.subtype(DOMNode.Element);
-                if (el.getTag() == .img) {
+                const tag = el.getTag();
+                if (tag == .img) {
                     if (el.getAttributeSafe(.wrap("alt"))) |alt| {
                         try writer.writeAll(alt);
                         try writer.writeByte(' ');
                     }
-                } else if (el.getTag() == .svg) {
-                    // Try to find a <title> inside SVG
-                    var sit = child.childrenIterator();
-                    while (sit.next()) |s_child| {
-                        if (s_child.is(DOMNode.Element)) |s_el| {
-                            if (std.mem.eql(u8, s_el.getTagNameLower(), "title")) {
-                                try writeAccessibleNameFallback(s_child, writer, frame);
-                                try writer.writeByte(' ');
-                            }
-                        }
-                    }
-                } else {
-                    if (!el.getTag().isMetadata()) {
-                        try writeAccessibleNameFallback(child, writer, frame);
-                    }
+                    tw.skipChildren();
+                } else if (tag != .svg and tag.isMetadata()) {
+                    tw.skipChildren();
                 }
             },
             else => {},

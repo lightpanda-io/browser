@@ -452,6 +452,18 @@ pub fn setHidden(self: *HtmlElement, hidden: bool, frame: *Frame) !void {
     }
 }
 
+pub fn getInert(self: *HtmlElement) bool {
+    return self.asElement().hasAttributeSafe(comptime .wrap("inert"));
+}
+
+pub fn setInert(self: *HtmlElement, inert: bool, frame: *Frame) !void {
+    if (inert) {
+        try self.asElement().setAttributeSafe(comptime .wrap("inert"), .wrap(""), frame);
+    } else {
+        try self.asElement().removeAttribute(comptime .wrap("inert"), frame);
+    }
+}
+
 // The translate IDL attribute reflects the element's translation mode:
 // translate="yes"/"" enables it, "no" disables it, anything else (or no
 // attribute) inherits from the parent, defaulting to enabled.
@@ -1862,6 +1874,7 @@ pub const JsApi = struct {
     pub const dir = reflect.enumerated("dir", &.{ "ltr", "rtl", "auto" }, .{});
     pub const draggable = bridge.accessor(HtmlElement.getDraggable, HtmlElement.setDraggable, .{ .ce_reactions = true });
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
+    pub const inert = bridge.accessor(HtmlElement.getInert, HtmlElement.setInert, .{ .ce_reactions = true });
     pub const translate = bridge.accessor(HtmlElement.getTranslate, HtmlElement.setTranslate, .{ .ce_reactions = true });
     pub const accessKeyLabel = bridge.accessor(HtmlElement.getAccessKeyLabel, null, .{});
     pub const popover = bridge.accessor(HtmlElement.getPopover, HtmlElement.setPopover, .{ .ce_reactions = true });

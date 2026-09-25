@@ -26,7 +26,7 @@ const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
 
-fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
+pub fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
     const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame.page);
     frame._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
         lp.log.err(.app, "dispatch input event failed", .{ .err = err });

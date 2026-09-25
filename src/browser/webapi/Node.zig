@@ -1613,6 +1613,28 @@ pub fn setHTML(self: *Node, html: []const u8, opts: Frame.parse.FragmentParseOpt
     }
 }
 
+pub fn replaceAllWithFragment(self: *Node, fragment: *Node, frame: *Frame) !void {
+    frame.domChanged();
+
+    const notify = Frame.observers.hasMutationObservers(frame);
+    var added: std.ArrayList(*Node) = .empty;
+    if (notify) {
+        var it = fragment.childrenIterator();
+        while (it.next()) |child| {
+            try added.append(frame.call_arena, child);
+        }
+    }
+
+    const removed = try self.removeAllChildrenCollecting(notify, frame);
+    try frame.moveAllChildren(fragment, self, null, .silent_parent);
+
+    if (notify and (removed.items.len > 0 or added.items.len > 0)) {
+        // The point here is to batch all of the adds/remove and get a combined
+        // mutation record
+        Frame.observers.notifyChildListChange(frame, self, added.items, removed.items, null, null);
+    }
+}
+
 // Writes a JSON representation of the node and its children
 pub fn jsonStringify(self: *const Node, writer: *std.json.Stringify) !void {
     // stupid json api requires this to be const,
@@ -1697,6 +1719,27 @@ pub fn assignedSlot(self: *Node, frame: *const Frame) ?*Element.Html.Slot {
         return null;
     }
     return frame.page._assigned_slots.get(self);
+}
+
+// An inert element applies to all its chidren, so walk up to see if we have
+// an inert parent
+pub fn isInert(self: *Node, frame: *const Frame) bool {
+    var current: ?*Node = self;
+    while (current) |node| {
+        if (node.is(Element)) |el| {
+            if (el._namespace == .html and el.hasAttributeSafe(comptime .wrap("inert"))) {
+                return true;
+            }
+        }
+        if (node.assignedSlot(frame)) |slot| {
+            current = slot.asNode();
+        } else if (node.is(ShadowRoot)) |shadow| {
+            current = shadow._host.asNode();
+        } else {
+            current = node._parent;
+        }
+    }
+    return false;
 }
 
 pub const JsApi = struct {

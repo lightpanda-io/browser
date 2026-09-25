@@ -275,6 +275,63 @@
   }
 </script>
 
+<script id="options_indexed_setter">
+  {
+    const sel = document.createElement('select')
+    const opts = sel.options
+    const make = (v) => { const o = document.createElement('option'); o.value = v; return o }
+
+    // past the end pads with blank options, then appends
+    opts[2] = make('c')
+    testing.expectEqual(3, opts.length)
+    testing.expectEqual(['', '', 'c'], Array.from(opts, (o) => o.value))
+
+    // in range replaces in place, including inside an optgroup (Firefox;
+    // Chrome removes it and add()s the new one before the next option)
+    opts[0] = make('a')
+    testing.expectEqual(['a', '', 'c'], Array.from(opts, (o) => o.value))
+    const group = document.createElement('optgroup')
+    group.appendChild(opts[1])
+    sel.appendChild(group)
+    opts[2] = make('b')
+    testing.expectEqual(group, opts[2].parentNode)
+    testing.expectEqual(['a', 'c', 'b'], Array.from(opts, (o) => o.value))
+
+    // null removes; null past the end is a no-op
+    opts[1] = null
+    testing.expectEqual(['a', 'b'], Array.from(opts, (o) => o.value))
+    opts[10] = null
+    testing.expectEqual(2, opts.length)
+
+    // only options (or null) are accepted
+    testing.expectError('TypeError', () => { opts[0] = document.createElement('div') })
+    testing.expectEqual(2, opts.length)
+
+    const desc = Object.getOwnPropertyDescriptor(opts, 0)
+    testing.expectEqual(true, desc.writable)
+    testing.expectEqual(true, desc.enumerable)
+  }
+</script>
+
+<script id="options_indexed_setter_padding">
+  {
+    const sel = document.createElement('select')
+    const make = (v) => { const o = document.createElement('option'); o.value = v; return o }
+    const records = []
+    new MutationObserver((r) => records.push(...r)).observe(sel, { childList: true })
+
+    // The spec pads with one DocumentFragment (we do, so 2 records); Chrome
+    // appends each blank option on its own. Only what was added is common.
+    sel.options[3] = make('d')
+    testing.expectEqual(4, sel.options.length)
+
+    testing.onload(() => {
+      const added = records.flatMap((r) => Array.from(r.addedNodes, (n) => n.value))
+      testing.expectEqual(['', '', '', 'd'], added)
+    })
+  }
+</script>
+
 <script id="select_add">
   {
     const sel = document.createElement('select')

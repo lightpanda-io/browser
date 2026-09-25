@@ -19,6 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const ClockCache = @import("ClockCache.zig").ClockCache;
+
 const log = lp.log;
 
 const CompiledPattern = struct {
@@ -86,9 +88,6 @@ pub const ContentSignal = struct {
 pub const Robots = @This();
 pub const empty: Robots = .{ .rules = &.{}, .content_signals = &.{} };
 
-// Think twice before deleting/freeing any entries from the map. Readers, e.g.
-// get and getContentSignals, receive values from the map, and if another thread
-// was to delete / free those values while in use, UAF.
 pub const RobotStore = struct {
     const RobotsEntry = union(enum) {
         present: Robots,
@@ -96,39 +95,46 @@ pub const RobotStore = struct {
         disallowed,
     };
 
-    const RobotsMap = @import("Network.zig").HostHashMap(RobotsEntry);
-
     allocator: std.mem.Allocator,
-    map: RobotsMap,
+    map: ClockCache(RobotsEntry),
     mutex: std.Io.Mutex = .init,
 
-    pub fn init(allocator: std.mem.Allocator) RobotStore {
-        return .{ .allocator = allocator, .map = .empty };
+    pub fn init(allocator: std.mem.Allocator, capacity: u32) RobotStore {
+        return .{
+            .allocator = allocator,
+            .map = .init(allocator, capacity),
+        };
     }
 
     pub fn deinit(self: *RobotStore) void {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        var iter = self.map.iterator();
-
-        while (iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-
-            switch (entry.value_ptr.*) {
-                .present => |*robots| robots.deinit(self.allocator),
-                .allowed, .disallowed => {},
-            }
+        for (self.map.entries()) |*entry| {
+            self.freeEntry(&entry.value);
         }
-
-        self.map.deinit(self.allocator);
+        self.map.deinit();
     }
 
-    pub fn get(self: *RobotStore, url: []const u8) ?RobotsEntry {
+    fn freeEntry(self: *RobotStore, entry: *RobotsEntry) void {
+        switch (entry.*) {
+            .present => |*robots| robots.deinit(self.allocator),
+            .allowed, .disallowed => {},
+        }
+    }
+
+    pub const Decision = enum { allowed, blocked };
+
+    pub fn checkPath(self: *RobotStore, url: []const u8, path: []const u8) ?Decision {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        return self.map.get(url);
+        const entry = self.map.get(url) orelse return null;
+        return switch (entry.*) {
+            .allowed => .allowed,
+            .disallowed => .blocked,
+            .present => |robots| if (robots.isAllowed(path)) .allowed else .blocked,
+        };
     }
 
     pub fn robotsFromBytes(self: *RobotStore, user_agent: []const u8, bytes: []const u8) !Robots {
@@ -139,69 +145,62 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        if (try self.putKey(url)) |value_ptr| {
-            // first time seeing this url, store the value
-            value_ptr.* = .{ .present = robots };
-            return;
-        }
-
-        // cannot overwrite an existing value, if it was `present`, we'd have
-        // to free the value but it might be being used.
+        if (try self.insert(url, .{ .present = robots })) return;
 
         var discarded = robots;
         discarded.deinit(self.allocator);
     }
 
-    // The returned slice is owned by the store
-    pub fn getContentSignals(self: *RobotStore, url: []const u8) ?[]const ContentSignal {
+    pub fn getContentSignals(
+        self: *RobotStore,
+        allocator: std.mem.Allocator,
+        url: []const u8,
+    ) !?[]const ContentSignal {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
         const entry = self.map.get(url) orelse return null;
-        return switch (entry) {
+        const signals = switch (entry.*) {
             .present => |robots| robots.content_signals,
-            .allowed, .disallowed => null,
+            .allowed, .disallowed => return null,
         };
+
+        const out = try allocator.alloc(ContentSignal, signals.len);
+        for (signals, 0..) |signal, i| {
+            out[i] = .{
+                .name = try allocator.dupe(u8, signal.name),
+                .value = try allocator.dupe(u8, signal.value),
+            };
+        }
+        return out;
     }
 
     /// This URL has no restrictions on crawling.
     pub fn putAllowed(self: *RobotStore, url: []const u8) !void {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
-
-        if (try self.putKey(url)) |value_ptr| {
-            // first time seeing this url, store the value
-            value_ptr.* = .allowed;
-        }
-        // cannot overwrite an existing value, if it was `present`, we'd have
-        // to free the value but it might be being used.
+        _ = try self.insert(url, .allowed);
     }
 
     /// This URL is fully restricted from crawling.
     pub fn putDisallowed(self: *RobotStore, url: []const u8) !void {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
-
-        if (try self.putKey(url)) |value_ptr| {
-            // first time seeing this url, store the value
-            value_ptr.* = .disallowed;
-        }
-        // cannot overwrite an existing value, if it was `present`, we'd have
-        // to free the value but it might be being used.
+        _ = try self.insert(url, .disallowed);
     }
 
-    // The RobotStore is shared across Browsers. Two rowsers can request the
-    // same robots URL at the same time, and they'll race here. First one wins.
-    // Caller holds the mutex.
-    fn putKey(self: *RobotStore, url: []const u8) !?*RobotsEntry {
-        const gop = try self.map.getOrPut(self.allocator, url);
-        if (gop.found_existing) {
-            // already have a value, caller should not overwrite
-            return null;
+    fn insert(self: *RobotStore, url: []const u8, entry: RobotsEntry) !bool {
+        switch (try self.map.insert(url, entry)) {
+            .exists => return false,
+            .inserted => |evicted| {
+                if (evicted) |value| {
+                    lp.metrics.robots_evictions.incr();
+                    var e = value;
+                    self.freeEntry(&e);
+                }
+                return true;
+            },
         }
-        errdefer _ = self.map.remove(url);
-        gop.key_ptr.* = try self.allocator.dupe(u8, url);
-        return gop.value_ptr;
     }
 };
 
@@ -1247,7 +1246,7 @@ test "Robots: content-signal prefers specific user-agent over wildcard" {
 test "Robots: RobotStore.getContentSignals round-trips" {
     const allocator = std.testing.allocator;
 
-    var store = RobotStore.init(allocator);
+    var store = RobotStore.init(allocator, 1000);
     defer store.deinit();
 
     const robots = try store.robotsFromBytes("MyBot",
@@ -1257,13 +1256,20 @@ test "Robots: RobotStore.getContentSignals round-trips" {
     );
     try store.put("https://example.com/robots.txt", robots);
 
-    const signals = store.getContentSignals("https://example.com/robots.txt").?;
+    const signals = (try store.getContentSignals(allocator, "https://example.com/robots.txt")).?;
+    defer {
+        for (signals) |signal| {
+            allocator.free(signal.name);
+            allocator.free(signal.value);
+        }
+        allocator.free(signals);
+    }
     try std.testing.expectEqual(1, signals.len);
     try std.testing.expectEqualStrings("ai-train", signals[0].name);
     try std.testing.expectEqualStrings("no", signals[0].value);
 
     // Unknown host has no stored robots.
-    try std.testing.expectEqual(null, store.getContentSignals("https://other.com/robots.txt"));
+    try std.testing.expectEqual(null, try store.getContentSignals(allocator, "https://other.com/robots.txt"));
 }
 
 fn testMatch(pattern: []const u8, path: []const u8) bool {

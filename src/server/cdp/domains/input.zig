@@ -514,6 +514,72 @@ test "cdp.input: dispatchMouseEvent mouseWheel scrolls a scroll container, not t
     try runner.waitForScript(frame._frame_id, "window.sheetScrolled === true", 1000);
 }
 
+test "cdp.input: dispatchMouseEvent mouseWheel chains once the container is saturated" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const leaf_x = try (try ls.local.compileAndRun("document.getElementById('innerleaf').getBoundingClientRect().x", null)).toF64();
+    const leaf_y = try (try ls.local.compileAndRun("document.getElementById('innerleaf').getBoundingClientRect().y", null)).toF64();
+
+    // #outerscroll is a 100px box over 500px of content. A wheel latches to one
+    // scroller: the container takes the whole delta and keeps what doesn't fit,
+    // rather than passing the rest on.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = leaf_x, .y = leaf_y, .deltaY = 1000 },
+    });
+    const latched = try ls.local.compileAndRun("document.getElementById('outerscroll').scrollTop === 400 && window.scrollY === 0", null);
+    try testing.expect(latched.isTrue());
+
+    // Saturated now, so the next wheel latches to the viewport instead.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = leaf_x, .y = leaf_y, .deltaY = 100 },
+    });
+    const chained = try ls.local.compileAndRun("document.getElementById('outerscroll').scrollTop === 400 && window.scrollY === 100", null);
+    try testing.expect(chained.isTrue());
+
+    // overscroll-behavior keeps the latch on a container that can't move, so
+    // nothing scrolls at all.
+    _ = try ls.local.compileAndRun("document.getElementById('outerscroll').style.overscrollBehavior = 'contain'", null);
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = leaf_x, .y = leaf_y, .deltaY = 100 },
+    });
+    const contained = try ls.local.compileAndRun("document.getElementById('outerscroll').scrollTop === 400 && window.scrollY === 100", null);
+    try testing.expect(contained.isTrue());
+
+    // Reversing direction latches back to the container, which can move again.
+    // The 100 it can't give back stays unscrolled: no split here either.
+    _ = try ls.local.compileAndRun("document.getElementById('outerscroll').style.overscrollBehavior = 'auto'", null);
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = leaf_x, .y = leaf_y, .deltaY = -500 },
+    });
+    const upward = try ls.local.compileAndRun("document.getElementById('outerscroll').scrollTop === 0 && window.scrollY === 100", null);
+    try testing.expect(upward.isTrue());
+}
+
 test "cdp.input: dispatchMouseEvent mouseWheel on page content scrolls the viewport" {
     var ctx = try testing.context();
     defer ctx.deinit();

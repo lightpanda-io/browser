@@ -120,16 +120,12 @@ fn savePrompt(revision: bool) []const u8 {
 
 const synthesis_prompt =
     \\You have used your tool budget or cannot finish the exploration.
-    \\Give your best final answer NOW based ONLY on what you actually observed
-    \\via tool calls in this conversation. Do NOT fall back to prior knowledge —
-    \\if your snapshots show only cookie banners, 403/access-denied pages,
-    \\blocked search results, or empty bodies, say that explicitly
-    \\(e.g. "the page was blocked by a cookie wall and I could not extract X").
-    \\Do not invent details that are not visible in the tool outputs above.
-    \\Do not call any more tools.
-    \\Respond with ONLY the answer — one word, one number, one short phrase,
-    \\or a brief honest explanation of why the page could not be read.
-    \\No prefix, no markdown.
+    \\Give your best final answer using only what the tool outputs above
+    \\show, not prior knowledge. If they show only cookie banners,
+    \\403/access-denied pages, blocked search results, or empty bodies, say
+    \\so plainly (e.g. "the page was blocked by a cookie wall and I could not
+    \\extract X") rather than filling the gap. Answer at the length the
+    \\question needs.
 ;
 
 allocator: std.mem.Allocator,
@@ -530,10 +526,7 @@ const TurnInput = struct {
 /// Returns true on success.
 pub fn run(self: *Agent) bool {
     if (self.start_url) |url| {
-        self.gotoStart(url, self.one_shot_save != null) catch |err| {
-            self.terminal.printError("could not open {s}: {s}", .{ url, browser_tools.errorMessage(err) });
-            return false;
-        };
+        if (!self.gotoStart(url)) return false;
     }
     if (self.jev_config) |config| {
         const ok = self.runPolicy(config);
@@ -562,16 +555,27 @@ pub fn run(self: *Agent) bool {
     return true;
 }
 
-fn gotoStart(self: *Agent, url: [:0]const u8, record: bool) browser_tools.ToolError!void {
+/// Opens `--url` through the tool layer, so a bad URL fails like any other
+/// tool call and `/save` replays the opening navigation.
+fn gotoStart(self: *Agent, url: [:0]const u8) bool {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
     var object: std.json.ObjectMap = .empty;
-    try object.put(a, "url", .{ .string = url });
+    object.put(a, "url", .{ .string = url }) catch return false;
     const args: std.json.Value = .{ .object = object };
-    _ = try browser_tools.call(a, self.ts.session, &self.ts.registry, "goto", args, .{});
-    if (record) self.recordSaveCommand(Command.fromToolCall(.goto, args));
+    const result = browser_tools.call(a, self.ts.session, &self.ts.registry, "goto", args, .{}) catch |err| {
+        self.terminal.printError("could not open {s}: {s}", .{ url, browser_tools.errorMessage(err) });
+        return false;
+    };
+    // `call` reports a failed navigation in-band, not as an error.
+    if (result.is_error) {
+        self.terminal.printError("could not open {s}: {s}", .{ url, result.text });
+        return false;
+    }
+    self.recordSaveCommand(Command.fromToolCall(.goto, args));
+    return true;
 }
 
 test {
@@ -880,7 +884,8 @@ fn runRepl(self: *Agent) void {
                 self.terminal.endTool();
                 self.printCommandResult(tc, result);
                 if (!result.is_error) {
-                    self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args) orelse cmd);
+                    const replayable = Command.fromToolCall(tc.tool, withSelector(aa, tc.args, result.selector));
+                    self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args) orelse replayable);
                 }
                 self.recordSlashToolCall(command_text, tc.name(), tc.args, result) catch |err| {
                     self.terminal.printWarning("LLM conversation out of sync (/{s}: {s}); next prompt may not see this action", .{ tc.name(), @errorName(err) });
@@ -1673,7 +1678,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
 
 fn runCommand(self: *Agent, arena: std.mem.Allocator, tc: Command.ToolCall) browser_tools.ToolResult {
     // The terminal can't show an image, but the conversation can.
-    return browser_tools.call(arena, self.ts.session, &self.ts.registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null }) catch |err| .{
+    return browser_tools.call(arena, self.ts.session, &self.ts.registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null, .record = true }) catch |err| .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",

@@ -74,7 +74,7 @@ fn getVersion(cmd: *CDP.Command) !void {
         .revision = REVISION,
         .userAgent = CDP_USER_AGENT,
         .jsVersion = JS_VERSION,
-    }, .{ .include_session_id = false });
+    }, .{});
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-setDownloadBehavior
@@ -195,7 +195,7 @@ fn grantPermissions(cmd: *CDP.Command) !void {
         try browser.setPermission(name, .granted);
     }
 
-    return cmd.sendResult(null, .{ .include_session_id = false });
+    return cmd.sendResult(null, .{});
 }
 
 // Set a single permission to an explicit state ("granted", "denied" or
@@ -219,14 +219,14 @@ fn setPermission(cmd: *CDP.Command) !void {
         return error.InvalidPermissionSetting;
     };
     try cmd.cdp.browser.setPermission(params.permission.name, state);
-    return cmd.sendResult(null, .{ .include_session_id = false });
+    return cmd.sendResult(null, .{});
 }
 
 // Clear all granted permissions; navigator.permissions.query() falls back to
 // the default "prompt".
 fn resetPermissions(cmd: *CDP.Command) !void {
     cmd.cdp.browser.clearPermissions();
-    return cmd.sendResult(null, .{ .include_session_id = false });
+    return cmd.sendResult(null, .{});
 }
 
 const testing = @import("../testing.zig");
@@ -247,6 +247,16 @@ test "cdp.browser: getVersion" {
         .userAgent = CDP_USER_AGENT,
         .jsVersion = JS_VERSION,
     }, .{ .id = 32, .index = 0, .session_id = null });
+}
+
+// Clients route replies by (sessionId, id): a reply must echo the sessionId of its command.
+test "cdp.browser: replies echo the sessionId" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .session_id = "SID-X" });
+    try ctx.processMessage(.{ .id = 1, .method = "Browser.getVersion", .sessionId = "SID-X" });
+    try ctx.expectSentResult(.{ .product = PRODUCT }, .{ .id = 1, .session_id = "SID-X" });
 }
 
 test "cdp.browser: getWindowForTarget" {

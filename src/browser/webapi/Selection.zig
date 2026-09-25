@@ -714,7 +714,7 @@ pub fn collapse(self: *Selection, _node: ?*Node, _offset: ?u32, frame: *Frame) !
 
 pub fn toString(self: *const Selection, frame: *Frame) ![]const u8 {
     const range = self._range orelse return "";
-    return try range.toString(frame);
+    return try range.toSelectionString(frame);
 }
 
 fn setRange(self: *Selection, new_range: ?*Range, frame: *Frame) void {

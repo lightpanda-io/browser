@@ -308,3 +308,23 @@
     testing.expectEqual(true, video.paused);
   }
 </script>
+
+<script id="legacy_factory_function">
+  // https://webidl.spec.whatwg.org/#legacy-factory-functions
+  testing.expectEqual(true, Audio !== HTMLAudioElement)
+  testing.expectEqual('Audio', Audio.name)
+  testing.expectEqual(0, Audio.length)
+  testing.expectEqual(HTMLAudioElement.prototype, Audio.prototype)
+  testing.expectEqual(HTMLAudioElement, new Audio().constructor)
+  testing.expectEqual('audio', new Audio().localName)
+  testing.expectError('TypeError', () => new HTMLAudioElement())
+  testing.expectError('TypeError', () => Audio())
+
+  const desc = Object.getOwnPropertyDescriptor(Audio, 'prototype')
+  testing.expectEqual(false, desc.writable)
+  testing.expectEqual(false, desc.enumerable)
+  testing.expectEqual(false, desc.configurable)
+
+  testing.expectEqual(false, Object.keys(window).includes('Audio'))
+  testing.expectEqual(false, Object.keys(window).includes('HTMLAudioElement'))
+</script>

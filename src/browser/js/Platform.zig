@@ -30,24 +30,26 @@ pub const Options = struct {
     timezone: ?[:0]const u8 = null,
 };
 
-/// ICU reads LC_ALL and TZ lazily on first use, so the environment must be
-/// set here, before InitializeICU and before the platform starts its thread
-/// pool (setenv is not safe once other threads may call getenv). ICU
-/// canonicalizes a BCP 47 tag itself, script subtag included.
+/// ICU reads TZ lazily on first use, so it must be set here, before
+/// InitializeICU and before the platform starts its thread pool (setenv is not
+/// safe once other threads may call getenv). The locale goes to ICU directly:
+/// a BCP 47 tag in LC_ALL is not a POSIX locale, so it broke setlocale for the
+/// rest of the process and for every child. ICU canonicalizes the tag itself,
+/// script subtag included.
 pub fn init(opts: Options) !Platform {
     if (opts.v8_flags) |flags| {
         v8.v8__V8__SetFlagsFromString(flags.ptr, flags.len);
     }
 
-    if (opts.locale) |tag| {
-        _ = setenv("LC_ALL", tag, 1);
-    }
     if (opts.timezone) |id| {
         _ = setenv("TZ", id, 1);
     }
 
     if (v8.v8__V8__InitializeICU() == false) {
         return error.FailedToInitializeICU;
+    }
+    if (opts.locale) |tag| {
+        if (!v8.v8__V8__SetDefaultLocale(tag)) return error.InvalidLocale;
     }
     // 0 - threadpool size, 0 == let v8 decide
     // 1 - idle_task_support, 1 == enabled

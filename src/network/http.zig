@@ -71,6 +71,13 @@ pub const Header = struct {
         value: []const u8,
     };
 
+    pub fn normalize(self: Header, allocator: std.mem.Allocator) !Header {
+        return .{
+            .name = try std.ascii.allocLowerString(allocator, self.name),
+            .value = try allocator.dupe(u8, self.value),
+        };
+    }
+
     pub fn parse(header_str: []const u8) ?Header {
         const colon_pos = std.mem.indexOfScalar(u8, header_str, ':') orelse return null;
 
@@ -147,10 +154,7 @@ pub const HeaderIterator = union(enum) {
         var list: std.ArrayList(Header) = .empty;
 
         while (self.next()) |hdr| {
-            try list.append(allocator, .{
-                .name = try allocator.dupe(u8, hdr.name),
-                .value = try allocator.dupe(u8, hdr.value),
-            });
+            try list.append(allocator, try hdr.normalize(allocator));
         }
 
         return list;

@@ -21,11 +21,9 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 
 const Frame = @import("../Frame.zig");
-const Parser = @import("../parser/Parser.zig");
 
 const Node = @import("Node.zig");
 const Document = @import("Document.zig");
-const HTMLDocument = @import("HTMLDocument.zig");
 
 const DOMParser = @This();
 
@@ -45,42 +43,8 @@ pub fn parseFromString(
 
     switch (target_mime) {
         .@"text/html" => {
-            const arena = try frame.getArena(.medium, "DOMParser.parseFromString");
-            defer arena.release();
-
-            // DOMParser builds a detached Document. Borrow the same fragment
-            // parse-mode that `Frame.parse` uses so frame-side hooks
-            // triggered from `Build.created` / `nodeIsReady` (external
-            // stylesheet fetches, script execution, mutation-observer fan-out,
-            // default-script injection) treat the parsed nodes as detached and
-            // skip side effects on the live document. The frame's
-            // `_parse_mode` is restored on exit.
-            const previous_parse_mode = frame._parse_mode;
-            frame._parse_mode = .fragment;
-            defer frame._parse_mode = previous_parse_mode;
-
-            // Create a new HTMLDocument
-            const doc = try frame._factory.document(HTMLDocument{
-                ._proto = undefined,
-            });
+            const doc = try Frame.parse.htmlDocument(frame, html, .{});
             doc.asDocument()._url = frame.url;
-
-            var normalized = std.mem.trim(u8, html, &std.ascii.whitespace);
-            if (normalized.len == 0) {
-                normalized = "<html></html>";
-            }
-
-            // Parse HTML into the document
-            var parser = Parser.init(arena.allocator(), doc.asNode(), frame, .{});
-            parser.parse(normalized);
-            if (parser.terminated) {
-                return error.ExecutionTerminated;
-            }
-
-            if (parser.err) |pe| {
-                return pe.err;
-            }
-
             return doc.asDocument();
         },
         else => {

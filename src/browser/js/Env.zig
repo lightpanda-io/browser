@@ -443,7 +443,7 @@ pub fn hideServiceWorker(self: *const Env, comptime is_frame: bool, v8_context: 
     var deleted: v8.MaybeBool = undefined;
     v8.v8__Object__Delete(global_obj, v8_context, @ptrCast(self.disabled_api_names.get(self.isolate.handle, "caches")), &deleted);
     if (deleted.has_value == false or deleted.value == false) {
-        log.warn(.js, "failed to hide experimental API", .{ .interface = "global", .member = "caches" });
+        log.warn(.js, "experimental API not hidden", .{ .interface = "global", .member = "caches" });
     }
 }
 
@@ -457,7 +457,7 @@ fn deletePrototypeMember(self: *const Env, v8_context: *const v8.Context, global
     var deleted: v8.MaybeBool = undefined;
     v8.v8__Object__Delete(@ptrCast(prototype), v8_context, @ptrCast(names.get(isolate, member)), &deleted);
     if (deleted.has_value == false or deleted.value == false) {
-        log.warn(.js, "failed to hide experimental API", .{ .interface = interface, .member = member });
+        log.warn(.js, "experimental API not hidden", .{ .interface = interface, .member = member });
     }
 }
 
@@ -567,14 +567,18 @@ pub fn msToNextTask(self: *Env) ?u64 {
     return if (next_task == std.math.maxInt(u64)) null else next_task;
 }
 
-pub fn pumpMessageLoop(self: *const Env) void {
+pub fn pumpMessageLoop(self: *const Env) bool {
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate.handle);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
     const isolate = self.isolate.handle;
     const platform = self.platform.handle;
-    while (v8.v8__Platform__PumpMessageLoop(platform, isolate, false)) {}
+    var ran = false;
+    while (v8.v8__Platform__PumpMessageLoop(platform, isolate, false)) {
+        ran = true;
+    }
+    return ran;
 }
 
 pub fn hasBackgroundTasks(self: *const Env) bool {

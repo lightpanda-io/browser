@@ -81,9 +81,7 @@ pub const TestContext = struct {
     };
     pub fn loadBrowserContext(self: *TestContext, opts: BrowserContextOpts) !*CDP.BrowserContext {
         var c = self.cdp();
-        if (c.browser_context) |bc| {
-            _ = c.disposeBrowserContext(bc.id);
-        }
+        c.disposeBrowserContext();
 
         _ = try c.createBrowserContext();
         var bc = &c.browser_context.?;

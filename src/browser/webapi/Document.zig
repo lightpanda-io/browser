@@ -40,6 +40,7 @@ const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
 const FontFaceSet = @import("css/FontFaceSet.zig");
 const Selection = @import("Selection.zig");
+const Sanitizer = @import("Sanitizer.zig");
 const XPathResult = @import("XPathResult.zig");
 const XPathExpression = @import("XPathExpression.zig");
 
@@ -58,6 +59,7 @@ _proto: *Node,
 _page: *Page,
 _index: u32, // browser.documents index
 _frame: ?*Frame = null,
+_template_contents_owner: ?*Document = null,
 _url: ?[:0]const u8 = null, // URL for documents created via DOMImplementation (about:blank)
 // content type override for documents created via DOMImplementation.createDocument
 _content_type: ?[]const u8 = null,
@@ -196,7 +198,7 @@ fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
     const timestamp = blk: {
         if (self._frame) |owner| {
             for (owner._http_headers.items) |header| {
-                if (std.ascii.eqlIgnoreCase(header.name, "last-modified")) {
+                if (std.mem.eql(u8, header.name, "last-modified")) {
                     if (dt.DateTime.parse(header.value, .rfc822)) |parsed| {
                         break :blk parsed.unix(.seconds);
                     } else |_| {}
@@ -515,6 +517,32 @@ fn getImplementation(self: *Document, frame: *Frame) !*DOMImplementation {
 
 fn createDocumentFragment(self: *Document, frame: *Frame) !*Node.DocumentFragment {
     return Node.DocumentFragment.init(self, frame);
+}
+
+// https://html.spec.whatwg.org/multipage/scripting.html#appropriate-template-contents-owner-document
+// A <template>'s content lives in a document with no browsing context, shared
+// by every template of this document (and by the templates nested in that
+// content). Nothing in there is connected, scripts never run and, having no
+// custom element registry, custom elements are never constructed.
+//
+// Only a copy stamped into a real document gets upgraded.
+pub fn templateContentsOwner(self: *Document, frame: *Frame) !*Document {
+    if (self._template_contents_owner) |owner| {
+        return owner;
+    }
+
+    const owner: *Document = if (self._type == .html)
+        (try frame._factory.document(HTMLDocument{ ._proto = undefined })).asDocument()
+    else
+        try frame._factory.genericDocument(.{});
+    owner._url = "about:blank";
+    owner._charset = "UTF-8";
+    owner._ready_state = .complete;
+    // Its own templates' content stays in it.
+    owner._template_contents_owner = owner;
+
+    self._template_contents_owner = owner;
+    return owner;
 }
 
 pub fn createComment(self: *Document, data: []const u8) !*Node {
@@ -1157,7 +1185,15 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     // gone for good, as in Chrome.
     frame.cancelQueuedNavigation();
 
+    if (std.mem.indexOfScalar(*Document, frame._script_created_parser_docs.items, self) == null) {
+        // have the page track this document (if it isn't already)
+        // so that, on shutdown, it can close the parser if needed.
+        try frame._script_created_parser_docs.append(frame.arena, self);
+    }
     self._script_created_parser = Parser.Streaming.init(frame.arena, doc_node, frame, .{ .allow_declarative_shadow = true });
+    // on start() failure the internal `handle` isn't yet create. So we can't
+    // call done() and we don't want any subsequent cleanup to call done().
+    errdefer self._script_created_parser = null;
     try self._script_created_parser.?.start();
     frame._parse_mode = .document;
 
@@ -1514,6 +1550,16 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(_constructor, .{});
     fn _constructor(frame: *Frame) !*Document {
         return frame._factory.genericDocument(.{ .url = "about:blank", .charset = "UTF-8" });
+    }
+
+    pub const parseHTML = bridge.function(_parseHTML, .{ .static = true });
+    fn _parseHTML(html: []const u8, options: ?Sanitizer.Options, frame: *Frame) !*Document {
+        return Sanitizer.parseHTML(html, options, true, frame);
+    }
+
+    pub const parseHTMLUnsafe = bridge.function(_parseHTMLUnsafe, .{ .static = true });
+    fn _parseHTMLUnsafe(html: []const u8, options: ?Sanitizer.Options, frame: *Frame) !*Document {
+        return Sanitizer.parseHTML(html, options, false, frame);
     }
 
     pub const onselectionchange = bridge.accessor(Document.getOnSelectionChange, Document.setOnSelectionChange, .{});
