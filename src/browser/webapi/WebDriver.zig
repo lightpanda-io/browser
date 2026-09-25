@@ -30,7 +30,6 @@ const EventTarget = @import("EventTarget.zig");
 
 const Cookie = @import("storage/Cookie.zig");
 const MouseEvent = @import("event/MouseEvent.zig");
-const TouchEvent = @import("event/TouchEvent.zig");
 const PointerEvent = @import("event/PointerEvent.zig");
 const KeyboardEvent = @import("event/KeyboardEvent.zig");
 const Label = @import("element/html/Label.zig");
@@ -230,7 +229,6 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     // The element the pointer is currently over, set by the last pointerMove
     // whose origin resolved to an element.
     var target: ?*Element = null;
-    var pressed = false;
     // The buttons bitmask of the currently depressed button, carried on move
     // and boundary events while dragging.
     var pressed_mask: u16 = 0;
@@ -263,9 +261,14 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             }
             const el = target orelse continue;
             if (is_touch) {
-                dispatchPointer(el, "pointermove", 0, pressed_mask, frame);
-                if (pressed) {
-                    dispatchTouch(el, "touchmove", frame);
+                // Touch pointers implicitly capture on pointerdown: while
+                // pressed, both the Pointer Event and the Touch stay pinned
+                // to the down target, not wherever this move landed.
+                if (down_target) |captured| {
+                    dispatchPointer(captured, "pointermove", 0, pressed_mask, "touch", frame);
+                    dispatchTouch(captured, .touchmove, frame);
+                } else {
+                    dispatchPointer(el, "pointermove", 0, pressed_mask, "touch", frame);
                 }
             } else {
                 Frame.user_input.updateHoverTarget(frame, el, .{
@@ -273,13 +276,12 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                     .modifiers = frame.page.input_modifiers,
                     .with_pointer = true,
                 });
-                dispatchPointer(el, "pointermove", 0, pressed_mask, frame);
+                dispatchPointer(el, "pointermove", 0, pressed_mask, "mouse", frame);
                 _ = dispatchMouse(el, "mousemove", 0, pressed_mask, 0, frame);
             }
         } else if (action_type.eql(comptime .wrap("pointerDown"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
-            pressed = true;
             pressed_mask = Frame.user_input.buttonsBitmask(button);
             down_target = el;
             if (last_click_target == el and last_click_button == button) {
@@ -287,9 +289,9 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             } else {
                 click_count = 1;
             }
-            dispatchPointer(el, "pointerdown", button, Frame.user_input.buttonsBitmask(button), frame);
+            dispatchPointer(el, "pointerdown", button, Frame.user_input.buttonsBitmask(button), if (is_touch) "touch" else "mouse", frame);
             if (is_touch) {
-                dispatchTouch(el, "touchstart", frame);
+                dispatchTouch(el, .touchstart, frame);
             } else {
                 const suppressed = dispatchMouse(el, "mousedown", button, Frame.user_input.buttonsBitmask(button), click_count, frame);
                 if (!suppressed) {
@@ -301,14 +303,20 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
         } else if (action_type.eql(comptime .wrap("pointerUp"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
-            pressed = false;
+            if (down_target == null) {
+                // A bare pointerUp, or a second one after the first already
+                // consumed the contact: dispatching here would fabricate
+                // events for a press that never happened.
+                continue;
+            }
             pressed_mask = 0;
-            dispatchPointer(el, "pointerup", button, 0, frame);
+            const pointer_target = if (is_touch) down_target.? else el;
+            dispatchPointer(pointer_target, "pointerup", button, 0, if (is_touch) "touch" else "mouse", frame);
             if (is_touch) {
-                dispatchTouch(el, "touchend", frame);
+                dispatchTouch(down_target.?, .touchend, frame);
             } else {
                 _ = dispatchMouse(el, "mouseup", button, 0, click_count, frame);
-                const click_target = commonClickTarget(down_target orelse el, el);
+                const click_target = commonClickTarget(down_target.?, el);
                 last_click_button = button;
                 last_click_target = click_target;
                 if (button == 0) {
@@ -531,7 +539,7 @@ fn readI32(obj: js.Object, key: []const u8, default: i32) i32 {
     return val.toI32() catch default;
 }
 
-fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, frame: *Frame) void {
+fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, pointer_type: []const u8, frame: *Frame) void {
     const modifiers = frame.page.input_modifiers;
     const event = PointerEvent.initTrusted(typ, .{
         .bubbles = true,
@@ -540,7 +548,7 @@ fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons:
         .button = button,
         .buttons = buttons,
         .pointerId = 1,
-        .pointerType = "mouse",
+        .pointerType = pointer_type,
         .isPrimary = true,
         .ctrlKey = modifiers.ctrl,
         .shiftKey = modifiers.shift,
@@ -591,17 +599,14 @@ fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8)
     };
 }
 
-fn dispatchTouch(el: *Element, comptime typ: []const u8, frame: *Frame) void {
+/// Action sequences do not track viewport coordinates (same as dispatchMouse
+/// / dispatchPointer), so clientX/clientY are 0 here. WebDriver has no CDP-style
+/// client-chosen id, so this source's single contact is always identifier 0.
+fn dispatchTouch(el: *Element, typ: Frame.user_input.TouchType, frame: *Frame) void {
     const owner = el.ownerFrame(frame) orelse return;
-    const event = TouchEvent.initTrusted(typ, .{
-        .bubbles = true,
-        .composed = true,
-    }, owner) catch |err| {
+    Frame.user_input.dispatchTouchEventOn(owner, el, typ, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
         log.warn(.app, "webdriver touch event", .{ .err = err });
-        return;
     };
-    event.asEvent()._cancelable_unless_passive = true;
-    dispatch(el.asEventTarget(), event.asEvent(), owner, typ);
 }
 
 pub const JsApi = struct {
@@ -619,3 +624,294 @@ pub const JsApi = struct {
     pub const actionSequence = bridge.function(WebDriver.actionSequence, .{});
     pub const click = bridge.function(WebDriver.click, .{});
 };
+
+const testing = @import("../../testing.zig");
+
+test "WebApi: WebDriver touch actionSequence populates touches" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    frame.page.input_modifiers = .{ .alt = true, .ctrl = true, .meta = true, .shift = true };
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const t = document.getElementById('hoverTarget');
+        \\window.pointerTypes = [];
+        \\for (const type of ['pointermove', 'pointerdown', 'pointerup']) {
+        \\  t.addEventListener(type, e => { pointerTypes.push(e.pointerType); });
+        \\}
+        \\t.addEventListener('touchstart', (e) => {
+        \\  window.start = e.touches.length === 1 &&
+        \\    e.targetTouches.length === 1 &&
+        \\    e.changedTouches.length === 1 &&
+        \\    e.touches[0].target === t && e.altKey && e.ctrlKey && e.metaKey && e.shiftKey;
+        \\});
+        \\t.addEventListener('touchend', (e) => {
+        \\  window.end = e.touches.length === 0 &&
+        \\    e.targetTouches.length === 0 &&
+        \\    e.changedTouches.length === 1 &&
+        \\    e.changedTouches[0].target === t && e.altKey && e.ctrlKey && e.metaKey && e.shiftKey;
+        \\});
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: t },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun(
+        "window.start === true && window.end === true && JSON.stringify(pointerTypes) === '[\"touch\",\"touch\",\"touch\"]'",
+        null,
+    );
+    try testing.expect(result.isTrue());
+}
+
+test "WebApi: WebDriver touchmove/touchend stay on the touchstart target" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const a = document.getElementById('hoverTarget');
+        \\const b = document.getElementById('btn');
+        \\window.moveOnA = false;
+        \\window.moveOnB = false;
+        \\window.endOnA = false;
+        \\window.endOnB = false;
+        \\window.pointerMoveOnACount = 0;
+        \\window.pointerMoveOnBCount = 0;
+        \\window.pointerUpOnA = false;
+        \\window.pointerUpOnB = false;
+        \\a.addEventListener('touchmove', (e) => {
+        \\  window.moveOnA = e.touches.length === 1 && e.touches[0].target === a;
+        \\});
+        \\b.addEventListener('touchmove', () => { window.moveOnB = true; });
+        \\a.addEventListener('touchend', (e) => {
+        \\  window.endOnA = e.changedTouches.length === 1 && e.changedTouches[0].target === a;
+        \\});
+        \\b.addEventListener('touchend', () => { window.endOnB = true; });
+        \\// The initial unpressed pointerMove(origin: a) also lands on `a`,
+        \\// so the count (not just "did it fire on a") is what discriminates
+        \\// the captured second move from an uncaptured one landing on `b`.
+        \\a.addEventListener('pointermove', e => { if (e.pointerType === 'touch') window.pointerMoveOnACount++; });
+        \\b.addEventListener('pointermove', () => { window.pointerMoveOnBCount++; });
+        \\a.addEventListener('pointerup', e => { window.pointerUpOnA = e.pointerType === 'touch'; });
+        \\b.addEventListener('pointerup', () => { window.pointerUpOnB = true; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: a },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerMove', origin: b },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    // Pointer Events implicitly capture to the pointerdown element for a
+    // touch source: the pressed pointermove and the pointerup must stay on
+    // `a`, never reach `b`, exactly like the Touch events above.
+    const result = try ls.local.compileAndRun(
+        "window.moveOnA === true && window.moveOnB !== true && window.endOnA === true && window.endOnB !== true" ++
+            " && window.pointerMoveOnACount === 2 && window.pointerMoveOnBCount === 0" ++
+            " && window.pointerUpOnA === true && window.pointerUpOnB !== true",
+        null,
+    );
+    try testing.expect(result.isTrue());
+}
+
+// An unmatched touch release (no preceding pointerDown in the source) must
+// not fabricate a touchend: per the WebDriver spec, releasing a button
+// that isn't pressed is a no-op.
+test "WebApi: WebDriver a touch pointerUp with no preceding pointerDown dispatches no touchend" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.sawTouchend = false;
+        \\document.getElementById('hoverTarget').addEventListener('touchend', () => { window.sawTouchend = true; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: document.getElementById('hoverTarget') },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun("window.sawTouchend === false", null);
+    try testing.expect(result.isTrue());
+}
+
+// A second pointerUp for the same source (no intervening pointerDown) must
+// not fire a second touchend for a contact the first release already ended.
+test "WebApi: WebDriver a second touch pointerUp dispatches no second touchend" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.touchendCount = 0;
+        \\document.getElementById('hoverTarget').addEventListener('touchend', () => { window.touchendCount++; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: document.getElementById('hoverTarget') },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun("window.touchendCount === 1", null);
+    try testing.expect(result.isTrue());
+}
+
+// The WebDriver "release a button that isn't pressed is a no-op" rule
+// applies to every pointer type, not just touch: a bare mouse pointerUp
+// must not fabricate pointerup/mouseup/click either.
+test "WebApi: WebDriver a mouse pointerUp with no preceding pointerDown dispatches no click" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.sawPointerup = false;
+        \\window.sawMouseup = false;
+        \\window.sawClick = false;
+        \\const t = document.getElementById('hoverTarget');
+        \\t.addEventListener('pointerup', () => { window.sawPointerup = true; });
+        \\t.addEventListener('mouseup', () => { window.sawMouseup = true; });
+        \\t.addEventListener('click', () => { window.sawClick = true; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'mouse' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: t },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun(
+        "window.sawPointerup === false && window.sawMouseup === false && window.sawClick === false",
+        null,
+    );
+    try testing.expect(result.isTrue());
+}
+
+// A second mouse pointerUp for the same source (no intervening pointerDown)
+// must not fire a second click for a press the first release already ended.
+test "WebApi: WebDriver a second mouse pointerUp dispatches no second click" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.clickCount = 0;
+        \\window.dblclickCount = 0;
+        \\window.mousePointerTypes = [];
+        \\const t = document.getElementById('hoverTarget');
+        \\for (const type of ['pointermove', 'pointerdown', 'pointerup']) {
+        \\  t.addEventListener(type, e => { mousePointerTypes.push(e.pointerType); });
+        \\}
+        \\t.addEventListener('click', () => { window.clickCount++; });
+        \\t.addEventListener('dblclick', () => { window.dblclickCount++; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'mouse' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: t },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun(
+        "window.clickCount === 1 && window.dblclickCount === 0 && JSON.stringify(mousePointerTypes) === '[\"mouse\",\"mouse\",\"mouse\"]'",
+        null,
+    );
+    try testing.expect(result.isTrue());
+}

@@ -35,6 +35,7 @@ const TreeWalker = @import("../webapi/TreeWalker.zig");
 const TextEvent = @import("../webapi/event/TextEvent.zig");
 const InputEvent = @import("../webapi/event/InputEvent.zig");
 const MouseEvent = @import("../webapi/event/MouseEvent.zig");
+const TouchEvent = @import("../webapi/event/TouchEvent.zig");
 const WheelEvent = @import("../webapi/event/WheelEvent.zig");
 const PointerEvent = @import("../webapi/event/PointerEvent.zig");
 const KeyboardEvent = @import("../webapi/event/KeyboardEvent.zig");
@@ -530,6 +531,118 @@ fn scrollAxis(target: *Element, comptime axis: Element.Axis, delta: i32, frame: 
 fn deltaToScroll(d: f64) i32 {
     if (std.math.isNan(d)) return 0;
     return @trunc(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
+}
+
+/// One contact as the client described it. The id is whatever the client
+/// picked on touchstart (Puppeteer counts up from 1; a bare CDP call with no
+/// id defaults to 0). The radius, angle and force defaults are Chrome's for a
+/// point that leaves them out, and Puppeteer overrides all three per tap.
+pub const TouchPoint = struct {
+    x: f64,
+    y: f64,
+    identifier: i32 = 0,
+    radius_x: f64 = 1,
+    radius_y: f64 = 1,
+    rotation_angle: f64 = 0,
+    force: f64 = 1,
+};
+
+/// The CDP-tracked touch contact. Single-touch scope: at most one.
+pub const TouchContact = struct {
+    target: *Element,
+    point: TouchPoint,
+};
+
+pub const TouchType = enum {
+    touchstart,
+    touchmove,
+    touchend,
+    touchcancel,
+
+    fn name(self: TouchType) []const u8 {
+        return @tagName(self);
+    }
+
+    fn isLift(self: TouchType) bool {
+        return self == .touchend or self == .touchcancel;
+    }
+};
+
+/// The caller supplies the target (no hit-test), so touchmove/touchend/
+/// touchcancel can stay pinned to the touchstart element instead of
+/// re-resolving at the current point.
+pub fn dispatchTouchEventOn(frame: *Frame, target: *Element, typ: TouchType, point: TouchPoint, modifiers: Modifiers) !void {
+    const active = !typ.isLift();
+
+    const event: *TouchEvent = try .initTrustedWithTouch(typ.name(), .{
+        .bubbles = true,
+        .composed = true,
+        .altKey = modifiers.alt,
+        .ctrlKey = modifiers.ctrl,
+        .metaKey = modifiers.meta,
+        .shiftKey = modifiers.shift,
+    }, .{
+        .identifier = point.identifier,
+        .target = target,
+        .clientX = point.x,
+        .clientY = point.y,
+        .radiusX = point.radius_x,
+        .radiusY = point.radius_y,
+        .rotationAngle = point.rotation_angle,
+        .force = point.force,
+    }, active, frame);
+
+    // touchcancel is never cancelable per spec; the others follow the same
+    // passive-listener-dependent rule as wheel (see EventManager).
+    if (typ != .touchcancel) {
+        event.asEvent()._cancelable_unless_passive = true;
+    }
+
+    try frame._event_manager.dispatch(target.asEventTarget(), event.asEvent());
+}
+
+pub fn hasActiveTouch(frame: *Frame) bool {
+    return frame.page.input_touch_contact != null;
+}
+
+/// When the point misses every element (e.g. past the end of a short faux
+/// layout), fall back to the document element rather than dropping the
+/// contact silently, the same fallback WebDriver's pointerMove uses.
+pub fn triggerTouch(frame: *Frame, typ: TouchType, point: TouchPoint, modifiers: Modifiers) !void {
+    const page = frame.page;
+    const pinned = if (typ == .touchstart) null else if (page.input_touch_contact) |c| c.target else null;
+    const resolved = pinned orelse
+        (try frame.window._document.elementFromPoint(point.x, point.y, frame)) orelse
+        frame.window._document.getDocumentElement() orelse return;
+    if (comptime lp.IS_DEBUG) {
+        log.debug(.frame, "frame touch", .{
+            .url = frame.url,
+            .node = resolved,
+            .x = point.x,
+            .y = point.y,
+            .type = frame._type,
+        });
+    }
+    try dispatchTouchEventOn(frame, resolved, typ, point, modifiers);
+    page.input_touch_contact = .{ .target = resolved, .point = point };
+}
+
+/// Playwright sends an empty touchPoints list, so there's nowhere to read a
+/// release position from but the stored contact. Puppeteer sends the point
+/// being released, and Chrome dispatches at that wire position rather than
+/// the last-seen one, so `point` (when given) wins over the stored
+/// coordinates.
+pub fn triggerTouchLift(frame: *Frame, typ: TouchType, point: ?TouchPoint, modifiers: Modifiers) !void {
+    const contact = frame.page.input_touch_contact orelse return;
+    // Consume the state before the fallible dispatch, so a dispatch that
+    // fails partway through (e.g. a listener throws) can't leave a stale
+    // contact that locks out every future touchStart for this page.
+    frame.page.input_touch_contact = null;
+    // The lift keeps the contact's id whatever the client re-sent, so a
+    // released point can move the position but not rename the contact.
+    var lift = point orelse contact.point;
+    lift.identifier = contact.point.identifier;
+    try dispatchTouchEventOn(frame, contact.target, typ, lift, modifiers);
 }
 
 /// Whether the element has a click activation behavior that handleClick
