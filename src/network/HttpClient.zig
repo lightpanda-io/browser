@@ -802,7 +802,6 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
             // we're about to tell our caller not to call us again without it
             // doing some work (e.g. running tasks). Let's assert that we were
             // right in doing that, else we'll likely introduce latency.
-            std.debug.assert(self.pending_queue.first == null);
             std.debug.assert(self.delayed_queue.first == null);
             std.debug.assert(self.dispatch_queue.first == null);
             std.debug.assert(self.ws_dispatch_queue.first == null);

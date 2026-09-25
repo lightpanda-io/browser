@@ -231,7 +231,6 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
 
     const activity = http_client.activity();
     const total_http_activity = activity.http;
-    const total_network_activity = activity.total();
 
     const network_idle = activity.idle();
     const is_done = browser.hasMacrotasks() == false and network_idle;
@@ -283,7 +282,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                 condition.status = .complete;
             },
             .pre, .raw, .text, .image, .download => {
-                if (total_network_activity == 0) {
+                // Includes pending: another client may hold every connection.
+                if (network_idle) {
                     condition.status = .complete;
                 } else {
                     want_http_tick = true;
