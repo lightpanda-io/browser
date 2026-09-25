@@ -1538,6 +1538,10 @@ fn lineWidth(self: *Element, frame: *Frame) ?f64 {
     const memo = &owner._layout_memo;
     memo.sync(owner);
 
+    if (memo.line_widths.get(self)) |known| {
+        return known;
+    }
+
     var resolved: ?f64 = null;
     var stop: ?*Element = self;
     while (stop) |el| {
@@ -1550,8 +1554,7 @@ fn lineWidth(self: *Element, frame: *Frame) ?f64 {
             resolved = width.value;
             break;
         }
-        const tag = el.getTag();
-        if (tag == .html or tag == .body) {
+        if (el.scrollsViewport()) {
             break;
         }
         stop = el.parentElement();
@@ -1603,8 +1606,9 @@ fn textHeight(self: *Element, frame: *Frame, line_width: f64) f64 {
     return height;
 }
 
+// SVG content is laid out in its own box, never in the parent's lines.
 fn isInlineLevel(self: *const Element) bool {
-    return self._type == .html and std.mem.eql(u8, CSSStyleDeclaration.getDefaultDisplay(self), "inline");
+    return self._type == .html and CSSStyleDeclaration.isInlineHtml(self);
 }
 
 // We can't do this correctly without full styles and more rendering. We also
