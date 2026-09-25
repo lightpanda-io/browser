@@ -45,12 +45,9 @@ pub const text = @import("jev/text.zig");
 
 pub const default_max_actions = 60;
 
-pub const channels = zenai.typesafe.channels;
-pub const Credential = channels.Credential;
-
 pub const Config = struct {
     goal: []const u8,
-    credential: Credential,
+    api_key: [:0]const u8,
     model: []const u8,
     base_url: []const u8,
     max_actions: u32 = default_max_actions,

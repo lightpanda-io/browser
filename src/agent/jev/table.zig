@@ -581,19 +581,11 @@ fn writeState(
     try jw.endObject();
 }
 
-/// The speculative fan-out for one turn: the operation head plus one target
-/// head per operation that actually has candidates. The offered option lists
-/// come back alongside, because validating an answer means checking it against
-/// exactly the set that was sent.
 /// One turn's questions: the operation head plus a target head per operation
 /// that has candidates. Kept as sent, because that is what an answer has to be
 /// validated against.
 pub const Ask = struct {
     questions: zenai.typesafe.types.Questions,
-
-    pub fn entries(self: Ask) []const QuestionEntry {
-        return self.questions.entries;
-    }
 };
 
 pub const AskOpts = struct {
@@ -832,8 +824,8 @@ test "ask: an operation with no candidates loses its head and its option" {
     try expectOptions(&.{"1"}, full.questions.get("type_text_target"));
     try expectOptions(&.{ "3:1", "3:2" }, full.questions.get("select_target"));
     // The operation head comes first so the answer is easy to find.
-    try std.testing.expectEqualStrings("operation", full.entries()[0].key);
-    try std.testing.expectEqual(@as(usize, 4), full.entries().len);
+    try std.testing.expectEqualStrings("operation", full.questions.entries[0].key);
+    try std.testing.expectEqual(@as(usize, 4), full.questions.entries.len);
     try expectOptions(&.{
         "CLICK", "TYPE_TEXT", "SELECT", "WAIT", "DONE", "BLOCKED",
     }, full.questions.get("operation"));
@@ -841,8 +833,8 @@ test "ask: an operation with no candidates loses its head and its option" {
     var narrow = fixtureTable();
     narrow.elements = fixtureTable().elements[1..2]; // the button alone
     const only_click = try ask(a, narrow, .{});
-    try std.testing.expectEqual(@as(usize, 2), only_click.entries().len);
-    try std.testing.expectEqualStrings("click_target", only_click.entries()[1].key);
+    try std.testing.expectEqual(@as(usize, 2), only_click.questions.entries.len);
+    try std.testing.expectEqualStrings("click_target", only_click.questions.entries[1].key);
     try std.testing.expectEqual(@as(?zenai.typesafe.types.Question, null), only_click.questions.get("type_text_target"));
 }
 

@@ -613,17 +613,18 @@ fn resolvePolicy(opts: Config.Agent) !?jev.Config {
         });
         return error.ConflictingFlags;
     }
-    const credential = jev.channels.detect(lp.environ()) orelse {
+    const api_key = lp.environ().getPosix("TYPESAFE_API_KEY") orelse "";
+    if (api_key.len == 0) {
         log.fatal(.app, "no decider API key", .{
-            .hint = "--policy jev needs one of: " ++ jev.channels.api_keys_hint,
+            .hint = "--policy jev needs TYPESAFE_API_KEY",
         });
         return error.MissingApiKey;
-    };
+    }
     return .{
         .goal = goal,
-        .credential = credential,
-        .model = opts.jev_model orelse credential.channel.model,
-        .base_url = opts.jev_base_url orelse credential.channel.base_url,
+        .api_key = api_key,
+        .model = opts.jev_model orelse zenai.typesafe.types.default_model,
+        .base_url = opts.jev_base_url orelse zenai.typesafe.Client.default_base_url,
         .max_actions = opts.max_actions orelse jev.default_max_actions,
     };
 }
@@ -631,12 +632,12 @@ fn resolvePolicy(opts: Config.Agent) !?jev.Config {
 /// Run the decision loop. True only when the decider reported the goal
 /// satisfied; upstream leaves verifying that to the caller, and so do we.
 fn runPolicy(self: *Agent, config: jev.Config) bool {
-    var client: zenai.typesafe.Client = .init(lp.io, self.allocator, config.credential.api_key, .{
+    var client: zenai.typesafe.Client = .init(lp.io, self.allocator, config.api_key, .{
         .base_url = config.base_url,
     });
     defer client.deinit();
     self.terminal.printInfo("{s}decider{s} {s} via {s}", .{
-        ansi.dim, ansi.reset, config.model, config.credential.channel.name,
+        ansi.dim, ansi.reset, config.model, config.base_url,
     });
 
     var system_one: jev.decider.SystemOne = .{ .client = &client, .model = config.model };

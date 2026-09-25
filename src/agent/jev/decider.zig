@@ -80,7 +80,7 @@ pub const SystemOne = struct {
         const self: *SystemOne = @ptrCast(@alignCast(context));
 
         const started: std.Io.Timestamp = .now(lp.io, .boot);
-        var response = self.client.ask(.{ .text = state }, ask.entries(), .{ .model = self.model }) catch |err| {
+        var response = self.client.ask(.{ .text = state }, ask.questions, .{ .model = self.model }) catch |err| {
             self.last_error = self.client.last_error.message;
             return switch (err) {
                 error.OutOfMemory => error.OutOfMemory,
