@@ -977,7 +977,7 @@ fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, name: String) []con
     return "";
 }
 
-fn getDefaultDisplay(element: *const Element) []const u8 {
+pub fn getDefaultDisplay(element: *const Element) []const u8 {
     switch (element._type) {
         .html => {
             return switch (element.subtype(Element.Html)._type) {

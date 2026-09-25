@@ -35,6 +35,7 @@ const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
 const Animation = @import("animation/Animation.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
+const CSSStyleDeclaration = @import("css/CSSStyleDeclaration.zig");
 
 const slotting = @import("element/slotting.zig");
 const DOMStringMap = @import("element/DOMStringMap.zig");
@@ -1518,7 +1519,64 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
         }
     }
 
+    // An auto-height block is as tall as its text. Parents only sum their
+    // children, so this is how nested text reaches them.
+    if (axis == .height and !self.isInlineLevel()) {
+        if (self.lineWidth(frame)) |line_width| {
+            return .{ .value = @max(5.0, self.textHeight(frame, line_width)) };
+        }
+    }
+
     return .{ .value = 5.0 };
+}
+
+/// The width self's text wraps at: its own, else the nearest sized
+/// ancestor's, since an auto-width block fills its container. Null under an
+/// unsized root, where text isn't measured.
+fn lineWidth(self: *Element, frame: *Frame) ?f64 {
+    var current: ?*Element = self;
+    while (current) |el| : (current = el.parentElement()) {
+        const width = el.getElementAxis(frame, .width);
+        if (width.explicit) {
+            return width.value;
+        }
+        const tag = el.getTag();
+        if (tag == .html or tag == .body) {
+            return null;
+        }
+    }
+    return null;
+}
+
+/// The height of self's text and its inline descendants' text, wrapped at
+/// line_width. Block descendants measure their own.
+fn textHeight(self: *Element, frame: *Frame, line_width: f64) f64 {
+    const owner = self.ownerFrame(frame) orelse return 0;
+    const style_manager = &owner._style_manager;
+
+    var wrap: text_measure.LineWrap = .{ .line_width = line_width, .font_size = style_manager.computedFontSize(self) };
+    var tw = TreeWalker.FullExcludeSelf.init(self.asNode(), .{});
+    while (tw.next()) |node| {
+        if (node.is(Node.CData.Text)) |text| {
+            wrap.add(text.ownData());
+            continue;
+        }
+        const el = node.is(Element) orelse {
+            tw.skipChildren();
+            continue;
+        };
+        if (el.getTag() == .br) {
+            wrap.breakLine();
+        } else if (!el.isInlineLevel() or style_manager.hasDisplayNone(el)) {
+            tw.skipChildren();
+        }
+    }
+    // Whole pixels, like scroll offsets
+    return @ceil(wrap.height());
+}
+
+fn isInlineLevel(self: *const Element) bool {
+    return self._type == .html and std.mem.eql(u8, CSSStyleDeclaration.getDefaultDisplay(self), "inline");
 }
 
 // We can't do this correctly without full styles and more rendering. We also
@@ -1750,37 +1808,30 @@ fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
 // `scrollWidth` passes a threshold (the infinite-marquee idiom) never
 // terminates when the metric ignores what it just inserted.
 //
-// Text children add height only under an explicit width to wrap at.
-// Otherwise almost every element with text would report overflow.
+// Text adds height only under a line width (see lineWidth). Otherwise
+// almost every element with text would report overflow. Inline children then
+// count as the lines their text fills, not as stacked boxes.
 pub fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     var total: f64 = 0;
     const owner = self.ownerFrame(frame) orelse return 0;
     const style_manager = &owner._style_manager;
 
-    var wrap: ?text_measure.LineWrap = null;
-    if (axis == .height) {
-        const width = self.getElementAxis(frame, .width);
-        if (width.explicit) {
-            wrap = .{ .line_width = width.value, .font_size = style_manager.computedFontSize(self) };
-        }
-    }
+    const line_width = if (axis == .height) self.lineWidth(frame) else null;
 
     var child = self.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
-        if (node.is(Element)) |el| {
-            if (!style_manager.hasDisplayNone(el)) {
-                total += el.getElementAxis(frame, axis).value;
-            }
-        } else if (wrap) |*w| {
-            if (node.is(Node.CData.Text)) |text| {
-                w.add(text.ownData());
-            }
+        const el = node.is(Element) orelse continue;
+        if (style_manager.hasDisplayNone(el)) {
+            continue;
         }
+        if (line_width != null and el.isInlineLevel()) {
+            continue;
+        }
+        total += el.getElementAxis(frame, axis).value;
     }
 
-    if (wrap) |w| {
-        // Whole pixels, like scroll offsets
-        total += @ceil(w.height());
+    if (line_width) |w| {
+        total += self.textHeight(frame, w);
     }
     return total;
 }

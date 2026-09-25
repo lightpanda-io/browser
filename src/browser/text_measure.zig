@@ -76,6 +76,8 @@ pub const LineWrap = struct {
     x: f64 = 0,
     // A space is due before the next word.
     space: bool = false,
+    // Forced breaks (<br>) since the last word.
+    breaks: u32 = 0,
 
     pub fn add(self: *LineWrap, text: []const u8) void {
         if (text.len == 0) {
@@ -88,7 +90,11 @@ pub const LineWrap = struct {
         while (words.next()) |word| {
             const w = width(word, self.font_size);
             const gap = if (self.space) advance(' ', self.font_size) else 0;
-            if (self.lines == 0) {
+            if (self.breaks > 0) {
+                self.lines = self.lineCount() + 1;
+                self.breaks = 0;
+                self.x = w;
+            } else if (self.lines == 0) {
                 self.lines = 1;
                 self.x = w;
             } else if (self.x + gap + w > self.line_width) {
@@ -102,8 +108,22 @@ pub const LineWrap = struct {
         self.space = std.ascii.isWhitespace(text[text.len - 1]);
     }
 
+    /// A `<br>` ends the current line, which counts even when empty. A
+    /// trailing one opens no new line.
+    pub fn breakLine(self: *LineWrap) void {
+        self.breaks += 1;
+        self.space = false;
+    }
+
+    fn lineCount(self: LineWrap) u32 {
+        if (self.breaks == 0) {
+            return self.lines;
+        }
+        return @max(self.lines, 1) + self.breaks - 1;
+    }
+
     pub fn height(self: LineWrap) f64 {
-        return @as(f64, @floatFromInt(self.lines)) * self.font_size * LINE_HEIGHT;
+        return @as(f64, @floatFromInt(self.lineCount())) * self.font_size * LINE_HEIGHT;
     }
 };
 
@@ -167,6 +187,27 @@ test "LineWrap: collapses whitespace and breaks between words" {
     wrap.add("aaaa");
     try std.testing.expectEqual(3, wrap.lines);
     try std.testing.expectApproxEqAbs(36, wrap.height(), 0.0001);
+
+    // A <br> starts a new line, but a trailing one adds none
+    var broken: LineWrap = .{ .line_width = 1000, .font_size = 10 };
+    broken.add("aaaa");
+    broken.breakLine();
+    try std.testing.expectEqual(1, broken.lineCount());
+    broken.add(" aaaa");
+    try std.testing.expectEqual(2, broken.lineCount());
+    broken.breakLine();
+    broken.breakLine();
+    try std.testing.expectEqual(3, broken.lineCount());
+    broken.add("aaaa");
+    try std.testing.expectEqual(4, broken.lineCount());
+
+    // Leading <br>s leave empty lines
+    var leading: LineWrap = .{ .line_width = 1000, .font_size = 10 };
+    leading.breakLine();
+    try std.testing.expectEqual(1, leading.lineCount());
+    leading.breakLine();
+    leading.add("aaaa");
+    try std.testing.expectEqual(3, leading.lineCount());
 
     // Long words aren't split
     var narrow: LineWrap = .{ .line_width = 10, .font_size = 10 };
