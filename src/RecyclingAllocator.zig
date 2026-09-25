@@ -26,6 +26,7 @@
 // has been freed. Nothing is ever returned to the child.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const Allocator = std.mem.Allocator;
 const Alignment = std.mem.Alignment;
@@ -70,10 +71,6 @@ pub fn init(child_allocator: Allocator) RecyclingAllocator {
     return .{ .child_allocator = child_allocator };
 }
 
-pub fn deinit(self: *RecyclingAllocator) void {
-    self.free_lists.deinit(self.child_allocator);
-}
-
 pub fn allocator(self: *RecyclingAllocator) Allocator {
     return .{
         .ptr = self,
@@ -114,7 +111,7 @@ fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, _: usize) void {
     }
 
     const slot = memory.ptr;
-    if (comptime std.debug.runtime_safety) {
+    if (comptime lp.IS_DEBUG) {
         // Make a use-after-free read garbage rather than the old object.
         @memset(slot[0..class.size], undefined);
     }
@@ -134,7 +131,6 @@ const TestAllocator = struct {
     }
 
     fn deinit(self: *TestAllocator) void {
-        self.recycling.deinit();
         self.arena.deinit();
     }
 };
