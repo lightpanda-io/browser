@@ -19,25 +19,12 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
-const units = @import("../css/units.zig");
 const Tokenizer = @import("../css/Tokenizer.zig");
 
 const CSS = @This();
 _pad: bool = false,
 
 pub const init: CSS = .{};
-
-// parseDimension plus viewport-relative units, which the faux layout
-// resolves against the page viewport.
-pub fn parseDimensionViewport(value: []const u8, frame: *Frame) ?f64 {
-    const parsed = units.parse(value) catch return null;
-    return switch (parsed.unit) {
-        .none, .px => parsed.value,
-        .vh => parsed.value * @as(f64, @floatFromInt(frame.page.getViewport().height)) / 100.0,
-        .vw => parsed.value * @as(f64, @floatFromInt(frame.page.getViewport().width)) / 100.0,
-        else => null,
-    };
-}
 
 // Extract the X value from a transfrom. This could come from a translate,
 // translatex, translate3d or matrix function.
