@@ -69,8 +69,12 @@ pub const SystemOne = struct {
     /// The versioned model the service says answered. An alias moves without
     /// notice, and the gateway exposes nothing but aliases, so this is the
     /// only record of what actually decided a run.
-    resolved: ?[]const u8 = null,
     resolved_buf: [64]u8 = undefined,
+    resolved_len: u8 = 0,
+
+    pub fn resolved(self: *const SystemOne) ?[]const u8 {
+        return if (self.resolved_len == 0) null else self.resolved_buf[0..self.resolved_len];
+    }
 
     pub fn decider(self: *SystemOne) Decider {
         return .{ .context = self, .decideFn = decide };
@@ -88,10 +92,10 @@ pub const SystemOne = struct {
             };
         };
         defer response.deinit();
-        if (self.resolved == null and response.value.model.len > 0) {
+        if (self.resolved_len == 0 and response.value.model.len > 0) {
             const n = @min(response.value.model.len, self.resolved_buf.len);
             @memcpy(self.resolved_buf[0..n], response.value.model[0..n]);
-            self.resolved = self.resolved_buf[0..n];
+            self.resolved_len = @intCast(n);
         }
         const latency_ms: u64 = @intCast(started.untilNow(lp.io, .boot).toMilliseconds());
 

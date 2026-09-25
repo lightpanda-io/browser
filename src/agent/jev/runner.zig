@@ -53,7 +53,7 @@ pub const Result = struct {
 };
 
 /// `NoTextGenerator` is TYPE_TEXT coming up with no text model configured.
-pub const Error = table.ObserveError || decider_mod.Error || text.Error || error{NoTextGenerator};
+pub const Error = table.ObserveError || decider_mod.Error || error{NoTextGenerator};
 
 /// Lets a caller watch the loop without the loop knowing what it is talking to.
 pub const Hooks = struct {
@@ -66,6 +66,8 @@ pub const Hooks = struct {
 
 /// How many consecutive non-WAIT steps may leave the page untouched before
 /// the run is called stuck. jev-ultrafast uses the same three.
+pub const default_max_actions = 60;
+
 const stuck_streak = 3;
 
 pub const Runner = struct {
@@ -77,7 +79,7 @@ pub const Runner = struct {
     /// rather than typing a guess.
     generator: ?text.Generator = null,
     goal: []const u8,
-    max_actions: u32 = 60,
+    max_actions: u32 = default_max_actions,
     hooks: ?Hooks = null,
 
     /// Decider tokens across the whole run, for the `$usage` line.
@@ -126,7 +128,7 @@ pub const Runner = struct {
             const arena = arenas[scratch].allocator();
 
             const before = carried orelse
-                try table.observe(arena, self.session, self.registry, .{ .text_bytes = table.default_text_bytes });
+                try table.observe(arena, self.session, self.registry, .{});
             const ask = try table.ask(arena, before, .{ .can_type = self.generator != null });
             const state = try table.stateJson(arena, before, self.goal, @intCast(self.history.items.len + 1), self.history.items);
 
@@ -159,17 +161,9 @@ pub const Runner = struct {
                 } else {
                     // The helper declined to invent a value. Record the dead
                     // end so the decider stops proposing this field.
-                    const kept = self.history_arena.allocator();
-                    try self.record(.{
-                        .number = @intCast(self.history.items.len + 1),
-                        .op = decision.operation,
-                        .target = try kept.dupe(u8, decision.target.?),
-                        .label = try kept.dupe(u8, target.?.element.label),
-                        .probability = decision.probability,
-                        .confidence = decision.confidence,
-                        .latency_ms = decision.latency_ms,
-                        .ok = false,
-                    });
+                    var step = try self.stepFrom(decision, target);
+                    step.ok = false;
+                    try self.record(step);
                     // Not `before`: it may live in this turn's arena, which
                     // the next turn resets. Only a table observed into the
                     // arena a turn *keeps* can be carried.
@@ -204,21 +198,12 @@ pub const Runner = struct {
             // model round to discover the page was mid-update.
             self.settle();
 
-            const after = try table.observe(arena, self.session, self.registry, .{ .text_bytes = table.default_text_bytes });
-            const made_progress = table.changed(before, after);
-            const kept = self.history_arena.allocator();
-            try self.record(.{
-                .number = @intCast(self.history.items.len + 1),
-                .op = decision.operation,
-                .target = if (decision.target) |t| try kept.dupe(u8, t) else null,
-                .label = if (target) |t| try kept.dupe(u8, t.element.label) else "",
-                .text = if (typed) |t| try kept.dupe(u8, t) else null,
-                .probability = decision.probability,
-                .confidence = decision.confidence,
-                .latency_ms = decision.latency_ms,
-                .ok = !result.is_error,
-                .page_changed = made_progress,
-            });
+            const after = try table.observe(arena, self.session, self.registry, .{});
+            var step = try self.stepFrom(decision, target);
+            step.text = if (typed) |t| try self.history_arena.allocator().dupe(u8, t) else null;
+            step.ok = !result.is_error;
+            step.page_changed = table.changed(before, after);
+            try self.record(step);
             self.cache.clear();
 
             // `after` lives in this turn's arena, which the next turn leaves
@@ -261,6 +246,21 @@ pub const Runner = struct {
     /// navigation state, which a click that only mutates the DOM never
     /// reaches, so it blocks until its own timeout — or, where no frame event
     /// is coming at all, indefinitely.
+    /// The fields both record sites share. Whatever a step reports about its
+    /// outcome, the caller sets.
+    fn stepFrom(self: *Runner, decision: decider_mod.Decision, target: ?table.Target) Error!Step {
+        const kept = self.history_arena.allocator();
+        return .{
+            .number = @intCast(self.history.items.len + 1),
+            .op = decision.operation,
+            .target = if (decision.target) |t| try kept.dupe(u8, t) else null,
+            .label = if (target) |t| try kept.dupe(u8, t.element.label) else "",
+            .probability = decision.probability,
+            .confidence = decision.confidence,
+            .latency_ms = decision.latency_ms,
+        };
+    }
+
     fn settle(self: *Runner) void {
         var pump = self.session.runner(.{});
         _ = pump.tick(settle_timeout_ms, &.{}) catch {};

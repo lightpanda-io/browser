@@ -98,13 +98,8 @@ pub const OpSet = struct {
 };
 
 pub const Element = struct {
-    pub const Choice = struct {
-        element: *const Element,
-        /// Only set for `SELECT`.
-        option: ?[]const u8 = null,
-    };
-
-    index: Index,
+    /// Assigned once, after `bound` has compacted the slice.
+    index: Index = @enumFromInt(0),
     /// Internal only — never serialized into the state.
     node_id: NodeRegistry.Id,
     role: []const u8,
@@ -117,7 +112,11 @@ pub const Element = struct {
 };
 
 /// What the decider picked.
-pub const Target = Element.Choice;
+pub const Target = struct {
+    element: *const Element,
+    /// Only set for `SELECT`.
+    option: ?[]const u8 = null,
+};
 
 /// Upstream's page-text budget.
 pub const default_text_bytes = 6000;
@@ -170,14 +169,12 @@ pub const Table = struct {
         return &self.elements[slot];
     }
 
-    /// The criteria offered for `op`: the `"<index>"` or `"<index>:<option>"`
-    /// id the decider answers with, and the description it chooses on. The
-    /// table is already bounded, so this only filters and formats -- except for
-    /// `<select>`, where one element contributes a target per option and can
-    /// overflow a head on its own.
-    /// The offered ids for one target head. Descriptions are null: `stateJson`
-    /// already sends every element under the same index, and repeating it here
-    /// cost 23% of the request for no change in what the decider picks.
+    /// The `"<index>"` or `"<index>:<option>"` ids offered for one target
+    /// head. Descriptions are null: `stateJson` already sends every element
+    /// under the same index, and repeating it here cost 23% of the request for
+    /// no change in what the decider picks. The table is already bounded, so
+    /// this only filters -- except for `<select>`, where one element
+    /// contributes a target per option and can overflow a head on its own.
     pub fn criteria(self: Table, arena: std.mem.Allocator, op: Operation) ![]const ChoiceEntry {
         var out: std.ArrayList(ChoiceEntry) = .empty;
         for (self.elements) |el| {
@@ -398,7 +395,6 @@ const Collector = struct {
         }
 
         try self.elements.append(self.arena, .{
-            .index = @enumFromInt(@as(u16, @intCast(self.elements.items.len + 1))),
             .node_id = data.id,
             .role = data.role,
             .label = label,
@@ -449,7 +445,7 @@ fn ariaDisabled(node: *Node) bool {
 }
 
 /// One executed step. Only `op`, `target`, `text`, `ok` and `page_changed`
-/// reach the decider; the rest feed the terminal and `--save`.
+/// reach the decider; the rest feed the terminal.
 pub const Step = struct {
     number: u32,
     op: Operation,
@@ -549,8 +545,6 @@ fn writeState(
     }
     try jw.endArray();
 
-    // What the table leaves out, so the decider does not read a truncated
-    // list as the whole page.
     if (table.dropped > 0) {
         try jw.objectField("elements_omitted");
         try jw.write(table.dropped);
@@ -611,10 +605,7 @@ pub fn ask(arena: std.mem.Allocator, observed: Table, opts: AskOpts) std.mem.All
             try operations.append(arena, describe(op));
             try entries.append(arena, .{
                 .key = op.targetQuestion().?,
-                .value = .{ .choice = .{
-                    .instructions = .{ .text = target_instructions[@intFromEnum(op)] },
-                    .criteria = .init(candidates),
-                } },
+                .value = .choiceText(targetInstructions(op), .init(candidates)),
             });
         }
     }
@@ -625,10 +616,7 @@ pub fn ask(arena: std.mem.Allocator, observed: Table, opts: AskOpts) std.mem.All
 
     try entries.insert(arena, 0, .{
         .key = "operation",
-        .value = .{ .choice = .{
-            .instructions = .{ .text = prompts.next_action },
-            .criteria = .init(operations.items),
-        } },
+        .value = .choiceText(prompts.next_action, .init(operations.items)),
     });
     return .{ .questions = .init(entries.items) };
 }
@@ -642,15 +630,14 @@ fn describe(comptime op: Operation) ChoiceEntry {
 
 /// Both halves are constant per operation, so the per-turn `allocPrint` the
 /// three heads used to do was ~1.5 KB of identical text rebuilt every step.
-const target_instructions = blk: {
-    var out: [@typeInfo(Operation).@"enum".fields.len][]const u8 = undefined;
-    for (&out, 0..) |*slot, i| {
-        const op: Operation = @enumFromInt(i);
-        slot.* = prompts.target ++ "\n\nThe operation this question chooses a target for is " ++
-            @tagName(op) ++ ".\n\n" ++ prompts.next_action;
-    }
-    break :blk out;
-};
+fn targetInstructions(comptime op: Operation) []const u8 {
+    return switch (op) {
+        .CLICK, .TYPE_TEXT, .SELECT => prompts.target ++
+            "\n\nThe operation this question chooses a target for is " ++
+            @tagName(op) ++ ".\n\n" ++ prompts.next_action,
+        .WAIT, .DONE, .BLOCKED => unreachable,
+    };
+}
 
 const testing = @import("../../testing.zig");
 

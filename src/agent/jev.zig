@@ -24,7 +24,7 @@
 //! chat model is called only to write a field value for TYPE_TEXT.
 //!
 //! The policy is browser-use/jev-ultrafast's (MIT), kept as close to upstream
-//! as this browser allows: the same eight operations, the same question shape,
+//! as this browser allows: the same operations, the same question shape,
 //! the same instruction strings. It acts on the page it is given and never
 //! navigates on its own.
 //!
@@ -33,17 +33,13 @@
 //! keeps its tables small for free. Lightpanda has no layout to ask, so labels
 //! are deduplicated and capped instead.
 
-const std = @import("std");
-const lp = @import("lightpanda");
-const zenai = @import("zenai");
-
 pub const decider = @import("jev/decider.zig");
 pub const prompts = @import("jev/prompts.zig");
 pub const runner = @import("jev/runner.zig");
 pub const table = @import("jev/table.zig");
 pub const text = @import("jev/text.zig");
 
-pub const default_max_actions = 60;
+pub const default_max_actions = runner.default_max_actions;
 
 pub const Config = struct {
     goal: []const u8,

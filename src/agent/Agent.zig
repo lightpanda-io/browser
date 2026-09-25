@@ -288,8 +288,10 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     errdefer allocator.free(model);
 
     // The REPL skips this network round trip for snappy startup; an invalid
-    // model surfaces on the first turn instead.
-    if (resolved) |*r| if (!will_repl) {
+    // model surfaces on the first turn instead. A policy run skips it for the
+    // same reason and a stronger one: the chat model is only reached if the
+    // decider ever picks TYPE_TEXT, which most runs never do.
+    if (resolved) |*r| if (!will_repl and !policy_standalone) {
         const remembered_matches = remembered != null and remembered.?.provider == r.credential.provider;
         const explicit = opts.model != null or remembered_matches;
         const resolved_model = try settings.reconcileModel(allocator, &r.credential, model, opts.base_url, explicit);
@@ -585,14 +587,12 @@ test {
 
 /// Validate the `--policy jev` flag set and fold it into a `jev.Config`.
 fn resolvePolicy(opts: Config.Agent) !?jev.Config {
-    const policy = opts.policy orelse {
+    _ = opts.policy orelse {
         if (opts.jev_model != null or opts.jev_base_url != null or opts.max_actions != null) {
             log.warn(.app, "ignoring policy options", .{ .reason = "--jev-*/--max-actions need --policy" });
         }
         return null;
     };
-    std.debug.assert(policy == .jev);
-
     const goal = opts.task orelse {
         log.fatal(.app, "conflicting flags", .{
             .hint = "--policy drives one goal to completion; pass --task \"...\"",
@@ -673,7 +673,7 @@ fn runPolicy(self: *Agent, config: jev.Config) bool {
     };
     defer self.allocator.free(result.url);
 
-    if (system_one.resolved) |resolved| {
+    if (system_one.resolved()) |resolved| {
         if (!std.mem.eql(u8, resolved, config.model)) {
             self.terminal.printInfo("{s}decider{s} answered as {s}", .{ ansi.dim, ansi.reset, resolved });
         }
