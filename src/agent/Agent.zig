@@ -118,16 +118,12 @@ fn savePrompt(revision: bool) []const u8 {
 
 const synthesis_prompt =
     \\You have used your tool budget or cannot finish the exploration.
-    \\Give your best final answer NOW based ONLY on what you actually observed
-    \\via tool calls in this conversation. Do NOT fall back to prior knowledge —
-    \\if your snapshots show only cookie banners, 403/access-denied pages,
-    \\blocked search results, or empty bodies, say that explicitly
-    \\(e.g. "the page was blocked by a cookie wall and I could not extract X").
-    \\Do not invent details that are not visible in the tool outputs above.
-    \\Do not call any more tools.
-    \\Respond with ONLY the answer — one word, one number, one short phrase,
-    \\or a brief honest explanation of why the page could not be read.
-    \\No prefix, no markdown.
+    \\Give your best final answer using only what the tool outputs above
+    \\show, not prior knowledge. If they show only cookie banners,
+    \\403/access-denied pages, blocked search results, or empty bodies, say
+    \\so plainly (e.g. "the page was blocked by a cookie wall and I could not
+    \\extract X") rather than filling the gap. Answer at the length the
+    \\question needs.
 ;
 
 allocator: std.mem.Allocator,
