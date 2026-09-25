@@ -36,6 +36,8 @@ const Conversation = @import("Conversation.zig");
 const Terminal = @import("Terminal.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const settings = @import("settings.zig");
+const jev = @import("jev.zig");
+const ansi = @import("ansi.zig");
 const auth = @import("auth/auth.zig");
 const models_dev = @import("auth/models_dev.zig");
 const picker = @import("picker.zig");
@@ -155,6 +157,8 @@ model: []u8,
 /// Per-turn reasoning budget for LLM turns. Mutable at runtime via `/effort`.
 effort: Config.Effort,
 script_file: ?[]const u8,
+/// Set by `--policy jev`; null runs the chat loop.
+jev_config: ?jev.Config,
 /// `--url`: opened before the first turn, so a `--task` run does not spend a
 /// model turn navigating to its own start page.
 start_url: ?[:0]const u8,
@@ -228,6 +232,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         log.warn(.app, "ignoring --attach", .{ .reason = "no --task; attachments are only consumed in one-shot mode" });
     }
 
+    const jev_config = try resolvePolicy(opts);
+    // A policy run authenticates against its own decider; a chat model only
+    // writes field values, so it is optional.
+    const policy_standalone = jev_config != null;
+
     const is_one_shot = opts.task != null;
     const will_repl = !is_one_shot and opts.script_file == null;
 
@@ -246,11 +255,15 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // null provider. Without it the REPL accepts natural language, so an absent
     // API key would only surface at the first non-slash-command line — too late.
     // Pure JavaScript script runs stay allowed: no REPL, no LLM.
-    const requires_llm = is_one_shot or (will_repl and !opts.no_llm and !remembered_no_llm);
+    const requires_llm = !policy_standalone and (is_one_shot or (will_repl and !opts.no_llm and !remembered_no_llm));
 
     // Skip resolve when no client is wanted — else resolveCredentials prints
     // "No API key detected" for a run that does not need one.
-    const resolve = !opts.no_llm and requires_llm;
+    // A policy run does not *need* a chat model but uses one when there is
+    // one: resolve only when there is something to resolve, so a decider-only
+    // run stays quiet and `--provider` is still honoured.
+    const resolve = !opts.no_llm and
+        (requires_llm or (policy_standalone and settings.hasDetectableKey(opts, remembered)));
 
     // Print the banner before resolution so it precedes the interactive picker.
     // The Ollama-only path never prompts, so its banner is deferred (below) to
@@ -275,8 +288,10 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     errdefer allocator.free(model);
 
     // The REPL skips this network round trip for snappy startup; an invalid
-    // model surfaces on the first turn instead.
-    if (resolved) |*r| if (!will_repl) {
+    // model surfaces on the first turn instead. A policy run skips it for the
+    // same reason and a stronger one: the chat model is only reached if the
+    // decider ever picks TYPE_TEXT, which most runs never do.
+    if (resolved) |*r| if (!will_repl and !policy_standalone) {
         const remembered_matches = remembered != null and remembered.?.provider == r.credential.provider;
         const explicit = opts.model != null or remembered_matches;
         const resolved_model = try settings.reconcileModel(allocator, &r.credential, model, opts.base_url, explicit);
@@ -330,6 +345,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .effort = effort,
         .stream_enabled = stream_enabled,
         .script_file = opts.script_file,
+        .jev_config = jev_config,
         .start_url = opts.url,
         .one_shot_task = opts.task,
         .one_shot_save = opts.save,
@@ -514,6 +530,11 @@ pub fn run(self: *Agent) bool {
     if (self.start_url) |url| {
         if (!self.gotoStart(url)) return false;
     }
+    if (self.jev_config) |config| {
+        const ok = self.runPolicy(config);
+        self.printUsageSummary();
+        return ok;
+    }
     if (self.one_shot_task) |task| {
         const saving = self.one_shot_save != null;
         const ok = self.runTurn(.{
@@ -557,6 +578,161 @@ fn gotoStart(self: *Agent, url: [:0]const u8) bool {
     }
     self.recordSaveCommand(Command.fromToolCall(.goto, args));
     return true;
+}
+
+test {
+    // A `const` import alone does not pull a file's tests into the suite.
+    _ = jev;
+}
+
+/// Validate the `--policy jev` flag set and fold it into a `jev.Config`.
+fn resolvePolicy(opts: Config.Agent) !?jev.Config {
+    _ = opts.policy orelse {
+        if (opts.jev_model != null or opts.jev_base_url != null or opts.jev_max_actions != null) {
+            log.warn(.app, "ignoring policy options", .{ .reason = "--jev-* needs --policy" });
+        }
+        return null;
+    };
+    const goal = opts.task orelse {
+        log.fatal(.app, "conflicting flags", .{
+            .hint = "--policy drives one goal to completion; pass --task \"...\"",
+        });
+        return error.ConflictingFlags;
+    };
+    // The action space has no navigation operation by design: this policy acts
+    // on the page it is given.
+    if (opts.url == null) {
+        log.fatal(.app, "missing --url", .{
+            .hint = "--policy jev starts from a page; pass --url https://...",
+        });
+        return error.ConflictingFlags;
+    }
+    if (opts.script_file != null or opts.list_models or opts.save != null) {
+        log.fatal(.app, "conflicting flags", .{
+            .hint = "--policy conflicts with a script file, --list-models and --save",
+        });
+        return error.ConflictingFlags;
+    }
+    const api_key = lp.environ().getPosix("TYPESAFE_API_KEY") orelse "";
+    if (api_key.len == 0) {
+        log.fatal(.app, "no decider API key", .{
+            .hint = "--policy jev needs TYPESAFE_API_KEY",
+        });
+        return error.MissingApiKey;
+    }
+    return .{
+        .goal = goal,
+        .api_key = api_key,
+        .model = opts.jev_model orelse zenai.typesafe.types.default_model,
+        .base_url = opts.jev_base_url orelse zenai.typesafe.Client.default_base_url,
+        .max_actions = opts.jev_max_actions orelse jev.default_max_actions,
+    };
+}
+
+/// Run the decision loop. True only when the decider reported the goal
+/// satisfied; upstream leaves verifying that to the caller, and so do we.
+fn runPolicy(self: *Agent, config: jev.Config) bool {
+    var client: zenai.typesafe.Client = .init(lp.io, self.allocator, config.api_key, .{
+        .base_url = config.base_url,
+    });
+    defer client.deinit();
+    self.terminal.printInfo("{s}decider{s} {s} via {s}", .{
+        ansi.dim, ansi.reset, config.model, config.base_url,
+    });
+
+    var system_one: jev.decider.SystemOne = .{ .client = &client, .model = config.model };
+    var chat: jev.text.ChatModel = .{ .agent = self };
+
+    self.refreshAuthIfNeeded();
+    var loop: jev.runner.Runner = .init(self.allocator, self.ts.session, &self.ts.registry, system_one.decider(), config.goal);
+    defer loop.deinit();
+    loop.max_actions = config.max_actions;
+    loop.generator = if (self.ai_client == null) null else chat.generator();
+    loop.hooks = .{
+        .context = @ptrCast(self),
+        .onStep = printPolicyStep,
+        .cancelled = policyCancelled,
+    };
+
+    // Jev bills input tokens only, but the `$usage` line is what wrappers grep
+    // for cost, so its tokens belong in the same counters -- including on the
+    // failure path, where the decisions that already happened were still paid
+    // for.
+    defer self.total_usage.add(.{
+        .prompt_tokens = @intCast(loop.usage.input_tokens),
+        .completion_tokens = @intCast(loop.usage.output_tokens),
+    });
+
+    const result = loop.run() catch |err| {
+        if (system_one.last_error) |detail| {
+            self.terminal.printError("policy run failed: {s} — {s}", .{ @errorName(err), detail });
+        } else {
+            self.terminal.printError("policy run failed: {s}", .{@errorName(err)});
+        }
+        return false;
+    };
+    defer self.allocator.free(result.url);
+
+    if (system_one.resolved()) |resolved| {
+        if (!std.mem.eql(u8, resolved, config.model)) {
+            self.terminal.printInfo("{s}decider{s} answered as {s}", .{ ansi.dim, ansi.reset, resolved });
+        }
+    }
+    if (result.outcome != .done) {
+        self.terminal.printError("stopped: {s} after {d} action(s)", .{ @tagName(result.outcome), result.steps });
+    }
+    self.terminal.printPlain(result.url);
+    return result.outcome == .done;
+}
+
+fn printPolicyStep(context: *anyopaque, step: jev.table.Step) void {
+    const self: *Agent = @ptrCast(@alignCast(context));
+    self.terminal.printInfo("{s}{d:>3}{s} {s}{s}{s} {s}{s}{s} p={d:.2} c={d:.2} {d}ms{s}", .{
+        ansi.dim,                                      step.number,
+        ansi.reset,                                    if (step.ok) "" else ansi.red,
+        @tagName(step.op),                             ansi.reset,
+        ansi.dim,                                      step.label,
+        ansi.reset,                                    step.probability,
+        step.confidence,                               step.latency_ms,
+        if (step.page_changed) "" else " (no change)",
+    });
+}
+
+fn policyCancelled(context: *anyopaque) bool {
+    const self: *Agent = @ptrCast(@alignCast(context));
+    return self.cancel_requested.load(.acquire);
+}
+
+/// One model call outside the conversation: no history, no tools, and the same
+/// auth refresh, interrupt reset, spinner and cancellation every other call
+/// site gets.
+pub fn oneShotCompletion(
+    self: *Agent,
+    arena: std.mem.Allocator,
+    system: []const u8,
+    user: []const u8,
+    config: zenai.provider.GenerationConfig,
+) ?[]const u8 {
+    const client = self.ai_client orelse return null;
+    self.refreshAuthIfNeeded();
+    self.http_interrupt.reset();
+    self.terminal.spinner.start();
+
+    var result = client.generateContent(self.model, &.{
+        .{ .role = .system, .content = system },
+        .{ .role = .user, .content = user },
+    }, config) catch |err| {
+        self.terminal.spinner.cancel();
+        if (self.cancel_requested.load(.acquire)) return null;
+        self.terminal.printError("model call failed: {s}", .{self.formatApiError(client, err)});
+        return null;
+    };
+    defer result.deinit();
+    self.terminal.spinner.stop();
+    self.total_usage.add(result.usage);
+
+    const text = result.text orelse return null;
+    return arena.dupe(u8, text) catch null;
 }
 
 /// Print single-line cumulative token usage to stderr, so wrappers driving

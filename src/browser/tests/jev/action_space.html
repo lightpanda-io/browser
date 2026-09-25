@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Action space fixture</title>
+</head>
+<body>
+<h1>Reserve a table</h1>
+
+<label for="q">Search</label>
+<input id="q" type="search" value="ramen">
+
+<label for="notes">Notes</label>
+<textarea id="notes">quiet corner</textarea>
+
+<label for="party">Party size</label>
+<select id="party">
+  <optgroup label="Small">
+    <option value="1">One</option>
+    <option value="2" selected>Two</option>
+  </optgroup>
+  <optgroup label="Large">
+    <option value="6">Six</option>
+  </optgroup>
+</select>
+
+<label for="outdoor">Outdoor seating</label>
+<input id="outdoor" type="checkbox">
+
+<button id="go">Search</button>
+<button id="cancel" disabled>Cancel</button>
+<span id="aria-off" role="button" aria-disabled="true" tabindex="0">Aria disabled</span>
+
+<a id="terms" href="/terms">Terms</a>
+
+<div id="inline" onclick="document.title = 'clicked'">Inline handler</div>
+<div id="listener">Registered handler</div>
+
+<input id="hidden-field" type="text" style="display:none">
+
+<p>Availability is shown after searching.</p>
+<script>
+  document.getElementById("listener").addEventListener("click", function () {
+    document.title = "clicked";
+  });
+</script>
+</body>
+</html>

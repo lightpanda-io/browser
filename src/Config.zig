@@ -351,6 +351,9 @@ pub const AiProvider = std.meta.Tag(zenai.provider.Client);
 pub const Effort = zenai.provider.Effort;
 pub const SearchEngine = @import("browser/tools.zig").SearchEngine;
 
+/// Which decision policy drives the agent instead of a chat turn per step.
+pub const Policy = enum { jev };
+
 /// Controls how chatty `agent` mode is on stderr.
 pub const AgentVerbosity = enum {
     /// REPL: spinner + per-turn summary. Non-REPL: final answer + errors only.
@@ -475,6 +478,10 @@ const Commands = cli.Builder(.{
             .{ .name = "effort", .type = ?Effort },
             .{ .name = "search_engine", .type = ?SearchEngine },
             .{ .name = "url", .type = ?[:0]const u8 },
+            .{ .name = "policy", .type = ?Policy },
+            .{ .name = "jev_model", .type = ?[:0]const u8 },
+            .{ .name = "jev_base_url", .type = ?[:0]const u8 },
+            .{ .name = "jev_max_actions", .type = ?u32 },
             .{ .name = "list_models", .type = bool },
             .{ .name = "no_llm", .type = bool },
         },
