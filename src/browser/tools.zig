@@ -2375,7 +2375,10 @@ fn renderJson(arena: std.mem.Allocator, value: anytype) ToolError![]const u8 {
 fn ensurePage(session: *lp.Session, registry: *NodeRegistry, url: ?[:0]const u8, timeout: ?u32) ToolError!*lp.Frame {
     if (url) |u| {
         if (session.currentFrame()) |frame| {
-            if (std.mem.eql(u8, frame.url, u)) return frame;
+            const is_loaded = frame._parse_state != .pre and frame._last_navigate_error == null;
+            if (is_loaded and std.mem.eql(u8, frame.url, u)) {
+                return frame;
+            }
         }
         _ = try performGoto(session, registry, u, .{ .timeout = timeout });
     }
