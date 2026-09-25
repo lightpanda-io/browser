@@ -27,6 +27,7 @@ const Session = @import("Session.zig");
 const EventManager = @import("EventManager.zig");
 const ScriptManager = @import("ScriptManager.zig");
 const StyleManager = @import("StyleManager.zig");
+const LayoutMemo = @import("LayoutMemo.zig");
 
 const Parser = @import("parser/Parser.zig");
 const h5e = @import("parser/html5ever.zig");
@@ -154,6 +155,7 @@ _queued_events: *std.ArrayList(QueuedEvent) = undefined,
 _focus_fixup_pending: bool = false,
 
 _style_manager: StyleManager,
+_layout_memo: LayoutMemo,
 _script_manager: ScriptManager,
 
 _http_owner: HttpClient.Owner,
@@ -363,6 +365,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         ._pending_loads = 1, // always 1 for the ScriptManager
         ._type = if (parent == null) .root else .frame,
         ._style_manager = undefined,
+        ._layout_memo = undefined,
         ._script_manager = undefined,
         ._ce_reactions = .{ .allocator = arena },
         ._event_manager = EventManager.init(arena, self),
@@ -410,6 +413,9 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
 
     self._style_manager = try StyleManager.init(self);
     errdefer self._style_manager.deinit();
+
+    self._layout_memo = try LayoutMemo.init(self);
+    errdefer self._layout_memo.deinit();
 
     const browser = session.browser;
     self._script_manager = ScriptManager.init(browser.allocator, &browser.http_client, self);
@@ -540,6 +546,7 @@ pub fn deinit(self: *Frame) void {
 
     self._script_manager.deinit();
     self._style_manager.deinit();
+    self._layout_memo.deinit();
 
     self._call_arena.release();
     self._local_arena.release();

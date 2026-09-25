@@ -1534,24 +1534,50 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
 /// ancestor's, since an auto-width block fills its container. Null under an
 /// unsized root, where text isn't measured.
 fn lineWidth(self: *Element, frame: *Frame) ?f64 {
-    var current: ?*Element = self;
-    while (current) |el| : (current = el.parentElement()) {
+    const owner = self.ownerFrame(frame) orelse return null;
+    const memo = &owner._layout_memo;
+    memo.sync(owner);
+
+    var resolved: ?f64 = null;
+    var stop: ?*Element = self;
+    while (stop) |el| {
+        if (memo.line_widths.get(el)) |known| {
+            resolved = known;
+            break;
+        }
         const width = el.getElementAxis(frame, .width);
         if (width.explicit) {
-            return width.value;
+            resolved = width.value;
+            break;
         }
         const tag = el.getTag();
         if (tag == .html or tag == .body) {
-            return null;
+            break;
+        }
+        stop = el.parentElement();
+    }
+
+    // Everything walked shares the width, so a sibling or child stops at the
+    // first step.
+    var fill: ?*Element = self;
+    while (fill) |el| : (fill = el.parentElement()) {
+        memo.putLineWidth(el, resolved);
+        if (el == stop) {
+            break;
         }
     }
-    return null;
+    return resolved;
 }
 
 /// The height of self's text and its inline descendants' text, wrapped at
 /// line_width. Block descendants measure their own.
 fn textHeight(self: *Element, frame: *Frame, line_width: f64) f64 {
     const owner = self.ownerFrame(frame) orelse return 0;
+    const memo = &owner._layout_memo;
+    memo.sync(owner);
+    if (memo.text_heights.get(self)) |height| {
+        return height;
+    }
     const style_manager = &owner._style_manager;
 
     var wrap: text_measure.LineWrap = .{ .line_width = line_width, .font_size = style_manager.computedFontSize(self) };
@@ -1572,7 +1598,9 @@ fn textHeight(self: *Element, frame: *Frame, line_width: f64) f64 {
         }
     }
     // Whole pixels, like scroll offsets
-    return @ceil(wrap.height());
+    const height = @ceil(wrap.height());
+    memo.putTextHeight(self, height);
+    return height;
 }
 
 fn isInlineLevel(self: *const Element) bool {
