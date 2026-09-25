@@ -175,6 +175,9 @@ pub const Table = struct {
     /// table is already bounded, so this only filters and formats -- except for
     /// `<select>`, where one element contributes a target per option and can
     /// overflow a head on its own.
+    /// The offered ids for one target head. Descriptions are null: `stateJson`
+    /// already sends every element under the same index, and repeating it here
+    /// cost 23% of the request for no change in what the decider picks.
     pub fn criteria(self: Table, arena: std.mem.Allocator, op: Operation) ![]const ChoiceEntry {
         var out: std.ArrayList(ChoiceEntry) = .empty;
         for (self.elements) |el| {
@@ -185,13 +188,13 @@ pub const Table = struct {
                     if (out.items.len >= max_offered) break;
                     try out.append(arena, .{
                         .key = try std.fmt.allocPrint(arena, "{d}:{s}", .{ @intFromEnum(el.index), option }),
-                        .value = try describeOption(arena, el, option),
+                        .value = null,
                     });
                 }
             } else {
                 try out.append(arena, .{
                     .key = try std.fmt.allocPrint(arena, "{d}", .{@intFromEnum(el.index)}),
-                    .value = try describeElement(arena, el),
+                    .value = null,
                 });
             }
         }
@@ -657,31 +660,6 @@ const target_instructions = blk: {
     break :blk out;
 };
 
-/// Target ids carry their own meaning, so their criteria descriptions are null.
-/// What the decider sees beside an id. Upstream sends the same facts as a
-/// small object; one line carries them for a third of the bytes and a single
-/// allocation, and the wire accepts either.
-///
-/// The index leads on purpose: two controls with one name stay apart from the
-/// criteria alone, without cross-referencing the element table.
-fn describeElement(arena: std.mem.Allocator, el: Element) !?Content {
-    var line: std.ArrayList(u8) = .empty;
-    try line.print(arena, "[{d}] {s} ({s})", .{ @intFromEnum(el.index), el.label, el.role });
-    if (el.value) |value| {
-        if (value.len > 0) try line.print(arena, " = {s}", .{value});
-    }
-    if (el.checked) |checked| try line.appendSlice(arena, if (checked) " [checked]" else " [unchecked]");
-    return .{ .text = line.items };
-}
-
-/// Upstream names an option `"<field> -> <option>"`. It has the option's label;
-/// the collector keeps only its value, so that is what goes here.
-fn describeOption(arena: std.mem.Allocator, el: Element, option: []const u8) !?Content {
-    return .{ .text = try std.fmt.allocPrint(arena, "[{d}:{s}] {s} -> {s} ({s})", .{
-        @intFromEnum(el.index), option, el.label, option, el.role,
-    }) };
-}
-
 const testing = @import("../../testing.zig");
 
 /// `expectEqualSlices` compares slices of slices by pointer, which is never
@@ -899,7 +877,7 @@ test "targets: no head can exceed what a choice question accepts" {
     try std.testing.expect(max_offered <= 255);
 }
 
-test "criteria: a candidate is described, not just numbered" {
+test "criteria: an id and nothing else, since the state already describes it" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -907,19 +885,17 @@ test "criteria: a candidate is described, not just numbered" {
     const typed = try fixtureTable().criteria(a, .TYPE_TEXT);
     try std.testing.expectEqual(@as(usize, 1), typed.len);
     try std.testing.expectEqualStrings("1", typed[0].key);
+    try std.testing.expectEqual(@as(?Content, null), typed[0].value);
 
-    // The index leads so two controls with one name stay apart from the
-    // criteria alone.
-    try std.testing.expectEqualStrings("[1] Search (searchbox) = ramen", typed[0].value.?.text);
-
-    // Nothing is emitted for a field with no value.
     const clicked = try fixtureTable().criteria(a, .CLICK);
-    try std.testing.expectEqualStrings("[2] Go (button)", clicked[0].value.?.text);
+    try std.testing.expectEqualStrings("2", clicked[0].key);
+    try std.testing.expectEqual(@as(?Content, null), clicked[0].value);
 
-    // A select option names its field as well as itself.
+    // A select option keeps its compound id: the element table has no row for
+    // one option, so the id is the only thing that identifies it.
     const picked = try fixtureTable().criteria(a, .SELECT);
     try std.testing.expectEqualStrings("3:1", picked[0].key);
-    try std.testing.expectEqualStrings("[3:1] Party size -> 1 (combobox)", picked[0].value.?.text);
+    try std.testing.expectEqual(@as(?Content, null), picked[0].value);
 }
 
 test "bound: one entry per distinct label, since we cannot ask what is on screen" {
