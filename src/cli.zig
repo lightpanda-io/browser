@@ -485,6 +485,10 @@ pub fn Builder(comptime commands: anytype) type {
         /// Try to sniff the command out of given option.
         /// Only exists for legacy reasons; hence hardcoded.
         fn sniffCommand(cmd_str: []const u8) error{UnknownCommand}!Enum {
+            if (std.mem.eql(u8, cmd_str, "--help") or std.mem.eql(u8, cmd_str, "-h")) {
+                return .help;
+            }
+
             if (std.mem.startsWith(u8, cmd_str, "--") == false) {
                 return .fetch;
             }
@@ -512,11 +516,6 @@ pub fn Builder(comptime commands: anytype) type {
                 if (std.mem.eql(u8, cmd_str, heuristic)) {
                     return .serve;
                 }
-            }
-
-            // Legacy `--help` flag maps to the `help` command.
-            if (std.mem.eql(u8, cmd_str, "--help")) {
-                return .help;
             }
 
             return error.UnknownCommand;
@@ -724,6 +723,18 @@ pub fn Builder(comptime commands: anytype) type {
             };
         }
 
+        fn helpHint(comptime command_name: []const u8) []const u8 {
+            return "see 'lightpanda help " ++ command_name ++ "'";
+        }
+
+        /// Validators return `error.MissingArgument` without logging when a
+        /// flag is the last argument, since only the parser knows its name.
+        fn logMissingValue(err: anyerror, arg: []const u8, comptime command_name: []const u8) void {
+            if (err == error.MissingArgument) {
+                log.fatal(.app, "missing argument value", .{ .arg = arg, .hint = helpHint(command_name) });
+            }
+        }
+
         /// Parses the command with its options.
         fn parseCommand(
             allocator: Allocator,
@@ -761,7 +772,10 @@ pub fn Builder(comptime commands: anytype) type {
                         std.mem.eql(u8, option_name, "--" ++ comptime toKebabCase(name)) or
                         (matches_short and std.mem.eql(u8, option_name, "-" ++ [_]u8{option.short})))
                     {
-                        try parseValue(allocator, args, &@field(c, field_name), option);
+                        parseValue(allocator, args, &@field(c, field_name), option) catch |err| {
+                            logMissingValue(err, option_name, command.name);
+                            return err;
+                        };
                         continue :iter_args;
                     }
 
@@ -786,7 +800,10 @@ pub fn Builder(comptime commands: anytype) type {
                                     break :blk .{ .name = variant.name, .type = option.type, .multiple = is_multiple };
                                 };
 
-                                try parseValue(allocator, args, &@field(c, field_name), opts);
+                                parseValue(allocator, args, &@field(c, field_name), opts) catch |err| {
+                                    logMissingValue(err, option_name, command.name);
+                                    return err;
+                                };
                                 continue :iter_args;
                             }
                         }
@@ -794,7 +811,7 @@ pub fn Builder(comptime commands: anytype) type {
                 }
 
                 // Subcommand help: `lightpanda fetch help` or `lightpanda fetch --help`.
-                if (std.mem.eql(u8, option_name, "help") or std.mem.eql(u8, option_name, "--help")) {
+                if (std.mem.eql(u8, option_name, "help") or std.mem.eql(u8, option_name, "--help") or std.mem.eql(u8, option_name, "-h")) {
                     return @unionInit(Union, "help", std.meta.stringToEnum(Enum, command.name).?);
                 }
 
@@ -820,6 +837,7 @@ pub fn Builder(comptime commands: anytype) type {
 
                     // A single (non-multiple) positional may only be given once.
                     if (!is_multiple and @field(c, positional.name) != null) {
+                        log.fatal(.app, "too many arguments", .{ .mode = command.name, .arg = option_name, .hint = helpHint(command.name) });
                         return error.TooManyPositionalArguments;
                     }
 
