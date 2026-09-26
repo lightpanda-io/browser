@@ -417,11 +417,12 @@ pub fn isOneOf(needle: []const u8, haystack: []const []const u8) bool {
     } else false;
 }
 
-/// Case-insensitive. Inputs over 64 bytes return `maxInt`; that fits the
-/// longest CLI flag.
+/// Case-insensitive, and swapping two adjacent characters counts as one
+/// edit. Inputs over 64 bytes return `maxInt`; that fits the longest CLI flag.
 fn editDistance(a: []const u8, b: []const u8) usize {
     const max = 64;
     if (a.len > max or b.len > max) return std.math.maxInt(usize);
+    var prev2: [max + 1]u8 = undefined;
     var prev: [max + 1]u8 = undefined;
     var cur: [max + 1]u8 = undefined;
     for (0..b.len + 1) |j| prev[j] = @intCast(j);
@@ -429,16 +430,24 @@ fn editDistance(a: []const u8, b: []const u8) usize {
         const la = std.ascii.toLower(ca);
         cur[0] = @intCast(i);
         for (b, 1..) |cb, j| {
-            const cost: u8 = if (la == std.ascii.toLower(cb)) 0 else 1;
+            const lb = std.ascii.toLower(cb);
+            const cost: u8 = if (la == lb) 0 else 1;
             cur[j] = @min(@min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + cost);
+            if (i > 1 and j > 1 and la == std.ascii.toLower(b[j - 2]) and std.ascii.toLower(a[i - 2]) == lb) {
+                cur[j] = @min(cur[j], prev2[j - 2] + 1);
+            }
         }
+        prev2 = prev;
         prev = cur;
     }
     return prev[b.len];
 }
 
-/// Earlier candidates win ties.
-pub fn closest(name: []const u8, candidates: []const []const u8, max_dist: usize) ?[]const u8 {
+/// The candidate nearest to `name`, within about one edit per three characters
+/// (rustc's rule). A leading `--` doesn't count toward the length, since every
+/// flag shares it. Earlier candidates win ties.
+pub fn closest(name: []const u8, candidates: []const []const u8) ?[]const u8 {
+    const max_dist = @max(std.mem.trimStart(u8, name, "-").len, 3) / 3;
     var best: ?[]const u8 = null;
     var best_dist: usize = std.math.maxInt(usize);
     for (candidates) |cand| {
@@ -553,6 +562,8 @@ test "editDistance" {
     try testing.expectEqual(@as(usize, 1), editDistance("wait-m", "wait-ms"));
     try testing.expectEqual(@as(usize, 1), editDistance("wait_ms", "wait-ms"));
     try testing.expectEqual(@as(usize, 3), editDistance("kitten", "sitting"));
+    try testing.expectEqual(@as(usize, 1), editDistance("dmup", "dump"));
+    try testing.expectEqual(@as(usize, 1), editDistance("ab", "ba"));
     try testing.expectEqual(@as(usize, 3), editDistance("", "abc"));
     try testing.expectEqual(@as(usize, 3), editDistance("abc", ""));
 
@@ -562,15 +573,23 @@ test "editDistance" {
 }
 
 test "closest" {
-    const names = [_][]const u8{ "--dump", "--wait-ms", "--wait-until" };
-    try testing.expectEqual("--wait-ms", closest("--wait-mss", &names, 2));
-    try testing.expectEqual("--dump", closest("--dmup", &names, 2));
-    try testing.expectEqual(null, closest("--totally-wrong", &names, 2));
-    try testing.expectEqual(null, closest("--wait-mss", &names, 0));
-    try testing.expectEqual(null, closest("--dump", &.{}, 2));
+    const names = [_][]const u8{ "--dump", "--wait-ms", "--wait-until", "--insecure-disable-tls-host-verification" };
+    try testing.expectEqual("--wait-ms", closest("--wait-mss", &names));
+    try testing.expectEqual("--dump", closest("--dmup", &names));
+    try testing.expectEqual(null, closest("--totally-wrong", &names));
+    try testing.expectEqual(null, closest("--dump", &.{}));
+    try testing.expectEqual("--insecure-disable-tls-host-verification", closest("--insecure-disable-tls-verification", &names));
 
-    const tie = [_][]const u8{ "ab", "ac" };
-    try testing.expectEqual("ab", closest("a", &tie, 1));
+    const formats = [_][]const u8{ "html", "markdown", "pdf", "png" };
+    try testing.expectEqual(null, closest("md", &formats));
+    try testing.expectEqual("pdf", closest("pdg", &formats));
+
+    const commands = [_][]const u8{ "fetch", "mcp", "run" };
+    try testing.expectEqual("run", closest("fun", &commands));
+    try testing.expectEqual(null, closest("ab", &commands));
+
+    const tie = [_][]const u8{ "abcd", "abce" };
+    try testing.expectEqual("abcd", closest("abc", &tie));
 }
 
 test "latin1ToUtf8" {

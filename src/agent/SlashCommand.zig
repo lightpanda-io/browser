@@ -103,7 +103,7 @@ const meta_names = blk: {
 /// Every slash-invocable name: browser tools, LLM triggers, meta commands.
 pub const all_names = browser_tools.names ++ llm_names ++ meta_names;
 
-/// Closest command name within two edits, or null — for "did you mean?" on typos.
+/// Closest command name, or null — for "did you mean?" on typos.
 pub fn closestCommand(name: []const u8) ?[]const u8 {
-    return string.closest(name, &all_names, 2);
+    return string.closest(name, &all_names);
 }

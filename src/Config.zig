@@ -86,8 +86,7 @@ fn logLevelValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?l
     }
 
     target.* = std.meta.stringToEnum(log.Level, str) orelse {
-        log.fatal(.app, "invalid option choice", .{ .arg = "--log-level", .value = str });
-        return error.InvalidArgument;
+        return invalidChoice("--log-level", str, comptime tagNames(log.Level) ++ &[_][]const u8{"error"});
     };
     log.opts.level = target.*.?;
 }
@@ -99,11 +98,19 @@ fn mcpLogDefaults() void {
     log.opts.format = .logfmt;
 }
 
+fn invalidChoice(arg: []const u8, value: []const u8, choices: []const []const u8) error{InvalidArgument} {
+    if (string.closest(value, choices)) |near| {
+        log.fatal(.app, "invalid option choice", .{ .arg = arg, .value = log.red(value), .did_you_mean = log.green(near) });
+    } else {
+        log.fatal(.app, "invalid option choice", .{ .arg = arg, .value = log.red(value) });
+    }
+    return error.InvalidArgument;
+}
+
 fn logFormatValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?log.Format) !void {
     const str = args.next() orelse return error.MissingArgument;
     const format = std.meta.stringToEnum(log.Format, str) orelse {
-        log.fatal(.app, "invalid option choice", .{ .arg = "--log-format", .value = str });
-        return error.InvalidArgument;
+        return invalidChoice("--log-format", str, tagNames(log.Format));
     };
     target.* = format;
     log.opts.format = format;
@@ -323,7 +330,7 @@ fn dumpValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?DumpF
     if (peek_args.next()) |next_arg| {
         const mode = std.meta.stringToEnum(DumpFormat, next_arg) orelse {
             // Anything else is the positional url, unless it is a misspelt format.
-            if (string.closest(next_arg, tagNames(DumpFormat), 2)) |near| {
+            if (string.closest(next_arg, tagNames(DumpFormat))) |near| {
                 log.fatal(.app, "invalid option choice", .{ .arg = "--dump", .value = log.red(next_arg), .did_you_mean = log.green(near) });
                 return error.InvalidArgument;
             }

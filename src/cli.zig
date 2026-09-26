@@ -442,7 +442,7 @@ pub fn Builder(comptime commands: anytype) type {
             }
 
             // A bare word close to a command name is a typo, not a fetch url.
-            if (std.mem.startsWith(u8, cmd_str, "--") == false and string.closest(cmd_str, command_names, 2) != null) {
+            if (std.mem.startsWith(u8, cmd_str, "--") == false and string.closest(cmd_str, command_names) != null) {
                 return unknownCommand(cmd_str);
             }
 
@@ -474,7 +474,7 @@ pub fn Builder(comptime commands: anytype) type {
 
         fn unknownCommand(name: []const u8) error{UnknownCommand} {
             const arg = log.red(name);
-            if (string.closest(name, command_names, 2)) |near| {
+            if (string.closest(name, command_names)) |near| {
                 log.fatal(.app, "unknown command", .{ .arg = arg, .did_you_mean = log.green(near) });
             } else {
                 log.fatal(.app, "unknown command", .{ .arg = arg });
@@ -690,7 +690,7 @@ pub fn Builder(comptime commands: anytype) type {
                     const str = args.next() orelse return error.MissingArgument;
                     const v = std.meta.stringToEnum(E, str) orelse {
                         const value = log.red(str);
-                        if (string.closest(str, tagNames(E), 2)) |near| {
+                        if (string.closest(str, tagNames(E))) |near| {
                             log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = value, .did_you_mean = log.green(near) });
                         } else {
                             log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = value });
@@ -819,7 +819,7 @@ pub fn Builder(comptime commands: anytype) type {
                 if (std.mem.startsWith(u8, option_name, "--")) {
                     const names = comptime optionNames(options) ++ &[_][]const u8{"--help"};
                     const arg = log.red(option_name);
-                    if (string.closest(option_name, names, 2)) |near| {
+                    if (string.closest(option_name, names)) |near| {
                         log.fatal(.app, "unknown argument", .{ .mode = command.name, .arg = arg, .did_you_mean = log.green(near) });
                     } else {
                         log.fatal(.app, "unknown argument", .{ .mode = command.name, .arg = arg });
