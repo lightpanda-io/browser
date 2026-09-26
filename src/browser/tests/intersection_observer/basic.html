@@ -47,7 +47,7 @@
   }
 
   {
-    // not connected, but has parent
+    // has a parent, but never connected
     let count = 0;
     const div1 = document.createElement('div');
     const div2 = document.createElement('div');
@@ -57,7 +57,23 @@
 
     div2.appendChild(div1);
     testing.onload(() => {
-      testing.expectEqual(1, count);
+      testing.expectEqual(0, count);
+    });
+  }
+
+  {
+    // observed inside a detached subtree, reported once the subtree is connected
+    const seen = [];
+    const div1 = document.createElement('div');
+    const div2 = document.createElement('div');
+    div2.appendChild(div1);
+    new IntersectionObserver((entries) => {
+      for (const entry of entries) seen.push(entry.isIntersecting);
+    }).observe(div1);
+
+    document.body.appendChild(div2);
+    testing.onload(() => {
+      testing.expectEqual([true], seen);
     });
   }
 </script>
