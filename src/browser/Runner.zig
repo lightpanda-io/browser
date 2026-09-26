@@ -37,6 +37,13 @@ browser: *Browser,
 http_client: *HttpClient,
 background_poll_ms: u32 = 0,
 
+// Not Frame._notified_network_idle: that latches for CDP's one-shot lifecycle
+// event, so a frame idle once reads idle forever.
+network_idle_since: ?u64 = null,
+network_almost_idle_since: ?u64 = null,
+
+const network_idle_hold_ms = 500;
+
 pub const Opts = struct {};
 
 pub fn init(session: *Session, _: Opts) Runner {
@@ -219,6 +226,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     // A navigation can swap a frame pointer or the page set,
     // so restart the tick to re-resolve cleanly.
     if (try session.processQueuedNavigation()) {
+        self.network_idle_since = null;
+        self.network_almost_idle_since = null;
         return .{ .ok = 0 };
     }
 
@@ -236,10 +245,13 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     const network_idle = activity.idle();
     const is_done = browser.hasMacrotasks() == false and network_idle;
 
+    const now = lp.datetime.milliTimestamp(.boot);
+    const network_idle_held = holdsFor(&self.network_idle_since, network_idle, now);
+    const network_almost_idle_held = holdsFor(&self.network_almost_idle_since, total_network_activity <= 2, now);
+
     // Outside the condition loop: it skips resolved conditions, but an idle
     // notification needs a check 500ms+ after the hold starts, and on a quiet
-    // page one tick both starts the hold and resolves the condition. Before
-    // it, so `.networkidle` conditions read fresh state.
+    // page one tick both starts the hold and resolves the condition.
     var page_index: usize = 0;
     while (page_index < session.pages.items.len) : (page_index += 1) {
         // Indexed: notifyNetworkIdle dispatches to listeners.
@@ -294,8 +306,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                     .done => is_done,
                     .domcontentloaded => frame._load_state == .load or frame._load_state == .complete,
                     .load => frame._load_state == .complete,
-                    .networkidle => frame._notified_network_idle == .done,
-                    .networkalmostidle => frame._notified_network_almost_idle == .done,
+                    .networkidle => network_idle_held,
+                    .networkalmostidle => network_almost_idle_held,
                 };
 
                 // `met` resolves the condition. Otherwise, as long as there's
@@ -353,6 +365,18 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     }
 
     return .done;
+}
+
+fn holdsFor(since: *?u64, active: bool, now: u64) bool {
+    if (active == false) {
+        since.* = null;
+        return false;
+    }
+    const start = since.* orelse {
+        since.* = now;
+        return false;
+    };
+    return now - start >= network_idle_hold_ms;
 }
 
 pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeout_ms: u32) !*Node.Element {
@@ -654,4 +678,19 @@ test "Runner: waits out a throttled navigation" {
 
     const el = try runner.waitForSelector(page.frame_id, "#sel1", 10);
     try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
+}
+
+test "Runner: networkidle waits out activity after the frame latched idle" {
+    const page = try testing.pageTest("runner/late_fetch.html", .{ .wait_until_done = false });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .load });
+
+    page.frame().?._notified_network_idle = .done;
+
+    const start = lp.datetime.milliTimestamp(.boot);
+    try runner.waitForFrame(page.frame_id, 3000, .{ .until = .networkidle });
+    try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - start >= 500);
+    _ = try runner.waitForSelector(page.frame_id, "#fetched", 0);
 }
