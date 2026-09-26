@@ -246,6 +246,16 @@ longer clobber each other's page:
 
 A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpanda-io/agent-skill).
 
+### Shell completion
+
+`lightpanda completion <bash | fish | zsh>` prints a completion script for commands, flags and their values:
+
+```console
+lightpanda completion fish > ~/.config/fish/completions/lightpanda.fish
+lightpanda completion bash > ~/.local/share/bash-completion/completions/lightpanda
+lightpanda completion zsh > ~/.zfunc/_lightpanda  # with fpath=(~/.zfunc $fpath) before compinit
+```
+
 ### Telemetry
 
 By default, Lightpanda collects and sends usage telemetry. This can be disabled by setting an environment variable `LIGHTPANDA_DISABLE_TELEMETRY=true`. You can read Lightpanda's privacy policy at: [https://lightpanda.io/privacy-policy](https://lightpanda.io/privacy-policy).

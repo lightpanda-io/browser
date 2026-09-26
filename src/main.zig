@@ -77,6 +77,14 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
             }
             return std.process.cleanExit(lp.io);
         },
+        .completion => |opts| {
+            const shell = opts.shell orelse return args.printUsageAndExit(main_arena, .completion, false);
+            var buf: [4096]u8 = undefined;
+            var stdout = std.Io.File.stdout().writerStreaming(lp.io, &buf);
+            try lp.completion.write(&stdout.interface, shell, args.exec_name);
+            try stdout.interface.flush();
+            return std.process.cleanExit(lp.io);
+        },
         .agent => |opts| if (opts.list_models) {
             try lp.Agent.listModels(allocator, opts);
             return std.process.cleanExit(lp.io);

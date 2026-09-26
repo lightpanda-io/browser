@@ -273,9 +273,9 @@ const CommonOptions = .{
     .{ .name = "log_filter", .type = log.FilterRule, .multiple = true, .validator = logFilterValidator },
     .{ .name = "log_filter_scopes", .type = log.FilterRule, .multiple = true, .validator = logFilterValidator, .deprecated = "use --log-filter" },
     .{ .name = "user_agent_suffix", .type = ?[]const u8 },
-    .{ .name = "http_cache_dir", .type = ?[]const u8 },
+    .{ .name = "http_cache_dir", .type = ?[]const u8, .path = true },
     .{ .name = "http_cache_entry_limit", .type = ?u32, .default = 1000 },
-    .{ .name = "web_bot_auth_key_file", .type = ?[]const u8 },
+    .{ .name = "web_bot_auth_key_file", .type = ?[]const u8, .path = true },
     .{ .name = "web_bot_auth_keyid", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_domain", .type = ?[]const u8 },
     .{ .name = "user_agent", .type = ?[]const u8, .validator = userAgentValidator },
@@ -284,9 +284,9 @@ const CommonOptions = .{
     .{ .name = "block_private_networks", .type = bool },
     .{ .name = "block_cidrs", .type = ?[]const u8, .validator = accumulateValidator },
     .{ .name = "block_urls", .type = ?[]const u8, .validator = accumulateValidator },
-    .{ .name = "adblock_lists", .type = ?[]const u8, .validator = accumulateValidator },
-    .{ .name = "cookie", .type = ?[]const u8 },
-    .{ .name = "cookie_jar", .type = ?[]const u8 },
+    .{ .name = "adblock_lists", .type = ?[]const u8, .validator = accumulateValidator, .path = true },
+    .{ .name = "cookie", .type = ?[]const u8, .path = true },
+    .{ .name = "cookie_jar", .type = ?[]const u8, .path = true },
     .{ .name = "disable_subframes", .type = bool, .deprecated = "subframes are now disabled by default, use \"--load-resources iframe\" to enable" },
     .{ .name = "disable_workers", .type = bool, .deprecated = "workers are now disabled by default, use \"--load-resources worker\" to enable" },
     .{ .name = "enable_external_stylesheets", .type = bool, .deprecated = "use \"--load-resources stylesheet\" to enable" },
@@ -304,6 +304,7 @@ const CommonOptions = .{
         },
         .default = Cert{},
         .validator = caCertValidator,
+        .path = true,
     },
     .{
         .name = "ca_path",
@@ -314,6 +315,7 @@ const CommonOptions = .{
         },
         .default = Cert{},
         .validator = caPathValidator,
+        .path = true,
     },
 };
 
@@ -396,7 +398,7 @@ fn injectScriptFileValidator(
 }
 
 /// Definition for all the commands and its arguments. See @cli.zig for further.
-const Commands = cli.Builder(.{
+pub const Commands = cli.Builder(.{
     .{
         .name = "serve",
         .options = .{
@@ -432,7 +434,7 @@ const Commands = cli.Builder(.{
                 .name = "wait_script",
                 .type = ?[:0]const u8,
                 .variants = .{
-                    .{ .name = "wait_script_file", .validator = waitScriptFileValidator },
+                    .{ .name = "wait_script_file", .validator = waitScriptFileValidator, .path = true },
                 },
             },
             .{ .name = "wait_selector", .type = ?[:0]const u8 },
@@ -441,7 +443,7 @@ const Commands = cli.Builder(.{
                 .type = []const u8,
                 .multiple = true,
                 .variants = .{
-                    .{ .name = "inject_script_file", .validator = injectScriptFileValidator },
+                    .{ .name = "inject_script_file", .validator = injectScriptFileValidator, .path = true },
                 },
             },
             .{ .name = "terminate_ms", .type = ?u32 },
@@ -462,15 +464,15 @@ const Commands = cli.Builder(.{
     },
     .{
         .name = "agent",
-        .positional = .{ .name = "script_file", .type = ?[:0]const u8 },
+        .positional = .{ .name = "script_file", .type = ?[:0]const u8, .path = true },
         .options = .{
             .{ .name = "provider", .type = ?AiProvider },
             .{ .name = "model", .type = ?[:0]const u8 },
             .{ .name = "base_url", .type = ?[:0]const u8 },
             .{ .name = "system_prompt", .type = ?[:0]const u8 },
             .{ .name = "task", .type = ?[]const u8 },
-            .{ .name = "save", .type = ?[]const u8 },
-            .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true },
+            .{ .name = "save", .type = ?[]const u8, .path = true },
+            .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true, .path = true },
             .{ .name = "verbosity", .type = ?AgentVerbosity },
             .{ .name = "effort", .type = ?Effort },
             .{ .name = "search_engine", .type = ?SearchEngine },
@@ -483,13 +485,18 @@ const Commands = cli.Builder(.{
     .{
         // Normalized to `.agent` in `parseArgs`; intentionally no LLM options.
         .name = "run",
-        .positional = .{ .name = "script_file", .type = ?[:0]const u8 },
+        .positional = .{ .name = "script_file", .type = ?[:0]const u8, .path = true },
         .options = .{},
         .shared_options = CommonOptions,
     },
     .{ .name = "version", .options = .{
         .{ .name = "check", .type = bool },
     } },
+    .{
+        .name = "completion",
+        .positional = .{ .name = "shell", .type = ?Shell },
+        .options = .{},
+    },
 });
 
 const RunMode = Commands.Enum;
@@ -968,6 +975,8 @@ pub const DumpFormat = enum {
     semantic_tree_text,
 };
 
+pub const Shell = enum { bash, fish, zsh };
+
 pub const WaitUntil = enum {
     load,
     domcontentloaded,
@@ -1140,8 +1149,8 @@ pub fn printUsageAndExit(self: *const Config, allocator: Allocator, help_for: Ru
             , .{ @field(Help, @tagName(tag)), Help.common_options });
             break :text try std.fmt.allocPrint(allocator, template, .{ exec_name, info_or_warn, pretty_or_logfmt });
         },
-        .version => text: {
-            const template = Help.version ++ "\n";
+        inline .version, .completion => |tag| text: {
+            const template = @field(Help, @tagName(tag)) ++ "\n";
             break :text try std.fmt.allocPrint(allocator, template, .{exec_name});
         },
     };
