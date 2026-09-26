@@ -422,18 +422,21 @@ pub fn isOneOf(needle: []const u8, haystack: []const []const u8) bool {
 fn editDistance(a: []const u8, b: []const u8) usize {
     const max = 64;
     if (a.len > max or b.len > max) return std.math.maxInt(usize);
+    var a_buf: [max]u8 = undefined;
+    var b_buf: [max]u8 = undefined;
+    const la = std.ascii.lowerString(&a_buf, a);
+    const lb = std.ascii.lowerString(&b_buf, b);
+
     var prev2: [max + 1]u8 = undefined;
     var prev: [max + 1]u8 = undefined;
     var cur: [max + 1]u8 = undefined;
-    for (0..b.len + 1) |j| prev[j] = @intCast(j);
-    for (a, 1..) |ca, i| {
-        const la = std.ascii.toLower(ca);
+    for (0..lb.len + 1) |j| prev[j] = @intCast(j);
+    for (la, 1..) |ca, i| {
         cur[0] = @intCast(i);
-        for (b, 1..) |cb, j| {
-            const lb = std.ascii.toLower(cb);
-            const cost: u8 = if (la == lb) 0 else 1;
+        for (lb, 1..) |cb, j| {
+            const cost: u8 = if (ca == cb) 0 else 1;
             cur[j] = @min(@min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + cost);
-            if (i > 1 and j > 1 and la == std.ascii.toLower(b[j - 2]) and std.ascii.toLower(a[i - 2]) == lb) {
+            if (i > 1 and j > 1 and ca == lb[j - 2] and la[i - 2] == cb) {
                 cur[j] = @min(cur[j], prev2[j - 2] + 1);
             }
         }
@@ -447,7 +450,8 @@ fn editDistance(a: []const u8, b: []const u8) usize {
 /// (rustc's rule). A leading `--` doesn't count toward the length, since every
 /// flag shares it. Earlier candidates win ties.
 pub fn closest(name: []const u8, candidates: []const []const u8) ?[]const u8 {
-    const max_dist = @max(std.mem.trimStart(u8, name, "-").len, 3) / 3;
+    const typed = if (std.mem.startsWith(u8, name, "--")) name[2..] else name;
+    const max_dist = @max(typed.len, 3) / 3;
     var best: ?[]const u8 = null;
     var best_dist: usize = std.math.maxInt(usize);
     for (candidates) |cand| {
