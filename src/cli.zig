@@ -257,7 +257,7 @@ pub fn Builder(comptime commands: anytype) type {
             break :blk @Enum(Tag, .exhaustive, &names, &std.simd.iota(Tag, len));
         };
 
-        const command_names = tagNames(Enum);
+        pub const command_names = tagNames(Enum);
 
         /// Creates an array of `StructField` out of given options.
         fn optionsToStructFields(comptime options: anytype) [options.len]std.builtin.Type.StructField {
@@ -570,7 +570,6 @@ pub fn Builder(comptime commands: anytype) type {
         /// Every command's flags and their accepted values, for generating
         /// shell completion scripts. Deprecated options are left out.
         pub const completion_spec: []const Completion.Command = blk: {
-            @setEvalBranchQuota(200_000);
             var specs: [commands.len + 1]Completion.Command = undefined;
             for (commands, specs[0..commands.len]) |command, *spec| {
                 const Command = @TypeOf(command);

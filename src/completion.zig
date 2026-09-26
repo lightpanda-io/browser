@@ -31,19 +31,13 @@ const Shell = Config.Shell;
 const Values = cli.Completion.Values;
 
 const commands = Config.Commands.completion_spec;
+const command_names = Config.Commands.command_names;
 
 /// Each command's help.zon text, in `commands` order.
 const help_texts = blk: {
     var texts: [commands.len][]const u8 = undefined;
-    for (commands, &texts) |command, *text| text.* = @field(Help, command.name);
+    for (commands, &texts) |command, *help| help.* = @field(Help, command.name);
     const frozen = texts;
-    break :blk &frozen;
-};
-
-const command_names = blk: {
-    var names: [commands.len][]const u8 = undefined;
-    for (commands, &names) |command, *name| name.* = command.name;
-    const frozen = names;
     break :blk &frozen;
 };
 
@@ -72,9 +66,11 @@ fn writeFish(w: *Writer, exec_name: []const u8) !void {
         \\
     , .{ exec_name, ident });
     for (commands) |command| {
-        try w.print("complete -c {s} -n __fish_use_subcommand -a {s} -d '", .{ exec_name, command.name });
-        try writeText(w, commandSummary(command.name), exec_name, .fish);
-        try w.writeAll("'\n");
+        try w.print("complete -c {s} -n __fish_use_subcommand -a {s} -d '{f}'\n", .{
+            exec_name,
+            command.name,
+            text(commandSummary(command.name), exec_name, .{ .shell = .fish }),
+        });
     }
 
     for (commands, help_texts) |command, help_text| {
@@ -92,29 +88,25 @@ fn writeFish(w: *Writer, exec_name: []const u8) !void {
             const block = flagBlock(help_text, flag.name);
             try w.print(condition ++ " -l {s}", .{ exec_name, command.name, flag.name[2..] });
             if (flag.short) |short| try w.print(" -s {c}", .{short});
+            // Values get a description even when empty, or fish shows the flag's.
+            const value = "{s}\\t\"{f}\"";
+            const quoting: Quoting = .{ .shell = .fish, .specials = "\\\"$" };
             switch (flag.values) {
                 .none => {},
                 .any => try w.writeAll(" -x"),
                 .path => try w.writeAll(" -r -F"),
-                .one_of, .list_of => |values| {
-                    const list = flag.values == .list_of;
+                .one_of => |values| {
                     try w.writeAll(" -x -a '");
-                    if (list) try w.print("(__{f}_list ", .{ident});
-                    for (values, 0..) |value, i| {
-                        if (i > 0) try w.writeAll(" ");
-                        try w.writeAll(value);
-                        // Even when empty, or fish shows the flag's description.
-                        try w.writeAll("\\t\"");
-                        try writeText(w, valueSummary(block, value), exec_name, .fish_value);
-                        try w.writeAll("\"");
-                    }
-                    if (list) try w.writeAll(")");
+                    try writeValues(w, values, block, exec_name, value, quoting);
                     try w.writeAll("'");
                 },
+                .list_of => |values| {
+                    try w.print(" -x -a '(__{f}_list ", .{ident});
+                    try writeValues(w, values, block, exec_name, value, quoting);
+                    try w.writeAll(")'");
+                },
             }
-            try w.writeAll(" -d '");
-            try writeText(w, summary(block), exec_name, .fish);
-            try w.writeAll("'\n");
+            try w.print(" -d '{f}'\n", .{text(summary(block), exec_name, .{ .shell = .fish })});
         }
     }
 }
@@ -216,9 +208,10 @@ fn writeZsh(w: *Writer, exec_name: []const u8) !void {
         \\
     , .{ exec_name, ident });
     for (commands) |command| {
-        try w.print("                '{s}:", .{command.name});
-        try writeText(w, commandSummary(command.name), exec_name, .zsh);
-        try w.writeAll("'\n");
+        try w.print("                '{s}:{f}'\n", .{
+            command.name,
+            text(commandSummary(command.name), exec_name, .{ .shell = .zsh }),
+        });
     }
     try w.writeAll(
         \\            )
@@ -233,10 +226,16 @@ fn writeZsh(w: *Writer, exec_name: []const u8) !void {
         try w.print("                {s})\n                    _arguments -s", .{command.name});
         for (command.flags) |flag| {
             const block = flagBlock(help_text, flag.name);
-            try writeZshFlag(w, flag.name, flag.values, block, exec_name);
+            // Every flag is repeatable: `multiple` ones collect, the rest keep the last.
+            try w.writeAll(" \\\n                        '*");
             if (flag.short) |short| {
-                try writeZshFlag(w, &.{ '-', short }, flag.values, block, exec_name);
+                try w.print("'{{-{c},{s}}}'", .{ short, flag.name });
+            } else {
+                try w.writeAll(flag.name);
             }
+            try w.print("[{f}]", .{text(summary(block), exec_name, .{ .shell = .zsh, .specials = "[]" })});
+            try writeZshAction(w, flag.name[2..], flag.values, block, exec_name);
+            try w.writeAll("'");
         }
         if (command.positional) |positional| {
             try w.print(" \\\n                        '{s}", .{if (positional.multiple) "*" else "1"});
@@ -261,47 +260,22 @@ fn writeZsh(w: *Writer, exec_name: []const u8) !void {
     , .{ ident, ident, ident, exec_name });
 }
 
-fn writeZshFlag(w: *Writer, name: []const u8, values: Values, block: []const u8, exec_name: []const u8) !void {
-    // Every flag is repeatable: `multiple` ones collect, the rest keep the last.
-    try w.print(" \\\n                        '*{s}[", .{name});
-    try writeText(w, summary(block), exec_name, .zsh);
-    try w.writeAll("]");
-    try writeZshAction(w, std.mem.trimStart(u8, name, "-"), values, block, exec_name);
-    try w.writeAll("'");
-}
-
 /// `block` holds the values' descriptions, if any.
 fn writeZshAction(w: *Writer, message: []const u8, values: Values, block: []const u8, exec_name: []const u8) !void {
+    // `:` would end a `((value\:description))` item early.
+    const quoting: Quoting = .{ .shell = .zsh, .specials = "\\\"$`:[]" };
     switch (values) {
         .none => {},
         .any => try w.print(":{s}: ", .{message}),
         .path => try w.print(":{s}:_files", .{message}),
         .one_of => |one_of| {
             try w.print(":{s}:((", .{message});
-            for (one_of, 0..) |value, i| {
-                if (i > 0) try w.writeAll(" ");
-                try w.writeAll(value);
-                const description = valueSummary(block, value);
-                if (description.len > 0) {
-                    try w.writeAll("\\:\"");
-                    try writeText(w, description, exec_name, .zsh_value);
-                    try w.writeAll("\"");
-                }
-            }
+            try writeValues(w, one_of, block, exec_name, "{s}\\:\"{f}\"", quoting);
             try w.writeAll("))");
         },
         .list_of => |list_of| {
-            try w.print(":{s}:_values -s , {s}", .{ message, message });
-            for (list_of) |value| {
-                try w.print(" \"{s}", .{value});
-                const description = valueSummary(block, value);
-                if (description.len > 0) {
-                    try w.writeAll("[");
-                    try writeText(w, description, exec_name, .zsh_value);
-                    try w.writeAll("]");
-                }
-                try w.writeAll("\"");
-            }
+            try w.print(":{s}:_values -s , {s} ", .{ message, message });
+            try writeValues(w, list_of, block, exec_name, "\"{s}[{f}]\"", quoting);
         },
     }
 }
@@ -310,6 +284,14 @@ fn writeJoined(w: *Writer, items: []const []const u8) !void {
     for (items, 0..) |item, i| {
         if (i > 0) try w.writeAll(" ");
         try w.writeAll(item);
+    }
+}
+
+/// Each value, printed with `fmt` from the value and its description.
+fn writeValues(w: *Writer, values: []const []const u8, block: []const u8, exec_name: []const u8, comptime fmt: []const u8, quoting: Quoting) !void {
+    for (values, 0..) |value, i| {
+        if (i > 0) try w.writeAll(" ");
+        try w.print(fmt, .{ value, text(valueSummary(block, value), exec_name, quoting) });
     }
 }
 
@@ -322,49 +304,56 @@ const Ident = struct {
     }
 };
 
-/// Writes help.zon text into a single-quoted string: `{0s}` becomes the exec
-/// name and each line break with its indentation a single space. zsh also
-/// needs `[]` escaped, as descriptions sit inside `--flag[description]`.
-/// The `_value` forms are a double-quoted string inside the single-quoted
-/// one, for value descriptions.
-fn writeText(w: *Writer, text: []const u8, exec_name: []const u8, comptime quoting: enum { fish, fish_value, zsh, zsh_value }) !void {
-    var i: usize = 0;
-    while (i < text.len) : (i += 1) {
-        if (std.mem.startsWith(u8, text[i..], "{0s}")) {
-            try w.writeAll(exec_name);
-            i += 3;
-            continue;
+/// How help text is escaped inside a single-quoted string. `specials` also
+/// get a backslash, for a double-quoted string nested inside (value
+/// descriptions) or zsh's `--flag[description]`.
+const Quoting = struct {
+    shell: enum { fish, zsh },
+    specials: []const u8 = "",
+
+    fn escape(self: Quoting, w: *Writer, c: u8) Writer.Error!void {
+        if (std.mem.indexOfScalar(u8, self.specials, c) != null) try self.escapeQuoted(w, '\\');
+        try self.escapeQuoted(w, c);
+    }
+
+    fn escapeQuoted(self: Quoting, w: *Writer, c: u8) Writer.Error!void {
+        switch (self.shell) {
+            .fish => if (c == '\\' or c == '\'') try w.writeByte('\\'),
+            .zsh => if (c == '\'') return w.writeAll("'\\''"),
         }
-        const c = text[i];
-        if (c == '\n') {
-            while (i + 1 < text.len and text[i + 1] == ' ') i += 1;
-            try w.writeByte(' ');
-            continue;
-        }
-        switch (quoting) {
-            .fish => switch (c) {
-                '\\', '\'' => try w.print("\\{c}", .{c}),
-                else => try w.writeByte(c),
-            },
-            .fish_value => switch (c) {
-                '\\' => try w.writeAll("\\\\\\\\"),
-                '"', '$' => try w.print("\\\\{c}", .{c}),
-                '\'' => try w.writeAll("\\'"),
-                else => try w.writeByte(c),
-            },
-            .zsh => switch (c) {
-                '\'' => try w.writeAll("'\\''"),
-                '[', ']' => try w.print("\\{c}", .{c}),
-                else => try w.writeByte(c),
-            },
-            // `:` would end a `((value\:description))` item early.
-            .zsh_value => switch (c) {
-                '\'' => try w.writeAll("'\\''"),
-                '"', '$', '`', '\\', ':', '[', ']' => try w.print("\\{c}", .{c}),
-                else => try w.writeByte(c),
-            },
+        try w.writeByte(c);
+    }
+};
+
+/// help.zon text as a template would render it, with each line break and
+/// its indentation turned into a single space.
+const Text = struct {
+    text: []const u8,
+    exec_name: []const u8,
+    quoting: Quoting,
+
+    pub fn format(self: Text, w: *Writer) Writer.Error!void {
+        var i: usize = 0;
+        while (i < self.text.len) : (i += 1) {
+            const rest = self.text[i..];
+            if (std.mem.startsWith(u8, rest, "{0s}")) {
+                for (self.exec_name) |c| try self.quoting.escape(w, c);
+                i += 3;
+                continue;
+            }
+            if (std.mem.startsWith(u8, rest, "{{") or std.mem.startsWith(u8, rest, "}}")) i += 1;
+            if (self.text[i] == '\n') {
+                while (i + 1 < self.text.len and self.text[i + 1] == ' ') i += 1;
+                try w.writeByte(' ');
+                continue;
+            }
+            try self.quoting.escape(w, self.text[i]);
         }
     }
+};
+
+fn text(help: []const u8, exec_name: []const u8, quoting: Quoting) Text {
+    return .{ .text = help, .exec_name = exec_name, .quoting = quoting };
 }
 
 fn commandSummary(name: []const u8) []const u8 {
@@ -386,26 +375,30 @@ fn flagBlock(help_text: []const u8, flag: []const u8) []const u8 {
     return findBlock(help_text, flag) orelse findBlock(Help.common_options, flag) orelse "";
 }
 
-fn findBlock(text: []const u8, flag: []const u8) ?[]const u8 {
-    var lines = std.mem.splitScalar(u8, text, '\n');
+fn findBlock(help: []const u8, flag: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, help, '\n');
     while (lines.next()) |line| {
-        if (!std.mem.startsWith(u8, line, "  -")) continue;
-        var tokens = std.mem.tokenizeAny(u8, line, " ,");
-        while (tokens.next()) |token| {
-            if (!std.mem.eql(u8, token, flag)) continue;
-            const rest = lines.rest();
-            var end: usize = 0;
-            var block = std.mem.splitScalar(u8, rest, '\n');
-            while (block.next()) |block_line| {
-                // Blank lines can separate the rows of a table.
-                if (block_line.len == 0) continue;
-                if (!std.mem.startsWith(u8, block_line, "   ")) break;
-                end = block.index orelse rest.len;
-            }
-            return rest[0..end];
-        }
+        if (std.mem.startsWith(u8, line, "  -") and hasToken(line, flag)) break;
+    } else return null;
+
+    const rest = lines.rest();
+    var end: usize = 0;
+    var block = std.mem.splitScalar(u8, rest, '\n');
+    while (block.next()) |line| {
+        // Blank lines can separate the rows of a table.
+        if (line.len == 0) continue;
+        if (!std.mem.startsWith(u8, line, "   ")) break;
+        end = block.index orelse rest.len;
     }
-    return null;
+    return rest[0..end];
+}
+
+fn hasToken(line: []const u8, token: []const u8) bool {
+    var tokens = std.mem.tokenizeAny(u8, line, " ,");
+    while (tokens.next()) |t| {
+        if (std.mem.eql(u8, t, token)) return true;
+    }
+    return false;
 }
 
 /// The block's first sentence, which can span lines.
@@ -425,9 +418,9 @@ fn summary(block: []const u8) []const u8 {
 /// The value's description in the block's `Allowed values:` table, where a
 /// row is the value, then its description, wrapped at the same column.
 fn valueSummary(block: []const u8, value: []const u8) []const u8 {
-    const table = block[(std.mem.indexOf(u8, block, "Allowed values:\n") orelse return "")..];
+    const header = "Allowed values:\n";
+    const table = block[(std.mem.indexOf(u8, block, header) orelse return "") + header.len ..];
     var lines = std.mem.splitScalar(u8, table, '\n');
-    _ = lines.next();
     while (lines.index) |line_start| {
         const line = lines.next().?;
         const row = std.mem.trimStart(u8, line, " ");
@@ -445,17 +438,17 @@ fn valueSummary(block: []const u8, value: []const u8) []const u8 {
     return "";
 }
 
-fn firstSentence(text: []const u8) []const u8 {
-    const body = std.mem.trim(u8, text, " \n");
-    return body[0 .. sentenceEnd(body) orelse std.mem.trimEnd(u8, body, ".").len];
+fn firstSentence(help: []const u8) []const u8 {
+    const body = std.mem.trim(u8, help, " \n");
+    return body[0 .. sentenceEnd(body) orelse body.len];
 }
 
 /// Index of the period closing the first sentence, skipping `e.g.`/`i.e.`.
-fn sentenceEnd(text: []const u8) ?usize {
+fn sentenceEnd(help: []const u8) ?usize {
     var i: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, text, i, '.')) |dot| : (i = dot + 1) {
-        if (dot + 1 < text.len and text[dot + 1] != ' ' and text[dot + 1] != '\n') continue;
-        if (std.mem.endsWith(u8, text[0..dot], "e.g") or std.mem.endsWith(u8, text[0..dot], "i.e")) continue;
+    while (std.mem.indexOfScalarPos(u8, help, i, '.')) |dot| : (i = dot + 1) {
+        if (dot + 1 < help.len and help[dot + 1] != ' ' and help[dot + 1] != '\n') continue;
+        if (std.mem.endsWith(u8, help[0..dot], "e.g") or std.mem.endsWith(u8, help[0..dot], "i.e")) continue;
         return dot;
     }
     return null;
@@ -543,7 +536,7 @@ test "completion: zsh value descriptions" {
 
     const expected = [_][]const u8{
         ":dump:((html\\:\"Serialized HTML of the DOM\" ",
-        " wpt semantic_tree\\:",
+        " wpt\\:\"\" semantic_tree\\:",
         ":load-resources:_values -s , load-resources \"image[<img> sources, so that load/error reflects the real HTTP status]\" ",
         "\"invisible[Best-effort (e.g. display\\:none) hidden elements]\"",
     };
@@ -553,4 +546,15 @@ test "completion: zsh value descriptions" {
             return error.MissingPart;
         }
     }
+}
+
+test "completion: Text" {
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    const help = "Run {0s} with '{{x}}',\n          then $stop.";
+    try out.writer.print("{f}|{f}", .{
+        text(help, "lp", .{ .shell = .fish }),
+        text(help, "lp", .{ .shell = .zsh, .specials = "\\\"$" }),
+    });
+    try std.testing.expectEqualStrings("Run lp with \\'{x}\\', then $stop.|Run lp with '\\''{x}'\\'', then \\$stop.", out.written());
 }
