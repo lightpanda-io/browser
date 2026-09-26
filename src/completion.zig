@@ -120,7 +120,17 @@ fn writeFish(w: *Writer, exec_name: []const u8) !void {
 }
 
 fn writeBash(w: *Writer, exec_name: []const u8) !void {
+    const ident: Ident = .{ .name = exec_name };
+    // Candidates for a comma-separated list: the items not chosen yet, after
+    // what's typed up to the last comma. Reads the caller's `cur`.
     try w.print(
+        \\_{f}_list() {{
+        \\    local prefix="${{cur%"${{cur##*,}}"}}" item
+        \\    for item in $(compgen -W "$*" -- "${{cur##*,}}"); do
+        \\        [[ ,$prefix == *,$item,* ]] || COMPREPLY+=("$prefix$item")
+        \\    done
+        \\}}
+        \\
         \\_{f}() {{
         \\    local cur prev cmd i
         \\    cur="${{COMP_WORDS[COMP_CWORD]}}"
@@ -135,7 +145,7 @@ fn writeBash(w: *Writer, exec_name: []const u8) !void {
         \\
         \\    if [[ -z $cmd ]]; then
         \\        COMPREPLY=($(compgen -W "
-    , .{Ident{ .name = exec_name }});
+    , .{ ident, ident });
     try writeJoined(w, command_names);
     try w.writeAll(
         \\" -- "$cur"))
@@ -153,7 +163,7 @@ fn writeBash(w: *Writer, exec_name: []const u8) !void {
             try w.print("                {s}", .{flag.name});
             if (flag.short) |short| try w.print("|-{c}", .{short});
             try w.writeAll(") ");
-            try writeBashAction(w, flag.values);
+            try writeBashAction(w, flag.values, ident);
             try w.writeAll("return ;;\n");
         }
         try w.writeAll("            esac\n            if [[ $cur == -* ]]; then\n                COMPREPLY=($(compgen -W \"");
@@ -165,16 +175,16 @@ fn writeBash(w: *Writer, exec_name: []const u8) !void {
         try w.writeAll("\" -- \"$cur\"))\n");
         if (command.positional) |positional| if (positional.values != .any) {
             try w.writeAll("            else\n                ");
-            try writeBashAction(w, positional.values);
+            try writeBashAction(w, positional.values, ident);
             try w.writeAll("\n");
         };
         try w.writeAll("            fi\n            ;;\n");
     }
 
-    try w.print("    esac\n}}\ncomplete -F _{f} {s}\n", .{ Ident{ .name = exec_name }, exec_name });
+    try w.print("    esac\n}}\ncomplete -F _{f} {s}\n", .{ ident, exec_name });
 }
 
-fn writeBashAction(w: *Writer, values: Values) !void {
+fn writeBashAction(w: *Writer, values: Values, ident: Ident) !void {
     switch (values) {
         .none, .any => {},
         .path => try w.writeAll("compopt -o filenames 2>/dev/null; mapfile -t COMPREPLY < <(compgen -f -- \"$cur\"); "),
@@ -184,10 +194,9 @@ fn writeBashAction(w: *Writer, values: Values) !void {
             try w.writeAll("\" -- \"$cur\")); ");
         },
         .list_of => |list_of| {
-            // Complete the item after the last comma.
-            try w.writeAll("COMPREPLY=($(compgen -P \"${cur%\"${cur##*,}\"}\" -W \"");
+            try w.print("_{f}_list ", .{ident});
             try writeJoined(w, list_of);
-            try w.writeAll("\" -- \"${cur##*,}\")); ");
+            try w.writeAll("; ");
         },
     }
 }
