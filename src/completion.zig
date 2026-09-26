@@ -56,7 +56,21 @@ pub fn write(w: *Writer, shell: Shell, exec_name: []const u8) !void {
 }
 
 fn writeFish(w: *Writer, exec_name: []const u8) !void {
-    try w.print("complete -c {s} -f\n", .{exec_name});
+    const ident: Ident = .{ .name = exec_name };
+    // Candidates for a comma-separated list: the items not chosen yet, after
+    // what's typed up to the last comma.
+    try w.print(
+        \\complete -c {s} -f
+        \\function __{f}_list
+        \\    set -l prefix (string match -r -- '.*,' (commandline -ct))
+        \\    set -l chosen (string split , -- $prefix)
+        \\    for item in $argv
+        \\        set -l value (string split -m1 \t -- $item)[1]
+        \\        contains -- $value $chosen; or printf '%s%s\n' "$prefix" $item
+        \\    end
+        \\end
+        \\
+    , .{ exec_name, ident });
     for (commands) |command| {
         try w.print("complete -c {s} -n __fish_use_subcommand -a {s} -d '", .{ exec_name, command.name });
         try writeText(w, commandSummary(command.name), exec_name, .fish);
@@ -75,6 +89,7 @@ fn writeFish(w: *Writer, exec_name: []const u8) !void {
             },
         };
         for (command.flags) |flag| {
+            const block = flagBlock(help_text, flag.name);
             try w.print(condition ++ " -l {s}", .{ exec_name, command.name, flag.name[2..] });
             if (flag.short) |short| try w.print(" -s {c}", .{short});
             switch (flag.values) {
@@ -82,13 +97,23 @@ fn writeFish(w: *Writer, exec_name: []const u8) !void {
                 .any => try w.writeAll(" -x"),
                 .path => try w.writeAll(" -r -F"),
                 .one_of, .list_of => |values| {
+                    const list = flag.values == .list_of;
                     try w.writeAll(" -x -a '");
-                    try writeJoined(w, values);
+                    if (list) try w.print("(__{f}_list ", .{ident});
+                    for (values, 0..) |value, i| {
+                        if (i > 0) try w.writeAll(" ");
+                        try w.writeAll(value);
+                        // Even when empty, or fish shows the flag's description.
+                        try w.writeAll("\\t\"");
+                        try writeText(w, valueSummary(block, value), exec_name, .fish_value);
+                        try w.writeAll("\"");
+                    }
+                    if (list) try w.writeAll(")");
                     try w.writeAll("'");
                 },
             }
             try w.writeAll(" -d '");
-            try writeText(w, describe(help_text, flag.name), exec_name, .fish);
+            try writeText(w, summary(block), exec_name, .fish);
             try w.writeAll("'\n");
         }
     }
@@ -198,7 +223,7 @@ fn writeZsh(w: *Writer, exec_name: []const u8) !void {
     for (commands, help_texts) |command, help_text| {
         try w.print("                {s})\n                    _arguments -s", .{command.name});
         for (command.flags) |flag| {
-            const description = describe(help_text, flag.name);
+            const description = summary(flagBlock(help_text, flag.name));
             try writeZshFlag(w, flag.name, flag.values, description, exec_name);
             if (flag.short) |short| {
                 try writeZshFlag(w, &.{ '-', short }, flag.values, description, exec_name);
@@ -272,7 +297,8 @@ const Ident = struct {
 /// Writes help.zon text into a single-quoted string: `{0s}` becomes the exec
 /// name and each line break with its indentation a single space. zsh also
 /// needs `[]` escaped, as descriptions sit inside `--flag[description]`.
-fn writeText(w: *Writer, text: []const u8, exec_name: []const u8, comptime quoting: enum { fish, zsh }) !void {
+/// `fish_value` is a double-quoted string inside the single-quoted `-a`.
+fn writeText(w: *Writer, text: []const u8, exec_name: []const u8, comptime quoting: enum { fish, fish_value, zsh }) !void {
     var i: usize = 0;
     while (i < text.len) : (i += 1) {
         if (std.mem.startsWith(u8, text[i..], "{0s}")) {
@@ -289,6 +315,12 @@ fn writeText(w: *Writer, text: []const u8, exec_name: []const u8, comptime quoti
         switch (quoting) {
             .fish => switch (c) {
                 '\\', '\'' => try w.print("\\{c}", .{c}),
+                else => try w.writeByte(c),
+            },
+            .fish_value => switch (c) {
+                '\\' => try w.writeAll("\\\\\\\\"),
+                '"', '$' => try w.print("\\\\{c}", .{c}),
+                '\'' => try w.writeAll("\\'"),
                 else => try w.writeByte(c),
             },
             .zsh => switch (c) {
@@ -313,37 +345,73 @@ fn commandSummary(name: []const u8) []const u8 {
     return "";
 }
 
-/// The first sentence of the flag's description, from the command's own help
-/// or else the common options. It can span lines, as written in help.zon.
-fn describe(help_text: []const u8, flag: []const u8) []const u8 {
-    return findDescription(help_text, flag) orelse findDescription(Help.common_options, flag) orelse "";
+/// The indented lines documenting the flag, from the command's own help or
+/// else the common options.
+fn flagBlock(help_text: []const u8, flag: []const u8) []const u8 {
+    return findBlock(help_text, flag) orelse findBlock(Help.common_options, flag) orelse "";
 }
 
-fn findDescription(text: []const u8, flag: []const u8) ?[]const u8 {
+fn findBlock(text: []const u8, flag: []const u8) ?[]const u8 {
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
         if (!std.mem.startsWith(u8, line, "  -")) continue;
         var tokens = std.mem.tokenizeAny(u8, line, " ,");
         while (tokens.next()) |token| {
-            if (std.mem.eql(u8, token, flag)) return firstSentence(lines.rest());
+            if (!std.mem.eql(u8, token, flag)) continue;
+            const rest = lines.rest();
+            var end: usize = 0;
+            var block = std.mem.splitScalar(u8, rest, '\n');
+            while (block.next()) |block_line| {
+                // Blank lines can separate the rows of a table.
+                if (block_line.len == 0) continue;
+                if (!std.mem.startsWith(u8, block_line, "   ")) break;
+                end = block.index orelse rest.len;
+            }
+            return rest[0..end];
         }
     }
     return null;
 }
 
-/// `text` starts with the indented description lines that follow a flag.
-fn firstSentence(text: []const u8) []const u8 {
+/// The block's first sentence, which can span lines.
+fn summary(block: []const u8) []const u8 {
     var end: usize = 0;
-    var lines = std.mem.splitScalar(u8, text, '\n');
+    var lines = std.mem.splitScalar(u8, block, '\n');
     while (lines.next()) |line| {
         const trimmed = std.mem.trimStart(u8, line, " ");
-        if (trimmed.len == line.len or
-            std.mem.startsWith(u8, trimmed, "Defaults") or
+        if (std.mem.startsWith(u8, trimmed, "Defaults") or
             std.mem.startsWith(u8, trimmed, "Allowed values") or
             std.mem.startsWith(u8, trimmed, "e.g.")) break;
-        end = lines.index orelse text.len;
+        end = lines.index orelse block.len;
     }
-    const body = std.mem.trim(u8, text[0..end], " \n");
+    return firstSentence(block[0..end]);
+}
+
+/// The value's description in the block's `Allowed values:` table, where a
+/// row is the value, then its description, wrapped at the same column.
+fn valueSummary(block: []const u8, value: []const u8) []const u8 {
+    const table = block[(std.mem.indexOf(u8, block, "Allowed values:\n") orelse return "")..];
+    var lines = std.mem.splitScalar(u8, table, '\n');
+    _ = lines.next();
+    while (lines.index) |line_start| {
+        const line = lines.next().?;
+        const row = std.mem.trimStart(u8, line, " ");
+        if (!std.mem.startsWith(u8, row, value) or !std.mem.startsWith(u8, row[value.len..], " ")) continue;
+
+        const column = line.len - std.mem.trimStart(u8, row[value.len..], " ").len;
+        var end = line_start + line.len;
+        while (lines.peek()) |next| {
+            if (next.len - std.mem.trimStart(u8, next, " ").len < column) break;
+            end = lines.index.? + next.len;
+            _ = lines.next();
+        }
+        return firstSentence(table[line_start + column .. end]);
+    }
+    return "";
+}
+
+fn firstSentence(text: []const u8) []const u8 {
+    const body = std.mem.trim(u8, text, " \n");
     return body[0 .. sentenceEnd(body) orelse std.mem.trimEnd(u8, body, ".").len];
 }
 
@@ -361,7 +429,7 @@ fn sentenceEnd(text: []const u8) ?usize {
 test "completion: every flag is documented" {
     for (commands, help_texts) |command, help_text| {
         for (command.flags) |flag| {
-            if (describe(help_text, flag.name).len == 0) {
+            if (summary(flagBlock(help_text, flag.name)).len == 0) {
                 std.debug.print("{s} {s} has no entry in help.zon\n", .{ command.name, flag.name });
                 return error.Undocumented;
             }
@@ -371,12 +439,27 @@ test "completion: every flag is documented" {
 }
 
 test "completion: describe" {
-    try std.testing.expectEqualStrings("Path to a file to load cookies from (read-only)", describe(Help.fetch, "--cookie"));
+    try std.testing.expectEqualStrings("Path to a file to load cookies from (read-only)", summary(flagBlock(Help.fetch, "--cookie")));
     // e.g. doesn't end the sentence.
-    try std.testing.expectEqualStrings("The host to advertise, e.g. in the /json/version response", describe(Help.serve, "--advertise-host"));
+    try std.testing.expectEqualStrings("The host to advertise, e.g. in the /json/version response", summary(flagBlock(Help.serve, "--advertise-host")));
     // Found in the common options.
-    try std.testing.expectEqualStrings("The log level", describe(Help.serve, "--log-level"));
-    try std.testing.expectEqualStrings("", describe(Help.serve, "--nope"));
+    try std.testing.expectEqualStrings("The log level", summary(flagBlock(Help.serve, "--log-level")));
+    try std.testing.expectEqualStrings("", summary(flagBlock(Help.serve, "--nope")));
+}
+
+test "completion: valueSummary" {
+    const dump = flagBlock(Help.fetch, "--dump");
+    try std.testing.expectEqualStrings("Serialized HTML of the DOM", valueSummary(dump, "html"));
+    // Wrapped rows keep their line break until written.
+    try std.testing.expectEqualStrings(
+        "Text-only rendering of the page as a\n                                 PDF file (base64 with --json)",
+        valueSummary(dump, "pdf"),
+    );
+    // `semantic_tree` is a prefix of `semantic_tree_text`.
+    try std.testing.expectEqualStrings("JSON-serialized semantic tree", valueSummary(dump, "semantic_tree"));
+    try std.testing.expectEqualStrings("", valueSummary(dump, "wpt"));
+    // Inline lists have no per-value descriptions.
+    try std.testing.expectEqualStrings("", valueSummary(flagBlock(Help.agent, "--effort"), "low"));
 }
 
 test "completion: fish" {
@@ -389,7 +472,8 @@ test "completion: fish" {
         "complete -c lp -n __fish_use_subcommand -a fetch -d 'fetches the specified URL'\n",
         "complete -c lp -n '__fish_seen_subcommand_from fetch' -l with-base -d ",
         "complete -c lp -n '__fish_seen_subcommand_from fetch' -l cookie -r -F -d ",
-        "complete -c lp -n '__fish_seen_subcommand_from fetch' -l dump -x -a 'html markdown ",
+        "complete -c lp -n '__fish_seen_subcommand_from fetch' -l dump -x -a 'html\\t\"Serialized HTML of the DOM\" markdown\\t\"Converts content to Markdown\" png\\t\"Text-only rendering of the page as a PNG image (base64 with --json)\" ",
+        "complete -c lp -n '__fish_seen_subcommand_from fetch' -l load-resources -x -a '(__lp_list image\\t\"<img> sources, so that load/error reflects the real HTTP status\" iframe\\t\"When enabled, <iframe> elements are fully loaded\" worker\\t\"Enable loading dedicated and shared workers\" stylesheet\\t",
         "complete -c lp -n '__fish_seen_subcommand_from agent' -l attach -s a -r -F -d ",
         "complete -c lp -n '__fish_seen_subcommand_from run' -F\n",
         "complete -c lp -n '__fish_seen_subcommand_from completion' -a 'bash fish zsh'\n",
