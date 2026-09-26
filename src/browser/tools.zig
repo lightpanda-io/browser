@@ -2997,3 +2997,18 @@ test "isPathSafe: absolute paths and traversal are rejected" {
     try std.testing.expect(!isPathSafe("sub/.."));
     try std.testing.expect(!isPathSafe(".."));
 }
+
+test "markdown: a same-url page whose navigation failed is navigated again" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:1/"}
+    , .{});
+    try std.testing.expect((try call(aa, session, &registry, "goto", args, .{})).is_error);
+    try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{})).is_error);
+}
