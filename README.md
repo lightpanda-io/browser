@@ -181,9 +181,8 @@ you can prototype with the LLM and ship the output to production without a
 model at runtime.
 
 It supports Anthropic, OpenAI, Gemini, Google Vertex AI, Mistral, Hugging
-Face, the multi-lab gateways [Vercel AI Gateway](https://vercel.com/ai-gateway),
-[OpenRouter](https://openrouter.ai) and [OrcaRouter](https://orcarouter.ai)
-(one key for hundreds of models), any OpenAI-compatible endpoint via
+Face, the multi-lab gateways [Vercel AI Gateway](https://vercel.com/ai-gateway)
+and [OpenRouter](https://openrouter.ai) (one key for hundreds of models), any OpenAI-compatible endpoint via
 `OPENAI_BASE_URL`, and local models via Ollama or llama.cpp. You can also run
 without an LLM using `--no-llm`, which drops you into the REPL. See the
 [agent documentation](https://lightpanda.io/docs/usage/agent) for the full

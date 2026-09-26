@@ -266,8 +266,8 @@
     \\          The AI provider. When omitted, lightpanda auto-detects an API
     \\          key from your environment (ANTHROPIC_API_KEY, OPENAI_API_KEY,
     \\          GOOGLE_API_KEY/GEMINI_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY,
-    \\          MISTRAL_API_KEY, OPENROUTER_API_KEY, ORCAROUTER_API_KEY,
-    \\          VERTEX_API_KEY). With exactly one key set:
+    \\          MISTRAL_API_KEY, OPENROUTER_API_KEY, VERTEX_API_KEY). With
+    \\          exactly one key set:
     \\          that provider is used. With multiple keys on a TTY: you'll be
     \\          prompted to pick; in non-interactive contexts, pass --provider
     \\          explicitly. With no keys set: falls back to the basic REPL
@@ -288,8 +288,8 @@
     \\          subscription (OAuth) instead of an API key.
     \\
     \\          Allowed values: "anthropic", "openai", "gemini", "huggingface",
-    \\                          "vercel", "mistral", "openrouter", "orcarouter",
-    \\                          "ollama", "llama_cpp", "vertex", "codex",
+    \\                          "vercel", "mistral", "openrouter", "ollama",
+    \\                          "llama_cpp", "vertex", "codex",
     \\                          "openai_compatible".
     \\          In the REPL, use /provider to list and change providers.
     \\  --save <PATH>
