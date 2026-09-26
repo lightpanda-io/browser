@@ -166,7 +166,7 @@ fn dispatchBrowserTool(
             error.FrameNotLoaded => .FrameNotLoaded,
             error.NodeNotFound, error.InvalidParams => .InvalidParams,
             error.Cancelled => .Cancelled,
-            error.Timeout => .Timeout,
+            error.Timeout, error.NavigationTimeout => .Timeout,
             error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
         };
         return server.sendError(id, code, browser_tools.errorMessage(err));
