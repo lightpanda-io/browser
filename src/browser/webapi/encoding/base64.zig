@@ -43,16 +43,17 @@ pub const BinInput = union(enum) {
 
 pub fn encode(allocator: Allocator, in: BinInput) ![]const u8 {
     const input = in.bytes();
-    const encoded_len = Base64.calcSizeDefault(input.len);
+    const encoded_len = Base64.Encoder.calcSize(.default, input.len);
     const encoded = try allocator.alloc(u8, encoded_len);
-    return Base64.encode(encoded, input);
+    return Base64.Encoder.encode(.default, encoded, input);
 }
 
-pub fn decode(alloc: Allocator, in: BinInput) ![]const u8 {
+pub fn decode(allocator: Allocator, in: BinInput) ![]const u8 {
     const input = in.bytes();
-    const decoded_len = Base64.calcDecodingSizeMax(input);
-    const output = try alloc.alloc(u8, decoded_len);
-    return Base64.decodeForgiving(output, input) catch |err| switch (err) {
+    const decoded_len = Base64.Decoder.calcSizeUpperBound(input);
+    const output = try allocator.alloc(u8, decoded_len);
+    errdefer allocator.free(output);
+    return Base64.Decoder.decodeForgiving(.default, output, input) catch |err| switch (err) {
         // Translate to DOM errors.
         error.InvalidBase64Character, error.Base64InputRemainder => error.InvalidCharacterError,
         else => unreachable,
