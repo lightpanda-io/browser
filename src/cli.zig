@@ -518,7 +518,7 @@ pub fn Builder(comptime commands: anytype) type {
                 }
             }
 
-            return error.UnknownCommand;
+            return unknownCommand(cmd_str);
         }
 
         /// Turns a snake_case string to kebab-case in comptime.
