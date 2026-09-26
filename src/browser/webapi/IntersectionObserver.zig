@@ -50,10 +50,6 @@ _pending_entries: std.ArrayList(*IntersectionObserverEntry) = .empty,
 // tracked targets that aren't reported yet
 _tracked: std.AutoHashMapUnmanaged(*Element, void) = .{},
 
-// Shared zero rect (plain values) for non-intersecting elements. Materialized
-// into a DOMRect only if it ends up on a delivered entry.
-const zero_rect: DOMRect.Data = .{};
-
 const ObserverInit = struct {
     root: ?*Node = null,
     rootMargin: ?[]const u8 = null,
@@ -207,7 +203,6 @@ fn releaseAll(entries: []const *IntersectionObserverEntry, page: *Page) void {
 fn calculateIntersection(
     self: *IntersectionObserver,
     target: *Element,
-    has_parent: bool,
     frame: *Frame,
 ) !IntersectionData {
     const target_rect = target.boundingClientRectValues(frame);
@@ -226,23 +221,15 @@ fn calculateIntersection(
     // For a headless browser without real layout, we treat all elements as fully visible.
     // This avoids fingerprinting issues (massive viewports) and matches the behavior
     // scripts expect when querying element visibility.
-    // However, elements without a parent cannot intersect (they have no containing block).
-    const intersection_ratio: f64 = if (has_parent) 1.0 else 0.0;
-
-    // Intersection rect is the same as the target rect if visible, otherwise zero rect
-    const intersection_rect = if (has_parent) target_rect else zero_rect;
-
     return .{
-        .is_intersecting = has_parent,
-        .intersection_ratio = intersection_ratio,
-        .intersection_rect = intersection_rect,
+        .intersection_ratio = 1.0,
+        .intersection_rect = target_rect,
         .bounding_client_rect = target_rect,
         .root_bounds = root_rect,
     };
 }
 
 const IntersectionData = struct {
-    is_intersecting: bool,
     intersection_ratio: f64,
     intersection_rect: DOMRect.Data,
     bounding_client_rect: DOMRect.Data,
@@ -266,17 +253,17 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Fram
         return;
     };
 
-    const has_parent = target.asNode().parentNode() != null;
-    const is_now_intersecting = has_parent and self.meetsThreshold(1.0);
+    const connected = target.asNode().isConnected();
+    const is_now_intersecting = connected and self.meetsThreshold(1.0);
     if (!is_now_intersecting) {
-        // Not intersecting yet (e.g. observed while still orphaned) — keep
+        // Not intersecting yet (e.g. observed while still detached) — keep
         // tracking so a later attach is reported.
         return;
     }
 
     // Building the entry is the expensive part — getBoundingClientRect walks the
     // document to fake a position (O(node count)) — so it only runs here.
-    const data = try self.calculateIntersection(target, has_parent, frame);
+    const data = try self.calculateIntersection(target, frame);
     const arena = try frame.getArena(.tiny, "IntersectionObserverEntry");
     errdefer arena.release();
 
@@ -419,7 +406,7 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 
 // Infinite scroll: the callback observes a fresh sentinel, which we report as
-// intersecting the moment it is attached, so the page never settles on its own.
+// intersecting the moment it is connected, so the page never settles on its own.
 // Old sentinels stay observed (_tracked keeps them from re-firing) so that the
 // observer stays registered on the frame for as long as it is alive. `deferred`
 // re-observes from a timer, one delivery per macrotask tick, the way a
@@ -433,7 +420,8 @@ fn observeSentinelChain(frame: *Frame, comptime deferred: bool) !void {
 
     try ls.local.eval(
         \\(function(deferred) {
-        \\  const list = document.createElement('div');
+        \\  const root = document.documentElement ?? document.appendChild(document.createElement('html'));
+        \\  const list = root.appendChild(document.createElement('div'));
         \\  const observe = () => io.observe(list.insertBefore(document.createElement('div'), list.firstChild));
         \\  const io = new IntersectionObserver((entries) => {
         \\    for (const entry of entries) {
