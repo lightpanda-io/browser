@@ -223,15 +223,15 @@ fn writeZsh(w: *Writer, exec_name: []const u8) !void {
     for (commands, help_texts) |command, help_text| {
         try w.print("                {s})\n                    _arguments -s", .{command.name});
         for (command.flags) |flag| {
-            const description = summary(flagBlock(help_text, flag.name));
-            try writeZshFlag(w, flag.name, flag.values, description, exec_name);
+            const block = flagBlock(help_text, flag.name);
+            try writeZshFlag(w, flag.name, flag.values, block, exec_name);
             if (flag.short) |short| {
-                try writeZshFlag(w, &.{ '-', short }, flag.values, description, exec_name);
+                try writeZshFlag(w, &.{ '-', short }, flag.values, block, exec_name);
             }
         }
         if (command.positional) |positional| {
             try w.print(" \\\n                        '{s}", .{if (positional.multiple) "*" else "1"});
-            try writeZshAction(w, positional.name, positional.values);
+            try writeZshAction(w, positional.name, positional.values, "", exec_name);
             try w.writeAll("'");
         }
         try w.writeAll("\n                    ;;\n");
@@ -252,28 +252,47 @@ fn writeZsh(w: *Writer, exec_name: []const u8) !void {
     , .{ ident, ident, ident, exec_name });
 }
 
-fn writeZshFlag(w: *Writer, name: []const u8, values: Values, description: []const u8, exec_name: []const u8) !void {
+fn writeZshFlag(w: *Writer, name: []const u8, values: Values, block: []const u8, exec_name: []const u8) !void {
     // Every flag is repeatable: `multiple` ones collect, the rest keep the last.
     try w.print(" \\\n                        '*{s}[", .{name});
-    try writeText(w, description, exec_name, .zsh);
+    try writeText(w, summary(block), exec_name, .zsh);
     try w.writeAll("]");
-    try writeZshAction(w, std.mem.trimStart(u8, name, "-"), values);
+    try writeZshAction(w, std.mem.trimStart(u8, name, "-"), values, block, exec_name);
     try w.writeAll("'");
 }
 
-fn writeZshAction(w: *Writer, message: []const u8, values: Values) !void {
+/// `block` holds the values' descriptions, if any.
+fn writeZshAction(w: *Writer, message: []const u8, values: Values, block: []const u8, exec_name: []const u8) !void {
     switch (values) {
         .none => {},
         .any => try w.print(":{s}: ", .{message}),
         .path => try w.print(":{s}:_files", .{message}),
         .one_of => |one_of| {
-            try w.print(":{s}:(", .{message});
-            try writeJoined(w, one_of);
-            try w.writeAll(")");
+            try w.print(":{s}:((", .{message});
+            for (one_of, 0..) |value, i| {
+                if (i > 0) try w.writeAll(" ");
+                try w.writeAll(value);
+                const description = valueSummary(block, value);
+                if (description.len > 0) {
+                    try w.writeAll("\\:\"");
+                    try writeText(w, description, exec_name, .zsh_value);
+                    try w.writeAll("\"");
+                }
+            }
+            try w.writeAll("))");
         },
         .list_of => |list_of| {
-            try w.print(":{s}:_values -s , {s} ", .{ message, message });
-            try writeJoined(w, list_of);
+            try w.print(":{s}:_values -s , {s}", .{ message, message });
+            for (list_of) |value| {
+                try w.print(" \"{s}", .{value});
+                const description = valueSummary(block, value);
+                if (description.len > 0) {
+                    try w.writeAll("[");
+                    try writeText(w, description, exec_name, .zsh_value);
+                    try w.writeAll("]");
+                }
+                try w.writeAll("\"");
+            }
         },
     }
 }
@@ -297,8 +316,9 @@ const Ident = struct {
 /// Writes help.zon text into a single-quoted string: `{0s}` becomes the exec
 /// name and each line break with its indentation a single space. zsh also
 /// needs `[]` escaped, as descriptions sit inside `--flag[description]`.
-/// `fish_value` is a double-quoted string inside the single-quoted `-a`.
-fn writeText(w: *Writer, text: []const u8, exec_name: []const u8, comptime quoting: enum { fish, fish_value, zsh }) !void {
+/// The `_value` forms are a double-quoted string inside the single-quoted
+/// one, for value descriptions.
+fn writeText(w: *Writer, text: []const u8, exec_name: []const u8, comptime quoting: enum { fish, fish_value, zsh, zsh_value }) !void {
     var i: usize = 0;
     while (i < text.len) : (i += 1) {
         if (std.mem.startsWith(u8, text[i..], "{0s}")) {
@@ -326,6 +346,12 @@ fn writeText(w: *Writer, text: []const u8, exec_name: []const u8, comptime quoti
             .zsh => switch (c) {
                 '\'' => try w.writeAll("'\\''"),
                 '[', ']' => try w.print("\\{c}", .{c}),
+                else => try w.writeByte(c),
+            },
+            // `:` would end a `((value\:description))` item early.
+            .zsh_value => switch (c) {
+                '\'' => try w.writeAll("'\\''"),
+                '"', '$', '`', '\\', ':', '[', ']' => try w.print("\\{c}", .{c}),
                 else => try w.writeByte(c),
             },
         }
@@ -497,5 +523,25 @@ test "completion: bash and zsh" {
         const script = out.written();
         try std.testing.expect(std.mem.indexOf(u8, script, "_light_panda()") != null);
         try std.testing.expect(std.mem.indexOf(u8, script, "--load-resources") != null);
+    }
+}
+
+test "completion: zsh value descriptions" {
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try write(&out.writer, .zsh, "lp");
+    const script = out.written();
+
+    const expected = [_][]const u8{
+        ":dump:((html\\:\"Serialized HTML of the DOM\" ",
+        " wpt semantic_tree\\:",
+        ":load-resources:_values -s , load-resources \"image[<img> sources, so that load/error reflects the real HTTP status]\" ",
+        "\"invisible[Best-effort (e.g. display\\:none) hidden elements]\"",
+    };
+    for (expected) |part| {
+        if (std.mem.indexOf(u8, script, part) == null) {
+            std.debug.print("missing: {s}\n", .{part});
+            return error.MissingPart;
+        }
     }
 }
