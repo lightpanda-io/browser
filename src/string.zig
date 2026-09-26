@@ -447,11 +447,16 @@ fn editDistance(a: []const u8, b: []const u8) usize {
 }
 
 /// The candidate nearest to `name`, within about one edit per three characters
-/// (rustc's rule). A leading `--` doesn't count toward the length, since every
-/// flag shares it. Earlier candidates win ties.
+/// (rustc's rule). A prefix every candidate shares, like a flag's `--`, doesn't
+/// count toward the length. Earlier candidates win ties.
 pub fn closest(name: []const u8, candidates: []const []const u8) ?[]const u8 {
-    const typed = if (std.mem.startsWith(u8, name, "--")) name[2..] else name;
-    const max_dist = @max(typed.len, 3) / 3;
+    if (candidates.len == 0) return null;
+    var shared = candidates[0];
+    for (candidates[1..]) |cand| {
+        shared = shared[0 .. std.mem.indexOfDiff(u8, shared, cand) orelse shared.len];
+    }
+    const typed = if (std.mem.startsWith(u8, name, shared)) name.len - shared.len else name.len;
+    const max_dist = @max(typed, 3) / 3;
     var best: ?[]const u8 = null;
     var best_dist: usize = std.math.maxInt(usize);
     for (candidates) |cand| {
@@ -580,6 +585,7 @@ test "closest" {
     const names = [_][]const u8{ "--dump", "--wait-ms", "--wait-until", "--insecure-disable-tls-host-verification" };
     try testing.expectEqual("--wait-ms", closest("--wait-mss", &names));
     try testing.expectEqual("--dump", closest("--dmup", &names));
+    try testing.expectEqual(null, closest("--dmpx", &names));
     try testing.expectEqual(null, closest("--totally-wrong", &names));
     try testing.expectEqual(null, closest("--dump", &.{}));
     try testing.expectEqual("--insecure-disable-tls-host-verification", closest("--insecure-disable-tls-verification", &names));
@@ -587,6 +593,7 @@ test "closest" {
     const formats = [_][]const u8{ "html", "markdown", "pdf", "png" };
     try testing.expectEqual(null, closest("md", &formats));
     try testing.expectEqual("pdf", closest("pdg", &formats));
+
 
     const commands = [_][]const u8{ "fetch", "mcp", "run" };
     try testing.expectEqual("run", closest("fun", &commands));
