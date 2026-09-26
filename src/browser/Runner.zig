@@ -246,7 +246,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
 
     const now = lp.datetime.milliTimestamp(.boot);
     const network_idle_held = holdsFor(&self.network_idle_since, network_idle, now);
-    const network_almost_idle_held = holdsFor(&self.network_almost_idle_since, total_network_activity <= 2, now);
+    const network_almost_idle_held = holdsFor(&self.network_almost_idle_since, activity.total() <= 2, now);
 
     // Outside the condition loop: it skips resolved conditions, but an idle
     // notification needs a check 500ms+ after the hold starts, and on a quiet
