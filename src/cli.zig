@@ -200,7 +200,6 @@ pub fn tagNames(comptime E: type) []const []const u8 {
     };
 }
 
-/// Logs a bad value for `arg` with the closest of `choices`, if any.
 pub fn invalidChoice(arg: []const u8, value: []const u8, choices: []const []const u8) error{InvalidArgument} {
     if (string.closest(value, choices)) |near| {
         log.fatal(.app, "invalid option choice", .{ .arg = arg, .value = log.red(value), .did_you_mean = log.green(near) });

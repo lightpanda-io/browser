@@ -594,7 +594,6 @@ test "closest" {
     try testing.expectEqual(null, closest("md", &formats));
     try testing.expectEqual("pdf", closest("pdg", &formats));
 
-
     const commands = [_][]const u8{ "fetch", "mcp", "run" };
     try testing.expectEqual("run", closest("fun", &commands));
     try testing.expectEqual(null, closest("ab", &commands));
