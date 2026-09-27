@@ -743,7 +743,6 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
     const frame_id = frame._frame_id;
     const reuse_window = frame.window;
     const page = frame.page;
-    frame.js.detachGlobal();
     frame.deinit();
     frame.* = undefined;
 
@@ -794,7 +793,6 @@ fn processPopupNavigation(_: *Session, frame: *Frame, qn: *QueuedNavigation) !vo
     const frame_id = frame._frame_id;
     const page = frame.page;
 
-    frame.js.detachGlobal();
     frame.deinit();
     frame.* = undefined;
 

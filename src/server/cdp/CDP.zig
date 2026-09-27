@@ -1371,10 +1371,6 @@ pub const IsolatedWorld = struct {
     }
 
     fn destroyFrameContext(self: *IsolatedWorld, fc: FrameContext) void {
-        // A re-navigating child frame keeps its Window, and the identity map
-        // keeps the window's global proxy; detach it from this context so the
-        // frame's next context can reattach it (as the main world does).
-        fc.context.detachGlobal();
         self.browser.env.destroyContext(fc.context);
         fc.call_arena.release();
         fc.local_arena.release();
