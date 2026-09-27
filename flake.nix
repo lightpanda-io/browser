@@ -26,6 +26,7 @@
 
   outputs =
     {
+      self,
       nixpkgs,
       zigPkgs,
       zlsPkg,
@@ -95,8 +96,21 @@
           packages = buildTools pkgs;
         };
 
+        # `-Dversion` with build metadata, as there is no .git in the Nix sandbox.
+        zonVersion = builtins.head (
+          builtins.match ".*\\.version = \"([^\"]+)\".*" (builtins.readFile ./build.zig.zon)
+        );
+        lightpanda = pkgs.callPackage ./nix/package.nix {
+          inherit rustToolchain;
+          src = self;
+          version = "${zonVersion}+${self.shortRev or self.dirtyShortRev or "unknown"}";
+        };
+
       in
       {
+        packages.default = lightpanda;
+        packages.lightpanda = lightpanda;
+
         devShells.default = if pkgs.stdenv.isDarwin then darwinShell else fhs.env;
       }
     );
