@@ -37,11 +37,6 @@ browser: *Browser,
 http_client: *HttpClient,
 background_poll_ms: u32 = 0,
 
-// Not Frame._notified_network_idle: that latches for CDP's one-shot lifecycle
-// event, so a frame idle once reads idle forever.
-network_idle_since: ?u64 = null,
-network_almost_idle_since: ?u64 = null,
-
 const network_idle_hold_ms = 500;
 
 pub const Opts = struct {};
@@ -226,8 +221,6 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     // A navigation can swap a frame pointer or the page set,
     // so restart the tick to re-resolve cleanly.
     if (try session.processQueuedNavigation()) {
-        self.network_idle_since = null;
-        self.network_almost_idle_since = null;
         return .{ .ok = 0 };
     }
 
@@ -244,9 +237,12 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     const network_idle = activity.idle();
     const is_done = browser.hasMacrotasks() == false and network_idle;
 
-    const now = lp.datetime.milliTimestamp(.boot);
-    const network_idle_held = holdsFor(&self.network_idle_since, network_idle, now);
-    const network_almost_idle_held = holdsFor(&self.network_almost_idle_since, activity.total() <= 2, now);
+    // Not Frame._notified_network_idle: that latches for CDP's one-shot
+    // lifecycle event, so a frame idle once reads idle forever.
+    const network_idle_held, const network_almost_idle_held = blk: {
+        const http_idle, const http_almost_idle = http_client.idleMs();
+        break :blk .{ http_idle >= network_idle_hold_ms, http_almost_idle >= network_idle_hold_ms };
+    };
 
     // Outside the condition loop: it skips resolved conditions, but an idle
     // notification needs a check 500ms+ after the hold starts, and on a quiet
@@ -365,18 +361,6 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     }
 
     return .done;
-}
-
-fn holdsFor(since: *?u64, active: bool, now: u64) bool {
-    if (active == false) {
-        since.* = null;
-        return false;
-    }
-    const start = since.* orelse {
-        since.* = now;
-        return false;
-    };
-    return now - start >= network_idle_hold_ms;
 }
 
 pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeout_ms: u32) !*Node.Element {
@@ -693,4 +677,10 @@ test "Runner: networkidle waits out activity after the frame latched idle" {
     try runner.waitForFrame(page.frame_id, 3000, .{ .until = .networkidle });
     try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - start >= 500);
     _ = try runner.waitForSelector(page.frame_id, "#fetched", 0);
+
+    // Already idle past the hold: a fresh wait doesn't serve it again.
+    var again = page.session.runner(.{});
+    const again_start = lp.datetime.milliTimestamp(.boot);
+    try again.waitForFrame(page.frame_id, 3000, .{ .until = .networkidle });
+    try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - again_start < 250);
 }
