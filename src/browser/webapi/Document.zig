@@ -903,7 +903,7 @@ pub fn elementFromVerticalPoint(self: *Document, y: f64, frame: *Frame) !?*Eleme
     return self.elementFromPointImpl(0, y, true, frame);
 }
 
-fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: *Frame) !?*Element {
+fn elementFromPointImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool, frame: *Frame) !?*Element {
     // DFS in document order; topmost = last visited element whose rect contains (x, y).
     //
     // Faux-layout shortcut: rect.top is calculateDocumentPosition × 5, which is
@@ -917,7 +917,13 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
     var topmost: ?*Element = null;
 
     const root = self.asNode();
-    const style_manager = &(root.ownerFrame(frame) orelse return null)._style_manager;
+    const owner = root.ownerFrame(frame) orelse return null;
+    const style_manager = &owner._style_manager;
+
+    // (x, y) is viewport-relative; the faux layout is in document coordinates.
+    const x = viewport_x + @as(f64, @floatFromInt(owner.window.getScrollX()));
+    const y = viewport_y + @as(f64, @floatFromInt(owner.window.getScrollY()));
+
     const Entry = struct { node: *Node, hidden: bool };
     var stack: std.ArrayList(Entry) = .empty;
     try stack.append(frame.local_arena, .{ .node = root, .hidden = false });

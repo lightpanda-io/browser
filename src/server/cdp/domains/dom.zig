@@ -480,7 +480,13 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
     switch (node.dom._type) {
-        .element => {},
+        .element => {
+            // Drivers (e.g. Playwright's click) scroll the target into view and
+            // then require its content quads to intersect the viewport.
+            const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+            const element = node.dom.is(DOMNode.Element).?;
+            element.scrollIntoViewIfNeeded(null, element.ownerFrame(frame) orelse frame);
+        },
         .document => {},
         .cdata => {},
         else => return error.NodeDoesNotHaveGeometry,
@@ -909,6 +915,41 @@ test "cdp.dom: focus makes the node activeElement and routes key events to it" {
     });
     result = try ls.local.compileAndRun("window.keyPressed === 'a' && document.getElementById('keyTarget').value === 'a'", null);
     try testing.expect(result.isTrue());
+}
+
+test "cdp.dom: scrollIntoViewIfNeeded brings the node's quads into the viewport" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.performSearch", .params = .{ .query = "#btn" } });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 1 }, .{ .id = 1 });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
+
+    // Push the target below the fold.
+    _ = try ls.local.compileAndRun(
+        \\const far = document.getElementById('btn');
+        \\for (let i = 0; i < 300; i++) document.body.insertBefore(document.createElement('p'), far);
+    , null);
+    try testing.expect((try ls.local.compileAndRun("far.getBoundingClientRect().top > window.innerHeight", null)).isTrue());
+
+    try ctx.processMessage(.{ .id = 3, .method = "DOM.scrollIntoViewIfNeeded", .params = .{ .nodeId = 1 } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    const rect = "far.getBoundingClientRect()";
+    try testing.expect((try ls.local.compileAndRun("window.scrollY > 0 && " ++ rect ++ ".top >= 0 && " ++ rect ++ ".bottom <= window.innerHeight", null)).isTrue());
+    try testing.expect((try ls.local.compileAndRun("document.elementFromPoint(" ++ rect ++ ".x, " ++ rect ++ ".y) === far", null)).isTrue());
 }
 
 test "cdp.dom: focus errors on an element that can't take focus" {
