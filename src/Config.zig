@@ -243,12 +243,15 @@ pub const ExperimentalFeatures = packed struct(u2) {
     serviceworker: bool = false,
 };
 
+pub const DisabledFeatures = packed struct(u1) {
+    cors: bool = false,
+};
+
 /// Common CLI args.
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
     .{ .name = "robot_store_entry_limit", .type = ?u32, .default = 1000 },
     .{ .name = "cors_store_entry_limit", .type = ?u32, .default = 1000 },
-    .{ .name = "disable_cors", .type = bool, .default = false },
     .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
     .{ .name = "http_proxy", .type = ?[:0]const u8 },
     .{ .name = "http_max_concurrent", .type = ?u8 },
@@ -284,6 +287,7 @@ const CommonOptions = .{
     .{ .name = "disable_subframes", .type = bool, .deprecated = "subframes are now disabled by default, use \"--load-resources iframe\" to enable" },
     .{ .name = "disable_workers", .type = bool, .deprecated = "workers are now disabled by default, use \"--load-resources worker\" to enable" },
     .{ .name = "enable_external_stylesheets", .type = bool, .deprecated = "use \"--load-resources stylesheet\" to enable" },
+    .{ .name = "disable_features", .type = DisabledFeatures, .default = DisabledFeatures{} },
     .{ .name = "experimental_features", .type = ExperimentalFeatures, .default = ExperimentalFeatures{} },
     .{ .name = "load_resources", .type = LoadResources, .default = LoadResources{} },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
@@ -555,7 +559,7 @@ pub fn tlsVerifyHost(self: *const Config) bool {
 
 pub fn obeyCors(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_cors == false,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_features.cors == false,
         else => unreachable,
     };
 }
