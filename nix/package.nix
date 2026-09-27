@@ -175,8 +175,6 @@ stdenv.mkDerivation {
     homepage = "https://lightpanda.io";
     license = lib.licenses.agpl3Only;
     mainProgram = "lightpanda";
-    # Linux is experimental until its build is verified; build it with
-    # NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM=1 and --impure.
-    platforms = lib.filter (lib.hasSuffix "-darwin") (builtins.attrNames v8Archives);
+    platforms = builtins.attrNames v8Archives;
   };
 }
