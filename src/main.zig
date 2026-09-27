@@ -67,7 +67,6 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
         // Already logged where they were found.
         error.UnknownCommand,
         error.UnknownOption,
-        error.InvalidOption,
         error.InvalidArgument,
         error.MissingArgument,
         error.TooManyPositionalArguments,
