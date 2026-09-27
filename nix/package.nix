@@ -4,6 +4,7 @@
   fetchurl,
   rustPlatform,
   autoPatchelfHook,
+  patchelf,
   zig,
   rustToolchain,
   src,
@@ -111,7 +112,10 @@ stdenv.mkDerivation {
     zig
     rustToolchain
   ]
-  ++ lib.optionals stdenv.hostPlatform.isLinux [ autoPatchelfHook ];
+  ++ lib.optionals stdenv.hostPlatform.isLinux [
+    autoPatchelfHook
+    patchelf
+  ];
 
   dontConfigure = true;
 
@@ -137,7 +141,17 @@ stdenv.mkDerivation {
     EOF
 
     # Same two steps as `make build`: create the V8 snapshot, then embed it.
-    zig build ${zigBuildFlags} snapshot_creator -- src/snapshot.bin
+    # The snapshot creator is installed and run by hand (not via the
+    # `snapshot_creator` step) so that on Linux it can first be pointed at
+    # nixpkgs' glibc: zig links it against the FHS /lib loader.
+    zig build ${zigBuildFlags} extras --prefix "$TMPDIR/extras"
+    ${lib.optionalString stdenv.hostPlatform.isLinux ''
+      patchelf \
+        --set-interpreter "$(cat $NIX_CC/nix-support/dynamic-linker)" \
+        --set-rpath "${lib.getLib stdenv.cc.libc}/lib" \
+        "$TMPDIR/extras/bin/lightpanda-snapshot-creator"
+    ''}
+    "$TMPDIR/extras/bin/lightpanda-snapshot-creator" src/snapshot.bin
     zig build ${zigBuildFlags} -Dsnapshot_path=../../snapshot.bin --prefix "$out"
 
     runHook postBuild
