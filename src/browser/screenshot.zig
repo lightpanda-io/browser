@@ -231,7 +231,7 @@ pub const Prepared = struct {
     }
 
     fn writeBase64(self: *const Prepared, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        var b64 = Base64Writer.init(writer, .standard);
+        var b64 = Base64Writer.init(writer, .default);
         _ = try self.write(&b64.writer);
         try b64.finish();
     }

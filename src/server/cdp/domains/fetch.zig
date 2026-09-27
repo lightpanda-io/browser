@@ -22,6 +22,8 @@ const lp = @import("lightpanda");
 const http = @import("../../../network/http.zig");
 const Notification = @import("../../../Notification.zig");
 const HttpClient = @import("../../../network/HttpClient.zig");
+const simdutf = @import("../../../sys/simdutf.zig");
+const Base64 = simdutf.Base64;
 
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
@@ -215,10 +217,9 @@ fn continueRequest(cmd: *CDP.Command) !void {
     }
 
     if (params.postData) |b| {
-        const decoder = std.base64.standard.Decoder;
-        const body = try arena.alloc(u8, try decoder.calcSizeForSlice(b));
-        try decoder.decode(body, b);
-        request.body = body;
+        const decoded_len = Base64.Decoder.calcSizeUpperBound(b);
+        const body = try arena.alloc(u8, decoded_len);
+        request.body = try Base64.Decoder.decode(.default, body, b);
     }
 
     try client.continueIntercepted(transfer);
@@ -321,10 +322,9 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
 
     var body: ?[]const u8 = null;
     if (params.body) |b| {
-        const decoder = std.base64.standard.Decoder;
-        const buf = try transfer.arena.alloc(u8, try decoder.calcSizeForSlice(b));
-        try decoder.decode(buf, b);
-        body = buf;
+        const decoded_len = Base64.Decoder.calcSizeUpperBound(b);
+        const buf = try transfer.arena.alloc(u8, decoded_len);
+        body = try Base64.Decoder.decode(.default, buf, b);
     }
 
     try client.fulfillIntercepted(transfer, params.responseCode, params.responseHeaders orelse &.{}, body);
