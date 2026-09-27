@@ -41,7 +41,7 @@ const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 // Tracks the CSS properties the renderless layout acts on (display, visibility,
-// opacity, pointer-events, overflow, width, height) from <style> elements.
+// opacity, pointer-events, overflow, width, height) from author stylesheets.
 // Rules are bucketed by their rightmost selector part for fast lookup.
 const StyleManager = @This();
 
@@ -465,8 +465,9 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
         return;
     }
     var customs: CustomSink = .{ .allocator = build_arena };
-    const props = try foldDeclarations(Declarations, block_text, &customs);
-    _ = try self.addSelectorRules(selector_text, props, customs.map.values(), layer);
+    var important: u16 = 0;
+    const props = try foldDeclarations(Declarations, block_text, &customs, &important);
+    _ = try self.addSelectorRules(selector_text, props, important, customs.map.values(), layer);
 }
 
 // Tracked rules get one group Rule per selector (not per selector list)
@@ -477,6 +478,7 @@ fn addSelectorRules(
     self: *StyleManager,
     selector_text: []const u8,
     props: Declarations,
+    important: u16,
     customs: []const CustomDeclaration,
     layer: u16,
 ) !bool {
@@ -508,7 +510,7 @@ fn addSelectorRules(
     if (relevant) {
         const selectors = SelectorParser.parseList(arena, selector_text) catch &.{};
         for (selectors) |selector| {
-            try self.addTrackedRule(selector, props, layer);
+            try self.addTrackedRule(selector, props, important, layer);
         }
     }
     return self.next_doc_order != before;
@@ -516,10 +518,11 @@ fn addSelectorRules(
 
 // One priority per selector, shared by every group it lands in: doc_order
 // indexes rule_layers.
-fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: Declarations, layer: u16) !void {
+fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: Declarations, important: u16, layer: u16) !void {
     const key = getBucketKey(selector.rightmost()) orelse return;
     const rank_and_order = try self.nextPriority(layer);
     const priority = rank_and_order | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT);
+    var offset: usize = 0;
     inline for (group_fields) |field| {
         const declared = @field(props, field);
         if (declaresAny(declared)) {
@@ -527,8 +530,10 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: Decla
                 .props = declared,
                 .selector = selector,
                 .priority = priority,
+                .important = @truncate(important >> @intCast(offset)),
             });
         }
+        offset += @TypeOf(declared).names.len;
     }
 }
 
@@ -689,7 +694,7 @@ pub fn declaredSize(self: *StyleManager, el: *Element, comptime axis: Element.Ax
 /// Like declaredSize, but only the inline style counts.
 pub fn inlineSize(self: *StyleManager, el: *Element, comptime axis: Element.Axis) ?f64 {
     self.assertOwns(el);
-    const length = @field(inlineDeclared(Geometry.Declared, el, self.frame), @tagName(axis)) orelse return null;
+    const length = @field(inlineDeclared(Geometry.Declared, el, self.frame, null), @tagName(axis)) orelse return null;
     return length.resolve(self.frame.page.getViewport());
 }
 
@@ -747,6 +752,9 @@ fn Group(comptime Spec: type) type {
             // layered rule's rank bits stay 0 until finalizeLayerRanks knows
             // every layer and stamps them from rule_layers[doc_order - 1].
             priority: u64,
+            // One bit per tracked property in this group, after folding
+            // shorthand/longhand and repeated declarations in source order.
+            important: u16,
         };
 
         const RuleList = std.MultiArrayList(Rule);
@@ -836,11 +844,12 @@ fn Group(comptime Spec: type) type {
             var p: Computed = .{};
             var priorities: Priorities(Declared) = .initFill(0);
 
-            const inline_declared = inlineDeclared(Declared, el, frame);
-            inline for (fields) |field| {
+            var inline_important: u16 = 0;
+            const inline_declared = inlineDeclared(Declared, el, frame, &inline_important);
+            inline for (fields, 0..) |field, index| {
                 if (@field(inline_declared, field)) |value| {
                     @field(p, field) = value;
-                    priorities.set(@field(Field, field), INLINE_PRIORITY);
+                    priorities.set(@field(Field, field), if (inline_important & (@as(u16, 1) << index) != 0) INLINE_IMPORTANT_PRIORITY else INLINE_PRIORITY);
                 }
             }
 
@@ -872,12 +881,13 @@ fn Group(comptime Spec: type) type {
         }
 
         fn checkRules(rules: *const RuleList, p: *Computed, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
-            for (rules.items(.priority), rules.items(.props), rules.items(.selector)) |priority, rule, selector| {
+            for (rules.items(.priority), rules.items(.important), rules.items(.props), rules.items(.selector)) |priority, important, rule, selector| {
                 // Only rules that set a property nothing stronger has set yet are
                 // worth matching.
                 var relevant = false;
-                inline for (fields) |field| {
-                    if (@field(rule, field) != null and priority > priorities.get(@field(Field, field))) {
+                inline for (fields, 0..) |field, index| {
+                    const cascade_priority = cascadePriority(priority, important & (@as(u16, 1) << index) != 0);
+                    if (@field(rule, field) != null and cascade_priority > priorities.get(@field(Field, field))) {
                         relevant = true;
                     }
                 }
@@ -885,11 +895,12 @@ fn Group(comptime Spec: type) type {
                     continue;
                 }
 
-                inline for (fields) |field| {
+                inline for (fields, 0..) |field, index| {
                     if (@field(rule, field)) |value| {
-                        if (priority > priorities.get(@field(Field, field))) {
+                        const cascade_priority = cascadePriority(priority, important & (@as(u16, 1) << index) != 0);
+                        if (cascade_priority > priorities.get(@field(Field, field))) {
                             @field(p, field) = value;
-                            priorities.set(@field(Field, field), priority);
+                            priorities.set(@field(Field, field), cascade_priority);
                         }
                     }
                 }
@@ -940,7 +951,8 @@ fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !bool {
         return false;
     }
     const style = style_rule._style orelse return false;
-    const props = extractDeclared(Declarations, style);
+    var important: u16 = 0;
+    const props = extractDeclared(Declarations, style, &important);
     const customs = try self.extractCustomDeclarations(style);
 
     // A custom rule holds selector_text until the property is looked up, but it
@@ -948,7 +960,7 @@ fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !bool {
     // frame arena and never frees the old one. Worst case we match a stale
     // selector, which is what the rest of this file already does when a rule is
     // mutated without going through sheetModified().
-    return self.addSelectorRules(selector_text, props, customs, NO_LAYER);
+    return self.addSelectorRules(selector_text, props, important, customs, NO_LAYER);
 }
 
 /// A style rule appended at or after the sheet that emitted the last rule is
@@ -1070,12 +1082,13 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
 /// Extracts the tracked properties from a style declaration. The object holds
 /// one entry per name in first-declared order, so folding it in order gives a
 /// shorthand and its longhands the same precedence as the source text.
-fn extractDeclared(comptime Declared: type, style: *CSSStyleProperties) Declared {
+fn extractDeclared(comptime Declared: type, style: *CSSStyleProperties, important: ?*u16) Declared {
     var slots: Slots(Declared) = .{};
     var it = style.asCSSStyleDeclaration().iterator();
     while (it.next()) |property| {
         slots.apply(property._name.str(), property._value.str(), property._important);
     }
+    if (important) |out| out.* = slots.importantMask();
     return slots.props();
 }
 
@@ -1298,6 +1311,9 @@ const Geometry = struct {
 /// once. Field names match the StyleManager's group fields.
 const Declarations = struct {
     const names = Visibility.Declared.names ++ Geometry.Declared.names;
+    comptime {
+        if (names.len > 16) @compileError("important mask needs a wider integer");
+    }
 
     visibility: Visibility.Declared = .{},
     geometry: Geometry.Declared = .{},
@@ -1332,7 +1348,7 @@ fn declaresAny(declared: anytype) bool {
 /// Per property, the priority of the declaration winning so far; 0 while
 /// none has.
 fn Priorities(comptime Declared: type) type {
-    return std.enums.EnumArray(std.meta.FieldEnum(Declared), u64);
+    return std.enums.EnumArray(std.meta.FieldEnum(Declared), u128);
 }
 
 // custom_rules map is property_name -> CustomProperty, loosely:
@@ -1394,7 +1410,7 @@ const MAX_LAYERS: usize = 1024;
 const SPEC_SHIFT: u6 = 22;
 const RANK_SHIFT: u6 = 52;
 
-// - 1 since INLINE_PRIORITY is _always_ higher
+// - 1 so every packed author priority remains below the inline-normal tier
 const MAX_DOC_ORDER: u32 = std.math.maxInt(u22) - 1;
 
 const CheckVisibilityOptions = struct {
@@ -1404,25 +1420,36 @@ const CheckVisibilityOptions = struct {
     ancestors: bool = true,
 };
 
-// Inline styles always win over stylesheets - use max u64 as sentinel.
-// Strictly above any packed rule priority: doc_order saturates one below
-// its field max, so a real rule can never pack to all-ones.
-const INLINE_PRIORITY: u64 = std.math.maxInt(u64);
+// CSS cascade tiers: normal author < normal inline < important author <
+// important inline. For important author rules, earlier layers outrank later
+// layers and unlayered declarations come last (the reverse of normal rules).
+const INLINE_PRIORITY: u128 = @as(u128, 1) << 64;
+const AUTHOR_IMPORTANT_PRIORITY: u128 = @as(u128, 1) << 65;
+const INLINE_IMPORTANT_PRIORITY: u128 = @as(u128, 1) << 66;
+
+fn cascadePriority(priority: u64, important: bool) u128 {
+    if (!important) return priority;
+    const rank = priority >> RANK_SHIFT;
+    const below_rank = priority & ((@as(u64, 1) << RANK_SHIFT) - 1);
+    return AUTHOR_IMPORTANT_PRIORITY |
+        (@as(u128, UNLAYERED_RANK - rank) << RANK_SHIFT) |
+        below_rank;
+}
 
 // `frame` must be el's owner frame (el.ownerFrame): that is the map where a
 // parsed inline style lives. Without one the attribute text is folded in
 // place; layout materializes the object itself when it needs it.
-fn inlineDeclared(comptime Declared: type, el: *Element, frame: *Frame) Declared {
+fn inlineDeclared(comptime Declared: type, el: *Element, frame: *Frame, important: ?*u16) Declared {
     if (!el._flags.has_inline_style) {
         // Neither a style object nor a style attribute; skip both lookups.
         return .{};
     }
     if (el.existingStyle(frame)) |style| {
-        return extractDeclared(Declared, style);
+        return extractDeclared(Declared, style, important);
     }
     const attr = el.getAttributeInterned("style") orelse return .{};
     // Without a sink nothing allocates
-    return foldDeclarations(Declared, attr, null) catch unreachable;
+    return foldDeclarations(Declared, attr, null, important) catch unreachable;
 }
 
 /// `--*` declarations of one block, keyed by name so a block declaring the same
@@ -1437,7 +1464,7 @@ const CustomSink = struct {
 // earlier !important one, and an empty value removes the property. The tracked
 // properties are matched case-insensitively; a custom property's name is
 // case-sensitive and goes to `customs` when there is one.
-fn foldDeclarations(comptime Declared: type, block: []const u8, customs: ?*CustomSink) !Declared {
+fn foldDeclarations(comptime Declared: type, block: []const u8, customs: ?*CustomSink, important: ?*u16) !Declared {
     var slots: Slots(Declared) = .{};
     var it = CssParser.parseDeclarationsList(block);
     while (it.next()) |declaration| {
@@ -1452,6 +1479,7 @@ fn foldDeclarations(comptime Declared: type, block: []const u8, customs: ?*Custo
         }
         slots.apply(declaration.name, declaration.value, declaration.important);
     }
+    if (important) |out| out.* = slots.importantMask();
     return slots.props();
 }
 
@@ -1476,6 +1504,16 @@ fn Slots(comptime Declared: type) type {
                     return;
                 }
             }
+        }
+
+        fn importantMask(self: Self) u16 {
+            var mask: u16 = 0;
+            inline for (0..Declared.names.len) |i| {
+                if (self.slots[i].value != null and self.slots[i].important) {
+                    mask |= @as(u16, 1) << i;
+                }
+            }
+            return mask;
         }
 
         fn props(self: Self) Declared {
@@ -1647,6 +1685,10 @@ fn parseFontSize(self: *StyleManager, raw: []const u8, parent: ?*Element, depth:
 }
 
 const testing = @import("../testing.zig");
+test "StyleManager: important cascade across external sheets, inline styles and layers" {
+    try testing.htmlRunner("css/important_cascade.html", .{ .load_resources = .{ .stylesheet = true } });
+}
+
 test "StyleManager: custom properties" {
     try testing.htmlRunner("css/custom_properties.html", .{});
 }
@@ -1877,13 +1919,13 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
     while (child) |node| : (child = node.nextSibling()) {
         const el = node.is(Element) orelse continue;
         // std's expectEqual: testing's can't compare an optional struct
-        const scanned = inlineDeclared(Declarations, el, frame);
+        const scanned = inlineDeclared(Declarations, el, frame, null);
         try std.testing.expectEqual(expected[i], scanned);
-        try std.testing.expectEqual(expected[i].visibility, inlineDeclared(Visibility.Declared, el, frame));
-        try std.testing.expectEqual(expected[i].geometry, inlineDeclared(Geometry.Declared, el, frame));
+        try std.testing.expectEqual(expected[i].visibility, inlineDeclared(Visibility.Declared, el, frame, null));
+        try std.testing.expectEqual(expected[i].geometry, inlineDeclared(Geometry.Declared, el, frame, null));
         // scanning never creates the style object
         try testing.expectEqual(null, el.existingStyle(frame));
-        const materialized = extractDeclared(Declarations, try el.getOrCreateStyle(frame));
+        const materialized = extractDeclared(Declarations, try el.getOrCreateStyle(frame), null);
         try std.testing.expectEqual(expected[i], materialized);
         i += 1;
     }

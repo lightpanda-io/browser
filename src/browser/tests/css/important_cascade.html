@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<head>
+  <script src="../testing.js"></script>
+  <link rel="stylesheet" href="/styles/important-cascade.css">
+  <style>
+    .product__media-sublist { display: block; }
+    @layer first, second;
+    @layer first { .layered { display: none !important; } }
+    @layer second { .layered { display: block !important; } }
+  </style>
+</head>
+<body>
+  <div id="gallery" class="product__media-sublist no-js-flex">hidden gallery</div>
+  <div id="inline" class="no-js-flex" style="display: block">hidden despite normal inline style</div>
+  <div id="inline-important" class="no-js-flex" style="display: block !important">visible with important inline style</div>
+  <div id="layered" class="layered">hidden by the earlier important layer</div>
+  <script id="author_important_cascade">
+  {
+    testing.expectEqual('none', getComputedStyle(document.getElementById('gallery')).display);
+    testing.expectEqual(0, document.getElementById('gallery').offsetWidth);
+    testing.expectEqual('none', getComputedStyle(document.getElementById('inline')).display);
+    testing.expectEqual('block', getComputedStyle(document.getElementById('inline-important')).display);
+    testing.expectEqual('none', getComputedStyle(document.getElementById('layered')).display);
+
+    // CSSOM insertion and deletion must preserve the declaration's priority.
+    const sheet = document.styleSheets[1];
+    const index = sheet.insertRule('.no-js-flex { display: block !important; }', sheet.cssRules.length);
+    testing.expectEqual('block', getComputedStyle(document.getElementById('gallery')).display);
+    sheet.deleteRule(index);
+    testing.expectEqual('none', getComputedStyle(document.getElementById('gallery')).display);
+  }
+  </script>
+</body>

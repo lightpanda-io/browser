@@ -1014,6 +1014,14 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/styles/important-cascade.css")) {
+        return req.respond(".no-js-flex { display: none !important; }", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/styles/visibility.css")) {
         // Used by css/external_stylesheet.html — drives the visibility
         // cascade through StyleManager via Frame.loadExternalStylesheet
