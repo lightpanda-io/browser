@@ -73,7 +73,7 @@ Verify the binary before running anything:
 
 > **Note:** The Linux release binaries are linked against glibc. On musl-based Linux distributions (Alpine, etc.) the binary fails with `cannot execute: required file not found` because the glibc dynamic linker is missing. Use a glibc-based base image (e.g., `FROM debian:bookworm-slim` or `FROM ubuntu:24.04`) or [build from sources](#build-from-sources).
 >
-> **Android / Termux:** The Linux aarch64 download is incompatible with the native Android and Termux Bionic runtime. Bionic is distinct from glibc and from musl, and a matching aarch64 CPU does not make that binary compatible. The binary's interpreter is `/lib/ld-linux-aarch64.so.1`; when that loader is missing, execution fails with `cannot execute: required file not found`. The project currently publishes no native Android binary. The Alpine guidance above applies to musl-based Linux distributions.
+> **Android / Termux:** there is no native Android build. The Linux aarch64 binary needs the glibc loader (`/lib/ld-linux-aarch64.so.1`), which Android's Bionic libc does not provide, so it fails with the same `cannot execute: required file not found` error.
 
 *For MacOS*
 ```console
