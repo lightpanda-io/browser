@@ -29,6 +29,8 @@ pub const Comment = @import("cdata/Comment.zig");
 pub const CDATASection = @import("cdata/CDATASection.zig");
 pub const ProcessingInstruction = @import("cdata/ProcessingInstruction.zig");
 
+const simdutf = @import("../../sys/simdutf.zig");
+
 const String = lp.String;
 
 const CData = @This();
@@ -89,37 +91,7 @@ pub fn subtype(self: *const CData, comptime T: type) *T {
 /// 4-byte UTF-8 sequences (codepoints >= U+10000) produce 2 UTF-16 code units (surrogate pair),
 /// everything else produces 1.
 pub fn utf16Len(data: []const u8) usize {
-    // All-ASCII data (the common case) is one code unit per byte.
-    for (data) |byte| {
-        if (byte >= 0x80) {
-            break;
-        }
-    } else return data.len;
-
-    var count: usize = 0;
-    var i: usize = 0;
-    while (i < data.len) {
-        const byte = data[i];
-        const seq_len = std.unicode.utf8ByteSequenceLength(byte) catch {
-            // Invalid UTF-8 byte — count as 1 code unit, advance 1 byte
-            i += 1;
-            count += 1;
-            continue;
-        };
-        if (i + seq_len > data.len) {
-            // Truncated sequence
-            count += 1;
-            i += 1;
-            continue;
-        }
-        if (seq_len == 4) {
-            count += 2; // surrogate pair
-        } else {
-            count += 1;
-        }
-        i += seq_len;
-    }
-    return count;
+    return simdutf.simdutf_utf16_length_from_utf8(data.ptr, data.len);
 }
 
 /// Convert a UTF-16 code unit offset to a UTF-8 byte offset.
