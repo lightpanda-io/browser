@@ -301,7 +301,7 @@ sudo apt install xz-utils ca-certificates \
 ```
 You also need to [install Rust](https://rust-lang.org/tools/install/).
 
-For systems with [**Nix**](https://nixos.org/download/), you can use the devShell:
+For systems with [**Nix**](https://nixos.org/download/) (Linux and macOS), you can use the devShell:
 ```
 nix develop
 ```
