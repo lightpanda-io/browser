@@ -173,7 +173,7 @@ pub fn setValue(self: *Input, value: []const u8, frame: *Frame) !void {
     }
 
     // move the text entry cursor position to the end of the text control
-    if (changed and self.selectionAvailable()) {
+    if (changed and self.tracksSelection()) {
         self._selection_start = @intCast(sanitized.len);
         self._selection_end = @intCast(sanitized.len);
         self._selection_direction = .none;
@@ -628,6 +628,7 @@ const entry = text_entry.TextEntry(Input);
 pub const select = entry.select;
 pub const innerInsert = entry.innerInsert;
 pub const acceptsTextEntry = entry.acceptsTextEntry;
+pub const tracksSelection = entry.tracksSelection;
 pub const innerDelete = entry.innerDelete;
 pub const moveCaret = entry.moveCaret;
 pub const CaretMove = entry.CaretMove;

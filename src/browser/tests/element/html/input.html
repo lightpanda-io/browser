@@ -590,3 +590,24 @@
     testing.expectEqual(null, check.selectionEnd);
   }
 </script>
+
+<script id="select_without_selection_api">
+  {
+    // select() never throws, even where the selection APIs don't apply.
+    for (const type of ['email', 'number', 'date', 'color', 'checkbox', 'radio', 'file', 'hidden']) {
+      const input = document.createElement('input');
+      input.type = type;
+      input.select();
+      testing.expectEqual(null, input.selectionStart);
+    }
+
+    const email = document.createElement('input');
+    email.type = 'email';
+    email.value = 'old@example.com';
+    let selects = 0;
+    email.addEventListener('select', () => selects++);
+    email.select();
+    testing.expectEqual(1, selects);
+    testing.expectError('InvalidStateError', () => email.setSelectionRange(0, 1));
+  }
+</script>

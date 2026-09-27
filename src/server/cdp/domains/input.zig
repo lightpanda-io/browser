@@ -200,6 +200,37 @@ test "cdp.input: insertText is a user edit for tooLong" {
     try testing.expect((try ls.local.compileAndRun("inp.validity.tooLong === false", null)).isTrue());
 }
 
+test "cdp.input: insertText replaces select()ed value of email and number inputs" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // What Playwright's fill() does: select() then Input.insertText.
+    _ = try ls.local.compileAndRun(
+        \\const inp = document.getElementById('inp');
+        \\inp.type = 'email';
+        \\inp.value = 'old@example.com';
+        \\inp.select();
+        \\inp.focus();
+    , null);
+    try ctx.processMessage(.{ .id = 1, .method = "Input.insertText", .params = .{ .text = "new@example.com" } });
+    try testing.expect((try ls.local.compileAndRun("inp.value === 'new@example.com'", null)).isTrue());
+
+    _ = try ls.local.compileAndRun("inp.type = 'number'; inp.value = '12'; inp.select();", null);
+    try ctx.processMessage(.{ .id = 2, .method = "Input.insertText", .params = .{ .text = "345" } });
+    try testing.expect((try ls.local.compileAndRun("inp.value === '345'", null)).isTrue());
+}
+
 test "cdp.input: dispatchMouseEvent mouseMoved fires hover events" {
     var ctx = try testing.context();
     defer ctx.deinit();
