@@ -83,8 +83,8 @@ const Context = struct {
     const Epilogue = union(enum) {
         none,
         element: Element.Tag,
-        block_anchor: struct { href: ?[]const u8, label: ?[]const u8 },
-        inline_anchor: struct { href: ?[]const u8, standalone: bool },
+        block_anchor: struct { href: []const u8, label: ?[]const u8 },
+        inline_anchor: struct { href: []const u8, standalone: bool },
     };
 
     fn deinit(self: *Context) void {
@@ -258,16 +258,15 @@ const Context = struct {
                 return;
             },
             .anchor => {
+                // Without href, <a> is a placeholder, not a hyperlink.
+                const href_raw = el.getAttributeInterned("href") orelse {
+                    return self.open(.init(self.tree.content(el, boxed)), .none);
+                };
+
                 const frame = self.frame;
                 const info = RenderTree.analyzeContent(el.asNode(), frame);
                 const label = getAnchorLabel(el);
-                const href_raw = el.getAttributeInterned("href");
-
-                if (!info.has_visible and label == null and href_raw == null) {
-                    return;
-                }
-
-                const href = if (href_raw) |h| URL.resolve(frame.local_arena, frame.base(), h, .{ .encoding = frame.charset }) catch h else null;
+                const href = URL.resolve(frame.local_arena, frame.base(), href_raw, .{ .encoding = frame.charset }) catch href_raw;
 
                 if (info.has_block) {
                     return self.open(.init(self.tree.content(el, boxed)), .{ .block_anchor = .{
@@ -311,20 +310,17 @@ const Context = struct {
             .none => return,
             .element => |t| t,
             .block_anchor => |anchor| {
-                const href = anchor.href orelse return;
                 try self.ensureNewline();
                 try self.writer.writeByte('[');
-                try self.writer.writeAll(anchor.label orelse href);
+                try self.writer.writeAll(anchor.label orelse anchor.href);
                 try self.writer.writeAll("](");
-                try self.writer.writeAll(href);
+                try self.writer.writeAll(anchor.href);
                 try self.writer.writeAll(")\n");
                 return;
             },
             .inline_anchor => |anchor| {
                 try self.writer.writeAll("](");
-                if (anchor.href) |h| {
-                    try self.writer.writeAll(h);
-                }
+                try self.writer.writeAll(anchor.href);
                 try self.writer.writeByte(')');
                 if (anchor.standalone) {
                     try self.writer.writeByte('\n');
@@ -754,6 +750,16 @@ test "browser.markdown: anchor fallback label" {
     try testMarkdownHTML(
         \\<a href="/no-label"><svg></svg></a>
     , "[](http://localhost/no-label)\n");
+}
+
+test "browser.markdown: anchor without href is plain text" {
+    try testMarkdownHTML(
+        \\<div>Tags: <a class="tag">change</a> <a class="tag"><b>deep</b></a></div>
+    , "Tags: change **deep**\n");
+
+    try testMarkdownHTML(
+        \\<a aria-label="Menu"><svg></svg></a>
+    , "");
 }
 
 test "browser.markdown: hidden elements are skipped" {
