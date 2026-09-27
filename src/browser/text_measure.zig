@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const simdutf = @import("../sys/simdutf.zig");
 
 // Deterministic DOM fallback only. This intentionally does not claim to shape
 // scripts, apply kerning, or select fonts; a real shaping backend can replace
@@ -25,12 +26,7 @@ const std = @import("std");
 // Character counts and indices are UTF-16 code units, to match DOM string
 // semantics: an astral codepoint is two addressable characters in browsers.
 pub fn utf16Length(text: []const u8) u32 {
-    var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    var result: u32 = 0;
-    while (iterator.nextCodepoint()) |codepoint| {
-        result += unitLength(codepoint);
-    }
-    return result;
+    return @intCast(simdutf.simdutf_utf16_length_from_utf8(text.ptr, text.len));
 }
 
 fn unitLength(codepoint: u21) u32 {

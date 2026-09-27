@@ -359,7 +359,8 @@ fn getResponseBody(cmd: *CDP.Command) !void {
 
     // must_encode trusts the declared charset; a server can declare UTF-8 and
     // still send invalid bytes.
-    if (!resp.must_encode and std.unicode.utf8ValidateSlice(data.items)) {
+    const slice = data.items;
+    if (!resp.must_encode and simdutf.simdutf_validate_utf8(slice.ptr, slice.len)) {
         return cmd.sendResult(.{
             .body = data.items,
             .base64Encoded = false,
