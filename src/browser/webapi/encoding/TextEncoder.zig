@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2026 Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -16,9 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const js = @import("../../js/js.zig");
-const v8 = js.v8;
 
 const TextEncoder = @This();
 _pad: bool = false,
@@ -42,7 +40,7 @@ pub fn encode(_: *const TextEncoder, v_: ?js.Value, exec: *const js.Execution) !
 
     const array = local.createTypedArray(.uint8, source.len());
     const slice = array.slice();
-    _ = source.writeUtf8(slice, .replace_invalid_utf8, null);
+    _ = source.writeUtf8(slice, null);
 
     return .{ .local = local, .handle = array.handle };
 }
@@ -69,7 +67,7 @@ pub fn encodeInto(_: *const TextEncoder, source_: js.Value, destination_: js.Val
     // V8 encodes straight into the destination, never writing a partial
     // sequence, and replaces lone surrogates as the USVString conversion would.
     var read: usize = 0;
-    const written = source.writeUtf8(dest, .replace_invalid_utf8, &read);
+    const written = source.writeUtf8(dest, &read);
 
     return .{ .read = read, .written = written };
 }
