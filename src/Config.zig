@@ -42,7 +42,7 @@ pub const CDP_TCP_USER_TIMEOUT_MS: c_int = 10_000;
 const Config = @This();
 
 fn logFilterValidator(allocator: Allocator, args: *std.process.Args.Iterator, list: *std.ArrayList(log.FilterRule)) !void {
-    const str = args.next() orelse return error.InvalidOption;
+    const str = args.next() orelse return error.MissingArgument;
 
     defer log.opts.scope_enabled = log.resolveFilters(list.items);
 
@@ -730,7 +730,7 @@ var stderr_tty_once = lp.once(initStderrTty);
 fn initStderrTty() void {
     stderr_tty_cached = std.Io.File.stderr().isTty(lp.io) catch false;
 }
-fn stderrIsTty() bool {
+pub fn stderrIsTty() bool {
     stderr_tty_once.call();
     return stderr_tty_cached;
 }
@@ -1228,6 +1228,11 @@ pub fn parseArgs(allocator: Allocator, proc_args: std.process.Args) !Config {
             @field(agent_opts, f.name) = @field(run, f.name);
         }
         command = .{ .agent = agent_opts };
+    }
+
+    if (command == .fetch and command.fetch.url.items.len == 0) {
+        log.fatal(.app, "missing URL", .{ .hint = "usage: lightpanda fetch <url>... [OPTIONS]" });
+        return error.MissingArgument;
     }
 
     // Agent mode quiets page-driven `console.error` noise unless
