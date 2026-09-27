@@ -200,11 +200,16 @@ pub fn tagNames(comptime E: type) []const []const u8 {
     };
 }
 
-pub fn invalidChoice(arg: []const u8, value: []const u8, choices: []const []const u8) error{InvalidArgument} {
+/// `prefix` was stripped from `value` before matching, like `--log-filter`'s sign.
+pub fn invalidChoice(arg: []const u8, prefix: []const u8, value: []const u8, choices: []const []const u8) error{InvalidArgument} {
+    var value_buf: [128]u8 = undefined;
+    const typed = std.fmt.bufPrint(&value_buf, "{s}{s}", .{ prefix, value }) catch value;
     if (string.closest(value, choices)) |near| {
-        log.fatal(.app, "invalid option choice", .{ .arg = arg, .value = log.red(value), .did_you_mean = log.green(near) });
+        var near_buf: [128]u8 = undefined;
+        const suggestion = std.fmt.bufPrint(&near_buf, "{s}{s}", .{ prefix, near }) catch near;
+        log.fatal(.app, "invalid option choice", .{ .arg = arg, .value = log.red(typed), .did_you_mean = log.green(suggestion) });
     } else {
-        log.fatal(.app, "invalid option choice", .{ .arg = arg, .value = log.red(value) });
+        log.fatal(.app, "invalid option choice", .{ .arg = arg, .value = log.red(typed) });
     }
     return error.InvalidArgument;
 }
@@ -697,7 +702,7 @@ pub fn Builder(comptime commands: anytype) type {
                     };
 
                     const str = args.next() orelse return error.MissingArgument;
-                    const v = std.meta.stringToEnum(E, str) orelse return invalidChoice(kebab_cased, str, tagNames(E));
+                    const v = std.meta.stringToEnum(E, str) orelse return invalidChoice(kebab_cased, "", str, tagNames(E));
 
                     if (is_multiple) {
                         try target.append(allocator, v);

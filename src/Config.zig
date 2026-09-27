@@ -69,7 +69,7 @@ fn logFilterValidator(allocator: Allocator, args: *std.process.Args.Iterator, li
         }
 
         const v = std.meta.stringToEnum(log.Scope, name) orelse {
-            return cli.invalidChoice("--log-filter", name, comptime tagNames(log.Scope) ++ &[_][]const u8{"all"});
+            return cli.invalidChoice("--log-filter", part[0 .. part.len - name.len], name, comptime tagNames(log.Scope) ++ &[_][]const u8{"all"});
         };
 
         try list.append(allocator, .{ .scope = v, .enable = enable });
@@ -84,7 +84,7 @@ fn logLevelValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?l
         return;
     }
 
-    target.* = std.meta.stringToEnum(log.Level, str) orelse return cli.invalidChoice("--log-level", str, tagNames(log.Level));
+    target.* = std.meta.stringToEnum(log.Level, str) orelse return cli.invalidChoice("--log-level", "", str, tagNames(log.Level));
     log.opts.level = target.*.?;
 }
 
@@ -97,7 +97,7 @@ fn mcpLogDefaults() void {
 
 fn logFormatValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?log.Format) !void {
     const str = args.next() orelse return error.MissingArgument;
-    const format = std.meta.stringToEnum(log.Format, str) orelse return cli.invalidChoice("--log-format", str, tagNames(log.Format));
+    const format = std.meta.stringToEnum(log.Format, str) orelse return cli.invalidChoice("--log-format", "", str, tagNames(log.Format));
     target.* = format;
     log.opts.format = format;
 }
@@ -316,8 +316,10 @@ fn dumpValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?DumpF
     if (peek_args.next()) |next_arg| {
         const mode = std.meta.stringToEnum(DumpFormat, next_arg) orelse {
             // Anything else is the positional url, unless it is a misspelt format.
-            if (string.closest(next_arg, tagNames(DumpFormat)) != null) {
-                return cli.invalidChoice("--dump", next_arg, tagNames(DumpFormat));
+            // No format has a `.`, `/` or `:`, so `markdown.com` is a url.
+            const url_like = std.mem.indexOfAny(u8, next_arg, ".:/") != null;
+            if (!url_like and string.closest(next_arg, tagNames(DumpFormat)) != null) {
+                return cli.invalidChoice("--dump", "", next_arg, tagNames(DumpFormat));
             }
             target.* = .html;
             return;
@@ -1357,6 +1359,25 @@ test "Config: parseArgs --http-session-timeout" {
         const proc_args: std.process.Args = .{ .vector = &argv };
         const config = try parseArgs(arena.allocator(), proc_args);
         try std.testing.expectEqual(null, config.httpSessionTimeout());
+    }
+}
+
+test "Config: parseArgs --dump tells a url from a misspelt format" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--dump", "markdown.com" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(.html, config.mode.fetch.dump);
+        try std.testing.expectEqualStrings("markdown.com", config.mode.fetch.url.items[0]);
+    }
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--dump", "markdwon", "https://example.com" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.InvalidArgument, parseArgs(arena.allocator(), proc_args));
     }
 }
 
