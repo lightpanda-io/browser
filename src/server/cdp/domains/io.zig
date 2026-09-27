@@ -24,6 +24,9 @@ const std = @import("std");
 
 const CDP = @import("../CDP.zig");
 
+const simdutf = @import("../../../sys/simdutf.zig");
+const Base64 = simdutf.Base64;
+
 const Allocator = std.mem.Allocator;
 
 pub fn processMessage(cmd: *CDP.Command) !void {
@@ -83,9 +86,9 @@ fn read(cmd: *CDP.Command) !void {
     stream.position = end;
 
     const chunk = stream.data[start..end];
-    const encoder = std.base64.standard.Encoder;
-    const encoded = try cmd.arena.alloc(u8, encoder.calcSize(chunk.len));
-    _ = encoder.encode(encoded, chunk);
+    const encoded_len = Base64.Encoder.calcSize(.default, chunk.len);
+    const encoded = try cmd.arena.alloc(u8, encoded_len);
+    _ = Base64.Encoder.encode(.default, encoded, chunk);
     return cmd.sendResult(.{
         .data = encoded,
         .base64Encoded = true,
