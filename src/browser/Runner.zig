@@ -317,6 +317,9 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
             if (has_runnable_page == false) {
                 break :blk 200;
             }
+            if (browser.foreground_task_posted.load(.acquire)) {
+                break :blk 0;
+            }
             break :blk browser.msToNextTask() orelse 200;
         };
         const ms_to_wait = @min(timeout_ms, ms_to_next_task);
