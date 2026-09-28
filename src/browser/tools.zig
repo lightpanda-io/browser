@@ -1862,7 +1862,8 @@ fn awaitQueuedNavigation(session: *lp.Session, frame: *lp.Frame) ToolError!void 
         return;
     }
     var runner = session.runner(.{});
-    runner.waitForFrame(root_frame_id, 10000, .{ .until = .done }) catch |err|
+    // `.done` never arrives on a page with background timers or polling.
+    runner.waitForFrame(root_frame_id, 10000, .{ .until = .networkidle }) catch |err|
         return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
 }
 
@@ -1906,7 +1907,7 @@ fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
         // The action opened a new window (target=_blank or window.open).
         // Follow it, as a user whose click opened a tab would.
         var runner = session.runner(.{});
-        runner.waitForFrame(page.page.frame._frame_id, 10000, .{ .until = .done }) catch |err|
+        runner.waitForFrame(page.page.frame._frame_id, 10000, .{ .until = .networkidle }) catch |err|
             return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
         page = try requireFrame(session);
         const popups = page.page.popups.items;

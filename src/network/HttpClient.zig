@@ -68,6 +68,12 @@ ws_active: usize = 0,
 // Count of active http requests
 http_active: usize = 0,
 
+// Since when http activity has been 0 / at most 2, backing networkidle and
+// networkalmostidle. Sampled each tick and cleared when a transfer is created,
+// so one that starts and finishes between two samples still breaks the hold.
+idle_since: ?u64 = null,
+almost_idle_since: ?u64 = null,
+
 // Our curl multi handle.
 handles: http.Handles,
 
@@ -608,6 +614,35 @@ pub fn activity(self: *const Client) Activity {
     };
 }
 
+// How long http activity has held at 0 and at most 2, each 0 if it doesn't
+// now. WebSockets don't count: an open socket would never let a page go idle.
+pub fn idleMs(self: *Client) struct { u64, u64 } {
+    const now = lp.datetime.milliTimestamp(.boot);
+    self.sampleIdle(now);
+
+    return .{
+        now - (self.idle_since orelse now),
+        now - (self.almost_idle_since orelse now),
+    };
+}
+
+fn sampleIdle(self: *Client, now: u64) void {
+    const a = self.activity();
+    if (a.pending or a.http > 2) {
+        self.idle_since = null;
+        self.almost_idle_since = null;
+        return;
+    }
+    if (self.almost_idle_since == null) {
+        self.almost_idle_since = now;
+    }
+    if (a.http > 0) {
+        self.idle_since = null;
+    } else if (self.idle_since == null) {
+        self.idle_since = now;
+    }
+}
+
 // What client messages drainInbox is allowed to dispatch this tick.
 //   .all       — outer event loop (Runner.tick). Safe to dispatch
 //                everything; the JS stack is empty.
@@ -717,6 +752,11 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         return err;
     };
 
+    self.idle_since = null;
+    if (self.activity().http >= 2) {
+        self.almost_idle_since = null;
+    }
+
     if (owner) |o| {
         o.addTransfer(transfer);
         transfer.owner = o;
@@ -755,6 +795,8 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
     if (self.disconnected) {
         return error.ClientDisconnected;
     }
+
+    defer self.sampleIdle(lp.datetime.milliTimestamp(.boot));
 
     var waited = true;
     const dispatched = self.dispatchCompleted(mode);
