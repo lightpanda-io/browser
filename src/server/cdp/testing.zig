@@ -233,6 +233,26 @@ pub const TestContext = struct {
         }
     }
 
+    pub fn countSentEvents(self: *TestContext, method: []const u8, session_id: []const u8) !usize {
+        var count: usize = 0;
+        var i: usize = 0;
+        while (try self.getSentMessage(i)) |msg| : (i += 1) {
+            const obj = switch (msg) {
+                .object => |o| o,
+                else => continue,
+            };
+            const sent_method = obj.get("method") orelse continue;
+            if (sent_method != .string or !std.mem.eql(u8, sent_method.string, method)) {
+                continue;
+            }
+            const sent_session_id = obj.get("sessionId") orelse continue;
+            if (sent_session_id == .string and std.mem.eql(u8, sent_session_id.string, session_id)) {
+                count += 1;
+            }
+        }
+        return count;
+    }
+
     pub fn getSentMessage(self: *TestContext, index: usize) !?json.Value {
         if (index >= self.received.items.len) {
             try self.read();

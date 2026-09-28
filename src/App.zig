@@ -57,6 +57,10 @@ render_fonts: screenshot.Fonts,
 /// every ask. Usable from any thread: it touches no browser state.
 typesafe: zenai.typesafe.Pool,
 
+// Serve workers alive, across threads. Virtual time moves a process-wide
+// clock, so a connection may only skip it while it's the only one.
+live_drivers: std.atomic.Value(u32) = .init(0),
+
 pub fn init(allocator: Allocator, config: *const Config) !*App {
     const platform = try Platform.init(.{
         .v8_flags = config.v8Flags(),
