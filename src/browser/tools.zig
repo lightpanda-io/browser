@@ -3029,7 +3029,7 @@ test "isPathSafe: absolute paths and traversal are rejected" {
 }
 
 test "markdown: a same-url page whose navigation failed is navigated again" {
-    testing.expectLog(&.{.frame, .frame});
+    testing.expectLog(&.{ .frame, .frame });
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
