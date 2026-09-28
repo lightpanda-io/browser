@@ -26,7 +26,7 @@ const simdutf = @import("../sys/simdutf.zig");
 // Character counts and indices are UTF-16 code units, to match DOM string
 // semantics: an astral codepoint is two addressable characters in browsers.
 pub fn utf16Length(text: []const u8) u32 {
-    return @intCast(simdutf.simdutf_utf16_length_from_utf8(text.ptr, text.len));
+    return @intCast(simdutf.v8__simdutf_utf16_length_from_utf8(text.ptr, text.len));
 }
 
 fn unitLength(codepoint: u21) u32 {

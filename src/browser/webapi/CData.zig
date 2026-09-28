@@ -91,7 +91,7 @@ pub fn subtype(self: *const CData, comptime T: type) *T {
 /// 4-byte UTF-8 sequences (codepoints >= U+10000) produce 2 UTF-16 code units (surrogate pair),
 /// everything else produces 1.
 pub fn utf16Len(data: []const u8) usize {
-    return simdutf.simdutf_utf16_length_from_utf8(data.ptr, data.len);
+    return simdutf.v8__simdutf_utf16_length_from_utf8(data.ptr, data.len);
 }
 
 /// Convert a UTF-16 code unit offset to a UTF-8 byte offset.
