@@ -42,15 +42,24 @@ pub fn advance(platform: Platform, ms: u32) void {
 }
 
 pub const Budget = struct {
-    per_navigation_ms: u32,
     remaining_ms: u32,
+    // --virtual-time-budget-ms refills on each navigation; an
+    // Emulation.setVirtualTimePolicy budget is spent once, like Chrome's.
+    per_navigation_ms: ?u32 = null,
+    // Emulation's `advance` policy skips even while fetches are in flight.
+    skip_during_fetches: bool = false,
+    // Emulation budgets end with virtualTimeBudgetExpired, and a page with
+    // nothing scheduled runs out the clock to get there.
+    expires: bool = false,
 
     pub fn init(ms: u32) Budget {
         return .{ .per_navigation_ms = ms, .remaining_ms = ms };
     }
 
     pub fn reset(self: *Budget) void {
-        self.remaining_ms = self.per_navigation_ms;
+        if (self.per_navigation_ms) |ms| {
+            self.remaining_ms = ms;
+        }
     }
 
     pub fn grant(self: *Budget, wanted_ms: u64) u32 {

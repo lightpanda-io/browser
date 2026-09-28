@@ -501,6 +501,7 @@ pub const BrowserContext = struct {
         try notification.register(.frame_dom_content_loaded, self, onFrameDOMContentLoaded);
         try notification.register(.frame_loaded, self, onFrameLoaded);
         try notification.register(.javascript_dialog_opening, self, onJavascriptDialogOpening);
+        try notification.register(.virtual_time_budget_expired, self, onVirtualTimeBudgetExpired);
     }
 
     pub fn deinit(self: *BrowserContext) void {
@@ -616,6 +617,11 @@ pub const BrowserContext = struct {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         const target = self.findTargetByRootFrameId(event.frame_id) orelse return;
         @import("domains/page.zig").frameRemove(target);
+    }
+
+    fn onVirtualTimeBudgetExpired(ctx: *anyopaque, _: *const Notification.VirtualTimeBudgetExpired) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/emulation.zig").virtualTimeBudgetExpired(self);
     }
 
     // A new top-level Page, or the replacement of one after a root
