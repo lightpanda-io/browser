@@ -335,7 +335,6 @@ pub const DownloadWillBegin = struct {
     content_type: ?[]const u8,
 };
 
-// Emitted when an Emulation.setVirtualTimePolicy budget runs out.
 pub const VirtualTimeBudgetExpired = struct {};
 
 // Emitted by Download: once when it starts (`.in_progress`) and once when it
