@@ -635,15 +635,6 @@ var serve_counts = [_]struct { name: []const u8, count: u32 = 0 }{
     .{ .name = "prescan_module" },
 };
 
-// dump a request in output for debugging.
-fn dumpReq(req: *std.http.Server.Request) void {
-    std.debug.print("\n> {} {s}\n", .{ req.head.method, req.head.target });
-    var it = req.iterateHeaders();
-    while (it.next()) |h| {
-        std.debug.print("> {s}: {s}\n", .{ h.name, h.value });
-    }
-}
-
 fn origin(req: *std.http.Server.Request) ?[]const u8 {
     var it = req.iterateHeaders();
     while (it.next()) |h| {
