@@ -844,6 +844,10 @@ test "Env: Worker context " {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
+    // Navigate the frame first to avoid CORS blocking request for the worker.
+    try frame.navigate("http://localhost:9582/", .{});
+    try testing.waitForFrame();
+
     const worker = try @import("../webapi/Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", null, frame);
 
     var ls: js.Local.Scope = undefined;

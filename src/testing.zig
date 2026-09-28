@@ -635,8 +635,36 @@ var serve_counts = [_]struct { name: []const u8, count: u32 = 0 }{
     .{ .name = "prescan_module" },
 };
 
+// dump a request in output for debugging.
+fn dumpReq(req: *std.http.Server.Request) void {
+    std.debug.print("\n> {} {s}\n", .{ req.head.method, req.head.target });
+    var it = req.iterateHeaders();
+    while (it.next()) |h| {
+        std.debug.print("> {s}: {s}\n", .{ h.name, h.value });
+    }
+}
+
+fn origin(req: *std.http.Server.Request) ?[]const u8 {
+    var it = req.iterateHeaders();
+    while (it.next()) |h| {
+        if (std.mem.eql(u8, "origin", h.name)) {
+            return h.value;
+        }
+    }
+
+    return null;
+}
+
 fn testHTTPHandler(req: *std.http.Server.Request) !void {
     const path = req.head.target;
+
+    if (std.mem.eql(u8, path, "/")) {
+        return req.respond("<html><head></head><body></body></html>", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
 
     if (std.mem.eql(u8, path, "/xhr")) {
         return req.respond("1234567890" ** 10, .{
@@ -1155,6 +1183,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(html, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                .{ .name = "Access-Control-Allow-Origin", .value = origin(req) orelse "*" },
             },
         });
     }
@@ -1201,6 +1230,16 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.eql(u8, path, "/echo_headers")) {
+        if (req.head.method == .OPTIONS) {
+            return req.respond("", .{
+                .extra_headers = &.{
+                    .{ .name = "Access-Control-Allow-Origin", .value = origin(req) orelse "*" },
+                    .{ .name = "Access-Control-Allow-Methods", .value = "GET" },
+                    .{ .name = "Access-Control-Allow-Headers", .value = "x-hop" },
+                },
+            });
+        }
+
         // Echo every request header back as "name: value" lines, so tests
         // can assert on the headers a request actually sent.
         var buf: [8192]u8 = undefined;
@@ -1213,6 +1252,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(buf[0..pos], .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
+                .{ .name = "Access-Control-Allow-Origin", .value = origin(req) orelse "*" },
             },
         });
     }
