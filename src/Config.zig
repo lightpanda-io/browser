@@ -69,8 +69,7 @@ fn logFilterValidator(allocator: Allocator, args: *std.process.Args.Iterator, li
         }
 
         const v = std.meta.stringToEnum(log.Scope, name) orelse {
-            log.fatal(.app, "invalid option choice", .{ .arg = "--log-filter", .value = part });
-            return error.InvalidOption;
+            return cli.invalidChoice("--log-filter", part[0 .. part.len - name.len], name, comptime tagNames(log.Scope) ++ &[_][]const u8{"all"});
         };
 
         try list.append(allocator, .{ .scope = v, .enable = enable });
@@ -85,10 +84,7 @@ fn logLevelValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?l
         return;
     }
 
-    target.* = std.meta.stringToEnum(log.Level, str) orelse {
-        log.fatal(.app, "invalid option choice", .{ .arg = "--log-level", .value = str });
-        return error.InvalidArgument;
-    };
+    target.* = std.meta.stringToEnum(log.Level, str) orelse return cli.invalidChoice("--log-level", "", str, tagNames(log.Level));
     log.opts.level = target.*.?;
 }
 
@@ -101,10 +97,7 @@ fn mcpLogDefaults() void {
 
 fn logFormatValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?log.Format) !void {
     const str = args.next() orelse return error.MissingArgument;
-    const format = std.meta.stringToEnum(log.Format, str) orelse {
-        log.fatal(.app, "invalid option choice", .{ .arg = "--log-format", .value = str });
-        return error.InvalidArgument;
-    };
+    const format = std.meta.stringToEnum(log.Format, str) orelse return cli.invalidChoice("--log-format", "", str, tagNames(log.Format));
     target.* = format;
     log.opts.format = format;
 }
@@ -323,9 +316,8 @@ fn dumpValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?DumpF
     if (peek_args.next()) |next_arg| {
         const mode = std.meta.stringToEnum(DumpFormat, next_arg) orelse {
             // Anything else is the positional url, unless it is a misspelt format.
-            if (string.closest(next_arg, tagNames(DumpFormat), 2)) |near| {
-                log.fatal(.app, "invalid option choice", .{ .arg = "--dump", .value = log.red(next_arg), .did_you_mean = log.green(near) });
-                return error.InvalidArgument;
+            if (!cli.isUrlLike(next_arg) and string.closest(next_arg, tagNames(DumpFormat)) != null) {
+                return cli.invalidChoice("--dump", "", next_arg, tagNames(DumpFormat));
             }
             target.* = .html;
             return;
@@ -1365,6 +1357,43 @@ test "Config: parseArgs --http-session-timeout" {
         const proc_args: std.process.Args = .{ .vector = &argv };
         const config = try parseArgs(arena.allocator(), proc_args);
         try std.testing.expectEqual(null, config.httpSessionTimeout());
+    }
+}
+
+test "Config: parseArgs --dump tells a url from a misspelt format" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--dump", "markdown.com" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(.html, config.mode.fetch.dump);
+        try std.testing.expectEqualStrings("markdown.com", config.mode.fetch.url.items[0]);
+    }
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--dump", "markdwon", "https://example.com" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.InvalidArgument, parseArgs(arena.allocator(), proc_args));
+    }
+}
+
+test "Config: parseArgs tells a url from a misspelt command" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "version.io" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqualStrings("version.io", config.mode.fetch.url.items[0]);
+    }
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "versoin" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.UnknownCommand, parseArgs(arena.allocator(), proc_args));
     }
 }
 
