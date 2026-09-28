@@ -101,6 +101,11 @@ fn getSandbox(self: *IFrame, frame: *Frame) !?*DOMTokenList {
     return element.getTokenList(.sandbox, frame);
 }
 
+fn setSandbox(self: *IFrame, value: String, frame: *Frame) !void {
+    const list = try self.getSandbox(frame) orelse return;
+    return list.setValue(value, frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(IFrame);
 
@@ -136,7 +141,7 @@ pub const JsApi = struct {
             return window._document;
         }
     }.wrap, null, .{});
-    pub const sandbox = bridge.accessor(IFrame.getSandbox, null, .{ .null_as_undefined = true });
+    pub const sandbox = bridge.accessor(IFrame.getSandbox, IFrame.setSandbox, .{ .null_as_undefined = true, .ce_reactions = true });
 };
 
 pub const Build = struct {
