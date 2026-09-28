@@ -405,7 +405,7 @@ pub const BrowserContext = struct {
         id: []const u8,
         parent_id: ?[]const u8,
         bc: *BrowserContext,
-        inspector_session: *js.Inspector.Session,
+        inspector_session: js.Inspector.Session,
 
         /// V8 -> this session. Stamp OUR id on responses and events.
         pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
@@ -1194,15 +1194,15 @@ pub const BrowserContext = struct {
         const attached = try allocator.create(AttachedSession);
         errdefer allocator.destroy(attached);
 
-        const inspector_session = try self.inspector().startSession(attached);
-        errdefer self.inspector().stopSession(inspector_session);
-
         attached.* = .{
             .id = try self.arena.dupe(u8, session_id),
             .parent_id = parent_id,
             .bc = self,
-            .inspector_session = inspector_session,
+            .inspector_session = undefined,
         };
+        attached.inspector_session.init(self.inspector(), attached);
+        errdefer attached.inspector_session.deinit();
+
         try self.attached_sessions.put(allocator, attached.id, attached);
         return attached;
     }
@@ -1237,14 +1237,14 @@ pub const BrowserContext = struct {
     }
 
     fn destroySession(self: *BrowserContext, attached: *AttachedSession) void {
-        self.inspector().stopSession(attached.inspector_session);
+        attached.inspector_session.deinit();
         self.cdp.allocator.destroy(attached);
     }
 
     pub fn inspectorSession(self: *const BrowserContext, session_id: ?[]const u8) !*js.Inspector.Session {
         const id = session_id orelse self.session_id orelse return error.SessionNotAttached;
         const attached = self.attached_sessions.get(id) orelse return error.SessionNotAttached;
-        return attached.inspector_session;
+        return &attached.inspector_session;
     }
 
     /// Forwards `cmd`'s raw JSON to the inspector session of the session it was sent through.

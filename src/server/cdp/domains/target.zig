@@ -1061,13 +1061,45 @@ test "cdp.target: detachFromTarget releases the auxiliary session's inspector se
     try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = "SID-AUX" }, .{});
     try ctx.expectSentResult(null, .{ .id = 11 });
     try testing.expectEqual(1, bc.attached_sessions.count());
-    try testing.expectEqual(1, bc.inspector().sessions.items.len);
 
     try ctx.processMessage(.{ .id = 12, .method = "Runtime.evaluate", .sessionId = "SID-AUX", .params = .{ .expression = "1 + 1", .returnByValue = true } });
     try ctx.expectSentError(-32001, "Unknown sessionId", .{ .id = 12 });
 
     try ctx.processMessage(.{ .id = 13, .method = "Runtime.evaluate", .sessionId = "SID-PRIMARY", .params = .{ .expression = "2 + 2", .returnByValue = true } });
     try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 4 } }, .{ .id = 13, .session_id = "SID-PRIMARY" });
+}
+
+// Stopping an inspector session fails its pending evaluations. The client was
+// already told the session is detached, so, like Chrome, nothing more is sent.
+test "cdp.target: detachFromTarget drops the auxiliary session's pending responses" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{
+        .id = "BID-9",
+        .url = "hi.html",
+        .session_id = "SID-PRIMARY",
+        .target_id = "TID-000000000B".*,
+    });
+    _ = try bc.attachSession("SID-AUX", null);
+
+    try ctx.processMessage(.{ .id = 10, .method = "Runtime.enable", .sessionId = "SID-AUX" });
+    try ctx.expectSentResult(null, .{ .id = 10, .session_id = "SID-AUX" });
+    try ctx.processMessage(.{ .id = 11, .method = "Runtime.evaluate", .sessionId = "SID-AUX", .params = .{ .expression = "({a: 1})" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object" } }, .{ .id = 11, .session_id = "SID-AUX" });
+    try ctx.processMessage(.{ .id = 12, .method = "Runtime.evaluate", .sessionId = "SID-AUX", .params = .{ .expression = "new Promise(() => {})", .awaitPromise = true } });
+
+    try ctx.processMessage(.{ .id = 13, .method = "Target.detachFromTarget", .params = .{ .sessionId = "SID-AUX" } });
+    try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = "SID-AUX" }, .{});
+    try ctx.expectSentResult(null, .{ .id = 13 });
+
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
+        const msg_id = msg.object.get("id") orelse continue;
+        try testing.expect(msg_id != .integer or msg_id.integer != 12);
+    }
+
+    try ctx.processMessage(.{ .id = 14, .method = "Runtime.evaluate", .sessionId = "SID-PRIMARY", .params = .{ .expression = "2 + 2", .returnByValue = true } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 4 } }, .{ .id = 14, .session_id = "SID-PRIMARY" });
 }
 
 test "cdp.target: detachFromTarget without session" {

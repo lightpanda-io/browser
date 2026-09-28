@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
 const js = @import("js.zig");
 const v8 = js.v8;
 
@@ -37,29 +36,22 @@ const CLIENT_TRUST_LEVEL = 1;
 // (not much at all)
 const Inspector = @This();
 
-allocator: Allocator,
 unique_id: i64,
 isolate: *v8.Isolate,
 handle: *v8.Inspector,
 client: *v8.InspectorClientImpl,
 default_context: ?v8.Global,
-/// One per CDP session attached to the page target; all connect to the same
-/// `CONTEXT_GROUP_ID`, so every session sees every context. Heap allocated
-/// because the V8 channel keeps the session's address (SET_DATA).
-sessions: std.ArrayListUnmanaged(*Session),
 
 pub fn init(allocator: Allocator, isolate: *v8.Isolate) !*Inspector {
     const self = try allocator.create(Inspector);
     errdefer allocator.destroy(self);
 
     self.* = .{
-        .allocator = allocator,
         .unique_id = 1,
         .isolate = isolate,
         .client = undefined,
         .handle = undefined,
         .default_context = null,
-        .sessions = .empty,
     };
 
     self.client = v8.v8_inspector__Client__IMPL__CREATE();
@@ -72,39 +64,14 @@ pub fn init(allocator: Allocator, isolate: *v8.Isolate) !*Inspector {
     return self;
 }
 
-pub fn deinit(self: *Inspector) void {
+pub fn deinit(self: *const Inspector, allocator: Allocator) void {
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
-    for (self.sessions.items) |session| {
-        session.deinit();
-        self.allocator.destroy(session);
-    }
-    self.sessions.deinit(self.allocator);
-
     v8.v8_inspector__Client__IMPL__DELETE(self.client);
     v8.v8_inspector__Inspector__DELETE(self.handle);
-    self.allocator.destroy(self);
-}
-
-pub fn startSession(self: *Inspector, ctx: anytype) !*Session {
-    const session = try self.allocator.create(Session);
-    errdefer self.allocator.destroy(session);
-
-    Session.init(session, self, ctx);
-    errdefer session.deinit();
-
-    try self.sessions.append(self.allocator, session);
-    return session;
-}
-
-pub fn stopSession(self: *Inspector, session: *Session) void {
-    const index = std.mem.findScalar(*Session, self.sessions.items, session);
-    lp.assert(index != null, "Inspector.stopSession unknown session", .{});
-    _ = self.sessions.swapRemove(index.?);
-    session.deinit();
-    self.allocator.destroy(session);
+    allocator.destroy(self);
 }
 
 // From CDP docs
@@ -211,7 +178,10 @@ const RemoteObject = struct {
 // Combines a v8::InspectorSession and a v8::InspectorChannelImpl. The
 // InspectorSession is for zig -> v8 (sending messages to the inspector). The
 // Channel is for v8 -> zig, getting events from the Inspector (that we'll pass
-// back to some opaque context, i.e the CDP BrowserContext).
+// back to some opaque context, i.e the CDP AttachedSession).
+// The channel keeps the Session's address, so the owner must not move it
+// between init and deinit. Every Session connects to the same
+// CONTEXT_GROUP_ID and so sees every context.
 // The channel callbacks are defined below, as:
 //   pub export fn v8_inspector__Channel__IMPL__XYZ
 pub const Session = struct {
@@ -224,7 +194,7 @@ pub const Session = struct {
     onNotif: *const fn (ctx: *anyopaque, msg: []const u8) void,
     onResp: *const fn (ctx: *anyopaque, call_id: u32, msg: []const u8) void,
 
-    fn init(self: *Session, inspector: *Inspector, ctx: anytype) void {
+    pub fn init(self: *Session, inspector: *Inspector, ctx: anytype) void {
         const Container = @typeInfo(@TypeOf(ctx)).pointer.child;
 
         const channel = v8.v8_inspector__Channel__IMPL__CREATE(inspector.isolate);
@@ -246,10 +216,22 @@ pub const Session = struct {
         };
     }
 
-    fn deinit(self: *const Session) void {
+    pub fn deinit(self: *Session) void {
+        // Deleting the V8 session fails its pending evaluations, which V8
+        // answers through the channel. The client is gone: drop them.
+        self.onResp = dropResponse;
+        self.onNotif = dropNotification;
+
+        var hs: v8.HandleScope = undefined;
+        v8.v8__HandleScope__CONSTRUCT(&hs, self.inspector.isolate);
+        defer v8.v8__HandleScope__DESTRUCT(&hs);
+
         v8.v8_inspector__Session__DELETE(self.handle);
         v8.v8_inspector__Channel__IMPL__DELETE(self.channel);
     }
+
+    fn dropResponse(_: *anyopaque, _: u32, _: []const u8) void {}
+    fn dropNotification(_: *anyopaque, _: []const u8) void {}
 
     pub fn send(self: *const Session, msg: []const u8) void {
         const isolate = self.inspector.isolate;
