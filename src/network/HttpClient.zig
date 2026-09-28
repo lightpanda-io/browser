@@ -1445,8 +1445,8 @@ const SyncContext = struct {
     body: std.ArrayList(u8),
     headers: std.ArrayList(http.Header) = .empty,
 
-    // Acquired on the first byte we have to buffer, so a bodyless response
-    // never takes one. Ownership moves to the SyncResponse.
+    // Acquired on the first byte we have to buffer.
+    // Ownership moves to the SyncResponse.
     arena: ?*lp.Arena = null,
 
     fn headerCallback(transfer: *Transfer) anyerror!Transfer.HeaderResult {
