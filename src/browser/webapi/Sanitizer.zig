@@ -268,6 +268,24 @@ pub fn deinit(self: *Sanitizer, _: *Page) void {
     self._owned_arena.release();
 }
 
+// Every setHTML/parseHTML that doesn't pass an explicit Sanitizer gets a default
+// one. This has ~300 entries, so rather than creating it every time, we have
+// one global default Sanitizer on the app. This value is only ever used internally
+// in sanitize where it is immutable.
+pub fn initDefault(arena_pool: *lp.ArenaPool) !*Sanitizer {
+    const arena = try arena_pool.acquire(.small, "Sanitizer.default");
+    errdefer arena.release();
+
+    const self = try arena.create(Sanitizer);
+    self.* = .{ ._owned_arena = arena, ._arena = arena.allocator() };
+    try self.setFromDefault();
+    return self;
+}
+
+pub fn deinitDefault(self: *Sanitizer) void {
+    self._owned_arena.release();
+}
+
 pub fn acquireRef(self: *Sanitizer) void {
     self._rc.acquire();
 }
@@ -475,8 +493,6 @@ fn ownName(self: *Sanitizer, name: defaults.Name) !Name {
 fn own(self: *Sanitizer, value: []const u8) ![]const u8 {
     return String.intern(value) orelse self._arena.dupe(u8, value);
 }
-
-// -
 
 const JsName = struct {
     name: String,
@@ -1023,7 +1039,7 @@ const FromOptions = struct {
     }
 };
 
-fn fromOptions(options: ?Options, safe: bool, exec: *const Execution) !?FromOptions {
+fn fromOptions(options: ?Options, safe: bool, frame: *Frame) !?FromOptions {
     const spec = blk: {
         const o = options orelse break :blk null;
         const spec = o.sanitizer orelse break :blk null;
@@ -1036,11 +1052,14 @@ fn fromOptions(options: ?Options, safe: bool, exec: *const Execution) !?FromOpti
         break :blk spec;
     };
 
-    if (spec == null and safe == false) {
-        return null;
+    if (spec == null) {
+        if (safe == false) {
+            return null;
+        }
+        // A missing spec takes the "default" preset
+        return .{ .sanitizer = frame._session.browser.app.default_sanitizer, .owned = false };
     }
-    // A missing spec takes the "default" preset
-    return .{ .sanitizer = try create(spec, safe == false, exec), .owned = true };
+    return .{ .sanitizer = try create(spec, safe == false, &frame.js.execution), .owned = true };
 }
 
 pub fn setAndFilterHTML(target: *Node, context: *Element, html: []const u8, options: ?Options, safe: bool, frame: *Frame) !void {
@@ -1051,7 +1070,7 @@ pub fn setAndFilterHTML(target: *Node, context: *Element, html: []const u8, opti
         }
     }
 
-    const resolved = try fromOptions(options, safe, &frame.js.execution);
+    const resolved = try fromOptions(options, safe, frame);
     defer if (resolved) |r| r.release(frame.page);
 
     // Parsed into a detached fragment, so that nothing is connected (no fetch,
@@ -1067,7 +1086,7 @@ pub fn setAndFilterHTML(target: *Node, context: *Element, html: []const u8, opti
 }
 
 pub fn parseHTML(html: []const u8, options: ?Options, safe: bool, frame: *Frame) !*Node.Document {
-    const resolved = try fromOptions(options, safe, &frame.js.execution);
+    const resolved = try fromOptions(options, safe, frame);
     defer if (resolved) |r| r.release(frame.page);
 
     const document = (try Frame.parse.htmlDocument(frame, html, .{ .allow_declarative_shadow = true })).asDocument();
@@ -1079,6 +1098,9 @@ pub fn parseHTML(html: []const u8, options: ?Options, safe: bool, frame: *Frame)
 }
 
 fn sanitize(self: *const Sanitizer, root: *Node, safe: bool, frame: *Frame) !void {
+    if (@TypeOf(self) != *const Sanitizer) {
+        @compileError("self *must* remain const since it can reference a globally shared default sanitizer that cannot be mutated");
+    }
     const arena = frame.call_arena;
 
     // A template's contents and a shadow root are trees of their own
