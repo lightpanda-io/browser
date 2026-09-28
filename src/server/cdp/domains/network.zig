@@ -1591,7 +1591,7 @@ test "cdp.Network: worker requests emit network events" {
     _ = try cdp.createBrowserContext();
     var bc = &cdp.browser_context.?;
     bc.id = "BID-NW";
-    bc.session_id = "SID-NW";
+    _ = try bc.attachPrimarySession("SID-NW");
     bc.target_id = "TID-NW-0000000".*;
 
     try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
