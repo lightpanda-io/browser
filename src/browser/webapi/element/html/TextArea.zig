@@ -143,6 +143,7 @@ pub const innerInsert = entry.innerInsert;
 pub const acceptsTextEntry = entry.acceptsTextEntry;
 pub const innerDelete = entry.innerDelete;
 pub const moveCaret = entry.moveCaret;
+pub const caretToEnd = entry.caretToEnd;
 pub const CaretMove = entry.CaretMove;
 pub const getSelectionDirection = entry.getSelectionDirection;
 pub const setSelectionStart = entry.setSelectionStart;
