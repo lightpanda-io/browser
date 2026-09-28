@@ -200,6 +200,12 @@ pub fn tagNames(comptime E: type) []const []const u8 {
     };
 }
 
+/// No command or choice has a `.`, `/` or `:`, so `markdown.com` is a url
+/// however close it is to `markdown`.
+pub fn isUrlLike(arg: []const u8) bool {
+    return std.mem.indexOfAny(u8, arg, ".:/") != null;
+}
+
 /// `prefix` was stripped from `value` before matching, like `--log-filter`'s sign.
 pub fn invalidChoice(arg: []const u8, prefix: []const u8, value: []const u8, choices: []const []const u8) error{InvalidArgument} {
     var value_buf: [128]u8 = undefined;
@@ -456,7 +462,7 @@ pub fn Builder(comptime commands: anytype) type {
             }
 
             // A bare word close to a command name is a typo, not a fetch url.
-            if (std.mem.startsWith(u8, cmd_str, "--") == false and string.closest(cmd_str, command_names) != null) {
+            if (std.mem.startsWith(u8, cmd_str, "--") == false and !isUrlLike(cmd_str) and string.closest(cmd_str, command_names) != null) {
                 return unknownCommand(cmd_str);
             }
 

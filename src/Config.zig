@@ -316,9 +316,7 @@ fn dumpValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?DumpF
     if (peek_args.next()) |next_arg| {
         const mode = std.meta.stringToEnum(DumpFormat, next_arg) orelse {
             // Anything else is the positional url, unless it is a misspelt format.
-            // No format has a `.`, `/` or `:`, so `markdown.com` is a url.
-            const url_like = std.mem.indexOfAny(u8, next_arg, ".:/") != null;
-            if (!url_like and string.closest(next_arg, tagNames(DumpFormat)) != null) {
+            if (!cli.isUrlLike(next_arg) and string.closest(next_arg, tagNames(DumpFormat)) != null) {
                 return cli.invalidChoice("--dump", "", next_arg, tagNames(DumpFormat));
             }
             target.* = .html;
@@ -1378,6 +1376,24 @@ test "Config: parseArgs --dump tells a url from a misspelt format" {
         const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--dump", "markdwon", "https://example.com" };
         const proc_args: std.process.Args = .{ .vector = &argv };
         try std.testing.expectError(error.InvalidArgument, parseArgs(arena.allocator(), proc_args));
+    }
+}
+
+test "Config: parseArgs tells a url from a misspelt command" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "version.io" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqualStrings("version.io", config.mode.fetch.url.items[0]);
+    }
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "versoin" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.UnknownCommand, parseArgs(arena.allocator(), proc_args));
     }
 }
 
