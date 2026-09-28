@@ -28,6 +28,7 @@ const DOMTokenList = @import("../../collections.zig").DOMTokenList;
 
 const Graphics = @import("Graphics.zig");
 
+const String = lp.String;
 const A = @This();
 
 pub const Proto = Graphics;
@@ -45,6 +46,11 @@ pub fn getRelList(self: *A, frame: *Frame) !*DOMTokenList {
     return self.asElement().getRelList(frame);
 }
 
+fn setRelList(self: *A, value: String, frame: *Frame) !void {
+    const list = try self.getRelList(frame);
+    try list.setValue(value, frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(A);
 
@@ -59,5 +65,5 @@ pub const JsApi = struct {
         return AnimatedString.getOrCreate(self.asElement(), .href, frame);
     }
 
-    pub const relList = bridge.accessor(A.getRelList, null, .{});
+    pub const relList = bridge.accessor(A.getRelList, A.setRelList, .{ .ce_reactions = true });
 };

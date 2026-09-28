@@ -61,9 +61,19 @@ pub fn main(init: std.process.Init) !void {
 
 fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args) !void {
     lp.core_dump.disableIfRequested();
+    lp.malloc_tuning.apply();
     lp.crash_handler.attachSignalHandlers();
 
-    const args = try Config.parseArgs(main_arena, proc_args);
+    const args = Config.parseArgs(main_arena, proc_args) catch |err| switch (err) {
+        // Already logged where they were found.
+        error.UnknownCommand,
+        error.UnknownOption,
+        error.InvalidArgument,
+        error.MissingArgument,
+        error.TooManyPositionalArguments,
+        => std.process.exit(1),
+        else => return err,
+    };
     defer args.deinit(main_arena);
 
     switch (args.mode) {
@@ -139,11 +149,6 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
         },
         .fetch => |opts| {
             const urls = opts.url.items;
-
-            if (urls.len == 0) {
-                log.fatal(.app, "missing URL", .{});
-                return error.MissingArgument;
-            }
 
             // Plain (non-JSON) dump writes one document to stdout with no
             // framing, so it can't disambiguate more than one page.
@@ -409,6 +414,9 @@ fn mcpThread(allocator: std.mem.Allocator, app: *App, cdp_server: ?*lp.Server, e
 }
 
 fn logConfigTips(config: *const Config) void {
+    // Only for a person reading the terminal, not for scripts capturing stderr.
+    if (!Config.stderrIsTty()) return;
+
     var count: usize = 0;
     var tips: [2]log.KV = undefined;
     if (config.obeyRobots() == false) {

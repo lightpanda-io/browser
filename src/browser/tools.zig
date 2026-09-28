@@ -1862,7 +1862,8 @@ fn awaitQueuedNavigation(session: *lp.Session, frame: *lp.Frame) ToolError!void 
         return;
     }
     var runner = session.runner(.{});
-    runner.waitForFrame(root_frame_id, 10000, .{ .until = .done }) catch |err|
+    // `.done` never arrives on a page with background timers or polling.
+    runner.waitForFrame(root_frame_id, 10000, .{ .until = .networkidle }) catch |err|
         return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
 }
 
@@ -1906,7 +1907,7 @@ fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
         // The action opened a new window (target=_blank or window.open).
         // Follow it, as a user whose click opened a tab would.
         var runner = session.runner(.{});
-        runner.waitForFrame(page.page.frame._frame_id, 10000, .{ .until = .done }) catch |err|
+        runner.waitForFrame(page.page.frame._frame_id, 10000, .{ .until = .networkidle }) catch |err|
             return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
         page = try requireFrame(session);
         const popups = page.page.popups.items;
@@ -2375,7 +2376,10 @@ fn renderJson(arena: std.mem.Allocator, value: anytype) ToolError![]const u8 {
 fn ensurePage(session: *lp.Session, registry: *NodeRegistry, url: ?[:0]const u8, timeout: ?u32) ToolError!*lp.Frame {
     if (url) |u| {
         if (session.currentFrame()) |frame| {
-            if (std.mem.eql(u8, frame.url, u)) return frame;
+            const is_loaded = frame._parse_state != .pre and frame._last_navigate_error == null;
+            if (is_loaded and std.mem.eql(u8, frame.url, u)) {
+                return frame;
+            }
         }
         _ = try performGoto(session, registry, u, .{ .timeout = timeout });
     }
@@ -3022,4 +3026,20 @@ test "isPathSafe: absolute paths and traversal are rejected" {
     try std.testing.expect(!isPathSafe("sub/../etc/passwd"));
     try std.testing.expect(!isPathSafe("sub/.."));
     try std.testing.expect(!isPathSafe(".."));
+}
+
+test "markdown: a same-url page whose navigation failed is navigated again" {
+    testing.expectLog(&.{ .frame, .frame });
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:1/"}
+    , .{});
+    try std.testing.expect((try call(aa, session, &registry, "goto", args, .{})).is_error);
+    try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{})).is_error);
 }

@@ -236,6 +236,26 @@ pub const Completion = struct {
     };
 };
 
+/// No command or choice has a `.`, `/` or `:`, so `markdown.com` is a url
+/// however close it is to `markdown`.
+pub fn isUrlLike(arg: []const u8) bool {
+    return std.mem.indexOfAny(u8, arg, ".:/") != null;
+}
+
+/// `prefix` was stripped from `value` before matching, like `--log-filter`'s sign.
+pub fn invalidChoice(arg: []const u8, prefix: []const u8, value: []const u8, choices: []const []const u8) error{InvalidArgument} {
+    var value_buf: [128]u8 = undefined;
+    const typed = std.fmt.bufPrint(&value_buf, "{s}{s}", .{ prefix, value }) catch value;
+    if (string.closest(value, choices)) |near| {
+        var near_buf: [128]u8 = undefined;
+        const suggestion = std.fmt.bufPrint(&near_buf, "{s}{s}", .{ prefix, near }) catch near;
+        log.fatal(.app, "invalid option choice", .{ .arg = arg, .value = log.red(typed), .did_you_mean = log.green(suggestion) });
+    } else {
+        log.fatal(.app, "invalid option choice", .{ .arg = arg, .value = log.red(typed) });
+    }
+    return error.InvalidArgument;
+}
+
 pub fn Builder(comptime commands: anytype) type {
     return struct {
         const Self = @This();
@@ -478,7 +498,7 @@ pub fn Builder(comptime commands: anytype) type {
             }
 
             // A bare word close to a command name is a typo, not a fetch url.
-            if (std.mem.startsWith(u8, cmd_str, "--") == false and string.closest(cmd_str, command_names, 2) != null) {
+            if (std.mem.startsWith(u8, cmd_str, "--") == false and !isUrlLike(cmd_str) and string.closest(cmd_str, command_names) != null) {
                 return unknownCommand(cmd_str);
             }
 
@@ -510,7 +530,7 @@ pub fn Builder(comptime commands: anytype) type {
 
         fn unknownCommand(name: []const u8) error{UnknownCommand} {
             const arg = log.red(name);
-            if (string.closest(name, command_names, 2)) |near| {
+            if (string.closest(name, command_names)) |near| {
                 log.fatal(.app, "unknown command", .{ .arg = arg, .did_you_mean = log.green(near) });
             } else {
                 log.fatal(.app, "unknown command", .{ .arg = arg });
@@ -521,6 +541,10 @@ pub fn Builder(comptime commands: anytype) type {
         /// Try to sniff the command out of given option.
         /// Only exists for legacy reasons; hence hardcoded.
         fn sniffCommand(cmd_str: []const u8) error{UnknownCommand}!Enum {
+            if (std.mem.eql(u8, cmd_str, "--help") or std.mem.eql(u8, cmd_str, "-h")) {
+                return .help;
+            }
+
             if (std.mem.startsWith(u8, cmd_str, "--") == false) {
                 return .fetch;
             }
@@ -550,12 +574,7 @@ pub fn Builder(comptime commands: anytype) type {
                 }
             }
 
-            // Legacy `--help` flag maps to the `help` command.
-            if (std.mem.eql(u8, cmd_str, "--help")) {
-                return .help;
-            }
-
-            return error.UnknownCommand;
+            return unknownCommand(cmd_str);
         }
 
         /// Turns a snake_case string to kebab-case in comptime.
@@ -644,15 +663,7 @@ pub fn Builder(comptime commands: anytype) type {
         }
 
         fn parseEnum(comptime E: type, arg: []const u8, str: []const u8) error{InvalidArgument}!E {
-            return std.meta.stringToEnum(E, str) orelse {
-                const value = log.red(str);
-                if (string.closest(str, tagNames(E), 2)) |near| {
-                    log.fatal(.app, "invalid option choice", .{ .arg = arg, .value = value, .did_you_mean = log.green(near) });
-                } else {
-                    log.fatal(.app, "invalid option choice", .{ .arg = arg, .value = value });
-                }
-                return error.InvalidArgument;
-            };
+            return std.meta.stringToEnum(E, str) orelse invalidChoice(arg, "", str, tagNames(E));
         }
 
         fn parseValue(
@@ -821,6 +832,18 @@ pub fn Builder(comptime commands: anytype) type {
             };
         }
 
+        fn helpHint(comptime command_name: []const u8) []const u8 {
+            return "see 'lightpanda help " ++ command_name ++ "'";
+        }
+
+        /// Validators return `error.MissingArgument` without logging when a
+        /// flag is the last argument, since only the parser knows its name.
+        fn logMissingValue(err: anyerror, arg: []const u8, comptime command_name: []const u8) void {
+            if (err == error.MissingArgument) {
+                log.fatal(.app, "missing argument value", .{ .arg = arg, .hint = helpHint(command_name) });
+            }
+        }
+
         /// Parses the command with its options.
         fn parseCommand(
             allocator: Allocator,
@@ -858,7 +881,10 @@ pub fn Builder(comptime commands: anytype) type {
                         std.mem.eql(u8, option_name, "--" ++ comptime toKebabCase(name)) or
                         (matches_short and std.mem.eql(u8, option_name, "-" ++ [_]u8{option.short})))
                     {
-                        try parseValue(allocator, args, &@field(c, field_name), option);
+                        parseValue(allocator, args, &@field(c, field_name), option) catch |err| {
+                            logMissingValue(err, option_name, command.name);
+                            return err;
+                        };
                         continue :iter_args;
                     }
 
@@ -883,7 +909,10 @@ pub fn Builder(comptime commands: anytype) type {
                                     break :blk .{ .name = variant.name, .type = option.type, .multiple = is_multiple };
                                 };
 
-                                try parseValue(allocator, args, &@field(c, field_name), opts);
+                                parseValue(allocator, args, &@field(c, field_name), opts) catch |err| {
+                                    logMissingValue(err, option_name, command.name);
+                                    return err;
+                                };
                                 continue :iter_args;
                             }
                         }
@@ -891,7 +920,7 @@ pub fn Builder(comptime commands: anytype) type {
                 }
 
                 // Subcommand help: `lightpanda fetch help` or `lightpanda fetch --help`.
-                if (std.mem.eql(u8, option_name, "help") or std.mem.eql(u8, option_name, "--help")) {
+                if (std.mem.eql(u8, option_name, "help") or std.mem.eql(u8, option_name, "--help") or std.mem.eql(u8, option_name, "-h")) {
                     return @unionInit(Union, "help", std.meta.stringToEnum(Enum, command.name).?);
                 }
 
@@ -905,7 +934,7 @@ pub fn Builder(comptime commands: anytype) type {
                         break :blk names;
                     };
                     const arg = log.red(option_name);
-                    if (string.closest(option_name, names, 2)) |near| {
+                    if (string.closest(option_name, names)) |near| {
                         log.fatal(.app, "unknown argument", .{ .mode = command.name, .arg = arg, .did_you_mean = log.green(near) });
                     } else {
                         log.fatal(.app, "unknown argument", .{ .mode = command.name, .arg = arg });
@@ -923,6 +952,7 @@ pub fn Builder(comptime commands: anytype) type {
 
                     // A single (non-multiple) positional may only be given once.
                     if (!is_multiple and @field(c, positional.name) != null) {
+                        log.fatal(.app, "too many arguments", .{ .mode = command.name, .arg = option_name, .hint = helpHint(command.name) });
                         return error.TooManyPositionalArguments;
                     }
 

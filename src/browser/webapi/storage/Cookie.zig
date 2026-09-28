@@ -43,9 +43,10 @@ expires: ?f64,
 secure: bool = false,
 http_only: bool = false,
 same_site: SameSite = .none,
-// True when Set-Cookie carried no SameSite attribute: the cookie is Lax
-// through the "Default" enforcement mode (RFC 6265bis 5.6.7.1), which
-// makes it eligible for "Lax-allowing-unsafe", see appliesTo.
+// True when no SameSite was given, by the Set-Cookie header, the CDP
+// driver or the cookie file: the cookie is Lax through the "Default"
+// enforcement mode (RFC 6265bis 5.6.7.1), which makes it eligible for
+// "Lax-allowing-unsafe", see appliesTo.
 same_site_default: bool = false,
 // Seconds since the epoch. Set by Jar.add, and inherited from the cookie it
 // replaces, so a site re-setting a cookie on every response can't keep it
@@ -56,6 +57,22 @@ pub const SameSite = enum {
     strict,
     lax,
     none,
+
+    // The SameSite a Set-Cookie attribute or a cookie file spells out:
+    // Strict, Lax or None, case-insensitive (RFC 6265bis 5.6.7; the file
+    // has both saveToFile's lowercase tags and CDP's casing). Anything
+    // else, including no value at all, "unspecified" and the
+    // chrome.cookies "no_restriction", is not a value: the cookie is
+    // unspecified and Lax by default, see `same_site_default`. CDP takes
+    // Chrome's exact spelling only, see `parseSameSite` in
+    // server/cdp/domains/storage.zig.
+    pub fn parse(value: ?[]const u8) ?SameSite {
+        const raw = value orelse return null;
+        if (std.ascii.eqlIgnoreCase(raw, "strict")) return .strict;
+        if (std.ascii.eqlIgnoreCase(raw, "lax")) return .lax;
+        if (std.ascii.eqlIgnoreCase(raw, "none")) return .none;
+        return null;
+    }
 };
 
 // How the request carrying the Cookie header reaches its target. Only a
@@ -146,12 +163,7 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
             .@"max-age" => max_age = std.fmt.parseInt(i64, value, 10) catch continue,
             .expires => expires = value,
             .httponly => http_only = true,
-            .samesite => {
-                if (value.len > scrap.len) {
-                    continue;
-                }
-                same_site = std.meta.stringToEnum(Cookie.SameSite, std.ascii.lowerString(&scrap, value)) orelse continue;
-            },
+            .samesite => same_site = SameSite.parse(value) orelse continue,
         }
     }
 

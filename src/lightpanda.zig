@@ -28,6 +28,7 @@ pub const completion = @import("completion.zig");
 pub const cookies = @import("cookies.zig");
 pub const datetime = @import("datetime.zig");
 pub const core_dump = @import("core_dump.zig");
+pub const malloc_tuning = @import("malloc_tuning.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
 pub const build_config = @import("build_config");
 pub const String = @import("string.zig").String;

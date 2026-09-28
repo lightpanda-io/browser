@@ -689,9 +689,9 @@ fn elementSendKeys(cmd: *BiDi.Command, p: SendKeys) !void {
             return cmd.sendError("element not interactable", "element can't be focused");
         }
         if (element.is(Html.Input)) |input_element| {
-            try caretToEnd(input_element, frame);
+            try input_element.caretToEnd(frame);
         } else if (element.is(Html.TextArea)) |textarea| {
-            try caretToEnd(textarea, frame);
+            try textarea.caretToEnd(frame);
         }
     }
 
@@ -700,14 +700,6 @@ fn elementSendKeys(cmd: *BiDi.Command, p: SendKeys) !void {
         else => return err,
     };
     return browsing_context.answerAfterNavigation(cmd, ctx, frame);
-}
-
-fn caretToEnd(ctl: anytype, frame: *Frame) !void {
-    if (ctl.selectionAvailable() == false) {
-        return;
-    }
-    const len: u32 = @intCast(ctl.getValue().len);
-    try ctl.setSelectionRange(len, len, null, frame);
 }
 
 fn requireInteractable(cmd: *BiDi.Command, element: *Node.Element, frame: *Frame) !bool {

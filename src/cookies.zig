@@ -20,10 +20,12 @@ const Session = @import("browser/Session.zig");
 const Cookie = @import("browser/webapi/storage/Cookie.zig");
 
 const log = lp.log;
+const Allocator = std.mem.Allocator;
 
 /// Load cookies from a JSON file into the cookie jar.
 /// The file format is an array of objects with: name, value, domain, path,
-/// expires (optional, float), secure (optional, bool), httpOnly (optional, bool).
+/// expires (optional, float), secure (optional, bool), httpOnly (optional, bool),
+/// sameSite (optional, Strict/Lax/None).
 /// This matches the CDP Network.Cookie format used by Puppeteer and Playwright.
 pub fn loadFromFile(session: *Session, path: []const u8) void {
     _loadFromFile(session, path) catch |err| {
@@ -68,27 +70,7 @@ fn _loadFromFile(session: *Session, path: []const u8) !void {
 
     var loaded: usize = 0;
     for (json_cookies) |jc| {
-        var cookie_arena = std.heap.ArenaAllocator.init(jar.allocator);
-        errdefer cookie_arena.deinit();
-
-        const a = cookie_arena.allocator();
-        const name = try a.dupe(u8, jc.name);
-        const value = try a.dupe(u8, jc.value);
-        const domain = try a.dupe(u8, jc.domain);
-        const cookie_path = if (jc.path) |p| try a.dupe(u8, p) else "/";
-
-        const cookie = Cookie{
-            .arena = cookie_arena,
-            .name = name,
-            .value = value,
-            .domain = domain,
-            .path = cookie_path,
-            .expires = jc.expires,
-            .secure = jc.secure orelse false,
-            .http_only = jc.httpOnly orelse false,
-            .same_site = parseJsonSameSite(jc.sameSite),
-        };
-
+        const cookie = try jc.toCookie(jar.allocator);
         jar.add(cookie, now, true) catch |err| {
             log.warn(.app, "invalid cookie", .{ .name = jc.name, .err = err });
             continue;
@@ -114,8 +96,13 @@ fn _saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
 
     var buf: [8192]u8 = undefined;
     var writer = file.writer(lp.io, &buf);
-    const w = &writer.interface;
+    try writeJson(jar, &writer.interface);
+    try writer.end();
 
+    log.info(.app, "Cookie.saveToFile", .{ .path = path, .count = jar.cookies.items.len });
+}
+
+fn writeJson(jar: *const Cookie.Jar, w: *std.Io.Writer) !void {
     try w.writeByte('[');
     for (jar.cookies.items, 0..) |c, i| {
         if (i > 0) {
@@ -131,17 +118,16 @@ fn _saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
             .expires = c.expires,
             .secure = c.secure,
             .httpOnly = c.http_only,
-            .sameSite = @tagName(c.same_site),
-        }, .{}, w);
+            // Left out for an unspecified cookie, as Network.getCookies
+            // does, so that it's still Lax by default once loaded back.
+            .sameSite = if (c.same_site_default) null else @tagName(c.same_site),
+        }, .{ .emit_null_optional_fields = false }, w);
     }
 
     if (jar.cookies.items.len > 0) {
         try w.writeByte('\n');
     }
     try w.writeAll("]\n");
-    try writer.end();
-
-    log.info(.app, "Cookie.saveToFile", .{ .path = path, .count = jar.cookies.items.len });
 }
 
 const JsonCookie = struct {
@@ -153,15 +139,35 @@ const JsonCookie = struct {
     secure: ?bool = null,
     httpOnly: ?bool = null,
     sameSite: ?[]const u8 = null,
-};
 
-fn parseJsonSameSite(value: ?[]const u8) Cookie.SameSite {
-    const same_site = value orelse return .none;
-    if (std.ascii.eqlIgnoreCase(same_site, "strict")) return .strict;
-    if (std.ascii.eqlIgnoreCase(same_site, "lax")) return .lax;
-    if (std.ascii.eqlIgnoreCase(same_site, "none")) return .none;
-    return .none;
-}
+    fn toCookie(self: JsonCookie, allocator: Allocator) !Cookie {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        errdefer arena.deinit();
+        const a = arena.allocator();
+
+        // Allocate before the struct literal copies `arena` into the result.
+        const name = try a.dupe(u8, self.name);
+        const value = try a.dupe(u8, self.value);
+        const domain = try a.dupe(u8, self.domain);
+        const path = if (self.path) |p| try a.dupe(u8, p) else "/";
+
+        // A missing or unrecognised sameSite leaves the cookie unspecified.
+        const same_site = Cookie.SameSite.parse(self.sameSite);
+
+        return .{
+            .arena = arena,
+            .name = name,
+            .value = value,
+            .domain = domain,
+            .path = path,
+            .expires = self.expires,
+            .secure = self.secure orelse false,
+            .http_only = self.httpOnly orelse false,
+            .same_site = same_site orelse .lax,
+            .same_site_default = same_site == null,
+        };
+    }
+};
 
 /// Netscape cookie file format parser with `#HttpOnly_` addition from curl.
 /// https://docs.cyotek.com/cyowcopy/1.10/netscapecookieformat.html
@@ -421,5 +427,7 @@ test "cookies: load JSON accepts CDP SameSite casing" {
         .{ .ignore_unknown_fields = true },
     );
 
-    try std.testing.expectEqual(Cookie.SameSite.lax, parseJsonSameSite(parsed[0].sameSite));
+    const cookie = try parsed[0].toCookie(std.testing.allocator);
+    defer cookie.deinit();
+    try std.testing.expectEqual(Cookie.SameSite.lax, cookie.same_site);
 }

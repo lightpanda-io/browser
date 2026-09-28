@@ -114,7 +114,8 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
             }
 
             // Resolve inline `style=` declarations through the element's
-            // parsed inline style, so computed values match `el.style`.
+            // parsed inline style, so computed values match `el.style`. One
+            // an !important rule beats falls through to the values below.
             if (style_manager.inlineStyleValue(element, wrapped)) |value| {
                 return value;
             }
@@ -199,14 +200,18 @@ fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame
 
 pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {
     const normalized = normalizePropertyName(property_name, &frame.buf);
-    const wrapped = String.wrap(normalized);
-    if (CssParser.axisShorthand(normalized)) |shorthand| {
-        const x = self.findProperty(.wrap(shorthand.x)) orelse return "";
-        const pair = self.axisPair(x) orelse return "";
-        return if (pair.x._important) "important" else "";
+    return if (self.declaredImportant(.wrap(normalized))) "important" else "";
+}
+
+/// Whether a declared property is !important; false when it isn't declared.
+pub fn declaredImportant(self: *const CSSStyleDeclaration, name: String) bool {
+    if (CssParser.axisShorthand(name.str())) |shorthand| {
+        const x = self.findProperty(.wrap(shorthand.x)) orelse return false;
+        const pair = self.axisPair(x) orelse return false;
+        return pair.x._important;
     }
-    const prop = self.findProperty(wrapped) orelse return "";
-    return if (prop._important) "important" else "";
+    const prop = self.findProperty(name) orelse return false;
+    return prop._important;
 }
 
 pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, priority_: ?[]const u8, frame: *Frame) !void {

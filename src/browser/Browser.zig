@@ -34,6 +34,7 @@ const Selector = @import("webapi/selector/Selector.zig");
 const Geolocation = @import("webapi/geolocation/Geolocation.zig");
 const PermissionState = @import("webapi/Permissions.zig").State;
 
+const log = lp.log;
 const ArenaPool = App.ArenaPool;
 const Allocator = std.mem.Allocator;
 
@@ -104,6 +105,8 @@ fc_identity_pool: std.heap.MemoryPool(js.FinalizerCallback.Identity),
 // #2472).
 frame_id_gen: u32 = 0,
 
+foreground_task_posted: std.atomic.Value(bool) = .init(false),
+
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
 };
@@ -146,6 +149,8 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts) !void {
         .heartbeat = &self.http_client.heartbeat,
     };
     app.watchdog.register(&self.watchdog_entry);
+
+    self.env.setForegroundTaskPostedCallback(onForegroundTaskPosted, self);
 }
 
 pub fn deinit(self: *Browser) void {
@@ -158,6 +163,9 @@ pub fn deinit(self: *Browser) void {
     lp.metrics.js_heap_physical_bytes.add(-@as(i64, @intCast(self.last_reported_js_bytes)));
     self.last_reported_js_bytes = 0;
 
+    // V8 workers can post until the isolate is gone; http_client is freed
+    // after env.
+    self.env.setForegroundTaskPostedCallback(null, null);
     self.env.deinit();
     // After env.deinit() the Isolate is gone, so no further weak finalizer can
     // fire — only now is it safe to free the pool backing their parameters.
@@ -169,6 +177,24 @@ pub fn deinit(self: *Browser) void {
     self.clearPermissions();
     self.permissions.deinit(allocator);
     self.selector_cache.deinit();
+}
+
+// Callback from v8 when a foreground task is posted.
+// !!Can be called from various threads!! (v8 worker threads)
+fn onForegroundTaskPosted(ctx: ?*anyopaque, delay_in_seconds: f64) callconv(.c) void {
+    if (delay_in_seconds > 0) {
+        return;
+    }
+    const self: *Browser = @ptrCast(@alignCast(ctx.?));
+    if (self.foreground_task_posted.swap(true, .acq_rel)) {
+        // it was already woken up before
+        return;
+    }
+
+    // wakeup is thread-safe
+    self.http_client.handles.wakeup() catch |err| {
+        log.err(.browser, "foreground task wakeup", .{ .err = err });
+    };
 }
 
 // Wait out a watchdog scan before clearing its termination request.
@@ -262,15 +288,15 @@ pub fn runMicrotasks(self: *Browser) void {
     self.env.runMicrotasks();
 }
 
-pub fn runMacrotasks(self: *Browser) !bool {
+pub fn runMacrotasks(self: *Browser) !void {
     const env = &self.env;
 
     try self.env.runMacrotasks();
-    const ran_platform_task = env.pumpMessageLoop();
+    self.foreground_task_posted.store(false, .release);
+    env.pumpMessageLoop();
 
     // either of the above could have queued more microtasks
     env.runMicrotasks();
-    return ran_platform_task;
 }
 
 pub fn hasBackgroundTasks(self: *Browser) bool {

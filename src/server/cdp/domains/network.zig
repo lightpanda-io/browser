@@ -291,9 +291,9 @@ fn setCookie(cmd: *CDP.Command) !void {
     )) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try CdpStorage.setCdpCookie(&bc.session.cookie_jar, params);
+    const stored = try CdpStorage.setCdpCookies(&bc.session.cookie_jar, &.{params});
 
-    try cmd.sendResult(.{ .success = true }, .{});
+    try cmd.sendResult(.{ .success = stored == 1 }, .{});
 }
 
 fn setCookies(cmd: *CDP.Command) !void {
@@ -302,9 +302,7 @@ fn setCookies(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    for (params.cookies) |param| {
-        try CdpStorage.setCdpCookie(&bc.session.cookie_jar, param);
-    }
+    _ = try CdpStorage.setCdpCookies(&bc.session.cookie_jar, params.cookies);
 
     try cmd.sendResult(null, .{});
 }
@@ -1591,7 +1589,7 @@ test "cdp.Network: worker requests emit network events" {
     _ = try cdp.createBrowserContext();
     var bc = &cdp.browser_context.?;
     bc.id = "BID-NW";
-    bc.session_id = "SID-NW";
+    _ = try bc.attachPrimarySession("SID-NW");
     bc.target_id = "TID-NW-0000000".*;
 
     try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
