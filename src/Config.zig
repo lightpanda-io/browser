@@ -239,8 +239,12 @@ pub const LoadResources = packed struct(u4) {
 };
 
 pub const ExperimentalFeatures = packed struct(u2) {
-    cors: bool = false,
+    cors: bool = false, // ignored, kept only for backward compatibility.
     serviceworker: bool = false,
+};
+
+pub const DisabledFeatures = packed struct(u1) {
+    cors: bool = false,
 };
 
 /// Common CLI args.
@@ -283,6 +287,7 @@ const CommonOptions = .{
     .{ .name = "disable_subframes", .type = bool, .deprecated = "subframes are now disabled by default, use \"--load-resources iframe\" to enable" },
     .{ .name = "disable_workers", .type = bool, .deprecated = "workers are now disabled by default, use \"--load-resources worker\" to enable" },
     .{ .name = "enable_external_stylesheets", .type = bool, .deprecated = "use \"--load-resources stylesheet\" to enable" },
+    .{ .name = "disable_features", .type = DisabledFeatures, .default = DisabledFeatures{} },
     .{ .name = "experimental_features", .type = ExperimentalFeatures, .default = ExperimentalFeatures{} },
     .{ .name = "load_resources", .type = LoadResources, .default = LoadResources{} },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
@@ -548,6 +553,13 @@ pub fn tlsVerifyHost(self: *const Config) bool {
         inline .serve, .fetch, .mcp, .agent => |opts| !opts.insecure_disable_tls_host_verification,
         // `version --check` talks to the release endpoint; always verify.
         .version => true,
+        else => unreachable,
+    };
+}
+
+pub fn obeyCors(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_features.cors == false,
         else => unreachable,
     };
 }

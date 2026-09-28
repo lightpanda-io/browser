@@ -766,6 +766,8 @@ pub fn Builder(comptime commands: anytype) type {
 
                 break :blk command.options;
             };
+            // toKebabCase walks every byte of every name.
+            @setEvalBranchQuota(50_000);
             iter_args: while (args.next()) |option_name| {
                 inline for (options) |option| {
                     const name = option.name;
