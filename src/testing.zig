@@ -884,6 +884,22 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond("", .{ .status = @enumFromInt(code) });
     }
 
+    if (std.mem.eql(u8, path, "/xhr/reason")) {
+        return req.respond("", .{
+            .status = .service_unavailable,
+            .reason = "HOUSTON WE HAVE A",
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/401")) {
+        return req.respond("No", .{
+            .status = .unauthorized,
+            .extra_headers = &.{
+                .{ .name = "WWW-Authenticate", .value = "Basic realm=\"test\"" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/xhr/500")) {
         return req.respond("Internal Server Error", .{
             .status = .internal_server_error,

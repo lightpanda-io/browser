@@ -66,6 +66,7 @@ _async: bool = true,
 _response: ?Response = null,
 _response_data: std.ArrayList(u8) = .empty,
 _response_status: u16 = 0,
+_response_status_text: ?[]const u8 = null,
 _response_len: ?usize = 0,
 _response_url: [:0]const u8 = "",
 _override_mime: ?Mime = null,
@@ -230,6 +231,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async
     self._response_xml = null;
     self._response_data.clearRetainingCapacity();
     self._response_status = 0;
+    self._response_status_text = null;
     self._response_len = 0;
     self._response_url = "";
     self._response_mime = null;
@@ -397,6 +399,9 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     defer self.releaseSelfRef();
 
     self._response_status = resp.status;
+    if (resp.status_text.get()) |st| {
+        self._response_status_text = try self._arena.dupe(u8, st);
+    }
     self._response_url = self._url;
     self._response_len = resp.body.items.len;
 
@@ -510,6 +515,9 @@ pub fn getStatus(self: *const XMLHttpRequest) u16 {
 }
 
 fn getStatusText(self: *const XMLHttpRequest) []const u8 {
+    if (self._response_status_text) |st| {
+        return st;
+    }
     return std.http.Status.phrase(@enumFromInt(self._response_status)) orelse "";
 }
 
@@ -660,6 +668,9 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     }
 
     self._response_status = transfer.responseStatus().?;
+    if (transfer.statusText()) |st| {
+        self._response_status_text = try self._arena.dupe(u8, st);
+    }
     if (transfer.getContentLength()) |cl| {
         self._response_len = cl;
     }

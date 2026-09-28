@@ -234,7 +234,10 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     }
 
     res._status = status;
-    res._status_text = std.http.Status.phrase(@enumFromInt(status)) orelse "";
+    res._status_text = if (transfer.statusText()) |st|
+        try arena.allocator().dupe(u8, st)
+    else
+        std.http.Status.phrase(@enumFromInt(status)) orelse "";
     res._url = try arena.dupeZ(u8, transfer.req.url);
     res._is_redirected = transfer.redirectCount().? > 0;
 
