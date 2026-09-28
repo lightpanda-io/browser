@@ -286,9 +286,10 @@ const Pass = struct {
 
                 var inner = ctx;
                 switch (tag) {
-                    .anchor => {
+                    // Unlike readability: without href, <a> is a placeholder
+                    // (tag chips, JS buttons), and its text is not link text.
+                    .anchor => if (el.getAttributeSafe(comptime .wrap("href"))) |href| {
                         inner.in_link = true;
-                        const href = el.getAttributeSafe(comptime .wrap("href")) orelse "";
                         inner.hash_link = href.len > 0 and href[0] == '#';
                     },
                     .h1, .h2, .h3, .h4, .h5, .h6 => inner.in_heading = true,
@@ -919,6 +920,15 @@ test "clutter: qualifying sibling paragraphs come along" {
     const out = try extract("<div id=\"wrap\"><div class=\"body\"><p>" ++ prose ++ "</p><p>" ++ prose ++ "</p></div><p>" ++ prose ++ "</p><div class=\"nav\"><a href=\"/a\">a</a> <a href=\"/b\">b</a> <a href=\"/c\">c</a></div></div>");
     try testing.expectEqual(3, std.mem.count(u8, out, "wild lactobacillaceae"));
     try testing.expectEqual(null, std.mem.indexOf(u8, out, "[a]"));
+}
+
+test "clutter: anchors without href are not link text" {
+    const quote = "<div class=\"quote\"><span>" ++ prose ++ "</span><div class=\"tags\">Tags: <a class=\"tag\">bread</a></div></div>";
+    // A short quote with many tags: over 0.2 link density if tags counted.
+    const tagged = "<div class=\"quote\"><span>I have not failed. I've just found ten thousand ways that won't work.</span><span>by Thomas A. Edison</span>" ++
+        "<div class=\"tags\">Tags: <a class=\"tag\">edison</a> <a class=\"tag\">failure</a> <a class=\"tag\">inspirational</a> <a class=\"tag\">paraphrased</a></div></div>";
+    const out = try extract("<div class=\"quotes\">" ++ quote ++ quote ++ tagged ++ quote ++ "</div>");
+    try testing.expectEqual(true, std.mem.indexOf(u8, out, "ten thousand ways") != null);
 }
 
 test "clutter: the prune set lives in the caller's allocator" {

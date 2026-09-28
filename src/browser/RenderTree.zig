@@ -343,7 +343,7 @@ fn measureChild(self: *const RenderTree, child: Child, where: Measure.Where, m: 
             const el = child.node.subtype(Element);
             const inner: Measure.Where = .{
                 .shell = where.shell or dump_html.isShellElement(el),
-                .link = where.link or el.getTag() == .anchor,
+                .link = where.link or (el.getTag() == .anchor and el.getAttributeInterned("href") != null),
             };
             if (el.is(Slot)) |slot| {
                 var it = self.slotted(slot);
