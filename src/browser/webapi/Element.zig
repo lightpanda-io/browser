@@ -1917,7 +1917,7 @@ fn calculateDocumentPosition(node: *Node) f64 {
 }
 
 // Counts total nodes in a subtree (node + all descendants)
-pub fn countSubtreeNodes(node: *Node) f64 {
+fn countSubtreeNodes(node: *Node) f64 {
     var count: f64 = 0;
     var tw = TreeWalker.Full.init(node, .{});
     while (tw.next()) |_| {

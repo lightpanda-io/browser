@@ -71,6 +71,20 @@
   window.scrollTo(0, 0);
 </script>
 
+<script id=scrollTo_reaches_nested_spacer>
+  // Virtualized lists size an inner spacer inside an auto-height wrapper
+  const outer = document.createElement('div');
+  const spacer = document.createElement('div');
+  spacer.style.height = '20000px';
+  outer.appendChild(spacer);
+  document.body.appendChild(outer);
+  window.scrollTo(0, 99999999);
+  testing.expectTrue(window.scrollY + window.innerHeight >= 20000);
+  testing.expectEqual(document.documentElement.scrollHeight - window.innerHeight, window.scrollY);
+  outer.remove();
+  window.scrollTo(0, 0);
+</script>
+
 <script id=element_scroll_events_coalesce_and_preserve_reentrancy type=module>
   const state = await testing.async();
   const element = document.createElement('div');

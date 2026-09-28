@@ -505,9 +505,10 @@ pub fn getDocumentElement(self: *Document) ?*Element {
 pub const Extent = struct { width: f64, height: f64 };
 
 /// The document's size. Height: enough for every synthetic position (5px per
-/// node) and body's stacked children. Width: body's widest child. An inline
-/// size on body stretches both. A document without a frame isn't rendered,
-/// so it has no size.
+/// node), the bottom of every element with a declared height, and body's
+/// stacked children. Width: body's widest child. An inline size on body
+/// stretches both. A document without a frame isn't rendered, so it has no
+/// size.
 pub fn extent(self: *Document) Extent {
     const frame = self._frame orelse return .{ .width = 0, .height = 0 };
     const version = frame.page.style_version;
@@ -518,11 +519,29 @@ pub fn extent(self: *Document) Extent {
         }
     }
 
-    var size: Extent = .{ .width = 0, .height = Element.countSubtreeNodes(self.asNode()) * 5.0 };
+    const style_manager = &frame._style_manager;
+    var size: Extent = .{ .width = 0, .height = 0 };
+
+    // A nested spacer (virtualized lists) must extend the document even when
+    // its auto-height ancestors count as 5px each. Body's own children are
+    // stacked below instead.
+    var index: f64 = 0;
+    var tw = @import("TreeWalker.zig").Full.init(self.asNode(), .{});
+    while (tw.next()) |node| : (index += 1) {
+        const el = node.is(Element) orelse continue;
+        const parent = el.parentElement() orelse continue;
+        if (parent.getTag() == .html or parent.getTag() == .body) {
+            continue;
+        }
+        if (style_manager.declaredSize(el, .height)) |height| {
+            size.height = @max(size.height, index * 5.0 + height);
+        }
+    }
+    size.height = @max(size.height, index * 5.0);
+
     if (self.is(HTMLDocument)) |html_doc| {
         if (html_doc.getBody()) |html_body| {
             const body = html_body.asElement();
-            const style_manager = &frame._style_manager;
             size.height = @max(size.height, body.contentAxis(frame, .height), style_manager.inlineSize(body, .height) orelse 0);
             size.width = style_manager.inlineSize(body, .width) orelse 0;
             var child = body.asNode().firstChild();
