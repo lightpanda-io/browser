@@ -1434,6 +1434,7 @@ const SyncContext = struct {
     } = .in_progress,
 
     status: u16 = 0,
+    status_text: http.StatusText = .{},
     body: std.ArrayList(u8),
 
     // Acquired on the first byte we have to buffer, so a bodyless response
@@ -1444,6 +1445,7 @@ const SyncContext = struct {
         const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
         lp.assert(transfer.responseStatus() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = transfer.responseStatus() });
         self.status = transfer.responseStatus().?;
+        self.status_text = transfer.res.status_text;
         const body_len = transfer.bodyLen();
         if (body_len > 0) {
             try self.body.ensureTotalCapacityPrecise(try self.bodyAllocator(body_len), body_len);
@@ -2112,6 +2114,7 @@ pub const Request = struct {
 const SyncResponse = struct {
     status: u16,
     body: std.ArrayList(u8),
+    status_text: http.StatusText,
 
     // Owns `body`. Null when the response had nothing to buffer. Callers that
     // keep `body` past this call take the arena instead of releasing it.
@@ -2671,6 +2674,7 @@ pub const Transfer = struct {
             .in_progress => @panic("Impossible to be in progress here."),
             .done, .shutdown => return .{
                 .status = sync_ctx.status,
+                .status_text = sync_ctx.status_text,
                 .body = sync_ctx.body,
                 .arena = sync_ctx.arena,
             },
@@ -3478,10 +3482,11 @@ pub const Transfer = struct {
 
         const url = try conn.getEffectiveUrl();
 
-        const status: u16 = if (self._auth_challenge != null)
-            407
-        else
-            try conn.getResponseCode();
+        var status = try conn.getResponseCode();
+        if (status == 0 and self._auth_challenge != null) {
+            // A proxy that refuses the CONNECT gives us no status code
+            status = try conn.getConnectCode();
+        }
 
         self.res.header = .{
             .url = url,
@@ -3831,7 +3836,14 @@ pub const Transfer = struct {
             std.debug.assert(chunk_count == 1);
         }
 
-        if (announcesBody(buffer[0..chunk_len]) == false) {
+        const line = buffer[0..chunk_len];
+        if (std.mem.startsWith(u8, line, "HTTP/")) {
+            const conn: *http.Connection = @ptrCast(@alignCast(data));
+            conn.transport.http.res.status_text = .fromStatusLine(line);
+            return chunk_len;
+        }
+
+        if (announcesBody(line) == false) {
             return chunk_len;
         }
 
@@ -4008,6 +4020,10 @@ pub const Transfer = struct {
     pub fn responseStatus(self: *const Transfer) ?u16 {
         const rh = self.res.header orelse return null;
         return rh.status;
+    }
+
+    pub fn statusText(self: *const Transfer) ?[]const u8 {
+        return self.res.status_text.get();
     }
 
     pub fn contentType(self: *Transfer) ?[]const u8 {
@@ -4250,6 +4266,10 @@ const ResourceTiming = struct {
 // (status / contentType / responseHeaderIterator / getContentLength).
 const Response = struct {
     header: ?http.ResponseHead = null,
+
+    // From the most recent status line curl reported (a CONNECT, a 1xx or
+    // an auth challenge can precede the final one).
+    status_text: http.StatusText = .{},
 
     // Full response headers, materialized into the transfer arena at
     // completion (or set directly by cache / synthetic / fulfill). Names are

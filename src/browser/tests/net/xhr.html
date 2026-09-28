@@ -194,6 +194,46 @@
   }
 </script>
 
+<script id=xhr_reason_phrase type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve() };
+    req.open('GET', 'http://127.0.0.1:9582/xhr/reason');
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(503, req.status);
+      testing.expectEqual('HOUSTON WE HAVE A', req.statusText);
+    });
+  }
+</script>
+
+<script id=xhr_reason_phrase_sync>
+  {
+    const req = new XMLHttpRequest();
+    req.open('GET', 'http://127.0.0.1:9582/xhr/reason', false);
+    req.send();
+    testing.expectEqual(503, req.status);
+    testing.expectEqual('HOUSTON WE HAVE A', req.statusText);
+  }
+</script>
+
+<script id=xhr_401_challenge type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve() };
+    req.open('GET', 'http://127.0.0.1:9582/xhr/401');
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(401, req.status);
+      testing.expectEqual('Unauthorized', req.statusText);
+    });
+  }
+</script>
+
 <script id=xhr_abort type=module>
   {
     const state = await testing.async();

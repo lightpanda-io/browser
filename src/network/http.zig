@@ -228,6 +228,32 @@ pub const AuthChallenge = struct {
     }
 };
 
+// The actual reason phrase from the server, verbatim. HTTP/2 has none, so "".
+pub const StatusText = struct {
+    pub const MAX_LEN = 128;
+
+    _len: ?u8 = null,
+    _buf: [MAX_LEN]u8 = undefined,
+
+    pub fn fromStatusLine(line: []const u8) StatusText {
+        const trimmed = std.mem.trimEnd(u8, line, "\r\n");
+        // HTTP-version SP status-code SP [ reason-phrase ]
+        const sp1 = std.mem.indexOfScalar(u8, trimmed, ' ') orelse return .{ ._len = 0 };
+        const sp2 = std.mem.indexOfScalarPos(u8, trimmed, sp1 + 1, ' ') orelse return .{ ._len = 0 };
+        const phrase = trimmed[sp2 + 1 ..];
+        const len = @min(phrase.len, MAX_LEN);
+
+        var st: StatusText = .{ ._len = @intCast(len) };
+        @memcpy(st._buf[0..len], phrase[0..len]);
+        return st;
+    }
+
+    pub fn get(self: *const StatusText) ?[]const u8 {
+        const len = self._len orelse return null;
+        return self._buf[0..len];
+    }
+};
+
 pub const ResponseHead = struct {
     // Matches Mime.parse's 255-byte cap
     pub const MAX_CONTENT_TYPE_LEN = 255;
@@ -1039,6 +1065,17 @@ test "Header.param" {
     try testing.expect((Header{ .name = "Content-Disposition", .value = "attachment" }).param("filename") == null);
     // Empty values are skipped.
     try testing.expect((Header{ .name = "Content-Disposition", .value = "attachment; filename=\"\"" }).param("filename") == null);
+}
+
+test "StatusText.fromStatusLine" {
+    try testing.expect((StatusText{}).get() == null);
+    try testing.expectEqualSlices(u8, "OK", StatusText.fromStatusLine("HTTP/1.1 200 OK\r\n").get().?);
+    try testing.expectEqualSlices(u8, "HOUSTON WE HAVE A", StatusText.fromStatusLine("HTTP/1.1 503 HOUSTON WE HAVE A\r\n").get().?);
+    try testing.expectEqualSlices(u8, "lowercase", StatusText.fromStatusLine("HTTP/1.0 502 lowercase\r\n").get().?);
+    // curl's synthesized HTTP/2 status line has no phrase
+    try testing.expectEqualSlices(u8, "", StatusText.fromStatusLine("HTTP/2 200 \r\n").get().?);
+    try testing.expectEqualSlices(u8, "", StatusText.fromStatusLine("HTTP/1.1 200\r\n").get().?);
+    try testing.expectEqual(StatusText.MAX_LEN, StatusText.fromStatusLine("HTTP/1.1 200 " ++ "x" ** 200).get().?.len);
 }
 
 test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {
