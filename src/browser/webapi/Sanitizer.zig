@@ -1099,7 +1099,7 @@ pub fn parseHTML(html: []const u8, options: ?Options, safe: bool, frame: *Frame)
 
 fn sanitize(self: *const Sanitizer, root: *Node, safe: bool, frame: *Frame) !void {
     if (@TypeOf(self) != *const Sanitizer) {
-        @compileError("self *must* remain const since it can reference a globally shared defaulf sanitizer that cannot be mutated");
+        @compileError("self *must* remain const since it can reference a globally shared default sanitizer that cannot be mutated");
     }
     const arena = frame.call_arena;
 
