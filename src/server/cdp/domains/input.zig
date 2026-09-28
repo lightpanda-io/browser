@@ -229,6 +229,11 @@ test "cdp.input: insertText replaces select()ed value of email and number inputs
     _ = try ls.local.compileAndRun("inp.type = 'number'; inp.value = '12'; inp.select();", null);
     try ctx.processMessage(.{ .id = 2, .method = "Input.insertText", .params = .{ .text = "345" } });
     try testing.expect((try ls.local.compileAndRun("inp.value === '345'", null)).isTrue());
+
+    // The caret lands at the end of the sanitized value, not of the inserted text.
+    _ = try ls.local.compileAndRun("inp.type = 'text'; inp.value = 'ab'; inp.select();", null);
+    try ctx.processMessage(.{ .id = 3, .method = "Input.insertText", .params = .{ .text = "c\nd" } });
+    try testing.expect((try ls.local.compileAndRun("inp.value === 'cd' && inp.selectionStart === 2", null)).isTrue());
 }
 
 test "cdp.input: dispatchMouseEvent mouseMoved fires hover events" {

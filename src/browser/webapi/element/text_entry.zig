@@ -77,8 +77,10 @@ pub fn TextEntry(comptime T: type) type {
                     // fully selected, replace the content.
                     const new_value = try arena.dupe(u8, str);
                     try self.setUserValue(new_value, frame);
-                    self._selection_start = @intCast(new_value.len);
-                    self._selection_end = @intCast(new_value.len);
+                    // the sanitized value can be shorter than what was inserted
+                    const new_len: u32 = @intCast(self.getValue().len);
+                    self._selection_start = new_len;
+                    self._selection_end = new_len;
                     self._selection_direction = .none;
                     try dispatchSelectionChangeEvent(self, frame);
                 },
@@ -95,9 +97,9 @@ pub fn TextEntry(comptime T: type) type {
                     );
                     try self.setUserValue(new_value, frame);
 
-                    const new_pos = range[0] + str.len;
-                    self._selection_start = @intCast(new_pos);
-                    self._selection_end = @intCast(new_pos);
+                    const new_pos: u32 = @intCast(@min(range[0] + str.len, self.getValue().len));
+                    self._selection_start = new_pos;
+                    self._selection_end = new_pos;
                     self._selection_direction = .none;
                     try dispatchSelectionChangeEvent(self, frame);
                 },
@@ -169,6 +171,16 @@ pub fn TextEntry(comptime T: type) type {
             self._selection_direction = .none;
             try dispatchSelectionChangeEvent(self, frame);
             try dispatchInputEvent(self, null, if (forward) "deleteContentForward" else "deleteContentBackward", frame);
+        }
+
+        // Collapses the selection to the end of the value. Unlike
+        // setSelectionRange(), applies to email and number too.
+        pub fn caretToEnd(self: *T, frame: *Frame) !void {
+            if (tracksSelection(self) == false) {
+                return;
+            }
+            const len: u32 = @intCast(self.getValue().len);
+            try applySelectionRange(self, len, len, .none, frame);
         }
 
         pub const CaretMove = enum { backward, forward, line_start, line_end };

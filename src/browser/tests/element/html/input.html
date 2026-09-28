@@ -609,5 +609,13 @@
     email.select();
     testing.expectEqual(1, selects);
     testing.expectError('InvalidStateError', () => email.setSelectionRange(0, 1));
+
+    const date = document.createElement('input');
+    date.type = 'date';
+    date.value = '2026-09-28';
+    let date_selects = 0;
+    date.addEventListener('select', () => date_selects++);
+    date.select();
+    testing.expectEqual(0, date_selects);
   }
 </script>
