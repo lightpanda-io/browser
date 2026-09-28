@@ -24,6 +24,7 @@ const URL = @import("../../../browser/URL.zig");
 const Cookie = @import("../../../browser/webapi/storage/storage.zig").Cookie;
 
 const log = lp.log;
+const Allocator = std.mem.Allocator;
 const CookieJar = Cookie.Jar;
 pub const PreparedUri = Cookie.PreparedUri;
 
@@ -85,18 +86,11 @@ fn setCookies(cmd: *CDP.Command) !void {
         }
     }
 
-    for (params.cookies) |param| {
-        try setCdpCookie(&bc.session.cookie_jar, param);
-    }
+    _ = try setCdpCookies(&bc.session.cookie_jar, params.cookies);
 
     try cmd.sendResult(null, .{});
 }
 
-pub const SameSite = enum {
-    Strict,
-    Lax,
-    None,
-};
 const CookiePriority = enum {
     Low,
     Medium,
@@ -121,7 +115,7 @@ pub const CdpCookie = struct {
     path: ?[:0]const u8 = null,
     secure: ?bool = null, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
     httpOnly: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
-    sameSite: SameSite = .None, // default: https://datatracker.ietf.org/doc/html/draft-west-first-party-cookies
+    sameSite: ?[]const u8 = null, // Strict, Lax or None; anything else is unspecified, see parseSameSite
     expires: ?f64 = null, // -1? says google
     priority: CookiePriority = .Medium, // default: https://datatracker.ietf.org/doc/html/draft-west-cookie-priority-00
     sameParty: ?bool = null,
@@ -130,48 +124,93 @@ pub const CdpCookie = struct {
     partitionKey: ?CookiePartitionKey = null,
 };
 
-pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
+/// Network.setCookie, Network.setCookies and Storage.setCookies. Every
+/// cookie is built before any is added: an entry `buildCdpCookie` refuses
+/// in the middle of a batch leaves the jar untouched, as Chrome's
+/// SetCookies does. `Jar.add`'s own checks can still stop a batch part-way.
+/// Returns how many cookies were stored.
+pub fn setCdpCookies(cookie_jar: *CookieJar, params: []const CdpCookie) !usize {
+    var cookies = try std.ArrayList(Cookie).initCapacity(cookie_jar.allocator, params.len);
+    defer cookies.deinit(cookie_jar.allocator);
+
+    // A cookie handed to `Jar.add` is its to free, stored or not; the ones
+    // we still hold when something fails are ours.
+    var added: usize = 0;
+    errdefer for (cookies.items[added..]) |*cookie| cookie.deinit();
+
+    for (params) |param| {
+        cookies.appendAssumeCapacity(try buildCdpCookie(cookie_jar.allocator, param));
+    }
+
+    const now = lp.datetime.timestamp(.real);
+    var stored: usize = 0;
+    for (cookies.items) |cookie| {
+        added += 1;
+        if (cookie.same_site == .none and !cookie.secure) {
+            // Chrome's store refuses SameSite=None without Secure, as
+            // `Cookie.parse` does for a Set-Cookie.
+            cookie.deinit();
+            continue;
+        }
+        try cookie_jar.add(cookie, now, true);
+        stored += 1;
+    }
+    return stored;
+}
+
+fn buildCdpCookie(allocator: Allocator, param: CdpCookie) !Cookie {
     // Silently ignore partitionKey since we don't support partitioned cookies (CHIPS).
     // This allows Puppeteer's frame.setCookie() to work, which may send cookies with
     // partitionKey as part of its cookie-setting workflow.
     if (param.partitionKey != null) {
-        log.warn(.not_implemented, "partition key", .{ .src = "setCdpCookie" });
+        log.warn(.not_implemented, "partition key", .{ .src = "buildCdpCookie" });
     }
     // Still reject unsupported features
     if (param.priority != .Medium or param.sameParty != null or param.sourceScheme != null) {
         return error.NotImplemented;
     }
 
-    // The errdefer only protects construction failures. Once we `break :blk`
-    // with the Cookie value, `Jar.add` owns its lifetime.
-    const cookie = blk: {
-        var arena = std.heap.ArenaAllocator.init(cookie_jar.allocator);
-        errdefer arena.deinit();
-        const a = arena.allocator();
+    // NOTE: The param.url can affect the default domain, (NOT path), secure, source port, and source scheme.
+    const secure = if (param.secure) |s| s else if (param.url) |url| URL.isSecure(url) else false;
 
-        // NOTE: The param.url can affect the default domain, (NOT path), secure, source port, and source scheme.
-        const domain = try Cookie.parseDomain(a, param.url, param.domain);
-        const path = if (param.path == null) "/" else try Cookie.parsePath(a, null, param.path);
+    const same_site = parseSameSite(param.sameSite);
 
-        const secure = if (param.secure) |s| s else if (param.url) |url| URL.isSecure(url) else false;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
 
-        break :blk Cookie{
-            .arena = arena,
-            .name = try a.dupe(u8, param.name),
-            .value = try a.dupe(u8, param.value),
-            .path = path,
-            .domain = domain,
-            .expires = param.expires,
-            .secure = secure,
-            .http_only = param.httpOnly,
-            .same_site = switch (param.sameSite) {
-                .Strict => .strict,
-                .Lax => .lax,
-                .None => .none,
-            },
-        };
+    // Allocate before the struct literal copies `arena` into the result.
+    const name = try a.dupe(u8, param.name);
+    const value = try a.dupe(u8, param.value);
+    const domain = try Cookie.parseDomain(a, param.url, param.domain);
+    const path = if (param.path == null) "/" else try Cookie.parsePath(a, null, param.path);
+
+    return .{
+        .arena = arena,
+        .name = name,
+        .value = value,
+        .path = path,
+        .domain = domain,
+        .expires = param.expires,
+        .secure = secure,
+        .http_only = param.httpOnly,
+        .same_site = same_site orelse .lax,
+        .same_site_default = same_site == null,
     };
-    try cookie_jar.add(cookie, lp.datetime.timestamp(.real), true);
+}
+
+// Chrome's MakeCookieFromProtocolValues takes CDP's exact Strict, Lax or
+// None. Anything else, "lax" included, or no value leaves the cookie
+// unspecified: Lax by default with the Lax-allowing-unsafe window, like a
+// Set-Cookie without the attribute (`Cookie.parse`, which, unlike CDP, is
+// case-insensitive).
+fn parseSameSite(value: ?[]const u8) ?Cookie.SameSite {
+    const same_site = std.meta.stringToEnum(enum { Strict, Lax, None }, value orelse return null) orelse return null;
+    return switch (same_site) {
+        .Strict => .strict,
+        .Lax => .lax,
+        .None => .none,
+    };
 }
 
 pub const CookieWriter = struct {
@@ -235,11 +274,15 @@ fn writeCookie(cookie: *const Cookie, w: anytype) !void {
         try w.objectField("session");
         try w.write(cookie.expires == null);
 
-        try w.objectField("sameSite");
-        switch (cookie.same_site) {
-            .none => try w.write("None"),
-            .lax => try w.write("Lax"),
-            .strict => try w.write("Strict"),
+        // Chrome's BuildCookie reports an explicit Strict/Lax/None only; a
+        // cookie that is Lax by default has no sameSite.
+        if (!cookie.same_site_default) {
+            try w.objectField("sameSite");
+            switch (cookie.same_site) {
+                .none => try w.write("None"),
+                .lax => try w.write("Lax"),
+                .strict => try w.write("Strict"),
+            }
         }
 
         // TODO experimentals
@@ -313,5 +356,5 @@ pub const ResCookie = struct {
     size: usize = 0,
     httpOnly: bool = false,
     secure: bool = false,
-    sameSite: []const u8 = "None",
+    sameSite: ?[]const u8 = null,
 };

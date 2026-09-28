@@ -291,9 +291,9 @@ fn setCookie(cmd: *CDP.Command) !void {
     )) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try CdpStorage.setCdpCookie(&bc.session.cookie_jar, params);
+    const stored = try CdpStorage.setCdpCookies(&bc.session.cookie_jar, &.{params});
 
-    try cmd.sendResult(.{ .success = true }, .{});
+    try cmd.sendResult(.{ .success = stored == 1 }, .{});
 }
 
 fn setCookies(cmd: *CDP.Command) !void {
@@ -302,9 +302,7 @@ fn setCookies(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    for (params.cookies) |param| {
-        try CdpStorage.setCdpCookie(&bc.session.cookie_jar, param);
-    }
+    _ = try CdpStorage.setCdpCookies(&bc.session.cookie_jar, params.cookies);
 
     try cmd.sendResult(null, .{});
 }
