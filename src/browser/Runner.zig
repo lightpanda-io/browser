@@ -331,7 +331,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
         };
         const ms_to_wait = @min(timeout_ms, ms_to_next_task);
 
-        if ((comptime is_cdp) and has_runnable_page and self.skipIdleTimeCDP()) {
+        if ((comptime is_cdp) and has_runnable_page and self.skipIdleTime()) {
             _ = try http_client.tick(0);
             return .{ .ok = 0 };
         }
@@ -487,80 +487,47 @@ fn pollFrame(self: *Runner, frame_id: u32, remaining_ms: u32) !void {
 /// Only reached when the last tick made no progress, so a clock jump here
 /// cannot reorder a timer ahead of work that tick completed.
 fn idleSleep(self: *Runner, ms: u32) void {
-    if (ms == 0) {
+    if (ms == 0 or self.skipIdleTime()) {
         return;
     }
-    const real_ms = self.advanceVirtualTime(ms);
-    if (real_ms > 0) {
-        lp.io.sleep(.fromMilliseconds(@intCast(real_ms)), .awake) catch {};
-    }
+    lp.io.sleep(.fromMilliseconds(@intCast(ms)), .awake) catch {};
 }
 
-/// Returns the real ms still to sleep. Grants against the next task, not
-/// `real_wait_ms`, which is clamped to the caller's polling slice.
-fn advanceVirtualTime(self: *Runner, real_wait_ms: u32) u32 {
-    const budget = &(self.session.virtual_time orelse return real_wait_ms);
-    if (self.maySkip(budget) == false) {
-        return real_wait_ms;
-    }
-    const next_ms = self.browser.msToNextTask() orelse return real_wait_ms;
-    const granted = self.skipVirtualTime(next_ms);
-    if (granted == 0) {
-        return real_wait_ms;
-    }
-    return @intCast(@min(real_wait_ms, next_ms - granted));
-}
-
-/// The CDP pump never sleeps idle (the driver's socket keeps the HTTP client
-/// polling), so it skips here instead, and only with no client message
-/// waiting: the skip then reads as the next message arriving later.
-fn skipIdleTimeCDP(self: *Runner) bool {
-    const budget = &(self.session.virtual_time orelse return false);
-    if (self.http_client.hasClientMessages() or self.maySkip(budget) == false) {
-        return false;
-    }
-    const wanted_ms = self.browser.msToNextTask() orelse blk: {
-        if (budget.expires == false) {
-            return false;
-        }
-        break :blk budget.remaining_ms;
-    };
-    if (wanted_ms == 0) {
-        return false;
-    }
-    return self.skipVirtualTime(wanted_ms) > 0;
-}
-
-fn maySkip(self: *Runner, budget: *const VirtualTime.Budget) bool {
-    if (self.browser.hasBackgroundTasks() or hasQueuedNavigation(self.session)) {
-        return false;
-    }
-    return budget.skip_during_fetches or self.http_client.activity().idle();
-}
-
-fn skipVirtualTime(self: *Runner, wanted_ms: u64) u32 {
+/// Grants against the next task, not the caller's polling slice, or a 3 s
+/// timer takes dozens of ticks. The CDP pump never sleeps idle (the driver's
+/// socket keeps the HTTP client polling), so it skips from `_tick`, and only
+/// with no client message waiting: the skip then reads as the next message
+/// arriving later.
+fn skipIdleTime(self: *Runner) bool {
     const session = self.session;
-    const budget = &session.virtual_time.?;
+    const budget = &(session.virtual_time orelse return false);
+    if (budget.skip_during_fetches == false and self.http_client.activity().idle() == false) {
+        return false;
+    }
+    if (session.hasQueuedNavigation() or self.browser.hasBackgroundTasks()) {
+        return false;
+    }
+    if (self.browser.app.live_drivers.load(.monotonic) > 1) {
+        return false;
+    }
+    const wanted_ms = self.browser.msToNextTask() orelse switch (budget.refill) {
+        .expires => budget.remaining_ms,
+        .per_navigation, .unbounded => return false,
+    };
+    if (self.http_client.hasClientMessages()) {
+        return false;
+    }
     const granted = budget.grant(wanted_ms);
     if (granted == 0) {
-        return 0;
+        return false;
     }
     VirtualTime.advance(self.browser.app.platform, granted);
     log.debug(.browser, "virtual time", .{ .advanced_ms = granted, .remaining_ms = budget.remaining_ms });
-    if (budget.expires and budget.remaining_ms == 0) {
+    if (budget.refill == .expires and budget.remaining_ms == 0) {
         session.virtual_time = null;
         session.notification.dispatch(.virtual_time_budget_expired, &.{});
     }
-    return granted;
-}
-
-fn hasQueuedNavigation(session: *Session) bool {
-    for (session.pages.items) |page| {
-        if (page.queued_navigation.items.len != 0) {
-            return true;
-        }
-    }
-    return false;
+    return true;
 }
 
 const testing = @import("../testing.zig");

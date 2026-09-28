@@ -514,8 +514,6 @@ pub const BrowserContext = struct {
 
     intercept_state: InterceptState,
     fetch_session_id: ?[]const u8 = null,
-    // The session that set Emulation.setVirtualTimePolicy: it gets
-    // virtualTimeBudgetExpired, and its detach drops the policy.
     virtual_time_session_id: ?[]const u8 = null,
 
     // Request bodies retained for Network.getRequestPostData, which can be
@@ -1228,11 +1226,7 @@ pub const BrowserContext = struct {
     /// Returns false when no such session is attached.
     pub fn detachSession(self: *BrowserContext, session_id: []const u8) bool {
         const kv = self.attached_sessions.fetchOrderedRemove(session_id) orelse return false;
-        if (self.virtual_time_session_id) |vt_session_id| {
-            if (std.mem.eql(u8, vt_session_id, session_id)) {
-                self.virtualTimeDisable();
-            }
-        }
+        self.virtualTimeDisableForSession(session_id);
         if (self.session_id) |primary| {
             if (std.mem.eql(u8, primary, session_id)) {
                 self.session_id = null;
@@ -1251,7 +1245,14 @@ pub const BrowserContext = struct {
         self.virtualTimeDisable();
     }
 
-    fn virtualTimeDisable(self: *BrowserContext) void {
+    fn virtualTimeDisableForSession(self: *BrowserContext, session_id: []const u8) void {
+        const active_session_id = self.virtual_time_session_id orelse return;
+        if (std.mem.eql(u8, active_session_id, session_id)) {
+            self.virtualTimeDisable();
+        }
+    }
+
+    pub fn virtualTimeDisable(self: *BrowserContext) void {
         self.session.virtual_time = null;
         self.virtual_time_session_id = null;
     }

@@ -112,7 +112,7 @@ _console_capture: bool = false,
 // configured external resources (images, stylesheet, worker, iframe) to load
 load_resources: Config.LoadResources,
 
-// Virtual time the page clock may still skip; null keeps real time.
+// null keeps real time.
 virtual_time: ?VirtualTime.Budget = null,
 
 // opt-in unstable features (--experimental-features)
@@ -385,8 +385,8 @@ fn installNewActivePage(self: *Session, frame_id: u32) !*Frame {
     return frame;
 }
 
-// Inform CDP the main frame has been created so it can point its page handle
-// at the new frame, and start the navigation's virtual time budget afresh.
+/// Inform CDP the main frame has been created so it can point its page handle
+/// at the new frame.
 fn publishActivePage(self: *Session, frame: *Frame) void {
     if (self.virtual_time) |*vt| vt.reset();
     self.notification.dispatch(.frame_created, frame);
@@ -598,6 +598,15 @@ pub fn scheduleNavigation(_: *Session, frame: *Frame) !void {
 // Processing a root navigation mutates self.pages, so it's safer to do this
 // just once, signal the caller, and have them call again. We use a cursor
 // to prevent one page from starving the rest.
+pub fn hasQueuedNavigation(self: *const Session) bool {
+    for (self.pages.items) |page| {
+        if (page.queued_navigation.items.len != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 pub fn processQueuedNavigation(self: *Session) !bool {
     const pages = self.pages.items;
     if (pages.len == 0) {
