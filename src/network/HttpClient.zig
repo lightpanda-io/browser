@@ -1457,6 +1457,10 @@ const SyncContext = struct {
         const body_len = transfer.bodyLen();
         const allocator = try self.bodyAllocator(body_len);
 
+        if (body_len > 0) {
+            try self.body.ensureTotalCapacityPrecise(allocator, body_len);
+        }
+
         if (self.options.copy_headers) {
             var it = transfer.responseHeaderIterator();
             while (it.next()) |hdr| {
@@ -1465,10 +1469,6 @@ const SyncContext = struct {
                     .value = try allocator.dupe(u8, hdr.value),
                 });
             }
-        }
-
-        if (body_len > 0) {
-            try self.body.ensureTotalCapacityPrecise(allocator, body_len);
         }
         return .proceed;
     }
