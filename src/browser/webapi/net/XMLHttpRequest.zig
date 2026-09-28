@@ -406,7 +406,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     self._response_len = resp.body.items.len;
 
     for (resp.headers) |hdr| {
-        if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) {
+        if (std.mem.eql(u8, hdr.name, "content-type")) {
             self.applyContentType(hdr.value) catch |e| {
                 log.info(.http, "invalid content type", .{
                     .content_Type = hdr.value,
