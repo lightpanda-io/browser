@@ -819,3 +819,17 @@ handler runs, abort() cancels the re-send and no load is delivered.
     });
   }
 </script>
+
+<script id=xhr_sync_response_headers type=module>
+  {
+    // Sync XHR goes through HttpClient.submitSync; headers must still come
+    // back with copy_headers = true (which XHR always requests).
+    const req = new XMLHttpRequest();
+    req.open('GET', 'http://127.0.0.1:9582/xhr', false);
+    req.send();
+
+    testing.expectEqual(200, req.status);
+    testing.expectEqual('text/html; charset=utf-8', req.getResponseHeader('Content-Type'));
+    testing.expectEqual('content-length: 100\r\ncontent-type: text/html; charset=utf-8\r\n', req.getAllResponseHeaders());
+  }
+</script>
