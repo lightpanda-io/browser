@@ -395,7 +395,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                     try frame.headersForRequest(transfer, .{});
                 }
 
-                const response = try transfer.submitSync();
+                const response = try transfer.submitSync(.{});
 
                 // Take the body's arena rather than releasing it: `source`
                 // has to outlive this call, up to script.deinit().

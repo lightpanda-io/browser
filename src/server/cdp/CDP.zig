@@ -1713,5 +1713,5 @@ test "cdp: syncRequest short-circuits after disconnect" {
         .resource_type = .fetch,
         .shutdown_callback = HttpClient.noopShutdown,
     }, null);
-    try testing.expectError(error.ClientDisconnected, transfer.submitSync());
+    try testing.expectError(error.ClientDisconnected, transfer.submitSync(.{}));
 }

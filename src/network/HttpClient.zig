@@ -1424,6 +1424,11 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     };
 }
 
+pub const SyncOptions = struct {
+    // Whether to copy the response headers into SyncResponse.headers.
+    copy_headers: bool = false,
+};
+
 const SyncContext = struct {
     client: *Client,
     completion: union(enum) {
@@ -1432,6 +1437,8 @@ const SyncContext = struct {
         err: anyerror,
         shutdown: void,
     } = .in_progress,
+
+    options: SyncOptions = .{},
 
     status: u16 = 0,
     status_text: http.StatusText = .{},
@@ -1450,12 +1457,14 @@ const SyncContext = struct {
         const body_len = transfer.bodyLen();
         const allocator = try self.bodyAllocator(body_len);
 
-        var it = transfer.responseHeaderIterator();
-        while (it.next()) |hdr| {
-            try self.headers.append(allocator, .{
-                .name = try allocator.dupe(u8, hdr.name),
-                .value = try allocator.dupe(u8, hdr.value),
-            });
+        if (self.options.copy_headers) {
+            var it = transfer.responseHeaderIterator();
+            while (it.next()) |hdr| {
+                try self.headers.append(allocator, .{
+                    .name = try allocator.dupe(u8, hdr.name),
+                    .value = try allocator.dupe(u8, hdr.value),
+                });
+            }
         }
 
         if (body_len > 0) {
@@ -2630,7 +2639,7 @@ pub const Transfer = struct {
         };
     }
 
-    pub fn submitSync(self: *Transfer) !SyncResponse {
+    pub fn submitSync(self: *Transfer, opts: SyncOptions) !SyncResponse {
         const client = self.client;
 
         if (client.disconnected) {
@@ -2646,7 +2655,7 @@ pub const Transfer = struct {
             return error.SyncWaitInterrupted;
         }
 
-        var sync_ctx = SyncContext{ .client = client, .body = .empty };
+        var sync_ctx = SyncContext{ .client = client, .body = .empty, .options = opts };
         errdefer if (sync_ctx.arena) |arena| arena.release();
 
         const req = &self.req;

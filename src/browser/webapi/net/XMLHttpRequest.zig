@@ -384,7 +384,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         return;
     }
 
-    var resp = transfer.submitSync() catch |err| {
+    var resp = transfer.submitSync(.{ .copy_headers = true }) catch |err| {
         log.err(.http, "sync request failed", .{
             .source = "xhr",
             .url = self._url,
