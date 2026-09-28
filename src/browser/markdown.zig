@@ -82,6 +82,8 @@ const Context = struct {
     // what follows after the children
     const Epilogue = union(enum) {
         none,
+        // A standalone anchor without href: its own line, but no link syntax.
+        standalone_text,
         element: Element.Tag,
         block_anchor: struct { href: []const u8, label: ?[]const u8 },
         inline_anchor: struct { href: []const u8, standalone: bool },
@@ -258,12 +260,16 @@ const Context = struct {
                 return;
             },
             .anchor => {
+                const frame = self.frame;
                 // Without href, <a> is a placeholder, not a hyperlink.
                 const href_raw = el.getAttributeInterned("href") orelse {
-                    return self.open(.init(self.tree.content(el, boxed)), .none);
+                    if (!RenderTree.isStandaloneAnchor(el, frame)) {
+                        return self.open(.init(self.tree.content(el, boxed)), .none);
+                    }
+                    try self.ensureNewline();
+                    return self.open(.init(self.tree.content(el, boxed)), .standalone_text);
                 };
 
-                const frame = self.frame;
                 const info = RenderTree.analyzeContent(el.asNode(), frame);
                 const label = getAnchorLabel(el);
                 const href = URL.resolve(frame.local_arena, frame.base(), href_raw, .{ .encoding = frame.charset }) catch href_raw;
@@ -308,6 +314,10 @@ const Context = struct {
     fn close(self: *Context, epilogue: Epilogue) Error!void {
         const tag = switch (epilogue) {
             .none => return,
+            .standalone_text => {
+                try self.ensureNewline();
+                return;
+            },
             .element => |t| t,
             .block_anchor => |anchor| {
                 try self.ensureNewline();
@@ -754,8 +764,12 @@ test "browser.markdown: anchor fallback label" {
 
 test "browser.markdown: anchor without href is plain text" {
     try testMarkdownHTML(
-        \\<div>Tags: <a class="tag">change</a> <a class="tag"><b>deep</b></a></div>
-    , "Tags: change **deep**\n");
+        \\<p>Read the <a class="term">glossary</a> first.</p>
+    , "\nRead the glossary first.\n");
+
+    try testMarkdownHTML(
+        \\<nav><a class="x">Home</a><a class="x"><b>About</b></a></nav>
+    , "Home\n**About**\n");
 
     try testMarkdownHTML(
         \\<a aria-label="Menu"><svg></svg></a>
