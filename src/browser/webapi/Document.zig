@@ -505,7 +505,7 @@ pub fn getDocumentElement(self: *Document) ?*Element {
 pub const Extent = struct { width: f64, height: f64 };
 
 /// The document's size. Height: enough for every synthetic position (5px per
-/// node), the bottom of every element with a declared height, and body's
+/// node), the bottom of every element with an inline height, and body's
 /// stacked children. Width: body's widest child. An inline size on body
 /// stretches both. A document without a frame isn't rendered, so it has no
 /// size.
@@ -524,7 +524,8 @@ pub fn extent(self: *Document) Extent {
 
     // A nested spacer (virtualized lists) must extend the document even when
     // its auto-height ancestors count as 5px each. Body's own children are
-    // stacked below instead.
+    // stacked below instead. Only inline heights: virtualizers set theirs
+    // inline, and the cascade per element is too slow on every mutation.
     var index: f64 = 0;
     var tw = @import("TreeWalker.zig").Full.init(self.asNode(), .{});
     while (tw.next()) |node| : (index += 1) {
@@ -533,7 +534,7 @@ pub fn extent(self: *Document) Extent {
         if (parent.getTag() == .html or parent.getTag() == .body) {
             continue;
         }
-        if (style_manager.declaredSize(el, .height)) |height| {
+        if (style_manager.inlineSize(el, .height)) |height| {
             size.height = @max(size.height, index * 5.0 + height);
         }
     }
