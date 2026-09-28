@@ -79,19 +79,19 @@ pub fn getError(rc: c_int) Error!void {
     };
 }
 
-pub extern fn simdutf_validate_utf8(buf: [*]const u8, len: usize) bool;
-pub extern fn simdutf_validate_ascii(buf: [*]const u8, len: usize) bool;
-pub extern fn simdutf_validate_ascii_with_errors(buf: [*]const u8, len: usize) result;
-pub extern fn simdutf_count_utf8(input: [*]const u8, length: usize) usize;
-pub extern fn simdutf_utf8_length_from_latin1(input: [*]const u8, length: usize) usize;
-pub extern fn simdutf_utf16_length_from_utf8(input: [*]const u8, length: usize) usize;
-pub extern fn simdutf_convert_latin1_to_utf8(input: [*]const u8, length: usize, output: [*]u8) usize;
-pub extern fn simdutf_maximal_binary_length_from_base64(input: [*]const u8, length: usize) usize;
-pub extern fn simdutf_maximal_binary_length_from_base64_utf16(input: [*]const u16, length: usize) usize;
-pub extern fn simdutf_base64_to_binary(input: [*]const u8, length: usize, output: [*]u8, options: c_int, last_chunk_options: c_int) result;
-pub extern fn simdutf_base64_length_from_binary(length: usize, options: c_int) usize;
-pub extern fn simdutf_binary_to_base64(input: [*]const u8, length: usize, output: [*]u8, options: c_int) usize;
-pub extern fn simdutf_trim_partial_utf8(input: [*]const u8, length: usize) usize;
+pub extern fn v8__simdutf_validate_utf8(buf: [*]const u8, len: usize) bool;
+pub extern fn v8__simdutf_validate_ascii(buf: [*]const u8, len: usize) bool;
+pub extern fn v8__simdutf_validate_ascii_with_errors(buf: [*]const u8, len: usize) result;
+pub extern fn v8__simdutf_count_utf8(input: [*]const u8, length: usize) usize;
+pub extern fn v8__simdutf_utf8_length_from_latin1(input: [*]const u8, length: usize) usize;
+pub extern fn v8__simdutf_utf16_length_from_utf8(input: [*]const u8, length: usize) usize;
+pub extern fn v8__simdutf_convert_latin1_to_utf8(input: [*]const u8, length: usize, output: [*]u8) usize;
+pub extern fn v8__simdutf_maximal_binary_length_from_base64(input: [*]const u8, length: usize) usize;
+pub extern fn v8__simdutf_maximal_binary_length_from_base64_utf16(input: [*]const u16, length: usize) usize;
+pub extern fn v8__simdutf_base64_to_binary(input: [*]const u8, length: usize, output: [*]u8, options: c_int, last_chunk_options: c_int) result;
+pub extern fn v8__simdutf_base64_length_from_binary(length: usize, options: c_int) usize;
+pub extern fn v8__simdutf_binary_to_base64(input: [*]const u8, length: usize, output: [*]u8, options: c_int) usize;
+pub extern fn v8__simdutf_trim_partial_utf8(input: [*]const u8, length: usize) usize;
 
 pub const Base64 = struct {
     pub const Type = enum(c_int) {
@@ -107,22 +107,22 @@ pub const Base64 = struct {
 
     pub const Encoder = struct {
         pub inline fn calcSize(encoder: Type, source_len: usize) usize {
-            return simdutf_base64_length_from_binary(source_len, @intFromEnum(encoder));
+            return v8__simdutf_base64_length_from_binary(source_len, @intFromEnum(encoder));
         }
 
         pub inline fn encode(encoder: Type, dest: []u8, source: []const u8) []const u8 {
-            const written = simdutf_binary_to_base64(source.ptr, source.len, dest.ptr, @intFromEnum(encoder));
+            const written = v8__simdutf_binary_to_base64(source.ptr, source.len, dest.ptr, @intFromEnum(encoder));
             return dest[0..written];
         }
     };
 
     pub const Decoder = struct {
         pub inline fn calcSizeUpperBound(source: []const u8) usize {
-            return simdutf_maximal_binary_length_from_base64(source.ptr, source.len);
+            return v8__simdutf_maximal_binary_length_from_base64(source.ptr, source.len);
         }
 
         pub inline fn decode(decoder: Type, dest: []u8, source: []const u8) Error![]u8 {
-            const res = simdutf_base64_to_binary(
+            const res = v8__simdutf_base64_to_binary(
                 source.ptr,
                 source.len,
                 dest.ptr,
@@ -135,7 +135,7 @@ pub const Base64 = struct {
 
         /// Decodes in WHATWG forgiving-base64 format.
         pub inline fn decodeForgiving(decoder: Type, dest: []u8, source: []const u8) Error![]u8 {
-            const res = simdutf_base64_to_binary(
+            const res = v8__simdutf_base64_to_binary(
                 source.ptr,
                 source.len,
                 dest.ptr,

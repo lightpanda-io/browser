@@ -489,10 +489,10 @@ pub fn truncateUtf8(bytes: []const u8, max_bytes: usize) []const u8 {
 /// as UTF-8. For bytes that aren't valid UTF-8 but must become a valid UTF-8
 /// string (JSON, filenames).
 pub fn latin1ToUtf8(allocator: Allocator, bytes: []const u8) ![]u8 {
-    const size = simdutf.simdutf_utf8_length_from_latin1(bytes.ptr, bytes.len);
+    const size = simdutf.v8__simdutf_utf8_length_from_latin1(bytes.ptr, bytes.len);
     const dest = try allocator.alloc(u8, size);
     //errdefer allocator.free(dest);
-    return dest[0..simdutf.simdutf_convert_latin1_to_utf8(bytes.ptr, bytes.len, dest.ptr)];
+    return dest[0..simdutf.v8__simdutf_convert_latin1_to_utf8(bytes.ptr, bytes.len, dest.ptr)];
 }
 
 // Discriminatory type that signals the bridge to use arena instead of call_arena
