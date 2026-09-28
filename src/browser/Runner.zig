@@ -493,28 +493,27 @@ fn idleSleep(self: *Runner, ms: u32) void {
     lp.io.sleep(.fromMilliseconds(@intCast(ms)), .awake) catch {};
 }
 
-/// Grants against the next task, not the caller's polling slice, or a 3 s
-/// timer takes dozens of ticks. The CDP pump never sleeps idle (the driver's
-/// socket keeps the HTTP client polling), so it skips from `_tick`, and only
-/// with no client message waiting: the skip then reads as the next message
-/// arriving later.
+/// Grants against the next task, not the caller's polling slice. The CDP pump
+/// never sleeps idle (the driver's socket keeps the HTTP client polling), so
+/// it skips from `_tick`, and only with no client message waiting: the skip
+/// then reads as the next message arriving later.
 fn skipIdleTime(self: *Runner) bool {
     const session = self.session;
     const budget = &(session.virtual_time orelse return false);
+    if (self.browser.app.live_drivers.load(.monotonic) > 1) {
+        return false;
+    }
     if (budget.skip_during_fetches == false and self.http_client.activity().idle() == false) {
         return false;
     }
     if (session.hasQueuedNavigation() or self.browser.hasBackgroundTasks()) {
         return false;
     }
-    if (self.browser.app.live_drivers.load(.monotonic) > 1) {
-        return false;
-    }
     const wanted_ms = self.browser.msToNextTask() orelse switch (budget.refill) {
         .expires => budget.remaining_ms,
         .per_navigation, .unbounded => return false,
     };
-    if (self.http_client.hasClientMessages()) {
+    if (wanted_ms == 0 or self.http_client.hasClientMessages()) {
         return false;
     }
     const granted = budget.grant(wanted_ms);

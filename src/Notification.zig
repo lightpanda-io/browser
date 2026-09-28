@@ -314,7 +314,6 @@ pub const DownloadWillBegin = struct {
     suggested_filename: []const u8,
 };
 
-// Emitted when an Emulation.setVirtualTimePolicy budget runs out.
 pub const VirtualTimeBudgetExpired = struct {};
 
 // Emitted by Frame as a download is written to disk: once when it starts

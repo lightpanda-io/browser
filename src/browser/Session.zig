@@ -112,7 +112,6 @@ _console_capture: bool = false,
 // configured external resources (images, stylesheet, worker, iframe) to load
 load_resources: Config.LoadResources,
 
-// null keeps real time.
 virtual_time: ?VirtualTime.Budget = null,
 
 // opt-in unstable features (--experimental-features)
@@ -594,10 +593,6 @@ pub fn scheduleNavigation(_: *Session, frame: *Frame) !void {
     return frame.page.scheduleNavigation(frame);
 }
 
-// Drain one page's queued navigations and return whether any page had work.
-// Processing a root navigation mutates self.pages, so it's safer to do this
-// just once, signal the caller, and have them call again. We use a cursor
-// to prevent one page from starving the rest.
 pub fn hasQueuedNavigation(self: *const Session) bool {
     for (self.pages.items) |page| {
         if (page.queued_navigation.items.len != 0) {
@@ -607,6 +602,10 @@ pub fn hasQueuedNavigation(self: *const Session) bool {
     return false;
 }
 
+// Drain one page's queued navigations and return whether any page had work.
+// Processing a root navigation mutates self.pages, so it's safer to do this
+// just once, signal the caller, and have them call again. We use a cursor
+// to prevent one page from starving the rest.
 pub fn processQueuedNavigation(self: *Session) !bool {
     const pages = self.pages.items;
     if (pages.len == 0) {

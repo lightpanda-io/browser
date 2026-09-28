@@ -211,7 +211,6 @@ test "cdp.runtime: inspector responses go to the session that sent the command" 
     try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 6, .description = "6" } }, .{ .id = 63, .session_id = "SID-PRIMARY" });
 }
 
-// Number of `method` events the client received on `session_id`.
 // V8 keeps Runtime.enable per inspector session: a session only gets the
 // executionContextCreated events it asked for, stamped with its own id.
 test "cdp.runtime: inspector events go to the session that enabled them" {

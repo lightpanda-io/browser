@@ -1511,8 +1511,7 @@ pub const Command = struct {
         });
     }
 
-    /// The attached session this command came in on, the primary one when it
-    /// names none. Valid until that session detaches.
+    /// Valid until that session detaches.
     pub fn sessionId(self: *const Command, bc: *const BrowserContext) ![]const u8 {
         if (self.input.session_id) |session_id| {
             return self.cdp.resolveSessionId(session_id) orelse error.UnknownSessionId;
