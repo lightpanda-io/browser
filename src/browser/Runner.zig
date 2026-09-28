@@ -331,6 +331,11 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
         };
         const ms_to_wait = @min(timeout_ms, ms_to_next_task);
 
+        if ((comptime is_cdp) and has_runnable_page and self.skipIdleTimeCDP()) {
+            _ = try http_client.tick(0);
+            return .{ .ok = 0 };
+        }
+
         const waited = try http_client.tick(@intCast(ms_to_wait));
 
         // If the HttpClient didn't wait/poll then it has nothing to do, and we
@@ -495,17 +500,67 @@ fn idleSleep(self: *Runner, ms: u32) void {
 /// `real_wait_ms`, which is clamped to the caller's polling slice.
 fn advanceVirtualTime(self: *Runner, real_wait_ms: u32) u32 {
     const budget = &(self.session.virtual_time orelse return real_wait_ms);
-    if (self.browser.hasBackgroundTasks() or self.http_client.activity().idle() == false) {
+    if (self.maySkip(budget) == false) {
         return real_wait_ms;
     }
     const next_ms = self.browser.msToNextTask() orelse return real_wait_ms;
-    const granted = budget.grant(next_ms);
+    const granted = self.skipVirtualTime(next_ms);
     if (granted == 0) {
         return real_wait_ms;
     }
+    return @intCast(@min(real_wait_ms, next_ms - granted));
+}
+
+/// The CDP pump never sleeps idle (the driver's socket keeps the HTTP client
+/// polling), so it skips here instead, and only with no client message
+/// waiting: the skip then reads as the next message arriving later.
+fn skipIdleTimeCDP(self: *Runner) bool {
+    const budget = &(self.session.virtual_time orelse return false);
+    if (self.http_client.hasClientMessages() or self.maySkip(budget) == false) {
+        return false;
+    }
+    const wanted_ms = self.browser.msToNextTask() orelse blk: {
+        if (budget.expires == false) {
+            return false;
+        }
+        break :blk budget.remaining_ms;
+    };
+    if (wanted_ms == 0) {
+        return false;
+    }
+    return self.skipVirtualTime(wanted_ms) > 0;
+}
+
+fn maySkip(self: *Runner, budget: *const VirtualTime.Budget) bool {
+    if (self.browser.hasBackgroundTasks() or hasQueuedNavigation(self.session)) {
+        return false;
+    }
+    return budget.skip_during_fetches or self.http_client.activity().idle();
+}
+
+fn skipVirtualTime(self: *Runner, wanted_ms: u64) u32 {
+    const session = self.session;
+    const budget = &session.virtual_time.?;
+    const granted = budget.grant(wanted_ms);
+    if (granted == 0) {
+        return 0;
+    }
     VirtualTime.advance(self.browser.app.platform, granted);
     log.debug(.browser, "virtual time", .{ .advanced_ms = granted, .remaining_ms = budget.remaining_ms });
-    return @intCast(@min(real_wait_ms, next_ms - granted));
+    if (budget.expires and budget.remaining_ms == 0) {
+        session.virtual_time = null;
+        session.notification.dispatch(.virtual_time_budget_expired, &.{});
+    }
+    return granted;
+}
+
+fn hasQueuedNavigation(session: *Session) bool {
+    for (session.pages.items) |page| {
+        if (page.queued_navigation.items.len != 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 const testing = @import("../testing.zig");

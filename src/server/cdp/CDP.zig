@@ -593,6 +593,7 @@ pub const BrowserContext = struct {
         try notification.register(.frame_dom_content_loaded, self, onFrameDOMContentLoaded);
         try notification.register(.frame_loaded, self, onFrameLoaded);
         try notification.register(.javascript_dialog_opening, self, onJavascriptDialogOpening);
+        try notification.register(.virtual_time_budget_expired, self, onVirtualTimeBudgetExpired);
     }
 
     pub fn deinit(self: *BrowserContext) void {
@@ -974,6 +975,11 @@ pub const BrowserContext = struct {
     fn onFrameRemove(ctx: *anyopaque, _: Notification.FrameRemove) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         @import("domains/page.zig").frameRemove(self);
+    }
+
+    fn onVirtualTimeBudgetExpired(ctx: *anyopaque, _: *const Notification.VirtualTimeBudgetExpired) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/emulation.zig").virtualTimeBudgetExpired(self);
     }
 
     fn onFrameCreated(ctx: *anyopaque, frame: *Frame) !void {

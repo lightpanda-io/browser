@@ -99,6 +99,7 @@ const EventListeners = struct {
     cookie_changed: List = .{},
     download_will_begin: List = .{},
     download_progress: List = .{},
+    virtual_time_budget_expired: List = .{},
 };
 
 const Events = union(enum) {
@@ -130,6 +131,7 @@ const Events = union(enum) {
     cookie_changed: *const CookieChanged,
     download_will_begin: *const DownloadWillBegin,
     download_progress: *const DownloadProgress,
+    virtual_time_budget_expired: *const VirtualTimeBudgetExpired,
 };
 pub const EventType = std.meta.FieldEnum(Events);
 
@@ -311,6 +313,10 @@ pub const DownloadWillBegin = struct {
     url: []const u8,
     suggested_filename: []const u8,
 };
+
+// Emitted by the Runner when an Emulation.setVirtualTimePolicy budget runs
+// out; the session is back on real time.
+pub const VirtualTimeBudgetExpired = struct {};
 
 // Emitted by Frame as a download is written to disk: once when it starts
 // (`.in_progress`) and once when the body is fully written (`.completed`).

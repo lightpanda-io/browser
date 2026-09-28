@@ -779,14 +779,21 @@ pub fn tickSync(self: *Client, timeout_ms: u32) !void {
 }
 
 fn hasPendingTeardown(self: *Client) bool {
-    const inbox = blk: {
-        if (comptime lp.IS_TEST) {
-            if (self.test_inbox) |test_inbox| break :blk test_inbox;
-        }
-        const driver = &(self.driver orelse return false);
-        break :blk driver.inbox;
-    };
+    const inbox = self.clientInbox() orelse return false;
     return inbox.contains(isSyncWaitInterrupt);
+}
+
+pub fn hasClientMessages(self: *Client) bool {
+    const inbox = self.clientInbox() orelse return false;
+    return inbox.isEmpty() == false;
+}
+
+fn clientInbox(self: *Client) ?*Inbox {
+    if (comptime lp.IS_TEST) {
+        if (self.test_inbox) |test_inbox| return test_inbox;
+    }
+    const driver = &(self.driver orelse return null);
+    return driver.inbox;
 }
 
 // Returns false iff the tick was a no-op. When false is returned, immediately

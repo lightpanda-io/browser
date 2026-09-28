@@ -112,7 +112,7 @@ _console_capture: bool = false,
 // configured external resources (images, stylesheet, worker, iframe) to load
 load_resources: Config.LoadResources,
 
-// Virtual time the current navigation may still skip; null keeps real time.
+// Virtual time the page clock may still skip; null keeps real time.
 virtual_time: ?VirtualTime.Budget = null,
 
 // opt-in unstable features (--experimental-features)
