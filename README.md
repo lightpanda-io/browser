@@ -421,8 +421,7 @@ zig build -Dwpt_extensions run -- serve \
     --load-resources iframe \
     --load-resources image \
     --load-resources worker \
-    --load-resources stylesheet \
-    --experimental-features cors
+    --load-resources stylesheet
 ```
 
 Then you can start the wptrunner from the demo's clone dir:
