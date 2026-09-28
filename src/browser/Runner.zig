@@ -633,11 +633,14 @@ test "Runner: waits out a throttled navigation" {
         network.rate_limiter.?.deinit();
         network.rate_limiter = null;
     }
-    const start = lp.datetime.milliTimestamp(.boot);
-    _ = try network.rate_limiter.?.reserve("127.0.0.1", start);
 
     const page = try session.createPage();
     defer page.close();
+
+    // Reserved after createPage: on a slow runner, creating the page can eat
+    // the whole interval and the navigation then goes out undelayed.
+    const start = lp.datetime.milliTimestamp(.boot);
+    _ = try network.rate_limiter.?.reserve("127.0.0.1", start);
     try page.navigate("http://127.0.0.1:9582/src/browser/tests/runner/runner1.html", .{});
     try testing.expectEqual(1, http_client.delayed_count);
     // A delayed navigation is in-flight work: the wait must not resolve early.
