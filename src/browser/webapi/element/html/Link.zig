@@ -28,6 +28,7 @@ const DOMTokenList = @import("../../collections.zig").DOMTokenList;
 
 const HtmlElement = @import("../Html.zig");
 
+const String = lp.String;
 const Link = @This();
 
 pub const Proto = HtmlElement;
@@ -91,6 +92,11 @@ fn getSizes(self: *Link, frame: *Frame) !?*DOMTokenList {
     return element.getTokenList(.sizes, frame);
 }
 
+fn setSizes(self: *Link, value: String, frame: *Frame) !void {
+    const list = try self.getSizes(frame) orelse return;
+    try list.setValue(value, frame);
+}
+
 pub fn getRelList(self: *Link, frame: *Frame) !?*DOMTokenList {
     const element = self.asElement();
     // relList is only valid for HTML <link> elements, not SVG or MathML
@@ -98,6 +104,11 @@ pub fn getRelList(self: *Link, frame: *Frame) !?*DOMTokenList {
         return null;
     }
     return element.getRelList(frame);
+}
+
+fn setRelList(self: *Link, value: String, frame: *Frame) !void {
+    const list = try self.getRelList(frame) orelse return;
+    try list.setValue(value, frame);
 }
 
 pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
@@ -176,8 +187,8 @@ pub const JsApi = struct {
     pub const @"type" = reflect.string("type");
     pub const rev = reflect.string("rev");
     pub const target = reflect.string("target");
-    pub const relList = bridge.accessor(Link.getRelList, null, .{ .null_as_undefined = true });
-    pub const sizes = bridge.accessor(Link.getSizes, null, .{ .null_as_undefined = true });
+    pub const relList = bridge.accessor(Link.getRelList, Link.setRelList, .{ .null_as_undefined = true, .ce_reactions = true });
+    pub const sizes = bridge.accessor(Link.getSizes, Link.setSizes, .{ .null_as_undefined = true, .ce_reactions = true });
 };
 
 // Parser-created <link> elements are void (no closing tag) so they never
