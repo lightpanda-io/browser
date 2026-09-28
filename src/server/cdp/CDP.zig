@@ -514,6 +514,9 @@ pub const BrowserContext = struct {
 
     intercept_state: InterceptState,
     fetch_session_id: ?[]const u8 = null,
+    // The session that set Emulation.setVirtualTimePolicy: it gets
+    // virtualTimeBudgetExpired, and its detach drops the policy.
+    virtual_time_session_id: ?[]const u8 = null,
 
     // Request bodies retained for Network.getRequestPostData, which can be
     // called after the transfer is gone. Capped at max_post_data_size.
@@ -1225,6 +1228,11 @@ pub const BrowserContext = struct {
     /// Returns false when no such session is attached.
     pub fn detachSession(self: *BrowserContext, session_id: []const u8) bool {
         const kv = self.attached_sessions.fetchOrderedRemove(session_id) orelse return false;
+        if (self.virtual_time_session_id) |vt_session_id| {
+            if (std.mem.eql(u8, vt_session_id, session_id)) {
+                self.virtualTimeDisable();
+            }
+        }
         if (self.session_id) |primary| {
             if (std.mem.eql(u8, primary, session_id)) {
                 self.session_id = null;
@@ -1240,6 +1248,12 @@ pub const BrowserContext = struct {
         }
         self.attached_sessions.clearRetainingCapacity();
         self.session_id = null;
+        self.virtualTimeDisable();
+    }
+
+    fn virtualTimeDisable(self: *BrowserContext) void {
+        self.session.virtual_time = null;
+        self.virtual_time_session_id = null;
     }
 
     fn destroySession(self: *BrowserContext, attached: *AttachedSession) void {
@@ -1494,6 +1508,15 @@ pub const Command = struct {
             .result = if (comptime @typeInfo(@TypeOf(result)) == .null) struct {}{} else result,
             .sessionId = self.input.session_id,
         });
+    }
+
+    /// The attached session this command came in on, the primary one when it
+    /// names none. Valid until that session detaches.
+    pub fn sessionId(self: *const Command, bc: *const BrowserContext) ![]const u8 {
+        if (self.input.session_id) |session_id| {
+            return self.cdp.resolveSessionId(session_id) orelse error.UnknownSessionId;
+        }
+        return bc.session_id orelse error.UnknownSessionId;
     }
 
     pub fn sendEvent(self: *Command, method: []const u8, p: anytype, opts: SendEventOpts) !void {

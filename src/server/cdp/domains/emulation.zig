@@ -273,6 +273,7 @@ fn setVirtualTimePolicy(cmd: *CDP.Command) !void {
         break :blk @ceil(@min(b, std.math.maxInt(u32)));
     } else null;
 
+    bc.virtual_time_session_id = try cmd.sessionId(bc);
     bc.session.virtual_time = .{
         .remaining_ms = budget_ms orelse std.math.maxInt(u32),
         .skip_during_fetches = params.policy == .advance,
@@ -288,7 +289,9 @@ fn setVirtualTimePolicy(cmd: *CDP.Command) !void {
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#event-virtualTimeBudgetExpired
 pub fn virtualTimeBudgetExpired(bc: *CDP.BrowserContext) !void {
-    return bc.cdp.sendEvent("Emulation.virtualTimeBudgetExpired", null, .{ .session_id = bc.session_id });
+    const session_id = bc.virtual_time_session_id orelse return;
+    bc.virtual_time_session_id = null;
+    return bc.cdp.sendEvent("Emulation.virtualTimeBudgetExpired", null, .{ .session_id = session_id });
 }
 
 const testing = @import("../testing.zig");
@@ -925,4 +928,33 @@ test "cdp.Emulation: setVirtualTimePolicy rejects pause and a zero budget expire
     try ctx.expectSentResult(null, .{ .id = 2 });
     try ctx.expectSentEvent("Emulation.virtualTimeBudgetExpired", null, .{ .session_id = "SID-VT4" });
     try testing.expectEqual(null, bc.session.virtual_time);
+}
+
+test "cdp.Emulation: setVirtualTimePolicy belongs to the session that set it" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-VT5", .session_id = "SID-PRIMARY", .target_id = "TID-0000000VT5".* });
+    _ = try bc.attachSession("SID-AUX", null);
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setVirtualTimePolicy",
+        .sessionId = "SID-AUX",
+        .params = .{ .policy = "pauseIfNetworkFetchesPending", .budget = 0 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1, .session_id = "SID-AUX" });
+    try ctx.expectSentEvent("Emulation.virtualTimeBudgetExpired", null, .{ .session_id = "SID-AUX" });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Emulation.setVirtualTimePolicy",
+        .sessionId = "SID-AUX",
+        .params = .{ .policy = "pauseIfNetworkFetchesPending", .budget = 5000 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2, .session_id = "SID-AUX" });
+    try testing.expectEqual(true, bc.session.virtual_time != null);
+
+    try testing.expectEqual(true, bc.detachSession("SID-AUX"));
+    try testing.expectEqual(null, bc.session.virtual_time);
+    try testing.expectEqual(null, bc.virtual_time_session_id);
 }
