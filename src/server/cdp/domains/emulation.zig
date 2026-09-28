@@ -277,16 +277,16 @@ fn setVirtualTimePolicy(cmd: *CDP.Command) !void {
         break :blk @ceil(@min(b, std.math.maxInt(u32)));
     } else null;
 
-    bc.virtualTimeDisable();
-    const session_id = try cmd.sessionId(try cmd.target());
+    const session_id = try cmd.sessionId();
     try cmd.sendResult(.{ .virtualTimeTicksBase = VirtualTime.milli() }, .{});
     if (budget_ms == 0) {
+        bc.virtualTimeDisable();
         return cmd.sendEvent("Emulation.virtualTimeBudgetExpired", null, .{ .session_id = session_id });
     }
 
     bc.virtual_time_session_id = session_id;
     bc.session.virtual_time = .{
-        .remaining_ms = budget_ms orelse std.math.maxInt(u32),
+        .remaining_ms = budget_ms orelse 0,
         .refill = if (budget_ms != null) .expires else .unbounded,
         .skip_during_fetches = params.policy == .advance,
     };
@@ -295,7 +295,7 @@ fn setVirtualTimePolicy(cmd: *CDP.Command) !void {
 // https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#event-virtualTimeBudgetExpired
 pub fn virtualTimeBudgetExpired(bc: *CDP.BrowserContext) !void {
     const session_id = bc.virtual_time_session_id orelse return;
-    bc.virtualTimeDisable();
+    bc.virtual_time_session_id = null;
     return bc.cdp.sendEvent("Emulation.virtualTimeBudgetExpired", null, .{ .session_id = session_id });
 }
 
@@ -899,7 +899,8 @@ fn navigateUnderCDP(bc: *CDP.BrowserContext, comptime fixture: []const u8, pump_
     try page.navigate("http://127.0.0.1:9582/src/browser/tests/" ++ fixture, .{});
     var runner = bc.session.runner(.{});
     try runner.waitForFrameCDP(page.frame_id, pump_ms, .done);
-    return bc.mainFrame().?;
+    const target = try testing.firstTarget(bc);
+    return target.mainFrame().?;
 }
 
 fn setPolicy(ctx: *testing.TestContext, id: i64, session_id: []const u8, params: anytype) !void {
@@ -957,7 +958,7 @@ test "cdp.Emulation: setVirtualTimePolicy belongs to the session that set it" {
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-VT4", .session_id = "SID-PRIMARY", .target_id = "TID-0000000VT4".* });
-    _ = try bc.attachSession("SID-AUX", null);
+    _ = try bc.attachSession(try testing.firstTarget(bc), "SID-AUX", null);
 
     try setPolicy(&ctx, 1, "SID-AUX", .{ .policy = "pauseIfNetworkFetchesPending", .budget = 0 });
     try ctx.expectSentEvent("Emulation.virtualTimeBudgetExpired", null, .{ .session_id = "SID-AUX" });
@@ -988,7 +989,6 @@ test "cdp.Emulation: setVirtualTimePolicy needs the process to itself" {
     live_drivers.store(1, .monotonic);
     try setPolicy(&ctx, 2, "SID-VT5", .{ .policy = "pauseIfNetworkFetchesPending", .budget = 5000 });
 
-    // A second connection arriving later stops the skipping.
     live_drivers.store(2, .monotonic);
     const frame = try navigateUnderCDP(bc, "runner/virtual_time.html", 300);
     try expectJs(frame, "document.getElementById('out').textContent === ''");

@@ -26,19 +26,19 @@ const lp = @import("lightpanda");
 
 const Platform = @import("js/Platform.zig");
 
-var offset_us: u64 = 0;
+var offset_ms: u64 = 0;
 
 pub fn milli() u64 {
-    return lp.datetime.milliTimestamp(.boot) + offset_us / std.time.us_per_ms;
+    return lp.datetime.milliTimestamp(.boot) + offset_ms;
 }
 
 pub fn micro() u64 {
-    return lp.datetime.microTimestamp(.boot) + offset_us;
+    return lp.datetime.microTimestamp(.boot) + offset_ms * std.time.us_per_ms;
 }
 
 pub fn advance(platform: Platform, ms: u32) void {
-    offset_us += @as(u64, ms) * std.time.us_per_ms;
-    platform.setClockOffsetMillis(@floatFromInt(offset_us / std.time.us_per_ms));
+    offset_ms += ms;
+    platform.setClockOffsetMillis(@floatFromInt(offset_ms));
 }
 
 pub const Budget = struct {
@@ -48,7 +48,6 @@ pub const Budget = struct {
     // a page with nothing scheduled runs it out so virtualTimeBudgetExpired
     // still fires.
     refill: union(enum) { per_navigation: u32, expires, unbounded },
-    // Emulation's `advance` policy.
     skip_during_fetches: bool = false,
 
     pub fn init(ms: u32) Budget {
@@ -63,6 +62,9 @@ pub const Budget = struct {
     }
 
     pub fn grant(self: *Budget, wanted_ms: u64) u32 {
+        if (self.refill == .unbounded) {
+            return @intCast(@min(wanted_ms, std.math.maxInt(u32)));
+        }
         const granted: u32 = @intCast(@min(wanted_ms, self.remaining_ms));
         self.remaining_ms -= granted;
         return granted;

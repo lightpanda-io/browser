@@ -1095,13 +1095,13 @@ pub const Command = struct {
         }, .{ .size_hint = opts.size_hint });
     }
 
-    /// The attached session this command came in on, the primary one when it
-    /// names none. Valid until that session detaches.
-    pub fn sessionId(self: *const Command, target: *const Target) ![]const u8 {
+    /// Valid until that session detaches.
+    pub fn sessionId(self: *const Command) ![]const u8 {
         if (self.routing_session_id) |session_id| {
             return self.cdp.resolveSessionId(session_id) orelse error.UnknownSessionId;
         }
-        return target.session_id orelse error.UnknownSessionId;
+        const t = try self.target();
+        return t.session_id orelse error.UnknownSessionId;
     }
 
     pub fn sendEvent(self: *Command, method: []const u8, p: anytype, opts: SendEventOpts) !void {

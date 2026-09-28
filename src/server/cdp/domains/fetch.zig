@@ -97,7 +97,7 @@ const EnableParam = struct {
 
 fn disable(cmd: *CDP.Command) !void {
     const target = try cmd.target();
-    target.fetchDisableForSession(try cmd.sessionId(target));
+    target.fetchDisableForSession(try cmd.sessionId());
     return cmd.sendResult(null, .{});
 }
 
@@ -109,7 +109,7 @@ fn enable(cmd: *CDP.Command) !void {
         }
     }
     const target = try cmd.target();
-    try target.fetchEnable(params.patterns, params.handleAuthRequests, try cmd.sessionId(target));
+    try target.fetchEnable(params.patterns, params.handleAuthRequests, try cmd.sessionId());
     return cmd.sendResult(null, .{});
 }
 
