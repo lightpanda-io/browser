@@ -95,16 +95,9 @@ const EnableParam = struct {
     handleAuthRequests: bool = false,
 };
 
-fn commandSessionId(cmd: *CDP.Command, target: *CDP.Target) ![]const u8 {
-    if (cmd.routing_session_id) |session_id| {
-        return cmd.cdp.resolveSessionId(session_id) orelse error.UnknownSessionId;
-    }
-    return target.session_id orelse error.UnknownSessionId;
-}
-
 fn disable(cmd: *CDP.Command) !void {
     const target = try cmd.target();
-    target.fetchDisableForSession(try commandSessionId(cmd, target));
+    target.fetchDisableForSession(try cmd.sessionId(target));
     return cmd.sendResult(null, .{});
 }
 
@@ -116,7 +109,7 @@ fn enable(cmd: *CDP.Command) !void {
         }
     }
     const target = try cmd.target();
-    try target.fetchEnable(params.patterns, params.handleAuthRequests, try commandSessionId(cmd, target));
+    try target.fetchEnable(params.patterns, params.handleAuthRequests, try cmd.sessionId(target));
     return cmd.sendResult(null, .{});
 }
 
