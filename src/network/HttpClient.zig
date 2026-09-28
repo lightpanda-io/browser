@@ -2282,6 +2282,13 @@ pub const Owner = struct {
     document_frame_id: u32,
     loader_id: u32,
 
+    // Entered around delivery, so the consumer's callbacks log as its page.
+    log_page: ?*log.PageContext = null,
+
+    fn logScope(self: *const Owner) log.PageScope {
+        return log.enterPage(self.log_page);
+    }
+
     const Blob = @import("../browser/webapi/Blob.zig");
 
     /// The URL of the document this owner's requests belong to.
@@ -2770,6 +2777,11 @@ pub const Transfer = struct {
         self.abort(error.TransferCanceled);
     }
 
+    fn logScope(self: *const Transfer) log.PageScope {
+        const owner = self.owner orelse return log.enterPage(null);
+        return owner.logScope();
+    }
+
     // Fail this transfer with `err`. Fires error_callback once (latched
     // via _notified_fail), then either deinits synchronously or, if
     // deliver() is running our callbacks, detaches and lets deliver()
@@ -2779,6 +2791,9 @@ pub const Transfer = struct {
     // to end a transfer. Don't reach for kill() or requestFailed() directly —
     // they're internal helpers.
     pub fn abort(self: *Transfer, err: anyerror) void {
+        const page_scope = self.logScope();
+        defer page_scope.exit();
+
         // error_callback can run JS that tears this transfer down again
         // (e.g. an XHR abort handler navigates -> abortRequests -> kill).
         // Hold the state at .delivering so the re-entrant teardown defers,
@@ -2895,6 +2910,9 @@ pub const Transfer = struct {
     // abortRequests when a Frame / WGS is being torn down. Any buffered,
     // undelivered events are dropped — the consumer is going away with us.
     fn kill(self: *Transfer) void {
+        const page_scope = self.logScope();
+        defer page_scope.exit();
+
         if (self._notify_cdp and !self._notified_fail) {
             self._notified_fail = true;
             self.notify(.http_request_fail, &.{
@@ -4067,6 +4085,9 @@ pub const Transfer = struct {
     // batch and stays inflight between batches, until a terminal event
     // (done / err) or an abort.
     fn deliver(transfer: *Transfer) void {
+        const page_scope = transfer.logScope();
+        defer page_scope.exit();
+
         // A streaming batch is delivered while the conn is still inflight;
         // that state is restored after the batch unless it turned terminal.
         const was_inflight = transfer.state == .inflight;

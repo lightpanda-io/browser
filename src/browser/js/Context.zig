@@ -288,6 +288,7 @@ pub fn localScope(self: *Context, ls: *js.Local.Scope) void {
         .handle = local_v8_context,
         .call_arena = self.call_arena,
     };
+    ls.page_scope = self.page.logScope();
 }
 
 pub fn toLocal(self: *Context, global: anytype) js.Local.ToLocalReturnType(@TypeOf(global)) {
@@ -1075,7 +1076,13 @@ pub fn enter(self: *Context, hs: *js.HandleScope) Entered {
 
     const handle: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.handle, isolate.handle));
     v8.v8__Context__Enter(handle);
-    return .{ .original = original, .handle = handle, .handle_scope = hs, .global = self.global };
+    return .{
+        .original = original,
+        .handle = handle,
+        .handle_scope = hs,
+        .global = self.global,
+        .page_scope = self.page.logScope(),
+    };
 }
 
 const Entered = struct {
@@ -1089,7 +1096,10 @@ const Entered = struct {
 
     global: lp.GlobalScope,
 
+    page_scope: log.PageScope,
+
     pub fn exit(self: Entered) void {
+        self.page_scope.exit();
         self.global.setJs(self.original);
         v8.v8__Context__Exit(self.handle);
         self.handle_scope.deinit();

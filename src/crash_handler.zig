@@ -63,6 +63,7 @@ pub noinline fn crash(
                 writer.print("OS: {s}\n", .{@tagName(builtin.os.tag)}) catch abort();
                 writer.print("mode: {s}\n", .{@tagName(builtin.mode)}) catch abort();
                 writer.print("version: {s}\n", .{lp.build_config.version}) catch abort();
+                writeCurrentPage(writer);
                 inline for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
                     writer.writeAll(f.name ++ ": ") catch break;
                     lp.log.writeValue(.pretty, @field(args, f.name), writer) catch abort();
@@ -281,8 +282,22 @@ fn handleFatalSignal(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_p
         writeBacktrace(ctx);
     }
 
+    // Last: reads the Page, which the fault may have corrupted.
+    {
+        var page_writer: std.Io.Writer = .fixed(&buffer);
+        writeCurrentPage(&page_writer);
+        writeRecord(page_writer.buffered());
+    }
+
     _ = std.c.raise(sig);
     std.c._exit(@intCast(128 + @intFromEnum(sig)));
+}
+
+// The page this thread was working on. Local output only (never sent to the
+// crash report)
+fn writeCurrentPage(writer: *std.Io.Writer) void {
+    const page = lp.log.currentPage() orelse return;
+    writer.print("page: {d}\nurl: {s}\n", .{ page.id, page.url.* }) catch {};
 }
 
 fn writeRecord(record: []const u8) void {

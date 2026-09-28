@@ -40,6 +40,7 @@ const AnimatedTransformList = @import("webapi/svg/AnimatedTransformList.zig");
 const ServiceWorkerGlobalScope = @import("webapi/ServiceWorkerGlobalScope.zig");
 const AnimatedPreserveAspectRatio = @import("webapi/svg/AnimatedPreserveAspectRatio.zig");
 
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 // A Page is the container for a root Frame and all of its descendants
@@ -79,6 +80,9 @@ broadcast_sequence: u64 = 0,
 // Uncaught JS errors attributed to this Page (all of its frames and workers):
 // Not exhaustive: some swallowed-callback paths aren't routed here.
 js_error_count: usize = 0,
+
+// Entered (logScope) around any work done on this Page's behalf.
+log_context: log.PageContext,
 
 // DOM object factory scoped to this Page's documents.
 factory: Factory,
@@ -257,15 +261,25 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
         .frame_arena = frame_arena.allocator(),
         .factory = Factory.init(self, frame_arena.allocator(), &session.browser.documents),
         .globals = .init(session.browser.app.allocator),
+        .log_context = .{ .id = log.nextPageId(), .url = &self.frame.url },
     };
     self.queued_navigation = &self.queued_navigation_1;
 
     try Frame.init(&self.frame, frame_id, self, .{});
 }
 
+pub fn logScope(self: *Page) log.PageScope {
+    return log.enterPage(&self.log_context);
+}
+
 // Tear down the Page and its root Frame. Equivalent to the old
 // Session.removePage + Session.resetFrameResources.
 pub fn deinit(self: *Page) void {
+    const page_scope = self.logScope();
+    defer page_scope.exit();
+
+    log.log(.frame, self.log_context.max_level, "navigation done", .{ .url = self.frame.url });
+
     for (self.popups.items) |popup| {
         popup.deinit();
     }

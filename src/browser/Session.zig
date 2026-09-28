@@ -276,6 +276,9 @@ pub fn processDestroyQueues(self: *Session) void {
         const queue = self._page_destruction_queue.items;
         if (queue.len > 0) {
             for (queue) |page| {
+                if (comptime lp.IS_DEBUG) {
+                    std.debug.assert(log.currentPage() != &page.log_context);
+                }
                 page.deinit();
                 self.browser.page_pool.destroy(page);
             }

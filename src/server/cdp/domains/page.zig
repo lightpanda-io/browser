@@ -2535,8 +2535,9 @@ test "cdp.frame: anchor click sends Referer matching the originating page" {
         f.js.localScope(&ls);
         defer ls.deinit();
         _ = try ls.local.exec("document.getElementById('link').click()", null);
-        try testing.waitForPage(bc);
     }
+    // Outside the scope: the navigation destroys the page it's entered on.
+    try testing.waitForPage(bc);
 
     // After the click navigation completes, the loaded page is /echo_referer
     // and its body echoes the Referer header the server actually saw.
