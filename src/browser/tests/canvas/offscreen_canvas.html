@@ -35,6 +35,11 @@
   testing.expectEqual(true, ctx instanceof OffscreenCanvasRenderingContext2D);
   // We can't really test rendering but let's try to call it at least.
   ctx.fillRect(0, 0, 10, 10);
+
+  testing.expectEqual(canvas, ctx.canvas);
+  testing.expectEqual(64, ctx.canvas.width);
+  testing.expectEqual(ctx, canvas.getContext("2d"));
+  testing.expectEqual(null, canvas.getContext("webgl"));
 }
 </script>
 

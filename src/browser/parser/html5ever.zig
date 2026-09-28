@@ -184,12 +184,15 @@ pub const AttributeIterator = extern struct {
 
 pub const NodeOrText = extern struct {
     tag: u8,
-    node: *anyopaque,
+    // Null for text. Also null for a node when its create callback failed:
+    // html5ever still appends the null ref it got back.
+    node: ?*anyopaque,
     text: StringSlice,
 
     pub fn toUnion(self: NodeOrText) Union {
         if (self.tag == 0) {
-            return .{ .node = @ptrCast(@alignCast(self.node)) };
+            const node = self.node orelse return .failed;
+            return .{ .node = @ptrCast(@alignCast(node)) };
         }
         return .{ .text = self.text.slice() };
     }
@@ -197,6 +200,8 @@ pub const NodeOrText = extern struct {
     const Union = union(enum) {
         node: *ParsedNode,
         text: []const u8,
+        // The create callback failed and already set Parser.err.
+        failed,
     };
 };
 

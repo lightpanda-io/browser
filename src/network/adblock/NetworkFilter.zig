@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const domain = @import("domain.zig");
-const Regex = @import("Regex.zig");
+const Regex = @import("../../Regex.zig");
 
 const NetworkFilter = @This();
 

@@ -21,3 +21,32 @@
   testing.expectError('TypeError', () => $('#d1').classList.supports('foo'));
 }
 </script>
+
+<a id=a1 rel="noopener"></a>
+<area id=ar1 rel="noopener">
+<output id=o1 for="x"></output>
+<iframe id=if1></iframe>
+<svg><a id=sa1 rel="noopener"></a></svg>
+
+<script id=put_forwards_value>
+{
+  // [PutForwards=value]: assigning sets the attribute and keeps the same list.
+  const cases = [
+    [$('#l1'), 'relList', 'rel'],
+    [$('#l1'), 'sizes', 'sizes'],
+    [$('#a1'), 'relList', 'rel'],
+    [$('#ar1'), 'relList', 'rel'],
+    [$('#o1'), 'htmlFor', 'for'],
+    [$('#if1'), 'sandbox', 'sandbox'],
+    [$('#sa1'), 'relList', 'rel'],
+  ];
+  for (const [el, prop, attr] of cases) {
+    const list = el[prop];
+    el[prop] = 'one two';
+    testing.expectEqual('one two', el.getAttribute(attr));
+    testing.expectEqual(true, list === el[prop]);
+    testing.expectEqual(2, list.length);
+    testing.expectEqual('two', list.item(1));
+  }
+}
+</script>

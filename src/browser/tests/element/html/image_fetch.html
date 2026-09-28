@@ -256,3 +256,32 @@
   testing.expectEqual(true, img.complete);
 }
 </script>
+
+<script id="img-srcset-fetches" type=module>
+  // A srcset-only image fetches its candidate, and a <picture> source wins
+  // over the img's own src.
+  const state = await testing.async();
+  const img = document.createElement("img");
+  const srcset = await new Promise(resolve => {
+    img.addEventListener("load", () => resolve("load"));
+    img.addEventListener("error", () => resolve("error"));
+    img.srcset = "/images/small.png 1x";
+  });
+
+  const picture = document.createElement("picture");
+  const source = document.createElement("source");
+  const picture_img = document.createElement("img");
+  picture_img.src = "/images/small.png";
+  picture.append(source, picture_img);
+  const from_source = await new Promise(resolve => {
+    picture_img.addEventListener("load", () => resolve("load"));
+    picture_img.addEventListener("error", () => resolve("error"));
+    source.srcset = "/images/404.png";
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("load", srcset);
+    testing.expectEqual("error", from_source);
+  });
+</script>

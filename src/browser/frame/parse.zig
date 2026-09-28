@@ -16,12 +16,15 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+
 const Frame = @import("../Frame.zig");
 const Parser = @import("../parser/Parser.zig");
 
 const Node = @import("../webapi/Node.zig");
 const Element = @import("../webapi/Element.zig");
 const Document = @import("../webapi/Document.zig");
+const HTMLDocument = @import("../webapi/HTMLDocument.zig");
 const ShadowRoot = @import("../webapi/ShadowRoot.zig");
 const slotting = @import("../webapi/element/slotting.zig");
 
@@ -46,22 +49,10 @@ pub fn fragment(frame: *Frame, node: *Node, html: []const u8, opts: FragmentPars
     frame._parse_mode = .fragment;
     defer frame._parse_mode = previous_parse_mode;
 
-    // A context element in a document without a browsing context
-    // (createHTMLDocument, new Document, DOMParser output) has no custom
-    // element registry.
-    const previous_creation = frame._custom_element_creation;
-    const document = node.ownerDocument(frame) orelse node.as(Document);
-    if (document._frame == null) {
-        // a document without a browsing context (DOMParser et al.) has
-        // no custom element and should stay undefined.
-        frame._custom_element_creation = .undefined;
-    }
-    defer frame._custom_element_creation = previous_creation;
-
     // The html5ever wrapper-unwrap below rebinds children without going
     // through the insertion path, so recompute slot assignments for any
     // shadow tree this fragment landed in (idempotent; signals only on diff).
-    defer if (frame._element_shadow_roots.count() != 0) {
+    defer if (frame.page.element_shadow_roots.count() != 0) {
         const root = node.getRootNode(.{});
         if (root.is(ShadowRoot) != null) {
             slotting.assignSlottablesForTree(root, frame);
@@ -107,6 +98,48 @@ pub fn fragment(frame: *Frame, node: *Node, html: []const u8, opts: FragmentPars
     while (it.next()) |child| {
         child._parent = node;
     }
+    // Nor did the options among them reach their select, nor the images
+    // their picture.
+    Element.Html.Select.childrenInserted(node);
+    try Element.Html.Picture.childrenInserted(node, frame);
+}
+
+pub const HtmlDocumentOpts = struct {
+    allow_declarative_shadow: bool = false,
+};
+
+// Build a detached HTMLDocument from `html` (DOMParser.parseFromString and
+// Document.parseHTML). The caller sets its URL.
+pub fn htmlDocument(frame: *Frame, html: []const u8, opts: HtmlDocumentOpts) !*HTMLDocument {
+    const arena = try frame.getArena(.medium, "parse.htmlDocument");
+    defer arena.release();
+
+    // Frame-side hooks triggered from `Build.created` / `nodeIsReady`
+    // (external stylesheet fetches, script execution, mutation-observer
+    // fan-out, default-script injection) treat the parsed nodes as detached
+    // and skip side effects on the live document.
+    const previous_parse_mode = frame._parse_mode;
+    frame._parse_mode = .fragment;
+    defer frame._parse_mode = previous_parse_mode;
+
+    const doc = try frame._factory.document(HTMLDocument{ ._proto = undefined });
+
+    var normalized = std.mem.trim(u8, html, &std.ascii.whitespace);
+    if (normalized.len == 0) {
+        normalized = "<html></html>";
+    }
+
+    var parser = Parser.init(arena.allocator(), doc.asNode(), frame, .{
+        .allow_declarative_shadow = opts.allow_declarative_shadow,
+    });
+    parser.parse(normalized);
+    if (parser.terminated) {
+        return error.ExecutionTerminated;
+    }
+    if (parser.err) |pe| {
+        return pe.err;
+    }
+    return doc;
 }
 
 // Build a detached XMLDocument from `xml` (DOMParser.parseFromString and
@@ -120,11 +153,6 @@ pub fn xmlDocument(frame: *Frame, xml: []const u8) !?*Document.XMLDocument {
     frame._parse_mode = .fragment;
     defer frame._parse_mode = previous_parse_mode;
 
-    // No browsing context, so no custom element registry.
-    const previous_creation = frame._custom_element_creation;
-    frame._custom_element_creation = .undefined;
-    defer frame._custom_element_creation = previous_creation;
-
     const doc = try frame._factory.document(Document.XMLDocument{ ._proto = undefined });
     const doc_node = doc.asNode();
     var parser = Parser.init(arena.allocator(), doc_node, frame, .{});
@@ -136,13 +164,5 @@ pub fn xmlDocument(frame: *Frame, xml: []const u8) !?*Document.XMLDocument {
     if (parser.err != null or parser.xml_error or doc_node.firstChild() == null) {
         return null;
     }
-
-    // If first node is a `ProcessingInstruction` (e.g. the <?xml?>
-    // declaration), skip it.
-    const first_child = doc_node.firstChild().?;
-    if (first_child.getNodeType() == 7) {
-        _ = try doc_node.removeChild(first_child, frame);
-    }
-
     return doc;
 }

@@ -20,6 +20,7 @@ const std = @import("std");
 
 const Frame = @import("Frame.zig");
 const URL = @import("URL.zig");
+const Regex = @import("../Regex.zig");
 const TreeWalker = @import("webapi/TreeWalker.zig");
 const Label = @import("webapi/element/html/Label.zig");
 const AXNode = @import("../server/cdp/AXNode.zig");
@@ -149,11 +150,18 @@ pub fn collectInteractiveElements(
     return walkInteractive(root, arena, frame, .{});
 }
 
+pub const Name = union(enum) {
+    /// Case-insensitive.
+    substring: []const u8,
+    /// Unanchored.
+    regex: Regex,
+};
+
 const FindFilter = struct {
     /// Exact role match (case-insensitive). When null, role is not filtered.
     role: ?[]const u8 = null,
-    /// Accessible-name substring match (case-insensitive). When null, name is not filtered.
-    name: ?[]const u8 = null,
+    /// Accessible-name match. When null, name is not filtered.
+    name: ?Name = null,
     /// Stop walking once this many matches accumulate. When null, walks the full subtree.
     max: ?usize = null,
 };
@@ -205,9 +213,11 @@ fn walkInteractive(
             else => {},
         }
 
-        if (frame._style_manager.hasDisplayNone(el)) {
-            tw.skipChildren();
-            continue;
+        if (el.ownerFrame(frame)) |owner| {
+            if (owner._style_manager.hasDisplayNone(el)) {
+                tw.skipChildren();
+                continue;
+            }
         }
 
         const html_el = el.is(Element.Html) orelse continue;
@@ -227,7 +237,11 @@ fn walkInteractive(
             if (role == null) try getTextContent(node, arena) else null;
         if (filter.name) |nf| {
             const n = name orelse continue;
-            if (std.ascii.indexOfIgnoreCase(n, nf) == null) continue;
+            const hit = switch (nf) {
+                .substring => |s| std.ascii.indexOfIgnoreCase(n, s) != null,
+                .regex => |re| re.matches(n),
+            };
+            if (!hit) continue;
         }
 
         const listener_types = getListenerTypes(el.asEventTarget(), listener_targets);
@@ -488,6 +502,30 @@ fn testInteractiveInBody(html: []const u8) ![]InteractiveElement {
     try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
 
     return collectInteractiveElements(div.asNode(), frame.call_arena, frame);
+}
+
+test "browser.interactive: a name regex filters the walk" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<button>Add to cart</button><button>Cart</button><a href=\"#\">Add item</a>");
+
+    const context = testing.test_app.regex_context;
+    const options: Regex.Options = .{ .case_insensitive = true, .unicode = true };
+
+    const starts_add = try context.compile("^add", options, null);
+    defer starts_add.deinit();
+    const found_add = try findInteractiveElements(div.asNode(), frame.call_arena, frame, .{ .name = .{ .regex = starts_add } });
+    try testing.expectEqual(2, found_add.len);
+    try testing.expectEqual("Add to cart", found_add[0].name.?);
+    try testing.expectEqual("Add item", found_add[1].name.?);
+
+    const only_cart = try context.compile("^cart$", options, null);
+    defer only_cart.deinit();
+    const found_cart = try findInteractiveElements(div.asNode(), frame.call_arena, frame, .{ .name = .{ .regex = only_cart } });
+    try testing.expectEqual(1, found_cart.len);
+    try testing.expectEqual("Cart", found_cart[0].name.?);
 }
 
 test "browser.interactive: names come from labels, like the tree" {

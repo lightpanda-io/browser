@@ -329,7 +329,7 @@ pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !
 }
 
 pub fn setInnerText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
-    const items = try renderedTextFragment(text, frame);
+    const items = try renderedTextFragment(self.asNode().getDocument(frame), text, frame);
     try self.asElement().replaceChildren(items, frame);
 }
 
@@ -346,7 +346,7 @@ pub fn setOuterText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
     const prev = node.previousSibling();
     const next = node.nextSibling();
 
-    var items: []const Node.NodeOrText = try renderedTextFragment(text, frame);
+    var items: []const Node.NodeOrText = try renderedTextFragment(node.getDocument(frame), text, frame);
     if (items.len == 0) {
         // A fragment with no node still replaces the element with an empty Text
         // node so surrounding text can merge with it.
@@ -389,7 +389,7 @@ pub fn insertAdjacentHTML(
     else
         null;
 
-    const fragment = (try DocumentFragment.init(frame)).asNode();
+    const fragment = (try DocumentFragment.init(self.asNode().getDocument(frame), frame)).asNode();
     try Frame.parse.fragment(frame, fragment, html, .{ .context = context });
 
     const target_node, const prev_node = try self.asNode().findAdjacentNodes(position, .html);
@@ -423,7 +423,7 @@ pub fn click(self: *HtmlElement, frame: *Frame) !void {
     // Keep the event alive past dispatch (which runs handlers/microtasks) so we
     // can read _prevent_default afterwards.
     event.acquireRef();
-    defer _ = event.releaseRef(frame._page);
+    defer _ = event.releaseRef(frame.page);
 
     try frame._event_manager.dispatch(self.asEventTarget(), event);
 
@@ -449,6 +449,18 @@ pub fn setHidden(self: *HtmlElement, hidden: bool, frame: *Frame) !void {
         try self.asElement().setAttributeSafe(comptime .wrap("hidden"), .wrap(""), frame);
     } else {
         try self.asElement().removeAttribute(comptime .wrap("hidden"), frame);
+    }
+}
+
+pub fn getInert(self: *HtmlElement) bool {
+    return self.asElement().hasAttributeSafe(comptime .wrap("inert"));
+}
+
+pub fn setInert(self: *HtmlElement, inert: bool, frame: *Frame) !void {
+    if (inert) {
+        try self.asElement().setAttributeSafe(comptime .wrap("inert"), .wrap(""), frame);
+    } else {
+        try self.asElement().removeAttribute(comptime .wrap("inert"), frame);
     }
 }
 
@@ -1638,8 +1650,11 @@ fn handleChildElement(
     // is hidden through its parent. If you can el.innerText on an element, the
     // visibility of el.parent doesn't matter. So we only care about visibility
     // on the element itself and then on each child. This is much simpler too.
-    if (state.frame._style_manager.hasDisplayNone(he.asElement())) {
-        return;
+    const el = he.asElement();
+    if (el.ownerFrame(state.frame)) |owner| {
+        if (owner._style_manager.hasDisplayNone(el)) {
+            return;
+        }
     }
 
     if (he._type == .br) {
@@ -1797,7 +1812,7 @@ fn mergeTextNodes(left_node: *Node, right_node: *Node, frame: *Frame) !bool {
     return true;
 }
 
-fn renderedTextFragment(value: []const u8, frame: *Frame) ![]Node.NodeOrText {
+fn renderedTextFragment(document: *const Node.Document, value: []const u8, frame: *Frame) ![]Node.NodeOrText {
     const arena = frame.local_arena;
     var nodes: std.ArrayList(Node.NodeOrText) = .empty;
 
@@ -1816,7 +1831,7 @@ fn renderedTextFragment(value: []const u8, frame: *Frame) ![]Node.NodeOrText {
         // break (so "\r\n" is one <br> but "\n\n" is two).
         const break_len: usize = if (rest[0] == '\r' and rest.len > 1 and rest[1] == '\n') 2 else 1;
 
-        try nodes.append(arena, .{ .node = try Frame.node_factory.createElementNS(frame, .html, "br", null) });
+        try nodes.append(arena, .{ .node = try Frame.node_factory.createElementNS(document, .html, "br", null) });
         rest = rest[break_len..];
     }
 }
@@ -1859,6 +1874,7 @@ pub const JsApi = struct {
     pub const dir = reflect.enumerated("dir", &.{ "ltr", "rtl", "auto" }, .{});
     pub const draggable = bridge.accessor(HtmlElement.getDraggable, HtmlElement.setDraggable, .{ .ce_reactions = true });
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
+    pub const inert = bridge.accessor(HtmlElement.getInert, HtmlElement.setInert, .{ .ce_reactions = true });
     pub const translate = bridge.accessor(HtmlElement.getTranslate, HtmlElement.setTranslate, .{ .ce_reactions = true });
     pub const accessKeyLabel = bridge.accessor(HtmlElement.getAccessKeyLabel, null, .{});
     pub const popover = bridge.accessor(HtmlElement.getPopover, HtmlElement.setPopover, .{ .ce_reactions = true });

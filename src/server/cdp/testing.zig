@@ -81,9 +81,7 @@ pub const TestContext = struct {
     };
     pub fn loadBrowserContext(self: *TestContext, opts: BrowserContextOpts) !*CDP.BrowserContext {
         var c = self.cdp();
-        if (c.browser_context) |bc| {
-            _ = c.disposeBrowserContext(bc.id);
-        }
+        c.disposeBrowserContext();
 
         _ = try c.createBrowserContext();
         var bc = &c.browser_context.?;
@@ -97,12 +95,12 @@ pub const TestContext = struct {
         }
 
         if (opts.session_id) |sid| {
-            bc.session_id = sid;
+            _ = try bc.attachPrimarySession(sid);
         }
 
         if (opts.url) |url| {
             if (bc.session_id == null) {
-                bc.session_id = "SID-X";
+                _ = try bc.attachPrimarySession("SID-X");
             }
             if (bc.target_id == null) {
                 bc.target_id = "TID-000000000Z".*;

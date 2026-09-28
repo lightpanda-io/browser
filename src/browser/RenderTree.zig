@@ -83,6 +83,10 @@ pub const Slotted = struct {
     assigned: []const *Node,
     fallback: Children,
 
+    pub fn init(children_: Children) Slotted {
+        return .{ .tree = children_.tree, .assigned = &.{}, .fallback = children_ };
+    }
+
     pub fn next(self: *Slotted) ?Child {
         while (self.assigned.len > 0) {
             const node = self.assigned[0];
@@ -172,7 +176,9 @@ fn visibleDisplay(el: *Element, frame: *Frame) ?StyleManager.Display {
     if (tag.isMetadata() or tag == .svg) {
         return null;
     }
-    const d = frame._style_manager.display(el);
+
+    const owner = el.ownerFrame(frame) orelse return .other;
+    const d = owner._style_manager.display(el);
     if (d == .none) {
         return null;
     }
@@ -337,7 +343,7 @@ fn measureChild(self: *const RenderTree, child: Child, where: Measure.Where, m: 
             const el = child.node.subtype(Element);
             const inner: Measure.Where = .{
                 .shell = where.shell or dump_html.isShellElement(el),
-                .link = where.link or el.getTag() == .anchor,
+                .link = where.link or (el.getTag() == .anchor and el.getAttributeInterned("href") != null),
             };
             if (el.is(Slot)) |slot| {
                 var it = self.slotted(slot);

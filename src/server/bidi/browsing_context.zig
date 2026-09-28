@@ -32,6 +32,7 @@ const Notification = @import("../../Notification.zig");
 
 const BiDi = @import("BiDi.zig");
 const script = @import("script.zig");
+const execute = @import("execute.zig");
 const remote_value = @import("remote_value.zig");
 
 const log = lp.log;
@@ -59,29 +60,31 @@ pub const Context = struct {
 };
 
 const PendingNavigate = struct {
-    command_id: u64,
-    until: enum { interactive, complete },
+    until: Until,
+    reply: BiDi.Reply,
+
+    pub const Until = enum { interactive, complete };
 };
 
-pub fn processMessage(cmd: *const BiDi.Command) !void {
+pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
     const command = std.meta.stringToEnum(enum {
         getTree,
         create,
         navigate,
         close,
         locateNodes,
-    }, cmd.action) orelse return error.UnknownCommand;
+    }, action) orelse return error.UnknownCommand;
 
     switch (command) {
         .getTree => return getTree(cmd),
         .create => return create(cmd),
-        .navigate => return navigate(cmd),
+        .navigate => return bidiNavigate(cmd),
         .close => return close(cmd),
         .locateNodes => return locateNodes(cmd),
     }
 }
 
-fn getTree(cmd: *const BiDi.Command) !void {
+fn getTree(cmd: *BiDi.Command) !void {
     const bidi = cmd.bidi;
     const ctx = &(bidi.browsing_context orelse {
         return cmd.sendResult(.{ .contexts = &[_]Info{} });
@@ -97,7 +100,7 @@ fn getTree(cmd: *const BiDi.Command) !void {
     });
 }
 
-fn create(cmd: *const BiDi.Command) !void {
+fn create(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         type: enum { tab, window },
         userContext: ?[]const u8 = null,
@@ -116,23 +119,32 @@ fn create(cmd: *const BiDi.Command) !void {
         return cmd.sendError("no such user context", "unknown user context");
     }
 
+    const ctx = openContext(bidi) catch |err| switch (err) {
+        error.CreatePage => return cmd.sendError("unknown error", "failed to create page"),
+        else => return err,
+    };
+    return cmd.sendResult(.{ .context = &ctx.id });
+}
+
+// The top-level browsing context, on a fresh about:blank page.
+pub fn openContext(bidi: *BiDi) !*Context {
     const page = bidi.user_context.session.createPage() catch |err| {
         log.err(.bidi, "create page", .{ .err = err });
-        return cmd.sendError("unknown error", "failed to create page");
+        return error.CreatePage;
     };
 
-    var ctx = Context{
+    bidi.browsing_context = .{
         .id = undefined,
         .realm_id = undefined,
         .frame_id = page.frame_id,
         .navigation_id = undefined,
     };
+    const ctx = &bidi.browsing_context.?;
     uuidv4(&ctx.id);
     uuidv4(&ctx.realm_id);
     uuidv4(&ctx.navigation_id);
-    bidi.browsing_context = ctx;
 
-    try cmd.sendEvent("browsingContext.contextCreated", .{
+    try bidi.sendEvent("browsingContext.contextCreated", .{
         .context = &ctx.id,
         .url = "about:blank",
         .userContext = bidi.user_context.id(),
@@ -151,8 +163,7 @@ fn create(cmd: *const BiDi.Command) !void {
         };
         try announceRealm(bidi, frame);
     }
-
-    return cmd.sendResult(.{ .context = &ctx.id });
+    return ctx;
 }
 
 fn announceRealm(bidi: *BiDi, frame: *const Frame) !void {
@@ -171,56 +182,103 @@ fn announceRealm(bidi: *BiDi, frame: *const Frame) !void {
     });
 }
 
-fn navigate(cmd: *const BiDi.Command) !void {
+fn bidiNavigate(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         url: [:0]const u8,
         context: []const u8,
-        wait: enum { none, interactive, complete } = .none,
+        wait: NavigateOpts.Wait = .none,
     });
 
-    const bidi = cmd.bidi;
     const ctx = (try requireContext(cmd, p.context)) orelse return;
+    return navigate(cmd, ctx, .{ .url = p.url, .wait = p.wait });
+}
 
-    const frame = bidi.user_context.session.currentFrame() orelse {
+pub const NavigateOpts = struct {
+    url: [:0]const u8,
+    wait: Wait,
+
+    pub const Wait = enum { none, interactive, complete };
+};
+
+pub fn navigate(cmd: *BiDi.Command, ctx: *Context, opts: NavigateOpts) !void {
+    const frame = cmd.bidi.user_context.session.currentFrame() orelse {
         return cmd.sendError("unknown error", "no frame");
     };
-    const encoded_url = URL.resolveNavigation(frame.call_arena, p.url, .{}) catch {
+    const encoded_url = URL.resolveNavigation(frame.call_arena, opts.url, .{}) catch {
         return cmd.sendError("invalid argument", "invalid url");
     };
+    return startNavigation(cmd, ctx, frame, encoded_url, .{ .reason = .address_bar, .kind = .{ .push = null } }, opts.wait);
+}
+
+// Reloads the current document, replaying its method and body like CDP's
+// Page.reload.
+pub fn reload(cmd: *BiDi.Command, ctx: *Context, wait: NavigateOpts.Wait) !void {
+    const frame = cmd.bidi.user_context.session.currentFrame() orelse {
+        return cmd.sendError("unknown error", "no frame");
+    };
+
+    // the frame's arena, which these live in, is gone once the reload commits
+    const arena = cmd.arena;
+    const url = try arena.dupeZ(u8, frame.url);
+    var nav_opts: Frame.NavigateOpts = .{ .reason = .address_bar, .kind = .reload };
+    if (frame._navigated_options) |prev| {
+        nav_opts.method = prev.method;
+        nav_opts.body = if (prev.body) |b| try arena.dupe(u8, b) else null;
+        nav_opts.header = if (prev.header) |h| try arena.dupeZ(u8, h) else null;
+    }
+    return startNavigation(cmd, ctx, frame, url, nav_opts, wait);
+}
+
+fn startNavigation(cmd: *BiDi.Command, ctx: *Context, frame: *Frame, url: [:0]const u8, nav_opts: Frame.NavigateOpts, wait: NavigateOpts.Wait) !void {
+    const bidi = cmd.bidi;
 
     // A second navigate supersedes an in-flight one; answer the old command
-    // so the client isn't left waiting on its id forever.
+    // so the client isn't left waiting on it forever.
     try rejectPending(bidi, ctx, "navigation superseded");
 
     // Set before starting: a navigation can reach its wait condition
     // synchronously (about:blank), which would fire the lifecycle callback
     // before we got a chance to record the pending command.
-    switch (p.wait) {
+    switch (wait) {
         .none => {},
-        .interactive => ctx.pending_navigate = .{ .command_id = cmd.id, .until = .interactive },
-        .complete => ctx.pending_navigate = .{ .command_id = cmd.id, .until = .complete },
+        .interactive => ctx.pending_navigate = .{ .reply = cmd.takeReply(), .until = .interactive },
+        .complete => ctx.pending_navigate = .{ .reply = cmd.takeReply(), .until = .complete },
     }
 
     // Same fast path as CDP's Page.navigate: a root frame that never
     // navigated has nothing to preserve, so it navigates in place; a live
     // page goes through the pending-Page replacement machinery.
     const nav_result = if (frame._load_state == .waiting)
-        frame.navigate(encoded_url, .{ .reason = .address_bar, .kind = .{ .push = null } })
+        frame.navigate(url, nav_opts)
     else
-        bidi.user_context.session.initiateRootNavigation(frame._frame_id, encoded_url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+        bidi.user_context.session.initiateRootNavigation(frame._frame_id, url, nav_opts);
 
     nav_result catch |err| {
         log.warn(.bidi, "navigate", .{ .err = err });
+        if (wait != .none and ctx.pending_navigate == null) {
+            // the lifecycle already answered it
+            return;
+        }
         ctx.pending_navigate = null;
         return cmd.sendError("unknown error", "navigation failed");
     };
 
-    if (p.wait == .none) {
-        return cmd.sendResult(.{ .navigation = &ctx.navigation_id, .url = encoded_url });
+    if (wait == .none) {
+        return cmd.sendResult(.{ .navigation = &ctx.navigation_id, .url = url });
     }
 }
 
-fn close(cmd: *const BiDi.Command) !void {
+// For commands that start a navigation, e.g. clicking a link.
+pub fn answerAfterNavigation(cmd: *BiDi.Command, ctx: *Context, frame: *const Frame) !void {
+    if (frame._queued_navigation == null) {
+        return cmd.sendDone();
+    }
+    // There was an already queued navigation, reject the previous pending command
+    try rejectPending(cmd.bidi, ctx, "navigation superseded");
+    ctx.pending_navigate = .{ .reply = cmd.takeReply(), .until = .complete };
+}
+
+fn close(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         context: []const u8,
     });
@@ -231,7 +289,7 @@ fn close(cmd: *const BiDi.Command) !void {
 }
 
 // Closes the page behind `ctx` and reports it gone.
-pub fn destroy(cmd: *const BiDi.Command, ctx: *Context) !void {
+pub fn destroy(cmd: *BiDi.Command, ctx: *Context) !void {
     const bidi = cmd.bidi;
     try rejectPending(bidi, ctx, "browsing context closed");
 
@@ -259,7 +317,7 @@ pub fn destroy(cmd: *const BiDi.Command, ctx: *Context) !void {
     });
 }
 
-fn locateNodes(cmd: *const BiDi.Command) !void {
+fn locateNodes(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         context: []const u8,
         locator: struct {
@@ -289,6 +347,7 @@ fn locateNodes(cmd: *const BiDi.Command) !void {
             return cmd.sendError("unsupported operation", "locator type is not supported");
         },
     };
+    const locator: Locator = if (p.locator.type == .css) .{ .css = selector } else .{ .xpath = selector };
 
     const bidi = cmd.bidi;
     const frame = bidi.user_context.session.currentFrame() orelse {
@@ -320,43 +379,17 @@ fn locateNodes(cmd: *const BiDi.Command) !void {
     defer ls.deinit();
     var serializer = remote_value.Serializer.init(bidi, arena, frame, &ls.local, p.serializationOptions.options(false));
 
-    const xpath_expr = if (p.locator.type == .xpath) XPathParser.parse(arena, selector) catch |err| {
-        return invalidSelector(cmd, "xpath", selector, err);
-    } else undefined;
-
     // Serialized straight from each root's result, stopping at maxNodeCount.
     const max = p.maxNodeCount orelse std.math.maxInt(u32);
     var remotes: std.ArrayList(remote_value.Remote) = .empty;
     for (roots) |root| {
-        switch (p.locator.type) {
-            .css => {
-                if (max == 1) {
-                    const element = Selector.querySelector(root, selector, frame) catch |err| {
-                        return invalidSelector(cmd, "css", selector, err);
-                    };
-                    if (element) |el| {
-                        try remotes.append(arena, try serializer.domNode(el.asNode()));
-                    }
-                } else {
-                    const list = Selector.querySelectorAll(root, selector, frame) catch |err| {
-                        return invalidSelector(cmd, "css", selector, err);
-                    };
-                    defer list.deinit(frame._page);
-                    try appendNodes(&remotes, arena, &serializer, list._nodes, max);
-                }
-            },
-            .xpath => {
-                // TODO: maxNodeCount == 1 could stop at the first match like css
-                const result = xpath.evaluate(arena, xpath_expr, root, frame) catch |err| {
-                    return invalidSelector(cmd, "xpath", selector, err);
-                };
-                switch (result) {
-                    .node_set => |nodes| try appendNodes(&remotes, arena, &serializer, nodes, max),
-                    else => return cmd.sendError("invalid selector", "xpath expression must select nodes"),
-                }
-            },
-            else => unreachable, // other types aren't currently supported (TODO) and were already rejected
-        }
+        const remaining = max - @as(u32, @intCast(remotes.items.len));
+        const nodes = locator.locate(arena, root, remaining, frame) catch |err| switch (err) {
+            error.InvalidSelector => return cmd.sendError("invalid selector", "invalid selector"),
+            error.NodeSetExpected => return cmd.sendError("invalid selector", "xpath expression must select nodes"),
+            else => return err,
+        };
+        try appendNodes(&remotes, arena, &serializer, nodes, max);
 
         if (remotes.items.len >= max) {
             break;
@@ -364,6 +397,94 @@ fn locateNodes(cmd: *const BiDi.Command) !void {
     }
 
     return cmd.sendResult(.{ .nodes = remotes.items });
+}
+
+// What a locator selects, shared by browsingContext.locateNodes and the HTTP
+// session's element finders. The last three are WebDriver-only strategies.
+pub const Locator = union(enum) {
+    css: []const u8,
+    xpath: []const u8,
+    tag_name: []const u8, // webdriver-only
+    link_text: []const u8, // webdriver-only
+    partial_link_text: []const u8, // webdriver-only
+
+    pub fn locate(self: Locator, arena: std.mem.Allocator, root: *Node, max: u32, frame: *Frame) ![]const *Node {
+        if (max == 0) {
+            return &.{};
+        }
+
+        switch (self) {
+            .css => |selector| {
+                if (max == 1) {
+                    const element = Selector.querySelector(root, selector, frame) catch |err| return badSelector("css", selector, err);
+                    const found = element orelse return &.{};
+                    const nodes = try arena.alloc(*Node, 1);
+                    nodes[0] = found.asNode();
+                    return nodes;
+                }
+                const list = Selector.querySelectorAll(root, selector, frame) catch |err| return badSelector("css", selector, err);
+                defer list.deinit(frame.page);
+                return arena.dupe(*Node, list._nodes[0..@min(list._nodes.len, max)]);
+            },
+            .xpath => |expression| {
+                // TODO: max == 1 could stop at the first match like css
+                const parsed = XPathParser.parse(arena, expression) catch |err| return badSelector("xpath", expression, err);
+                const result = xpath.evaluate(arena, parsed, root, frame) catch |err| return badSelector("xpath", expression, err);
+                const nodes = switch (result) {
+                    .node_set => |nodes| nodes,
+                    else => return error.NodeSetExpected,
+                };
+                return nodes[0..@min(nodes.len, max)];
+            },
+            .tag_name, .link_text, .partial_link_text => {},
+        }
+
+        const tag_name = switch (self) {
+            .tag_name => |name| name,
+            else => "a", // link_text or partial_link_test all sub-filter from <a>
+        };
+        var elements = root.getElementsByTagName(tag_name, frame) catch |err| switch (err) {
+            error.InvalidTagName => return badSelector("tag name", tag_name, err),
+            else => return err,
+        };
+
+        var text: std.Io.Writer.Allocating = .init(arena);
+        var found: std.ArrayList(*Node) = .empty;
+        switch (elements) {
+            inline else => |*list| while (list.next()) |element| {
+                const matches = switch (self) {
+                    .tag_name => true,
+                    .link_text, .partial_link_text => |needle| blk: {
+                        // an <a> outside HTML has no rendered text
+                        if (element.getTag() != .anchor) {
+                            break :blk false;
+                        }
+                        text.clearRetainingCapacity();
+                        try element.getInnerText(&text.writer, frame);
+                        const rendered = std.mem.trim(u8, text.written(), &std.ascii.whitespace);
+                        break :blk switch (self) {
+                            .link_text => std.mem.eql(u8, rendered, needle),
+                            else => std.mem.indexOf(u8, rendered, needle) != null,
+                        };
+                    },
+                    else => unreachable, // css and xpath returned above
+                };
+
+                if (matches) {
+                    try found.append(arena, element.asNode());
+                    if (found.items.len == max) {
+                        break;
+                    }
+                }
+            },
+        }
+        return found.items;
+    }
+};
+
+fn badSelector(kind: []const u8, selector: []const u8, err: anyerror) error{InvalidSelector} {
+    log.debug(.bidi, "locate", .{ .kind = kind, .selector = selector, .err = err });
+    return error.InvalidSelector;
 }
 
 fn appendNodes(remotes: *std.ArrayList(remote_value.Remote), arena: std.mem.Allocator, serializer: *remote_value.Serializer, nodes: []const *Node, max: u32) !void {
@@ -375,12 +496,7 @@ fn appendNodes(remotes: *std.ArrayList(remote_value.Remote), arena: std.mem.Allo
     }
 }
 
-fn invalidSelector(cmd: *const BiDi.Command, kind: []const u8, selector: []const u8, err: anyerror) !void {
-    log.debug(.bidi, "locateNodes", .{ .kind = kind, .selector = selector, .err = err });
-    return cmd.sendError("invalid selector", "invalid selector");
-}
-
-pub fn requireContext(cmd: *const BiDi.Command, context: []const u8) !?*Context {
+pub fn requireContext(cmd: *BiDi.Command, context: []const u8) !?*Context {
     if (cmd.bidi.browsing_context) |*ctx| {
         if (std.mem.eql(u8, &ctx.id, context)) {
             return ctx;
@@ -394,10 +510,14 @@ pub fn requireContext(cmd: *const BiDi.Command, context: []const u8) !?*Context 
 fn answerPending(bidi: *BiDi, ctx: *Context, url: []const u8) !void {
     const pending = ctx.pending_navigate orelse return;
     ctx.pending_navigate = null;
-    return bidi.sendResult(pending.command_id, .{
-        .url = url,
-        .navigation = &ctx.navigation_id,
-    });
+    switch (pending.reply) {
+        .bidi => |id| return bidi.sendResult(id, .{
+            .url = url,
+            .navigation = &ctx.navigation_id,
+        }),
+        // WebDriver's Navigate To answers null
+        .http => return bidi.respondHTTP(null),
+    }
 }
 
 // Fails `ctx`'s pending navigate command, if any, and clears it. BiDi has no
@@ -406,7 +526,7 @@ fn answerPending(bidi: *BiDi, ctx: *Context, url: []const u8) !void {
 fn rejectPending(bidi: *BiDi, ctx: *Context, message: []const u8) !void {
     const pending = ctx.pending_navigate orelse return;
     ctx.pending_navigate = null;
-    return bidi.sendError(pending.command_id, "unknown error", message);
+    return bidi.replyError(pending.reply, "unknown error", message);
 }
 
 pub fn registerNotifications(bidi: *BiDi) !void {
@@ -438,6 +558,7 @@ fn onFrameCreated(ptr: *anyopaque, frame: *Frame) !void {
 fn onFrameDestroyed(ptr: *anyopaque, frame: *const Frame) !void {
     const bidi: *BiDi = @ptrCast(@alignCast(ptr));
     script.Pending.contextDestroyed(bidi, frame.js.id);
+    execute.Pending.contextDestroyed(bidi, frame.js.id);
 }
 
 fn onFrameNavigate(ptr: *anyopaque, msg: *const Notification.FrameNavigate) !void {
@@ -485,7 +606,7 @@ fn onFrameLoaded(ptr: *anyopaque, msg: *const Notification.FrameLoaded) !void {
 fn frameLifecycleEvent(
     ptr: *anyopaque,
     comptime method: []const u8,
-    reached: @FieldType(PendingNavigate, "until"),
+    reached: PendingNavigate.Until,
     frame_id: u32,
     timestamp: u64,
 ) !void {

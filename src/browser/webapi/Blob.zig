@@ -447,8 +447,8 @@ test "Blob: a pinned arena reaches the browser's account and is given back" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const page = frame._page;
-    const browser = frame._session.browser;
+    const page = frame.page;
+    const browser = page.session.browser;
 
     browser.flushArenaMemory();
     try testing.expectEqual(0, browser.arena_account.pending);

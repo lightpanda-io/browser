@@ -140,27 +140,54 @@ pub const Format = enum {
     pretty,
 };
 
-pub fn debug(scope: Scope, msg: []const u8, data: anytype) void {
+// A message is a short, plain-text key; the detail belongs in the kvs.
+const max_msg_len = 30;
+
+/// The comptime form of the checks in logToErased. Those only fire in a debug
+/// build *and* only once the line actually runs, so a message on a rare path
+/// can ship and then panic on whoever first hits it. Every message below is a
+/// literal, so the same rules can be a build error instead.
+fn validateMsg(comptime msg: []const u8) void {
+    comptime {
+        if (msg.len > max_msg_len) {
+            @compileError("log msg cannot be more than 30 characters: " ++ msg);
+        }
+        for (msg) |b| {
+            switch (b) {
+                'A'...'Z', 'a'...'z', ' ', '0'...'9', '_', '-', '.', '{', '}' => {},
+                else => @compileError("log msg contains an invalid character: " ++ msg),
+            }
+        }
+    }
+}
+
+pub fn debug(scope: Scope, comptime msg: []const u8, data: anytype) void {
+    comptime validateMsg(msg);
     log(scope, .debug, msg, data);
 }
 
-pub fn info(scope: Scope, msg: []const u8, data: anytype) void {
+pub fn info(scope: Scope, comptime msg: []const u8, data: anytype) void {
+    comptime validateMsg(msg);
     log(scope, .info, msg, data);
 }
 
-pub fn warn(scope: Scope, msg: []const u8, data: anytype) void {
+pub fn warn(scope: Scope, comptime msg: []const u8, data: anytype) void {
+    comptime validateMsg(msg);
     log(scope, .warn, msg, data);
 }
 
-pub fn err(scope: Scope, msg: []const u8, data: anytype) void {
+pub fn err(scope: Scope, comptime msg: []const u8, data: anytype) void {
+    comptime validateMsg(msg);
     log(scope, .err, msg, data);
 }
 
-pub fn fatal(scope: Scope, msg: []const u8, data: anytype) void {
+pub fn fatal(scope: Scope, comptime msg: []const u8, data: anytype) void {
+    comptime validateMsg(msg);
     log(scope, .fatal, msg, data);
 }
 
-pub fn note(scope: Scope, msg: []const u8, data: anytype) void {
+pub fn note(scope: Scope, comptime msg: []const u8, data: anytype) void {
+    comptime validateMsg(msg);
     if (comptime lp.IS_TEST == false) {
         log(scope, .note, msg, data);
     }
@@ -236,7 +263,7 @@ fn logTo(scope: Scope, level: Level, msg: []const u8, data: anytype, out: *std.I
 
 fn logToErased(scope: Scope, level: Level, msg: []const u8, kvs: []const KV, out: *std.Io.Writer) !void {
     if (lp.IS_DEBUG) {
-        if (msg.len > 30) {
+        if (msg.len > max_msg_len) {
             std.debug.print("debug-only-panic: log msg cannot be more than 30 characters: {s}", .{msg});
             @panic("invalid log msg");
         }

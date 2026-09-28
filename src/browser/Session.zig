@@ -25,6 +25,7 @@ const Config = @import("../Config.zig");
 const History = @import("webapi/History.zig");
 const storage = @import("webapi/storage/storage.zig");
 const IdbManager = @import("webapi/storage/idb/idb.zig").Manager;
+const CacheStore = @import("webapi/cache/Store.zig");
 const Factory = @import("Factory.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Navigation = @import("webapi/navigation/Navigation.zig");
@@ -37,6 +38,7 @@ pub const Runner = @import("Runner.zig");
 const Notification = @import("../Notification.zig");
 const QueuedNavigation = Frame.QueuedNavigation;
 const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
+const ServiceWorkerGlobalScope = @import("webapi/ServiceWorkerGlobalScope.zig");
 
 const log = lp.log;
 const ArenaPool = App.ArenaPool;
@@ -53,8 +55,8 @@ arena: *lp.Arena,
 history: History,
 navigation: *Navigation,
 storage_shed: storage.Shed,
-// Per-origin IndexedDB engines
-idb: IdbManager,
+idb: IdbManager, // Per-origin IndexedDB engines
+cache_store: CacheStore, // Per-origin CacheStorage
 // Backs `globalThis.lp.*`; values pre-stringified so the prelude splices
 // them in without re-encoding.
 bridge_store: std.StringHashMapUnmanaged([]const u8) = .empty,
@@ -74,6 +76,10 @@ pages: std.ArrayList(*Page) = .empty,
 // `new SharedWorker(url, name)` in the session connects to the same instance.
 // Owned by the Page that creates it.
 shared_workers: std.StringHashMapUnmanaged(*SharedWorkerGlobalScope) = .empty,
+
+// url => SWGS. The SWGS is owned by the page, but can be shared with other
+// pages by url.
+service_workers: std.StringHashMapUnmanaged(*ServiceWorkerGlobalScope) = .empty,
 
 _page_destruction_queue: std.ArrayList(*Page) = .empty,
 
@@ -108,6 +114,9 @@ load_resources: Config.LoadResources,
 
 // Virtual time the current navigation may still skip; null keeps real time.
 virtual_time: ?VirtualTime.Budget = null,
+
+// opt-in unstable features (--experimental-features)
+experimental_features: Config.ExperimentalFeatures,
 
 /// Caller-supplied cancellation probe. `Runner._wait` polls it between
 /// ticks; once `check` returns true the wait returns `error.Cancelled`.
@@ -166,12 +175,14 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .navigation = navigation,
         .storage_shed = .{},
         .idb = IdbManager.init(allocator),
+        .cache_store = CacheStore.init(allocator),
         .browser = browser,
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator, notification),
         ._console_messages = .init(allocator),
         .load_resources = browser.app.config.loadResources(),
         .virtual_time = if (browser.app.config.virtualTimeBudgetMs()) |ms| .init(ms) else null,
+        .experimental_features = browser.app.config.experimentalFeatures(),
     };
     errdefer self._console_messages.deinit();
 }
@@ -209,6 +220,7 @@ pub fn deinit(self: *Session) void {
 
     self.storage_shed.deinit(self.browser.app.allocator);
     self.idb.deinit();
+    self.cache_store.deinit();
     {
         const allocator = self.browser.app.allocator;
         var it = self.bridge_store.iterator();
@@ -579,7 +591,7 @@ pub fn idleSlice(self: *Session) u31 {
 }
 
 pub fn scheduleNavigation(_: *Session, frame: *Frame) !void {
-    return frame._page.scheduleNavigation(frame);
+    return frame.page.scheduleNavigation(frame);
 }
 
 // Drain one page's queued navigations and return whether any page had work.
@@ -740,8 +752,7 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
 
     const frame_id = frame._frame_id;
     const reuse_window = frame.window;
-    const page = frame._page;
-    frame.js.detachGlobal();
+    const page = frame.page;
     frame.deinit();
     frame.* = undefined;
 
@@ -790,9 +801,8 @@ fn processPopupNavigation(_: *Session, frame: *Frame, qn: *QueuedNavigation) !vo
     const saved_name = reuse_window._name;
     const saved_opener = reuse_window._opener;
     const frame_id = frame._frame_id;
-    const page = frame._page;
+    const page = frame.page;
 
-    frame.js.detachGlobal();
     frame.deinit();
     frame.* = undefined;
 
@@ -914,6 +924,9 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
         log.err(.browser, "pending navigation start", .{ .err = err, .url = url });
         return err;
     };
+
+    live.frame.abortDocumentLoad();
+    live.frame.abortedDocumentIsComplete();
 }
 
 // Promote a pending replacement Page to be the live Page.
@@ -1064,4 +1077,32 @@ test "Session: retiring a pending page destroys it once" {
 
     // Would deinit `pending` twice if it had been queued twice.
     session.processDestroyQueues();
+}
+
+test "Session: console capture runs no page JS" {
+    const js = @import("js/js.zig");
+
+    const session = testing.test_session;
+    try session.enableConsoleCapture();
+    defer {
+        session.notification.unregister(.console_message, session);
+        session._console_capture = false;
+        session._console_messages.clearRetainingCapacity();
+    }
+
+    const frame = try testing.createFrame();
+    defer session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec(
+        \\globalThis.probed = 0;
+        \\const probe = { toString() { globalThis.probed++; console.log('inner'); return 'outer'; } };
+        \\console.log('head', probe, 10n, Symbol('s'));
+    , null);
+
+    try testing.expectEqualSlices(u8, "[log] head [object Object] 10n Symbol(s)\n", session.drainConsoleMessages());
+    const probed = try ls.local.exec("globalThis.probed", null);
+    try testing.expectEqual(0, try probed.toF64());
 }

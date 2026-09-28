@@ -85,7 +85,7 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
         .same_site = data.same_site,
     };
     const same_site = Cookie.areSameSite(exec.siteForCookies(), target.host);
-    if (!probe.appliesTo(&target, same_site, false, false)) {
+    if (!probe.appliesTo(&target, .{ .same_site = same_site, .is_http = false })) {
         return;
     }
 
@@ -259,11 +259,11 @@ pub fn get(_: *CookieStore, input: ?GetInput, exec: *const Execution) !js.Promis
 
     if (name == null and url == null) {
         // Unlike getAll(), get() requires a name or url
-        return local.rejectPromise(.{ .type_error = "get requires a name or url" });
+        return local.typeError("get requires a name or url");
     }
 
     const items = matchCookies(exec, name, url, true) catch |err| {
-        return local.rejectPromise(.{ .type_error = @errorName(err) });
+        return local.typeError(@errorName(err));
     };
 
     if (items.len == 0) {
@@ -281,7 +281,7 @@ pub fn getAll(_: *CookieStore, input: ?GetInput, exec: *const Execution) !js.Pro
     } else .{ null, null };
 
     const items = matchCookies(exec, name, url, false) catch |err| {
-        return local.rejectPromise(.{ .type_error = @errorName(err) });
+        return local.typeError(@errorName(err));
     };
     return local.resolvePromise(items);
 }
@@ -293,12 +293,12 @@ pub fn set(_: *CookieStore, input: SetInput, value: ?[]const u8, exec: *const Ex
         .options => |o| o,
         .name => |n| .{
             .name = n,
-            .value = value orelse return local.rejectPromise(.{ .type_error = "value is required" }),
+            .value = value orelse return local.typeError("value is required"),
         },
     };
 
     storeCookie(exec, init, false) catch |err| {
-        return local.rejectPromise(.{ .type_error = @errorName(err) });
+        return local.typeError(@errorName(err));
     };
 
     return local.resolvePromise({});
@@ -324,7 +324,7 @@ pub fn delete(_: *CookieStore, input: DeleteInput, exec: *const Execution) !js.P
         .sameSite = .strict,
         .partitioned = opts.partitioned,
     }, true) catch |err| {
-        return local.rejectPromise(.{ .type_error = @errorName(err) });
+        return local.typeError(@errorName(err));
     };
 
     return local.resolvePromise({});
@@ -363,11 +363,7 @@ fn matchCookies(
     const session = exec.session;
     const url_resolved = try resolveQueryUrl(exec, url);
 
-    const target = Cookie.PreparedUri{
-        .host = URL.getHostname(url_resolved),
-        .path = URL.getPathname(url_resolved),
-        .secure = URL.isSecure(url_resolved),
-    };
+    const target: Cookie.PreparedUri = .init(url_resolved);
     if (target.host.len == 0) {
         return error.SecurityError;
     }
@@ -383,7 +379,7 @@ fn matchCookies(
     for (session.cookie_jar.cookies.items) |*cookie| {
         // CookieStore exposes only cookies that script would see for the
         // current document. HttpOnly cookies stay hidden.
-        if (cookie.appliesTo(&target, same_site, false, false) == false) {
+        if (cookie.appliesTo(&target, .{ .same_site = same_site, .is_http = false }) == false) {
             continue;
         }
         if (normalized_name) |n| {
@@ -494,10 +490,10 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
         return error.SameSiteBlocked;
     }
 
-    const is_https = URL.isSecure(url);
+    const trustworthy = URL.isPotentiallyTrustworthy(url);
     // Per spec, SameSite=None requires Secure. CookieStore additionally
-    // marks any cookie written from an HTTPS document as Secure.
-    const secure = is_https or init.sameSite == .none;
+    // marks any cookie written from a trustworthy origin as Secure.
+    const secure = trustworthy or init.sameSite == .none;
 
     // The `__Http-` and `__Host-Http-` prefixes are reserved for HTTP-state
     // cookies; the (script) CookieStore API can never set them, on any origin.
@@ -509,7 +505,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
     // catch impersonation attempts (e.g. "__HoSt-").
     // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-cookie-name-prefixes
     if (std.ascii.startsWithIgnoreCase(init.name, "__Host-")) {
-        if (!is_https) {
+        if (!trustworthy) {
             return error.InvalidPrefixedCookie;
         }
         if (init.domain) |d| {
@@ -523,7 +519,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
             return error.InvalidPrefixedCookie;
         }
     } else if (std.ascii.startsWithIgnoreCase(init.name, "__Secure-")) {
-        if (!is_https) {
+        if (!trustworthy) {
             return error.InvalidPrefixedCookie;
         }
     }

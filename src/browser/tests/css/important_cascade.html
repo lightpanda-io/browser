@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<head>
+  <script src="../testing.js"></script>
+  <link rel="stylesheet" href="/styles/important-cascade.css">
+  <style>
+    .product__media-sublist { display: block; }
+    @layer first, second;
+    @layer first { .layered { display: none !important; } }
+    @layer second { .layered { display: block !important; } }
+    @layer outer { .nested { display: block !important; } @layer inner { .nested { display: none !important; } } }
+    @layer first { .over-unlayered { display: none !important; } }
+    .over-unlayered { display: block !important; }
+    .mixed { visibility: hidden !important; display: none; }
+    .mixed-later { visibility: visible; display: block; }
+    .force-flex { display: flex !important; }
+    .force-visible { visibility: visible !important; }
+    .force-width { width: 50px !important; }
+  </style>
+</head>
+<body>
+  <div id="gallery" class="product__media-sublist no-js-flex">hidden gallery</div>
+  <div id="inline" class="no-js-flex" style="display: block">hidden despite normal inline style</div>
+  <div id="inline-important" class="no-js-flex" style="display: block !important">visible with important inline style</div>
+  <div id="layered" class="layered">hidden by the earlier important layer</div>
+  <div id="nested" class="nested">hidden by the sublayer, which precedes its parent's own rules</div>
+  <div id="over-unlayered" class="over-unlayered">hidden: an important layer beats important unlayered</div>
+  <div id="mixed" class="mixed mixed-later">shown, but visibility: hidden</div>
+  <div id="flex-over-inline" class="force-flex" style="display: none">shown</div>
+  <div id="visible-over-inline" class="force-visible" style="visibility: hidden">shown</div>
+  <div id="width-over-inline" class="force-width" style="width: 10px">50px wide</div>
+  <div id="width-inline-important" class="force-width" style="width: 10px !important">10px wide</div>
+  <script id="author_important_cascade">
+  {
+    testing.expectEqual('none', getComputedStyle(document.getElementById('gallery')).display);
+    testing.expectEqual(0, document.getElementById('gallery').offsetWidth);
+    testing.expectEqual('none', getComputedStyle(document.getElementById('inline')).display);
+    testing.expectEqual('block', getComputedStyle(document.getElementById('inline-important')).display);
+    testing.expectEqual('none', getComputedStyle(document.getElementById('layered')).display);
+
+    // CSSOM insertion and deletion must preserve the declaration's priority.
+    const sheet = document.styleSheets[1];
+    const index = sheet.insertRule('.no-js-flex { display: block !important; }', sheet.cssRules.length);
+    testing.expectEqual('block', getComputedStyle(document.getElementById('gallery')).display);
+    sheet.deleteRule(index);
+    testing.expectEqual('none', getComputedStyle(document.getElementById('gallery')).display);
+  }
+  </script>
+
+  <script id="important_layer_order">
+  {
+    testing.expectEqual('none', getComputedStyle(document.getElementById('nested')).display);
+    testing.expectEqual('none', getComputedStyle(document.getElementById('over-unlayered')).display);
+  }
+  </script>
+
+  <script id="mixed_importance_block">
+  {
+    // Only the block's !important declaration outranks the later rule.
+    const mixed = document.getElementById('mixed');
+    testing.expectEqual(true, mixed.checkVisibility());
+    testing.expectEqual(false, mixed.checkVisibility({ visibilityProperty: true }));
+    testing.expectEqual('hidden', getComputedStyle(mixed).visibility);
+  }
+  </script>
+
+  <script id="computed_style_skips_losing_inline">
+  {
+    // getComputedStyle agrees with the cascade checkVisibility and layout use:
+    // a normal inline declaration loses to an !important rule.
+    const flex = document.getElementById('flex-over-inline');
+    testing.expectEqual(true, flex.checkVisibility());
+    testing.expectEqual(false, getComputedStyle(flex).display == 'none');
+    testing.expectEqual('none', flex.style.display);
+
+    const visible = document.getElementById('visible-over-inline');
+    testing.expectEqual(true, visible.checkVisibility({ visibilityProperty: true }));
+    testing.expectEqual('visible', getComputedStyle(visible).visibility);
+
+    const wide = document.getElementById('width-over-inline');
+    testing.expectEqual(50, wide.offsetWidth);
+    testing.expectEqual('50px', getComputedStyle(wide).width);
+
+    const narrow = document.getElementById('width-inline-important');
+    testing.expectEqual(10, narrow.offsetWidth);
+    testing.expectEqual('10px', getComputedStyle(narrow).width);
+  }
+  </script>
+</body>

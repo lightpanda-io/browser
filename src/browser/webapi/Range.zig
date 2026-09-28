@@ -479,7 +479,7 @@ fn nodeContained(self: *const Range, node: *Node) bool {
 }
 
 fn cloneContents(self: *const Range, frame: *Frame) !*DocumentFragment {
-    const fragment = try DocumentFragment.init(frame);
+    const fragment = try DocumentFragment.init(self._proto._start_container.getDocument(frame), frame);
     if (self._proto.getCollapsed()) return fragment;
 
     try cloneContentsBetween(
@@ -499,7 +499,7 @@ fn cloneContentsBetween(frame: *Frame, out: *Node, start_node: *Node, start_offs
     if (start_node == end_node) {
         if (start_node.is(Node.CData)) |cdata| {
             const data = cdata.getData().str();
-            const cloned = (try start_node.cloneNodeForAppending(false, frame)) orelse return;
+            const cloned = (try start_node.cloneNodeForAppending(false, out.getDocument(frame), frame)) orelse return;
             try cloned.setData(data[byteOffset(data, start_offset)..byteOffset(data, end_offset)], frame);
             _ = try out.appendChild(cloned, frame);
             return;
@@ -522,11 +522,11 @@ fn cloneContentsBetween(frame: *Frame, out: *Node, start_node: *Node, start_offs
             if (c.is(Node.CData)) |cdata| {
                 // c is the start node itself.
                 const data = cdata.getData().str();
-                const cloned = (try c.cloneNodeForAppending(false, frame)) orelse continue;
+                const cloned = (try c.cloneNodeForAppending(false, out.getDocument(frame), frame)) orelse continue;
                 try cloned.setData(data[byteOffset(data, start_offset)..], frame);
                 _ = try out.appendChild(cloned, frame);
             } else {
-                const cloned = (try c.cloneNodeForAppending(false, frame)) orelse continue;
+                const cloned = (try c.cloneNodeForAppending(false, out.getDocument(frame), frame)) orelse continue;
                 _ = try out.appendChild(cloned, frame);
                 try cloneContentsBetween(frame, cloned, start_node, start_offset, c, c.getLength());
             }
@@ -535,11 +535,11 @@ fn cloneContentsBetween(frame: *Frame, out: *Node, start_node: *Node, start_offs
             if (c.is(Node.CData)) |cdata| {
                 // c is the end node itself.
                 const data = cdata.getData().str();
-                const cloned = (try c.cloneNodeForAppending(false, frame)) orelse continue;
+                const cloned = (try c.cloneNodeForAppending(false, out.getDocument(frame), frame)) orelse continue;
                 try cloned.setData(data[0..byteOffset(data, end_offset)], frame);
                 _ = try out.appendChild(cloned, frame);
             } else {
-                const cloned = (try c.cloneNodeForAppending(false, frame)) orelse continue;
+                const cloned = (try c.cloneNodeForAppending(false, out.getDocument(frame), frame)) orelse continue;
                 _ = try out.appendChild(cloned, frame);
                 try cloneContentsBetween(frame, cloned, c, 0, end_node, end_offset);
             }
@@ -547,7 +547,7 @@ fn cloneContentsBetween(frame: *Frame, out: *Node, start_node: *Node, start_offs
             if (c._type == .document_type) {
                 return error.HierarchyError;
             }
-            const cloned = (try c.cloneNodeForAppending(true, frame)) orelse continue;
+            const cloned = (try c.cloneNodeForAppending(true, out.getDocument(frame), frame)) orelse continue;
             _ = try out.appendChild(cloned, frame);
         }
     }
@@ -560,7 +560,7 @@ fn containedBetween(node: *Node, start_node: *Node, start_offset: u32, end_node:
 }
 
 fn extractContents(self: *Range, frame: *Frame) !*DocumentFragment {
-    const fragment = try DocumentFragment.init(frame);
+    const fragment = try DocumentFragment.init(self._proto._start_container.getDocument(frame), frame);
     if (self._proto.getCollapsed()) return fragment;
 
     frame.domChanged();
@@ -599,7 +599,7 @@ fn extractContentsBetween(frame: *Frame, out: *Node, start_node: *Node, start_of
     if (start_node == end_node) {
         if (start_node.is(Node.CData)) |cdata| {
             const data = cdata.getData().str();
-            const cloned = (try start_node.cloneNodeForAppending(false, frame)) orelse return;
+            const cloned = (try start_node.cloneNodeForAppending(false, out.getDocument(frame), frame)) orelse return;
             try cloned.setData(data[byteOffset(data, start_offset)..byteOffset(data, end_offset)], frame);
             _ = try out.appendChild(cloned, frame);
             try cdata.replaceData(start_offset, end_offset - start_offset, "", frame);
@@ -635,13 +635,13 @@ fn extractContentsBetween(frame: *Frame, out: *Node, start_node: *Node, start_of
             // c is the start node itself.
             const data = cdata.getData().str();
             const byte_start = byteOffset(data, start_offset);
-            const cloned = (try c.cloneNodeForAppending(false, frame)) orelse return;
+            const cloned = (try c.cloneNodeForAppending(false, out.getDocument(frame), frame)) orelse return;
             try cloned.setData(data[byte_start..], frame);
             _ = try out.appendChild(cloned, frame);
             const length: u32 = @intCast(cdata.getLength());
             try cdata.replaceData(start_offset, length - start_offset, "", frame);
         } else {
-            const cloned = (try c.cloneNodeForAppending(false, frame)) orelse return;
+            const cloned = (try c.cloneNodeForAppending(false, out.getDocument(frame), frame)) orelse return;
             _ = try out.appendChild(cloned, frame);
             try extractContentsBetween(frame, cloned, start_node, start_offset, c, c.getLength());
         }
@@ -655,12 +655,12 @@ fn extractContentsBetween(frame: *Frame, out: *Node, start_node: *Node, start_of
         if (c.is(Node.CData)) |cdata| {
             // c is the end node itself.
             const data = cdata.getData().str();
-            const cloned = (try c.cloneNodeForAppending(false, frame)) orelse return;
+            const cloned = (try c.cloneNodeForAppending(false, out.getDocument(frame), frame)) orelse return;
             try cloned.setData(data[0..byteOffset(data, end_offset)], frame);
             _ = try out.appendChild(cloned, frame);
             try cdata.replaceData(0, end_offset, "", frame);
         } else {
-            const cloned = (try c.cloneNodeForAppending(false, frame)) orelse return;
+            const cloned = (try c.cloneNodeForAppending(false, out.getDocument(frame), frame)) orelse return;
             _ = try out.appendChild(cloned, frame);
             try extractContentsBetween(frame, cloned, c, 0, end_node, end_offset);
         }
@@ -689,7 +689,8 @@ fn createContextualFragment(self: *const Range, html: []const u8, frame: *Frame)
         context_node = context_node.parentNode() orelse context_node;
     }
 
-    const fragment = try DocumentFragment.init(frame);
+    const document = context_node.getDocument(frame);
+    const fragment = try DocumentFragment.init(document, frame);
 
     if (html.len == 0) {
         return fragment;
@@ -698,9 +699,9 @@ fn createContextualFragment(self: *const Range, html: []const u8, frame: *Frame)
     // Create a temporary element of the same type as the context for parsing
     // This preserves the parsing context without modifying the original node
     const temp_node = if (context_node.is(Node.Element)) |el|
-        try Frame.node_factory.createElementNS(frame, el._namespace, el.getTagNameLower(), null)
+        try Frame.node_factory.createElementNS(document, el._namespace, el.getTagNameLower(), null)
     else
-        try Frame.node_factory.createElementNS(frame, .html, "div", null);
+        try Frame.node_factory.createElementNS(document, .html, "div", null);
 
     try Frame.parse.contextualFragment(frame, temp_node, html);
 
@@ -718,11 +719,19 @@ fn createContextualFragment(self: *const Range, html: []const u8, frame: *Frame)
 pub fn toString(self: *const Range, frame: *Frame) ![]const u8 {
     // Simplified implementation: just extract text content
     var buf = std.Io.Writer.Allocating.init(frame.local_arena);
-    try self.writeTextContent(&buf.writer);
+    try self.writeTextContent(&buf.writer, null);
     return buf.written();
 }
 
-fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
+// Selection.toString is almost like Range.toString, except it does not include
+// the text that an inert element hides.
+pub fn toSelectionString(self: *const Range, frame: *Frame) ![]const u8 {
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+    try self.writeTextContent(&buf.writer, frame);
+    return buf.written();
+}
+
+fn writeTextContent(self: *const Range, writer: *std.Io.Writer, skip_inert: ?*const Frame) !void {
     if (self._proto.getCollapsed()) return;
 
     const start_node = self._proto._start_container;
@@ -733,7 +742,7 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
     // Same text node — just substring
     if (start_node == end_node) {
         if (start_node.is(Node.CData)) |cdata| {
-            if (!isCommentOrPI(cdata)) {
+            if (includeText(cdata, skip_inert)) {
                 const data = cdata.getData().str();
                 const s = byteOffset(data, start_offset);
                 const e = byteOffset(data, end_offset);
@@ -747,7 +756,7 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
 
     // Partial start: if start container is a text node, write from offset to end
     if (start_node.is(Node.CData)) |cdata| {
-        if (!isCommentOrPI(cdata)) {
+        if (includeText(cdata, skip_inert)) {
             const data = cdata.getData().str();
             const s = byteOffset(data, start_offset);
             try writer.writeAll(data[s..]);
@@ -774,7 +783,7 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
                 if (n == we) break;
             }
             if (n.is(Node.CData)) |cdata| {
-                if (!isCommentOrPI(cdata)) {
+                if (includeText(cdata, skip_inert)) {
                     try writer.writeAll(cdata.getData().str());
                 }
             }
@@ -785,13 +794,21 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
     // Partial end: if end container is a different text node, write from start to offset
     if (start_node != end_node) {
         if (end_node.is(Node.CData)) |cdata| {
-            if (!isCommentOrPI(cdata)) {
+            if (includeText(cdata, skip_inert)) {
                 const data = cdata.getData().str();
                 const e = byteOffset(data, end_offset);
                 try writer.writeAll(data[0..e]);
             }
         }
     }
+}
+
+fn includeText(cdata: *Node.CData, skip_inert: ?*const Frame) bool {
+    if (isCommentOrPI(cdata)) {
+        return false;
+    }
+    const frame = skip_inert orelse return true;
+    return cdata.asNode().isInert(frame) == false;
 }
 
 fn isCommentOrPI(cdata: *Node.CData) bool {

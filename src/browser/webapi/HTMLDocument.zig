@@ -71,7 +71,7 @@ pub fn setBody(self: *HTMLDocument, html: []const u8, frame: *Frame) !void {
 
     // Build a fresh <body> holding the parsed HTML as its children. Fragment
     // parsing strips any <html>/<body>/<head> wrappers the author included.
-    const new_body_node = try Frame.node_factory.createElementNS(frame, .html, "body", null);
+    const new_body_node = try Frame.node_factory.createElementNS(self._proto, .html, "body", null);
     if (html.len > 0) {
         try Frame.parse.htmlAsChildren(frame, new_body_node, html);
     }
@@ -158,7 +158,7 @@ fn setTitle(self: *HTMLDocument, title: []const u8, frame: *Frame) !void {
     }
 
     // No title element found, create one
-    const title_node = try Frame.node_factory.createElementNS(frame, .html, "title", null);
+    const title_node = try Frame.node_factory.createElementNS(self._proto, .html, "title", null);
     const title_element = title_node.as(Element);
 
     // Only add text if non-empty
@@ -242,7 +242,7 @@ fn getDocType(self: *HTMLDocument, frame: *Frame) !*DocumentType {
         }
     }
 
-    self._document_type = try frame._factory.node(DocumentType{
+    self._document_type = try frame._factory.node(self._proto, DocumentType{
         ._proto = undefined,
         ._name = "html",
         ._public_id = "",

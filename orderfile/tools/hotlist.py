@@ -2,13 +2,17 @@
 # usage: hotlist.py <binary> <resident.json> <out-prefix>
 # Emits <out>.text and <out>.rodata: symbols overlapping resident pages, in address order,
 # plus a per-section summary of resident bytes.
-import sys, json, subprocess, bisect, collections, os
+import sys, json, re, subprocess, bisect, collections, os
 binary, resjson, outp = sys.argv[1:4]
 syms = []
+# "addr size type name", but the size is omitted for sizeless symbols and a
+# Zig instantiation's name can contain spaces: splitting on whitespace drops
+# both (~70 symbols per profile).
+nm_line = re.compile(r"^([0-9a-fA-F]+) (?:([0-9a-fA-F]+) )?(.) (.+)$")
 for line in subprocess.run(["nm", "-S", "--numeric-sort", "--defined-only", binary], capture_output=True, text=True).stdout.splitlines():
-    p = line.split()
-    if len(p) == 4 and p[2] in "TtWwVvRrDdBb":
-        syms.append((int(p[0], 16), int(p[1], 16), p[2], p[3]))
+    m = nm_line.match(line)
+    if m and m.group(3) in "TtWwVvRrDdBb":
+        syms.append((int(m.group(1), 16), int(m.group(2) or "0", 16), m.group(3), m.group(4)))
 syms.sort()
 starts = [s[0] for s in syms]
 secs = []

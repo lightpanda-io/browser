@@ -46,11 +46,6 @@ _type: Worker.WorkerType,
 // until registered; deinit/close use it to unregister.
 _registry_key: []const u8 = "",
 
-// used by HttpClient when generating notification
-// Ultimately used by CDP to generate request/loader ids.
-_frame_id: u32,
-_loader_id: u32,
-
 _closed: bool = false,
 _script_loaded: bool = false,
 _script_arena: ?*lp.Arena = null,
@@ -81,8 +76,6 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
             ._url = owned_url,
             ._name = try arena.dupe(u8, name),
             ._type = worker_type,
-            ._frame_id = frame_id,
-            ._loader_id = loader_id,
         },
         worker_type == .module,
         frame_id,
@@ -326,7 +319,7 @@ fn releaseScriptArena(self: *SharedWorkerGlobalScope) void {
 fn drainPendingConnects(self: *SharedWorkerGlobalScope) void {
     for (self._pending_connects.items) |port| {
         self.scheduleConnect(port) catch |err| {
-            log.warn(.browser, "shared worker drain connect failed", .{ .err = err });
+            log.warn(.browser, "shared worker drain failed", .{ .err = err });
         };
     }
     self._pending_connects.clearRetainingCapacity();
@@ -387,9 +380,9 @@ const ConnectCallback = struct {
             .ports = &.{self.port},
             .bubbles = false,
             .cancelable = false,
-        }, wgs._page)).asEvent();
+        }, wgs.page)).asEvent();
 
-        try wgs.dispatch(target, event, on_connect, .{ .context = "SharedWorkerGlobalScope.connect" });
+        try wgs.dispatch(target, event, on_connect, .{ .context = "shared worker connect" });
         return null;
     }
 };

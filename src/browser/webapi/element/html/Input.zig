@@ -173,7 +173,7 @@ pub fn setValue(self: *Input, value: []const u8, frame: *Frame) !void {
     }
 
     // move the text entry cursor position to the end of the text control
-    if (changed and self.selectionAvailable()) {
+    if (changed and self.tracksSelection()) {
         self._selection_start = @intCast(sanitized.len);
         self._selection_end = @intCast(sanitized.len);
         self._selection_direction = .none;
@@ -288,9 +288,9 @@ pub fn selectFiles(self: *Input, files: []const *File, frame: *Frame) !void {
 
     // A file input fires `input` then `change`, both as plain bubbling Events
     // (not InputEvents — `inputType`/`data` only apply to editable text inputs).
-    const input_evt = try Event.initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame._page);
+    const input_evt = try Event.initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), input_evt);
-    const change_evt = try Event.initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame._page);
+    const change_evt = try Event.initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), change_evt);
 }
 
@@ -310,7 +310,7 @@ fn replaceFiles(self: *Input, files: []const *File, frame: *Frame) !void {
     }
 
     for (fl._files) |old| {
-        old._proto.releaseRef(frame._page);
+        old._proto.releaseRef(frame.page);
     }
 
     fl._files = dupe;
@@ -365,7 +365,7 @@ pub fn checkValidity(self: *Input, frame: *Frame) !bool {
     const v = ValidityState{ ._owner = self.asElement() };
     if (v.getValid(frame)) return true;
 
-    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
+    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
     return false;
 }
@@ -627,8 +627,11 @@ const entry = text_entry.TextEntry(Input);
 
 pub const select = entry.select;
 pub const innerInsert = entry.innerInsert;
+pub const acceptsTextEntry = entry.acceptsTextEntry;
+const tracksSelection = entry.tracksSelection;
 pub const innerDelete = entry.innerDelete;
 pub const moveCaret = entry.moveCaret;
+pub const caretToEnd = entry.caretToEnd;
 pub const CaretMove = entry.CaretMove;
 pub const getSelectionDirection = entry.getSelectionDirection;
 pub const setSelectionStart = entry.setSelectionStart;
@@ -708,7 +711,7 @@ pub fn getForm(self: *Input, frame: *Frame) ?*Form {
 
 fn getFormAction(self: *Input, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const owner_url = element.ownerFrame(frame).url;
+    const owner_url = element.asNode().ownerDocument(frame).?.getURL(frame);
     const action = element.getAttributeSafe(comptime .wrap("formaction")) orelse return owner_url;
     if (action.len == 0) {
         return owner_url;

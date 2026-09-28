@@ -65,15 +65,17 @@ pub fn reset(self: *NodeRegistry) void {
 }
 
 /// Evict only the nodes owned by `frame`'s page, leaving sibling pages' node
-/// IDs valid. Must run before the page's arena is freed — attribution walks
-/// each node's live parent chain.
+/// IDs valid. Must run before the page's arena is freed — attribution reads
+/// each node's document.
 pub fn resetFrame(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
-    const page = frame._page;
+    const page = frame.page;
     var doomed: std.ArrayListUnmanaged(*Node) = .empty;
     var it = self.lookup_by_id.valueIterator();
     while (it.next()) |node_ptr| {
         const node = node_ptr.*;
-        if (node.dom.ownerFrame(frame)._page == page) {
+        // The document table is the browser's, so a sibling page's node
+        // resolves correctly through this page's frame.
+        if (node.dom.getDocument(frame)._page == page) {
             doomed.append(arena, node) catch return;
         }
     }
@@ -187,4 +189,21 @@ test "NodeRegistry: resetFrame" {
     try testing.expectEqual(1, registry.lookup_by_id.count());
     try testing.expectEqual(rb, registry.lookup_by_id.get(rb.id).?);
     try testing.expectEqual(b_node, registry.lookup_by_node.get(b_node).?.dom);
+}
+
+test "NodeRegistry: reset never reuses an id" {
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/registry1.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const dom_node = (try frame.window._document.querySelector(.wrap("#a1"), frame)).?.asNode();
+    // The pool recycles the `Node` itself, so keep the id, not the pointer.
+    const first_id = (try registry.register(dom_node)).id;
+
+    registry.reset();
+    try testing.expectEqual(null, registry.lookup_by_id.get(first_id));
+    try testing.expect((try registry.register(dom_node)).id != first_id);
 }

@@ -24,6 +24,7 @@ const public_suffix_list = @import("../../data/public_suffix_list.zig");
 
 const URL = @import("../URL.zig");
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
 const Parser = @import("../parser/Parser.zig");
 
@@ -39,6 +40,7 @@ const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
 const FontFaceSet = @import("css/FontFaceSet.zig");
 const Selection = @import("Selection.zig");
+const Sanitizer = @import("Sanitizer.zig");
 const XPathResult = @import("XPathResult.zig");
 const XPathExpression = @import("XPathExpression.zig");
 
@@ -54,7 +56,10 @@ pub const Proto = Node;
 
 _type: Type,
 _proto: *Node,
+_page: *Page,
+_index: u32, // browser.documents index
 _frame: ?*Frame = null,
+_template_contents_owner: ?*Document = null,
 _url: ?[:0]const u8 = null, // URL for documents created via DOMImplementation (about:blank)
 // content type override for documents created via DOMImplementation.createDocument
 _content_type: ?[]const u8 = null,
@@ -62,6 +67,9 @@ _content_type: ?[]const u8 = null,
 // createDocument) are UTF-8 regardless of the frame's encoding
 _charset: ?[]const u8 = null,
 _ready_state: ReadyState = .loading,
+_load_aborted: bool = false,
+// HTML's "active parser was aborted" flag also makes open/write no-ops.
+_active_parser_aborted: bool = false,
 _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
 // Track IDs that were removed from the map - they might have duplicates in the tree
@@ -190,7 +198,7 @@ fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
     const timestamp = blk: {
         if (self._frame) |owner| {
             for (owner._http_headers.items) |header| {
-                if (std.ascii.eqlIgnoreCase(header.name, "last-modified")) {
+                if (std.mem.eql(u8, header.name, "last-modified")) {
                     if (dt.DateTime.parse(header.value, .rfc822)) |parsed| {
                         break :blk parsed.unix(.seconds);
                     } else |_| {}
@@ -295,7 +303,7 @@ fn getCookie(self: *Document, frame: *Frame) ![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(frame.local_arena);
     try frame._session.cookie_jar.forRequest(frame.url, &aw.writer, .{
         .is_http = false,
-        .is_navigation = false,
+        .kind = .subresource,
         .origin_url = frame.siteForCookies(),
     });
     return aw.written();
@@ -373,7 +381,7 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     };
     // HTML documents are case-insensitive - lowercase the tag name
 
-    const node = try self.createElementNode(ns, normalized_name, frame);
+    const node = try self.createElementNode(ns, normalized_name);
     const element = node.as(Element);
 
     const options = options_ orelse return element;
@@ -389,52 +397,38 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
     _ = try validateAndExtract(namespace, name, .element);
     const ns = Element.Namespace.parse(namespace);
     // Per spec, createElementNS does NOT lowercase (unlike createElement).
-    const node = try self.createElementNode(ns, name, frame);
+    const node = try self.createElementNode(ns, name);
 
     // Store original URI for unknown namespaces so lookupNamespaceURI can return it
     if (ns == .unknown) {
         if (namespace) |uri| {
             const duped = try frame.dupeString(uri);
-            try frame._element_namespace_uris.put(frame.arena, node.as(Element), duped);
+            try self._page.element_namespace_uris.put(self._page.frame_arena, node.as(Element), duped);
         }
     }
     return node.as(Element);
 }
 
-fn createElementNode(self: *Document, ns: Element.Namespace, name: []const u8, frame: *Frame) !*Node {
-    const previous_creation = frame._custom_element_creation;
-    if (self._frame == null) {
-        // a document without a browser context, e.g. DOMParser, has no custom
-        // element registry
-        frame._custom_element_creation = .undefined;
-    }
-    defer frame._custom_element_creation = previous_creation;
-
-    const node = try Frame.node_factory.createElementNS(frame, ns, name, null);
-
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
-    return node;
+fn createElementNode(self: *Document, ns: Element.Namespace, name: []const u8) !*Node {
+    return Frame.node_factory.createElementNS(self, ns, name, null);
 }
 
-fn createAttribute(_: *const Document, name: String.Global, frame: *Frame) !?*Element.Attribute {
+fn createAttribute(self: *const Document, name: String.Global, frame: *Frame) !?*Element.Attribute {
     try Element.Attribute.validateAttributeName(name.str);
-    return frame._factory.node(Element.Attribute{
+    return frame._factory.node(self, Element.Attribute{
         ._name = name.str,
         ._value = String.empty,
         ._element = null,
     });
 }
 
-pub fn createAttributeNS(_: *const Document, namespace: []const u8, name: String.Global, frame: *Frame) !?*Element.Attribute {
+pub fn createAttributeNS(self: *const Document, namespace: []const u8, name: String.Global, frame: *Frame) !?*Element.Attribute {
     if (std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml") == false) {
         log.warn(.not_implemented, "document.createAttributeNS", .{ .namespace = namespace });
     }
 
     try Element.Attribute.validateAttributeName(name.str);
-    return frame._factory.node(Element.Attribute{
+    return frame._factory.node(self, Element.Attribute{
         ._name = name.str,
         ._value = String.empty,
         ._element = null,
@@ -522,52 +516,52 @@ fn getImplementation(self: *Document, frame: *Frame) !*DOMImplementation {
 }
 
 fn createDocumentFragment(self: *Document, frame: *Frame) !*Node.DocumentFragment {
-    const frag = try Node.DocumentFragment.init(frame);
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(frag.asNode(), self);
-    }
-    return frag;
+    return Node.DocumentFragment.init(self, frame);
 }
 
-pub fn createComment(self: *Document, data: []const u8, frame: *Frame) !*Node {
-    const node = try Frame.node_factory.createComment(frame, data);
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
+// https://html.spec.whatwg.org/multipage/scripting.html#appropriate-template-contents-owner-document
+// A <template>'s content lives in a document with no browsing context, shared
+// by every template of this document (and by the templates nested in that
+// content). Nothing in there is connected, scripts never run and, having no
+// custom element registry, custom elements are never constructed.
+//
+// Only a copy stamped into a real document gets upgraded.
+pub fn templateContentsOwner(self: *Document, frame: *Frame) !*Document {
+    if (self._template_contents_owner) |owner| {
+        return owner;
     }
-    return node;
+
+    const owner: *Document = if (self._type == .html)
+        (try frame._factory.document(HTMLDocument{ ._proto = undefined })).asDocument()
+    else
+        try frame._factory.genericDocument(.{});
+    owner._url = "about:blank";
+    owner._charset = "UTF-8";
+    owner._ready_state = .complete;
+    // Its own templates' content stays in it.
+    owner._template_contents_owner = owner;
+
+    self._template_contents_owner = owner;
+    return owner;
 }
 
-pub fn createTextNode(self: *Document, data: []const u8, frame: *Frame) !*Node {
-    const node = try Frame.node_factory.createTextNode(frame, data);
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
-    return node;
+pub fn createComment(self: *Document, data: []const u8) !*Node {
+    return Frame.node_factory.createComment(self, data);
 }
 
-pub fn createCDATASection(self: *Document, data: []const u8, frame: *Frame) !*Node {
-    const node = switch (self._type) {
-        .html => return error.NotSupported, // cannot create a CDataSection in an HTMLDocument
-        .xml => try Frame.node_factory.createCDATASection(frame, data),
-        .generic => try Frame.node_factory.createCDATASection(frame, data),
+pub fn createTextNode(self: *Document, data: []const u8) !*Node {
+    return Frame.node_factory.createTextNode(self, data);
+}
+
+pub fn createCDATASection(self: *Document, data: []const u8) !*Node {
+    return switch (self._type) {
+        .html => error.NotSupported, // cannot create a CDataSection in an HTMLDocument
+        .xml, .generic => Frame.node_factory.createCDATASection(self, data),
     };
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
-    return node;
 }
 
-pub fn createProcessingInstruction(self: *Document, target: []const u8, data: []const u8, frame: *Frame) !*Node {
-    const node = try Frame.node_factory.createProcessingInstruction(frame, target, data);
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
-    return node;
+pub fn createProcessingInstruction(self: *Document, target: []const u8, data: []const u8) !*Node {
+    return Frame.node_factory.createProcessingInstruction(self, target, data);
 }
 
 const Range = @import("Range.zig");
@@ -584,12 +578,12 @@ fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@imp
 
     const event: *Event = blk: {
         if (std.mem.eql(u8, normalized, "event") or std.mem.eql(u8, normalized, "events") or std.mem.eql(u8, normalized, "htmlevents") or std.mem.eql(u8, normalized, "svgevents")) {
-            break :blk try Event.init("", null, frame._page);
+            break :blk try Event.init("", null, frame.page);
         }
 
         if (std.mem.eql(u8, normalized, "customevent")) {
             const CustomEvent = @import("event/CustomEvent.zig");
-            break :blk (try CustomEvent.init("", null, frame._page)).asEvent();
+            break :blk (try CustomEvent.init("", null, frame.page)).asEvent();
         }
 
         if (std.mem.eql(u8, normalized, "keyboardevent")) {
@@ -614,7 +608,7 @@ fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@imp
 
         if (std.mem.eql(u8, normalized, "messageevent")) {
             const MessageEvent = @import("event/MessageEvent.zig");
-            break :blk (try MessageEvent.init("", null, frame._page)).asEvent();
+            break :blk (try MessageEvent.init("", null, frame.page)).asEvent();
         }
 
         if (std.mem.eql(u8, normalized, "hashchangeevent")) {
@@ -801,7 +795,7 @@ fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
         return error.HierarchyError;
     }
 
-    const old_owner = node.ownerDocument(frame) orelse frame.document;
+    const old_owner = node.ownerDocument(frame).?;
 
     if (node._parent) |parent| {
         frame.removeNode(parent, node, .{ .reconnect_to = null });
@@ -814,12 +808,12 @@ fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
     return node;
 }
 
-fn importNode(_: *const Document, node: *Node, deep_: ?bool, frame: *Frame) !*Node {
+fn importNode(self: *const Document, node: *Node, deep_: ?bool, frame: *Frame) !*Node {
     if (node._type == .document) {
         return error.NotSupported;
     }
 
-    return node.cloneNode(deep_, frame);
+    return node.cloneNodeInto(deep_ orelse false, self, frame);
 }
 
 pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
@@ -829,7 +823,7 @@ pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !v
     frame.domChanged();
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self);
 
         // DocumentFragments are special - append all their children
         if (child.is(Node.DocumentFragment)) |_| {
@@ -855,7 +849,7 @@ pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !
     var i = nodes.len;
     while (i > 0) {
         i -= 1;
-        const child = try nodes[i].toNode(frame);
+        const child = try nodes[i].toNode(self);
 
         // DocumentFragments are special - need to insert all their children
         if (child.is(Node.DocumentFragment)) |frag| {
@@ -917,16 +911,23 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
     // preorder counter instead of calling calculateDocumentPosition per node
     // (which itself is O(N)). Once the counter's y passes the query y, no
     // later element can contain the point, and we can return.
+    //
+    // Hidden subtrees still count towards the index so positions agree with
+    // getBoundingClientRect; the hidden verdict just rides down the stack.
     var topmost: ?*Element = null;
 
     const root = self.asNode();
-    var stack: std.ArrayList(*Node) = .empty;
-    try stack.append(frame.local_arena, root);
+    const style_manager = &(root.ownerFrame(frame) orelse return null)._style_manager;
+    const Entry = struct { node: *Node, hidden: bool };
+    var stack: std.ArrayList(Entry) = .empty;
+    try stack.append(frame.local_arena, .{ .node = root, .hidden = false });
 
     var preorder_index: f64 = 0;
 
     while (stack.items.len > 0) {
-        const node = stack.pop() orelse break;
+        const entry = stack.pop() orelse break;
+        const node = entry.node;
+        var hidden = entry.hidden;
         const pos = preorder_index * 5.0;
 
         if (pos > y) {
@@ -936,7 +937,8 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
 
         preorder_index += 1;
         if (node.is(Element)) |element| {
-            if (element.isVisible(frame)) {
+            hidden = hidden or style_manager.hasDisplayNone(element);
+            if (!hidden) {
                 if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
                     if (ignore_x) {
                         topmost = element;
@@ -955,7 +957,7 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
         // Add children to stack in reverse order so we process them in document order
         var child = node.lastChild();
         while (child) |c| {
-            try stack.append(frame.local_arena, c);
+            try stack.append(frame.local_arena, .{ .node = c, .hidden = hidden });
             child = c.previousSibling();
         }
     }
@@ -1025,6 +1027,8 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
         return error.InvalidStateError;
     }
 
+    if (self._active_parser_aborted) return;
+
     const html = blk: {
         var joined: std.ArrayList(u8) = .empty;
         for (text) |str| {
@@ -1081,7 +1085,7 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
 
     // Our implementation is hacky. We'll write to a DocumentFragment, then
     // append its children.
-    const fragment = try Node.DocumentFragment.init(frame);
+    const fragment = try Node.DocumentFragment.init(self, frame);
     const fragment_node = fragment.asNode();
 
     const previous_parse_mode = frame._parse_mode;
@@ -1151,7 +1155,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
         return error.InvalidStateError;
     }
 
-    if (frame._load_state == .parsing) {
+    if (self._active_parser_aborted or frame._load_state == .parsing) {
         return self;
     }
 
@@ -1177,8 +1181,19 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     self._style_sheets = null;
     self._implementation = null;
     self._ready_state = .loading;
+    // open() cancels an ongoing navigation; the aborted document's load is
+    // gone for good, as in Chrome.
+    frame.cancelQueuedNavigation();
 
+    if (std.mem.indexOfScalar(*Document, frame._script_created_parser_docs.items, self) == null) {
+        // have the page track this document (if it isn't already)
+        // so that, on shutdown, it can close the parser if needed.
+        try frame._script_created_parser_docs.append(frame.arena, self);
+    }
     self._script_created_parser = Parser.Streaming.init(frame.arena, doc_node, frame, .{ .allow_declarative_shadow = true });
+    // on start() failure the internal `handle` isn't yet create. So we can't
+    // call done() and we don't want any subsequent cleanup to call done().
+    errdefer self._script_created_parser = null;
     try self._script_created_parser.?.start();
     frame._parse_mode = .document;
 
@@ -1509,9 +1524,9 @@ fn _injectBlank(self: *Document, frame: *Frame) !void {
         std.debug.assert(self.asNode()._first_child == null);
     }
 
-    const html = try Frame.node_factory.createElementNS(frame, .html, "html", null);
-    const head = try Frame.node_factory.createElementNS(frame, .html, "head", null);
-    const body = try Frame.node_factory.createElementNS(frame, .html, "body", null);
+    const html = try Frame.node_factory.createElementNS(self, .html, "html", null);
+    const head = try Frame.node_factory.createElementNS(self, .html, "head", null);
+    const body = try Frame.node_factory.createElementNS(self, .html, "body", null);
     try frame.appendNode(html, head, .{});
     try frame.appendNode(html, body, .{});
     try frame.appendNode(self.asNode(), html, .{});
@@ -1534,12 +1549,17 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(_constructor, .{});
     fn _constructor(frame: *Frame) !*Document {
-        return frame._factory.node(Document{
-            ._proto = undefined,
-            ._type = .generic,
-            ._url = "about:blank",
-            ._charset = "UTF-8",
-        });
+        return frame._factory.genericDocument(.{ .url = "about:blank", .charset = "UTF-8" });
+    }
+
+    pub const parseHTML = bridge.function(_parseHTML, .{ .static = true });
+    fn _parseHTML(html: []const u8, options: ?Sanitizer.Options, frame: *Frame) !*Document {
+        return Sanitizer.parseHTML(html, options, true, frame);
+    }
+
+    pub const parseHTMLUnsafe = bridge.function(_parseHTMLUnsafe, .{ .static = true });
+    fn _parseHTMLUnsafe(html: []const u8, options: ?Sanitizer.Options, frame: *Frame) !*Document {
+        return Sanitizer.parseHTML(html, options, false, frame);
     }
 
     pub const onselectionchange = bridge.accessor(Document.getOnSelectionChange, Document.setOnSelectionChange, .{});

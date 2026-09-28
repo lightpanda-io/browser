@@ -97,7 +97,7 @@ fn getLabels(self: *Button, frame: *Frame) !js.Array {
 
 fn getFormAction(self: *Button, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const owner_url = element.ownerFrame(frame).url;
+    const owner_url = element.asNode().ownerDocument(frame).?.getURL(frame);
     const action = element.getAttributeSafe(comptime .wrap("formaction")) orelse return owner_url;
     if (action.len == 0) {
         return owner_url;
@@ -165,7 +165,7 @@ pub fn checkValidity(self: *Button, frame: *Frame) !bool {
     if (!self.getWillValidate()) return true;
     if (self._custom_validity == null) return true;
 
-    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
+    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
     return false;
 }

@@ -22,8 +22,10 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const id = @import("id.zig");
 const Frame = @import("../../browser/Frame.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
+const IFrame = @import("../../browser/webapi/element/html/IFrame.zig");
 const NodeRegistry = @import("../../NodeRegistry.zig");
 
 const log = lp.log;
@@ -67,12 +69,12 @@ pub const Search = struct {
         }
 
         pub fn create(self: *List, nodes: []const *DOMNode) !Search {
-            const id = self.search_id;
-            defer self.search_id = id +% 1;
+            const search_id = self.search_id;
+            defer self.search_id = search_id +% 1;
 
             const arena = self.arena.allocator();
 
-            const name = switch (id) {
+            const name = switch (search_id) {
                 0 => "0",
                 1 => "1",
                 2 => "2",
@@ -83,7 +85,7 @@ pub const Search = struct {
                 7 => "7",
                 8 => "8",
                 9 => "9",
-                else => try std.fmt.allocPrint(arena, "{d}", .{id}),
+                else => try std.fmt.allocPrint(arena, "{d}", .{search_id}),
             };
 
             var registry = self.registry;
@@ -217,6 +219,25 @@ pub const Writer = struct {
 
             try w.objectField("localName");
             try w.write(element.getLocalName());
+
+            // Chrome names the hosted frame on frame-owner elements and the own
+            // frame on the document element; that's how clients pair an <iframe>
+            // with its Page.frameAttached id.
+            if (element.is(IFrame)) |iframe| {
+                if (iframe.getContentDocument()) |document| {
+                    if (document._frame) |child| {
+                        try w.objectField("frameId");
+                        try w.write(&id.toFrameId(child._frame_id));
+                    }
+                }
+            } else if (dom_node._parent) |dom_parent| {
+                if (dom_parent._type == .document) {
+                    if (dom_parent.subtype(DOMNode.Document)._frame) |frame| {
+                        try w.objectField("frameId");
+                        try w.write(&id.toFrameId(frame._frame_id));
+                    }
+                }
+            }
         } else {
             try w.objectField("localName");
             try w.write("");
@@ -295,7 +316,7 @@ test "cdp Node: search list" {
 
         {
             const l1 = try doc.querySelectorAll(.wrap("a"), frame);
-            defer l1.deinit(frame._page);
+            defer l1.deinit(frame.page);
             const s1 = try search_list.create(l1._nodes);
             try testing.expectEqual("1", s1.name);
             try testing.expectEqualSlices(u32, &.{ 1, 2 }, s1.node_ids);
@@ -306,7 +327,7 @@ test "cdp Node: search list" {
 
         {
             const l2 = try doc.querySelectorAll(.wrap("#a1"), frame);
-            defer l2.deinit(frame._page);
+            defer l2.deinit(frame.page);
             const s2 = try search_list.create(l2._nodes);
             try testing.expectEqual("2", s2.name);
             try testing.expectEqualSlices(u32, &.{1}, s2.node_ids);
@@ -314,7 +335,7 @@ test "cdp Node: search list" {
 
         {
             const l3 = try doc.querySelectorAll(.wrap("#a2"), frame);
-            defer l3.deinit(frame._page);
+            defer l3.deinit(frame.page);
             const s3 = try search_list.create(l3._nodes);
             try testing.expectEqual("3", s3.name);
             try testing.expectEqualSlices(u32, &.{2}, s3.node_ids);

@@ -126,7 +126,7 @@ fn getPointAtLength(self: *Geometry, distance: f64, frame: *Frame) !*DOMPoint {
     var path = try self.buildPath(frame);
     defer path.deinit(frame.local_arena);
     const point = try path.pointAtLength(distance, frame.local_arena);
-    return DOMPoint.create(point.x, point.y, 0, 1, frame._page);
+    return DOMPoint.create(point.x, point.y, 0, 1, frame.page);
 }
 
 pub fn buildPath(self: *Geometry, frame: *Frame) !PathData.Path {

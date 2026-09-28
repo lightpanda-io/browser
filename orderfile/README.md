@@ -28,7 +28,7 @@ below), with no change in run duration.
   gracefully: renamed or removed functions simply fall back into cold `.text`.
   Zig's `__anon_NNN` names (~7% of the patterns) renumber on unrelated
   changes, so the profile decays a little with every commit; it is
-  regenerated weekly (below).
+  regenerated nightly by CI (below).
 - Link-time cost: LLD name-checks every input section against every pattern
   of every input-section description, so the script scopes patterns to their
   object file (`*api.o(...)`). The shipped script covers Zig/Rust/C only

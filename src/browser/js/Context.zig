@@ -24,6 +24,7 @@ const Env = @import("Env.zig");
 const Origin = @import("Origin.zig");
 const Scheduler = @import("Scheduler.zig");
 const Execution = @import("Execution.zig");
+const WasmStreaming = @import("WasmStreaming.zig");
 
 const Frame = @import("../Frame.zig");
 const Page = @import("../Page.zig");
@@ -103,6 +104,9 @@ identity_arena: Allocator,
 // Unlike other v8 types, like functions or objects, modules are not shared
 // across origins.
 global_modules: std.ArrayList(v8.Global) = .empty,
+
+// WebAssembly streaming compilations still waiting on their Response.
+wasm_streams: std.ArrayList(*WasmStreaming) = .empty,
 
 // Our module cache: normalized module specifier => module.
 module_cache: std.StringHashMapUnmanaged(ModuleEntry) = .empty,
@@ -201,6 +205,10 @@ pub fn deinit(self: *Context) void {
         v8.v8__Global__Reset(global);
     }
 
+    while (self.wasm_streams.pop()) |stream| {
+        stream.abort(null);
+    }
+
     self.page.releaseOrigin(self.origin);
 
     // Clear the embedder data so that if V8 keeps this context alive
@@ -208,30 +216,20 @@ pub fn deinit(self: *Context) void {
     // have a dangling pointer to our freed Context struct.
     v8.v8__Context__SetAlignedPointerInEmbedderData(entered.handle, 1, null);
 
+    // Detach the global so that a navigation can attach the reused Window to
+    // the frame's next context. This also nulls v8's pointer to our
+    // microtask_queue, which we free below. The v8 context can outlive us when
+    // another realm holds one of our functions, e.g. as a promise handler, and
+    // resolving that promise would enqueue onto the freed queue. With the
+    // pointer null, v8 drops the job instead.
+    v8.v8__Context__DetachGlobal(entered.handle);
+
     v8.v8__Global__Reset(&self.handle);
     env.isolate.notifyContextDisposed();
     // There can be other tasks associated with this context that we need to
     // purge while the context is still alive.
-    _ = env.pumpMessageLoop();
+    env.pumpMessageLoop();
     v8.v8__MicrotaskQueue__DELETE(self.microtask_queue);
-}
-
-// The global (e.g. Window) can be reused across contexts. If you do:
-//
-// var w = iframe.contentWindow;
-// iframe.src = 'two.html';
-// w === iframe.contentWindow  (must be true)
-//
-// so when we navigate, the Window/Global is re-used. That's fine with v8, but
-// we need to explicitly detach it from the original before we can safely attach
-// it to the new
-pub fn detachGlobal(self: *Context) void {
-    var hs: js.HandleScope = undefined;
-    hs.init(self.isolate);
-    defer hs.deinit();
-
-    const local_v8_context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.handle, self.isolate.handle));
-    v8.v8__Context__DetachGlobal(local_v8_context);
 }
 
 // setOrigin is called at navigation (opaque -> real origin) and again when a
@@ -253,6 +251,12 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
         // one context to access another.
         const token_local = v8.v8__Global__Get(&origin.security_token, isolate.handle);
         v8.v8__Context__SetSecurityToken(ls.local.handle, token_local);
+
+        // navigator.serviceWorker is [SecureContext]. With the feature
+        // disabled, Env.createContext has already removed it.
+        if (self.global == .frame and self.page.session.experimental_features.serviceworker and self.execution.isSecureContext() == false) {
+            env.hideServiceWorker(true, ls.local.handle, v8.v8__Context__Global(ls.local.handle).?);
+        }
     }
 }
 

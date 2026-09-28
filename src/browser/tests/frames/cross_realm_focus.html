@@ -30,4 +30,35 @@ element; we don't model that, so this file deliberately doesn't assert it.)
     testing.expectEqual(idoc.body, idoc.activeElement);
   });
 </script>
+
+<script id="events_fire_in_own_frame">
+  testing.onload(() => {
+    const idf = document.getElementById('idf');
+    const iwin = idf.contentWindow;
+    const inp = idf.contentDocument.getElementById('fin2');
+    iwin.events.length = 0;
+
+    // The parent realm's focus/blur still dispatch through the iframe's
+    // EventManager, so its listeners see FocusEvents of the iframe's realm.
+    HTMLElement.prototype.focus.call(inp);
+    HTMLElement.prototype.blur.call(inp);
+    testing.expectEqual(
+      'focus:fin2:true,focusin:fin2:true,blur:fin2:true,focusout:fin2:true',
+      iwin.events.join(','));
+  });
+</script>
+
+<script id="frameless_document_is_not_focusable">
+  testing.onload(() => {
+    const doc = new DOMParser().parseFromString('<input id=x>', 'text/html');
+    const inp = doc.getElementById('x');
+    let fired = 0;
+    inp.addEventListener('focus', () => fired++);
+
+    inp.focus();
+    inp.blur();
+    testing.expectEqual(0, fired);
+    testing.expectFalse(doc.activeElement === inp);
+  });
+</script>
 </body>

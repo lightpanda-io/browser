@@ -36,7 +36,7 @@
       testing.expectEqual(200, req.status);
       testing.expectEqual('OK', req.statusText);
       testing.expectEqual('text/html; charset=utf-8', req.getResponseHeader('Content-Type'));
-      testing.expectEqual('content-length: 100\r\nContent-Type: text/html; charset=utf-8\r\n', req.getAllResponseHeaders());
+      testing.expectEqual('content-length: 100\r\ncontent-type: text/html; charset=utf-8\r\n', req.getAllResponseHeaders());
       testing.expectEqual(100, req.responseText.length);
       testing.expectEqual(req.responseText.length, req.response.length);
       testing.expectEqual('http://127.0.0.1:9582/xhr', req.responseURL);
@@ -190,6 +190,46 @@
       testing.expectEqual(500, req.status);
       testing.expectEqual('Internal Server Error', req.statusText);
       testing.expectEqual('Internal Server Error', req.responseText);
+    });
+  }
+</script>
+
+<script id=xhr_reason_phrase type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve() };
+    req.open('GET', 'http://127.0.0.1:9582/xhr/reason');
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(503, req.status);
+      testing.expectEqual('HOUSTON WE HAVE A', req.statusText);
+    });
+  }
+</script>
+
+<script id=xhr_reason_phrase_sync>
+  {
+    const req = new XMLHttpRequest();
+    req.open('GET', 'http://127.0.0.1:9582/xhr/reason', false);
+    req.send();
+    testing.expectEqual(503, req.status);
+    testing.expectEqual('HOUSTON WE HAVE A', req.statusText);
+  }
+</script>
+
+<script id=xhr_401_challenge type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve() };
+    req.open('GET', 'http://127.0.0.1:9582/xhr/401');
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(401, req.status);
+      testing.expectEqual('Unauthorized', req.statusText);
     });
   }
 </script>
@@ -575,6 +615,11 @@
     req.setRequestHeader('X-Multi', 'b');
     req.setRequestHeader('User-Agent', 'Mozilla/5.0 (X11; Linux x86_64)');
     req.setRequestHeader('Sec-Ch-Ua', '"Chromium";v="140"');
+    // forbidden request headers are silently ignored
+    req.setRequestHeader('Cookie', 'injected=1');
+    req.setRequestHeader('Proxy-Test', '1');
+    req.setRequestHeader('Sec-Test', '1');
+    req.setRequestHeader('X-HTTP-Method-Override', 'TRACE');
     req.send();
 
     await state.done(() => {
@@ -589,6 +634,10 @@
       testing.expectEqual(false, got['user-agent'].includes('Mozilla'));
       testing.expectEqual(true, got['sec-ch-ua'].includes('Lightpanda'));
       testing.expectEqual(false, got['sec-ch-ua'].includes('Chromium'));
+      testing.expectEqual(false, (got['cookie'] ?? '').includes('injected'));
+      testing.expectEqual(undefined, got['proxy-test']);
+      testing.expectEqual(undefined, got['sec-test']);
+      testing.expectEqual(undefined, got['x-http-method-override']);
     });
   }
 </script>

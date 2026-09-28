@@ -34,11 +34,11 @@ pub fn init(stream: *WritableStream, exec: *const Execution) !*WritableStreamDef
 pub fn write(self: *WritableStreamDefaultWriter, chunk: js.Value, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
     const stream = self._stream orelse {
-        return local.rejectPromise(.{ .type_error = "Writer has been released" });
+        return local.typeError("Writer has been released");
     };
 
     if (stream._state != .writable) {
-        return local.rejectPromise(.{ .type_error = "Stream is not writable" });
+        return local.typeError("Stream is not writable");
     }
 
     try stream.writeChunk(chunk, exec);
@@ -49,11 +49,11 @@ pub fn write(self: *WritableStreamDefaultWriter, chunk: js.Value, exec: *const E
 pub fn close(self: *WritableStreamDefaultWriter, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
     const stream = self._stream orelse {
-        return local.rejectPromise(.{ .type_error = "Writer has been released" });
+        return local.typeError("Writer has been released");
     };
 
     if (stream._state != .writable) {
-        return local.rejectPromise(.{ .type_error = "Stream is not writable" });
+        return local.typeError("Stream is not writable");
     }
 
     try stream.closeStream(exec);
@@ -71,7 +71,7 @@ pub fn releaseLock(self: *WritableStreamDefaultWriter) void {
 pub fn getClosed(self: *WritableStreamDefaultWriter, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
     const stream = self._stream orelse {
-        return local.rejectPromise(.{ .type_error = "Writer has been released" });
+        return local.typeError("Writer has been released");
     };
 
     if (stream._state == .closed) {

@@ -43,7 +43,7 @@ pub fn init(query: []const u8, frame: *Frame) !*MediaQueryList {
         ._proto = undefined,
         ._media = media,
         ._frame = frame,
-        ._matches = MediaQuery.matches(media, frame._page.getViewport()),
+        ._matches = MediaQuery.matches(media, frame.page.getViewport()),
     });
     try frame._media_query_lists.append(frame.arena, self);
     return self;
@@ -62,7 +62,7 @@ pub fn getMedia(self: *const MediaQueryList) []const u8 {
 /// from the page (overridable via Emulation.setDeviceMetricsOverride),
 /// matching `Window.innerWidth` / `innerHeight`.
 fn getMatches(self: *const MediaQueryList) bool {
-    return MediaQuery.matches(self._media, self._frame._page.getViewport());
+    return MediaQuery.matches(self._media, self._frame.page.getViewport());
 }
 
 pub fn viewportChanged(self: *MediaQueryList) void {

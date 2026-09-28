@@ -347,3 +347,8 @@ pub const JsApi = struct {
     pub const namedItem = bridge.function(HTMLCollection.getByName, .{});
     pub const symbol_iterator = bridge.iterator(HTMLCollection.iterator, .{});
 };
+
+const testing = @import("../../../testing.zig");
+test "WebApi: indexed properties" {
+    try testing.htmlRunner("collections/indexed_properties.html", .{});
+}

@@ -22,10 +22,12 @@ pub const log = @import("log.zig");
 pub const mcp = @import("mcp.zig");
 pub const App = @import("App.zig");
 pub const Arena = @import("Arena.zig");
+pub const Regex = @import("Regex.zig");
 pub const Config = @import("Config.zig");
 pub const cookies = @import("cookies.zig");
 pub const datetime = @import("datetime.zig");
 pub const core_dump = @import("core_dump.zig");
+pub const malloc_tuning = @import("malloc_tuning.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
 pub const build_config = @import("build_config");
 pub const String = @import("string.zig").String;
@@ -467,7 +469,7 @@ fn prepareBinary(arena: std.mem.Allocator, frame: *Frame, opts: FetchOpts) !Bina
 }
 
 fn pngOpts(frame: *Frame) screenshot.Opts {
-    return .fromViewport(frame._page.getViewport(), true);
+    return .fromViewport(frame.page.getViewport(), true);
 }
 
 fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
@@ -494,13 +496,9 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Fram
             var registry = NodeRegistry.init(app.allocator);
             defer registry.deinit();
 
-            const st: SemanticTree = .{
-                .dom_node = state.root,
-                .registry = &registry,
-                .frame = frame,
-                .arena = frame.call_arena,
+            const st: SemanticTree = try .init(frame.call_arena, state.root, &registry, frame, .{
                 .prune = (mode == .semantic_tree_text),
-            };
+            });
 
             if (mode == .semantic_tree) {
                 try std.json.Stringify.value(st, .{}, writer);

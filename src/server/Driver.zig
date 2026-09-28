@@ -27,6 +27,7 @@ const Link = @import("Link.zig");
 
 const CDP = @import("cdp/CDP.zig");
 const BiDi = @import("bidi/BiDi.zig");
+const http_command = @import("bidi/http_command.zig");
 
 const log = lp.log;
 
@@ -118,6 +119,18 @@ pub fn onLink(self: *const Driver, l: *Link) void {
             // a CDP worker is born with its link and never offered another
             log.err(self.scope, "unexpected link", .{});
             l.destroy();
+        },
+    }
+}
+
+// Worker Thread. An HTTP WebDriver command; its connection waits on our answer.
+pub fn onHttp(self: *const Driver, command: http_command.Command) void {
+    switch (self.impl) {
+        .bidi => |bidi| bidi.onHttpCommand(command),
+        .cdp => {
+            if (comptime lp.IS_DEBUG) {
+                lp.assert(false, "Driver.onHttp cdp", .{});
+            }
         },
     }
 }

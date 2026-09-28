@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body>
+  <button id="outside">outside</button>
+  <div id="container" inert>
+    <input id="inner" type="text">
+    <span id="text">hidden</span>
+  </div>
+  <div id="selectable">
+    <p>shown</p>
+    <span inert>hidden</span>
+    <math inert><mi>math</mi></math>
+  </div>
+</body>
+
+<script id="inert_property">
+{
+  testing.expectEqual(false, $('#outside').inert);
+  testing.expectEqual(true, $('#container').inert);
+  // inherited inertness isn't reflected
+  testing.expectEqual(false, $('#inner').inert);
+
+  const outside = $('#outside');
+  outside.inert = true;
+  testing.expectEqual('', outside.getAttribute('inert'));
+  outside.inert = false;
+  testing.expectEqual(false, outside.hasAttribute('inert'));
+}
+</script>
+
+<script id="inert_unfocusable">
+{
+  const outside = $('#outside');
+  outside.focus();
+  testing.expectEqual(outside, document.activeElement);
+
+  $('#inner').focus();
+  testing.expectEqual(outside, document.activeElement);
+
+  $('#container').inert = false;
+  $('#inner').focus();
+  testing.expectEqual($('#inner'), document.activeElement);
+  $('#container').inert = true;
+}
+</script>
+
+<script id="inert_selection">
+{
+  const selection = getSelection();
+  selection.selectAllChildren($('#selectable'));
+  // inert only applies to HTML elements, so the MathML text stays
+  testing.expectEqual('shown math', selection.toString().trim().replace(/\s+/g, ' '));
+  selection.removeAllRanges();
+}
+</script>
+
+<script id="inert_focus_fixup" type=module>
+  const state = await testing.async();
+  const nextRendering = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+  const outside = $('#outside');
+  outside.focus();
+  const events = [];
+  outside.addEventListener('blur', () => events.push('blur'));
+  outside.addEventListener('focusout', () => events.push('focusout'));
+  outside.inert = true;
+  // like browsers, the fixup waits for the next rendering update
+  const syncActive = document.activeElement;
+  await nextRendering();
+  const fixedActive = document.activeElement;
+  outside.inert = false;
+
+  const host = document.createElement('div');
+  host.innerHTML = '<button id="slotted" slot="s">slotted</button>';
+  document.body.appendChild(host);
+  const shadow = host.attachShadow({ mode: 'open' });
+  const slot = document.createElement('slot');
+  slot.name = 's';
+  slot.inert = true;
+  shadow.appendChild(slot);
+  const shadowButton = document.createElement('button');
+  shadow.appendChild(shadowButton);
+
+  $('#slotted').focus();
+  const slottedActive = document.activeElement;
+  shadowButton.focus();
+  const shadowActive = document.activeElement;
+  host.inert = true;
+  await nextRendering();
+  const hostFixedActive = document.activeElement;
+  host.remove();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(outside, syncActive);
+    testing.expectEqual(document.body, fixedActive);
+    testing.expectEqual(['blur', 'focusout'], events);
+    testing.expectEqual(document.body, slottedActive);
+    testing.expectEqual(host, shadowActive);
+    testing.expectEqual(document.body, hostFixedActive);
+  });
+</script>

@@ -75,7 +75,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     errdefer arena.release();
 
     const resolved_url = try URL.resolve(arena.allocator(), frame.base(), url, .{ .encoding = frame.charset });
-    const self = try frame._page.factory.eventTargetWithAllocator(arena.allocator(), Worker{
+    const self = try frame.page.factory.eventTargetWithAllocator(arena.allocator(), Worker{
         ._arena = arena,
         ._proto = undefined,
         ._frame = frame,
@@ -320,7 +320,7 @@ fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Gl
         .filename = self._url,
         .bubbles = false,
         .cancelable = true,
-    }, frame._page);
+    }, frame.page);
 
     try frame._event_manager.dispatchDirect(target, error_event.asEvent(), on_error, .{
         .context = "Worker.onerror",
@@ -441,7 +441,7 @@ const ReceiveMessageCallback = struct {
                 .data = .{ .string = @errorName(err) },
                 .bubbles = false,
                 .cancelable = false,
-            }, frame._page)).asEvent();
+            }, frame.page)).asEvent();
             try frame._event_manager.dispatchDirect(target, event, on_messageerror, .{ .context = "Worker.messageerror" });
             return null;
         };
@@ -458,7 +458,7 @@ const ReceiveMessageCallback = struct {
             .data = .{ .value = data },
             .bubbles = false,
             .cancelable = false,
-        }, frame._page)).asEvent();
+        }, frame.page)).asEvent();
 
         try frame._event_manager.dispatchDirect(target, event, on_message, .{ .context = "Worker.receiveMessage" });
 

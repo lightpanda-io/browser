@@ -29,6 +29,8 @@
 #   OUT       scratch directory (default /tmp/orderfile-regen)
 #   RAMDIR    tmpfs the binary is benched from (default /dev/shm)
 set -euo pipefail
+# profile() runs in a command substitution, which otherwise drops set -e.
+shopt -s inherit_errexit
 
 DEMO_DIR=${DEMO_DIR:-../demo}
 RUNS=${RUNS:-100}
@@ -92,8 +94,12 @@ profile() {
     set_fault_around 4096
     "$ram" serve --insecure-disable-tls-host-verification > /dev/null 2>&1 &
     local pid=$!
+    # This subshell's own trap: the script's cleanup doesn't know this pid.
+    trap "kill $pid 2> /dev/null || true" EXIT
     sleep 1
     (cd "$DEMO_DIR" && RUNS=$RUNS node puppeteer/cdp.js > "$OUT/bench.out")
+    # A bench that dies early still leaves a resident set, just the wrong one.
+    grep -q '^total runs' "$OUT/bench.out" || { echo "bench did not complete, see $OUT/bench.out" >&2; exit 1; }
     sleep 2
     python3 "$TOOLS/pagemap.py" "$pid" "$resident" >&2
     local hwm

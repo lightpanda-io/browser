@@ -170,7 +170,7 @@ fn siblingMatches(self: SelectorPath, el: *Element, sel: []const u8) bool {
 fn matchCount(self: SelectorPath, candidate: []const u8) usize {
     const root = self.frame.window._document.asNode();
     const list = Selector.querySelectorAllUncached(root, candidate, self.frame) catch return 0;
-    defer list.deinit(self.frame._page);
+    defer list.deinit(self.frame.page);
     return list.getLength();
 }
 

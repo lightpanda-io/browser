@@ -26,13 +26,13 @@ const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
 
-fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
-    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame._page);
+pub fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
+    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame.page);
     frame._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
         lp.log.err(.app, "dispatch input event failed", .{ .err = err });
     };
 
-    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame._page);
+    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame.page);
     frame._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
         lp.log.err(.app, "dispatch change event failed", .{ .err = err });
     };
@@ -41,15 +41,13 @@ fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
 pub fn click(node: *DOMNode, frame: *Frame) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
 
-    const mouse_event: *MouseEvent = try .initTrusted(comptime .wrap("click"), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .clientX = 0,
-        .clientY = 0,
-    }, frame);
+    if (el.isDisabled()) {
+        return;
+    }
 
-    frame._event_manager.dispatch(el.asEventTarget(), mouse_event.asEvent()) catch |err| {
+    Frame.user_input.updateHoverTarget(frame, el, .{ .with_pointer = true });
+
+    Frame.user_input.triggerClick(frame, el, .{}) catch |err| {
         lp.log.err(.app, "click failed", .{ .err = err });
         return error.ActionFailed;
     };
@@ -80,11 +78,10 @@ pub fn hover(node: *DOMNode, frame: *Frame) !void {
 }
 
 pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
-    const target_el: ?*Element = if (node) |n|
+    const target: *Element = if (node) |n|
         (n.is(Element) orelse return error.InvalidNodeType)
     else
-        null;
-    const target = if (target_el) |el| el.asEventTarget() else frame.document.asNode().asEventTarget();
+        Frame.user_input.focusedElement(frame) orelse return error.ActionFailed;
     const canonical = canonicalKey(key);
 
     const keydown_event: *KeyboardEvent = try .initTrusted(comptime .wrap("keydown"), .{
@@ -94,22 +91,10 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
         .key = canonical,
     }, frame);
 
-    // Keep the event alive past dispatch so we can read defaultPrevented.
-    keydown_event.asEvent().acquireRef();
-    defer _ = keydown_event.asEvent().releaseRef(frame._page);
-
-    frame._event_manager.dispatch(target, keydown_event.asEvent()) catch |err| {
+    _ = Frame.user_input.pressKey(frame, target, keydown_event, Frame.user_input.textForKey(keydown_event)) catch |err| {
         lp.log.err(.app, "press keydown failed", .{ .err = err });
         return error.ActionFailed;
     };
-
-    if (std.mem.eql(u8, canonical, "Enter") and !keydown_event.asEvent().getDefaultPrevented()) {
-        if (target_el) |el| implicitFormSubmit(el, frame) catch |err| {
-            // Don't skip keyup on a submit-listener throw — UIs that gate
-            // state on keyup (e.g. clearing a "submitting" flag) would hang.
-            lp.log.warn(.app, "implicit form submit failed", .{ .err = err });
-        };
-    }
 
     const keyup_event: *KeyboardEvent = try .initTrusted(comptime .wrap("keyup"), .{
         .bubbles = true,
@@ -118,7 +103,7 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
         .key = canonical,
     }, frame);
 
-    frame._event_manager.dispatch(target, keyup_event.asEvent()) catch |err| {
+    frame._event_manager.dispatch(target.asEventTarget(), keyup_event.asEvent()) catch |err| {
         lp.log.err(.app, "press keyup failed", .{ .err = err });
         return error.ActionFailed;
     };
@@ -149,28 +134,6 @@ fn canonicalKey(key: []const u8) []const u8 {
         if (std.ascii.eqlIgnoreCase(key, a.in)) return a.out;
     }
     return key;
-}
-
-fn implicitFormSubmit(el: *Element, frame: *Frame) !void {
-    const Input = Element.Html.Input;
-    const Button = Element.Html.Button;
-
-    if (el.is(Input)) |input| {
-        const form = input.getForm(frame) orelse return;
-        const submitter: ?*Element = switch (input._input_type) {
-            .submit, .image => el,
-            // Non-text controls (checkbox, radio, file, ...) don't trigger
-            // implicit submission; only the text-like family does.
-            .text, .password, .email, .url, .tel, .search, .number, .date, .time, .@"datetime-local", .month, .week => null,
-            else => return,
-        };
-        return form.requestSubmit(submitter, frame);
-    }
-    if (el.is(Button)) |button| {
-        if (!std.ascii.eqlIgnoreCase(button.getType(), "submit")) return;
-        const form = button.getForm(frame) orelse return;
-        return form.requestSubmit(el, frame);
-    }
 }
 
 pub fn selectOption(node: *DOMNode, value: []const u8, frame: *Frame) !void {
@@ -242,33 +205,43 @@ pub fn fill(node: *DOMNode, text: []const u8, frame: *Frame) !void {
     try dispatchInputAndChangeEvents(el, frame);
 }
 
-pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, frame: *Frame) !void {
-    if (node) |n| {
-        const el = n.is(Element) orelse return error.InvalidNodeType;
+pub const ScrollResult = struct {
+    /// What scrolled. Always the node the caller named, its nearest scroll
+    /// container, or the window.
+    target: union(enum) {
+        window,
+        node: *DOMNode,
+        container: *DOMNode,
+    },
+    x: u32,
+    y: u32,
+};
 
-        if (x) |val| {
-            el.setScrollLeft(val, frame) catch |err| {
-                lp.log.err(.app, "setScrollLeft failed", .{ .err = err });
-                return error.ActionFailed;
-            };
-        }
-        if (y) |val| {
-            el.setScrollTop(val, frame) catch |err| {
-                lp.log.err(.app, "setScrollTop failed", .{ .err = err });
-                return error.ActionFailed;
-            };
-        }
-
-        const scroll_evt: *Event = try .initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, frame._page);
-        frame._event_manager.dispatch(el.asEventTarget(), scroll_evt) catch |err| {
-            lp.log.err(.app, "dispatch scroll event failed", .{ .err = err });
-        };
-    } else {
-        frame.window.scrollTo(.{ .x = x orelse 0 }, y, frame) catch |err| {
+pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, frame: *Frame) !ScrollResult {
+    const n = node orelse {
+        frame.window.scrollTo(.{ .opts = .{ .left = x, .top = y } }, null, frame) catch |err| {
             lp.log.err(.app, "scroll failed", .{ .err = err });
             return error.ActionFailed;
         };
-    }
+        return .{ .target = .window, .x = frame.window.getScrollX(), .y = frame.window.getScrollY() };
+    };
+    const el = n.is(Element) orelse return error.InvalidNodeType;
+
+    // A node with no scroll container scrolls itself, not the viewport: the
+    // caller named it.
+    const target = switch (el.scrollContainer(.{ .x = x != null, .y = y != null }, frame)) {
+        .container => |container| container,
+        .viewport => el,
+    };
+    target.scrollTo(.{ .opts = .{ .left = x, .top = y } }, null, frame) catch |err| {
+        lp.log.err(.app, "scroll failed", .{ .err = err });
+        return error.ActionFailed;
+    };
+    return .{
+        .target = if (target == el) .{ .node = n } else .{ .container = target.asNode() },
+        .x = target.getScrollLeft(frame),
+        .y = target.getScrollTop(frame),
+    };
 }
 
 // Floored to 1 so timeout_ms=0 still gets one check instead of failing outright.

@@ -398,20 +398,25 @@ pub const Indexed = struct {
             }.wrap;
         }
 
-        if (@typeInfo(@TypeOf(query)) != .null) {
-            indexed.query = struct {
-                fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
-                    const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
-                    var caller: Caller = undefined;
-                    if (!caller.init(v8_isolate)) {
-                        return js.Intercepted.no;
-                    }
-                    defer caller.deinit();
+        const query_func = if (@typeInfo(@TypeOf(query)) != .null)
+            query
+        else
+            // Generate a Query handler by wrapping getter. With no setter, this
+            // gets the ReadOnly attribute
+            GetterQuery(getter, if (@typeInfo(@TypeOf(setter)) == .null) v8.ReadOnly else v8.None).query;
 
-                    return caller.getIndexQuery(T, query, idx, handle.?);
+        indexed.query = struct {
+            fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                var caller: Caller = undefined;
+                if (!caller.init(v8_isolate)) {
+                    return js.Intercepted.no;
                 }
-            }.wrap;
-        }
+                defer caller.deinit();
+
+                return caller.getIndexQuery(T, query_func, idx, handle.?);
+            }
+        }.wrap;
 
         if (@typeInfo(@TypeOf(definer)) != .null) {
             indexed.definer = struct {
@@ -432,6 +437,56 @@ pub const Indexed = struct {
         return indexed;
     }
 };
+
+fn hasNotHandled(comptime E: type) bool {
+    // anyerror includes it
+    const errors = @typeInfo(E).error_set orelse return true;
+    for (errors) |e| {
+        if (std.mem.eql(u8, e.name, "NotHandled")) return true;
+    }
+    return false;
+}
+
+// Default index query if one isn't provided. Uses the getter to determine the result
+fn GetterQuery(comptime getter: anytype, comptime attrs: u32) type {
+    const params = @typeInfo(@TypeOf(getter)).@"fn".params;
+    const Self = params[0].type.?;
+    const Index = params[1].type.?;
+
+    // A getter that can return neither null nor error.NotHandled would report
+    // every index as present.
+    const can_be_absent = switch (@typeInfo(@typeInfo(@TypeOf(getter)).@"fn".return_type.?)) {
+        .optional => true,
+        .error_union => |eu| @typeInfo(eu.payload) == .optional or hasNotHandled(eu.error_set),
+        else => false,
+    };
+    if (can_be_absent == false) {
+        @compileError(@typeName(Self) ++ ": an indexed getter that can't return null or error.NotHandled needs an explicit query");
+    }
+
+    return struct {
+        const query = if (params.len == 3) withGlobal else plain;
+
+        fn plain(self: Self, idx: Index) !u32 {
+            return attributes(getter(self, idx));
+        }
+
+        fn withGlobal(self: Self, idx: Index, global: params[2].type.?) !u32 {
+            return attributes(getter(self, idx, global));
+        }
+
+        fn attributes(ret: anytype) !u32 {
+            const value = switch (@typeInfo(@TypeOf(ret))) {
+                .error_union => try ret,
+                else => ret,
+            };
+            if (@typeInfo(@TypeOf(value)) == .optional and value == null) {
+                return error.NotHandled;
+            }
+            return attrs;
+        }
+    };
+}
 
 pub const NamedIndexed = struct {
     getter: *const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32,
@@ -1190,6 +1245,9 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/BroadcastChannel.zig"),
     @import("../webapi/Worker.zig"),
     @import("../webapi/SharedWorker.zig"),
+    @import("../webapi/ServiceWorker.zig"),
+    @import("../webapi/ServiceWorkerContainer.zig"),
+    @import("../webapi/ServiceWorkerRegistration.zig"),
     @import("../webapi/media/MediaError.zig"),
     @import("../webapi/media/TextTrackCue.zig"),
     @import("../webapi/media/VTTCue.zig"),
@@ -1224,6 +1282,8 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/storage/storage.zig"),
     @import("../webapi/storage/CookieStore.zig"),
     @import("../webapi/storage/idb/idb.zig"),
+    @import("../webapi/cache/CacheStorage.zig"),
+    @import("../webapi/cache/Cache.zig"),
     @import("../webapi/event/CookieChangeEvent.zig"),
     @import("../webapi/URL.zig"),
     @import("../webapi/URLPattern.zig"),
@@ -1266,12 +1326,13 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/XPathExpression.zig"),
     @import("../webapi/XPathEvaluator.zig"),
     @import("../webapi/collections/DOMStringList.zig"),
+    @import("../webapi/Sanitizer.zig"),
 });
 
-// APIs available on every Worker context global (constructors like URL,
-// Headers, etc.), regardless of worker kind. Each kind's snapshot context
-// adds its own global-scope type on top (DedicatedWorkerJsApis,
-// SharedWorkerJsApis below).
+// APIs available on EVERY worker global — dedicated, shared and service. This
+// is the WebIDL `[Exposed=Worker]` set, which covers all three. Each kind's
+// snapshot context adds its own global-scope type on top; dedicated and shared
+// additionally get worker_extended_apis below.
 // This is a subset of PageJsApis plus WorkerGlobalScope.
 // TODO: Expand this list to include all worker-appropriate APIs.
 const worker_common_apis = [_]type{
@@ -1332,19 +1393,15 @@ const worker_common_apis = [_]type{
     @import("../webapi/canvas/TextMetrics.zig"),
     @import("../webapi/canvas/CanvasGradient.zig"),
     @import("../webapi/canvas/CanvasPattern.zig"),
-    @import("../webapi/net/XMLHttpRequest.zig"),
-    @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
-    @import("../webapi/net/XMLHttpRequestUpload.zig"),
     @import("../webapi/net/WebSocket.zig"),
     @import("../webapi/net/EventSource.zig"),
     @import("../webapi/FileReader.zig"),
-    @import("../webapi/FileReaderSync.zig"),
     @import("../webapi/ImageData.zig"),
     @import("../webapi/Performance.zig"),
     @import("../webapi/PerformanceObserver.zig"),
-    @import("../webapi/storage/CookieStore.zig"),
     @import("../webapi/storage/idb/idb.zig"),
-    @import("../webapi/event/CookieChangeEvent.zig"),
+    @import("../webapi/cache/CacheStorage.zig"),
+    @import("../webapi/cache/Cache.zig"),
     @import("../webapi/BroadcastChannel.zig"),
     @import("../webapi/event/CustomEvent.zig"),
     @import("../webapi/event/ProgressEvent.zig"),
@@ -1355,8 +1412,28 @@ const worker_common_apis = [_]type{
     @import("../webapi/collections/DOMStringList.zig"),
 };
 
-pub const DedicatedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/DedicatedWorkerGlobalScope.zig")} ++ worker_common_apis));
-pub const SharedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/SharedWorkerGlobalScope.zig")} ++ worker_common_apis));
+// Additionally available on a dedicated or shared worker, but NOT on a service
+// worker. Both are blocking APIs that a service worker — which has to stay
+// responsive to lifecycle and (eventually) fetch events — must not have:
+// XMLHttpRequest is [Exposed=(Window,DedicatedWorker,SharedWorker)] and
+// FileReaderSync is [Exposed=(DedicatedWorker,SharedWorker)].
+const worker_extended_apis = worker_common_apis ++ [_]type{
+    @import("../webapi/net/XMLHttpRequest.zig"),
+    @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
+    @import("../webapi/net/XMLHttpRequestUpload.zig"),
+    @import("../webapi/FileReaderSync.zig"),
+};
+
+pub const DedicatedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/DedicatedWorkerGlobalScope.zig")} ++ worker_extended_apis));
+pub const SharedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/SharedWorkerGlobalScope.zig")} ++ worker_extended_apis));
+
+pub const ServiceWorkerJsApis = flattenTypes(&([_]type{
+    @import("../webapi/ServiceWorkerGlobalScope.zig"),
+    @import("../webapi/ServiceWorker.zig"),
+    @import("../webapi/ServiceWorkerRegistration.zig"),
+    @import("../webapi/event/ExtendableEvent.zig"),
+    @import("../webapi/storage/CookieStore.zig"),
+} ++ worker_common_apis));
 
 // Master list of ALL JS APIs across all contexts.
 // Used by Env (class IDs, templates), JsApiLookup, and anywhere that needs
@@ -1368,6 +1445,9 @@ pub const JsApis = blk: {
         @import("../webapi/FileReaderSync.zig").JsApi,
         @import("../webapi/DedicatedWorkerGlobalScope.zig").JsApi,
         @import("../webapi/SharedWorkerGlobalScope.zig").JsApi,
+        @import("../webapi/ServiceWorkerGlobalScope.zig").JsApi,
+        //ServiceWorker-only, so it isn't in PageJsApis either.
+        @import("../webapi/event/ExtendableEvent.zig").JsApi,
         @import("../webapi/WorkerGlobalScope.zig").JsApi,
         @import("../webapi/WorkerLocation.zig").JsApi,
         @import("../webapi/WorkerNavigator.zig").JsApi,

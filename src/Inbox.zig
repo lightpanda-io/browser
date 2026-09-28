@@ -30,6 +30,7 @@ const lp = @import("lightpanda");
 
 const CDP = @import("server/cdp/CDP.zig");
 const Link = @import("server/Link.zig");
+const http_command = @import("server/bidi/http_command.zig");
 
 const DoublyLinkedList = std.DoublyLinkedList;
 
@@ -168,10 +169,16 @@ pub const Message = struct {
         // gets its BiDi connection after the fact).
         link: *Link,
 
+        // An HTTP WebDriver command, parsed on the loop. Its connection is
+        // parked on the Server.Worker until the consumer responds.
+        bidi_http: http_command.Command,
+
         pub fn size(self: Payload) usize {
             return switch (self) {
                 .cdp => |c| c.raw.len,
                 .bidi, .ping => |b| b.len,
+                // one at a time, it never backs up
+                .bidi_http => 0,
                 .close, .disconnect, .link, .quit => 0,
             };
         }

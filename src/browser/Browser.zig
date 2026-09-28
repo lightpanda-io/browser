@@ -28,10 +28,13 @@ const js = @import("js/js.zig");
 const Page = @import("Page.zig");
 const Session = @import("Session.zig");
 const Viewport = @import("Viewport.zig");
+const DocumentRegistry = @import("DocumentRegistry.zig");
+
 const Selector = @import("webapi/selector/Selector.zig");
 const Geolocation = @import("webapi/geolocation/Geolocation.zig");
 const PermissionState = @import("webapi/Permissions.zig").State;
 
+const log = lp.log;
 const ArenaPool = App.ArenaPool;
 const Allocator = std.mem.Allocator;
 
@@ -55,6 +58,7 @@ arena_account: lp.Arena.Account = .{},
 
 // Our isolate's heap size as of the last reportJsHeap().
 last_reported_js_bytes: usize = 0,
+last_js_heap_sample_ms: u64 = 0,
 
 // Permission state set via CDP Browser.grantPermissions / setPermission /
 // resetPermissions, keyed by permission name (e.g. "geolocation"). Read back
@@ -71,6 +75,11 @@ renderer: ?*lp.screenshot.Renderer = null,
 
 // Runtime geolocation override
 geolocation_override: ?Geolocation.Override = null,
+
+// Every Document allocated in this browser session, allows nodes to refer to
+// documents by their index. (TODO: this will probably eventually be moved
+// to the Page, but we need other changes first)
+documents: DocumentRegistry,
 
 // used by sessions to allocate pages.
 page_pool: std.heap.MemoryPool(Page),
@@ -95,6 +104,8 @@ fc_identity_pool: std.heap.MemoryPool(js.FinalizerCallback.Identity),
 // which Playwright rejects with `Duplicate target FID-...` (issue
 // #2472).
 frame_id_gen: u32 = 0,
+
+foreground_task_posted: std.atomic.Value(bool) = .init(false),
 
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
@@ -122,6 +133,7 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts) !void {
         .env = env,
         .session = null,
         .page_pool = .empty,
+        .documents = .init(allocator),
         .allocator = allocator,
         .arena_pool = &app.arena_pool,
         .http_client = undefined,
@@ -137,6 +149,8 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts) !void {
         .heartbeat = &self.http_client.heartbeat,
     };
     app.watchdog.register(&self.watchdog_entry);
+
+    self.env.setForegroundTaskPostedCallback(onForegroundTaskPosted, self);
 }
 
 pub fn deinit(self: *Browser) void {
@@ -149,16 +163,38 @@ pub fn deinit(self: *Browser) void {
     lp.metrics.js_heap_physical_bytes.add(-@as(i64, @intCast(self.last_reported_js_bytes)));
     self.last_reported_js_bytes = 0;
 
+    // V8 workers can post until the isolate is gone; http_client is freed
+    // after env.
+    self.env.setForegroundTaskPostedCallback(null, null);
     self.env.deinit();
     // After env.deinit() the Isolate is gone, so no further weak finalizer can
     // fire — only now is it safe to free the pool backing their parameters.
     self.fc_identity_pool.deinit(allocator);
     self.page_pool.deinit(allocator);
+    self.documents.deinit();
     self.http_client.deinit();
     if (self.renderer) |r| r.deinit();
     self.clearPermissions();
     self.permissions.deinit(allocator);
     self.selector_cache.deinit();
+}
+
+// Callback from v8 when a foreground task is posted.
+// !!Can be called from various threads!! (v8 worker threads)
+fn onForegroundTaskPosted(ctx: ?*anyopaque, delay_in_seconds: f64) callconv(.c) void {
+    if (delay_in_seconds > 0) {
+        return;
+    }
+    const self: *Browser = @ptrCast(@alignCast(ctx.?));
+    if (self.foreground_task_posted.swap(true, .acq_rel)) {
+        // it was already woken up before
+        return;
+    }
+
+    // wakeup is thread-safe
+    self.http_client.handles.wakeup() catch |err| {
+        log.err(.browser, "foreground task wakeup", .{ .err = err });
+    };
 }
 
 // Wait out a watchdog scan before clearing its termination request.
@@ -236,6 +272,18 @@ pub fn reportJsHeap(self: *Browser) void {
     self.last_reported_js_bytes = bytes;
 }
 
+// Called every Runner tick
+pub fn sampleJsHeap(self: *Browser) void {
+    const now = lp.datetime.milliTimestamp(.boot);
+    if (now - self.last_js_heap_sample_ms < 1000) {
+        // a busy page ticks often, we don't need to track this more than once
+        // per second
+        return;
+    }
+    self.last_js_heap_sample_ms = now;
+    self.reportJsHeap();
+}
+
 pub fn runMicrotasks(self: *Browser) void {
     self.env.runMicrotasks();
 }
@@ -244,6 +292,7 @@ pub fn runMacrotasks(self: *Browser) !void {
     const env = &self.env;
 
     try self.env.runMacrotasks();
+    self.foreground_task_posted.store(false, .release);
     env.pumpMessageLoop();
 
     // either of the above could have queued more microtasks

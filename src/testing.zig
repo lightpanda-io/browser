@@ -333,6 +333,7 @@ const HtmlRunnerOpts = struct {
         .worker = true,
         .iframe = true,
     },
+    experimental_features: Config.ExperimentalFeatures = .{},
 };
 
 // Create a fresh page on `test_session` and return its root frame — for tests
@@ -364,6 +365,9 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
         .worker = true,
         .iframe = true,
     };
+
+    test_session.experimental_features = opts.experimental_features;
+    defer test_session.experimental_features = .{};
 
     const root = try std.fs.path.joinZ(arena_allocator, &.{ WEB_API_TEST_ROOT, path });
     const stat = std.Io.Dir.cwd().statFile(io, root, .{}) catch |err| {
@@ -448,7 +452,11 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
         try_catch.init(&ls.local);
         defer try_catch.deinit();
 
-        const js_val = ls.local.exec("testing.assertOk()", "testing.assertOk()") catch |err| {
+        const js_val = ls.local.exec(
+            // testing is undefined until testing.js is run
+            "typeof testing === 'undefined' ? false : testing.assertOk()",
+            "testing.assertOk()",
+        ) catch |err| {
             const caught = try_catch.caughtOrError(arena_allocator, err);
             std.debug.print("{s}: test failure\nError: {f}\n", .{ test_file, caught });
             return err;
@@ -457,7 +465,7 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
             return;
         }
         const sleep_ms: usize = switch (try runner.tickForFrame(page.frame_id, 20, .{ .until = .done })) {
-            .done => 20,
+            .done => @min(test_session.browser.msToNextTask() orelse 20, 20), // could be at BLOCKING_NESTING, so wait a bit more
             .ok => |next_ms| @min(next_ms, 20),
         };
 
@@ -469,7 +477,14 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
             return error.TestTimedOut;
         }
         wait_ms -= @intCast(ms_elapsed);
-        lp.io.sleep(.fromMilliseconds(@intCast(sleep_ms)), .awake) catch {};
+
+        // WebSocket connection doesn't count as pending work, but we much prefer
+        // waiting on on activity than a blind sleep.
+        const http_client = &test_session.browser.http_client;
+        const waited = http_client.activity().ws_conns > 0 and try http_client.tick(@intCast(sleep_ms));
+        if (waited == false) {
+            lp.io.sleep(.fromMilliseconds(@intCast(sleep_ms)), .awake) catch {};
+        }
     }
 }
 
@@ -623,8 +638,27 @@ var serve_counts = [_]struct { name: []const u8, count: u32 = 0 }{
     .{ .name = "prescan_module" },
 };
 
+fn origin(req: *std.http.Server.Request) ?[]const u8 {
+    var it = req.iterateHeaders();
+    while (it.next()) |h| {
+        if (std.mem.eql(u8, "origin", h.name)) {
+            return h.value;
+        }
+    }
+
+    return null;
+}
+
 fn testHTTPHandler(req: *std.http.Server.Request) !void {
     const path = req.head.target;
+
+    if (std.mem.eql(u8, path, "/")) {
+        return req.respond("<html><head></head><body></body></html>", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
 
     if (std.mem.eql(u8, path, "/xhr")) {
         return req.respond("1234567890" ** 10, .{
@@ -728,6 +762,19 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
             .status = .found,
             .extra_headers = &.{
                 .{ .name = "Location", .value = "http://localhost:9582/echo-x-hop" },
+            },
+        });
+    }
+
+    // Bounces to the same path on the other loopback host, e.g. for an iframe
+    // whose origin must change between its request and its response.
+    if (std.mem.startsWith(u8, path, "/redirect-cross-origin/")) {
+        var location_buf: [1024]u8 = undefined;
+        const location = try std.fmt.bufPrint(&location_buf, "http://localhost:9582/{s}", .{path["/redirect-cross-origin/".len..]});
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = location },
             },
         });
     }
@@ -850,6 +897,27 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/javascript" },
                 .{ .name = "Cache-Control", .value = "no-store" },
+            },
+        });
+    }
+
+    if (std.mem.startsWith(u8, path, "/status/")) {
+        const code = try std.fmt.parseInt(u16, path["/status/".len..], 10);
+        return req.respond("", .{ .status = @enumFromInt(code) });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/reason")) {
+        return req.respond("", .{
+            .status = .service_unavailable,
+            .reason = "HOUSTON WE HAVE A",
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/401")) {
+        return req.respond("No", .{
+            .status = .unauthorized,
+            .extra_headers = &.{
+                .{ .name = "WWW-Authenticate", .value = "Basic realm=\"test\"" },
             },
         });
     }
@@ -980,6 +1048,14 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond("data: x\n\n", .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/plain" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/styles/important-cascade.css")) {
+        return req.respond(".no-js-flex { display: none !important; }", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
             },
         });
     }
@@ -1117,6 +1193,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(html, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                .{ .name = "Access-Control-Allow-Origin", .value = origin(req) orelse "*" },
             },
         });
     }
@@ -1163,6 +1240,16 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.eql(u8, path, "/echo_headers")) {
+        if (req.head.method == .OPTIONS) {
+            return req.respond("", .{
+                .extra_headers = &.{
+                    .{ .name = "Access-Control-Allow-Origin", .value = origin(req) orelse "*" },
+                    .{ .name = "Access-Control-Allow-Methods", .value = "GET" },
+                    .{ .name = "Access-Control-Allow-Headers", .value = "x-hop" },
+                },
+            });
+        }
+
         // Echo every request header back as "name: value" lines, so tests
         // can assert on the headers a request actually sent.
         var buf: [8192]u8 = undefined;
@@ -1175,6 +1262,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(buf[0..pos], .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
+                .{ .name = "Access-Control-Allow-Origin", .value = origin(req) orelse "*" },
             },
         });
     }

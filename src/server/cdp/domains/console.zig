@@ -66,9 +66,7 @@ pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     const w = &aw.writer;
     for (event.values, 0..) |v, i| {
         if (i != 0) try w.writeByte(' ');
-
-        const js_str = try v.toString();
-        try js_str.format(w);
+        try v.format(w);
     }
 
     return bc.cdp.sendEvent("Console.messageAdded", ConsoleMessage{

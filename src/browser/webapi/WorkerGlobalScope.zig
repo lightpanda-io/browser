@@ -30,6 +30,7 @@ const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
 const Session = @import("../Session.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
+const GlobalScope = @import("../global_scope.zig").GlobalScope;
 const EventManagerBase = @import("../EventManagerBase.zig");
 const ScriptManagerBase = @import("../ScriptManagerBase.zig");
 
@@ -45,9 +46,10 @@ const WorkerLocation = @import("WorkerLocation.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const Fetch = @import("net/Fetch.zig");
 const idb = @import("storage/idb/idb.zig");
-const CookieStore = @import("storage/CookieStore.zig");
+const CacheStorage = @import("cache/CacheStorage.zig");
 const MessagePort = @import("MessagePort.zig");
 const SharedWorkerGlobalScope = @import("SharedWorkerGlobalScope.zig");
+const ServiceWorkerGlobalScope = @import("ServiceWorkerGlobalScope.zig");
 const DedicatedWorkerGlobalScope = @import("DedicatedWorkerGlobalScope.zig");
 
 const log = lp.log;
@@ -64,7 +66,7 @@ _is_module: bool,
 // Meant to follow the same field naming as Page so that an anytype of generic
 // can access these the same for a Page of a WGS.
 // These fields represent the "Page"-like component of the WGS
-_page: *Page,
+page: *Page,
 _session: *Session,
 _factory: *Factory,
 _identity: JS.Identity = .{},
@@ -78,6 +80,10 @@ local_arena: Allocator,
 url: [:0]const u8,
 // Same-origin constraint: a worker's origin is inherited from its parent frame.
 origin: ?[]const u8 = null,
+// Inherited from the creating frame, captured at creation since the worker
+// can outlive it. Always true for a service worker: only a secure context can
+// register one.
+_secure_context: bool,
 buf: [1024]u8 = undefined, // same size as frame.buf
 // Document charset (matches Page.charset). Workers default to UTF-8.
 charset: []const u8 = "UTF-8",
@@ -108,10 +114,10 @@ _crypto: Crypto = .init,
 _navigator: WorkerNavigator = .init,
 _performance: *Performance,
 _idb_factory: ?*idb.IDBFactory = null,
+_caches: ?*CacheStorage = null,
 _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
-_cookie_store: ?*CookieStore = null,
 
 _location: WorkerLocation,
 
@@ -120,6 +126,7 @@ _scheduler: Scheduler = .{},
 
 pub const Type = union(enum) {
     shared: *SharedWorkerGlobalScope,
+    service: *ServiceWorkerGlobalScope,
     dedicated: *DedicatedWorkerGlobalScope,
 };
 
@@ -148,13 +155,14 @@ pub fn init(
             .url = url,
             .arena = arena,
             .origin = frame.origin,
+            ._secure_context = tag == .service or frame.isSecureContext(),
             .js = undefined,
             ._call_arena = call_arena,
             ._local_arena = local_arena,
             .call_arena = call_arena.allocator(),
             .local_arena = local_arena.allocator(),
             ._frame = frame,
-            ._page = frame._page,
+            .page = frame.page,
             ._session = session,
             ._identity = .{},
             ._type = undefined,
@@ -174,18 +182,7 @@ pub fn init(
     const self = leaf._proto;
     self._type = @unionInit(Type, @tagName(tag), leaf);
 
-    self._http_owner = .{
-        .blob_urls = &frame._page.blob_urls,
-        .origin = &self.origin,
-        .url = null,
-        .parent = &frame._http_owner,
-        .frame_id = frame_id,
-        .document_frame_id = frame._frame_id,
-        .loader_id = loader_id,
-        .cookie_jar = &session.cookie_jar,
-        .notification = session.notification,
-        .performance = self._performance,
-    };
+    self._http_owner = GlobalScope.initHttpOwner(.{ .worker = self });
 
     self._script_manager = ScriptManagerBase.init(
         arena,
@@ -211,7 +208,7 @@ pub fn init(
 }
 
 pub fn deinit(self: *WorkerGlobalScope) void {
-    const page = self._page;
+    const page = self.page;
     const session = page.session;
     const browser = session.browser;
 
@@ -256,7 +253,7 @@ pub fn dispatch(
         target,
         event,
         handler,
-        self._page,
+        self.page,
         opts,
     );
 }
@@ -267,8 +264,8 @@ pub fn hasDirectListeners(self: *WorkerGlobalScope, target: *EventTarget, typ: [
 
 // Workers don't have their own Referer; per spec, dedicated worker requests
 // use the parent document's URL. Delegate to the owning frame.
-pub fn headersForRequest(self: *WorkerGlobalScope, transfer: *HttpClient.Transfer) !void {
-    return self._frame.headersForRequest(transfer);
+pub fn headersForRequest(self: *WorkerGlobalScope, transfer: *HttpClient.Transfer, opts: JS.Execution.HeadersForRequestOptions) !void {
+    return self._frame.headersForRequest(transfer, opts);
 }
 
 pub fn isSameOrigin(self: *const WorkerGlobalScope, url: [:0]const u8) bool {
@@ -280,7 +277,7 @@ pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
     const transfer = try self._session.browser.http_client.newRequest(req, &self._http_owner);
     {
         errdefer transfer.deinit();
-        try self.headersForRequest(transfer);
+        try self.headersForRequest(transfer, .{});
     }
     transfer.submit() catch {};
 }
@@ -322,15 +319,12 @@ pub fn performance(self: *WorkerGlobalScope) *Performance {
     return self._performance;
 }
 
-pub fn getLocation(self: *WorkerGlobalScope) *WorkerLocation {
-    return &self._location;
+fn getIsSecureContext(self: *const WorkerGlobalScope) bool {
+    return self._secure_context;
 }
 
-fn getCookieStore(self: *WorkerGlobalScope) !*CookieStore {
-    if (self._cookie_store) |cs| return cs;
-    const cs = try self._factory.eventTargetWithAllocator(self.arena, CookieStore{ ._proto = undefined });
-    self._cookie_store = cs;
-    return cs;
+pub fn getLocation(self: *WorkerGlobalScope) *WorkerLocation {
+    return &self._location;
 }
 
 fn getOnError(self: *const WorkerGlobalScope) ?JS.Function.Global {
@@ -388,7 +382,7 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rej
     };
 
     if (no_handler) {
-        self._page.recordJsError(error.JsException);
+        self.page.recordJsError(error.JsException);
     }
 
     const target = self.asEventTarget();
@@ -396,7 +390,7 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rej
         const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
             .reason = if (rejection.reason()) |r| try r.persist() else null,
             .promise = try rejection.promise().persist(),
-        }, self._page)).asEvent();
+        }, self.page)).asEvent();
         try self.dispatch(target, event, attribute_callback, .{});
     }
 }
@@ -440,7 +434,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     };
     {
         errdefer transfer.deinit();
-        try self.headersForRequest(transfer);
+        try self.headersForRequest(transfer, .{});
     }
 
     var response = transfer.submitSync() catch |err| {
@@ -463,7 +457,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     defer try_catch.deinit();
 
     _ = ls.local.eval(response.body.items, url) catch |err| {
-        self._page.recordJsError(err);
+        self.page.recordJsError(err);
         const caught = try_catch.caughtOrError(arena, err);
         log.err(.browser, "importScript", .{ .url = resolved_url, .caught = caught });
         return;
@@ -473,14 +467,14 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
 }
 
 pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
-    self._page.recordJsError(error.JsException);
+    self.page.recordJsError(error.JsException);
 
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.persist(),
         .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
-    }, self._page);
+    }, self.page);
 
     // Invoke onerror callback if set (per WHATWG spec, this is called
     // with 5 arguments: message, source, lineno, colno, error)
@@ -509,7 +503,7 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     const event = error_event.asEvent();
     // Keep the event alive past dispatch so we can read _prevent_default.
     event.acquireRef();
-    defer _ = event.releaseRef(self._page);
+    defer _ = event.releaseRef(self.page);
 
     event._prevent_default = prevent_default;
     // Pass null as handler: onerror was already called above with 5 args.
@@ -560,6 +554,15 @@ pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, dela
 
 fn clearInterval(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
+}
+
+fn getCaches(self: *WorkerGlobalScope, exec: *JS.Execution) !*CacheStorage {
+    if (self._caches) |c| {
+        return c;
+    }
+    const c = try exec._factory.create(CacheStorage{});
+    self._caches = c;
+    return c;
 }
 
 fn getIndexedDB(self: *WorkerGlobalScope, exec: *JS.Execution) !*idb.IDBFactory {
@@ -616,8 +619,8 @@ pub const JsApi = struct {
     }.wrap, null, .{});
     pub const self = bridge.accessor(WorkerGlobalScope.getSelf, WorkerGlobalScope.setSelf, .{});
     pub const location = bridge.accessor(WorkerGlobalScope.getLocation, null, .{});
-    pub const cookieStore = bridge.accessor(WorkerGlobalScope.getCookieStore, null, .{});
     pub const indexedDB = bridge.accessor(WorkerGlobalScope.getIndexedDB, null, .{});
+    pub const caches = bridge.accessor(WorkerGlobalScope.getCaches, null, .{});
 
     pub const onerror = bridge.accessor(WorkerGlobalScope.getOnError, WorkerGlobalScope.setOnError, .{});
     pub const onrejectionhandled = bridge.accessor(WorkerGlobalScope.getOnRejectionHandled, WorkerGlobalScope.setOnRejectionHandled, .{});
@@ -635,6 +638,5 @@ pub const JsApi = struct {
     pub const setInterval = bridge.function(WorkerGlobalScope.setInterval, .{});
     pub const clearInterval = bridge.function(WorkerGlobalScope.clearInterval, .{});
 
-    // Return false since workers don't have secure-context-only APIs
-    pub const isSecureContext = bridge.property(false, .{ .template = false });
+    pub const isSecureContext = bridge.accessor(WorkerGlobalScope.getIsSecureContext, null, .{});
 };

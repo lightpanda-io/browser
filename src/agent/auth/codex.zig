@@ -155,7 +155,7 @@ fn deviceLogin(allocator: std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) 
 
     const code_res = try post(a, interrupt, device_code_url, "application/json", "{\"client_id\":\"" ++ client_id ++ "\"}");
     if (code_res.status != .ok) {
-        log.warn(.app, "codex device-code request failed", .{ .status = @intFromEnum(code_res.status), .body = code_res.body });
+        log.warn(.app, "codex device-code failed", .{ .status = @intFromEnum(code_res.status), .body = code_res.body });
         return error.DeviceCodeRequestFailed;
     }
     const dc = try std.json.parseFromSliceLeaky(DeviceCode, a, code_res.body, .{ .ignore_unknown_fields = true });

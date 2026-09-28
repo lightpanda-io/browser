@@ -51,6 +51,15 @@ pub const Method = enum(u8) {
     OPTIONS = 5,
     PATCH = 6,
     PROPFIND = 7,
+
+    // The safe methods of RFC 9110 9.2.1 (we have no TRACE). PROPFIND is
+    // read-only in practice but isn't on that list.
+    pub fn isSafe(self: Method) bool {
+        return switch (self) {
+            .GET, .HEAD, .OPTIONS => true,
+            .PUT, .POST, .DELETE, .PATCH, .PROPFIND => false,
+        };
+    }
 };
 
 pub const Header = struct {
@@ -61,6 +70,13 @@ pub const Header = struct {
         key: []const u8,
         value: []const u8,
     };
+
+    pub fn normalize(self: Header, allocator: std.mem.Allocator) !Header {
+        return .{
+            .name = try std.ascii.allocLowerString(allocator, self.name),
+            .value = try allocator.dupe(u8, self.value),
+        };
+    }
 
     pub fn parse(header_str: []const u8) ?Header {
         const colon_pos = std.mem.indexOfScalar(u8, header_str, ':') orelse return null;
@@ -138,10 +154,7 @@ pub const HeaderIterator = union(enum) {
         var list: std.ArrayList(Header) = .empty;
 
         while (self.next()) |hdr| {
-            try list.append(allocator, .{
-                .name = try allocator.dupe(u8, hdr.name),
-                .value = try allocator.dupe(u8, hdr.value),
-            });
+            try list.append(allocator, try hdr.normalize(allocator));
         }
 
         return list;
@@ -212,6 +225,32 @@ pub const AuthChallenge = struct {
         }
 
         return ac;
+    }
+};
+
+// The actual reason phrase from the server, verbatim. HTTP/2 has none, so "".
+pub const StatusText = struct {
+    pub const MAX_LEN = 128;
+
+    _len: ?u8 = null,
+    _buf: [MAX_LEN]u8 = undefined,
+
+    pub fn fromStatusLine(line: []const u8) StatusText {
+        const trimmed = std.mem.trimEnd(u8, line, "\r\n");
+        // HTTP-version SP status-code SP [ reason-phrase ]
+        const sp1 = std.mem.indexOfScalar(u8, trimmed, ' ') orelse return .{ ._len = 0 };
+        const sp2 = std.mem.indexOfScalarPos(u8, trimmed, sp1 + 1, ' ') orelse return .{ ._len = 0 };
+        const phrase = trimmed[sp2 + 1 ..];
+        const len = @min(phrase.len, MAX_LEN);
+
+        var st: StatusText = .{ ._len = @intCast(len) };
+        @memcpy(st._buf[0..len], phrase[0..len]);
+        return st;
+    }
+
+    pub fn get(self: *const StatusText) ?[]const u8 {
+        const len = self._len orelse return null;
+        return self._buf[0..len];
     }
 };
 
@@ -348,6 +387,11 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(easy, .copy_post_fields, body.ptr);
     }
 
+    pub fn setNoBody(self: *const Connection) !void {
+        const easy = self._easy;
+        try libcurl.curl_easy_setopt(easy, .no_body, true);
+    }
+
     pub fn setGetMode(self: *const Connection) !void {
         try libcurl.curl_easy_setopt(self._easy, .http_get, true);
     }
@@ -406,6 +450,13 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(self._easy, .connect_only, value);
     }
 
+    // Close this connection when the transfer ends instead of returning it to
+    // libcurl's keepalive pool. Read by libcurl when the transfer completes,
+    // so it can be set while the response is being received.
+    pub fn setForbidReuse(self: *const Connection) !void {
+        try libcurl.curl_easy_setopt(self._easy, .forbid_reuse, true);
+    }
+
     pub fn setWriteCallback(
         self: *Connection,
         comptime data_cb: libcurl.CurlWriteFunction,
@@ -454,6 +505,9 @@ pub const Connection = struct {
         // timeouts
         try libcurl.curl_easy_setopt(self._easy, .timeout_ms, config.httpTimeout());
         try libcurl.curl_easy_setopt(self._easy, .connect_timeout_ms, config.httpConnectTimeout());
+
+        // Otherwise requests issued before ALPN settles each open a socket.
+        try libcurl.curl_easy_setopt(self._easy, .pipewait, true);
 
         // compression, don't remove this. CloudFront will send gzip content
         // even if we don't support it, and then it won't be decompressed.
@@ -1011,6 +1065,17 @@ test "Header.param" {
     try testing.expect((Header{ .name = "Content-Disposition", .value = "attachment" }).param("filename") == null);
     // Empty values are skipped.
     try testing.expect((Header{ .name = "Content-Disposition", .value = "attachment; filename=\"\"" }).param("filename") == null);
+}
+
+test "StatusText.fromStatusLine" {
+    try testing.expect((StatusText{}).get() == null);
+    try testing.expectEqualSlices(u8, "OK", StatusText.fromStatusLine("HTTP/1.1 200 OK\r\n").get().?);
+    try testing.expectEqualSlices(u8, "HOUSTON WE HAVE A", StatusText.fromStatusLine("HTTP/1.1 503 HOUSTON WE HAVE A\r\n").get().?);
+    try testing.expectEqualSlices(u8, "lowercase", StatusText.fromStatusLine("HTTP/1.0 502 lowercase\r\n").get().?);
+    // curl's synthesized HTTP/2 status line has no phrase
+    try testing.expectEqualSlices(u8, "", StatusText.fromStatusLine("HTTP/2 200 \r\n").get().?);
+    try testing.expectEqualSlices(u8, "", StatusText.fromStatusLine("HTTP/1.1 200\r\n").get().?);
+    try testing.expectEqual(StatusText.MAX_LEN, StatusText.fromStatusLine("HTTP/1.1 200 " ++ "x" ** 200).get().?.len);
 }
 
 test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {

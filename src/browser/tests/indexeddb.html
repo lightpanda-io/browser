@@ -1520,4 +1520,26 @@
     });
 }
 </script>
+
+<!-- A popup that closes itself from inside an IndexedDB success handler. The
+     close detaches its context from the engine's connection gate while the
+     delete task is still on the stack; receiving the message proves neither
+     the popup nor its in-flight task was freed twice. -->
+<script id=popup_self_close type=module>
+{
+    const state = await testing.async();
+    window.addEventListener('message', (e) => {
+        if (e.data && e.data.from === 'popup_idb_self_close') {
+            state.resolve(e.data);
+        }
+    }, { once: true });
+
+    const w = window.open(testing.BASE_URL + 'window/support/popup_idb_self_close.html');
+    testing.expectTrue(w != null);
+
+    await state.done((data) => {
+        testing.expectEqual('popup_idb_self_close', data.from);
+    });
+}
+</script>
 </body>

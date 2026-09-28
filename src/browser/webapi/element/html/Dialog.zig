@@ -52,7 +52,7 @@ pub fn close(self: *Dialog, return_value: ?[]const u8, frame: *Frame) !void {
     if (return_value) |v| {
         try self.asElement().setAttributeSafe(comptime .wrap("returnvalue"), .wrap(v), frame);
     }
-    const event = try Event.init("close", .{ .bubbles = false, .cancelable = false }, frame._page);
+    const event = try Event.init("close", .{ .bubbles = false, .cancelable = false }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 

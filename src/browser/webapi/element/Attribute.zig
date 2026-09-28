@@ -88,20 +88,12 @@ pub fn isEqualNode(self: *const Attribute, other: *const Attribute) bool {
     return self.getName().eql(other.getName()) and self.getValue().eql(other.getValue());
 }
 
-pub fn clone(self: *const Attribute, frame: *Frame) !*Attribute {
-    const cloned = try frame._factory.node(Attribute{
+pub fn clone(self: *const Attribute, document: *const Node.Document, frame: *Frame) !*Attribute {
+    return frame._factory.node(document, Attribute{
         ._element = null,
         ._name = self._name,
         ._value = self._value,
     });
-
-    if (self._element) |el| {
-        // cloned has no element, we need to store its document
-        if (el.asNode().ownerDocument(frame)) |doc| {
-            try frame.setNodeOwnerDocument(cloned.asNode(), doc);
-        }
-    }
-    return cloned;
 }
 
 pub const JsApi = struct {
@@ -134,7 +126,7 @@ pub const JsApi = struct {
 // Attribute value (the same JSValue) when called multiple time, and that gets
 // more important when you look at the [hardly every used] el.removeAttributeNode
 // and setAttributeNode.
-// So, we maintain a lookup, frame._attribute_lookup, to serve as an identity map
+// So, we maintain a lookup, page.attribute_lookup, to serve as an identity map
 // from our internal Entry to a proper Attribute. This is lazily populated
 // whenever an Attribute is created. Why not just have an ?*Attribute field
 // in our Entry? Because that would require an extra 8 bytes for every single
@@ -149,7 +141,7 @@ pub const List = struct {
 
     pub const Lookup = std.AutoHashMapUnmanaged(LookupKey, *Attribute);
 
-    // for Frame._attribute_lookup which is our identity map for attributes
+    // for Page.attribute_lookup which is our identity map for attributes
     const LookupKey = struct {
         list: *const List,
         // canonical (see canonicalizeName), so identity is the address
@@ -212,19 +204,18 @@ pub const List = struct {
         return self.getEntryWithInternedName(name) != null;
     }
 
-    pub fn getAttribute(self: *const List, name: String, element: ?*Element, frame: *Frame) !?*Attribute {
+    pub fn getAttribute(self: *const List, name: String, element: *Element, frame: *Frame) !?*Attribute {
         const entry = (try self.getEntry(name, frame)) orelse return null;
         return self.getOrCreateAttribute(entry, element, frame);
     }
 
     // Identity map access: a given (list, name) always yields the same
-    // *Attribute until the attribute is removed. The map must be the
-    // element's frame's, not the caller's frame.
-    pub fn getOrCreateAttribute(self: *const List, entry: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
-        const owner = if (element) |el| el.ownerFrame(frame) else frame;
-        const gop = try owner._attribute_lookup.getOrPut(owner.arena, .{ .list = self, .name = entry._name_ptr });
+    // *Attribute until the attribute is removed.
+    pub fn getOrCreateAttribute(self: *const List, entry: *const Entry, element: *Element, frame: *Frame) !*Attribute {
+        const page = frame.page;
+        const gop = try page.attribute_lookup.getOrPut(page.frame_arena, .{ .list = self, .name = entry._name_ptr });
         if (!gop.found_existing) {
-            gop.value_ptr.* = try entry.toAttribute(element, owner);
+            gop.value_ptr.* = try entry.toAttribute(element, element.ownerFrame(frame) orelse frame);
         }
         return gop.value_ptr.*;
     }
@@ -243,7 +234,7 @@ pub const List = struct {
     // run script which mutates the list, moving or shifting entries. The
     // canonical name is interned, so it stays valid.
     fn _put(self: *List, result: NormalizeAndEntry, value: String, element: *Element, frame: *Frame) ![]const u8 {
-        const owner = element.ownerFrame(frame);
+        const owner = element.ownerFrame(frame) orelse frame;
         const is_id = shouldAddToIdMap(result.normalized, element);
 
         var entry: *Entry = undefined;
@@ -312,8 +303,8 @@ pub const List = struct {
 
         const name = try self.put(attribute._name, attribute._value, element, frame);
         attribute._element = element;
-        const owner = element.ownerFrame(frame);
-        try owner._attribute_lookup.put(owner.arena, .{ .list = self, .name = name.ptr }, attribute);
+        const page = frame.page;
+        try page.attribute_lookup.put(page.frame_arena, .{ .list = self, .name = name.ptr }, attribute);
         return existing_attribute;
     }
 
@@ -350,7 +341,7 @@ pub const List = struct {
     }
 
     fn _delete(self: *List, entry: *Entry, normalized: String, element: *Element, frame: *Frame) void {
-        const owner = element.ownerFrame(frame);
+        const owner = element.ownerFrame(frame) orelse frame;
         const is_id = shouldAddToIdMap(normalized, element);
         const old_value = entry.value();
 
@@ -360,7 +351,7 @@ pub const List = struct {
 
         // remove this BEFORE triggering anything, incase that re-enters delete
         // or some other callback.
-        if (owner._attribute_lookup.fetchRemove(.{ .list = self, .name = entry._name_ptr })) |kv| {
+        if (frame.page.attribute_lookup.fetchRemove(.{ .list = self, .name = entry._name_ptr })) |kv| {
             // The attribute can still be alive
             kv.value._element = null;
         }
@@ -504,8 +495,8 @@ pub const List = struct {
             return formatAttribute(self.name(), self.value(), writer);
         }
 
-        fn toAttribute(self: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
-            return frame._factory.node(Attribute{
+        fn toAttribute(self: *const Entry, element: *Element, frame: *Frame) !*Attribute {
+            return frame._factory.node(element.getDocument(frame), Attribute{
                 ._element = element,
                 // The entry's bytes outlive the entry itself, so the
                 // Attribute can wrap them without duping.
@@ -546,17 +537,17 @@ pub fn validateAttributeName(name: String) !void {
 }
 
 // Every stored entry name either comes from the static String.intern or from
-// the frame._attribute_names. Beyond avoiding extra dupes/allocations, this
-// gives a stable pointer for the frame's lifetime, which List.LookupKey
-// relies on for identity. The pointer is NOT comparable across frames (each
-// frame has its own pool), which is why lookups byte-compare.
+// the page's attribute_names. Beyond avoiding extra dupes/allocations, this
+// gives a stable pointer for the page's lifetime, which List.LookupKey
+// relies on for identity.
 fn canonicalizeName(name: []const u8, frame: *Frame) ![]const u8 {
     if (String.intern(name)) |static| {
         return static;
     }
-    const gop = try frame._attribute_names.getOrPut(frame.arena, name);
+    const page = frame.page;
+    const gop = try page.attribute_names.getOrPut(page.frame_arena, name);
     if (!gop.found_existing) {
-        gop.key_ptr.* = try frame.arena.dupe(u8, name);
+        gop.key_ptr.* = try page.frame_arena.dupe(u8, name);
     }
     return gop.key_ptr.*;
 }

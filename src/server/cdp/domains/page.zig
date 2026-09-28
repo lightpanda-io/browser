@@ -121,6 +121,18 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
     // attached targets.
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
+    // Like Chrome, report the initial about:blank as loaded. Its state is left
+    // as is, since the first navigation reuses it (see canNavigateInPlace).
+    if (frame._load_state == .waiting) {
+        const frame_id = &id.toFrameId(frame._frame_id);
+        const loader_id = &id.toLoaderId(frame._loader_id);
+
+        const now = lp.datetime.timestamp(.boot);
+        try sendPageLifecycle(bc, "DOMContentLoaded", now, frame_id, loader_id);
+        try sendPageLifecycle(bc, "load", now, frame_id, loader_id);
+        return cmd.sendResult(null, .{});
+    }
+
     if (frame._load_state == .complete) {
         const frame_id = &id.toFrameId(frame._frame_id);
         const loader_id = &id.toLoaderId(frame._loader_id);
@@ -226,41 +238,15 @@ fn removeScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
 fn close(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    const target_id = bc.target_id orelse return error.TargetNotLoaded;
+    if (bc.target_id == null) {
+        return error.TargetNotLoaded;
+    }
 
     // can't be null if we have a target_id
     lp.assert(bc.session.hasPage(), "CDP.frame.close null frame", .{});
 
-    try cmd.sendResult(.{}, .{});
-
-    // Following code is similar to target.closeTarget
-    //
-    // could be null, created but never attached
-    if (bc.session_id) |session_id| {
-        // Inspector.detached event
-        try cmd.sendEvent("Inspector.detached", .{
-            .reason = "Render process gone.",
-        }, .{ .session_id = session_id });
-
-        // detachedFromTarget event
-        try cmd.sendEvent("Target.detachedFromTarget", .{
-            .targetId = target_id,
-            .sessionId = session_id,
-            .reason = "Render process gone.",
-        }, .{});
-
-        bc.session_id = null;
-    }
-
-    if (bc.page_handle) |handle| {
-        handle.close();
-    }
-    bc.page_handle = null;
-    for (bc.isolated_worlds.items) |world| {
-        world.deinit();
-    }
-    bc.isolated_worlds.clearRetainingCapacity();
-    bc.target_id = null;
+    try cmd.sendResult(null, .{});
+    try bc.closeTarget();
 }
 
 fn createIsolatedWorld(cmd: *CDP.Command) !void {
@@ -298,7 +284,7 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
     var ls: js.Local.Scope = undefined;
     js_context.localScope(&ls);
     defer ls.deinit();
-    const context_id = bc.inspector_session.inspector.getContextId(&ls.local);
+    const context_id = bc.inspector().getContextId(&ls.local);
     return cmd.sendResult(.{ .executionContextId = context_id }, .{});
 }
 
@@ -329,7 +315,7 @@ fn registerIsolatedWorldContext(arena: Allocator, bc: *CDP.BrowserContext, world
     js_context.localScope(&ls);
     defer ls.deinit();
 
-    bc.inspector_session.inspector.contextCreated(
+    bc.inspector().contextCreated(
         &ls.local,
         world.name,
         frame.origin orelse "",
@@ -572,7 +558,7 @@ pub fn frameNavigate(bc: *CDP.BrowserContext, event: *const Notification.FrameNa
 pub fn frameRemove(bc: *CDP.BrowserContext) void {
     // Clear all remote object mappings to prevent stale objectIds from being used
     // after the context is destroy
-    bc.inspector_session.inspector.resetContextGroup();
+    bc.inspector().resetContextGroup();
 
     // The main frame is going to be removed, we need to remove contexts from other worlds first.
     for (bc.isolated_worlds.items) |isolated_world| {
@@ -757,7 +743,7 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
         frame.js.localScope(&ls);
         defer ls.deinit();
 
-        bc.inspector_session.inspector.contextCreated(
+        bc.inspector().contextCreated(
             &ls.local,
             "",
             frame.origin orelse "",
@@ -778,7 +764,11 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     // navigation as blink rebuilds a detached isolated-world window proxy.
     for (bc.isolated_worlds.items) |isolated_world| {
         if (isolated_world.contextFor(frame)) |js_context| {
-            // The context was already created ahead of time (createIsolatedWorld).
+            // The context was already created ahead of time and still carries
+            // the origin the frame had then. Move it onto the navigated origin.
+            js_context.setOrigin(frame.origin) catch |err| {
+                log.warn(.cdp, "isolated world origin", .{ .err = err, .world = isolated_world.name, .frame_id = frame._frame_id });
+            };
             // A child keeps the id the client was given. The root's id was just
             // invalidated by executionContextsCleared: the first navigation of a
             // pristine about:blank keeps the Frame and its contexts.
@@ -1218,6 +1208,29 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
 }
 
 const testing = @import("../testing.zig");
+
+test "cdp.page: close detaches the target like Target.closeTarget" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const target_id = bc.target_id.?;
+    const session_id = try testing.arena_allocator.dupe(u8, bc.session_id.?);
+
+    try ctx.processMessage(.{ .id = 3, .method = "Page.close", .sessionId = session_id });
+    try ctx.expectSentResult(null, .{ .id = 3, .session_id = session_id });
+    try ctx.expectSentEvent("Inspector.detached", .{ .reason = "Render process gone." }, .{ .session_id = session_id });
+    try ctx.expectSentEvent("Target.detachedFromTarget", .{
+        .targetId = target_id,
+        .sessionId = session_id,
+        .reason = "Render process gone.",
+    }, .{});
+    try ctx.expectSentEvent("Target.targetDestroyed", .{ .targetId = target_id }, .{});
+    try testing.expectEqual(null, bc.target_id);
+    try testing.expectEqual(null, bc.session_id);
+}
 test "cdp.frame: setup no-ops" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1500,6 +1513,22 @@ test "cdp.frame: a worldName preload script seeds every frame" {
     try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "undefined" } }, .{ .id = 34 });
 }
 
+// The initial about:blank is reported as loaded, but stays pristine.
+test "cdp.page: setLifecycleEventsEnabled reports the initial about:blank as loaded" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const session_id = bc.session_id.?;
+
+    try ctx.processMessage(.{ .id = 3, .method = "Page.setLifecycleEventsEnabled", .sessionId = session_id, .params = .{ .enabled = true } });
+    try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "DOMContentLoaded", .frameId = bc.target_id.? }, .{ .session_id = session_id });
+    try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "load", .frameId = bc.target_id.? }, .{ .session_id = session_id });
+    try testing.expectEqual(.waiting, bc.mainFrame().?._load_state);
+}
+
 // puppeteer: the utility world is created on the bootstrap about:blank and
 // must be announced again for the first document, which navigates the
 // pristine Frame in place (no teardown, no frame_destroyed).
@@ -1541,6 +1570,94 @@ test "cdp.frame: isolated world survives the in-place first navigation" {
         .contextId = page_ctx,
     } });
     try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page one" } }, .{ .id = 45 });
+}
+
+// #1550: the kept context was created on the bootstrap about:blank and still
+// carried its opaque origin after the in-place navigation. A world context
+// shares its frame's Origin (same V8 security token, one Page.origins entry).
+test "cdp.frame: isolated world follows the in-place first navigation's origin" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 40, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 41, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const session_id = bc.session_id.?;
+    const root = bc.mainFrame() orelse unreachable;
+    const root_id = id.toFrameId(root._frame_id);
+
+    try ctx.processMessage(.{ .id = 42, .method = "Runtime.enable", .sessionId = session_id });
+    try ctx.processMessage(.{ .id = 43, .method = "Page.createIsolatedWorld", .sessionId = session_id, .params = .{
+        .frameId = &root_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    const world = bc.isolated_worlds.items[0];
+
+    // The bootstrap about:blank has an opaque origin: one Origin per context.
+    try testing.expectEqual(null, root.origin);
+    try testing.expect(world.contextFor(root).?.origin != root.js.origin);
+
+    try ctx.processMessage(.{ .id = 44, .method = "Page.navigate", .sessionId = session_id, .params = .{
+        .url = "http://127.0.0.1:9582/src/browser/tests/cdp/isolated_world_one.html",
+    } });
+    try testing.waitForPage(bc);
+    try testing.expectEqual(root, bc.mainFrame().?);
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582", root.origin.?);
+
+    // Kept context, now on the navigated origin with the main world.
+    const world_context = world.contextFor(root) orelse return error.ContextNotFound;
+    try testing.expectEqual(root.js.origin, world_context.origin);
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582", world_context.origin.key);
+}
+
+// A child's world is created while its load is in flight (drivers do it on
+// Page.frameAttached). A cross-origin redirect then moves frame.origin before
+// frame_navigated: the kept context must follow, as the root's does.
+test "cdp.frame: isolated world follows a child's redirected origin" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-IW4", .url = "hi.html", .target_id = "FID-000000000X".* });
+    try ctx.processMessage(.{ .id = 70, .method = "Runtime.enable", .sessionId = "SID-X" });
+    try ctx.processMessage(.{ .id = 71, .method = "Page.navigate", .sessionId = "SID-X", .params = .{
+        .url = "http://127.0.0.1:9582/src/browser/tests/cdp/isolated_world_redirect.html",
+    } });
+
+    // The parent is parsed while the child's redirected, server-delayed
+    // response has yet to arrive: the child exists on its request origin.
+    var runner = bc.session.runner(.{});
+    try runner.waitForFrame(bc.page_handle.?.frame_id, 2000, .{ .until = .domcontentloaded });
+    const root = bc.mainFrame() orelse unreachable;
+    try testing.expectEqual(1, root.child_frames.items.len);
+    const child = root.child_frames.items[0];
+    const child_id = id.toFrameId(child._frame_id);
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582", child.origin.?);
+
+    try ctx.processMessage(.{ .id = 72, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = &child_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    const child_ctx = try isolatedWorldContextId(bc, child);
+    const world = bc.isolated_worlds.items[0];
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582", world.contextFor(child).?.origin.key);
+
+    try testing.waitForPage(bc);
+    try testing.expectEqual(child, root.child_frames.items[0]);
+    try testing.expectEqualSlices(u8, "http://localhost:9582", child.origin.?);
+
+    // Same context (the child keeps its id), now on the navigated origin.
+    try testing.expectEqual(child_ctx, try isolatedWorldContextId(bc, child));
+    const world_context = world.contextFor(child) orelse return error.ContextNotFound;
+    try testing.expectEqual(child.js.origin, world_context.origin);
+    try testing.expectEqualSlices(u8, "http://localhost:9582", world_context.origin.key);
+
+    try ctx.processMessage(.{ .id = 73, .method = "Runtime.evaluate", .sessionId = "SID-X", .params = .{
+        .expression = "document.title",
+        .contextId = child_ctx,
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page one" } }, .{ .id = 73 });
 }
 
 // A committed root navigation tears the old Page down later, with the same
@@ -1618,7 +1735,7 @@ fn isolatedWorldContextId(bc: *CDP.BrowserContext, frame: *const Frame) !i32 {
     var ls: js.Local.Scope = undefined;
     js_context.localScope(&ls);
     defer ls.deinit();
-    return bc.inspector_session.inspector.getContextId(&ls.local);
+    return bc.inspector().getContextId(&ls.local);
 }
 
 test "cdp.frame: child frame metadata" {
@@ -2053,7 +2170,7 @@ test "cdp.frame: reload replays POST navigation" {
     _ = try cdp_inst.createBrowserContext();
     var bc = &cdp_inst.browser_context.?;
     bc.id = "BID-A6";
-    bc.session_id = "SID-X";
+    _ = try bc.attachPrimarySession("SID-X");
     bc.target_id = "TID-A6-0000000".*;
 
     // First navigation: POST a form-style payload to /echo_method.
@@ -2105,7 +2222,7 @@ test "cdp.frame: reload after POST→redirect drops the POST" {
     _ = try cdp_inst.createBrowserContext();
     var bc = &cdp_inst.browser_context.?;
     bc.id = "BID-A6R";
-    bc.session_id = "SID-XR";
+    _ = try bc.attachPrimarySession("SID-XR");
     bc.target_id = "TID-A6R-000000".*;
 
     // First navigation: POST /redirect_to_echo → 302 → GET /echo_method.
@@ -2369,7 +2486,7 @@ test "cdp.frame: first navigation of a pristine bootstrap about:blank navigates 
     defer ctx.deinit();
 
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-PRS", .target_id = "TID-PRS-000000".* });
-    bc.session_id = "SID-PRS";
+    _ = try bc.attachPrimarySession("SID-PRS");
     _ = try bc.session.createPage();
     const before = bc.mainFrame() orelse unreachable;
     try testing.expectEqualSlices(u8, "about:blank", before.url);
@@ -2398,7 +2515,7 @@ test "cdp.frame: anchor click sends Referer matching the originating page" {
     _ = try cdp_inst.createBrowserContext();
     var bc = &cdp_inst.browser_context.?;
     bc.id = "BID-A18";
-    bc.session_id = "SID-A18";
+    _ = try bc.attachPrimarySession("SID-A18");
     bc.target_id = "TID-A18-000000".*;
 
     // Initial navigation to the page hosting the anchor — driven directly via
@@ -2447,7 +2564,7 @@ test "cdp.frame: address-bar Page.navigate sends no Referer" {
     _ = try cdp_inst.createBrowserContext();
     var bc = &cdp_inst.browser_context.?;
     bc.id = "BID-A18B";
-    bc.session_id = "SID-A18B";
+    _ = try bc.attachPrimarySession("SID-A18B");
     bc.target_id = "TID-A18B-00000".*;
 
     {

@@ -23,6 +23,7 @@ const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const Page = @import("../../Page.zig");
 const units = @import("../../css/units.zig");
+const StyleManager = @import("../../StyleManager.zig");
 const Element = @import("../Element.zig");
 
 const String = lp.String;
@@ -65,7 +66,7 @@ pub const Unit = enum(u16) {
 const MAX_ANCESTOR_DEPTH = 32;
 
 pub fn detached(frame: *Frame) !*Length {
-    const arena = try frame._page.getArena(.tiny, "SVGLength");
+    const arena = try frame.page.getArena(.tiny, "SVGLength");
     errdefer arena.release();
     const self = try arena.create(Length);
     self.* = .{ ._rc = .{}, ._arena = arena };
@@ -279,7 +280,7 @@ fn nearestSvgViewport(element: *Element) ?*Element {
 }
 
 fn pageViewportDimension(direction: Direction, frame: *Frame) f64 {
-    const viewport = frame._page.getViewport();
+    const viewport = frame.page.getViewport();
     return switch (direction) {
         .horizontal => @floatFromInt(viewport.width),
         .vertical => @floatFromInt(viewport.height),
@@ -290,16 +291,21 @@ fn pageViewportDimension(direction: Direction, frame: *Frame) f64 {
 fn resolveParsedLength(parsed: Parsed, element: *Element, direction: Direction, frame: *Frame, depth: u8) f64 {
     const factor = switch (parsed.unit) {
         .percentage => ancestorViewportDimensionAt(element, direction, frame, depth) / 100.0,
-        .em => element.ownerFrame(frame)._style_manager.computedFontSize(element),
-        .ex => element.ownerFrame(frame)._style_manager.computedFontSize(element) / 2.0,
+        .em => elementFontSize(element, frame),
+        .ex => elementFontSize(element, frame) / 2.0,
         else => units.absoluteLengthFactor(toShared(parsed.unit)).?,
     };
     return parsed.value * factor;
 }
 
 fn fontSize(self: *const Length, frame: *Frame) f64 {
-    const element = self._element orelse return frame._style_manager.computedFontSize(null);
-    return element.ownerFrame(frame)._style_manager.computedFontSize(element);
+    const element = self._element orelse return StyleManager.DEFAULT_FONT_SIZE;
+    return elementFontSize(element, frame);
+}
+
+fn elementFontSize(element: *Element, frame: *Frame) f64 {
+    const owner = element.ownerFrame(frame) orelse return StyleManager.DEFAULT_FONT_SIZE;
+    return owner._style_manager.computedFontSize(element);
 }
 
 const Parsed = struct {

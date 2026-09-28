@@ -31,7 +31,9 @@ const WS = @import("WS.zig");
 const http = @import("http.zig");
 const Link = @import("Link.zig");
 const Driver = @import("Driver.zig");
+
 const Inbox = @import("../Inbox.zig");
+const http_command = @import("bidi/http_command.zig");
 
 const log = lp.log;
 const posix = std.posix;
@@ -178,7 +180,7 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
         .webdriver => protocols.webdriver = true,
     };
 
-    const request_capacity = 2 * config.maxConnections();
+    const request_capacity = 3 * config.maxConnections();
     var worker_queue: std.ArrayList(WorkerRequest) = try .initCapacity(allocator, request_capacity);
     errdefer worker_queue.deinit(allocator);
 
@@ -560,6 +562,43 @@ pub fn quitSession(self: *Server, worker: *Worker) void {
     }
 }
 
+// An HTTP command for a session's worker. We need to park the connection, push
+// the request to the worker, and park the connection until we get the response
+// to send back as the HTTP response.
+pub fn parkRequest(self: *Server, worker: *Worker, conn: *Connection, keepalive: bool, arena: *lp.Arena, command: http_command.Command) void {
+    if (comptime lp.IS_DEBUG) {
+        lp.assert(worker.http_request == null, "Server.parkRequest busy", .{});
+    }
+
+    // stop monitoring the socket
+    self.detachConnection(conn);
+
+    worker.http_request = .{ .conn = conn, .keepalive = keepalive };
+    // a session with a command in flight isn't idle, whatever its link
+    self.clearIdle(worker);
+    // the command lives in arena, which the message now owns
+    worker.inbox.push(arena, .{ .bidi_http = command });
+    if (worker.driver) |driver| {
+        driver.wakeup();
+    }
+}
+
+fn deliverResponse(self: *Server, worker: *Worker, response: Connection.Writing.Pooled, now: u64) void {
+    const parked = worker.http_request orelse {
+        // the worker answers only what it was sent, once
+        if (comptime lp.IS_DEBUG) {
+            lp.assert(false, "Server.deliverResponse unparked", .{});
+        }
+        response.arena.release();
+        return;
+    };
+    worker.http_request = null;
+    http.resumeParked(self, parked.conn, parked.keepalive, .{ .pooled = response }, now);
+    if (worker.link == null) {
+        self.markIdle(worker, now);
+    }
+}
+
 // Into the worker's mailbox.
 fn push(self: *Server, worker: *Worker, payload: Inbox.Message.Payload) void {
     const arena = self.app.arena_pool.acquire(.tiny, "worker push") catch |err| switch (err) {
@@ -589,7 +628,8 @@ fn drainWorkerQueue(self: *Server, now: u64) void {
         switch (request.op) {
             .attach => |attach| self.attachWorker(request.worker, attach.driver, attach.link, now),
             .release_link => |notify| self.releaseLink(request.worker, notify, now),
-            .release => |notify| self.releaseWorker(request.worker, notify),
+            .release => |notify| self.releaseWorker(request.worker, notify, now),
+            .respond => |response| self.deliverResponse(request.worker, response, now),
         }
     }
     self.worker_drain.clearRetainingCapacity();
@@ -639,6 +679,13 @@ fn markIdle(self: *Server, worker: *Worker, now: u64) void {
         // ending already (or never a HTTP session)
         return;
     }
+
+    if (worker.http_request != null) {
+        // waiting for a response, not idle, once we [start] to deliver the
+        // response, then the clock will start ticking again.
+        return;
+    }
+
     const timeout = self.session_timeout_ms orelse {
         // reaping disabled: the session lives until DELETE /session/{id}
         return;
@@ -673,9 +720,14 @@ fn releaseLink(self: *Server, worker: *Worker, notify: *std.Io.Event, now: u64) 
     notify.set(lp.io);
 }
 
-fn releaseWorker(self: *Server, worker: *Worker, notify: *std.Io.Event) void {
+fn releaseWorker(self: *Server, worker: *Worker, notify: *std.Io.Event, now: u64) void {
     self.unmonitorLink(worker);
     worker.link = null;
+    if (worker.http_request) |parked| {
+        // the worker stopped without answering (DELETE, shutdown, a failed init)
+        worker.http_request = null;
+        http.resumeParked(self, parked.conn, false, .{ .static = http.session_ended_response }, now);
+    }
     self.releaseWorkerSlot(worker);
     // The worker is free to deinit its driver and close the fd from here.
     notify.set(lp.io);
@@ -792,8 +844,9 @@ fn fdBudget(config: *const Config) usize {
         };
         break :blk limit.cur;
     };
-    // put some limit incase of a unlimited or very large rlimit
-    const ceiling = (64 * 1024 * 1024) / @max(@as(u64, config.cdpMaxHTTPMessageSize()), 1);
+    // put some limit incase of a unlimited or very large rlimit. A connection
+    // only commits INITIAL_BUFFER_SIZE up front
+    const ceiling = (64 * 1024 * 1024) / http.INITIAL_BUFFER_SIZE;
     const budget = @min(soft, ceiling) -| reserve;
     return @intCast(@max(budget, 8));
 }
@@ -907,7 +960,7 @@ const EPoll = struct {
     // the low bit set (both are word-aligned, so the bit is free).
     const WS_TAG: usize = 1;
 
-    fn monitorHTTP(self: *const EPoll, conn: *Connection) !void {
+    pub fn monitorHTTP(self: *const EPoll, conn: *Connection) !void {
         var event = linux.epoll_event{
             .data = .{ .ptr = @intFromPtr(conn) },
             .events = READ_EVENTS,
@@ -1050,7 +1103,7 @@ const KQueue = struct {
         return self.change(&.{socketEvent(fd, EVFILT.READ, EV.DELETE, 0)});
     }
 
-    fn monitorHTTP(self: *const KQueue, conn: *Connection) !void {
+    pub fn monitorHTTP(self: *const KQueue, conn: *Connection) !void {
         return self.monitor(conn.socket, EVFILT.READ, @intFromPtr(conn));
     }
 
@@ -1214,6 +1267,14 @@ pub const Worker = struct {
     deadline: ?u64 = null,
     idle_node: DoublyLinkedList.Node = .{},
 
+    // The HTTP WebDriver command the worker is answering.
+    http_request: ?ParkedRequest = null,
+
+    const ParkedRequest = struct {
+        conn: *Connection,
+        keepalive: bool,
+    };
+
     const Pool = struct {
         slab: []Worker,
         free: DoublyLinkedList,
@@ -1334,6 +1395,12 @@ pub const Worker = struct {
         notify.waitUncancelable(lp.io);
     }
 
+    // Worker -> loop: the answer to http_request, a complete HTTP response in
+    // a pooled arena. The loop releases it once it's written.
+    pub fn respond(self: *Worker, response: Connection.Writing.Pooled) void {
+        self.notifyLoop(.{ .respond = response });
+    }
+
     fn notifyLoop(self: *Worker, op: WorkerRequest.Op) void {
         const server = self.server;
         server.worker_mutex.lockUncancelable(lp.io);
@@ -1352,6 +1419,7 @@ const WorkerRequest = struct {
         release: *std.Io.Event,
         release_link: *std.Io.Event,
         attach: struct { driver: Driver, link: ?*Link },
+        respond: Connection.Writing.Pooled,
     };
 };
 
@@ -1374,13 +1442,30 @@ test "server: buildJSONVersionResponse" {
     try testing.expect(std.mem.indexOf(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
 }
 
-test "Client: http invalid request" {
-    testing.silenceLog(&.{.cdp});
-
+test "Client: http header past the initial buffer" {
     var c = try createTestClient();
     defer c.deinit();
 
+    // A header this size doesn't fit the buffer a connection starts with; it
+    // grows to take it rather than rejecting the request.
     const res = try c.httpRequest("GET /over/9000 HTTP/1.1\r\n" ++ "Header: " ++ ("a" ** 4100) ++ "\r\n\r\n");
+    try testing.expectEqual("HTTP/1.1 404 \r\n" ++
+        "Connection: Close\r\n" ++
+        "Content-Length: 9\r\n\r\n" ++
+        "Not found", res);
+}
+
+test "Client: http request past the limit" {
+    var c = try createTestClient();
+    defer c.deinit();
+
+    // The body never arrives: Content-Length alone is enough to turn it down,
+    // so we never read (or make room for) any of it.
+    var buf: [128]u8 = undefined;
+    const request = try std.fmt.bufPrint(&buf, "POST /session HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{
+        @as(u64, testing.test_app.config.cdpMaxHTTPMessageSize()) + 1,
+    });
+    const res = try c.httpRequest(request);
     try testing.expectEqual("HTTP/1.1 413 \r\n" ++
         "Connection: Close\r\n" ++
         "Content-Length: 17\r\n\r\n" ++
@@ -1901,6 +1986,691 @@ test "server: HTTP session bootstrap errors" {
     try deleteHTTPSession("00000000-0000-4000-8000-000000000000", false);
 }
 
+test "server: HTTP navigate" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    // One keepalive connection throughout: an answered command's connection
+    // is back on the loop, ready for the next.
+    var c = try createTestClient();
+    defer c.deinit();
+    {
+        const res = try sessionCommand(&c, "POST", &session_id, "/url", "not json");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"invalid argument\",\"message\":\"invalid body\",\"stacktrace\":\"\"}}"));
+    }
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html";
+    {
+        const res = try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}");
+        try testing.expectEqual("HTTP/1.1 200 OK\r\n" ++
+            "Content-Length: 14\r\n" ++
+            "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+            "{\"value\":null}", res);
+    }
+
+    // it's the browsing context a websocket on the session sees
+    var ws = try createTestClient();
+    defer ws.deinit();
+    var path_buf: [64]u8 = undefined;
+    try ws.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+    try ws.bidiCommand("{\"id\":1,\"method\":\"browsingContext.getTree\"}");
+    const msg = try ws.readWebsocketMessage() orelse return error.NoMessage;
+    defer if (msg.cleanup_fragment) ws.reader.cleanup();
+    try testing.expect(std.mem.indexOf(u8, msg.data, "\"url\":\"" ++ url ++ "\"") != null);
+}
+
+test "server: HTTP page commands" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    // the browsing context is opened by the first command that needs it
+    try testing.expectEqual("{\"value\":\"about:blank\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
+
+    const handle = blk: {
+        const body = responseBody(try sessionCommand(&c, "GET", &session_id, "/window", ""));
+        try testing.expect(std.mem.startsWith(u8, body, "{\"value\":\""));
+        break :blk try testing.arena_allocator.dupe(u8, body[10..46]);
+    };
+    {
+        const body = responseBody(try sessionCommand(&c, "GET", &session_id, "/window/handles", ""));
+        try testing.expectEqual(try std.fmt.allocPrint(testing.arena_allocator, "{{\"value\":[\"{s}\"]}}", .{handle}), body);
+    }
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/bidi/input.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+    try testing.expectEqual("{\"value\":\"" ++ url ++ "\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
+    try testing.expectEqual("{\"value\":\"bidi input\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/title", "")));
+    {
+        const body = responseBody(try sessionCommand(&c, "GET", &session_id, "/source", ""));
+        try testing.expect(std.mem.startsWith(u8, body, "{\"value\":\"<!DOCTYPE html>\\n<html><head><title>bidi input</title>"));
+    }
+    {
+        const res = try c.httpRequestAlloc(try std.fmt.allocPrint(testing.arena_allocator, "GET /session/{s}/screenshot HTTP/1.1\r\n\r\n", .{&session_id}));
+        defer testing.allocator.free(res);
+        // base64 of the PNG signature
+        try testing.expect(std.mem.startsWith(u8, responseBody(res), "{\"value\":\"iVBORw0KGgo"));
+    }
+
+    // a click on the button, then a held key. The element origin is
+    // resolved after the pause parks the actions.
+    {
+        const actions = "{\"actions\":[" ++
+            "{\"type\":\"pointer\",\"id\":\"mouse\",\"parameters\":{\"pointerType\":\"mouse\"},\"actions\":[" ++
+            "{\"type\":\"pause\",\"duration\":20}," ++
+            "{\"type\":\"pointerMove\",\"x\":0,\"y\":0,\"origin\":{\"" ++ http_command.element_key ++ "\":\"1\"}}," ++
+            "{\"type\":\"pointerDown\",\"button\":0},{\"type\":\"pointerUp\",\"button\":0}]}," ++
+            "{\"type\":\"key\",\"id\":\"kb\",\"actions\":[{\"type\":\"pause\"},{\"type\":\"pause\"},{\"type\":\"pause\"},{\"type\":\"keyDown\",\"value\":\"a\"}]}]}";
+
+        // an element reference is a sharedId, so take #btn's over BiDi
+        var ws = try createTestClient();
+        defer ws.deinit();
+        var path_buf: [64]u8 = undefined;
+        try ws.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+        try ws.bidiCommand(try std.fmt.allocPrint(testing.arena_allocator,
+            \\{{"id":1,"method":"browsingContext.locateNodes","params":{{"context":"{s}","locator":{{"type":"css","value":"#btn"}}}}}}
+        , .{handle}));
+        try expectWebsocketContains(&ws, "\"sharedId\":\"1\"");
+
+        try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/actions", actions)));
+        try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "DELETE", &session_id, "/actions", "")));
+
+        try ws.bidiCommand(try std.fmt.allocPrint(testing.arena_allocator,
+            \\{{"id":2,"method":"script.evaluate","params":{{"expression":"window.events.join(' ')","awaitPromise":false,"target":{{"context":"{s}"}}}}}}
+        , .{handle}));
+        try expectWebsocketContains(&ws, "\"value\":\"mousemove@btn mousedown@btn mouseup@btn click@btn keydown:a@btn keyup:a@btn\"");
+    }
+    {
+        const res = try sessionCommand(&c, "POST", &session_id, "/actions", "{\"actions\":[{\"type\":\"key\",\"id\":\"kb\",\"actions\":[{\"type\":\"keyDown\"}]}]}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"invalid argument\"") != null);
+    }
+
+    // the reload lands on the same document
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/refresh", "{}")));
+    try testing.expectEqual("{\"value\":\"" ++ url ++ "\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
+}
+
+test "server: HTTP element commands" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/webdriver/elements.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+
+    // a reference nothing ever handed out
+    {
+        const res = try sessionCommand(&c, "GET", &session_id, "/element/99/text", "");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"no such element\"") != null);
+    }
+
+    {
+        const res = try findElements(&c, &session_id, "css selector", "[");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"invalid selector\"") != null);
+    }
+
+    const msg = try findElement(&c, &session_id, "css selector", "#msg");
+    try testing.expectEqual("{\"value\":\"hello\"}", try elementCommand(&c, &session_id, msg, "/text"));
+    try testing.expectEqual("{\"value\":\"p\"}", try elementCommand(&c, &session_id, msg, "/name"));
+    try testing.expectEqual("{\"value\":\"msg\"}", try elementCommand(&c, &session_id, msg, "/property/id"));
+    try testing.expectEqual("{\"value\":\"P\"}", try elementCommand(&c, &session_id, msg, "/property/tagName"));
+    try testing.expectEqual("{\"value\":\"rgb(1, 2, 3)\"}", try elementCommand(&c, &session_id, msg, "/css/color"));
+    try testing.expectEqual("{\"value\":null}", try elementCommand(&c, &session_id, msg, "/attribute/nope"));
+
+    // the same node keeps its reference
+    try testing.expectEqual(msg, try findElement(&c, &session_id, "css selector", "#msg"));
+
+    const box = try findElement(&c, &session_id, "css selector", "#box");
+    try testing.expectEqual("{\"value\":\"1\"}", try elementCommand(&c, &session_id, box, "/attribute/data-x"));
+    {
+        const body = try elementCommand(&c, &session_id, box, "/rect");
+        try testing.expect(std.mem.startsWith(u8, body, "{\"value\":{\"x\":"));
+        try testing.expect(std.mem.indexOf(u8, body, "\"width\":40") != null);
+        try testing.expect(std.mem.indexOf(u8, body, "\"height\":20") != null);
+    }
+
+    // a boolean attribute is "true", never its value
+    const check = try findElement(&c, &session_id, "css selector", "#check");
+    try testing.expectEqual("{\"value\":\"true\"}", try elementCommand(&c, &session_id, check, "/attribute/checked"));
+    try testing.expectEqual("{\"value\":true}", try elementCommand(&c, &session_id, check, "/selected"));
+    try testing.expectEqual("{\"value\":true}", try elementCommand(&c, &session_id, check, "/enabled"));
+    try testing.expectEqual("{\"value\":false}", try elementCommand(&c, &session_id, msg, "/selected"));
+
+    const off = try findElement(&c, &session_id, "css selector", "#off");
+    try testing.expectEqual("{\"value\":false}", try elementCommand(&c, &session_id, off, "/enabled"));
+
+    {
+        const selected = try findElement(&c, &session_id, "css selector", "#opt_a");
+        try testing.expectEqual("{\"value\":true}", try elementCommand(&c, &session_id, selected, "/selected"));
+        const other = try findElement(&c, &session_id, "css selector", "#opt_b");
+        try testing.expectEqual("{\"value\":false}", try elementCommand(&c, &session_id, other, "/selected"));
+    }
+
+    // the strategies no selector engine covers
+    {
+        const link = try findElement(&c, &session_id, "link text", "first link");
+        try testing.expectEqual("{\"value\":\"first link\"}", try elementCommand(&c, &session_id, link, "/text"));
+
+        const partial = try findElement(&c, &session_id, "partial link text", "second");
+        try testing.expectEqual("{\"value\":\"second link\"}", try elementCommand(&c, &session_id, partial, "/text"));
+
+        // tag names match whatever case they're asked in
+        const res = try findElements(&c, &session_id, "tag name", "A");
+        try testing.expectEqual(2, (try elementReferences(responseBody(res))).len);
+
+        // a tag the Tag enum doesn't know takes the string-compare path
+        const custom = try findElement(&c, &session_id, "tag name", "my-widget");
+        try testing.expectEqual("{\"value\":\"custom\"}", try elementCommand(&c, &session_id, custom, "/text"));
+    }
+    {
+        const first = try findElement(&c, &session_id, "xpath", "//p[@class='item']");
+        try testing.expectEqual("{\"value\":\"hello\"}", try elementCommand(&c, &session_id, first, "/text"));
+    }
+
+    // scoped to an element: the two <p> inside #box, not the rest of the page
+    {
+        const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}/elements", .{box});
+        const res = responseBody(try sessionCommand(&c, "POST", &session_id, path, "{\"using\":\"css selector\",\"value\":\".item\"}"));
+        const references = try elementReferences(res);
+        try testing.expectEqual(2, references.len);
+        try testing.expectEqual(msg, references[0]);
+    }
+    {
+        const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}/element", .{box});
+        const res = responseBody(try sessionCommand(&c, "POST", &session_id, path, "{\"using\":\"tag name\",\"value\":\"p\"}"));
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, res, .{});
+        try testing.expectEqual(msg, parsed.object.get("value").?.object.get(http_command.element_key).?.string);
+    }
+
+    // nothing is focused, so the active element is the body
+    {
+        const body = responseBody(try sessionCommand(&c, "GET", &session_id, "/element/active", ""));
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, body, .{});
+        const active = parsed.object.get("value").?.object.get(http_command.element_key).?.string;
+        try testing.expectEqual("{\"value\":\"body\"}", try elementCommand(&c, &session_id, active, "/name"));
+    }
+
+    // a reference to a node that's been taken out of the document
+    {
+        const handle = blk: {
+            const body = responseBody(try sessionCommand(&c, "GET", &session_id, "/window", ""));
+            break :blk try testing.arena_allocator.dupe(u8, body[10..46]);
+        };
+
+        var ws = try createTestClient();
+        defer ws.deinit();
+        var path_buf: [64]u8 = undefined;
+        try ws.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+        try ws.bidiCommand(try std.fmt.allocPrint(testing.arena_allocator,
+            \\{{"id":1,"method":"script.evaluate","params":{{"expression":"document.getElementById('msg').remove()","awaitPromise":false,"target":{{"context":"{s}"}}}}}}
+        , .{handle}));
+        try expectWebsocketContains(&ws, "\"type\":\"success\"");
+
+        const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}/text", .{msg});
+        const res = try sessionCommand(&c, "GET", &session_id, path, "");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"stale element reference\"") != null);
+    }
+}
+
+test "server: HTTP element input" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/webdriver/input.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+
+    const take_events = "var e = window.events.join(' '); window.events = []; return e;";
+
+    const btn = try findElement(&c, &session_id, "css selector", "#btn");
+    try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, btn, "/click", "{}")));
+    try testing.expectEqual("{\"value\":\"focus@btn click@btn\"}", try executeSync(&c, &session_id, take_events, "[]"));
+
+    {
+        const gone = try findElement(&c, &session_id, "css selector", "#gone");
+        const res = try elementPost(&c, &session_id, gone, "/click", "{}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"element not interactable\"") != null);
+    }
+
+    // clear: focus, the edit's input and change, blur
+    const name = try findElement(&c, &session_id, "css selector", "#name");
+    try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, name, "/clear", "{}")));
+    try testing.expectEqual("{\"value\":\"\"}", try elementCommand(&c, &session_id, name, "/property/value"));
+    try testing.expectEqual("{\"value\":\"blur@btn focus@name input@name change@name blur@name\"}", try executeSync(&c, &session_id, take_events, "[]"));
+
+    // already empty: nothing happens at all
+    try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, name, "/clear", "{}")));
+    try testing.expectEqual("{\"value\":\"\"}", try executeSync(&c, &session_id, take_events, "[]"));
+
+    for ([_][]const u8{ "#ro", "#check" }) |selector| {
+        const element = try findElement(&c, &session_id, "css selector", selector);
+        const res = try elementPost(&c, &session_id, element, "/clear", "{}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"invalid element state\"") != null);
+    }
+
+    // a modifier stays down until it's typed again
+    try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, name, "/value", "{\"text\":\"\\uE008a\\uE008b\"}")));
+    try testing.expectEqual("{\"value\":\"Ab\"}", try elementCommand(&c, &session_id, name, "/property/value"));
+    try testing.expectEqual(
+        "{\"value\":\"focus@name keydown:S-Shift@name keydown:S-A@name input@name keydown:b@name input@name\"}",
+        try executeSync(&c, &session_id, take_events, "[]"),
+    );
+
+    // focusing puts the caret at the end
+    {
+        const area = try findElement(&c, &session_id, "css selector", "#area");
+        try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, area, "/value", "{\"text\":\"!\"}")));
+        try testing.expectEqual("{\"value\":\"text!\"}", try elementCommand(&c, &session_id, area, "/property/value"));
+    }
+
+    {
+        const plain = try findElement(&c, &session_id, "css selector", "#plain");
+        const res = try elementPost(&c, &session_id, plain, "/value", "{\"text\":\"x\"}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"element not interactable\"") != null);
+    }
+
+    // an option is clicked by selecting it
+    {
+        _ = try executeSync(&c, &session_id, take_events, "[]");
+        const opt_b = try findElement(&c, &session_id, "css selector", "#opt_b");
+        try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, opt_b, "/click", "{}")));
+        try testing.expectEqual("{\"value\":true}", try elementCommand(&c, &session_id, opt_b, "/selected"));
+        const opt_a = try findElement(&c, &session_id, "css selector", "#opt_a");
+        try testing.expectEqual("{\"value\":false}", try elementCommand(&c, &session_id, opt_a, "/selected"));
+        try testing.expectEqual("{\"value\":\"blur@area focus@pick click@opt_b input@pick change@pick\"}", try executeSync(&c, &session_id, take_events, "[]"));
+    }
+
+    // a click that navigates is answered once the new page has loaded
+    {
+        const next = try findElement(&c, &session_id, "css selector", "#next");
+        try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, next, "/click", "{}")));
+        try testing.expectEqual("{\"value\":\"webdriver elements\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/title", "")));
+    }
+
+    // and so is Enter in a form
+    {
+        try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+        const q = try findElement(&c, &session_id, "css selector", "#q");
+        try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, q, "/value", "{\"text\":\"hi\\n\"}")));
+        try testing.expectEqual(
+            "{\"value\":\"http://127.0.0.1:9582/src/browser/tests/webdriver/elements.html?q=hi\"}",
+            responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")),
+        );
+    }
+}
+
+fn elementPost(c: *TestClient, session_id: *const [36]u8, id: []const u8, suffix: []const u8, body: []const u8) ![]const u8 {
+    const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}{s}", .{ id, suffix });
+    return sessionCommand(c, "POST", session_id, path, body);
+}
+
+test "server: HTTP execute script" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/webdriver/elements.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+
+    try testing.expectEqual(
+        "{\"value\":{\"script\":30000,\"pageLoad\":300000,\"implicit\":0}}",
+        responseBody(try sessionCommand(&c, "GET", &session_id, "/timeouts", "")),
+    );
+
+    // the script is a function body, so `arguments` is bound and `return` works
+    try testing.expectEqual("{\"value\":5}", try executeSync(&c, &session_id, "return arguments[0] + arguments[1];", "[2,3]"));
+    try testing.expectEqual("{\"value\":\"hi\"}", try executeSync(&c, &session_id, "return 'hi';", "[]"));
+    try testing.expectEqual("{\"value\":true}", try executeSync(&c, &session_id, "return 1 < 2;", "[]"));
+
+    // a whole number isn't 2e0, and what JSON can't hold is null
+    try testing.expectEqual("{\"value\":2}", try executeSync(&c, &session_id, "return 2.0;", "[]"));
+    try testing.expectEqual("{\"value\":1.5}", try executeSync(&c, &session_id, "return 1.5;", "[]"));
+    try testing.expectEqual("{\"value\":null}", try executeSync(&c, &session_id, "return 0/0;", "[]"));
+
+    // undefined, and a body that doesn't return at all
+    try testing.expectEqual("{\"value\":null}", try executeSync(&c, &session_id, "return undefined;", "[]"));
+    try testing.expectEqual("{\"value\":null}", try executeSync(&c, &session_id, "var x = 1;", "[]"));
+
+    try testing.expectEqual(
+        "{\"value\":{\"a\":1,\"b\":[true,null,\"x\"]}}",
+        try executeSync(&c, &session_id, "return {a: 1, b: [true, null, 'x']};", "[]"),
+    );
+
+    // a function has no own enumerable properties, so it clones to {}
+    try testing.expectEqual("{\"value\":{}}", try executeSync(&c, &session_id, "return function() {};", "[]"));
+
+    // toJSON wins over the property walk
+    try testing.expectEqual(
+        "{\"value\":\"1970-01-01T00:00:00.000Z\"}",
+        try executeSync(&c, &session_id, "return new Date(0);", "[]"),
+    );
+
+    // an element comes back as a reference, and goes back in as the node
+    {
+        const body = try executeSync(&c, &session_id, "return document.getElementById('msg');", "[]");
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, body, .{});
+        const reference = parsed.object.get("value").?.object.get(http_command.element_key).?.string;
+
+        // the same node the find endpoints hand out
+        try testing.expectEqual(reference, try findElement(&c, &session_id, "css selector", "#msg"));
+        try testing.expectEqual("{\"value\":\"hello\"}", try elementCommand(&c, &session_id, reference, "/text"));
+
+        const args = try std.fmt.allocPrint(testing.arena_allocator, "[{{\"" ++ http_command.element_key ++ "\":\"{s}\"}}]", .{reference});
+        try testing.expectEqual("{\"value\":\"msg\"}", try executeSync(&c, &session_id, "return arguments[0].id;", args));
+    }
+
+    // a collection is an array of references, a non-element node is a bare {}
+    {
+        const body = try executeSync(&c, &session_id, "return document.querySelectorAll('.item');", "[]");
+        try testing.expectEqual(2, (try elementReferences(body)).len);
+        try testing.expectEqual("{\"value\":[{}]}", try executeSync(&c, &session_id, "return [document.getElementById('msg').firstChild];", "[]"));
+    }
+
+    // a reference nothing handed out
+    {
+        const res = try executeRaw(&c, &session_id, "sync", "return 1;", "[{\"" ++ http_command.element_key ++ "\":\"99\"}]");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"no such element\"") != null);
+    }
+
+    // a node in another document is stale, connected or not
+    {
+        const body = try executeSync(&c, &session_id, "return document.getElementById('child').contentDocument.getElementById('inner');", "[]");
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, body, .{});
+        const reference = parsed.object.get("value").?.object.get(http_command.element_key).?.string;
+
+        const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}/text", .{reference});
+        const res = try sessionCommand(&c, "GET", &session_id, path, "");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"stale element reference\"") != null);
+
+        const args = try std.fmt.allocPrint(testing.arena_allocator, "[{{\"" ++ http_command.element_key ++ "\":\"{s}\"}}]", .{reference});
+        const arg_res = try executeRaw(&c, &session_id, "sync", "return 1;", args);
+        try testing.expect(std.mem.indexOf(u8, arg_res, "\"error\":\"stale element reference\"") != null);
+    }
+
+    // a throw fails the command; it isn't reported inside a successful result
+    {
+        const res = try executeRaw(&c, &session_id, "sync", "throw new Error('nope');", "[]");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 Internal Server Error\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "Error: nope") != null);
+    }
+
+    {
+        const res = try executeRaw(&c, &session_id, "sync", "return (", "[]");
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "SyntaxError") != null);
+    }
+
+    // a cycle is an error, not a collapsed value like a RemoteValue's
+    {
+        const res = try executeRaw(&c, &session_id, "sync", "var a = {}; a.self = a; return a;", "[]");
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "circular reference") != null);
+    }
+
+    // a returned promise is resolved before we answer
+    try testing.expectEqual("{\"value\":7}", try executeSync(&c, &session_id, "return Promise.resolve(7);", "[]"));
+    try testing.expectEqual(
+        "{\"value\":8}",
+        try executeSync(&c, &session_id, "return new Promise(function(r) { setTimeout(function() { r(8); }, 5); });", "[]"),
+    );
+    {
+        const res = try executeRaw(&c, &session_id, "sync", "return Promise.reject(new Error('late'));", "[]");
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "Error: late") != null);
+    }
+
+    // async: the callback is the last argument, and only its first call counts
+    try testing.expectEqual("{\"value\":42}", try executeAsync(&c, &session_id, "arguments[0](42);", "[]"));
+    try testing.expectEqual(
+        "{\"value\":42}",
+        try executeAsync(&c, &session_id, "var cb = arguments[arguments.length - 1]; cb(arguments[0] * 2);", "[21]"),
+    );
+    try testing.expectEqual(
+        "{\"value\":\"late\"}",
+        try executeAsync(&c, &session_id, "var cb = arguments[0]; setTimeout(function() { cb('late'); cb('again'); }, 5);", "[]"),
+    );
+    // what an async body returns is ignored
+    try testing.expectEqual("{\"value\":null}", try executeAsync(&c, &session_id, "arguments[0](); return 9;", "[]"));
+
+    // only the first call counts; the rest are a no-op on a settled promise
+    try testing.expectEqual("{\"value\":1}", try executeAsync(&c, &session_id, "arguments[0](1); arguments[0](2);", "[]"));
+
+    // The body is promise-called, so throwing rejects it and fails the
+    // command even though the callback already ran -- and that failure must
+    // not be a *second* answer on a connection we already handed back.
+    {
+        const res = try executeRaw(&c, &session_id, "async", "arguments[0](1); throw new Error('too late');", "[]");
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "Error: too late") != null);
+    }
+    try testing.expectEqual("{\"value\":2}", try executeSync(&c, &session_id, "return 2;", "[]"));
+
+    // a throw before the callback still fails the command
+    {
+        const res = try executeRaw(&c, &session_id, "async", "throw new Error('early');", "[]");
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "Error: early") != null);
+    }
+
+    // a script that never completes is answered by the script timeout
+    {
+        try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/timeouts", "{\"script\":50}")));
+        try testing.expectEqual(
+            "{\"value\":{\"script\":50,\"pageLoad\":300000,\"implicit\":0}}",
+            responseBody(try sessionCommand(&c, "GET", &session_id, "/timeouts", "")),
+        );
+
+        const res = try executeRaw(&c, &session_id, "async", "// never calls back", "[]");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 Internal Server Error\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"script timeout\"") != null);
+
+        // a sync script whose promise never settles times out the same way
+        const promise = try executeRaw(&c, &session_id, "sync", "return new Promise(function() {});", "[]");
+        try testing.expect(std.mem.indexOf(u8, promise, "\"error\":\"script timeout\"") != null);
+
+        // A script that resolves AFTER it timed out: answering is not the
+        // promise settling, so the Pending has to outlive its own answer.
+        // Freeing it on the timeout leaves V8 holding our callbacks on a
+        // live promise and the late resolve lands in freed memory -- which a
+        // release build segfaults on, but the debug allocator here does not
+        // trap, so this covers the path rather than proving the invariant.
+        // selenium/http/demo.js in ../demo is what actually catches it.
+        const late = try executeRaw(&c, &session_id, "async", "var cb = arguments[0]; setTimeout(function() { window.__late = true; cb('way late'); }, 150);", "[]");
+        try testing.expect(std.mem.indexOf(u8, late, "\"error\":\"script timeout\"") != null);
+        // the assertion only means anything if the stale resolve actually ran
+        var ran = false;
+        for (0..200) |_| {
+            if (std.mem.eql(u8, "{\"value\":true}", try executeSync(&c, &session_id, "return window.__late === true;", "[]"))) {
+                ran = true;
+                break;
+            }
+            lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
+        }
+        try testing.expect(ran);
+        try testing.expectEqual("{\"value\":\"alive\"}", try executeSync(&c, &session_id, "return 'alive';", "[]"));
+    }
+
+    // null turns the script timeout off
+    {
+        try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/timeouts", "{\"script\":null}")));
+        try testing.expectEqual(
+            "{\"value\":{\"script\":null,\"pageLoad\":300000,\"implicit\":0}}",
+            responseBody(try sessionCommand(&c, "GET", &session_id, "/timeouts", "")),
+        );
+        try testing.expectEqual("{\"value\":1}", try executeSync(&c, &session_id, "return 1;", "[]"));
+    }
+
+    // Navigating out from under a running script answers it. The Pending
+    // stays alive past that answer -- V8 still holds its callback -- until
+    // the frame, and with it the context, is destroyed.
+    {
+        const handle = blk: {
+            const body = responseBody(try sessionCommand(&c, "GET", &session_id, "/window", ""));
+            break :blk try testing.arena_allocator.dupe(u8, body[10..46]);
+        };
+
+        var ws = try createTestClient();
+        defer ws.deinit();
+        var path_buf: [64]u8 = undefined;
+        try ws.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+
+        // the script never calls back, so its connection parks
+        var parked = try createTestClient();
+        defer parked.deinit();
+        try writeSessionCommand(&parked, "POST", &session_id, "/execute/async", "{\"script\":\"// never calls back\",\"args\":[]}");
+        lp.io.sleep(.fromMilliseconds(50), .awake) catch {};
+
+        try ws.bidiCommand(try std.fmt.allocPrint(testing.arena_allocator,
+            \\{{"id":1,"method":"browsingContext.navigate","params":{{"context":"{s}","url":"about:blank","wait":"complete"}}}}
+        , .{handle}));
+
+        const res = try parked.httpRequest("");
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "document was unloaded") != null);
+    }
+}
+
+// POST /execute/{sync,async}: the raw response, so a test can assert on an
+// error too.
+fn executeRaw(c: *TestClient, session_id: *const [36]u8, kind: []const u8, script: []const u8, args: []const u8) ![]const u8 {
+    const arena = testing.arena_allocator;
+    const quoted = try std.json.Stringify.valueAlloc(arena, script, .{});
+    const body = try std.fmt.allocPrint(arena, "{{\"script\":{s},\"args\":{s}}}", .{ quoted, args });
+    const path = try std.fmt.allocPrint(arena, "/execute/{s}", .{kind});
+    return sessionCommand(c, "POST", session_id, path, body);
+}
+
+fn executeSync(c: *TestClient, session_id: *const [36]u8, script: []const u8, args: []const u8) ![]const u8 {
+    return responseBody(try executeRaw(c, session_id, "sync", script, args));
+}
+
+fn executeAsync(c: *TestClient, session_id: *const [36]u8, script: []const u8, args: []const u8) ![]const u8 {
+    return responseBody(try executeRaw(c, session_id, "async", script, args));
+}
+
+fn findElement(c: *TestClient, session_id: *const [36]u8, using: []const u8, value: []const u8) ![]const u8 {
+    const body = try std.fmt.allocPrint(testing.arena_allocator, "{{\"using\":\"{s}\",\"value\":\"{s}\"}}", .{ using, value });
+    const res = responseBody(try sessionCommand(c, "POST", session_id, "/element", body));
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, res, .{});
+    const reference = parsed.object.get("value").?.object;
+    return reference.get(http_command.element_key).?.string;
+}
+
+// The raw response, so a test can assert on an error too.
+fn findElements(c: *TestClient, session_id: *const [36]u8, using: []const u8, value: []const u8) ![]const u8 {
+    const body = try std.fmt.allocPrint(testing.arena_allocator, "{{\"using\":\"{s}\",\"value\":\"{s}\"}}", .{ using, value });
+    return sessionCommand(c, "POST", session_id, "/elements", body);
+}
+
+fn elementReferences(body: []const u8) ![]const []const u8 {
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, body, .{});
+    const values = parsed.object.get("value").?.array;
+    const references = try testing.arena_allocator.alloc([]const u8, values.items.len);
+    for (values.items, references) |value, *reference| {
+        reference.* = value.object.get(http_command.element_key).?.string;
+    }
+    return references;
+}
+
+fn elementCommand(c: *TestClient, session_id: *const [36]u8, id: []const u8, suffix: []const u8) ![]const u8 {
+    const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}{s}", .{ id, suffix });
+    return responseBody(try sessionCommand(c, "GET", session_id, path, ""));
+}
+
+fn responseBody(res: []const u8) []const u8 {
+    return res[std.mem.indexOf(u8, res, "\r\n\r\n").? + 4 ..];
+}
+
+fn expectWebsocketContains(ws: *TestClient, expected: []const u8) !void {
+    const msg = try ws.readWebsocketMessage() orelse return error.NoMessage;
+    defer if (msg.cleanup_fragment) ws.reader.cleanup();
+    if (std.mem.indexOf(u8, msg.data, expected) == null) {
+        std.debug.print("expected {s} in {s}\n", .{ expected, msg.data });
+        return error.UnexpectedMessage;
+    }
+}
+
+test "server: HTTP command errors" {
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        const res = try sessionCommand(&c, "POST", "00000000-0000-4000-8000-000000000000", "/url", "{}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"invalid session id\",\"message\":\"no such session\",\"stacktrace\":\"\"}}"));
+    }
+
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+
+    // routing errors are the loop's, in W3C form. A known path with the wrong
+    // method is an unknown command like any other.
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        var request_buf: [128]u8 = undefined;
+        const res = try c.httpRequest(try std.fmt.bufPrint(&request_buf, "DELETE /session/{s}/url HTTP/1.1\r\n\r\n", .{&session_id}));
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown command\",\"message\":\"unknown command\",\"stacktrace\":\"\"}}"));
+    }
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        const res = try sessionCommand(&c, "POST", &session_id, "/nope", "{}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown command\",\"message\":\"unknown command\",\"stacktrace\":\"\"}}"));
+    }
+
+    // a slow page keeps the navigate parked on the worker
+    var slow = try createTestClient();
+    defer slow.deinit();
+    try writeSessionCommand(&slow, "POST", &session_id, "/url", "{\"url\":\"http://127.0.0.1:9582/src/browser/tests/hi.html?delay_ms=500\"}");
+    lp.io.sleep(.fromMilliseconds(50), .awake) catch {};
+
+    // one command at a time
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        const res = try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"about:blank\"}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 Internal Server Error\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown error\",\"message\":\"a command is already in progress\",\"stacktrace\":\"\"}}"));
+    }
+
+    // ending the session answers the parked command
+    try deleteHTTPSession(&session_id, true);
+    const res = try slow.httpRequest("");
+    try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+    try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"invalid session id\",\"message\":\"session ended\",\"stacktrace\":\"\"}}"));
+}
+
+fn sessionCommand(c: *TestClient, method: []const u8, session_id: *const [36]u8, command: []const u8, body: []const u8) ![]const u8 {
+    try writeSessionCommand(c, method, session_id, command, body);
+    return c.httpRequest("");
+}
+
+fn writeSessionCommand(c: *TestClient, method: []const u8, session_id: *const [36]u8, command: []const u8, body: []const u8) !void {
+    var head_buf: [128]u8 = undefined;
+    try sys_net.writeAll(c.socket, try std.fmt.bufPrint(&head_buf, "{s} /session/{s}{s} HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{ method, session_id, command, body.len }));
+    try sys_net.writeAll(c.socket, body);
+}
+
 // POST /session; asserts the response and whether it advertised a websocket
 fn createHTTPSession(body: []const u8, expect_ws_url: bool) ![36]u8 {
     var c = try createTestClient();
@@ -2349,6 +3119,9 @@ fn createTestClient() !TestClient {
     });
     try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
     try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
+    if (@hasDecl(posix.TCP, "NODELAY")) {
+        try posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+    }
     return .{
         .socket = socket,
         .reader = .{
@@ -2642,19 +3415,14 @@ test "server: releasing past the pool's retain destroys the connection" {
 }
 
 test "server: the connection budget is bounded by buffer memory" {
-    const opts = &testing.test_config.mode.serve;
-    const original = opts.cdp_max_http_message_size;
-    defer opts.cdp_max_http_message_size = original;
-
     // whatever NOFILE happens to be, we never sign up for more read buffers
-    // than fdBudget's ceiling pays for (kept in step with it by hand)
+    // than fdBudget's ceiling pays for (kept in step with it by hand). Only
+    // the initial size is committed; --cdp-max-http-message-size caps what a
+    // request in flight may grow one to, and doesn't enter into the budget.
     const ceiling = 64 * 1024 * 1024;
-    for ([_]u14{ 1024, 4096, 16383 }) |size| {
-        opts.cdp_max_http_message_size = size;
-        const budget = fdBudget(testing.test_app.config);
-        try testing.expect(budget * size <= ceiling);
-        try testing.expect(budget >= 8);
-    }
+    const budget = fdBudget(testing.test_app.config);
+    try testing.expect(budget * http.INITIAL_BUFFER_SIZE <= ceiling);
+    try testing.expect(budget >= 8);
 }
 
 test "server: accepted sockets get TCP keepalive" {
@@ -2675,12 +3443,12 @@ test "server: accepted sockets get TCP keepalive" {
     http.disconnect(lt.server, conn);
 }
 
-test "server: the http read buffer is sized by --cdp-max-http-message-size" {
+test "server: --cdp-max-http-message-size is a limit, not an allocation" {
     // the pool is built in Server.init, so this has to move first
     const opts = &testing.test_config.mode.serve;
     const original = opts.cdp_max_http_message_size;
     defer opts.cdp_max_http_message_size = original;
-    opts.cdp_max_http_message_size = 8192;
+    opts.cdp_max_http_message_size = 512 * 1024;
 
     var lt = try LoopTest.init();
     defer lt.deinit();
@@ -2688,7 +3456,10 @@ test "server: the http read buffer is sized by --cdp-max-http-message-size" {
     const client, const conn = try lt.accept();
     defer sys_net.close(client);
 
-    try testing.expectEqual(8192, conn.buffer.buf.len);
+    // a connection costs the initial buffer whatever the limit is; only a
+    // request that needs the room grows it
+    try testing.expectEqual(http.INITIAL_BUFFER_SIZE, conn.buffer.buf.len);
+    try testing.expectEqual(512 * 1024, conn.buffer.max);
 
     http.disconnect(lt.server, conn);
 }

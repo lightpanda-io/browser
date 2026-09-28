@@ -171,7 +171,7 @@ fn performSearch(cmd: *CDP.Command) !void {
     }
 
     const list = try Selector.querySelectorAll(root, params.query, frame);
-    defer list.deinit(frame._page);
+    defer list.deinit(frame.page);
     return finishSearch(cmd, bc, list._nodes);
 }
 
@@ -320,7 +320,7 @@ fn querySelectorAll(cmd: *CDP.Command) !void {
     };
 
     const selected_nodes = try Selector.querySelectorAll(node.dom, params.selector, frame);
-    defer selected_nodes.deinit(frame._page);
+    defer selected_nodes.deinit(frame.page);
 
     const nodes = selected_nodes._nodes;
 
@@ -358,15 +358,19 @@ fn resolveNode(cmd: *CDP.Command) !void {
     const js_context = if (params.executionContextId) |context_id|
         findContext(bc, root, context_id) orelse return error.ContextNotFound
     else
-        nodeFrame(node.dom, root).js;
+        // orelse root is safe here since there's no frame-specific state being used
+        (node.dom.ownerFrame(root) orelse root).js;
 
     var ls: js.Local.Scope = undefined;
     js_context.localScope(&ls);
     defer ls.deinit();
 
+    // The object id is minted on the command's session; only that session can unwrap it later.
+    const inspector_session = try bc.inspectorSession(cmd.input.session_id);
+
     // node._node is a *DOMNode we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
-    const remote_object = try bc.inspector_session.getRemoteObject(
+    const remote_object = try inspector_session.getRemoteObject(
         &ls.local,
         params.objectGroup orelse "",
         node.dom,
@@ -381,16 +385,6 @@ fn resolveNode(cmd: *CDP.Command) !void {
         .description = try remote_object.getDescription(arena),
         .objectId = try remote_object.getObjectId(arena),
     } }, .{});
-}
-
-// The frame owning the node's document. Synthetic documents (DOMParser,
-// DOMImplementation) have no frame and fall back to the root.
-fn nodeFrame(dom_node: *DOMNode, root: *Frame) *Frame {
-    const document = if (dom_node._type == .document)
-        dom_node.subtype(DOMNode.Document)
-    else
-        dom_node.ownerDocument(root) orelse return root;
-    return document._frame orelse root;
 }
 
 // The context the inspector announced under `context_id`: any frame's main
@@ -442,7 +436,7 @@ fn describeNode(cmd: *CDP.Command) !void {
     }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
     return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
 }
@@ -486,7 +480,7 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
 
     // We retrieve the node to at least check if it exists and is valid.
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
     switch (node.dom._type) {
         .element => {},
@@ -498,7 +492,9 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-pub fn getNode(arena: Allocator, bc: *CDP.BrowserContext, node_id: ?NodeRegistry.Id, backend_node_id: ?NodeRegistry.Id, object_id: ?[]const u8) !*NodeRegistry.Node {
+/// `session_id` belongs to the command; a remote object id only resolves on
+/// the inspector session that minted it.
+pub fn getNode(arena: Allocator, bc: *CDP.BrowserContext, session_id: ?[]const u8, node_id: ?NodeRegistry.Id, backend_node_id: ?NodeRegistry.Id, object_id: ?[]const u8) !*NodeRegistry.Node {
     const input_node_id = node_id orelse backend_node_id;
     if (input_node_id) |input_node_id_| {
         return bc.node_registry.lookup_by_id.get(input_node_id_) orelse return error.NodeNotFound;
@@ -510,7 +506,8 @@ pub fn getNode(arena: Allocator, bc: *CDP.BrowserContext, node_id: ?NodeRegistry
         defer ls.deinit();
 
         // Retrieve the object from which ever context it is in.
-        const parser_node = try bc.inspector_session.getNodePtr(arena, object_id_, &ls.local);
+        const inspector_session = try bc.inspectorSession(session_id);
+        const parser_node = try inspector_session.getNodePtr(arena, object_id_, &ls.local);
         return try bc.node_registry.register(@ptrCast(@alignCast(parser_node)));
     }
     return error.MissingParams;
@@ -528,7 +525,7 @@ fn getContentQuads(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
     // TODO likely if the following CSS properties are set the quads should be empty
     // visibility: hidden
@@ -554,7 +551,7 @@ fn getBoxModel(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
     // TODO implement for document or text
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
@@ -610,7 +607,14 @@ fn getFrameOwner(cmd: *CDP.Command) !void {
         return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
     };
 
-    const node = try bc.node_registry.register(frame.window._document.asNode());
+    // The element hosting the frame, as in Chrome; the main frame has none.
+    // Clients (Stagehand's frameLocator, Playwright's contentFrame) match this
+    // backendNodeId against the <iframe> they resolved in the parent.
+    const iframe = frame.iframe orelse {
+        return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
+    };
+
+    const node = try bc.node_registry.register(iframe.asNode());
     return cmd.sendResult(.{ .nodeId = node.id, .backendNodeId = node.id }, .{});
 }
 
@@ -628,7 +632,7 @@ fn getOuterHTML(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
     var aw = std.Io.Writer.Allocating.init(cmd.arena);
     try dump.deep(node.dom, .{}, &aw.writer, frame);
@@ -642,7 +646,7 @@ fn requestNode(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const node = try getNode(cmd.arena, bc, null, null, params.objectId);
+    const node = try getNode(cmd.arena, bc, cmd.input.session_id, null, null, params.objectId);
 
     return cmd.sendResult(.{ .nodeId = node.id }, .{});
 }
@@ -661,21 +665,23 @@ fn setFileInputFiles(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const root = bc.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
     const input = element.is(Input) orelse return error.NotAnInputElement;
     if (input._input_type != .file) return error.NotAFileInput;
+    // input/change fire through the owner frame's EventManager.
+    const frame = element.ownerFrame(root) orelse return error.InvalidNodeId;
 
     var files = try cmd.arena.alloc(*File, params.files.len);
     {
         // Files are created at refcount 0; selectFiles takes ownership. If a later
         // path fails to load, release the arenas of the ones already created.
         var created: usize = 0;
-        errdefer for (files[0..created]) |f| f._proto.deinit(frame._page);
+        errdefer for (files[0..created]) |f| f._proto.deinit(frame.page);
         for (params.files, 0..) |path, i| {
-            files[i] = try fileFromDiskPath(path, frame._page);
+            files[i] = try fileFromDiskPath(path, frame.page);
             created = i + 1;
         }
     }
@@ -694,7 +700,7 @@ fn focus(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
     if (element.isFocusable(frame) == false) {
         return cmd.sendError(-32000, "Element is not focusable", .{});
@@ -1152,6 +1158,49 @@ test "cdp.dom: setFileInputFiles errors when a path is missing" {
     try ctx.expectSentError(-31998, "FileNotFound", .{ .id = 3 });
 }
 
+test "cdp.dom: focus and setFileInputFiles fire in the node's own frame" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_iframe.html" });
+    const child = bc.mainFrame().?.child_frames.items[0];
+
+    const text = child.document.getElementById("text", child) orelse unreachable;
+    const upload = child.document.getElementById("upload", child) orelse unreachable;
+    const text_node = try bc.node_registry.register(text.asNode());
+    const upload_node = try bc.node_registry.register(upload.asNode());
+
+    try std.Io.Dir.cwd().createDirPath(lp.io, ".zig-cache/tmp");
+    var tmp_dir = try std.Io.Dir.cwd().openDir(lp.io, ".zig-cache/tmp", .{});
+    defer tmp_dir.close(lp.io);
+    {
+        const f = try tmp_dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
+        defer f.close(lp.io);
+        try f.writeStreamingAll(lp.io, "hello upload");
+    }
+
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.focus", .params = .{ .nodeId = text_node.id } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.setFileInputFiles",
+        .params = .{
+            .nodeId = upload_node.id,
+            .files = &[_][]const u8{".zig-cache/tmp/upload.txt"},
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    // The child's listeners only see events dispatched through its own frame.
+    var ls: lp.js.Local.Scope = undefined;
+    child.js.localScope(&ls);
+    defer ls.deinit();
+    const result = try ls.local.compileAndRun(
+        \\window.__evts.join(',') === 'focus:text,focusin:text,input:upload,change:upload'
+    , null);
+    try testing.expect(result.isTrue());
+}
+
 test "cdp.dom: isXPathQuery heuristic" {
     // XPath-shaped queries — each line covers a distinct heuristic branch.
     try std.testing.expect(isXPathQuery("/html"));
@@ -1313,11 +1362,93 @@ test "cdp.dom: resolveNode into a child frame's context" {
     try ctx.expectSentError(-31998, "ContextNotFound", .{ .id = 15 });
 }
 
+test "cdp.dom: getFrameOwner returns the owner iframe element" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-FO", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const child = root.child_frames.items[0];
+    const iframe_node = try bc.node_registry.register(child.iframe.?.asNode());
+
+    try ctx.processMessage(.{ .id = 10, .method = "DOM.getFrameOwner", .sessionId = "SID-X", .params = .{
+        .frameId = &id.toFrameId(child._frame_id),
+    } });
+    try ctx.expectSentResult(.{ .nodeId = iframe_node.id, .backendNodeId = iframe_node.id }, .{ .id = 10 });
+
+    // The owner element names the frame it hosts.
+    try ctx.processMessage(.{ .id = 11, .method = "DOM.describeNode", .sessionId = "SID-X", .params = .{
+        .backendNodeId = iframe_node.id,
+    } });
+    try ctx.expectSentResult(.{ .node = .{
+        .localName = "iframe",
+        .frameId = &id.toFrameId(child._frame_id),
+    } }, .{ .id = 11 });
+
+    // So does the document element, for its own frame.
+    const child_html = try bc.node_registry.register(child.window._document.getDocumentElement().?.asNode());
+    try ctx.processMessage(.{ .id = 12, .method = "DOM.describeNode", .sessionId = "SID-X", .params = .{
+        .backendNodeId = child_html.id,
+    } });
+    try ctx.expectSentResult(.{ .node = .{
+        .localName = "html",
+        .frameId = &id.toFrameId(child._frame_id),
+    } }, .{ .id = 12 });
+
+    // The main frame has no owner.
+    try ctx.processMessage(.{ .id = 13, .method = "DOM.getFrameOwner", .sessionId = "SID-X", .params = .{
+        .frameId = &id.toFrameId(root._frame_id),
+    } });
+    try ctx.expectSentError(-32000, "Frame with the given id does not belong to the target.", .{ .id = 13 });
+}
+
 fn mainWorldContextId(bc: *CDP.BrowserContext, frame: *const Frame) !i32 {
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
-    return bc.inspector_session.inspector.getContextId(&ls.local);
+    return bc.inspector().getContextId(&ls.local);
+}
+
+test "cdp.dom: remote object ids belong to the session that minted them" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RO", .url = "cdp/dom1.html", .target_id = "FID-000000000R".*, .session_id = "SID-PRIMARY" });
+    _ = try bc.attachSession("SID-AUX", null);
+
+    const root = bc.mainFrame() orelse unreachable;
+    const html = root.document.getDocumentElement() orelse unreachable;
+    const html_node = try bc.node_registry.register(html.asNode());
+    const document_node = try bc.node_registry.register(root.document.asNode());
+
+    // The auxiliary session mints an id for <html> and resolves it.
+    try ctx.processMessage(.{ .id = 20, .method = "DOM.resolveNode", .sessionId = "SID-AUX", .params = .{ .backendNodeId = html_node.id } });
+    const aux_object_id = try sentObjectId(&ctx, 20);
+    try ctx.processMessage(.{ .id = 21, .method = "DOM.requestNode", .sessionId = "SID-AUX", .params = .{ .objectId = aux_object_id } });
+    try ctx.expectSentResult(.{ .nodeId = html_node.id }, .{ .id = 21, .session_id = "SID-AUX" });
+
+    // The primary has minted nothing yet: the auxiliary's id is not its.
+    try ctx.processMessage(.{ .id = 22, .method = "Runtime.callFunctionOn", .sessionId = "SID-PRIMARY", .params = .{
+        .objectId = aux_object_id,
+        .functionDeclaration = "function() { return this.localName; }",
+        .returnByValue = true,
+    } });
+    try ctx.expectSentError(-32000, "Could not find object with given id", .{ .id = 22 });
+
+    // Each session numbers its ids by itself, so the primary's first id may
+    // well be the same string as the auxiliary's: the session a command comes
+    // through, not the id, tells the objects apart. Mint a different node on
+    // the primary and check that each id describes its own.
+    try ctx.processMessage(.{ .id = 23, .method = "DOM.resolveNode", .sessionId = "SID-PRIMARY", .params = .{ .backendNodeId = document_node.id } });
+    const primary_object_id = try sentObjectId(&ctx, 23);
+    try ctx.processMessage(.{ .id = 24, .method = "DOM.describeNode", .sessionId = "SID-PRIMARY", .params = .{ .objectId = primary_object_id } });
+    try ctx.expectSentResult(.{ .node = .{ .nodeId = document_node.id, .nodeName = "#document" } }, .{ .id = 24, .session_id = "SID-PRIMARY" });
+    try ctx.processMessage(.{ .id = 25, .method = "DOM.describeNode", .sessionId = "SID-AUX", .params = .{ .objectId = aux_object_id } });
+    try ctx.expectSentResult(.{ .node = .{ .nodeId = html_node.id, .localName = "html" } }, .{ .id = 25, .session_id = "SID-AUX" });
+    try ctx.processMessage(.{ .id = 26, .method = "DOM.requestNode", .sessionId = "SID-PRIMARY", .params = .{ .objectId = primary_object_id } });
+    try ctx.expectSentResult(.{ .nodeId = document_node.id }, .{ .id = 26, .session_id = "SID-PRIMARY" });
+    try ctx.processMessage(.{ .id = 27, .method = "DOM.requestNode", .sessionId = "SID-AUX", .params = .{ .objectId = aux_object_id } });
+    try ctx.expectSentResult(.{ .nodeId = html_node.id }, .{ .id = 27, .session_id = "SID-AUX" });
 }
 
 // The result.object.objectId of the response to command `msg_id`.

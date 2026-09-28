@@ -33,20 +33,43 @@ const log = lp.log;
 const Execution = js.Execution;
 const Transfer = HttpClient.Transfer;
 
+const referrer = @import("../../referrer.zig");
+
 const Fetch = @This();
 
 _exec: *const Execution,
 _url: []const u8,
 _buf: std.ArrayList(u8),
 _response: *Response,
-_resolver: js.PromiseResolver.Global,
 _owns_response: bool,
 _signal: ?*AbortSignal,
 _manual_redirect: bool,
 _no_cors: bool,
+_null_body: bool,
+_sink: Sink,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
+
+const Sink = union(enum) {
+    promise: js.PromiseResolver.Global,
+    completion: Completion,
+};
+
+// For a fetch made by Zig code (Cache.add), in place of fetch()'s promise.
+// Once `start` has returned without an error, `callback` fires exactly once.
+pub const Completion = struct {
+    ctx: *anyopaque,
+    callback: *const fn (ctx: *anyopaque, result: Result) void,
+
+    pub const Result = union(enum) {
+        // Only valid for the duration of the callback.
+        done: *Response,
+        err,
+        // The owner is being torn down: no JS.
+        shutdown,
+    };
+};
 
 pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promise {
     const resolver = exec.js.local.?.createPromiseResolver();
@@ -58,15 +81,15 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         return resolver.promise();
     };
 
-    if (request._mode == .navigate) {
-        resolver.rejectError("fetch request mode error", .{ .type_error = "Fetch can't be navigate" });
-        return resolver.promise();
-    }
-
     // This Request is never exposed to JS. makeRequest dupes the url/body
     // into the transfer, so nothing references it once we return.
     request.acquireRef();
     defer request.releaseRef(exec.page);
+
+    if (request._mode == .navigate) {
+        resolver.rejectError("fetch request mode error", .{ .type_error = "Fetch can't be navigate" });
+        return resolver.promise();
+    }
 
     if (request._signal) |signal| {
         if (signal._aborted) {
@@ -75,6 +98,24 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         }
     }
 
+    const body = request.bodyBytes() catch |err| switch (err) {
+        error.TypeError => {
+            resolver.rejectError("fetch body error", .{ .type_error = "Failed to read ReadableStream body" });
+            return resolver.promise();
+        },
+        else => return err,
+    };
+
+    try submit(request, body, .{ .promise = try resolver.persist() }, exec);
+    return resolver.promise();
+}
+
+pub fn start(request: *Request, completion: Completion, exec: *const Execution) !void {
+    const body = try request.bodyBytes();
+    return submit(request, body, .{ .completion = completion }, exec);
+}
+
+fn submit(request: *Request, body: ?[]const u8, sink: Sink, exec: *const Execution) !void {
     const response = try Response.initPending(exec);
     errdefer response.deinit(exec.page);
 
@@ -83,23 +124,24 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         ._exec = exec,
         ._buf = .empty,
         ._url = try response._arena.dupe(u8, request._url),
-        ._resolver = try resolver.persist(),
+        ._sink = sink,
         ._response = response,
         ._owns_response = true,
         ._signal = request._signal,
         ._manual_redirect = request._redirect == .manual,
         ._no_cors = request._mode == .@"no-cors",
+        ._null_body = request._method == .HEAD,
     };
 
     if (comptime lp.IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });
     }
 
-    const transfer = exec.newRequest(.{
+    const transfer = try exec.newRequest(.{
         .ctx = fetch,
         .url = request._url,
         .method = request._method,
-        .body = request._body,
+        .body = body,
         .resource_type = .fetch,
         .credentials_mode = switch (request._credentials) {
             .omit => .omit,
@@ -123,17 +165,31 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
-    }) catch {
-        // OOM-class; nothing was committed and no callback fired.
-        return resolver.promise();
-    };
+    });
 
     {
         errdefer transfer.deinit();
         if (request._headers) |h| {
             try h.populateRequestHeaders(transfer);
         }
-        try exec.headersForRequest(transfer);
+
+        // fetch() computes its own Referer below, from request._referrer /
+        // request._referrer_policy, so skip the default one here.
+        try exec.headersForRequest(transfer, .{ .referer = false });
+
+        const source: ?[:0]const u8 = switch (request._referrer) {
+            .none => null,
+            .client => exec.referrerSource(),
+            .url => |u| u,
+        };
+
+        if (source) |s| {
+            const policy = request._referrer_policy orelse exec.referrerPolicy();
+            if (try referrer.compute(transfer.arena.allocator(), policy, s, transfer.req.url)) |ref| {
+                try transfer.setHeader("Referer", ref, .{});
+                transfer.req.referrer_policy = policy;
+            }
+        }
     }
 
     // Held for Response.deinit's abort; the error, shutdown and done
@@ -145,7 +201,6 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     // error from here would also fire the `errdefer response.deinit` above
     // and double-free the arena.
     transfer.submit() catch {};
-    return resolver.promise();
 }
 
 fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
@@ -158,8 +213,13 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         }
     }
 
+    const status = transfer.responseStatus().?;
+    if (is_opaque or Response.isNullBodyStatus(status) or (self._manual_redirect and HttpClient.isRedirectStatus(status))) {
+        self._null_body = true;
+    }
+
     const arena = self._response._arena;
-    if (!is_opaque) {
+    if (self._null_body == false) {
         try self._buf.ensureTotalCapacityPrecise(arena.allocator(), transfer.bodyLen());
     }
 
@@ -173,8 +233,11 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         });
     }
 
-    res._status = transfer.responseStatus().?;
-    res._status_text = std.http.Status.phrase(@enumFromInt(transfer.responseStatus().?)) orelse "";
+    res._status = status;
+    res._status_text = if (transfer.statusText()) |st|
+        try arena.allocator().dupe(u8, st)
+    else
+        std.http.Status.phrase(@enumFromInt(status)) orelse "";
     res._url = try arena.dupeZ(u8, transfer.req.url);
     res._is_redirected = transfer.redirectCount().? > 0;
 
@@ -237,7 +300,7 @@ fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
         }
     }
 
-    if (self._no_cors and transfer.client.obey_cors and transfer._cors_cross_origin) {
+    if (self._null_body) {
         return;
     }
 
@@ -248,7 +311,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
     var response = self._response;
     response._http_transfer = null;
-    response._body = .{ .bytes = self._buf.items };
+    response._body = if (self._null_body) .empty else .{ .bytes = self._buf.items };
 
     log.info(.http, "request complete", .{
         .source = "fetch",
@@ -257,6 +320,15 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
         .len = self._buf.items.len,
     });
 
+    const resolver = switch (self._sink) {
+        .promise => |resolver| resolver,
+        .completion => |completion| {
+            self._owns_response = false;
+            defer response.deinit(self._exec.page);
+            return completion.callback(completion.ctx, .{ .done = response });
+        },
+    };
+
     var ls: js.Local.Scope = undefined;
     self._exec.js.localScope(&ls);
     defer ls.deinit();
@@ -264,7 +336,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     const js_val = try ls.local.zigValueToJs(self._response, .{});
     self._owns_response = false;
     response._arena.report();
-    return ls.toLocal(self._resolver).resolve("fetch done", js_val);
+    return ls.toLocal(resolver).resolve("fetch done", js_val);
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -293,23 +365,33 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
         response.deinit(self._exec.page);
     };
 
+    const resolver = switch (self._sink) {
+        .promise => |resolver| resolver,
+        .completion => |completion| return completion.callback(completion.ctx, .err),
+    };
+
     var ls: js.Local.Scope = undefined;
     self._exec.js.localScope(&ls);
     defer ls.deinit();
 
     // fetch() must reject with a TypeError on network errors per spec
-    ls.toLocal(self._resolver).rejectError("fetch error", .{ .type_error = "fetch error" });
+    ls.toLocal(resolver).rejectError("fetch error", .{ .type_error = "fetch error" });
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
 
     if (self._owns_response) {
+        const sink = self._sink;
         var response = self._response;
         response._http_transfer = null;
         response.deinit(self._exec.page);
         // Do not access `self` after this point: the Fetch struct was
         // allocated from response._arena which has been released.
+        switch (sink) {
+            .promise => {},
+            .completion => |completion| completion.callback(completion.ctx, .shutdown),
+        }
     }
 }
 

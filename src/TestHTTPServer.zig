@@ -163,6 +163,10 @@ fn getContentType(file_path: []const u8) []const u8 {
         return "text/xml";
     }
 
+    if (std.mem.endsWith(u8, file_path, ".wasm")) {
+        return "application/wasm";
+    }
+
     if (std.mem.endsWith(u8, file_path, ".mjs")) {
         // mjs are ECMAScript modules
         return "application/json";

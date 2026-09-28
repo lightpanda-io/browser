@@ -861,18 +861,14 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
             }
 
             if (element.is(Form.Select)) |select| {
-                if (select.getMultiple() == false) {
-                    // Per the HTML spec, a single-select with no selectedness
-                    // candidate (zero options or every option disabled)
-                    // contributes no entry. Otherwise emit the candidate's
-                    // value.
-                    const opt = select.effectiveOption() orelse continue;
-                    break :blk opt.getValue(frame);
-                }
-
                 var options = try select.getSelectedOptions(frame);
-                while (options.next()) |option| {
-                    try appendString(&list, arena, name, option.as(Form.Select.Option).getValue(frame));
+                while (options.next()) |node| {
+                    const option = node.as(Form.Select.Option);
+                    // A disabled option can be selected, but isn't submitted.
+                    if (option.asElement().isDisabled()) {
+                        continue;
+                    }
+                    try appendString(&list, arena, name, option.getValue(frame));
                 }
                 continue;
             }
@@ -1028,8 +1024,8 @@ test "FormData: multipart with file" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const file = try buildTestFile(allocator, frame._page, "hello.txt", "text/plain", "hello");
-    defer file._proto.releaseRef(frame._page);
+    const file = try buildTestFile(allocator, frame.page, "hello.txt", "text/plain", "hello");
+    defer file._proto.releaseRef(frame.page);
 
     var fd = FormData{
         ._rc = .{},
@@ -1065,8 +1061,8 @@ test "FormData: multipart with empty file defaults to octet-stream" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const file = try buildTestFile(allocator, frame._page, "", "", "");
-    defer file._proto.releaseRef(frame._page);
+    const file = try buildTestFile(allocator, frame.page, "", "", "");
+    defer file._proto.releaseRef(frame.page);
 
     var fd = FormData{
         ._rc = .{},
@@ -1098,8 +1094,8 @@ test "FormData: multipart escapes file name and filename" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const file = try buildTestFile(allocator, frame._page, "a\"b\r\nc.txt", "text/plain", "x");
-    defer file._proto.releaseRef(frame._page);
+    const file = try buildTestFile(allocator, frame.page, "a\"b\r\nc.txt", "text/plain", "x");
+    defer file._proto.releaseRef(frame.page);
 
     var fd = FormData{
         ._rc = .{},
@@ -1131,8 +1127,8 @@ test "FormData: file entry collapses to filename in urlencode" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const file = try buildTestFile(allocator, frame._page, "hello.txt", "text/plain", "hello");
-    defer file._proto.releaseRef(frame._page);
+    const file = try buildTestFile(allocator, frame.page, "hello.txt", "text/plain", "hello");
+    defer file._proto.releaseRef(frame.page);
 
     var fd = FormData{
         ._rc = .{},
@@ -1334,7 +1330,7 @@ test "FormData: multipart parse with file" {
         "bytes\r\n" ++
         "--B--\r\n", "B", &frame.js.execution);
     defer for (fd._entries.items) |entry| switch (entry.value) {
-        .file => |file| file.releaseRef(frame._page),
+        .file => |file| file.releaseRef(frame.page),
         else => {},
     };
 

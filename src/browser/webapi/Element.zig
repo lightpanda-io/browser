@@ -23,12 +23,14 @@ const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
+const text_measure = @import("../text_measure.zig");
 
 const CSS = @import("CSS.zig");
 const Node = @import("Node.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
 const EventTarget = @import("EventTarget.zig");
 const collections = @import("collections.zig");
+const Sanitizer = @import("Sanitizer.zig");
 
 const Selector = @import("selector/Selector.zig");
 const Animation = @import("animation/Animation.zig");
@@ -219,6 +221,10 @@ pub fn is(self: *Element, comptime T: type) ?*T {
 
 pub fn as(self: *Element, comptime T: type) *T {
     return self.is(T).?;
+}
+
+pub fn getDocument(self: *Element, frame: *const Frame) *Node.Document {
+    return self.asNode().getDocument(frame);
 }
 
 pub fn asNode(self: *Element) *Node {
@@ -438,7 +444,7 @@ pub fn getNamespaceURI(self: *const Element) ?[]const u8 {
 
 pub fn getNamespaceUri(self: *Element, frame: *Frame) ?[]const u8 {
     if (self._namespace != .unknown) return self._namespace.toUri();
-    return frame._element_namespace_uris.get(self);
+    return frame.page.element_namespace_uris.get(self);
 }
 
 pub fn lookupNamespaceURIForElement(self: *Element, prefix: ?[]const u8, frame: *Frame) ?[]const u8 {
@@ -568,7 +574,7 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
 
     var fragment: ?*Node = null;
     if (html.len > 0) {
-        const frag = (try Node.DocumentFragment.init(frame)).asNode();
+        const frag = (try Node.DocumentFragment.init(node.getDocument(frame), frame)).asNode();
         // The parent is the parse context (a fragment parent means body).
         try Frame.parse.fragment(frame, frag, html, .{ .context = parent.is(Element) });
         fragment = frag;
@@ -623,10 +629,20 @@ pub fn setInnerHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     return parent.setHTML(html, .{}, frame);
 }
 
+pub fn setHTML(self: *Element, html: []const u8, options: ?Sanitizer.Options, frame: *Frame) !void {
+    return Sanitizer.setAndFilterHTML(self.htmlTarget(), self, html, options, true, frame);
+}
+
 /// allows declarative shadow dom
-pub fn setHTMLUnsafe(self: *Element, html: []const u8, frame: *Frame) !void {
-    const parent = self.asNode();
-    return parent.setHTML(html, .{ .allow_declarative_shadow = true }, frame);
+pub fn setHTMLUnsafe(self: *Element, html: []const u8, options: ?Sanitizer.Options, frame: *Frame) !void {
+    return Sanitizer.setAndFilterHTML(self.htmlTarget(), self, html, options, false, frame);
+}
+
+fn htmlTarget(self: *Element) *Node {
+    if (self.is(Html.Template)) |template| {
+        return template.getContent().asNode();
+    }
+    return self.asNode();
 }
 
 pub fn getId(self: *const Element) ?[]const u8 {
@@ -895,7 +911,8 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
     }
 
     const shadow_root = try ShadowRoot.init(self, opts, frame);
-    try frame._element_shadow_roots.put(frame.arena, self, shadow_root);
+    const page = frame.page;
+    try page.element_shadow_roots.put(page.frame_arena, self, shadow_root);
     self._flags.shadow_host = true;
     return shadow_root;
 }
@@ -907,7 +924,7 @@ pub fn hostedShadowRoot(self: *Element, frame: *const Frame) ?*ShadowRoot {
     if (!self._flags.shadow_host) {
         return null;
     }
-    return frame._element_shadow_roots.get(self);
+    return frame.page.element_shadow_roots.get(self);
 }
 
 pub fn insertAdjacentElement(
@@ -936,7 +953,7 @@ pub fn insertAdjacentText(
         error.AdjacentNoParent => return,
         else => return err,
     };
-    const text_node = try Frame.node_factory.createTextNode(frame, data);
+    const text_node = try Frame.node_factory.createTextNode(self.getDocument(frame), data);
     _ = try target_node.insertBefore(text_node, prev_node, frame);
 }
 
@@ -990,19 +1007,20 @@ pub fn getAttributeNames(self: *const Element, frame: *Frame) ![][]const u8 {
 }
 
 pub fn getAttributeNamedNodeMap(self: *Element, frame: *Frame) !*Attribute.NamedNodeMap {
-    const gop = try frame._attribute_named_node_map_lookup.getOrPut(frame.arena, @intFromPtr(self));
+    const page = frame.page;
+    const gop = try page.attribute_named_node_map_lookup.getOrPut(page.frame_arena, @intFromPtr(self));
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(Attribute.NamedNodeMap{ ._element = self });
     }
     return gop.value_ptr.*;
 }
 
-// The materialized style lives in the map of the element's own frame, not
-// the caller's: attributeChange (which resyncs it) is dispatched on the owner
-// frame, and a same-origin script can reach an element in another frame.
+// The materialized style is built with the element's own frame, not the
+// caller's: a same-origin script can reach an element in another frame.
 pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
-    const owner = self.ownerFrame(frame);
-    const gop = try owner._element_styles.getOrPut(owner.arena, self);
+    const owner = self.ownerFrame(frame) orelse frame;
+    const page = frame.page;
+    const gop = try page.element_styles.getOrPut(page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try CSSStyleProperties.init(self, false, owner);
     }
@@ -1014,7 +1032,7 @@ pub fn existingStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
     if (!self._flags.has_inline_style) {
         return null;
     }
-    return self.ownerFrame(frame)._element_styles.get(self);
+    return frame.page.element_styles.get(self);
 }
 
 /// The inline style object, parsed from the style attribute on first use;
@@ -1050,7 +1068,8 @@ pub fn setStyle(self: *Element, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getClassList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
-    const gop = try frame._element_class_lists.getOrPut(frame.arena, self);
+    const page = frame.page;
+    const gop = try page.element_class_lists.getOrPut(page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1066,7 +1085,8 @@ pub fn setClassList(self: *Element, value: String, frame: *Frame) !void {
 }
 
 pub fn getPartList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
-    const gop = try frame._element_part_lists.getOrPut(frame.arena, self);
+    const page = frame.page;
+    const gop = try page.element_part_lists.getOrPut(page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1077,7 +1097,8 @@ pub fn getPartList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
 }
 
 pub fn getRelList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
-    const gop = try frame._element_rel_lists.getOrPut(frame.arena, self);
+    const page = frame.page;
+    const gop = try page.element_rel_lists.getOrPut(page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1094,7 +1115,8 @@ pub const TokenListKey = struct { element: *Element, attribute: TokenListAttribu
 pub const TokenListLookup = std.AutoHashMapUnmanaged(TokenListKey, *collections.DOMTokenList);
 
 pub fn getTokenList(self: *Element, comptime attribute: TokenListAttribute, frame: *Frame) !*collections.DOMTokenList {
-    const gop = try frame._element_token_lists.getOrPut(frame.arena, .{ .element = self, .attribute = attribute });
+    const page = frame.page;
+    const gop = try page.element_token_lists.getOrPut(page.frame_arena, .{ .element = self, .attribute = attribute });
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1105,7 +1127,8 @@ pub fn getTokenList(self: *Element, comptime attribute: TokenListAttribute, fram
 }
 
 pub fn getDataset(self: *Element, frame: *Frame) !*DOMStringMap {
-    const gop = try frame._element_datasets.getOrPut(frame.arena, self);
+    const page = frame.page;
+    const gop = try page.element_datasets.getOrPut(page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(DOMStringMap{
             ._element = self,
@@ -1128,7 +1151,7 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame
     var rm_ref_node = true;
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self.getDocument(frame));
 
         // If a child is the ref node. We keep it at its own current position.
         if (child == ref_node) {
@@ -1170,6 +1193,35 @@ pub fn remove(self: *Element, frame: *Frame) void {
     frame.removeNode(parent, node, .{ .reconnect_to = null });
 }
 
+// SVG 2 <a> links via `href`; xlink:href is the deprecated SVG 1.1 spelling.
+pub fn svgAnchorHref(self: *Element) ?[]const u8 {
+    return self.getAttributeInterned("href") orelse self.getAttributeSafe(comptime .wrap("xlink:href"));
+}
+
+pub fn isSvgLink(self: *Element) bool {
+    return self.is(Svg.Graphics.A) != null and self.svgAnchorHref() != null;
+}
+
+// An editing host takes focus like a form control does.
+pub fn isEditingHost(self: *Element) bool {
+    const value = self.getAttributeSafe(.wrap("contenteditable")) orelse return false;
+    return std.ascii.eqlIgnoreCase(value, "false") == false;
+}
+
+/// Focusable without a tabindex attribute.
+fn isNativelyFocusable(self: *Element) bool {
+    if (self.is(Html) == null) {
+        return self.isSvgLink();
+    }
+
+    return switch (self.getTag()) {
+        .button, .select, .textarea, .iframe => true,
+        .input => self.as(Html.Input)._input_type != .hidden,
+        .anchor, .area => self.getAttributeInterned("href") != null,
+        else => false,
+    };
+}
+
 // The tabindex of a focusable area, or null when the element can't take focus
 // at all. A negative value is still focusable, just skipped by sequential
 // focus navigation.
@@ -1178,28 +1230,32 @@ pub fn focusTabIndex(self: *Element) ?i32 {
     if (self.isDisabled()) {
         return null;
     }
-    if (self.is(Html) == null) {
-        return null;
-    }
 
     if (self.getAttributeInterned("tabindex")) |attr| {
-        return Html.parseInteger(attr) orelse 0;
+        if (Html.parseInteger(attr)) |tab_index| {
+            return tab_index;
+        } else {
+            // can't be parsed is treated the same as no tabindex
+        }
     }
 
-    return switch (self.getTag()) {
-        .button, .select, .textarea, .iframe => 0,
-        .input => if (self.as(Html.Input)._input_type != .hidden) 0 else null,
-        .anchor, .area => if (self.getAttributeInterned("href") != null) 0 else null,
-        else => null,
-    };
+    if (self.isNativelyFocusable() or self.isEditingHost()) {
+        return 0;
+    }
+    return null;
 }
 
-// A focusable area that can take focus right now: connected and being rendered.
+// A focusable area that can take focus right now: connected, not inert and
+// being rendered.
 pub fn isFocusable(self: *Element, frame: *Frame) bool {
     if (self.focusTabIndex() == null) {
         return false;
     }
-    if (self.asNode().isConnected() == false) {
+    const node = self.asNode();
+    if (node.isConnected() == false) {
+        return false;
+    }
+    if (node.isInert(frame)) {
         return false;
     }
     return self.isVisible(frame);
@@ -1211,62 +1267,63 @@ pub fn focus(self: *Element, frame: *Frame) !void {
         return;
     }
 
-    // Per HTML spec §6.4.4, an element must be "being rendered" (not
-    // display:none on self or any ancestor) to be focusable.
-    if (!self.isVisible(frame)) {
+    const owner = self.ownerFrame(frame) orelse return;
+    const doc = owner.document;
+    const old_active = doc._active_element;
+    if (old_active == self) {
+        return;
+    }
+
+    if (self.isFocusable(owner) == false) {
         return;
     }
 
     const FocusEvent = @import("event/FocusEvent.zig");
 
     const new_target = self.asEventTarget();
-    const doc = self.asNode().ownerDocument(frame) orelse frame.document;
-    const old_active = doc._active_element;
-    doc.setActiveElement(self, frame);
+    doc.setActiveElement(self, owner);
 
     if (old_active) |old| {
-        if (old == self) {
-            return;
-        }
-
         const old_target = old.asEventTarget();
 
         // Dispatch blur on old element (no bubble, composed)
-        const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = new_target }, frame);
-        try frame._event_manager.dispatch(old_target, blur_event.asEvent());
+        const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = new_target }, owner);
+        try owner._event_manager.dispatch(old_target, blur_event.asEvent());
 
         // Dispatch focusout on old element (bubbles, composed)
-        const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = new_target }, frame);
-        try frame._event_manager.dispatch(old_target, focusout_event.asEvent());
+        const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = new_target }, owner);
+        try owner._event_manager.dispatch(old_target, focusout_event.asEvent());
     }
 
     const old_related: ?*EventTarget = if (old_active) |old| old.asEventTarget() else null;
 
     // Dispatch focus on new element (no bubble, composed)
-    const focus_event = try FocusEvent.initTrusted(comptime .wrap("focus"), .{ .composed = true, .relatedTarget = old_related }, frame);
-    try frame._event_manager.dispatch(new_target, focus_event.asEvent());
+    const focus_event = try FocusEvent.initTrusted(comptime .wrap("focus"), .{ .composed = true, .relatedTarget = old_related }, owner);
+    try owner._event_manager.dispatch(new_target, focus_event.asEvent());
 
     // Dispatch focusin on new element (bubbles, composed)
-    const focusin_event = try FocusEvent.initTrusted(comptime .wrap("focusin"), .{ .bubbles = true, .composed = true, .relatedTarget = old_related }, frame);
-    try frame._event_manager.dispatch(new_target, focusin_event.asEvent());
+    const focusin_event = try FocusEvent.initTrusted(comptime .wrap("focusin"), .{ .bubbles = true, .composed = true, .relatedTarget = old_related }, owner);
+    try owner._event_manager.dispatch(new_target, focusin_event.asEvent());
 }
 
 pub fn blur(self: *Element, frame: *Frame) !void {
-    const doc = self.asNode().ownerDocument(frame) orelse frame.document;
+    // A frameless document never has a focused element.
+    const owner = self.ownerFrame(frame) orelse return;
+    const doc = owner.document;
     if (doc._active_element != self) return;
 
-    doc.setActiveElement(null, frame);
+    doc.setActiveElement(null, owner);
 
     const FocusEvent = @import("event/FocusEvent.zig");
     const old_target = self.asEventTarget();
 
     // Dispatch blur (no bubble, composed)
-    const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true }, frame);
-    try frame._event_manager.dispatch(old_target, blur_event.asEvent());
+    const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true }, owner);
+    try owner._event_manager.dispatch(old_target, blur_event.asEvent());
 
     // Dispatch focusout (bubbles, composed)
-    const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true }, frame);
-    try frame._event_manager.dispatch(old_target, focusout_event.asEvent());
+    const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true }, owner);
+    try owner._event_manager.dispatch(old_target, focusout_event.asEvent());
 }
 
 pub fn getChildren(self: *Element, frame: *Frame) !collections.NodeLive(.child_elements) {
@@ -1290,7 +1347,7 @@ pub fn before(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !vo
     const parent = node.parentNode() orelse return;
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self.getDocument(frame));
         _ = try parent.insertBefore(child, node, frame);
     }
 }
@@ -1301,7 +1358,7 @@ pub fn after(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !voi
     const viable_next = Node.NodeOrText.viableNextSibling(node, nodes);
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self.getDocument(frame));
         _ = try parent.insertBefore(child, viable_next, frame);
     }
 }
@@ -1405,11 +1462,13 @@ pub fn parentElement(self: *Element) ?*Element {
 // the caller's: its stylesheets and materialized inline styles are per-frame,
 // and a same-origin script can reach an element in another frame.
 pub fn hasPointerEventsNone(self: *Element, frame: *Frame) bool {
-    return self.ownerFrame(frame)._style_manager.hasPointerEventsNone(self);
+    const owner = self.ownerFrame(frame) orelse return false;
+    return owner._style_manager.hasPointerEventsNone(self);
 }
 
 pub fn isVisible(self: *Element, frame: *Frame) bool {
-    return !self.ownerFrame(frame)._style_manager.isHidden(self, .{});
+    const owner = self.ownerFrame(frame) orelse return false;
+    return !owner._style_manager.isHidden(self, .{});
 }
 
 const CheckVisibilityOpts = struct {
@@ -1420,7 +1479,8 @@ const CheckVisibilityOpts = struct {
 };
 pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Frame) bool {
     const opts = opts_ orelse CheckVisibilityOpts{};
-    return !self.ownerFrame(frame)._style_manager.isHidden(self, .{
+    const owner = self.ownerFrame(frame) orelse return false;
+    return !owner._style_manager.isHidden(self, .{
         .check_opacity = opts.checkOpacity or opts.opacityProperty,
         .check_visibility = opts.visibilityProperty or opts.checkVisibilityCSS,
     });
@@ -1438,27 +1498,34 @@ pub const Axis = enum {
 };
 
 pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.State {
-    if (self.inlineStyle(frame)) |style| {
-        const decl = style.asCSSStyleDeclaration();
-        if (CSS.parseDimensionViewport(decl.getPropertyValue(@tagName(axis), frame), frame)) |v| {
+    const tag = self.getTag();
+    const root = tag == .html or tag == .body;
+
+    if (self.ownerFrame(frame)) |owner| {
+        const style_manager = &owner._style_manager;
+        // Roots take only an inline size: a sheet's `height: 100vh` on body
+        // would shrink the box every synthetic position must fit in.
+        const size = if (root) style_manager.inlineSize(self, axis) else style_manager.declaredSize(self, axis);
+        if (size) |v| {
             return .{ .value = v, .explicit = true };
         }
     }
 
-    switch (self.getTag()) {
-        // Root containers get large default size to contain descendant positions.
-        // With calculateDocumentPosition using linear depth scaling (100px per level),
-        // even very deep trees (100 levels) stay within 10,000px.
-        // 100M pixels is plausible for very long documents.
-        .html, .body => return .{ .value = if (axis == .width) 1920.0 else 100_000_000.0 },
-        .img, .iframe => {
-            if (self.getAttributeSafe(comptime .wrap(@tagName(axis)))) |attr| {
-                if (std.fmt.parseFloat(f64, attr)) |parsed| {
-                    return .{ .value = parsed, .explicit = true };
-                } else |_| {}
-            }
-        },
-        else => {},
+    // Root containers get large default size to contain descendant positions.
+    // With calculateDocumentPosition using linear depth scaling (100px per level),
+    // even very deep trees (100 levels) stay within 10,000px.
+    // 100M pixels is plausible for very long documents.
+    if (root) {
+        return .{ .value = if (axis == .width) 1920.0 else 100_000_000.0 };
+    }
+
+    // Presentational attributes lose to CSS sizes.
+    if (tag == .img or tag == .iframe) {
+        if (self.getAttributeSafe(comptime .wrap(@tagName(axis)))) |attr| {
+            if (std.fmt.parseFloat(f64, attr)) |parsed| {
+                return .{ .value = parsed, .explicit = true };
+            } else |_| {}
+        }
     }
 
     return .{ .value = 5.0 };
@@ -1496,7 +1563,7 @@ fn viewportAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
     // clientWidth and clientHeight rather than its own MASSIVE box. This
     // fixes jstracker's uiContourMap which attempts to tile the clientHeight
     // of the body. (https://github.com/lightpanda-io/browser/issues/3251)
-    const viewport = frame._page.getViewport();
+    const viewport = frame.page.getViewport();
     return @floatFromInt(if (axis == .width) viewport.width else viewport.height);
 }
 
@@ -1550,47 +1617,69 @@ pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
     return rects;
 }
 
-// Scroll positions live in the map of the element's own frame — not the
-// caller's, which differs when a same-origin script scrolls an element in
-// another frame (e.g. inside an iframe). All scroll accessors resolve the
-// owner frame first so the state, the fired events and the document
-// comparison stay in the element's frame.
+// Scroll events fire in the element's own frame — not the caller's, which
+// differs when a same-origin script scrolls an element in another frame (e.g.
+// inside an iframe). All scroll accessors resolve the owner frame first so the
+// fired events and the document comparison stay in the element's frame.
 pub fn getScrollTop(self: *Element, frame: *Frame) u32 {
-    const owner = self.ownerFrame(frame);
-    const pos = owner._element_scroll_positions.get(self) orelse return 0;
+    const owner = self.ownerFrame(frame) orelse return 0;
+    const pos = owner.page.element_scroll_positions.get(self) orelse return 0;
     return pos.y;
 }
 
 pub fn setScrollTop(self: *Element, value: i32, frame: *Frame) !void {
-    const owner = self.ownerFrame(frame);
-    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
-    }
-    const new_y: u32 = @intCast(@max(0, value));
-    if (gop.value_ptr.y != new_y) {
-        gop.value_ptr.y = new_y;
-        try self.scheduleScrollEvents(owner);
-    }
+    _ = try self.writeScroll(.{ .to = .{ .left = null, .top = value } }, frame);
 }
 
 pub fn getScrollLeft(self: *Element, frame: *Frame) u32 {
-    const owner = self.ownerFrame(frame);
-    const pos = owner._element_scroll_positions.get(self) orelse return 0;
+    const owner = self.ownerFrame(frame) orelse return 0;
+    const pos = owner.page.element_scroll_positions.get(self) orelse return 0;
     return pos.x;
 }
 
 pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
-    const owner = self.ownerFrame(frame);
-    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
+    _ = try self.writeScroll(.{ .to = .{ .left = value, .top = null } }, frame);
+}
+
+pub const ScrollAxes = struct { x: bool = false, y: bool = false };
+
+/// What a scroll along one axis lands on. html and body scroll the viewport,
+/// and so does a detached element.
+const ScrollTarget = union(enum) {
+    viewport,
+    container: *Element,
+};
+
+/// Nearest ancestor-or-self scroll container along any of `axes`. The walk
+/// is cheap to repeat per axis: the cascade memoizes each element's props.
+pub fn scrollContainer(self: *Element, axes: ScrollAxes, frame: *Frame) ScrollTarget {
+    if (!axes.x and !axes.y) return .viewport;
+    const owner = self.ownerFrame(frame) orelse return .viewport;
+    const style_manager = &owner._style_manager;
+    var current: ?*Element = self;
+    while (current) |el| : (current = el.parentElement()) {
+        if (el.scrollsViewport()) break;
+        const scrolls = style_manager.overflowAxes(el);
+        if ((axes.x and scrolls.x) or (axes.y and scrolls.y)) {
+            return .{ .container = el };
+        }
     }
-    const new_x: u32 = @intCast(@max(0, value));
-    if (gop.value_ptr.x != new_x) {
-        gop.value_ptr.x = new_x;
-        try self.scheduleScrollEvents(owner);
-    }
+    return .viewport;
+}
+
+/// Whether the element's own overscroll-behavior keeps a scroll from chaining
+/// out of it.
+pub fn containsOverscroll(self: *Element, axes: ScrollAxes, frame: *Frame) bool {
+    const owner = self.ownerFrame(frame) orelse return false;
+    const contains = owner._style_manager.overscrollContainAxes(self);
+    return (axes.x and contains.x) or (axes.y and contains.y);
+}
+
+fn scrollsViewport(self: *const Element) bool {
+    return switch (self.getTag()) {
+        .html, .body => true,
+        else => false,
+    };
 }
 
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
@@ -1628,6 +1717,26 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
     return @max(width, self.contentAxis(frame, .width));
 }
 
+/// Null where we can't prove a limit, which leaves the offset unbounded:
+/// without an explicit size the client and content measurements collapse onto
+/// the same sum, and html and body carry giant defaults that would fabricate
+/// an extent against the real viewport. Refusing a scroll we can't prove
+/// impossible is worse than allowing one too many.
+fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
+    if (self.scrollsViewport() or !self.getElementAxis(frame, axis).explicit) {
+        return null;
+    }
+    const client = self.clientAxis(frame, axis);
+    const content = switch (axis) {
+        .width => self.getScrollWidth(frame),
+        .height => self.getScrollHeight(frame),
+    };
+    if (content <= client) {
+        return null;
+    }
+    return content - client;
+}
+
 // One axis of the direct child elements' size: laid end to end on a single
 // row for the width, stacked for the height.
 //
@@ -1648,15 +1757,20 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 // `scrollWidth` passes a threshold (the infinite-marquee idiom) never
 // terminates when the metric ignores what it just inserted.
 //
-// Text children are not measured. Estimating a text run from its length would
-// need a per-character advance, which in turn has to track font-size or
-// "shrink the font until it fits" loops stop converging — and it would report
-// overflow for practically every element containing text, since a few words
-// already exceed the default box. Element children are what content grown by
-// script actually consists of.
+// Text children add height only under an explicit width to wrap at.
+// Otherwise almost every element with text would report overflow.
 fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     var total: f64 = 0;
-    const style_manager = &self.ownerFrame(frame)._style_manager;
+    const owner = self.ownerFrame(frame) orelse return 0;
+    const style_manager = &owner._style_manager;
+
+    var wrap: ?text_measure.LineWrap = null;
+    if (axis == .height) {
+        const width = self.getElementAxis(frame, .width);
+        if (width.explicit) {
+            wrap = .{ .line_width = width.value, .font_size = style_manager.computedFontSize(self) };
+        }
+    }
 
     var child = self.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
@@ -1664,9 +1778,17 @@ fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
             if (!style_manager.hasDisplayNone(el)) {
                 total += el.getElementAxis(frame, axis).value;
             }
+        } else if (wrap) |*w| {
+            if (node.is(Node.CData.Text)) |text| {
+                w.add(text.ownData());
+            }
         }
     }
 
+    if (wrap) |w| {
+        // Whole pixels, like scroll offsets
+        total += @ceil(w.height());
+    }
     return total;
 }
 
@@ -1824,7 +1946,8 @@ fn countSubtreeNodes(node: *Node) f64 {
 pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
     var x: f64 = 0.0;
     var current = self.asNode();
-    const style_manager = &self.ownerFrame(frame)._style_manager;
+    const owner = self.ownerFrame(frame) orelse return 0;
+    const style_manager = &owner._style_manager;
 
     if (self.inlineStyle(frame)) |style| {
         x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
@@ -1863,15 +1986,16 @@ pub fn getElementsByClassName(self: *Element, class_name: []const u8, frame: *Fr
     return self.asNode().getElementsByClassName(class_name, frame);
 }
 
-pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
+pub fn clone(self: *Element, deep: bool, document: *const Node.Document, frame: *Frame) !*Node {
     const tag_name = self.getTagNameDump();
-    const node = try Frame.node_factory.createElementNS(frame, self._namespace, tag_name, &self._attributes);
+    const node = try Frame.node_factory.createElementNS(document, self._namespace, tag_name, &self._attributes);
 
     // A namespace outside the built-in set lives in a side table; the clone
     // must report the same namespaceURI.
     if (self._namespace == .unknown) {
-        if (frame._element_namespace_uris.get(self)) |uri| {
-            try frame._element_namespace_uris.put(frame.arena, node.as(Element), uri);
+        const page = document._page;
+        if (page.element_namespace_uris.get(self)) |uri| {
+            try page.element_namespace_uris.put(page.frame_arena, node.as(Element), uri);
         }
     }
 
@@ -1893,23 +2017,12 @@ pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
                 .declarative = shadow._declarative,
             }, frame) catch return error.CloneError;
 
-            const cloned_shadow_node = cloned_shadow.asNode();
-            var shadow_child_it = shadow.asNode().childrenIterator();
-            while (shadow_child_it.next()) |child| {
-                if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
-                    try frame.appendNode(cloned_shadow_node, cloned_child, .{});
-                }
-            }
+            try shadow.asNode().cloneChildrenInto(cloned_shadow.asNode(), document, frame);
         }
     }
 
     if (deep) {
-        var child_it = self.asNode().childrenIterator();
-        while (child_it.next()) |child| {
-            if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
-                try frame.appendNode(node, cloned_child, .{});
-            }
-        }
+        try self.asNode().cloneChildrenInto(node, document, frame);
     }
 
     return node;
@@ -1939,80 +2052,123 @@ pub fn scrollIntoView(self: *Element, opts: ?ScrollIntoViewOpts, frame: *Frame) 
     frame.window.scrollTo(.{ .x = 0 }, @trunc(@max(0, y)), frame) catch {};
 }
 
-const ScrollToOpts = union(enum) {
+// The scrollTo/scrollBy argument shape shared with Window: positional (x, y)
+// or a dictionary.
+pub const ScrollToOpts = union(enum) {
     x: i32,
     opts: Opts,
 
-    const Opts = struct {
+    pub const Opts = struct {
         behavior: []const u8 = "",
         left: ?i32 = null,
         top: ?i32 = null,
     };
+
+    pub const Offsets = struct { left: ?i32, top: ?i32 };
+
+    /// Per-axis values; null leaves that axis where it is. Only the dictionary
+    /// form can omit an axis.
+    pub fn offsets(self: ScrollToOpts, y: ?i32) Offsets {
+        return switch (self) {
+            .x => |x| .{ .left = x, .top = y orelse 0 },
+            .opts => |o| .{ .left = o.left, .top = o.top },
+        };
+    }
 };
 
 pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
-    const o = opts orelse return;
-    const owner = self.ownerFrame(frame);
-    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
-    }
-    const old_x = gop.value_ptr.x;
-    const old_y = gop.value_ptr.y;
-    switch (o) {
-        .x => |x| {
-            gop.value_ptr.x = @intCast(@max(0, x));
-            gop.value_ptr.y = @intCast(@max(0, y orelse 0));
-        },
-        .opts => |dict| {
-            if (dict.left) |left| gop.value_ptr.x = @intCast(@max(0, left));
-            if (dict.top) |top| gop.value_ptr.y = @intCast(@max(0, top));
-        },
-    }
-    if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
-        try self.scheduleScrollEvents(owner);
-    }
+    const o = (opts orelse return).offsets(y);
+    _ = try self.writeScroll(.{ .to = o }, frame);
 }
 
 // scrollBy(): like scrollTo() but relative to the current position.
 pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
-    const o = opts orelse return;
-    const owner = self.ownerFrame(frame);
-    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
+    const o = (opts orelse return).offsets(y);
+    _ = try self.writeScroll(.{ .by = o }, frame);
+}
+
+/// Reports whether the container moved: a wheel walks outward until one does.
+pub fn scrollByAxis(self: *Element, comptime axis: Axis, delta: i32, frame: *Frame) !bool {
+    return self.writeScroll(.{ .by = switch (axis) {
+        .width => .{ .left = delta, .top = null },
+        .height => .{ .left = null, .top = delta },
+    } }, frame);
+}
+
+const ScrollWrite = union(enum) {
+    to: ScrollToOpts.Offsets,
+    by: ScrollToOpts.Offsets,
+
+    // Null leaves that axis alone.
+    fn target(self: ScrollWrite, comptime axis: Axis, current: u32) ?i64 {
+        const offsets = switch (self) {
+            inline else => |o| o,
+        };
+        const value = switch (axis) {
+            .width => offsets.left,
+            .height => offsets.top,
+        } orelse return null;
+        return switch (self) {
+            .to => value,
+            .by => @as(i64, current) + value,
+        };
+    }
+};
+
+/// Every scroll write goes through here. Reports whether anything moved; one
+/// that lands where the offsets already are doesn't even take a map entry.
+fn writeScroll(self: *Element, write: ScrollWrite, frame: *Frame) !bool {
+    const owner = self.ownerFrame(frame) orelse return false;
+    const current: ScrollPosition = owner.page.element_scroll_positions.get(self) orelse .{};
+
+    var x = current.x;
+    var y = current.y;
+    if (write.target(.width, current.x)) |target| {
+        x = self.clampScroll(frame, .width, target);
+    }
+    if (write.target(.height, current.y)) |target| {
+        y = self.clampScroll(frame, .height, target);
+    }
+    if (x == current.x and y == current.y) {
+        return false;
+    }
+
+    const gop = try owner.page.element_scroll_positions.getOrPut(owner.page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
-    const dx: i32, const dy: i32 = switch (o) {
-        .x => |x| .{ x, y orelse 0 },
-        .opts => |dict| .{ dict.left orelse 0, dict.top orelse 0 },
-    };
-    const old_x = gop.value_ptr.x;
-    const old_y = gop.value_ptr.y;
-    gop.value_ptr.x = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.x)) + dx));
-    gop.value_ptr.y = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.y)) + dy));
-    if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
-        try self.scheduleScrollEvents(owner);
+    gop.value_ptr.x = x;
+    gop.value_ptr.y = y;
+    try self.scheduleScrollEvents(gop.value_ptr, owner);
+    return true;
+}
+
+fn clampScroll(self: *Element, frame: *Frame, comptime axis: Axis, target: i64) u32 {
+    var clamped = target;
+    if (clamped < 0) {
+        clamped = 0;
+    } else if (self.scrollExtent(frame, axis)) |extent| {
+        const max: i64 = @floor(extent);
+        clamped = @min(clamped, max);
     }
+    return @intCast(@min(clamped, std.math.maxInt(u32)));
 }
 
 // Scrolling an element fires a scroll event and then a scrollend event,
 // asynchronously and throttled, mirroring Window.scrollTo. Scrolls of the
 // scrolling element (the root) are fired at the document instead.
-// `frame` is the element's owner frame (resolved by the public accessors).
-fn scheduleScrollEvents(self: *Element, frame: *Frame) !void {
-    const gop = try frame._element_scroll_positions.getOrPut(frame.arena, self);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
-    }
-    const task_pending = gop.value_ptr.state != .done;
-    gop.value_ptr.state = .scroll;
+// `frame` is the element's owner frame and `pos` its entry there, both
+// resolved by writeScroll.
+fn scheduleScrollEvents(self: *Element, pos: *ScrollPosition, frame: *Frame) !void {
+    const task_pending = pos.state != .done;
+    pos.state = .scroll;
     if (task_pending) {
         return;
     }
 
     const task = try frame._factory.create(ScrollEventTask{ .frame = frame, .element = self });
     errdefer {
-        gop.value_ptr.state = .done;
+        pos.state = .done;
         frame._factory.destroy(task);
     }
     try frame.js.scheduler.add(task, ScrollEventTask.run, 10, .{
@@ -2041,7 +2197,7 @@ const ScrollEventTask = struct {
 
     fn cancelled(ptr: *anyopaque) void {
         const self: *ScrollEventTask = @ptrCast(@alignCast(ptr));
-        if (self.frame._element_scroll_positions.getPtr(self.element)) |pos| {
+        if (self.frame.page.element_scroll_positions.getPtr(self.element)) |pos| {
             pos.state = .done;
         }
         self.frame._factory.destroy(self);
@@ -2050,7 +2206,7 @@ const ScrollEventTask = struct {
     fn run(ptr: *anyopaque) anyerror!?u32 {
         const self: *ScrollEventTask = @ptrCast(@alignCast(ptr));
         const f = self.frame;
-        const pos = f._element_scroll_positions.getPtr(self.element) orelse {
+        const pos = f.page.element_scroll_positions.getPtr(self.element) orelse {
             f._factory.destroy(self);
             return null;
         };
@@ -2075,7 +2231,7 @@ const ScrollEventTask = struct {
 
     fn dispatchEvent(self: *ScrollEventTask, comptime event_type: String) void {
         const Event = @import("Event.zig");
-        const event = Event.initTrusted(event_type, .{ .bubbles = self.bubbles() }, self.frame._page) catch |err| {
+        const event = Event.initTrusted(event_type, .{ .bubbles = self.bubbles() }, self.frame.page) catch |err| {
             log.warn(.dom, "element.scroll.event", .{ .err = err });
             return;
         };
@@ -2187,8 +2343,8 @@ pub fn getTag(self: *const Element) Tag {
     };
 }
 
-pub fn ownerFrame(self: *const Element, default: *Frame) *Frame {
-    return self.asConstNode().ownerFrame(default);
+pub fn ownerFrame(self: *const Element, frame: *const Frame) ?*Frame {
+    return self.asConstNode().ownerFrame(frame);
 }
 
 pub const Tag = enum {
@@ -2537,6 +2693,7 @@ pub const JsApi = struct {
     pub const assignedSlot = bridge.accessor(Element.getAssignedSlot, null, .{});
     pub const attachShadow = bridge.function(_attachShadow, .{});
     pub const insertAdjacentHTML = bridge.function(Element.insertAdjacentHTML, .{ .ce_reactions = true });
+    pub const setHTML = bridge.function(Element.setHTML, .{ .ce_reactions = true });
     pub const setHTMLUnsafe = bridge.function(Element.setHTMLUnsafe, .{ .ce_reactions = true });
     pub const insertAdjacentElement = bridge.function(Element.insertAdjacentElement, .{ .ce_reactions = true });
     pub const insertAdjacentText = bridge.function(Element.insertAdjacentText, .{ .ce_reactions = true });
@@ -2670,6 +2827,30 @@ pub const Build = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Element" {
     try testing.htmlRunner("element", .{});
+}
+
+test "Element: scroll extent" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const root = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, root.asNode(),
+        \\<div style="height: 100px; overflow: auto"><div style="height: 500px"></div></div>
+        \\<div style="height: 100px; overflow: auto">text, and no element child to measure</div>
+    );
+    const box = root.asNode().firstChild().?.as(Element);
+    const text = box.nextElementSibling().?;
+
+    try box.setScrollTop(9999, frame);
+    try testing.expectEqual(400, box.getScrollTop(frame));
+    try box.setScrollTop(-1, frame);
+    try testing.expectEqual(0, box.getScrollTop(frame));
+
+    // A real browser clamps this one too, to the height of its text. contentAxis
+    // sums element children only, so we have no extent to clamp against and the
+    // offset stays unbounded.
+    try text.setScrollTop(9999, frame);
+    try testing.expectEqual(9999, text.getScrollTop(frame));
 }
 
 test "Element: div chain slot size" {

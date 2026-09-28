@@ -4,7 +4,8 @@
 <h1 align="center">Lightpanda Browser</h1>
 <p align="center">
 <strong>The headless browser built from scratch for AI agents and automation.</strong><br>
-Not a Chromium fork. Not a WebKit patch. A new browser, written in Zig.
+Not a Chromium fork. Not a WebKit patch. A new browser, written in Zig.</strong><br>
+16x lighter and 9x faster than Chromium.
 </p>
 
 </div>
@@ -70,7 +71,9 @@ Verify the binary before running anything:
 
 [Linux aarch64 is also available](https://github.com/lightpanda-io/browser/releases/tag/nightly)
 
-> **Note:** The Linux release binaries are linked against glibc. On musl-based distros (Alpine, etc.) the binary fails with `cannot execute: required file not found` because the glibc dynamic linker is missing. Use a glibc-based base image (e.g., `FROM debian:bookworm-slim` or `FROM ubuntu:24.04`) or [build from sources](#build-from-sources).
+> **Note:** The Linux release binaries are linked against glibc. On musl-based Linux distributions (Alpine, etc.) the binary fails with `cannot execute: required file not found` because the glibc dynamic linker is missing. Use a glibc-based base image (e.g., `FROM debian:bookworm-slim` or `FROM ubuntu:24.04`) or [build from sources](#build-from-sources).
+>
+> **Android / Termux:** there is no native Android build. The Linux aarch64 binary needs the glibc loader (`/lib/ld-linux-aarch64.so.1`), which Android's Bionic libc does not provide, so it fails with the same `cannot execute: required file not found` error.
 
 *For MacOS*
 ```console
@@ -180,8 +183,8 @@ you can prototype with the LLM and ship the output to production without a
 model at runtime.
 
 It supports Anthropic, OpenAI, Gemini, Google Vertex AI, Mistral, Hugging
-Face, the [Vercel AI Gateway](https://vercel.com/ai-gateway) (one key for
-hundreds of models from every major lab), any OpenAI-compatible endpoint via
+Face, the multi-lab gateways [Vercel AI Gateway](https://vercel.com/ai-gateway)
+and [OpenRouter](https://openrouter.ai) (one key for hundreds of models), any OpenAI-compatible endpoint via
 `OPENAI_BASE_URL`, and local models via Ollama or llama.cpp. You can also run
 without an LLM using `--no-llm`, which drops you into the REPL. See the
 [agent documentation](https://lightpanda.io/docs/usage/agent) for the full
@@ -192,11 +195,13 @@ reference.
 ./lightpanda agent --task "top story on news.ycombinator.com?"
 ./lightpanda agent --no-llm                           # basic REPL, no LLM
 ./lightpanda run session.js                           # run a recorded script
+cat session.js | ./lightpanda run -                   # ...or pipe one in via stdin
 ./lightpanda agent --provider gemini --task "..."     # force a specific provider
 ./lightpanda agent --list-models                      # models available for the detected provider
 VERTEX_API_KEY=... ./lightpanda agent --provider vertex             # Vertex AI, express mode
 GOOGLE_CLOUD_PROJECT=my-proj ./lightpanda agent --provider vertex   # Vertex AI, token via gcloud auth
 AI_GATEWAY_API_KEY=... ./lightpanda agent --provider vercel --model moonshotai/kimi-k2   # any model behind Vercel AI Gateway
+OPENROUTER_API_KEY=... ./lightpanda agent --provider openrouter --model anthropic/claude-sonnet-5   # any model behind OpenRouter
 OPENAI_BASE_URL=https://my-gateway/v1 OPENAI_API_KEY=... ./lightpanda agent            # any OpenAI-compatible server
 ```
 
@@ -255,7 +260,7 @@ Set `LIGHTPANDA_DISABLE_CORE_DUMP` (to any value) to suppress crash core dumps b
 Here are the key features we have implemented.
 For full details, see our [Web Platform Tests results](https://perf.lightpanda.io/wpt).
 
-- [x] CORS (enable with `--experimental-features cors`)
+- [x] CORS
 - [x] HTTP loader ([Libcurl](https://curl.se/libcurl/))
 - [x] HTML parser ([html5ever](https://github.com/servo/html5ever))
 - [x] DOM tree
@@ -369,7 +374,7 @@ Tests](https://web-platform-tests.org/).
 We use [a fork](https://github.com/lightpanda-io/wpt/tree/fork) including a custom
 [`testharnessreport.js`](https://github.com/lightpanda-io/wpt/blob/fork/resources/testharnessreport.js). Results are [published](https://perf.lightpanda.io/wpt) daily.
 
-For reference, you can easily execute a WPT test case with your browser via
+For reference, you can execute a WPT test case with your browser via
 [wpt.live](https://wpt.live).
 
 #### Configure WPT HTTP server
@@ -412,7 +417,13 @@ First start the WPT's HTTP server from your `wpt/` clone dir.
 Run a Lightpanda browser
 
 ```
-zig build run -- --insecure-disable-tls-host-verification
+zig build -Dwpt_extensions run -- serve \
+    --ws-max-concurrent 64 \
+    --insecure-disable-tls-host-verification \
+    --load-resources iframe \
+    --load-resources image \
+    --load-resources worker \
+    --load-resources stylesheet
 ```
 
 Then you can start the wptrunner from the demo's clone dir:
@@ -433,7 +444,7 @@ Also `--concurrency` define the concurrency limit.
 it's useful to build in `releaseFast` mode to make tests faster.
 
 ```
-zig build -Doptimize=ReleaseFast run
+zig build -Dwpt_extensions -Doptimize=ReleaseFast run -- serve ...
 ```
 
 ## Contributing

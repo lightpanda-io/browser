@@ -40,19 +40,19 @@ pub fn asCData(self: *const Text) *CData {
 }
 
 pub fn init(str: ?js.NullableString, frame: *Frame) !*Text {
-    const node = try Frame.node_factory.createTextNode(frame, if (str) |s| s.value else "");
+    const node = try Frame.node_factory.createTextNode(frame.document, if (str) |s| s.value else "");
     return node.as(Text);
 }
 
 // This Text node's own data (getWholeText below spans adjacent Text nodes).
 pub fn ownData(self: *const Text) []const u8 {
-    return Factory.protoOf(self)._data.str();
+    return self.asCData()._data.str();
 }
 
 // The concatenated data of the contiguous exclusive Text nodes (adjacent
 // Text siblings on both sides of this one), in tree order.
 fn getWholeText(self: *Text, frame: *Frame) ![]const u8 {
-    const node = Factory.protoOf(self).asNode();
+    const node = self.asCData().asNode();
 
     var first = node;
     while (first.previousSibling()) |prev| {
@@ -86,15 +86,16 @@ fn getAssignedSlot(self: *Text, frame: *Frame) ?*Slot {
 }
 
 pub fn splitText(self: *Text, offset: usize, frame: *Frame) !*Text {
-    const data = Factory.protoOf(self)._data.str();
+    const cdata = self.asCData();
+    const node = cdata.asNode();
+
+    const data = cdata._data.str();
 
     const byte_offset = CData.utf16OffsetToUtf8(data, offset) catch return error.IndexSizeError;
 
     const new_data = data[byte_offset..];
-    const new_node = try Frame.node_factory.createTextNode(frame, new_data);
+    const new_node = try Frame.node_factory.createTextNode(node.getDocument(frame), new_data);
     const new_text = new_node.as(Text);
-
-    const node = Factory.protoOf(self).asNode();
 
     // Per DOM spec splitText: insert first (step 7a), then update ranges (7b-7e),
     // then truncate original node (step 8).
@@ -112,7 +113,7 @@ pub fn splitText(self: *Text, offset: usize, frame: *Frame) !*Text {
     // Use replaceData instead of setData so live range updates fire
     // (matters for detached text nodes where steps 7b-7e were skipped).
     const length = Factory.protoOf(self).getLength();
-    try Factory.protoOf(self).replaceData(offset, length - offset, "", frame);
+    try cdata.replaceData(offset, length - offset, "", frame);
 
     return new_text;
 }

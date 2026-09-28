@@ -101,6 +101,11 @@ fn getSandbox(self: *IFrame, frame: *Frame) !?*DOMTokenList {
     return element.getTokenList(.sandbox, frame);
 }
 
+fn setSandbox(self: *IFrame, value: String, frame: *Frame) !void {
+    const list = try self.getSandbox(frame) orelse return;
+    return list.setValue(value, frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(IFrame);
 
@@ -126,8 +131,17 @@ pub const JsApi = struct {
     pub const srcdoc = bridge.accessor(IFrame.getSrcdoc, IFrame.setSrcdoc, .{ .ce_reactions = true });
     pub const name = reflect.string("name");
     pub const contentWindow = bridge.accessor(IFrame.getContentWindow, null, .{});
-    pub const contentDocument = bridge.accessor(IFrame.getContentDocument, null, .{});
-    pub const sandbox = bridge.accessor(IFrame.getSandbox, null, .{ .null_as_undefined = true });
+    pub const contentDocument = bridge.accessor(struct {
+        fn wrap(self: *const IFrame, frame: *Frame) ?*Document {
+            // specific JS implementation which is origin-aware.
+            const window = self._window orelse return null;
+            if (window._frame.js.origin != frame.js.origin) {
+                return null;
+            }
+            return window._document;
+        }
+    }.wrap, null, .{});
+    pub const sandbox = bridge.accessor(IFrame.getSandbox, IFrame.setSandbox, .{ .null_as_undefined = true, .ce_reactions = true });
 };
 
 pub const Build = struct {

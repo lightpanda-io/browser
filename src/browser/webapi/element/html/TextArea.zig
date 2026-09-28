@@ -124,7 +124,7 @@ fn setDefaultValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
     }
 
     // No text child exists, create one
-    const text_node = try Frame.node_factory.createTextNode(frame, value);
+    const text_node = try Frame.node_factory.createTextNode(node.getDocument(frame), value);
     _ = try node.appendChild(text_node, frame);
 }
 
@@ -140,8 +140,10 @@ const entry = text_entry.TextEntry(TextArea);
 
 pub const select = entry.select;
 pub const innerInsert = entry.innerInsert;
+pub const acceptsTextEntry = entry.acceptsTextEntry;
 pub const innerDelete = entry.innerDelete;
 pub const moveCaret = entry.moveCaret;
+pub const caretToEnd = entry.caretToEnd;
 pub const CaretMove = entry.CaretMove;
 pub const getSelectionDirection = entry.getSelectionDirection;
 pub const setSelectionStart = entry.setSelectionStart;
@@ -218,7 +220,7 @@ pub fn checkValidity(self: *TextArea, frame: *Frame) !bool {
     const v = ValidityState{ ._owner = self.asElement() };
     if (v.getValid(frame)) return true;
 
-    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
+    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
     return false;
 }

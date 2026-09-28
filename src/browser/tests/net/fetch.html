@@ -507,6 +507,35 @@
   }
 </script>
 
+<script id=fetch_metadata_headers type=module>
+  {
+    // The test server is loopback, so potentially trustworthy.
+    const state = await testing.async();
+    const parse = (text) => {
+      const got = {};
+      for (const line of text.trim().split('\n')) {
+        const sep = line.indexOf(': ');
+        got[line.slice(0, sep).toLowerCase()] = line.slice(sep + 2);
+      }
+      return got;
+    };
+    const same = parse(await (await fetch('/echo_headers')).text());
+    const same_origin_mode = parse(await (await fetch('/echo_headers', { mode: 'same-origin' })).text());
+    // 127.0.0.1 -> localhost is cross-site, and the chain keeps it.
+    const cross = parse(await (await fetch('/redirect_cross_echo_headers')).text());
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual('same-origin', same['sec-fetch-site']);
+      testing.expectEqual('cors', same['sec-fetch-mode']);
+      testing.expectEqual('empty', same['sec-fetch-dest']);
+      testing.expectEqual(undefined, same['sec-fetch-user']);
+      testing.expectEqual('same-origin', same_origin_mode['sec-fetch-mode']);
+      testing.expectEqual('cross-site', cross['sec-fetch-site']);
+    });
+  }
+</script>
+
 <script id=fetch_redirect_referer type=module>
   {
     const state = await testing.async();
@@ -532,6 +561,33 @@
       testing.expectEqual(null, response.headers.get('set-cookie'));
       testing.expectEqual(0, response.headers.getSetCookie().length);
       testing.expectEqual(false, [...response.headers.keys()].includes('set-cookie'));
+    });
+  }
+</script>
+
+<script id=fetch_null_body type=module>
+  {
+    const state = await testing.async();
+    const results = [];
+    for (const [url, method] of [
+      ['http://127.0.0.1:9582/status/204', 'GET'],
+      ['http://127.0.0.1:9582/status/205', 'POST'],
+      ['http://127.0.0.1:9582/status/304', 'GET'],
+      ['http://127.0.0.1:9582/xhr', 'HEAD'],
+    ]) {
+      const response = await fetch(url, { method });
+      results.push([response.body, response.bodyUsed, await response.text()]);
+    }
+    const ok = await fetch('http://127.0.0.1:9582/xhr');
+    state.resolve();
+
+    await state.done(() => {
+      for (const [body, bodyUsed, text] of results) {
+        testing.expectEqual(null, body);
+        testing.expectEqual(false, bodyUsed);
+        testing.expectEqual('', text);
+      }
+      testing.expectEqual(true, ok.body !== null);
     });
   }
 </script>

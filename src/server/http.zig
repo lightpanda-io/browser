@@ -27,6 +27,7 @@ const statusCategory = @import("../network/http.zig").statusCategory;
 const Server = @import("Server.zig");
 const Driver = @import("Driver.zig");
 const bidi_session = @import("bidi/session.zig");
+const http_command = @import("bidi/http_command.zig");
 const uuidv4 = @import("../id.zig").uuidv4;
 
 const log = lp.log;
@@ -59,11 +60,20 @@ pub const Connection = struct {
 
             // lives as long as the server; referenced, never freed
             static: []const u8,
+
+            // built by a worker in a pooled arena; released once written
+            pooled: Pooled,
+        };
+
+        pub const Pooled = struct {
+            arena: *lp.Arena,
+            bytes: []const u8,
         };
 
         pub fn remaining(self: *const Writing) []const u8 {
             return switch (self.data) {
-                inline else => |d| d[self.pos..],
+                .owned, .static => |d| d[self.pos..],
+                .pooled => |p| p.bytes[self.pos..],
             };
         }
 
@@ -71,6 +81,7 @@ pub const Connection = struct {
             switch (self.data) {
                 .static => {},
                 .owned => |owned| allocator.free(owned),
+                .pooled => |p| p.arena.release(),
             }
         }
     };
@@ -120,9 +131,15 @@ pub const Connection = struct {
         header: void, // still parsing the header
         request: Request,
 
-        fn parseHeader(self: *State, arena: Allocator, data: []u8) !bool {
+        // What the connection still needs before the request can be served.
+        const Parsed = union(enum) {
+            complete,
+            need: usize, // bytes the buffer needs will hold, 0 while parsing the header
+        };
+
+        fn parseHeader(self: *State, arena: Allocator, data: []u8) !Parsed {
             const header_index = std.mem.indexOf(u8, data, "\r\n\r\n") orelse {
-                return false;
+                return .{ .need = 0 };
             };
 
             // include the last line's \r\n so every line, including the request
@@ -132,10 +149,11 @@ pub const Connection = struct {
 
             _ = line_1_end;
             const body_start = header_index + 4;
-            const total = body_start + try contentLength(header);
+            // large content lenghts will saturate to max(usize) -> 413
+            const total = body_start +| try contentLength(header);
             if (data.len < total) {
                 // the body is still arriving
-                return false;
+                return .{ .need = total };
             }
             // A WebSocket upgrade may be pipelined with its first frames, but every
             // client we care about waits for the 101 first. Anything past the
@@ -153,11 +171,9 @@ pub const Connection = struct {
                 .arena = arena,
             } };
 
-            return true;
+            return .complete;
         }
 
-        // The HTTP WebDriver bootstrap (POST /session) is the only thing
-        // that sends a body; everything else is 0.
         fn contentLength(header: []const u8) !usize {
             const key = "\r\ncontent-length:";
             const at = std.ascii.indexOfIgnoreCase(header, key) orelse return 0;
@@ -196,16 +212,17 @@ pub const Connection = struct {
 
     const Buffer = struct {
         buf: []u8,
-
         // position in buf up until where we have valid data
         len: usize,
-
+        max: usize,
         allocator: Allocator,
 
-        fn init(allocator: Allocator, size: usize) !Buffer {
+        fn init(allocator: Allocator, max: usize) !Buffer {
+            const real_max = @max(max, INITIAL_BUFFER_SIZE);
             return .{
                 .len = 0,
-                .buf = try allocator.alloc(u8, size),
+                .max = real_max,
+                .buf = try allocator.alloc(u8, INITIAL_BUFFER_SIZE),
                 .allocator = allocator,
             };
         }
@@ -214,10 +231,34 @@ pub const Connection = struct {
             self.allocator.free(self.buf);
         }
 
+        fn reset(self: *Buffer) void {
+            self.len = 0;
+            if (self.buf.len == INITIAL_BUFFER_SIZE) {
+                return;
+            }
+            // keeping the larger buffer is only wasteful, so failure is fine
+            self.buf = self.allocator.realloc(self.buf, INITIAL_BUFFER_SIZE) catch self.buf;
+        }
+
+        fn ensureCapacity(self: *Buffer, needed: usize) !void {
+            if (needed <= self.buf.len) {
+                return;
+            }
+            if (needed > self.max) {
+                return error.RequestTooLarge;
+            }
+            self.buf = try self.allocator.realloc(self.buf, needed);
+        }
+
         pub fn read(self: *Buffer, socket: posix.socket_t) ![]u8 {
             const len = self.len;
             if (len == self.buf.len) {
-                return error.RequestTooLarge;
+                if (self.buf.len == self.max) {
+                    return error.RequestTooLarge;
+                }
+                // Only the header gets here: its length isn't declared, so we
+                // double until it fits. A body is sized from Content-Length.
+                try self.ensureCapacity(@min(self.buf.len * 2, self.max));
             }
 
             const n = try posix.read(socket, self.buf[len..]);
@@ -236,7 +277,7 @@ pub const Connection = struct {
         live: usize, // acquired and not yet released
         retain: usize, // min # to keep
         free_count: usize, // # of connections available in free
-        buffer_size: usize, // --cdp-max-http-message-size
+        max_buffer_size: usize, // --cdp-max-http-message-size
 
         pub fn init(app: *App) !Pool {
             const retain = app.config.maxConnections();
@@ -246,7 +287,7 @@ pub const Connection = struct {
                 .free_count = 0,
                 .retain = retain,
                 .allocator = app.allocator,
-                .buffer_size = app.config.cdpMaxHTTPMessageSize(),
+                .max_buffer_size = app.config.cdpMaxHTTPMessageSize(),
             };
             errdefer self.deinit();
 
@@ -291,7 +332,7 @@ pub const Connection = struct {
             conn.address = .{ .ip4 = .unspecified(0) };
             conn.deadline = 0;
             conn.pending = null;
-            conn.buffer.len = 0;
+            conn.buffer.reset();
             conn.state = .header;
 
             self.free.prepend(&conn.node);
@@ -309,7 +350,7 @@ pub const Connection = struct {
                 .deadline = 0,
                 .pending = null,
                 .state = .header,
-                .buffer = try .init(allocator, self.buffer_size),
+                .buffer = try .init(allocator, self.max_buffer_size),
             };
             return conn;
         }
@@ -323,6 +364,11 @@ pub const Connection = struct {
 
 // How long a connection may sit without completing a request before we close it.
 pub const IDLE_TIMEOUT_MS = 10_000;
+
+// Default buffer size of a new connection. For CDP connections, this should be
+// enough for the few HTTP requests that it makes. WebDriver can send larger
+// bodies and the buffer will grow up to --cdp-max-http-message-size as needed
+pub const INITIAL_BUFFER_SIZE = 4096;
 
 const REQUEST_ARENA_RETAIN = 8192;
 
@@ -388,9 +434,12 @@ fn processHTTP(server: *Server, conn: *Connection, now: u64) !bool {
         switch (http.*) {
             .header => {
                 const data = try conn.buffer.read(conn.socket);
-                if (try http.parseHeader(arena, data) == false) {
-                    // don't have a complete header yet
-                    return true;
+                switch (try http.parseHeader(arena, data)) {
+                    .need => |needed| {
+                        try conn.buffer.ensureCapacity(needed);
+                        return true;
+                    },
+                    .complete => {},
                 }
                 if (comptime lp.IS_DEBUG) {
                     // we do have a complete header, the state must have transitioned
@@ -400,7 +449,8 @@ fn processHTTP(server: *Server, conn: *Connection, now: u64) !bool {
             },
             .request => |*req| {
                 defer _ = server.request_arena.reset(.{ .retain_with_limit = REQUEST_ARENA_RETAIN });
-                if (try serveHTTP(server, conn, req) == .upgraded) {
+                const served = try serveHTTP(server, conn, req);
+                if (served == .upgraded) {
                     // The fd moved to a WebSocket (and out of server.http); all
                     // that's left of this Connection is to recycle it.
                     // upgradeConnection already took it out of http_connections.
@@ -411,7 +461,14 @@ fn processHTTP(server: *Server, conn: *Connection, now: u64) !bool {
                 // req lives in http.*; read what we need before resetting it
                 const keepalive = req.keepalive;
                 http.* = .header;
-                conn.buffer.len = 0;
+                // safe to free the buffer, a parked command wil have copied
+                // what it needed from it.
+                conn.buffer.reset();
+
+                if (served == .parked) {
+                    // off the loop until its worker answers (resumeParked)
+                    return true;
+                }
 
                 if (conn.pending != null) {
                     // We got a WouldBlock and now have a pending write. The
@@ -450,10 +507,18 @@ const empty_json_list_response = staticResponse(.{ .status = "200 OK", .body = "
 const status_response = staticResponse(.{ .status = "200 OK", .body = "{\"value\":{\"ready\":true,\"message\":\"\"}}", .content_type = "application/json; charset=UTF-8" });
 const delete_session_response = staticResponse(.{ .status = "200 OK", .body = "{\"value\":null}", .content_type = "application/json; charset=UTF-8" });
 const protocol_response = staticResponse(.{ .status = "200 OK", .body = @embedFile("../data/protocol.json"), .content_type = "application/json; charset=UTF-8" });
+// A parked command whose worker went away before answering.
+pub const session_ended_response = staticResponse(.{
+    .status = "404 Not Found",
+    .body = "{\"value\":{\"error\":\"invalid session id\",\"message\":\"session ended\",\"stacktrace\":\"\"}}",
+    .content_type = "application/json; charset=UTF-8",
+    .close = true,
+});
 
 const Served = enum {
     responded,
     upgraded,
+    parked,
 };
 
 const Route = struct {
@@ -490,8 +555,8 @@ const session_routes = [_]Route{
     .{ .method = .DELETE, .path = "", .handler = deleteSession },
 };
 
-// Routes under /session/{id}; path is what follows the id ("" for the
-// session itself). The HTTP command surface goes here.
+// /session/{id} itself is session_routes; everything under it is a command
+// (http_command.parse).
 const SESSION_PREFIX = "/session/";
 
 const SESSION_ID_LEN = 36;
@@ -511,7 +576,10 @@ fn serveHTTP(server: *Server, conn: *Connection, req: *Connection.Request) !Serv
             return serveNotFound(server, conn, req);
         }
         req.session_id = path[SESSION_PREFIX.len..][0..SESSION_ID_LEN];
-        return dispatch(server, &session_routes, conn, req, tail);
+        if (tail.len == 0) {
+            return dispatch(server, &session_routes, conn, req, tail);
+        }
+        return serveSessionCommand(server, conn, req, tail);
     }
     return dispatch(server, &routes, conn, req, path);
 }
@@ -588,20 +656,32 @@ fn beginBody(server: *Server) !*std.Io.Writer {
     return &server.scratch.writer;
 }
 
-fn serveDynamicHTTPResponse(server: *Server, conn: *Connection, req: *const Connection.Request, comptime status: []const u8, comptime content_type: []const u8) !Served {
-    const header_format = "HTTP/1.1 " ++ status ++ "\r\n" ++
+fn serveDynamicHTTPResponse(server: *Server, conn: *Connection, req: *const Connection.Request, status: std.http.Status, comptime content_type: []const u8) !Served {
+    return serveHTTPResponse(server, conn, req, .{ .dynamic = fillHeader(server.scratch.written(), status, content_type) });
+}
+
+const JSON_CONTENT_TYPE = "application/json; charset=UTF-8";
+
+// `buf` is HEADER_RESERVE bytes followed by the body; returns the response,
+// its header right-aligned against the body.
+fn fillHeader(buf: []u8, status: std.http.Status, comptime content_type: []const u8) []u8 {
+    const header_format = "HTTP/1.1 {d} {s}\r\n" ++
         "Content-Length: {d}\r\n" ++
         "Content-Type: " ++ content_type ++ "\r\n\r\n";
 
-    // a usize prints as at most 20 digits
-    comptime std.debug.assert(header_format.len + 20 <= HEADER_RESERVE);
+    // 3 status digits, the longest std.http.Status phrase ("Network
+    // Authentication Required"), a usize's 20 digits
+    comptime std.debug.assert(header_format.len + 3 + 31 + 20 <= HEADER_RESERVE);
 
-    const buf = server.scratch.written();
     var header_buf: [HEADER_RESERVE]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, header_format, .{buf.len - HEADER_RESERVE}) catch unreachable;
+    const header = std.fmt.bufPrint(&header_buf, header_format, .{
+        @intFromEnum(status),
+        status.phrase() orelse "",
+        buf.len - HEADER_RESERVE,
+    }) catch unreachable;
     const start = HEADER_RESERVE - header.len;
     @memcpy(buf[start..HEADER_RESERVE], header);
-    return serveHTTPResponse(server, conn, req, .{ .dynamic = buf[start..] });
+    return buf[start..];
 }
 
 fn errorResponse(comptime status: u16, comptime body: []const u8) []const u8 {
@@ -656,7 +736,7 @@ fn serveJSONProtocol(server: *Server, conn: *Connection, req: *Connection.Reques
 fn serveMetrics(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
     const writer = try beginBody(server);
     lp.metrics.write(writer);
-    return serveDynamicHTTPResponse(server, conn, req, "200 OK", "text/plain; version=0.0.4; charset=utf-8");
+    return serveDynamicHTTPResponse(server, conn, req, .ok, "text/plain; version=0.0.4; charset=utf-8");
 }
 
 // GET /status (webdriver)
@@ -678,20 +758,12 @@ fn newSession(server: *Server, conn: *Connection, req: *Connection.Request) !Ser
             firstMatch: ?[]const Capability = null,
         } = null,
     }, req.arena, req.body, .{ .ignore_unknown_fields = true }) catch {
-        return serveWebDriver(server, conn, req, "400 Bad Request", .{
-            .@"error" = "invalid argument",
-            .message = "invalid JSON body",
-            .stacktrace = "",
-        });
+        return serveWebDriverError(server, conn, req, "invalid argument", "invalid JSON body");
     };
 
     if (server.worker_pool.isFull()) {
         lp.metrics.serve_connection_limit.incr();
-        return serveWebDriver(server, conn, req, "500 Internal Server Error", .{
-            .@"error" = "session not created",
-            .message = "too many sessions",
-            .stacktrace = "",
-        });
+        return serveWebDriverError(server, conn, req, "session not created", "too many sessions");
     }
 
     var session_id: [36]u8 = undefined;
@@ -699,11 +771,7 @@ fn newSession(server: *Server, conn: *Connection, req: *Connection.Request) !Ser
 
     const worker = server.spawnWorker(.bidi, .{ .session = session_id }) catch |err| {
         log.err(.serve, "worker spawn", .{ .err = err });
-        return serveWebDriver(server, conn, req, "500 Internal Server Error", .{
-            .@"error" = "session not created",
-            .message = "failed to start the session",
-            .stacktrace = "",
-        });
+        return serveWebDriverError(server, conn, req, "session not created", "failed to start the session");
     };
     // The client never learns the id if we fail to answer (e.g. it hung up),
     // so nothing would ever DELETE this session.
@@ -731,7 +799,7 @@ fn newSession(server: *Server, conn: *Connection, req: *Connection.Request) !Ser
         break :blk null;
     };
 
-    return serveWebDriver(server, conn, req, "200 OK", .{
+    return serveWebDriver(server, conn, req, .ok, .{
         .sessionId = &session_id,
         .capabilities = bidi_session.Capabilities{
             .userAgent = server.app.config.http_headers.user_agent,
@@ -763,14 +831,40 @@ fn upgradeSession(server: *Server, conn: *Connection, req: *Connection.Request) 
 // DELETE /session/ID (webdriver)
 fn deleteSession(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
     const worker = server.findSession(req.session_id.?) orelse {
-        return serveWebDriver(server, conn, req, "404 Not Found", .{
-            .@"error" = "invalid session id",
-            .message = "no such session",
-            .stacktrace = "",
-        });
+        return serveNoSuchSession(server, conn, req);
     };
     server.quitSession(worker);
     return serveHTTPResponse(server, conn, req, .{ .static = delete_session_response });
+}
+
+// /session/ID/... (webdriver): parsed here, answered by the session's worker.
+fn serveSessionCommand(server: *Server, conn: *Connection, req: *Connection.Request, path: []const u8) !Served {
+    const worker = server.findSession(req.session_id.?) orelse {
+        return serveNoSuchSession(server, conn, req);
+    };
+    if (worker.http_request != null) {
+        return serveCommandInProgress(server, conn, req);
+    }
+
+    const arena = try server.app.arena_pool.acquire(req.body.len, "http command");
+    const command = http_command.parse(arena.allocator(), req.method, path, req.body) catch |err| {
+        arena.release();
+        switch (err) {
+            error.OutOfMemory => return err,
+            error.UnknownCommand => return serveWebDriverError(server, conn, req, "unknown command", "unknown command"),
+            error.InvalidArgument => return serveWebDriverError(server, conn, req, "invalid argument", "invalid body"),
+        }
+    };
+    server.parkRequest(worker, conn, req.keepalive, arena, command);
+    return .parked;
+}
+
+fn serveCommandInProgress(server: *Server, conn: *Connection, req: *const Connection.Request) !Served {
+    return serveWebDriverError(server, conn, req, "unknown error", "a command is already in progress");
+}
+
+fn serveNoSuchSession(server: *Server, conn: *Connection, req: *const Connection.Request) !Served {
+    return serveWebDriverError(server, conn, req, "invalid session id", "no such session");
 }
 
 // CDP or Bidi directly creating a Worker from an websocket upgrade
@@ -783,10 +877,18 @@ fn upgradeSpawn(server: *Server, conn: *Connection, req: *Connection.Request, pr
 }
 
 // Answers a HTTP WebDriver request with {"value": value}.
-fn serveWebDriver(server: *Server, conn: *Connection, req: *const Connection.Request, comptime status: []const u8, value: anytype) !Served {
+fn serveWebDriver(server: *Server, conn: *Connection, req: *const Connection.Request, status: std.http.Status, value: anytype) !Served {
     const writer = try beginBody(server);
     try std.json.Stringify.value(.{ .value = value }, .{}, writer);
-    return serveDynamicHTTPResponse(server, conn, req, status, "application/json; charset=UTF-8");
+    return serveDynamicHTTPResponse(server, conn, req, status, JSON_CONTENT_TYPE);
+}
+
+fn serveWebDriverError(server: *Server, conn: *Connection, req: *const Connection.Request, code: []const u8, message: []const u8) !Served {
+    return serveWebDriver(server, conn, req, webDriverErrorStatus(code), .{
+        .@"error" = code,
+        .message = message,
+        .stacktrace = "",
+    });
 }
 
 fn serveNotFound(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
@@ -821,6 +923,81 @@ fn serveHTTPResponse(server: *Server, conn: *Connection, req: *const Connection.
     // on failure the caller disconnects, which frees pending
     try server.io_engine.waitWritable(conn);
     return .responded;
+}
+
+// A parked connection's response is ready, join the loop so that we can start
+// writing the response.
+pub fn resumeParked(server: *Server, conn: *Connection, req_keepalive: bool, response: Connection.Writing.Data, now: u64) void {
+    const allocator = server.app.allocator;
+    // beginShutdown closed the http connections, this one was off the loop then
+    const keepalive = req_keepalive and server.shutdown_begun == false;
+    var writing: Connection.Writing = .{ .pos = 0, .data = response, .keepalive = keepalive };
+
+    server.io_engine.monitorHTTP(conn) catch |err| {
+        log.err(.serve, "resume monitor", .{ .err = err });
+        writing.deinit(allocator);
+        sys_net.close(conn.socket);
+        return recycle(server, conn);
+    };
+    conn.deadline = now + IDLE_TIMEOUT_MS;
+    server.http_connections.append(&conn.node);
+
+    const data = writing.remaining();
+    recordResponse(data);
+    writing.pos = write(conn.socket, data) catch |err| {
+        log.debug(.serve, "resume write", .{ .err = err });
+        writing.deinit(allocator);
+        return disconnect(server, conn);
+    };
+
+    if (writing.pos < data.len) {
+        // disconnect frees it from here
+        conn.pending = writing;
+        server.io_engine.waitWritable(conn) catch |err| {
+            log.err(.serve, "wait writable", .{ .err = err });
+            return disconnect(server, conn);
+        };
+        return;
+    }
+
+    writing.deinit(allocator);
+    if (keepalive == false) {
+        disconnect(server, conn);
+    }
+}
+
+// A complete {"value": value} response, built by a worker for resumeParked,
+// in an arena the loop releases once it's written.
+pub fn webDriverResponse(arena: *lp.Arena, status: std.http.Status, value: anytype) ![]const u8 {
+    var aw: std.Io.Writer.Allocating = try .initCapacity(arena.allocator(), 512);
+    try aw.writer.splatByteAll(0, HEADER_RESERVE);
+    try std.json.Stringify.value(.{ .value = value }, .{}, &aw.writer);
+    return fillHeader(aw.written(), status, JSON_CONTENT_TYPE);
+}
+
+// W3C WebDriver's error table; every code not listed is a 500.
+pub fn webDriverErrorStatus(code: []const u8) std.http.Status {
+    const statuses = std.StaticStringMap(std.http.Status).initComptime(.{
+        .{ "detached shadow root", .not_found },
+        .{ "element click intercepted", .bad_request },
+        .{ "element not interactable", .bad_request },
+        .{ "insecure certificate", .bad_request },
+        .{ "invalid argument", .bad_request },
+        .{ "invalid cookie domain", .bad_request },
+        .{ "invalid element state", .bad_request },
+        .{ "invalid selector", .bad_request },
+        .{ "invalid session id", .not_found },
+        .{ "no such alert", .not_found },
+        .{ "no such cookie", .not_found },
+        .{ "no such element", .not_found },
+        .{ "no such frame", .not_found },
+        .{ "no such shadow root", .not_found },
+        .{ "no such window", .not_found },
+        .{ "stale element reference", .not_found },
+        .{ "unknown command", .not_found },
+        .{ "unknown method", .method_not_allowed },
+    });
+    return statuses.get(code) orelse .internal_server_error;
 }
 
 // HTTP-phase teardown. Websockets tear down via releaseWorker.
@@ -859,7 +1036,7 @@ pub fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
         // advertiseHost() falls back to 127.0.0.1 so clients can still
         // connect locally. Surface the trade-off so users running
         // outside the same host know they have to opt in.
-        log.note(.cdp, "advertising loopback for wildcard bind", .{
+        log.note(.cdp, "wildcard bind advertise", .{
             .message = "--host is a wildcard (0.0.0.0 / ::) without --advertise-host; clients on other hosts will need --advertise-host to reach the CDP endpoint",
         });
     }
@@ -980,4 +1157,69 @@ fn webSocketAccept(head: []const u8, out: *[28]u8) ![]const u8 {
     hasher.final(&sha);
     _ = std.base64.standard.Encoder.encode(out, &sha);
     return out;
+}
+
+const testing = @import("../testing.zig");
+
+test "http: the read buffer grows with the request and gives the space back" {
+    var pair: [2]posix.socket_t = undefined;
+    if (std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair) != 0) {
+        return error.SocketPairFailed;
+    }
+    defer sys_net.close(pair[0]);
+    defer sys_net.close(pair[1]);
+
+    const max = INITIAL_BUFFER_SIZE * 2;
+    var buffer = try Connection.Buffer.init(testing.allocator, max);
+    defer buffer.deinit();
+
+    // a connection commits the initial size, never the limit
+    try testing.expectEqual(INITIAL_BUFFER_SIZE, buffer.buf.len);
+
+    // a header declares no length, so the buffer doubles to take it
+    const filler = "a" ** max;
+    try sys_net.writeAll(pair[1], filler);
+    while (buffer.len < filler.len) {
+        _ = try buffer.read(pair[0]);
+    }
+    try testing.expectEqual(max, buffer.buf.len);
+
+    // and stops doubling at the limit
+    try sys_net.writeAll(pair[1], "a");
+    try testing.expectError(error.RequestTooLarge, buffer.read(pair[0]));
+
+    // the next request on this connection starts small again
+    buffer.reset();
+    try testing.expectEqual(0, buffer.len);
+    try testing.expectEqual(INITIAL_BUFFER_SIZE, buffer.buf.len);
+}
+
+test "http: a declared body is sized upfront" {
+    var pair: [2]posix.socket_t = undefined;
+    if (std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair) != 0) {
+        return error.SocketPairFailed;
+    }
+    defer sys_net.close(pair[0]);
+    defer sys_net.close(pair[1]);
+
+    var buffer = try Connection.Buffer.init(testing.allocator, 1024 * 1024);
+    defer buffer.deinit();
+
+    var state: Connection.State = .header;
+    const body_len = INITIAL_BUFFER_SIZE * 4;
+    var head_buf: [64]u8 = undefined;
+    const head = try std.fmt.bufPrint(&head_buf, "POST /session HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{body_len});
+    try sys_net.writeAll(pair[1], head);
+
+    // the header alone is enough to know how much room the body needs
+    const needed = switch (try state.parseHeader(testing.allocator, try buffer.read(pair[0]))) {
+        .complete => return error.UnexpectedlyComplete,
+        .need => |n| n,
+    };
+    try testing.expectEqual(head.len + body_len, needed);
+    try buffer.ensureCapacity(needed);
+    try testing.expectEqual(needed, buffer.buf.len);
+
+    // a body that can't fit is rejected without reading any of it
+    try testing.expectError(error.RequestTooLarge, buffer.ensureCapacity(buffer.max + 1));
 }

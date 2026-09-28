@@ -53,7 +53,7 @@ _arena: *lp.Arena,
 _rc: lp.RC = .{},
 _items: std.ArrayList(*DataTransferItem) = .empty,
 _item_list: *DataTransferItemList,
-// FileList lives on the factory slab and is frame-tracked, so each File ref it
+// FileList lives on the factory allocator and is frame-tracked, so each File ref it
 // holds is released at frame teardown (same path as `<input type=file>`).
 _files: *FileList,
 _drop_effect: []const u8 = "none",
@@ -181,7 +181,7 @@ pub fn removeItem(self: *DataTransfer, index: u32, frame: *Frame) !void {
     }
     const it = self._items.orderedRemove(index);
     if (it._kind == .file) {
-        it._payload.file._proto.releaseRef(frame._page);
+        it._payload.file._proto.releaseRef(frame.page);
         try self.rebuildFiles(frame);
     }
 }
@@ -189,7 +189,7 @@ pub fn removeItem(self: *DataTransfer, index: u32, frame: *Frame) !void {
 pub fn clearItems(self: *DataTransfer, frame: *Frame) !void {
     for (self._items.items) |it| {
         if (it._kind == .file) {
-            it._payload.file._proto.releaseRef(frame._page);
+            it._payload.file._proto.releaseRef(frame.page);
         }
     }
     self._items.clearRetainingCapacity();

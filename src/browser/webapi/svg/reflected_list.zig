@@ -77,7 +77,7 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
             try sync(self, frame);
 
             const prepared = try hooks.prepareItem(self, item, frame);
-            errdefer hooks.releaseItem(prepared, frame._page);
+            errdefer hooks.releaseItem(prepared, frame.page);
 
             try retireAll(self, frame);
             try self._items.ensureTotalCapacity(frame.arena, 1);
@@ -98,7 +98,7 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
             try sync(self, frame);
 
             const prepared = try hooks.prepareItem(self, item, frame);
-            errdefer hooks.releaseItem(prepared, frame._page);
+            errdefer hooks.releaseItem(prepared, frame.page);
             const at = @min(@as(usize, index), self._items.items.len);
             const next = try frame.local_arena.alloc(*Item, self._items.items.len + 1);
             @memcpy(next[0..at], self._items.items[0..at]);
@@ -118,7 +118,7 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
             if (index >= self._items.items.len) return error.IndexSizeError;
 
             const prepared = try hooks.prepareItem(self, item, frame);
-            errdefer hooks.releaseItem(prepared, frame._page);
+            errdefer hooks.releaseItem(prepared, frame.page);
             const next = try frame.local_arena.dupe(*Item, self._items.items);
             next[index] = prepared;
 
@@ -158,7 +158,7 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
         }
 
         pub fn sync(self: *List, frame: *Frame) !void {
-            releaseRetired(self, frame._page);
+            releaseRetired(self, frame.page);
 
             const raw = self._element.getAttributeSafe(hooks.attrName(self)) orelse "";
             if (self._synced and std.mem.eql(u8, self._snapshot.items, raw)) {
@@ -170,7 +170,7 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
                 error.SyntaxError => std.ArrayList(*Item).empty,
                 else => return err,
             };
-            errdefer for (parsed.items) |item| hooks.releaseItem(item, frame._page);
+            errdefer for (parsed.items) |item| hooks.releaseItem(item, frame.page);
 
             self._snapshot.clearRetainingCapacity();
             try self._snapshot.appendSlice(frame.arena, raw);

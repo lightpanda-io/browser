@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<script>
+  // A pending timer, so the wait can't resolve through `.done`.
+  setTimeout(() => {}, 5000);
+  window.addEventListener('load', () => {
+    fetch('/xhr/slow').then(() => {
+      const div = document.createElement('div');
+      div.id = 'fetched';
+      document.body.appendChild(div);
+    });
+  });
+</script>

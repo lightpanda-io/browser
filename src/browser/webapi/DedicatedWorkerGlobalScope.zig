@@ -213,7 +213,7 @@ const ReceiveMessageCallback = struct {
             const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
                 .bubbles = false,
                 .cancelable = false,
-            }, wsg._page)).asEvent();
+            }, wsg.page)).asEvent();
             try wsg.dispatch(target, event, on_messageerror, .{});
             return null;
         }
@@ -230,7 +230,7 @@ const ReceiveMessageCallback = struct {
             .data = .{ .value = self.data.? },
             .bubbles = false,
             .cancelable = false,
-        }, wsg._page)).asEvent();
+        }, wsg.page)).asEvent();
         try wsg.dispatch(target, event, on_message, .{});
         return null;
     }

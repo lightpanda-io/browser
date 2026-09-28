@@ -46,7 +46,7 @@ const Unit = enum(u16) {
 };
 
 pub fn detached(frame: *Frame) !*Angle {
-    const arena = try frame._page.getArena(.tiny, "SVGAngle");
+    const arena = try frame.page.getArena(.tiny, "SVGAngle");
     errdefer arena.release();
     const self = try arena.create(Angle);
     self.* = .{ ._arena = arena };

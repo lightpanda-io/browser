@@ -50,7 +50,7 @@ pub fn findSlot(slottable: *Node, comptime open_only: bool, frame: *Frame) ?*Slo
     const shadow_node = shadow_root.asNode();
 
     if (shadow_root._slot_assignment == .manual) {
-        const slot = frame._manual_slot_assignments.get(slottable) orelse return null;
+        const slot = frame.page._manual_slot_assignments.get(slottable) orelse return null;
         if (slot.asNode().getRootNode(.{}) != shadow_node) {
             return null;
         }
@@ -130,16 +130,17 @@ fn _assignSlottables(slot: *Slot, frame: *Frame) !void {
 
     frame.signalSlotChange(slot);
 
+    const page = frame.page;
     for (old) |node| {
-        if (frame._assigned_slots.get(node) == slot) {
-            _ = frame._assigned_slots.remove(node);
+        if (page._assigned_slots.get(node) == slot) {
+            _ = page._assigned_slots.remove(node);
             node._flags.assigned_slot = false;
         }
     }
     slot._assigned.clearRetainingCapacity();
     try slot._assigned.appendSlice(frame.arena, slottables.items);
     for (slottables.items) |node| {
-        try frame._assigned_slots.put(frame.arena, node, slot);
+        try page._assigned_slots.put(page.frame_arena, node, slot);
         node._flags.assigned_slot = true;
     }
 }
@@ -202,7 +203,7 @@ pub fn insertionSteps(parent: *Node, child: *Node, in_fragment_parse: bool, fram
 // DOM spec removing steps that affect slot assignment. Runs after child has
 // been unlinked from parent.
 pub fn removalSteps(parent: *Node, child: *Node, frame: *Frame) void {
-    if (frame._element_shadow_roots.count() == 0) {
+    if (frame.page.element_shadow_roots.count() == 0) {
         // shortcut
         return;
     }
@@ -233,7 +234,7 @@ pub fn slotAttributeChanged(slottable: *Node, old_value: []const u8, value: []co
     if (std.mem.eql(u8, old_value, value)) {
         return;
     }
-    if (frame._element_shadow_roots.count() == 0) {
+    if (frame.page.element_shadow_roots.count() == 0) {
         return;
     }
     if (slottable.assignedSlot(frame)) |old_slot| {

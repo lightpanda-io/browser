@@ -233,10 +233,11 @@ jobs:
               --field tag="${{ env.RELEASE }}"
 
   update-python-package:
-    # Version tags only (never nightly): create the matching release on
-    # lightpanda-python. That repo's wheels workflow triggers on its release
-    # event, bundles this release's binaries, and publishes to PyPI once a
-    # maintainer approves the `pypi` environment deployment there.
+    # Version tags only (never nightly): start the wheels build on
+    # lightpanda-python. It bundles this release's binaries, publishes to PyPI
+    # once a maintainer approves the `pypi` environment deployment there, and
+    # then records the matching release on that repo itself — the app token
+    # below can start workflows there but cannot write repository contents.
     if: github.ref_type == 'tag'
     needs: [build-linux, build-macos]
     runs-on: ubuntu-latest
@@ -251,7 +252,7 @@ jobs:
           owner: lightpanda-io
           repositories: lightpanda-python
 
-      - name: Create the matching lightpanda-python release
+      - name: Start the lightpanda-python wheels build
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PYTHON_REPO: lightpanda-io/lightpanda-python
@@ -264,7 +265,7 @@ jobs:
             echo "release $RELEASE already exists on $PYTHON_REPO; nothing to do"
             exit 0
           fi
-          gh release create "$RELEASE" --repo "$PYTHON_REPO" \
-            --title "$RELEASE" \
-            --notes "Bundles [lightpanda-io/browser ${RELEASE}](https://github.com/lightpanda-io/browser/releases/tag/${RELEASE}). Install with \`pip install lightpanda\`."
-          echo "created; the release event starts the wheels build, whose publish waits for pypi environment approval"
+          gh workflow run wheels.yml --repo "$PYTHON_REPO" \
+            --field release="$RELEASE" \
+            --field publish=pypi
+          echo "dispatched; the publish waits for pypi environment approval on $PYTHON_REPO"

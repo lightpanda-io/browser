@@ -26,13 +26,13 @@ const browsing_context = @import("browsing_context.zig");
 
 const log = lp.log;
 
-pub fn processMessage(cmd: *const BiDi.Command) !void {
+pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
     const command = std.meta.stringToEnum(enum {
         close,
         getUserContexts,
         createUserContext,
         removeUserContext,
-    }, cmd.action) orelse return error.UnknownCommand;
+    }, action) orelse return error.UnknownCommand;
 
     switch (command) {
         .close => return close(cmd),
@@ -42,7 +42,7 @@ pub fn processMessage(cmd: *const BiDi.Command) !void {
     }
 }
 
-fn close(cmd: *const BiDi.Command) !void {
+fn close(cmd: *BiDi.Command) !void {
     try cmd.sendResult(struct {}{});
 
     const bidi = cmd.bidi;
@@ -52,7 +52,7 @@ fn close(cmd: *const BiDi.Command) !void {
 
 const UserContextInfo = struct { userContext: []const u8 };
 
-fn getUserContexts(cmd: *const BiDi.Command) !void {
+fn getUserContexts(cmd: *BiDi.Command) !void {
     const bidi = cmd.bidi;
     var infos: [2]UserContextInfo = .{ .{ .userContext = "default" }, undefined };
     var len: usize = 1;
@@ -63,7 +63,7 @@ fn getUserContexts(cmd: *const BiDi.Command) !void {
     return cmd.sendResult(.{ .userContexts = infos[0..len] });
 }
 
-fn createUserContext(cmd: *const BiDi.Command) !void {
+fn createUserContext(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         proxy: ?std.json.Value = null,
         acceptInsecureCerts: ?bool = null,
@@ -92,7 +92,7 @@ fn createUserContext(cmd: *const BiDi.Command) !void {
     return cmd.sendResult(.{ .userContext = &id });
 }
 
-fn removeUserContext(cmd: *const BiDi.Command) !void {
+fn removeUserContext(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         userContext: []const u8,
     });

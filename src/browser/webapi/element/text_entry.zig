@@ -29,10 +29,43 @@ const InputEvent = @import("../event/InputEvent.zig");
 
 pub fn TextEntry(comptime T: type) type {
     return struct {
+        /// Whether typing edits the control's value. Checkbox and radio share
+        /// Input's value machinery but no text goes into them.
+        pub fn acceptsTextEntry(self: *const T) bool {
+            if (!@hasField(T, "_input_type")) {
+                return true;
+            }
+            return switch (self._input_type) {
+                .checkbox, .radio => false,
+                else => true,
+            };
+        }
+
+        /// Whether the control keeps a text selection/caret internally. Wider
+        /// than selectionAvailable(): email and number have selectable text
+        /// (and a caret) even though the selection APIs don't apply to them.
+        pub fn tracksSelection(self: *const T) bool {
+            if (self.selectionAvailable()) {
+                return true;
+            }
+            if (!@hasField(T, "_input_type")) {
+                return false;
+            }
+            return switch (self._input_type) {
+                .email, .number => true,
+                else => false,
+            };
+        }
+
+        // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-textarea/input-select
+        // Never throws: without selectable text it just returns.
         pub fn select(self: *T, frame: *Frame) !void {
+            if (tracksSelection(self) == false) {
+                return;
+            }
             const len: u32 = @intCast(self.getValue().len);
-            try setSelectionRange(self, 0, len, null, frame);
-            const event = try Event.init("select", .{ .bubbles = true }, frame._page);
+            try applySelectionRange(self, 0, len, .none, frame);
+            const event = try Event.init("select", .{ .bubbles = true }, frame.page);
             try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
         }
 
@@ -44,8 +77,10 @@ pub fn TextEntry(comptime T: type) type {
                     // fully selected, replace the content.
                     const new_value = try arena.dupe(u8, str);
                     try self.setUserValue(new_value, frame);
-                    self._selection_start = @intCast(new_value.len);
-                    self._selection_end = @intCast(new_value.len);
+                    // the sanitized value can be shorter than what was inserted
+                    const new_len: u32 = @intCast(self.getValue().len);
+                    self._selection_start = new_len;
+                    self._selection_end = new_len;
                     self._selection_direction = .none;
                     try dispatchSelectionChangeEvent(self, frame);
                 },
@@ -62,20 +97,20 @@ pub fn TextEntry(comptime T: type) type {
                     );
                     try self.setUserValue(new_value, frame);
 
-                    const new_pos = range[0] + str.len;
-                    self._selection_start = @intCast(new_pos);
-                    self._selection_end = @intCast(new_pos);
+                    const new_pos: u32 = @intCast(@min(range[0] + str.len, self.getValue().len));
+                    self._selection_start = new_pos;
+                    self._selection_end = new_pos;
                     self._selection_direction = .none;
                     try dispatchSelectionChangeEvent(self, frame);
                 },
                 .none => {
                     // nothing selected, insert at the caret. Controls without
-                    // selection support keep no caret; append.
+                    // a caret (e.g. date) append.
                     const current_value = self.getValue();
-                    const caret = if (self.selectionAvailable()) @min(self._selection_start, current_value.len) else current_value.len;
+                    const caret = if (tracksSelection(self)) @min(self._selection_start, current_value.len) else current_value.len;
                     const new_value = try std.mem.concat(arena, u8, &.{ current_value[0..caret], str, current_value[caret..] });
                     try self.setUserValue(new_value, frame);
-                    if (self.selectionAvailable()) {
+                    if (tracksSelection(self)) {
                         // the sanitized value can be shorter than what was inserted
                         const new_pos: u32 = @intCast(@min(caret + str.len, self.getValue().len));
                         self._selection_start = new_pos;
@@ -105,8 +140,8 @@ pub fn TextEntry(comptime T: type) type {
                     start, end = range;
                 },
                 .none => {
-                    // Controls without selection support keep no caret; edit at the end.
-                    const caret = if (self.selectionAvailable()) @min(self._selection_start, value_len) else value_len;
+                    // Controls without a caret (e.g. date) edit at the end.
+                    const caret = if (tracksSelection(self)) @min(self._selection_start, value_len) else value_len;
                     if (forward) {
                         if (caret >= value_len) {
                             return;
@@ -138,6 +173,16 @@ pub fn TextEntry(comptime T: type) type {
             try dispatchInputEvent(self, null, if (forward) "deleteContentForward" else "deleteContentBackward", frame);
         }
 
+        // Collapses the selection to the end of the value. Unlike
+        // setSelectionRange(), applies to email and number too.
+        pub fn caretToEnd(self: *T, frame: *Frame) !void {
+            if (tracksSelection(self) == false) {
+                return;
+            }
+            const len: u32 = @intCast(self.getValue().len);
+            try applySelectionRange(self, len, len, .none, frame);
+        }
+
         pub const CaretMove = enum { backward, forward, line_start, line_end };
 
         // Default action of the caret movement keys (ArrowLeft, ArrowRight,
@@ -146,7 +191,7 @@ pub fn TextEntry(comptime T: type) type {
         // ArrowLeft/ArrowRight on a non-collapsed selection collapses it to
         // the corresponding edge without moving, like Chrome.
         pub fn moveCaret(self: *T, move: CaretMove, extend: bool, frame: *Frame) !void {
-            if (self.selectionAvailable() == false) {
+            if (tracksSelection(self) == false) {
                 return;
             }
             const value = self.getValue();
@@ -254,6 +299,16 @@ pub fn TextEntry(comptime T: type) type {
                 } else break :blk .none;
             };
 
+            return applySelectionRange(self, selection_start, selection_end, direction, frame);
+        }
+
+        fn applySelectionRange(
+            self: *T,
+            selection_start: u32,
+            selection_end: u32,
+            direction: Selection.SelectionDirection,
+            frame: *Frame,
+        ) !void {
             const len_u32: u32 = @intCast(self.getValue().len);
             var start: u32 = if (selection_start > len_u32) len_u32 else selection_start;
             const end: u32 = if (selection_end > len_u32) len_u32 else selection_end;
@@ -273,7 +328,7 @@ pub fn TextEntry(comptime T: type) type {
         const HowSelected = union(enum) { partial: struct { u32, u32 }, full, none };
 
         fn howSelected(self: *const T) HowSelected {
-            if (self.selectionAvailable() == false) {
+            if (tracksSelection(self) == false) {
                 return .none;
             }
             const value_len: u32 = @intCast(self.getValue().len);
@@ -290,7 +345,7 @@ pub fn TextEntry(comptime T: type) type {
         }
 
         fn dispatchSelectionChangeEvent(self: *T, frame: *Frame) !void {
-            const event = try Event.init("selectionchange", .{ .bubbles = true }, frame._page);
+            const event = try Event.init("selectionchange", .{ .bubbles = true }, frame.page);
             try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
         }
 

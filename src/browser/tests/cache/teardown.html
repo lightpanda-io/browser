@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=add_all_in_flight_at_teardown type=module>
+  // Never awaited: the page goes away with one fetch done and one still in
+  // flight. The runner's leak check is the assertion.
+  const cache = await caches.open('teardown');
+  cache.addAll(['/xhr', '/xhr/slow']);
+  testing.expectTrue(true);
+</script>
