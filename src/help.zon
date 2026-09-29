@@ -266,8 +266,8 @@
     \\          The AI provider. When omitted, lightpanda auto-detects an API
     \\          key from your environment (ANTHROPIC_API_KEY, OPENAI_API_KEY,
     \\          GOOGLE_API_KEY/GEMINI_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY,
-    \\          MISTRAL_API_KEY, OPENROUTER_API_KEY, ORCAROUTER_API_KEY,
-    \\          VERTEX_API_KEY). With exactly one key set:
+    \\          MISTRAL_API_KEY, OPENROUTER_API_KEY, VERTEX_API_KEY). With
+    \\          exactly one key set:
     \\          that provider is used. With multiple keys on a TTY: you'll be
     \\          prompted to pick; in non-interactive contexts, pass --provider
     \\          explicitly. With no keys set: falls back to the basic REPL
@@ -288,8 +288,8 @@
     \\          subscription (OAuth) instead of an API key.
     \\
     \\          Allowed values: "anthropic", "openai", "gemini", "huggingface",
-    \\                          "vercel", "mistral", "openrouter", "orcarouter",
-    \\                          "ollama", "llama_cpp", "vertex", "codex",
+    \\                          "vercel", "mistral", "openrouter", "ollama",
+    \\                          "llama_cpp", "vertex", "codex",
     \\                          "openai_compatible".
     \\          In the REPL, use /provider to list and change providers.
     \\  --save <PATH>
@@ -409,14 +409,15 @@
     \\  --cors-store-entry-limit <INT>
     \\          Maximum number of entries kept in the CorsStore. 0 means no limit.
     \\          Defaults to 1000.
+    \\  --disable-features <FEATURE>
+    \\          Disable a feature that is on by default. Can be passed multiple times.
+    \\          Defaults to none disabled.
+    \\          Allowed values:
+    \\             cors        Skip CORS checks on fetch/XHR requests.
     \\  --experimental-features <FEATURE>
     \\          Enable an experimental, unstable feature. Can be passed multiple times.
     \\          Behavior may change or be removed without notice.
     \\          Defaults to none enabled.
-    \\          Allowed values:
-    \\              cors      Obey CORS (cross-origin resource sharing) checks
-    \\                        on fetch/XHR requests instead of allowing them
-    \\                        unconditionally.
     \\  --load-resources <RESOURCE>
     \\          Sub-resource to actually request. Can be passed multiple times.
     \\          Defaults to requesting none of them.

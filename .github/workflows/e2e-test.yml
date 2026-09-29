@@ -117,7 +117,7 @@ jobs:
           echo "value=$args" >> "$GITHUB_OUTPUT"
 
       - run: |
-          ./lightpanda serve --experimental-features cors --port 9222 ${{ steps.args.outputs.value }} &
+          ./lightpanda serve --port 9222 ${{ steps.args.outputs.value }} &
 
       - run: |
           go run runner/main.go
@@ -163,7 +163,7 @@ jobs:
       - id: args
         name: build LP args
         run: |
-          args="--experimental-features cors --http-cache-dir /tmp/lp-cache --load-resources worker --load-resources iframe"
+          args="--http-cache-dir /tmp/lp-cache --load-resources worker --load-resources iframe"
           args="$args --protocol cdp --protocol webdriver"
           [ "${{ matrix.robotstxt }}" = "true" ] && args="$args --obey-robots"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-key-file private_key.pem"
@@ -227,7 +227,6 @@ jobs:
           exec 3<<< "${{ secrets.WBA_PRIVATE_KEY_PEM }}"
 
           ./lightpanda fetch --dump http://127.0.0.1:8989/ \
-            --experimental-features cors \
             --web-bot-auth-key-file /proc/self/fd/3 \
             --web-bot-auth-keyid ${{ vars.WBA_KEY_ID }} \
             --web-bot-auth-domain ${{ vars.WBA_DOMAIN }}
@@ -251,7 +250,6 @@ jobs:
           exec 3<<< "${{ secrets.WBA_PRIVATE_KEY_PEM }}"
 
           ./lightpanda fetch --dump "http://127.0.0.1:8989/redirect?to=http://127.0.0.1:8990/" \
-            --experimental-features cors \
             --web-bot-auth-key-file /proc/self/fd/3 \
             --web-bot-auth-keyid ${{ vars.WBA_KEY_ID }} \
             --web-bot-auth-domain ${{ vars.WBA_DOMAIN }}
@@ -430,7 +428,7 @@ jobs:
 
       - run: chmod a+x ./lightpanda
 
-      - run: ./lightpanda fetch --experimental-features cors  "https://demo-browser.lightpanda.io/campfire-commerce/"
+      - run: ./lightpanda fetch  "https://demo-browser.lightpanda.io/campfire-commerce/"
 
   agent-deterministic:
     name: agent deterministic replay
@@ -483,7 +481,7 @@ jobs:
 
           jq --version
 
-          timeout 30 ./lightpanda mcp --experimental-features cors > mcp.out <<'JSONRPC'
+          timeout 30 ./lightpanda mcp > mcp.out <<'JSONRPC'
           {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1.0.0"}}}
           {"jsonrpc":"2.0","method":"notifications/initialized"}
           {"jsonrpc":"2.0","id":2,"method":"tools/list"}

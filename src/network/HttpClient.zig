@@ -68,6 +68,12 @@ ws_active: usize = 0,
 // Count of active http requests
 http_active: usize = 0,
 
+// Since when http activity has been 0 / at most 2, backing networkidle and
+// networkalmostidle. Sampled each tick and cleared when a transfer is created,
+// so one that starts and finishes between two samples still breaks the hold.
+idle_since: ?u64 = null,
+almost_idle_since: ?u64 = null,
+
 // Our curl multi handle.
 handles: http.Handles,
 
@@ -238,7 +244,7 @@ pub fn init(self: *Client, app: *lp.App) !void {
         .serve_mode = config.mode == .serve,
         .obey_robots = config.obeyRobots(),
         .http_version = config.httpVersion(),
-        .obey_cors = config.experimentalFeatures().cors,
+        .obey_cors = config.obeyCors(),
         .robots = .{
             .network = network,
             .single_flight = .init(allocator),
@@ -608,6 +614,35 @@ pub fn activity(self: *const Client) Activity {
     };
 }
 
+// How long http activity has held at 0 and at most 2, each 0 if it doesn't
+// now. WebSockets don't count: an open socket would never let a page go idle.
+pub fn idleMs(self: *Client) struct { u64, u64 } {
+    const now = lp.datetime.milliTimestamp(.boot);
+    self.sampleIdle(now);
+
+    return .{
+        now - (self.idle_since orelse now),
+        now - (self.almost_idle_since orelse now),
+    };
+}
+
+fn sampleIdle(self: *Client, now: u64) void {
+    const a = self.activity();
+    if (a.pending or a.http > 2) {
+        self.idle_since = null;
+        self.almost_idle_since = null;
+        return;
+    }
+    if (self.almost_idle_since == null) {
+        self.almost_idle_since = now;
+    }
+    if (a.http > 0) {
+        self.idle_since = null;
+    } else if (self.idle_since == null) {
+        self.idle_since = now;
+    }
+}
+
 // What client messages drainInbox is allowed to dispatch this tick.
 //   .all       — outer event loop (Runner.tick). Safe to dispatch
 //                everything; the JS stack is empty.
@@ -717,6 +752,11 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         return err;
     };
 
+    self.idle_since = null;
+    if (self.activity().http >= 2) {
+        self.almost_idle_since = null;
+    }
+
     if (owner) |o| {
         o.addTransfer(transfer);
         transfer.owner = o;
@@ -755,6 +795,8 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
     if (self.disconnected) {
         return error.ClientDisconnected;
     }
+
+    defer self.sampleIdle(lp.datetime.milliTimestamp(.boot));
 
     var waited = true;
     const dispatched = self.dispatchCompleted(mode);
@@ -802,7 +844,6 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
             // we're about to tell our caller not to call us again without it
             // doing some work (e.g. running tasks). Let's assert that we were
             // right in doing that, else we'll likely introduce latency.
-            std.debug.assert(self.pending_queue.first == null);
             std.debug.assert(self.delayed_queue.first == null);
             std.debug.assert(self.dispatch_queue.first == null);
             std.debug.assert(self.ws_dispatch_queue.first == null);
@@ -1383,6 +1424,11 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     };
 }
 
+pub const SyncOptions = struct {
+    // Whether to copy the response headers into SyncResponse.headers.
+    copy_headers: bool = false,
+};
+
 const SyncContext = struct {
     client: *Client,
     completion: union(enum) {
@@ -1392,20 +1438,41 @@ const SyncContext = struct {
         shutdown: void,
     } = .in_progress,
 
-    status: u16 = 0,
-    body: std.ArrayList(u8),
+    options: SyncOptions = .{},
 
-    // Acquired on the first byte we have to buffer, so a bodyless response
-    // never takes one. Ownership moves to the SyncResponse.
+    status: u16 = 0,
+    status_text: http.StatusText = .{},
+    body: std.ArrayList(u8),
+    headers: std.ArrayList(http.Header) = .empty,
+
+    // Acquired on the first byte we have to buffer.
+    // Ownership moves to the SyncResponse.
     arena: ?*lp.Arena = null,
 
     fn headerCallback(transfer: *Transfer) anyerror!Transfer.HeaderResult {
         const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
         lp.assert(transfer.responseStatus() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = transfer.responseStatus() });
         self.status = transfer.responseStatus().?;
+        self.status_text = transfer.res.status_text;
+
         const body_len = transfer.bodyLen();
+        if (body_len == 0 and self.options.copy_headers == false) {
+            return .proceed;
+        }
+
+        const allocator = try self.bodyAllocator(body_len);
         if (body_len > 0) {
-            try self.body.ensureTotalCapacityPrecise(try self.bodyAllocator(body_len), body_len);
+            try self.body.ensureTotalCapacityPrecise(allocator, body_len);
+        }
+
+        if (self.options.copy_headers) {
+            var it = transfer.responseHeaderIterator();
+            while (it.next()) |hdr| {
+                try self.headers.append(allocator, .{
+                    .name = try allocator.dupe(u8, hdr.name),
+                    .value = try allocator.dupe(u8, hdr.value),
+                });
+            }
         }
         return .proceed;
     }
@@ -2071,10 +2138,9 @@ pub const Request = struct {
 const SyncResponse = struct {
     status: u16,
     body: std.ArrayList(u8),
-
-    // Owns `body`. Null when the response had nothing to buffer. Callers that
-    // keep `body` past this call take the arena instead of releasing it.
-    arena: ?*lp.Arena,
+    status_text: http.StatusText,
+    headers: []const http.Header,
+    arena: ?*lp.Arena, // need only if there's a body, or we're copying the headers
 
     pub fn deinit(self: *SyncResponse) void {
         if (self.arena) |arena| {
@@ -2574,7 +2640,7 @@ pub const Transfer = struct {
         };
     }
 
-    pub fn submitSync(self: *Transfer) !SyncResponse {
+    pub fn submitSync(self: *Transfer, opts: SyncOptions) !SyncResponse {
         const client = self.client;
 
         if (client.disconnected) {
@@ -2590,7 +2656,7 @@ pub const Transfer = struct {
             return error.SyncWaitInterrupted;
         }
 
-        var sync_ctx = SyncContext{ .client = client, .body = .empty };
+        var sync_ctx = SyncContext{ .client = client, .body = .empty, .options = opts };
         errdefer if (sync_ctx.arena) |arena| arena.release();
 
         const req = &self.req;
@@ -2630,7 +2696,9 @@ pub const Transfer = struct {
             .in_progress => @panic("Impossible to be in progress here."),
             .done, .shutdown => return .{
                 .status = sync_ctx.status,
+                .status_text = sync_ctx.status_text,
                 .body = sync_ctx.body,
+                .headers = sync_ctx.headers.items,
                 .arena = sync_ctx.arena,
             },
             .err => |e| return e,
@@ -3437,10 +3505,11 @@ pub const Transfer = struct {
 
         const url = try conn.getEffectiveUrl();
 
-        const status: u16 = if (self._auth_challenge != null)
-            407
-        else
-            try conn.getResponseCode();
+        var status = try conn.getResponseCode();
+        if (status == 0 and self._auth_challenge != null) {
+            // A proxy that refuses the CONNECT gives us no status code
+            status = try conn.getConnectCode();
+        }
 
         self.res.header = .{
             .url = url,
@@ -3790,7 +3859,14 @@ pub const Transfer = struct {
             std.debug.assert(chunk_count == 1);
         }
 
-        if (announcesBody(buffer[0..chunk_len]) == false) {
+        const line = buffer[0..chunk_len];
+        if (std.mem.startsWith(u8, line, "HTTP/")) {
+            const conn: *http.Connection = @ptrCast(@alignCast(data));
+            conn.transport.http.res.status_text = .fromStatusLine(line);
+            return chunk_len;
+        }
+
+        if (announcesBody(line) == false) {
             return chunk_len;
         }
 
@@ -3967,6 +4043,10 @@ pub const Transfer = struct {
     pub fn responseStatus(self: *const Transfer) ?u16 {
         const rh = self.res.header orelse return null;
         return rh.status;
+    }
+
+    pub fn statusText(self: *const Transfer) ?[]const u8 {
+        return self.res.status_text.get();
     }
 
     pub fn contentType(self: *Transfer) ?[]const u8 {
@@ -4209,6 +4289,10 @@ const ResourceTiming = struct {
 // (status / contentType / responseHeaderIterator / getContentLength).
 const Response = struct {
     header: ?http.ResponseHead = null,
+
+    // From the most recent status line curl reported (a CONNECT, a 1xx or
+    // an auth challenge can precede the final one).
+    status_text: http.StatusText = .{},
 
     // Full response headers, materialized into the transfer arena at
     // completion (or set directly by cache / synthetic / fulfill). Names are

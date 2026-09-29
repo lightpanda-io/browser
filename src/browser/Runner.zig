@@ -35,7 +35,8 @@ const Runner = @This();
 session: *Session,
 browser: *Browser,
 http_client: *HttpClient,
-background_poll_ms: u32 = 0,
+
+const network_idle_hold_ms = 500;
 
 pub const Opts = struct {};
 
@@ -224,22 +225,26 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
 
     const has_runnable_page = hasRunnablePage(session);
 
-    var ran_platform_task = false;
     if (has_runnable_page) {
-        ran_platform_task = try browser.runMacrotasks();
+        try browser.runMacrotasks();
     }
 
     const activity = http_client.activity();
     const total_http_activity = activity.http;
-    const total_network_activity = activity.total();
 
     const network_idle = activity.idle();
     const is_done = browser.hasMacrotasks() == false and network_idle;
 
+    // Not Frame._notified_network_idle: that latches for CDP's one-shot
+    // lifecycle event, so a frame idle once reads idle forever.
+    const network_idle_held, const network_almost_idle_held = blk: {
+        const http_idle, const http_almost_idle = http_client.idleMs();
+        break :blk .{ http_idle >= network_idle_hold_ms, http_almost_idle >= network_idle_hold_ms };
+    };
+
     // Outside the condition loop: it skips resolved conditions, but an idle
     // notification needs a check 500ms+ after the hold starts, and on a quiet
-    // page one tick both starts the hold and resolves the condition. Before
-    // it, so `.networkidle` conditions read fresh state.
+    // page one tick both starts the hold and resolves the condition.
     var page_index: usize = 0;
     while (page_index < session.pages.items.len) : (page_index += 1) {
         // Indexed: notifyNetworkIdle dispatches to listeners.
@@ -283,7 +288,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                 condition.status = .complete;
             },
             .pre, .raw, .text, .image, .download => {
-                if (total_network_activity == 0) {
+                // Includes pending: another client may hold every connection.
+                if (network_idle) {
                     condition.status = .complete;
                 } else {
                     want_http_tick = true;
@@ -294,8 +300,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                     .done => is_done,
                     .domcontentloaded => frame._load_state == .load or frame._load_state == .complete,
                     .load => frame._load_state == .complete,
-                    .networkidle => frame._notified_network_idle == .done,
-                    .networkalmostidle => frame._notified_network_almost_idle == .done,
+                    .networkidle => network_idle_held,
+                    .networkalmostidle => network_almost_idle_held,
                 };
 
                 // `met` resolves the condition. Otherwise, as long as there's
@@ -319,17 +325,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
             if (has_runnable_page == false) {
                 break :blk 200;
             }
-            if (browser.hasBackgroundTasks()) {
-                // if our last runMacrotasks() ran something and we now have
-                // a background, then don't linger in the http client waiting
-                // for I/O, instead, hurry back to run more tasks.
-                // Else, backoff to 10ms between runs.
-                // TODO: this is a temporary solution to ensuring background
-                // tasks are run promptly.The better solution is to have v8
-                // wakeup the http client when there's work to do.
-                self.background_poll_ms = if (ran_platform_task) 0 else @min(10, @max(1, self.background_poll_ms * 2));
-                // msToNextTask could be less than this, but 10ms drift is ok
-                break :blk self.background_poll_ms;
+            if (browser.foreground_task_posted.load(.acquire)) {
+                break :blk 0;
             }
             break :blk browser.msToNextTask() orelse 200;
         };
@@ -636,11 +633,14 @@ test "Runner: waits out a throttled navigation" {
         network.rate_limiter.?.deinit();
         network.rate_limiter = null;
     }
-    const start = lp.datetime.milliTimestamp(.boot);
-    _ = try network.rate_limiter.?.reserve("127.0.0.1", start);
 
     const page = try session.createPage();
     defer page.close();
+
+    // Reserved after createPage: on a slow runner, creating the page can eat
+    // the whole interval and the navigation then goes out undelayed.
+    const start = lp.datetime.milliTimestamp(.boot);
+    _ = try network.rate_limiter.?.reserve("127.0.0.1", start);
     try page.navigate("http://127.0.0.1:9582/src/browser/tests/runner/runner1.html", .{});
     try testing.expectEqual(1, http_client.delayed_count);
     // A delayed navigation is in-flight work: the wait must not resolve early.
@@ -654,4 +654,25 @@ test "Runner: waits out a throttled navigation" {
 
     const el = try runner.waitForSelector(page.frame_id, "#sel1", 10);
     try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
+}
+
+test "Runner: networkidle waits out activity after the frame latched idle" {
+    const page = try testing.pageTest("runner/late_fetch.html", .{ .wait_until_done = false });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .load });
+
+    page.frame().?._notified_network_idle = .done;
+
+    const start = lp.datetime.milliTimestamp(.boot);
+    try runner.waitForFrame(page.frame_id, 3000, .{ .until = .networkidle });
+    try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - start >= 500);
+    _ = try runner.waitForSelector(page.frame_id, "#fetched", 0);
+
+    // Already idle past the hold: a fresh wait doesn't serve it again.
+    var again = page.session.runner(.{});
+    const again_start = lp.datetime.milliTimestamp(.boot);
+    try again.waitForFrame(page.frame_id, 3000, .{ .until = .networkidle });
+    try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - again_start < 250);
 }

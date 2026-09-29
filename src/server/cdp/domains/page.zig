@@ -284,7 +284,7 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
     var ls: js.Local.Scope = undefined;
     js_context.localScope(&ls);
     defer ls.deinit();
-    const context_id = bc.inspector_session.inspector.getContextId(&ls.local);
+    const context_id = bc.inspector().getContextId(&ls.local);
     return cmd.sendResult(.{ .executionContextId = context_id }, .{});
 }
 
@@ -315,7 +315,7 @@ fn registerIsolatedWorldContext(arena: Allocator, bc: *CDP.BrowserContext, world
     js_context.localScope(&ls);
     defer ls.deinit();
 
-    bc.inspector_session.inspector.contextCreated(
+    bc.inspector().contextCreated(
         &ls.local,
         world.name,
         frame.origin orelse "",
@@ -558,7 +558,7 @@ pub fn frameNavigate(bc: *CDP.BrowserContext, event: *const Notification.FrameNa
 pub fn frameRemove(bc: *CDP.BrowserContext) void {
     // Clear all remote object mappings to prevent stale objectIds from being used
     // after the context is destroy
-    bc.inspector_session.inspector.resetContextGroup();
+    bc.inspector().resetContextGroup();
 
     // The main frame is going to be removed, we need to remove contexts from other worlds first.
     for (bc.isolated_worlds.items) |isolated_world| {
@@ -743,7 +743,7 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
         frame.js.localScope(&ls);
         defer ls.deinit();
 
-        bc.inspector_session.inspector.contextCreated(
+        bc.inspector().contextCreated(
             &ls.local,
             "",
             frame.origin orelse "",
@@ -1735,7 +1735,7 @@ fn isolatedWorldContextId(bc: *CDP.BrowserContext, frame: *const Frame) !i32 {
     var ls: js.Local.Scope = undefined;
     js_context.localScope(&ls);
     defer ls.deinit();
-    return bc.inspector_session.inspector.getContextId(&ls.local);
+    return bc.inspector().getContextId(&ls.local);
 }
 
 test "cdp.frame: child frame metadata" {
@@ -2170,7 +2170,7 @@ test "cdp.frame: reload replays POST navigation" {
     _ = try cdp_inst.createBrowserContext();
     var bc = &cdp_inst.browser_context.?;
     bc.id = "BID-A6";
-    bc.session_id = "SID-X";
+    _ = try bc.attachPrimarySession("SID-X");
     bc.target_id = "TID-A6-0000000".*;
 
     // First navigation: POST a form-style payload to /echo_method.
@@ -2222,7 +2222,7 @@ test "cdp.frame: reload after POST→redirect drops the POST" {
     _ = try cdp_inst.createBrowserContext();
     var bc = &cdp_inst.browser_context.?;
     bc.id = "BID-A6R";
-    bc.session_id = "SID-XR";
+    _ = try bc.attachPrimarySession("SID-XR");
     bc.target_id = "TID-A6R-000000".*;
 
     // First navigation: POST /redirect_to_echo → 302 → GET /echo_method.
@@ -2486,7 +2486,7 @@ test "cdp.frame: first navigation of a pristine bootstrap about:blank navigates 
     defer ctx.deinit();
 
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-PRS", .target_id = "TID-PRS-000000".* });
-    bc.session_id = "SID-PRS";
+    _ = try bc.attachPrimarySession("SID-PRS");
     _ = try bc.session.createPage();
     const before = bc.mainFrame() orelse unreachable;
     try testing.expectEqualSlices(u8, "about:blank", before.url);
@@ -2515,7 +2515,7 @@ test "cdp.frame: anchor click sends Referer matching the originating page" {
     _ = try cdp_inst.createBrowserContext();
     var bc = &cdp_inst.browser_context.?;
     bc.id = "BID-A18";
-    bc.session_id = "SID-A18";
+    _ = try bc.attachPrimarySession("SID-A18");
     bc.target_id = "TID-A18-000000".*;
 
     // Initial navigation to the page hosting the anchor — driven directly via
@@ -2564,7 +2564,7 @@ test "cdp.frame: address-bar Page.navigate sends no Referer" {
     _ = try cdp_inst.createBrowserContext();
     var bc = &cdp_inst.browser_context.?;
     bc.id = "BID-A18B";
-    bc.session_id = "SID-A18B";
+    _ = try bc.attachPrimarySession("SID-A18B");
     bc.target_id = "TID-A18B-00000".*;
 
     {

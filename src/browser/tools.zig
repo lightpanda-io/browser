@@ -795,6 +795,7 @@ pub const ToolError = error{
     InvalidParams,
     NodeNotFound,
     NavigationFailed,
+    NavigationTimeout,
     Cancelled,
     Timeout,
     InternalError,
@@ -807,6 +808,7 @@ pub fn errorMessage(err: ToolError) []const u8 {
     return switch (err) {
         error.NodeNotFound => "NodeNotFound: the selector or backendNodeId matched nothing on the current page. Re-inspect the page (tree/interactiveElements) for fresh node ids, or omit backendNodeId to target the document root.",
         error.FrameNotLoaded => "FrameNotLoaded: no page is loaded — call goto (or pass a url) first.",
+        error.NavigationTimeout => "NavigationTimeout: no response arrived before the timeout, so the page is empty. Other sessions may be holding every connection (see --http-max-concurrent); retry goto or close idle sessions.",
         else => @errorName(err),
     };
 }
@@ -2374,7 +2376,10 @@ fn renderJson(arena: std.mem.Allocator, value: anytype) ToolError![]const u8 {
 fn ensurePage(session: *lp.Session, registry: *NodeRegistry, url: ?[:0]const u8, timeout: ?u32) ToolError!*lp.Frame {
     if (url) |u| {
         if (session.currentFrame()) |frame| {
-            if (std.mem.eql(u8, frame.url, u)) return frame;
+            const is_loaded = frame._parse_state != .pre and frame._last_navigate_error == null;
+            if (is_loaded and std.mem.eql(u8, frame.url, u)) {
+                return frame;
+            }
         }
         _ = try performGoto(session, registry, u, .{ .timeout = timeout });
     }
@@ -2456,6 +2461,7 @@ fn performGoto(session: *lp.Session, registry: *NodeRegistry, url: [:0]const u8,
     // re-fetch frame, navigate might have changed it.
     const frame = page.frame() orelse return ToolError.NavigationFailed;
     if (frame._last_navigate_error != null) return ToolError.NavigationFailed;
+    if (result == .timeout and frame._parse_state == .pre) return ToolError.NavigationTimeout;
     return result;
 }
 
@@ -2701,6 +2707,32 @@ test "tree and nodeDetails read the node's own frame" {
     const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try std.fmt.allocPrint(aa, "{{\"backendNodeId\":{d}}}", .{input_id}), .{});
     const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{});
     try std.testing.expect(std.mem.indexOf(u8, details.text, "child-label") != null);
+}
+
+test "goto: a navigation stuck waiting for a connection is an error" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const network = &testing.test_app.network;
+    var held: std.ArrayList(*@import("../network/http.zig").Connection) = .empty;
+    defer held.deinit(std.testing.allocator);
+    defer for (held.items) |conn| network.releaseConnection(conn);
+    while (network.getConnection()) |conn| try held.append(std.testing.allocator, conn);
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":300}
+    , .{});
+    try std.testing.expectError(error.NavigationTimeout, call(aa, session, &registry, "goto", args, .{}));
+
+    for (held.items) |conn| network.releaseConnection(conn);
+    held.clearRetainingCapacity();
+
+    const r = try call(aa, session, &registry, "goto", args, .{});
+    try std.testing.expectEqualStrings("Navigated successfully.", r.text);
 }
 
 test "parseValue: zero-filled optional backendNodeId treated as omitted" {
@@ -2994,4 +3026,20 @@ test "isPathSafe: absolute paths and traversal are rejected" {
     try std.testing.expect(!isPathSafe("sub/../etc/passwd"));
     try std.testing.expect(!isPathSafe("sub/.."));
     try std.testing.expect(!isPathSafe(".."));
+}
+
+test "markdown: a same-url page whose navigation failed is navigated again" {
+    testing.expectLog(&.{ .frame, .frame });
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:1/"}
+    , .{});
+    try std.testing.expect((try call(aa, session, &registry, "goto", args, .{})).is_error);
+    try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{})).is_error);
 }

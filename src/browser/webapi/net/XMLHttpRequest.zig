@@ -66,6 +66,7 @@ _async: bool = true,
 _response: ?Response = null,
 _response_data: std.ArrayList(u8) = .empty,
 _response_status: u16 = 0,
+_response_status_text: ?[]const u8 = null,
 _response_len: ?usize = 0,
 _response_url: [:0]const u8 = "",
 _override_mime: ?Mime = null,
@@ -230,6 +231,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async
     self._response_xml = null;
     self._response_data.clearRetainingCapacity();
     self._response_status = 0;
+    self._response_status_text = null;
     self._response_len = 0;
     self._response_url = "";
     self._response_mime = null;
@@ -382,7 +384,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         return;
     }
 
-    var resp = transfer.submitSync() catch |err| {
+    var resp = transfer.submitSync(.{ .copy_headers = true }) catch |err| {
         log.err(.http, "sync request failed", .{
             .source = "xhr",
             .url = self._url,
@@ -397,8 +399,25 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     defer self.releaseSelfRef();
 
     self._response_status = resp.status;
+    if (resp.status_text.get()) |st| {
+        self._response_status_text = try self._arena.dupe(u8, st);
+    }
     self._response_url = self._url;
     self._response_len = resp.body.items.len;
+
+    for (resp.headers) |hdr| {
+        if (std.mem.eql(u8, hdr.name, "content-type")) {
+            self.applyContentType(hdr.value) catch |e| {
+                log.info(.http, "invalid content type", .{
+                    .content_Type = hdr.value,
+                    .err = e,
+                    .url = self._url,
+                });
+            };
+            break;
+        }
+    }
+    try self.applyResponseHeaders(.{ .list = .{ .list = resp.headers } });
 
     try self._response_data.appendSlice(self._arena.allocator(), resp.body.items);
 
@@ -510,6 +529,9 @@ pub fn getStatus(self: *const XMLHttpRequest) u16 {
 }
 
 fn getStatusText(self: *const XMLHttpRequest) []const u8 {
+    if (self._response_status_text) |st| {
+        return st;
+    }
     return std.http.Status.phrase(@enumFromInt(self._response_status)) orelse "";
 }
 
@@ -627,6 +649,22 @@ fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Documen
     }
 }
 
+fn applyContentType(self: *XMLHttpRequest, content_type: []const u8) !void {
+    self._response_mime = try Mime.parse(content_type);
+    self._response_mime_raw = try self._arena.dupe(u8, std.mem.trim(u8, content_type, &std.ascii.whitespace));
+}
+
+fn applyResponseHeaders(self: *XMLHttpRequest, headers: http.HeaderIterator) !void {
+    var it = headers;
+    while (it.next()) |hdr| {
+        if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
+            continue;
+        }
+        const joined = try std.fmt.allocPrint(self._arena.allocator(), "{s}: {s}", .{ hdr.name, hdr.value });
+        try self._response_headers.append(self._arena.allocator(), joined);
+    }
+}
+
 fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.req.ctx));
 
@@ -639,7 +677,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     }
 
     if (transfer.contentType()) |ct| {
-        self._response_mime = Mime.parse(ct) catch |e| {
+        self.applyContentType(ct) catch |e| {
             log.info(.http, "invalid content type", .{
                 .content_Type = ct,
                 .err = e,
@@ -647,19 +685,14 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
             });
             return .abort;
         };
-        self._response_mime_raw = try self._arena.dupe(u8, std.mem.trim(u8, ct, &std.ascii.whitespace));
     }
 
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
-        if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
-            continue;
-        }
-        const joined = try std.fmt.allocPrint(self._arena.allocator(), "{s}: {s}", .{ hdr.name, hdr.value });
-        try self._response_headers.append(self._arena.allocator(), joined);
-    }
+    try self.applyResponseHeaders(transfer.responseHeaderIterator());
 
     self._response_status = transfer.responseStatus().?;
+    if (transfer.statusText()) |st| {
+        self._response_status_text = try self._arena.dupe(u8, st);
+    }
     if (transfer.getContentLength()) |cl| {
         self._response_len = cl;
     }

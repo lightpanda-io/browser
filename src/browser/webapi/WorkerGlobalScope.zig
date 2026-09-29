@@ -437,7 +437,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         try self.headersForRequest(transfer, .{});
     }
 
-    var response = transfer.submitSync() catch |err| {
+    var response = transfer.submitSync(.{}) catch |err| {
         log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });
         return error.NetworkError;
     };

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<script src="../testing.js"></script>
+
+<!--
+Navigating a frame frees the contexts of its child frames, but their v8
+contexts live on while another realm holds one of their functions. Resolving
+a promise whose handler is such a function used to enqueue the job on the
+freed microtask queue (SIGFPE / SIGSEGV in MicrotaskQueue::EnqueueMicrotask).
+-->
+
+<script id=detached_realm_promise_handler type=module>
+  const state = await testing.async();
+
+  const iframe = document.createElement('iframe');
+  const onceLoad = (f) => new Promise((r) => { f.onload = () => r(); });
+
+  let loaded = onceLoad(iframe);
+  iframe.src = 'support/win_a.html';
+  document.body.appendChild(iframe);
+  await loaded;
+
+  const inner = iframe.contentDocument.createElement('iframe');
+  iframe.contentDocument.body.appendChild(inner);
+
+  let ran = false;
+  const grandchild = inner.contentWindow;
+  const handler = new grandchild.Function('cb', 'return () => cb()')(() => { ran = true; });
+
+  loaded = onceLoad(iframe);
+  iframe.src = 'support/win_b.html';
+  await loaded;
+
+  // fetch() resolves natively, which enqueues the handler's job directly.
+  await Promise.all(Array.from({ length: 50 }, (_, i) => {
+    const p = fetch('support/win_a.html?' + i);
+    p.then(handler);
+    return p;
+  }));
+
+  state.resolve();
+  await state.done(() => {
+    // The grandchild's document is gone, so its job is dropped.
+    testing.expectEqual(false, ran);
+  });
+</script>
+</body>

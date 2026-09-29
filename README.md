@@ -71,7 +71,9 @@ Verify the binary before running anything:
 
 [Linux aarch64 is also available](https://github.com/lightpanda-io/browser/releases/tag/nightly)
 
-> **Note:** The Linux release binaries are linked against glibc. On musl-based distros (Alpine, etc.) the binary fails with `cannot execute: required file not found` because the glibc dynamic linker is missing. Use a glibc-based base image (e.g., `FROM debian:bookworm-slim` or `FROM ubuntu:24.04`) or [build from sources](#build-from-sources).
+> **Note:** The Linux release binaries are linked against glibc. On musl-based Linux distributions (Alpine, etc.) the binary fails with `cannot execute: required file not found` because the glibc dynamic linker is missing. Use a glibc-based base image (e.g., `FROM debian:bookworm-slim` or `FROM ubuntu:24.04`) or [build from sources](#build-from-sources).
+>
+> **Android / Termux:** there is no native Android build. The Linux aarch64 binary needs the glibc loader (`/lib/ld-linux-aarch64.so.1`), which Android's Bionic libc does not provide, so it fails with the same `cannot execute: required file not found` error.
 
 *For MacOS*
 ```console
@@ -181,9 +183,8 @@ you can prototype with the LLM and ship the output to production without a
 model at runtime.
 
 It supports Anthropic, OpenAI, Gemini, Google Vertex AI, Mistral, Hugging
-Face, the multi-lab gateways [Vercel AI Gateway](https://vercel.com/ai-gateway),
-[OpenRouter](https://openrouter.ai) and [OrcaRouter](https://orcarouter.ai)
-(one key for hundreds of models), any OpenAI-compatible endpoint via
+Face, the multi-lab gateways [Vercel AI Gateway](https://vercel.com/ai-gateway)
+and [OpenRouter](https://openrouter.ai) (one key for hundreds of models), any OpenAI-compatible endpoint via
 `OPENAI_BASE_URL`, and local models via Ollama or llama.cpp. You can also run
 without an LLM using `--no-llm`, which drops you into the REPL. See the
 [agent documentation](https://lightpanda.io/docs/usage/agent) for the full
@@ -259,7 +260,7 @@ Set `LIGHTPANDA_DISABLE_CORE_DUMP` (to any value) to suppress crash core dumps b
 Here are the key features we have implemented.
 For full details, see our [Web Platform Tests results](https://perf.lightpanda.io/wpt).
 
-- [x] CORS (enable with `--experimental-features cors`)
+- [x] CORS
 - [x] HTTP loader ([Libcurl](https://curl.se/libcurl/))
 - [x] HTML parser ([html5ever](https://github.com/servo/html5ever))
 - [x] DOM tree
@@ -422,8 +423,7 @@ zig build -Dwpt_extensions run -- serve \
     --load-resources iframe \
     --load-resources image \
     --load-resources worker \
-    --load-resources stylesheet \
-    --experimental-features cors
+    --load-resources stylesheet
 ```
 
 Then you can start the wptrunner from the demo's clone dir:

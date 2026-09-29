@@ -11,3 +11,312 @@
   testing.expectEqual([226, 130, 172], Array.from(encoder.encode('€')));
   testing.expectEqual([111,118,101,114,32,57,48,48,48], encoder.encode("over 9000"));
 </script>
+
+<script id=encode-conversion>
+  {
+    const encoder = new TextEncoder();
+
+    testing.expectEqual(0, TextEncoder.prototype.encode.length);
+    testing.expectEqual('Uint8Array', encoder.encode('a').constructor.name);
+    testing.expectEqual(0, encoder.encode('').length);
+
+    // Astral code points are 4 bytes, lone surrogates become U+FFFD.
+    testing.expectEqual([240, 159, 152, 128], Array.from(encoder.encode('\u{1F600}')));
+    testing.expectEqual([97, 239, 191, 189, 98], Array.from(encoder.encode('a\uD800b')));
+    testing.expectEqual([239, 191, 189], Array.from(encoder.encode('\uDC00')));
+
+    // Anything else is stringified.
+    testing.expectEqual([52, 50], Array.from(encoder.encode(42)));
+    testing.expectEqual([104, 105], Array.from(encoder.encode({ toString() { return 'hi'; } })));
+    testing.expectError('Error', () => encoder.encode({ toString() { throw new Error('boom'); } }));
+  }
+</script>
+
+<script id=encodeInto>
+  {
+    const encoder = new TextEncoder();
+
+    // Plain ASCII fits exactly.
+    let dest = new Uint8Array(9);
+    let res = encoder.encodeInto('over 9000', dest);
+    testing.expectEqual(9, res.read);
+    testing.expectEqual(9, res.written);
+    testing.expectEqual([111,118,101,114,32,57,48,48,48], Array.from(dest));
+
+    // A roomy destination leaves the trailing bytes untouched.
+    dest = new Uint8Array(6).fill(255);
+    res = encoder.encodeInto('ab', dest);
+    testing.expectEqual(2, res.read);
+    testing.expectEqual(2, res.written);
+    testing.expectEqual([97, 98, 255, 255, 255, 255], Array.from(dest));
+  }
+</script>
+
+<script id=encodeInto-multibyte>
+  {
+    const encoder = new TextEncoder();
+
+    // '€' is 3 bytes but a single UTF-16 code unit.
+    let dest = new Uint8Array(3);
+    let res = encoder.encodeInto('€', dest);
+    testing.expectEqual(1, res.read);
+    testing.expectEqual(3, res.written);
+    testing.expectEqual([226, 130, 172], Array.from(dest));
+
+    // An astral code point is 4 bytes and a surrogate pair, so read is 2.
+    dest = new Uint8Array(4);
+    res = encoder.encodeInto('\u{1F600}', dest);
+    testing.expectEqual(2, res.read);
+    testing.expectEqual(4, res.written);
+    testing.expectEqual([240, 159, 152, 128], Array.from(dest));
+
+    // A lone surrogate goes through the USVString conversion and comes out
+    // as U+FFFD: one code unit read, three bytes written.
+    dest = new Uint8Array(3);
+    res = encoder.encodeInto('\uD800', dest);
+    testing.expectEqual(1, res.read);
+    testing.expectEqual(3, res.written);
+    testing.expectEqual([239, 191, 189], Array.from(dest));
+  }
+</script>
+
+<script id=encodeInto-truncation>
+  {
+    const encoder = new TextEncoder();
+
+    // A partial UTF-8 sequence must never be written: '€' needs 3 bytes, so
+    // with only 2 left nothing of it is emitted.
+    let dest = new Uint8Array(2).fill(255);
+    let res = encoder.encodeInto('€', dest);
+    testing.expectEqual(0, res.read);
+    testing.expectEqual(0, res.written);
+    testing.expectEqual([255, 255], Array.from(dest));
+
+    // The ASCII prefix is written, then encoding stops at the '€'.
+    dest = new Uint8Array(3).fill(255);
+    res = encoder.encodeInto('ab€', dest);
+    testing.expectEqual(2, res.read);
+    testing.expectEqual(2, res.written);
+    testing.expectEqual([97, 98, 255], Array.from(dest));
+
+    // Neither half of a surrogate pair is read when its 4 bytes don't fit.
+    dest = new Uint8Array(4).fill(255);
+    res = encoder.encodeInto('a\u{1F600}', dest);
+    testing.expectEqual(1, res.read);
+    testing.expectEqual(1, res.written);
+    testing.expectEqual([97, 255, 255, 255], Array.from(dest));
+
+    // An empty destination writes nothing.
+    dest = new Uint8Array(0);
+    res = encoder.encodeInto('abc', dest);
+    testing.expectEqual(0, res.read);
+    testing.expectEqual(0, res.written);
+  }
+</script>
+
+<script id=encodeInto-required-args>
+  {
+    const encoder = new TextEncoder();
+
+    // Both arguments are required.
+    testing.expectEqual(2, TextEncoder.prototype.encodeInto.length);
+    testing.expectError('TypeError', () => encoder.encodeInto());
+    testing.expectError('TypeError', () => encoder.encodeInto('abc'));
+  }
+</script>
+
+<script id=encodeInto-destination-type>
+  {
+    const encoder = new TextEncoder();
+
+    // The destination must be a Uint8Array specifically — no other view type,
+    // and not a bare ArrayBuffer.
+    testing.expectError('TypeError', () => encoder.encodeInto('', new Int8Array(8)));
+    testing.expectError('TypeError', () => encoder.encodeInto('', new Uint8ClampedArray(8)));
+    testing.expectError('TypeError', () => encoder.encodeInto('', new Uint16Array(8)));
+    testing.expectError('TypeError', () => encoder.encodeInto('', new Int32Array(8)));
+    testing.expectError('TypeError', () => encoder.encodeInto('', new Float64Array(8)));
+    testing.expectError('TypeError', () => encoder.encodeInto('', new DataView(new ArrayBuffer(8))));
+    testing.expectError('TypeError', () => encoder.encodeInto('', new ArrayBuffer(8)));
+
+    // A Uint8Array view over a subrange only sees its own window.
+    const buf = new ArrayBuffer(8);
+    const view = new Uint8Array(buf, 2, 3);
+    const res = encoder.encodeInto('abcd', view);
+    testing.expectEqual(3, res.read);
+    testing.expectEqual(3, res.written);
+    testing.expectEqual([0, 0, 97, 98, 99, 0, 0, 0], Array.from(new Uint8Array(buf)));
+  }
+</script>
+
+<script id=encodeInto-source-stringified>
+  {
+    const encoder = new TextEncoder();
+
+    // The source is a USVString: anything else is stringified, so a typed
+    // array is encoded as its toString(), not as its bytes.
+    let dest = new Uint8Array(8);
+    let res = encoder.encodeInto(new Uint8Array([104, 105]), dest);
+    testing.expectEqual(7, res.read);
+    testing.expectEqual(7, res.written);
+    testing.expectEqual('104,105', String.fromCharCode(...dest.subarray(0, 7)));
+
+    dest = new Uint8Array(9);
+    res = encoder.encodeInto(undefined, dest);
+    testing.expectEqual(9, res.written);
+    testing.expectEqual('undefined', String.fromCharCode(...dest));
+
+    // Using the same array as source and destination is fine: the source is
+    // stringified before anything is written.
+    const both = new Uint8Array([104, 105]);
+    res = encoder.encodeInto(both, both);
+    testing.expectEqual(2, res.read);
+    testing.expectEqual(2, res.written);
+    testing.expectEqual([49, 48], Array.from(both));
+  }
+</script>
+
+<script id=encodeInto-detached-and-shared>
+  {
+    const encoder = new TextEncoder();
+
+    // A detached destination has no room, so nothing is read or written.
+    const buf = new ArrayBuffer(4);
+    const detached = new Uint8Array(buf);
+    buf.transfer();
+    testing.expectEqual(0, detached.byteLength);
+    let res = encoder.encodeInto('abc', detached);
+    testing.expectEqual(0, res.read);
+    testing.expectEqual(0, res.written);
+
+    // [AllowShared]: a SharedArrayBuffer-backed view is written like any other.
+    const shared = new Uint8Array(new SharedArrayBuffer(4));
+    res = encoder.encodeInto('ab', shared);
+    testing.expectEqual(2, res.read);
+    testing.expectEqual(2, res.written);
+    testing.expectEqual([97, 98, 0, 0], Array.from(shared));
+  }
+</script>
+
+<script id=encode-output>
+  {
+    const encoder = new TextEncoder();
+
+    // Every call returns its own Uint8Array, sized exactly to the output.
+    const a = encoder.encode('a€');
+    const b = encoder.encode('a€');
+    testing.expectEqual(true, a.buffer !== b.buffer);
+    testing.expectEqual(0, a.byteOffset);
+    testing.expectEqual(4, a.byteLength);
+    testing.expectEqual(4, a.buffer.byteLength);
+
+    // Mixed widths round-trip through TextDecoder, lone surrogates as U+FFFD.
+    const source = 'aé€\u{1F600}\uD800'.repeat(20000);
+    const encoded = encoder.encode(source);
+    testing.expectEqual(20000 * (1 + 2 + 3 + 4 + 3), encoded.length);
+    testing.expectEqual(source.replaceAll('\uD800', '�'), new TextDecoder().decode(encoded));
+  }
+</script>
+
+<script id=encodeInto-vectors>
+  {
+    // The vectors from WPT's encoding/encodeInto.any.js, written at an offset
+    // into a larger buffer pre-filled with 0x80: bytes around the destination
+    // window must be left alone.
+    const vectors = [
+      { input: 'Hi', read: 0, destinationLength: 0, written: [] },
+      { input: 'A', read: 1, destinationLength: 10, written: [0x41] },
+      { input: '\u{1D306}', read: 2, destinationLength: 4, written: [0xF0, 0x9D, 0x8C, 0x86] },
+      { input: '\u{1D306}A', read: 0, destinationLength: 3, written: [] },
+      { input: '\uD834A\uDF06A¥Hi', read: 5, destinationLength: 10, written: [0xEF, 0xBF, 0xBD, 0x41, 0xEF, 0xBF, 0xBD, 0x41, 0xC2, 0xA5] },
+      { input: 'A\uDF06', read: 2, destinationLength: 4, written: [0x41, 0xEF, 0xBF, 0xBD] },
+      { input: '¥¥', read: 2, destinationLength: 4, written: [0xC2, 0xA5, 0xC2, 0xA5] },
+    ];
+
+    const encoder = new TextEncoder();
+    for (const v of vectors) {
+      const offset = 4;
+      const buffer = new ArrayBuffer(v.destinationLength + 10);
+      new Uint8Array(buffer).fill(0x80);
+      const view = new Uint8Array(buffer, offset, v.destinationLength);
+
+      const res = encoder.encodeInto(v.input, view);
+      testing.expectEqual(v.read, res.read);
+      testing.expectEqual(v.written.length, res.written);
+
+      const expected = new Array(buffer.byteLength).fill(0x80);
+      expected.splice(offset, v.written.length, ...v.written);
+      testing.expectEqual(expected, Array.from(new Uint8Array(buffer)));
+    }
+  }
+</script>
+
+<script id=encodeInto-argument-order>
+  {
+    const encoder = new TextEncoder();
+
+    // Arguments are converted in order: the source is stringified before the
+    // destination is checked.
+    let called = false;
+    const source = { toString() { called = true; return 'a'; } };
+    testing.expectError('TypeError', () => encoder.encodeInto(source, new Int8Array(4)));
+    testing.expectEqual(true, called);
+
+    // An exception from the stringification propagates, nothing is written.
+    const dest = new Uint8Array(4).fill(255);
+    testing.expectError('boom', () => encoder.encodeInto({ toString() { throw new Error('boom'); } }, dest));
+    testing.expectEqual([255, 255, 255, 255], Array.from(dest));
+
+    // The destination is looked at after the source is stringified, so one
+    // detached from inside toString() is seen as empty.
+    const buffer = new ArrayBuffer(8);
+    const view = new Uint8Array(buffer);
+    const res = encoder.encodeInto({ toString() { buffer.transfer(); return 'abc'; } }, view);
+    testing.expectEqual(0, res.read);
+    testing.expectEqual(0, res.written);
+
+    // null is stringified, not treated as a missing argument.
+    const out = new Uint8Array(4);
+    const nres = encoder.encodeInto(null, out);
+    testing.expectEqual(4, nres.read);
+    testing.expectEqual(4, nres.written);
+    testing.expectEqual([110, 117, 108, 108], Array.from(out));
+  }
+</script>
+
+<script id=encodeInto-resizable>
+  {
+    const encoder = new TextEncoder();
+
+    // A length-tracking view over a resizable buffer uses its current length.
+    const growable = new ArrayBuffer(2, { maxByteLength: 8 });
+    const tracking = new Uint8Array(growable);
+    growable.resize(6);
+    let res = encoder.encodeInto('abcdefgh', tracking);
+    testing.expectEqual(6, res.read);
+    testing.expectEqual(6, res.written);
+    testing.expectEqual([97, 98, 99, 100, 101, 102], Array.from(tracking));
+
+    // A fixed-length view the buffer shrank out from under is out of bounds,
+    // so it has no room.
+    const shrinkable = new ArrayBuffer(8, { maxByteLength: 8 });
+    const fixed = new Uint8Array(shrinkable, 0, 6);
+    shrinkable.resize(4);
+    res = encoder.encodeInto('abc', fixed);
+    testing.expectEqual(0, res.read);
+    testing.expectEqual(0, res.written);
+    testing.expectEqual([0, 0, 0, 0], Array.from(new Uint8Array(shrinkable)));
+  }
+</script>
+
+<script id=encodeInto-large>
+  {
+    // A long source is cut at the last code point that fits: 50000 'é's take
+    // 100000 bytes, the 50001st doesn't fit in the one byte left.
+    const dest = new Uint8Array(100001);
+    const res = new TextEncoder().encodeInto('é'.repeat(100001), dest);
+    testing.expectEqual(50000, res.read);
+    testing.expectEqual(100000, res.written);
+    testing.expectEqual(0, dest[100000]);
+  }
+</script>
