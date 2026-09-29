@@ -613,10 +613,10 @@ fn resolvePolicy(opts: Config.Agent) !?jev.Config {
         });
         return error.ConflictingFlags;
     }
-    const api_key = lp.environ().getPosix("TYPESAFE_API_KEY") orelse "";
+    const api_key = zenai.typesafe.envApiKey(lp.environ()) orelse "";
     if (api_key.len == 0) {
         log.fatal(.app, "no decider API key", .{
-            .hint = "--policy jev needs TYPESAFE_API_KEY",
+            .hint = "--policy jev needs " ++ zenai.typesafe.env_var_name,
         });
         return error.MissingApiKey;
     }

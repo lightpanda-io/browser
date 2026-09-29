@@ -99,34 +99,33 @@ pub const SystemOne = struct {
         }
         const latency_ms: u64 = @intCast(started.untilNow(lp.io, .boot).toMilliseconds());
 
-        const operation_name = response.value.choice("operation", ask.questions) catch return error.InvalidDecision;
-        const operation = std.meta.stringToEnum(Operation, operation_name) orelse return error.InvalidDecision;
-        const operation_answer = response.value.answer("operation").?;
+        const answers = response.value;
+        const operation = answers.choiceEnum("operation", ask.questions, Operation) catch
+            return error.InvalidDecision;
 
         if (!operation.needsTarget()) {
             return .{
                 .operation = operation,
-                .probability = operation_answer.probability(operation_name) orelse 0,
-                .confidence = operation_answer.confidence() orelse 0,
+                .probability = answers.probability("operation", @tagName(operation)) orelse 0,
+                .confidence = answers.confidence("operation") orelse 0,
                 .latency_ms = latency_ms,
-                .usage = response.value.usage,
+                .usage = answers.usage,
             };
         }
 
         // The speculative heads cannot reach the browser, so they are not
         // validated.
         const question = operation.targetQuestion().?;
-        const target = response.value.choice(question, ask.questions) catch return error.InvalidDecision;
-        const target_answer = response.value.answer(question).?;
+        const target = answers.choice(question, ask.questions) catch return error.InvalidDecision;
 
         return .{
             .operation = operation,
             // The answers borrow the response, which dies with this scope.
             .target = try arena.dupe(u8, target),
-            .probability = target_answer.probability(target) orelse 0,
-            .confidence = target_answer.confidence() orelse 0,
+            .probability = answers.probability(question, target) orelse 0,
+            .confidence = answers.confidence(question) orelse 0,
             .latency_ms = latency_ms,
-            .usage = response.value.usage,
+            .usage = answers.usage,
         };
     }
 };
