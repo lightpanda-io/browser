@@ -1424,6 +1424,11 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     };
 }
 
+pub const SyncOptions = struct {
+    // Whether to copy the response headers into SyncResponse.headers.
+    copy_headers: bool = false,
+};
+
 const SyncContext = struct {
     client: *Client,
     completion: union(enum) {
@@ -1433,12 +1438,15 @@ const SyncContext = struct {
         shutdown: void,
     } = .in_progress,
 
+    options: SyncOptions = .{},
+
     status: u16 = 0,
     status_text: http.StatusText = .{},
     body: std.ArrayList(u8),
+    headers: std.ArrayList(http.Header) = .empty,
 
-    // Acquired on the first byte we have to buffer, so a bodyless response
-    // never takes one. Ownership moves to the SyncResponse.
+    // Acquired on the first byte we have to buffer.
+    // Ownership moves to the SyncResponse.
     arena: ?*lp.Arena = null,
 
     fn headerCallback(transfer: *Transfer) anyerror!Transfer.HeaderResult {
@@ -1446,9 +1454,25 @@ const SyncContext = struct {
         lp.assert(transfer.responseStatus() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = transfer.responseStatus() });
         self.status = transfer.responseStatus().?;
         self.status_text = transfer.res.status_text;
+
         const body_len = transfer.bodyLen();
+        if (body_len == 0 and self.options.copy_headers == false) {
+            return .proceed;
+        }
+
+        const allocator = try self.bodyAllocator(body_len);
         if (body_len > 0) {
-            try self.body.ensureTotalCapacityPrecise(try self.bodyAllocator(body_len), body_len);
+            try self.body.ensureTotalCapacityPrecise(allocator, body_len);
+        }
+
+        if (self.options.copy_headers) {
+            var it = transfer.responseHeaderIterator();
+            while (it.next()) |hdr| {
+                try self.headers.append(allocator, .{
+                    .name = try allocator.dupe(u8, hdr.name),
+                    .value = try allocator.dupe(u8, hdr.value),
+                });
+            }
         }
         return .proceed;
     }
@@ -2115,10 +2139,8 @@ const SyncResponse = struct {
     status: u16,
     body: std.ArrayList(u8),
     status_text: http.StatusText,
-
-    // Owns `body`. Null when the response had nothing to buffer. Callers that
-    // keep `body` past this call take the arena instead of releasing it.
-    arena: ?*lp.Arena,
+    headers: []const http.Header,
+    arena: ?*lp.Arena, // need only if there's a body, or we're copying the headers
 
     pub fn deinit(self: *SyncResponse) void {
         if (self.arena) |arena| {
@@ -2618,7 +2640,7 @@ pub const Transfer = struct {
         };
     }
 
-    pub fn submitSync(self: *Transfer) !SyncResponse {
+    pub fn submitSync(self: *Transfer, opts: SyncOptions) !SyncResponse {
         const client = self.client;
 
         if (client.disconnected) {
@@ -2634,7 +2656,7 @@ pub const Transfer = struct {
             return error.SyncWaitInterrupted;
         }
 
-        var sync_ctx = SyncContext{ .client = client, .body = .empty };
+        var sync_ctx = SyncContext{ .client = client, .body = .empty, .options = opts };
         errdefer if (sync_ctx.arena) |arena| arena.release();
 
         const req = &self.req;
@@ -2676,6 +2698,7 @@ pub const Transfer = struct {
                 .status = sync_ctx.status,
                 .status_text = sync_ctx.status_text,
                 .body = sync_ctx.body,
+                .headers = sync_ctx.headers.items,
                 .arena = sync_ctx.arena,
             },
             .err => |e| return e,
