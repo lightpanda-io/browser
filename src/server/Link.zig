@@ -60,6 +60,7 @@ send_arena: ArenaAllocator,
 send_depth: u32,
 send_timeout_ms: i32,
 max_inbox_backlog: usize,
+peer_closed: bool,
 
 pub fn init(
     self: *Link,
@@ -91,6 +92,7 @@ pub fn init(
         .send_depth = 0,
         .send_timeout_ms = SEND_TIMEOUT_MS,
         .max_inbox_backlog = @as(usize, config.cdpMaxMessageSize()) * INBOX_BACKLOG_MESSAGES,
+        .peer_closed = false,
     };
 }
 
@@ -132,6 +134,10 @@ pub fn releaseSendArena(self: *Link) void {
 }
 
 pub fn send(self: *Link, data: []const u8) !void {
+    if (self.peer_closed) {
+        return;
+    }
+
     var pos: usize = 0;
     const socket = self.socket;
 
@@ -157,6 +163,11 @@ pub fn send(self: *Link, data: []const u8) !void {
             },
             // a signal landed mid-write; nothing was written
             error.Interrupted => continue,
+            error.BrokenPipe, error.ConnectionResetByPeer => {
+                lp.log.debug(.app, "link peer closed", .{ .err = err });
+                self.peer_closed = true;
+                return;
+            },
             else => return err,
         };
 

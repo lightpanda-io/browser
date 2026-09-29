@@ -1255,7 +1255,9 @@ pub fn documentIsLoaded(self: *Frame) void {
     self.document._ready_state = .interactive;
     self._documentIsLoaded() catch |err| switch (err) {
         error.JsException => {}, // already logged
-        else => log.err(.frame, "document is loaded2", .{ .err = err, .type = self._type, .url = self.url }),
+        // logged by whatever requested the terminate (watchdog, runaway loop)
+        error.ExecutionTerminated => log.debug(.frame, "document is loaded", .{ .err = err, .type = self._type, .url = self.url }),
+        else => log.err(.frame, "document is loaded", .{ .err = err, .type = self._type, .url = self.url }),
     };
 }
 
@@ -1359,6 +1361,8 @@ pub fn documentIsComplete(self: *Frame) void {
     self._load_state = .complete;
     self._documentIsComplete() catch |err| switch (err) {
         error.JsException => {}, // already logged
+        // logged by whatever requested the terminate (watchdog, runaway loop)
+        error.ExecutionTerminated => log.debug(.frame, "document is complete", .{ .err = err, .type = self._type, .url = self.url }),
         else => log.err(.frame, "document is complete", .{ .err = err, .type = self._type, .url = self.url }),
     };
 
