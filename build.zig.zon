@@ -44,8 +44,8 @@
             .hash = "N-V-__8AAHxtEwB16xj2Xz-zx_uklGdTP5C2-GHXDoSzah-8",
         },
         .pcre2 = .{
-            .url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.48/pcre2-10.48.tar.gz",
-            .hash = "pcre2-10.48.0-IZ6r69wnegD6fc08FgRTKVcmyp4Ux2aVefaVvsRndgEl",
+            .url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz",
+            .hash = "pcre2-10.49.0-IZ6r68cregBKN199ndY6AaKNyKJpNmnQVSm8-h0gp4sj",
         },
     },
     .paths = .{""},
