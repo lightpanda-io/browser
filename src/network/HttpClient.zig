@@ -1454,9 +1454,13 @@ const SyncContext = struct {
         lp.assert(transfer.responseStatus() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = transfer.responseStatus() });
         self.status = transfer.responseStatus().?;
         self.status_text = transfer.res.status_text;
-        const body_len = transfer.bodyLen();
-        const allocator = try self.bodyAllocator(body_len);
 
+        const body_len = transfer.bodyLen();
+        if (body_len == 0 and self.options.copy_headers == false) {
+            return .proceed;
+        }
+
+        const allocator = try self.bodyAllocator(body_len);
         if (body_len > 0) {
             try self.body.ensureTotalCapacityPrecise(allocator, body_len);
         }
@@ -2136,10 +2140,7 @@ const SyncResponse = struct {
     body: std.ArrayList(u8),
     status_text: http.StatusText,
     headers: []const http.Header,
-
-    // Owns `body`. Null when the response had nothing to buffer. Callers that
-    // keep `body` past this call take the arena instead of releasing it.
-    arena: ?*lp.Arena,
+    arena: ?*lp.Arena, // need only if there's a body, or we're copying the headers
 
     pub fn deinit(self: *SyncResponse) void {
         if (self.arena) |arena| {
