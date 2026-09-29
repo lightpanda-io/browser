@@ -1097,8 +1097,7 @@ pub const BrowserContext = struct {
                 // for well known content-type.
                 .must_encode = blk: {
                     if (msg.transfer.contentType()) |ct| {
-                        const mime = try Mime.parse(ct);
-
+                        const mime = Mime.parse(ct) catch break :blk true;
                         if (!mime.isText()) {
                             break :blk true;
                         }

@@ -615,7 +615,7 @@ const ResponseWriter = struct {
         {
             const mime: Mime = blk: {
                 if (transfer.contentType()) |ct| {
-                    break :blk try Mime.parse(ct);
+                    break :blk Mime.parse(ct) catch .unknown;
                 }
                 break :blk .unknown;
             };
