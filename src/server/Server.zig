@@ -330,7 +330,7 @@ fn accept(self: *Server, now: u64) !void {
             switch (err) {
                 error.WouldBlock => break,
                 error.ConnectionAborted => {
-                    log.warn(.serve, "accept connection aborted", .{});
+                    log.debug(.serve, "accept connection aborted", .{});
                     continue;
                 },
                 error.ProcessFdQuotaExceeded, error.SystemFdQuotaExceeded => {

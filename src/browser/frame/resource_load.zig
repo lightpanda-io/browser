@@ -105,7 +105,7 @@ pub fn image(frame: *Frame, img: *Element.Html.Image, src: []const u8) !void {
     // already routed the failure through error_callback, which settles the
     // ImageLoad and gives the pending-load slot back.
     transfer.submit() catch |err| {
-        log.warn(.http, "image fetch", .{ .err = err, .url = resolved });
+        log.debug(.http, "image fetch", .{ .err = err, .url = resolved });
     };
 }
 

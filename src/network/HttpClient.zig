@@ -1112,7 +1112,7 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
 
             if (self.obey_cors and !transfer.req.internal) {
                 if (!isCrossOriginModeAllowed(transfer)) {
-                    log.warn(.http, "blocked by mode", .{
+                    log.debug(.http, "blocked by mode", .{
                         .url = transfer.req.url,
                         .mode = @tagName(transfer.req.request_mode),
                     });
@@ -1721,7 +1721,7 @@ fn processMessages(self: *Client) !bool {
                 // either buffered it for dispatch, parked it, or deinit'd it.
                 // Only the throw path cleans up here.
                 const done = self.processOneMessage(msg, transfer) catch |err| blk: {
-                    log.err(.http, "process_messages", .{ .err = err, .req = transfer });
+                    log.debug(.http, "process_messages", .{ .err = err, .req = transfer });
                     if (transfer._conn) |c| {
                         self.removeConn(c);
                         transfer._conn = null;
@@ -3045,7 +3045,7 @@ pub const Transfer = struct {
     // free. Only called from deliver().
     fn failDelivery(self: *Transfer, err: anyerror) void {
         if (err != error.TransferCanceled) {
-            log.err(.http, "delivery callback", .{ .err = err, .req = self });
+            log.debug(.http, "delivery callback", .{ .err = err, .req = self });
         }
         self.requestFailed(err);
         self.finishDelivery();
@@ -3791,7 +3791,7 @@ pub const Transfer = struct {
 
             if (@intFromEnum(hdr.source) > @intFromEnum(source)) {
                 if (hdr.source == .fixed) {
-                    log.warn(.http, "ignore overriding fixed header", .{ .header = hdr.name });
+                    log.debug(.http, "ignore overriding fixed header", .{ .header = hdr.name });
                 }
                 return;
             }
@@ -3814,7 +3814,7 @@ pub const Transfer = struct {
     fn verifyHeader(name: []const u8, value: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(name, "user-agent")) {
             lp.Config.validateUserAgent(value) catch |err| {
-                log.warn(.http, "invalid header dropped", .{ .name = name, .err = err });
+                log.debug(.http, "invalid header dropped", .{ .name = name, .err = err });
                 return false;
             };
         }
@@ -4959,13 +4959,11 @@ test "HttpClient: Transfer header layering" {
     try testing.expectEqual("\"author-etag\"", transfer.findRequestHeader("if-none-match").?);
 
     // nothing overrides a fixed header, whatever the layer or mode
-    testing.expectLog(&.{ .http, .http });
     try transfer.setHeader("sec-ch-ua", "\"Chromium\";v=\"140\"", .{ .source = .cdp });
     try transfer.appendHeader("SEC-CH-UA", "\"Chromium\";v=\"140\"", .{ .source = .author });
     try testing.expectEqual("\"Lightpanda\";v=\"1\"", transfer.findRequestHeader("sec-ch-ua").?);
 
     // an invalid User-Agent never enters the list
-    testing.expectLog(&.{.http});
     try transfer.setHeader("user-agent", "Mozilla/5.0", .{ .source = .author });
     try testing.expectEqual("Lightpanda/1.0", transfer.findRequestHeader("user-agent").?);
 

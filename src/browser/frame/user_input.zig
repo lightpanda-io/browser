@@ -151,11 +151,11 @@ fn dispatchBoundaryEvent(frame: *Frame, target: *Element, comptime mouse_typ: []
             .altKey = modifiers.alt,
             .metaKey = modifiers.meta,
         }, frame) catch |err| {
-            log.warn(.frame, "boundary pointer event", .{ .err = err, .type = pointer_typ });
+            log.debug(.frame, "boundary pointer event", .{ .err = err, .type = pointer_typ });
             return;
         };
         frame._event_manager.dispatch(target.asEventTarget(), pointer_event.asEvent()) catch |err| {
-            log.warn(.frame, "boundary pointer dispatch", .{ .err = err, .type = pointer_typ });
+            log.debug(.frame, "boundary pointer dispatch", .{ .err = err, .type = pointer_typ });
         };
     }
 
@@ -172,11 +172,11 @@ fn dispatchBoundaryEvent(frame: *Frame, target: *Element, comptime mouse_typ: []
         .altKey = modifiers.alt,
         .metaKey = modifiers.meta,
     }, frame) catch |err| {
-        log.warn(.frame, "boundary mouse event", .{ .err = err, .type = mouse_typ });
+        log.debug(.frame, "boundary mouse event", .{ .err = err, .type = mouse_typ });
         return;
     };
     frame._event_manager.dispatch(target.asEventTarget(), mouse_event.asEvent()) catch |err| {
-        log.warn(.frame, "boundary mouse dispatch", .{ .err = err, .type = mouse_typ });
+        log.debug(.frame, "boundary mouse dispatch", .{ .err = err, .type = mouse_typ });
     };
 }
 
@@ -320,7 +320,7 @@ fn dispatchPointerRelease(frame: *Frame, target: *Element, in: PointerInput, sup
 pub fn triggerClick(frame: *Frame, target: *Element, modifiers: Modifiers) !void {
     const press = try dispatchPointerPress(frame, target, .{ .x = 0, .y = 0, .buttons = 1, .detail = 1, .modifiers = modifiers });
     if (press.suppress_focus == false) {
-        focusForMouseDown(frame, target) catch |err| log.warn(.app, "click mousedown focus", .{ .err = err });
+        focusForMouseDown(frame, target) catch |err| log.debug(.app, "click mousedown focus", .{ .err = err });
     }
 
     const up: PointerInput = .{ .x = 0, .y = 0, .detail = 1, .modifiers = modifiers };
@@ -656,11 +656,11 @@ const JavascriptUrlTask = struct {
         defer ls.deinit();
 
         const script = ls.local.compile(self.source, "javascript:") catch |err| {
-            log.warn(.browser, "javascript-url compile", .{ .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.browser, "javascript-url compile", .{ .err = err, .type = frame._type, .url = frame.url });
             return null;
         };
         _ = script.run() catch |err| {
-            log.warn(.browser, "javascript-url run", .{ .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.browser, "javascript-url run", .{ .err = err, .type = frame._type, .url = frame.url });
         };
         return null;
     }
@@ -767,7 +767,7 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
     }
 
     if (try element.hasAttribute(comptime .wrap("download"), frame)) {
-        log.warn(.browser, "a.download", .{ .type = frame._type, .url = frame.url });
+        log.debug(.browser, "a.download", .{ .type = frame._type, .url = frame.url });
         return;
     }
 
@@ -838,7 +838,7 @@ pub fn pressKey(frame: *Frame, target: *Element, keydown: *KeyboardEvent, text: 
     }
     // logged like a default action's failure, not the key event's
     typeChar(frame, target, try keypressFor(frame, keydown), t) catch |err| {
-        log.warn(.frame, "frame.keypress", .{ .err = err });
+        log.debug(.frame, "frame.keypress", .{ .err = err });
     };
     return false;
 }

@@ -685,7 +685,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     if (is_about_blank or is_srcdoc or is_blob) {
         if (is_blob) {
             if (!Blob.urlBelongsToOrigin(request_url, opts.initiator_origin)) {
-                log.warn(.js, "invalid blob", .{ .url = request_url });
+                log.debug(.js, "invalid blob", .{ .url = request_url });
                 return error.BlobNotFound;
             }
         }
@@ -737,7 +737,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         if (is_blob) {
             const blob = blk: {
                 if (self.page.blob_urls.get(request_url)) |entry| break :blk entry.blob;
-                log.warn(.js, "invalid blob", .{ .url = request_url });
+                log.debug(.js, "invalid blob", .{ .url = request_url });
                 return error.BlobNotFound;
             };
             const parse_arena = try self.getArena(.medium, "Frame.parseBlob");
@@ -759,7 +759,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
                 // the parser emits nothing for an empty input; commit the
                 // same html/head/body scaffolding an empty srcdoc implies
                 self.document.injectBlank(self) catch |err| {
-                    log.err(.browser, "inject blank", .{ .err = err });
+                    log.debug(.browser, "inject blank", .{ .err = err });
                     return error.InjectBlankFailed;
                 };
             } else {
@@ -773,7 +773,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             }
         } else {
             self.document.injectBlank(self) catch |err| {
-                log.err(.browser, "inject blank", .{ .err = err });
+                log.debug(.browser, "inject blank", .{ .err = err });
                 return error.InjectBlankFailed;
             };
         }
@@ -906,7 +906,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     session.navigation._current_navigation_kind = opts.kind;
 
     transfer.submit() catch |err| {
-        log.err(.frame, "navigate request", .{ .url = self.url, .err = err, .type = self._type });
+        log.debug(.frame, "navigate request", .{ .url = self.url, .err = err, .type = self._type });
         return err;
     };
 }
@@ -1255,7 +1255,9 @@ pub fn documentIsLoaded(self: *Frame) void {
     self.document._ready_state = .interactive;
     self._documentIsLoaded() catch |err| switch (err) {
         error.JsException => {}, // already logged
-        else => log.err(.frame, "document is loaded2", .{ .err = err, .type = self._type, .url = self.url }),
+        // logged by whatever requested the terminate (watchdog, runaway loop)
+        error.ExecutionTerminated => log.debug(.frame, "document is loaded", .{ .err = err, .type = self._type, .url = self.url }),
+        else => log.err(.frame, "document is loaded", .{ .err = err, .type = self._type, .url = self.url }),
     };
 }
 
@@ -1319,7 +1321,7 @@ fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void
             break :blk;
         };
         self._event_manager.dispatch(iframe.asNode().asEventTarget(), event) catch |err| {
-            log.warn(.js, "iframe onload", .{ .err = err, .url = iframe._src });
+            log.debug(.js, "iframe onload", .{ .err = err, .url = iframe._src });
         };
     }
 
@@ -1359,6 +1361,8 @@ pub fn documentIsComplete(self: *Frame) void {
     self._load_state = .complete;
     self._documentIsComplete() catch |err| switch (err) {
         error.JsException => {}, // already logged
+        // logged by whatever requested the terminate (watchdog, runaway loop)
+        error.ExecutionTerminated => log.debug(.frame, "document is complete", .{ .err = err, .type = self._type, .url = self.url }),
         else => log.err(.frame, "document is complete", .{ .err = err, .type = self._type, .url = self.url }),
     };
 
@@ -1431,7 +1435,7 @@ fn metaRefreshOnLoad(self: *Frame) void {
         const meta = node.is(Element.Html.Meta) orelse continue;
         const target = meta.refreshTarget() orelse continue;
         return self.metaRefresh(target) catch |err| {
-            log.err(.frame, "meta refresh", .{ .err = err, .type = self._type, .url = self.url });
+            log.debug(.frame, "meta refresh", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -1467,7 +1471,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     }
 
     if (self.parent != null and framing.allowed(self, transfer) == false) {
-        log.warn(.frame, "x-frame-options blocked", .{ .url = self.url });
+        log.debug(.frame, "x-frame-options blocked", .{ .url = self.url });
         // give this an opaque origin so that any request to the error page
         // is treated as being cross-origin
         self.origin = null;
@@ -1941,8 +1945,7 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
     var self: *Frame = @ptrCast(@alignCast(ctx));
 
     self._last_navigate_error = err;
-    const level: log.Level = if (err == error.TransferCanceled) .info else .err;
-    log.log(.frame, level, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
+    log.debug(.frame, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
 
     // A navigation that fails before any response headers arrive never
     // reaches the frame_navigated dispatch in frameHeaderCallback, so the
@@ -2008,11 +2011,7 @@ pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *El
     }
 
     self._script_manager.addFromElement(from_parser, script, "parsing") catch |err| {
-        const level: log.Level = switch (err) {
-            error.UrlBlocked, error.RobotsBlocked => .warn,
-            else => .err,
-        };
-        log.log(.frame, level, "frame.scriptAddedCallback", .{
+        log.debug(.frame, "frame.scriptAddedCallback", .{
             .err = err,
             .url = self.url,
             .src = script.asElement().getAttributeInterned("src"),
@@ -2134,7 +2133,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         if (std.mem.indexOfScalar(*Frame, self.child_frames.items, new_frame)) |idx| {
             _ = self.child_frames.swapRemove(idx);
         }
-        log.warn(.frame, "iframe navigate failure", .{ .url = url, .err = err });
+        log.debug(.frame, "iframe navigate failure", .{ .url = url, .err = err });
         if (delays_load) {
             self._pending_loads -= 1;
         }
@@ -2227,7 +2226,7 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
     errdefer _ = page.popups.swapRemove(popup_index);
 
     popup.navigate(resolved_url, .{ .reason = .script, .initiator_origin = self.origin }) catch |err| {
-        log.warn(.frame, "popup navigate failure", .{ .url = resolved_url, .err = err });
+        log.debug(.frame, "popup navigate failure", .{ .url = resolved_url, .err = err });
         return err;
     };
 
@@ -2488,7 +2487,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     defer arena.release();
 
     const resolved = URL.resolve(arena.allocator(), self.base(), href, .{ .encoding = self.charset }) catch |err| {
-        log.warn(.http, "external stylesheet resolve", .{ .err = err, .href = href });
+        log.debug(.http, "external stylesheet resolve", .{ .err = err, .href = href });
         try self.fireElementEvent(element, comptime .wrap("error"));
         return;
     };
@@ -2509,7 +2508,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         .resource_type = .stylesheet,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {
-        log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
+        log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
     {
@@ -2531,7 +2530,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     defer sm.endEvaluationWindow(was_evaluating);
 
     var response = transfer.submitSync(.{}) catch |err| {
-        log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
+        log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
     defer response.deinit();
@@ -2542,7 +2541,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     }
 
     if (response.body.items.len > MAX_STYLESHEET_BYTES) {
-        log.warn(.http, "external stylesheet too large", .{
+        log.debug(.http, "external stylesheet too large", .{
             .bytes = response.body.items.len,
             .max = MAX_STYLESHEET_BYTES,
             .url = resolved,
@@ -2575,7 +2574,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     // `_href` consistent with what the sheet actually contains is the
     // minimum.
     sheet.replaceSync(response.body.items, self) catch |err| {
-        log.warn(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
+        log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
     sheet._href = try self.arena.dupe(u8, resolved);
@@ -3363,31 +3362,31 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
 
         const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         frame.scriptAddedCallback(from_parser, script) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "script", .type = frame._type, .url = frame.url });
+            log.debug(.frame, "frame.nodeIsReady", .{ .err = err, .element = "script", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(IFrame)) |iframe| {
         const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         frame.iframeAddedCallback(iframe) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "iframe", .type = frame._type, .url = frame.url });
+            log.debug(.frame, "frame.nodeIsReady", .{ .err = err, .element = "iframe", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(Element.Html.Meta)) |meta| {
         const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         meta.processRefresh(frame) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "meta", .type = frame._type, .url = frame.url });
+            log.debug(.frame, "frame.nodeIsReady", .{ .err = err, .element = "meta", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(Element.Html.Link)) |link| {
         const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         link.linkAddedCallback(frame) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "link", .type = frame._type });
+            log.debug(.frame, "frame.nodeIsReady", .{ .err = err, .element = "link", .type = frame._type });
             return error.LinkLoadError;
         };
     } else if (node.is(Element.Html.Style)) |style| {
         const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         style.styleAddedCallback(frame) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "style", .type = frame._type });
+            log.debug(.frame, "frame.nodeIsReady", .{ .err = err, .element = "style", .type = frame._type });
             return error.StyleLoadError;
         };
     }
@@ -4273,8 +4272,6 @@ fn appendMetaRefresh(frame: *Frame, content: []const u8) !*Element {
 }
 
 test "Frame: httpMetadata after navigation" {
-    testing.expectLog(&.{.http});
-
     const page = try testing.pageTest("page/meta.html", .{});
     defer page.close();
 

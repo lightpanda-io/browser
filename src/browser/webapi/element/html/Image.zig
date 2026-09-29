@@ -151,7 +151,7 @@ fn imageAddedCallback(self: *Image, frame: *Frame) !void {
     }
 
     Frame.resource_load.image(frame, self, src) catch |err| {
-        log.warn(.http, "image fetch", .{ .err = err, .src = src });
+        log.debug(.http, "image fetch", .{ .err = err, .src = src });
         return frame.queueElementEvent(Factory.protoOf(self), .@"error");
     };
 }

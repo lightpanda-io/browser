@@ -128,7 +128,7 @@ fn abortZigError(self: *WasmStreaming, local: *const js.Local, err: anyerror) vo
             env.error_message = null;
         },
         else => {
-            log.err(.js, "wasm streaming", .{ .err = err });
+            log.debug(.js, "wasm streaming", .{ .err = err });
             self.abort(local.isolate.createError(@errorName(err)));
         },
     }

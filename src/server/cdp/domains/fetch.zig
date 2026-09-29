@@ -297,7 +297,7 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     if (params.binaryResponseHeaders != null) {
-        log.warn(.not_implemented, "Fetch.fulfillRequest", .{ .param = "binaryResponseHeaders" });
+        log.debug(.not_implemented, "Fetch.fulfillRequest", .{ .param = "binaryResponseHeaders" });
         return error.NotImplemented;
     }
 
@@ -474,7 +474,7 @@ pub const InterceptState = struct {
         }
 
         if (has_response_stage) {
-            log.warn(.not_implemented, "Fetch.enable", .{ .params = "requestStage=Response" });
+            log.debug(.not_implemented, "Fetch.enable", .{ .params = "requestStage=Response" });
         }
 
         const owned = try self.allocator.alloc(Pattern, count);
@@ -675,8 +675,6 @@ test "cdp.Fetch: wildcardMatch" {
 }
 
 test "cdp.Fetch: InterceptState patterns" {
-    testing.expectLog(&.{.not_implemented});
-
     var state = try InterceptState.init(testing.allocator);
     defer state.deinit();
 

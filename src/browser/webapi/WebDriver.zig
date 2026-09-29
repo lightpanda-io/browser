@@ -69,7 +69,7 @@ pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
 
     // A dispatch error must never reject the testdriver command.
     Frame.user_input.triggerClick(frame, element, frame.page.input_modifiers) catch |err| {
-        log.warn(.app, "webdriver click", .{ .err = err });
+        log.debug(.app, "webdriver click", .{ .err = err });
     };
 }
 
@@ -294,7 +294,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                 const suppressed = dispatchMouse(el, "mousedown", button, Frame.user_input.buttonsBitmask(button), click_count, frame);
                 if (!suppressed) {
                     Frame.user_input.focusForMouseDown(frame, el) catch |err| {
-                        log.warn(.app, "webdriver mousedown focus", .{ .err = err });
+                        log.debug(.app, "webdriver mousedown focus", .{ .err = err });
                     };
                 }
             }
@@ -509,16 +509,16 @@ fn dispatchKey(is_down: bool, key: []const u8, frame: *Frame) void {
         .altKey = modifiers.alt,
         .metaKey = modifiers.meta,
     }, frame) catch |err| {
-        log.warn(.app, "webdriver key event", .{ .err = err });
+        log.debug(.app, "webdriver key event", .{ .err = err });
         return;
     };
     if (is_down) {
         _ = Frame.user_input.triggerKeyDown(frame, event, Frame.user_input.textForKey(event)) catch |err| {
-            log.warn(.app, "webdriver dispatch", .{ .err = err, .type = typ.str() });
+            log.debug(.app, "webdriver dispatch", .{ .err = err, .type = typ.str() });
         };
     } else {
         Frame.user_input.triggerKeyUp(frame, event) catch |err| {
-            log.warn(.app, "webdriver dispatch", .{ .err = err, .type = typ.str() });
+            log.debug(.app, "webdriver dispatch", .{ .err = err, .type = typ.str() });
         };
     }
 }
@@ -547,7 +547,7 @@ fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons:
         .altKey = modifiers.alt,
         .metaKey = modifiers.meta,
     }, frame) catch |err| {
-        log.warn(.app, "webdriver pointer event", .{ .err = err, .type = typ });
+        log.debug(.app, "webdriver pointer event", .{ .err = err, .type = typ });
         return;
     };
     dispatch(el.asEventTarget(), event.asEvent(), frame, typ);
@@ -567,11 +567,11 @@ fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u
         .altKey = modifiers.alt,
         .metaKey = modifiers.meta,
     }, frame) catch |err| {
-        log.warn(.app, "webdriver mouse event", .{ .err = err, .type = typ });
+        log.debug(.app, "webdriver mouse event", .{ .err = err, .type = typ });
         return false;
     };
     return frame._event_manager.dispatchCancelable(el.asEventTarget(), event.asEvent()) catch |err| {
-        log.warn(.app, "webdriver dispatch", .{ .err = err, .type = typ });
+        log.debug(.app, "webdriver dispatch", .{ .err = err, .type = typ });
         return false;
     };
 }
@@ -581,13 +581,13 @@ fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u
 // no center worth computing.
 fn dispatchWheel(el: *Element, x: i32, y: i32, delta_x: i32, delta_y: i32, frame: *Frame) void {
     Frame.user_input.wheel(frame, el, @floatFromInt(x), @floatFromInt(y), @floatFromInt(delta_x), @floatFromInt(delta_y)) catch |err| {
-        log.warn(.app, "webdriver wheel", .{ .err = err });
+        log.debug(.app, "webdriver wheel", .{ .err = err });
     };
 }
 
 fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8) void {
     frame._event_manager.dispatch(target, event) catch |err| {
-        log.warn(.app, "webdriver dispatch", .{ .err = err, .type = typ });
+        log.debug(.app, "webdriver dispatch", .{ .err = err, .type = typ });
     };
 }
 
@@ -597,7 +597,7 @@ fn dispatchTouch(el: *Element, comptime typ: []const u8, frame: *Frame) void {
         .bubbles = true,
         .composed = true,
     }, owner) catch |err| {
-        log.warn(.app, "webdriver touch event", .{ .err = err });
+        log.debug(.app, "webdriver touch event", .{ .err = err });
         return;
     };
     event.asEvent()._cancelable_unless_passive = true;

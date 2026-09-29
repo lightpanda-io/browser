@@ -339,7 +339,7 @@ pub fn checkAndAttachBuiltIn(element: *Element, frame: *Frame) !void {
 
     var caught: js.TryCatch.Caught = .{};
     _ = local.toLocal(definition.constructor).newInstance(&caught) catch |err| {
-        log.warn(.js, "custom builtin ctor", .{ .name = is_value, .err = err, .caught = caught });
+        log.debug(.js, "custom builtin ctor", .{ .name = is_value, .err = err, .caught = caught });
         return;
     };
 }

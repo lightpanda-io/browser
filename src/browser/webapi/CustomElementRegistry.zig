@@ -249,7 +249,7 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
             custom._definition = null;
             return err;
         }
-        log.warn(.js, "custom element upgrade", .{ .name = definition.name, .err = err });
+        log.debug(.js, "custom element upgrade", .{ .name = definition.name, .err = err });
         upgradeFailed(custom);
         if (try_catch.exceptionValue()) |exc| {
             frame.window.reportError(exc, frame) catch {};
@@ -260,7 +260,7 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     const same = if (object.toZig(*Node)) |result| result == node else |_| false;
     if (!same) {
         // the construction result must be the element being upgraded.
-        log.warn(.js, "custom element upgrade", .{ .name = definition.name, .reason = "constructor returned another value" });
+        log.debug(.js, "custom element upgrade", .{ .name = definition.name, .reason = "constructor returned another value" });
         upgradeFailed(custom);
         const exc: js.Value = .{
             .local = local,
@@ -344,6 +344,5 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: CustomElementRegistry" {
-    testing.expectLog(&.{ .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js });
     try testing.htmlRunner("custom_elements", .{});
 }

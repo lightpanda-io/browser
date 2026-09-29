@@ -65,7 +65,7 @@ fn flushPending(self: *CorsGate, key: []const u8, allowed: bool) void {
 
         if (!allowed) {
             lp.metrics.cors_preflight.incr(.blocked);
-            log.warn(.cors, "preflight blocked", .{ .url = transfer.req.url });
+            log.debug(.cors, "preflight blocked", .{ .url = transfer.req.url });
             transfer.failAsync(error.CorsBlocked);
             continue;
         }
@@ -527,7 +527,7 @@ const CorsPreflightContext = struct {
 
     fn errorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
         const self: *CorsPreflightContext = @ptrCast(@alignCast(ctx_ptr));
-        log.warn(.cors, "preflight error", .{ .url = self.url, .err = err });
+        log.debug(.cors, "preflight error", .{ .url = self.url, .err = err });
 
         self.resolve(false);
     }
@@ -656,7 +656,7 @@ pub fn validateResponse(transfer: *Transfer) !void {
     errdefer lp.metrics.cors_response.incr(.blocked);
 
     const allow_origin = HttpClient.findHeader(transfer.res.headers, ACCESS_CONTROL_ALLOW_ORIGIN) orelse {
-        log.warn(.cors, "blocked", .{ .url = req.url, .reason = "missing acao" });
+        log.debug(.cors, "blocked", .{ .url = req.url, .reason = "missing acao" });
         return error.CorsBlocked;
     };
 
@@ -664,14 +664,14 @@ pub fn validateResponse(transfer: *Transfer) !void {
     const is_wildcard_origin = std.mem.eql(u8, allow_origin, "*");
 
     if (is_wildcard_origin and wants_credentials) {
-        log.warn(.cors, "blocked", .{ .url = req.url, .reason = "wildcard origin with credentials" });
+        log.debug(.cors, "blocked", .{ .url = req.url, .reason = "wildcard origin with credentials" });
         return error.CorsBlocked;
     }
 
     if (!is_wildcard_origin) {
         const origin = transfer.effectiveOrigin();
         if (!std.mem.eql(u8, allow_origin, origin)) {
-            log.warn(.cors, "blocked", .{
+            log.debug(.cors, "blocked", .{
                 .url = req.url,
                 .reason = "origin mismatch",
                 .allow_origin = allow_origin,
@@ -683,12 +683,12 @@ pub fn validateResponse(transfer: *Transfer) !void {
 
     if (wants_credentials) {
         const allow_creds = HttpClient.findHeader(transfer.res.headers, ACCESS_CONTROL_ALLOW_CREDENTIALS) orelse {
-            log.warn(.cors, "blocked", .{ .url = req.url, .reason = "missing acac" });
+            log.debug(.cors, "blocked", .{ .url = req.url, .reason = "missing acac" });
             return error.CorsBlocked;
         };
 
         if (!std.mem.eql(u8, allow_creds, "true")) {
-            log.warn(.cors, "blocked", .{ .url = req.url, .reason = "credentials not allowed", .allow_credentials = allow_creds });
+            log.debug(.cors, "blocked", .{ .url = req.url, .reason = "credentials not allowed", .allow_credentials = allow_creds });
             return error.CorsBlocked;
         }
     }

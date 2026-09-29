@@ -317,7 +317,7 @@ pub fn dispatchDirect(
             if (err == error.JsException) {
                 event._listeners_did_throw = true;
             } else {
-                log.warn(.event, opts.context, .{ .err = err, .caught = caught });
+                log.debug(.event, opts.context, .{ .err = err, .caught = caught });
             }
         };
     }
@@ -472,7 +472,7 @@ pub const Listener = struct {
                         reportException(&try_catch, local);
                     },
                     error.ExecutionTerminated => return error.ExecutionTerminated,
-                    else => log.warn(.event, context, .{ .err = err }),
+                    else => log.debug(.event, context, .{ .err = err }),
                 };
             },
             .string => |string| {
@@ -485,7 +485,7 @@ pub const Listener = struct {
                     if (err == error.JsException) {
                         event._listeners_did_throw = true;
                     } else {
-                        log.warn(.event, context, .{ .err = err });
+                        log.debug(.event, context, .{ .err = err });
                     }
                 };
             },
@@ -503,7 +503,7 @@ pub const Listener = struct {
                         event._listeners_did_throw = true;
                         reportException(&try_catch, local);
                     } else {
-                        log.warn(.event, context, .{ .err = err });
+                        log.debug(.event, context, .{ .err = err });
                     }
                     return;
                 };
@@ -529,7 +529,7 @@ pub const Listener = struct {
                         reportException(&try_catch, local);
                     },
                     error.ExecutionTerminated => return error.ExecutionTerminated,
-                    else => log.warn(.event, context, .{ .err = err }),
+                    else => log.debug(.event, context, .{ .err = err }),
                 };
             },
         }
@@ -545,7 +545,7 @@ pub const Listener = struct {
     fn reportExceptionValue(local: *const js.Local, exc: js.Value) void {
         switch (local.ctx.global) {
             .frame => |frame| frame.window.reportError(exc, frame) catch |err| {
-                log.warn(.event, "listener report error", .{ .err = err });
+                log.debug(.event, "listener report error", .{ .err = err });
             },
             // No worker error-event plumbing here (yet); still count it.
             .worker => local.ctx.page.recordJsError(error.JsException),

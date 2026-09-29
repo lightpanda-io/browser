@@ -200,7 +200,7 @@ pub fn dispatch(self: *PerformanceObserver) !void {
 
     var caught: js.TryCatch.Caught = .{};
     ls.toLocal(self._callback).tryCall(void, .{ EntryList{ ._entries = records }, self }, &caught) catch |err| {
-        log.err(.frame, "PerfObserver.dispatch", .{ .err = err, .caught = caught });
+        log.debug(.frame, "PerfObserver.dispatch", .{ .err = err, .caught = caught });
         return err;
     };
 }

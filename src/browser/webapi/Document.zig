@@ -431,7 +431,7 @@ fn createAttribute(self: *const Document, name: String.Global, frame: *Frame) !?
 
 pub fn createAttributeNS(self: *const Document, namespace: []const u8, name: String.Global, frame: *Frame) !?*Element.Attribute {
     if (std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml") == false) {
-        log.warn(.not_implemented, "document.createAttributeNS", .{ .namespace = namespace });
+        log.debug(.not_implemented, "document.createAttributeNS", .{ .namespace = namespace });
     }
 
     try Element.Attribute.validateAttributeName(name.str);

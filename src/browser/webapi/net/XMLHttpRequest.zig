@@ -385,7 +385,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     }
 
     var resp = transfer.submitSync(.{ .copy_headers = true }) catch |err| {
-        log.err(.http, "sync request failed", .{
+        log.debug(.http, "sync request failed", .{
             .source = "xhr",
             .url = self._url,
             .err = err,
@@ -778,7 +778,7 @@ pub fn abort(self: *XMLHttpRequest) void {
 
 fn handleError(self: *XMLHttpRequest, err: anyerror) void {
     self._handleError(err) catch |inner| {
-        log.err(.http, "handle error error", .{
+        log.debug(.http, "handle error error", .{
             .original = err,
             .err = inner,
         });
@@ -804,12 +804,7 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
         try self._proto.dispatch(.load_end, null, exec);
     }
 
-    const level: log.Level = switch (err) {
-        error.TransferCanceled => .debug,
-        error.UrlBlocked => .warn,
-        else => .err,
-    };
-    log.log(.http, level, "error", .{
+    log.debug(.http, "error", .{
         .url = self._url,
         .err = err,
         .source = "xhr.handleError",
@@ -894,7 +889,6 @@ test "parseMethod: accepts known methods case-insensitively" {
 }
 
 test "WebApi: XHR" {
-    testing.expectLog(&.{ .http, .http });
     try testing.htmlRunner("net/xhr.html", .{});
 }
 

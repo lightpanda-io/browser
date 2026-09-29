@@ -221,7 +221,7 @@ pub fn run(self: *HttpServer, address: sys_net.IpAddress) !void {
                 return;
             }
             switch (err) {
-                error.ConnectionAborted => log.warn(.mcp, "accept connection aborted", .{}),
+                error.ConnectionAborted => log.debug(.mcp, "accept connection aborted", .{}),
                 else => log.err(.mcp, "accept error", .{ .err = err }),
             }
             continue;

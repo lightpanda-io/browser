@@ -290,7 +290,7 @@ pub const Pending = struct {
         };
 
         result catch |err| {
-            log.err(.bidi, "await promise", .{ .err = err, .reply = reply.to });
+            log.debug(.bidi, "await promise", .{ .err = err, .reply = reply.to });
         };
     }
 
@@ -419,7 +419,7 @@ fn serialize(
         if (err == error.OutOfMemory) {
             return err;
         }
-        log.warn(.bidi, "serialize", .{ .err = err });
+        log.debug(.bidi, "serialize", .{ .err = err });
         try reply.sendError("unknown error", "cannot serialize result");
         return null;
     };
@@ -1171,7 +1171,6 @@ test "bidi.script: callFunction arguments" {
 }
 
 test "bidi.script: handles" {
-    testing.expectLog(&.{.bidi});
     var ctx = try testing.context();
     defer ctx.deinit();
 

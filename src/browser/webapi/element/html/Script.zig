@@ -162,6 +162,5 @@ pub const Build = struct {
 const testing = @import("../../../../testing.zig");
 test "WebApi: Script" {
     testing.silenceLog(&.{.http});
-    testing.expectLog(&.{ .js, .js });
     try testing.htmlRunner("element/html/script", .{});
 }

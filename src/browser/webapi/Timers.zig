@@ -235,7 +235,7 @@ const ScheduleCallback = struct {
                 const IdleDeadline = @import("IdleDeadline.zig");
                 ls.toLocal(self.cb).call(void, .{IdleDeadline{}}) catch |err| {
                     self.exec.page.recordJsError(err);
-                    log.warn(.js, "idleCallback", .{ .name = self.name, .err = err });
+                    log.debug(.js, "idleCallback", .{ .name = self.name, .err = err });
                 };
             },
             .animation_frame => {
@@ -245,13 +245,13 @@ const ScheduleCallback = struct {
                 };
                 ls.toLocal(self.cb).call(void, .{now}) catch |err| {
                     self.exec.page.recordJsError(err);
-                    log.warn(.js, "RAF", .{ .name = self.name, .err = err });
+                    log.debug(.js, "RAF", .{ .name = self.name, .err = err });
                 };
             },
             .normal => {
                 ls.toLocal(self.cb).call(void, self.params) catch |err| {
                     self.exec.page.recordJsError(err);
-                    log.warn(.js, "timer", .{ .name = self.name, .err = err });
+                    log.debug(.js, "timer", .{ .name = self.name, .err = err });
                 };
             },
         }

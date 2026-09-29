@@ -54,7 +54,7 @@ pub fn check(self: *RobotsGate, transfer: *Transfer) !Result {
         switch (decision) {
             .allowed => return .allowed,
             .blocked => {
-                log.warn(.http, "blocked by robots", .{ .url = url });
+                log.debug(.http, "blocked by robots", .{ .url = url });
                 return .blocked;
             },
         }
@@ -148,7 +148,7 @@ fn flushPending(self: *RobotsGate, robots_url: []const u8, outcome: Outcome) voi
 
         if (decision == .blocked) {
             lp.metrics.robots_access.incr(.deny);
-            log.warn(.http, "blocked by robots", .{ .url = transfer.req.url });
+            log.debug(.http, "blocked by robots", .{ .url = transfer.req.url });
             transfer.failAsync(error.RobotsBlocked);
             continue;
         }
@@ -207,7 +207,7 @@ const RobotsContext = struct {
                     // We only return an error if an allocation or something fails.
                     // Our parser does already leniently handle malformed input and takes whichever rules it can parse.
                     // On this case of an allocation failure, it is our fault so we put it as disallowed.
-                    log.warn(.browser, "error while parsing robots.txt", .{ .robots_url = robots_url, .err = err });
+                    log.debug(.browser, "error while parsing robots.txt", .{ .robots_url = robots_url, .err = err });
                     self.settle(.{ .outcome = .{ .decision = .blocked } });
                     return;
                 };
@@ -230,7 +230,7 @@ const RobotsContext = struct {
             },
             // RFC9309: Unreachable (500-599) means that we are completely disallowed.
             500...599 => {
-                log.warn(.http, "robots.txt unreachable", .{
+                log.debug(.http, "robots.txt unreachable", .{
                     .url = robots_url,
                     .status = self.status,
                 });
@@ -249,7 +249,7 @@ const RobotsContext = struct {
     fn errorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
 
-        log.warn(.http, "robots fetch failed", .{ .err = err });
+        log.debug(.http, "robots fetch failed", .{ .err = err });
         self.settle(.{
             .outcome = .{ .decision = .allowed },
             .cache = false,

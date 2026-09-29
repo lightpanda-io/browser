@@ -130,7 +130,7 @@ fn setAtIndex(self: *HTMLOptionsCollection, index: u32, option_: ?*Option, frame
     }
 
     if (index >= max_list_items) {
-        lp.log.warn(.js, "select overflow", .{ .max_list_items = max_list_items, .request = index });
+        lp.log.debug(.js, "select overflow", .{ .max_list_items = max_list_items, .request = index });
         return;
     }
 

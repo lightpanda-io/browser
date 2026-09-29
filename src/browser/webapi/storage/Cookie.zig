@@ -685,7 +685,7 @@ pub const Jar = struct {
 
     pub fn populateFromResponse(self: *Jar, url: [:0]const u8, set_cookie: []const u8) !void {
         const c = Cookie.parse(self.allocator, url, set_cookie) catch |err| {
-            log.warn(.frame, "cookie parse failed", .{ .raw = set_cookie, .err = err });
+            log.debug(.frame, "cookie parse failed", .{ .raw = set_cookie, .err = err });
             return;
         };
 

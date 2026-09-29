@@ -233,7 +233,7 @@ pub fn pushEntry(
     // entry's failure skip the others.
     defer for (disposed) |d| {
         d.fireDispose(frame) catch |err| {
-            log.warn(.event, "NavigationHistoryEntry.dispose", .{ .err = err });
+            log.debug(.event, "NavigationHistoryEntry.dispose", .{ .err = err });
         };
     };
 
@@ -302,7 +302,7 @@ pub fn replaceEntry(
     // Per spec, dispose fires last, after currententrychange. old_entry is
     // already out of _entries, so fire even if the dispatch below fails.
     defer old_entry.fireDispose(frame) catch |err| {
-        log.warn(.event, "NavigationHistoryEntry.dispose", .{ .err = err });
+        log.debug(.event, "NavigationHistoryEntry.dispose", .{ .err = err });
     };
 
     if (should_dispatch) {
@@ -326,7 +326,7 @@ fn fireNavigateSuccess(self: *Navigation, frame: *Frame) !void {
         null,
         frame.page,
     ) catch |err| {
-        log.warn(.event, "Navigation.navigatesuccess", .{ .err = err });
+        log.debug(.event, "Navigation.navigatesuccess", .{ .err = err });
         return;
     };
 
@@ -356,7 +356,7 @@ fn fireCurrentEntryChangeEvent(
             },
             frame,
         ) catch |err| {
-            log.warn(.event, "Navigation.currententrychange", .{ .err = err });
+            log.debug(.event, "Navigation.currententrychange", .{ .err = err });
             return;
         };
 
@@ -509,7 +509,7 @@ const TraverseToOptions = struct {
 
 pub fn traverseTo(self: *Navigation, key: []const u8, _opts: ?TraverseToOptions, frame: *Frame) !NavigationReturn {
     if (_opts != null) {
-        log.warn(.not_implemented, "Navigation.traverseTo", .{ .has_options = true });
+        log.debug(.not_implemented, "Navigation.traverseTo", .{ .has_options = true });
     }
 
     for (self._entries.items, 0..) |entry, i| {

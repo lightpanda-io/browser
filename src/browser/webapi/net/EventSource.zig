@@ -216,7 +216,7 @@ fn reconnectTask(self: *EventSource) void {
         return;
     }
     self.connect() catch |err| {
-        log.warn(.http, "EventSource reconnect", .{ .err = err, .url = self._url });
+        log.debug(.http, "EventSource reconnect", .{ .err = err, .url = self._url });
         self.failConnection();
     };
 }
@@ -247,7 +247,7 @@ fn failConnection(self: *EventSource) void {
     }
     self._ready_state = .closed;
     self.dispatchEvent("error", self._on_error) catch |err| {
-        log.err(.http, "EventSource error event", .{ .err = err, .url = self._url });
+        log.debug(.http, "EventSource error event", .{ .err = err, .url = self._url });
     };
     self.deactivate();
 }
@@ -258,7 +258,7 @@ fn reestablish(self: *EventSource) void {
     }
     self._ready_state = .connecting;
     self.dispatchEvent("error", self._on_error) catch |err| {
-        log.err(.http, "EventSource error event", .{ .err = err, .url = self._url });
+        log.debug(.http, "EventSource error event", .{ .err = err, .url = self._url });
     };
     // the error handler may have close()d us
     if (self._ready_state == .closed) {

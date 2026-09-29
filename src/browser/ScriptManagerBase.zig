@@ -764,7 +764,7 @@ pub const Script = struct {
     pub fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
         const self: *Script = @ptrCast(@alignCast(transfer.req.ctx));
         self._dataCallback(transfer, data) catch |err| {
-            log.err(.http, "SM.dataCallback", .{ .err = err, .transfer = transfer, .len = data.len });
+            log.debug(.http, "SM.dataCallback", .{ .err = err, .transfer = transfer, .len = data.len });
             return err;
         };
     }
@@ -814,7 +814,7 @@ pub const Script = struct {
                 .extra = std.meta.activeTag(self.extra),
             });
         } else {
-            log.warn(.http, "script fetch error", .{
+            log.debug(.http, "script fetch error", .{
                 .err = err,
                 .req = self.url,
                 .extra = std.meta.activeTag(self.extra),
@@ -923,7 +923,7 @@ pub const Script = struct {
         // Multiple <script type="importmap"> elements merge with first-wins semantics.
         if (fe.kind == .importmap) {
             self.manager.importmap.merge(frame.arena, frame.base(), self.source.content()) catch |err| {
-                log.err(.browser, "parse importmap script", .{
+                log.debug(.browser, "parse importmap script", .{
                     .err = err,
                     .src = url,
                     .kind = fe.kind,
@@ -981,14 +981,14 @@ pub const Script = struct {
 
         const caught = try_catch.caughtOrError(frame.local_arena, error.Unknown);
         lp.metrics.script_errors.incr();
-        log.warn(.js, "eval script", .{
+        log.debug(.js, "eval script", .{
             .url = url,
             .caught = caught,
         });
 
         if (try_catch.exceptionValue()) |exc| {
             frame.window.reportError(exc, frame) catch |err| {
-                log.warn(.js, "eval script report error", .{ .url = url, .err = err });
+                log.debug(.js, "eval script report error", .{ .url = url, .err = err });
             };
         }
 
@@ -1013,7 +1013,7 @@ pub const Script = struct {
         const frame = fe.frame;
         const Event = @import("webapi/Event.zig");
         const event = Event.initTrusted(typ, .{}, frame.page) catch |err| {
-            log.warn(.js, "script internal callback", .{
+            log.debug(.js, "script internal callback", .{
                 .url = self.url,
                 .type = typ,
                 .err = err,
@@ -1021,7 +1021,7 @@ pub const Script = struct {
             return;
         };
         frame._event_manager.dispatch(fe.script_element.asNode().asEventTarget(), event) catch |err| {
-            log.warn(.js, "script callback", .{
+            log.debug(.js, "script callback", .{
                 .url = self.url,
                 .type = typ,
                 .err = err,
@@ -1040,7 +1040,7 @@ pub const Script = struct {
         // hints only originate from a <link> in a frame, never from a worker
         const frame = self.manager.owner.frame;
         frame.queueElementEvent(element, kind) catch |err| {
-            log.warn(.js, "script hint event", .{ .url = self.url, .kind = kind, .err = err });
+            log.debug(.js, "script hint event", .{ .url = self.url, .kind = kind, .err = err });
         };
     }
 };
@@ -1135,9 +1135,6 @@ test "ScriptManagerBase: import whose submit fails synchronously releases its ar
     client.test_fail_submit = error.TestSubmitFailure;
     defer client.test_fail_submit = null;
 
-    // Script.errorCallback logs the fetch error.
-    testing.expectLog(&.{.http});
-
     const url: [:0]const u8 = "http://127.0.0.1:9582/fails-at-submit.js";
     try sm.preloadImport(url, frame.url, .{});
 
@@ -1156,9 +1153,6 @@ test "ScriptManagerBase: dynamic import whose submit fails synchronously rejects
     const client = sm.client;
     client.test_fail_submit = error.TestSubmitFailure;
     defer client.test_fail_submit = null;
-
-    // Script.errorCallback logs the fetch error.
-    testing.expectLog(&.{.http});
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);

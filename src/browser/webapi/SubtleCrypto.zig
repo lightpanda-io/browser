@@ -60,7 +60,7 @@ pub fn generateKey(
         .ec_key_gen => |params| return EC.generate(params, extractable, key_usages, exec),
         .rsa_hashed_key_gen => |params| {
             try RSA.validate(params, key_usages);
-            log.warn(.not_implemented, "generateKey", .{ .name = params.name });
+            log.debug(.not_implemented, "generateKey", .{ .name = params.name });
         },
         .name => |js_name| return generateKeyFromName(try js_name.toSSO(false), extractable, key_usages, exec),
         .object => |object| return generateKeyFromName(try object.name.toSSO(false), extractable, key_usages, exec),
@@ -114,7 +114,7 @@ fn generateKeyFromName(
         }
     }
 
-    log.warn(.not_implemented, "generateKey", .{ .name = name });
+    log.debug(.not_implemented, "generateKey", .{ .name = name });
     return error.NotSupported;
 }
 
@@ -145,7 +145,7 @@ pub fn importKey(
             };
             return EC.import(name, algo.namedCurve(), format, der, is_private, extractable, mask, exec);
         }
-        log.warn(.not_implemented, "SubtleCrypto.importKey", .{ .name = name });
+        log.debug(.not_implemented, "SubtleCrypto.importKey", .{ .name = name });
         return error.NotSupported;
     }
 
@@ -205,7 +205,7 @@ pub fn importKey(
         return HMAC.import(hash_name, raw, extractable, key_usages, exec);
     }
 
-    log.warn(.not_implemented, "SubtleCrypto.importKey", .{ .name = name });
+    log.debug(.not_implemented, "SubtleCrypto.importKey", .{ .name = name });
     return error.NotSupported;
 }
 
@@ -265,7 +265,7 @@ pub fn exportKey(
 
     const is_unsupported = std.mem.eql(u8, format, "pkcs8") or std.mem.eql(u8, format, "spki");
     if (is_unsupported) {
-        log.warn(.not_implemented, "SubtleCrypto.exportKey", .{ .format = format });
+        log.debug(.not_implemented, "SubtleCrypto.exportKey", .{ .format = format });
         return error.NotSupported;
     }
 
@@ -295,7 +295,7 @@ fn exportJwk(key: *CryptoKey, exec: *const Execution) !js.Promise {
             break :blk try std.fmt.allocPrint(exec.local_arena, "HS{s}", .{hash[4..]}); // strip "SHA-"
         },
         else => {
-            log.warn(.not_implemented, "SubtleCrypto.exportKey", .{ .format = "jwk", .type = key._type });
+            log.debug(.not_implemented, "SubtleCrypto.exportKey", .{ .format = "jwk", .type = key._type });
             return error.NotSupported;
         },
     };
@@ -353,7 +353,7 @@ pub fn deriveKey(
             return HMAC.import(hash_name, bits, extractable, key_usages, exec);
         },
         .object, .name => {
-            log.warn(.not_implemented, "SubtleCrypto.deriveKey", .{});
+            log.debug(.not_implemented, "SubtleCrypto.deriveKey", .{});
             return error.NotSupported;
         },
     }
@@ -448,7 +448,7 @@ pub fn sign(
         // Call sign for HMAC.
         .hmac => return HMAC.sign(algo, key, data, exec),
         else => {
-            log.warn(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
+            log.debug(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
             return error.InvalidAccessError;
         },
     };

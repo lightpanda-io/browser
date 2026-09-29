@@ -576,7 +576,7 @@ fn notifyObservers(self: *Performance, entry: *Entry) !void {
     for (self._observers.items) |observer| {
         if (observer.interested(entry)) {
             observer._entries.append(observer._arena, entry) catch |err| {
-                lp.log.err(.frame, "Performance.notifyObservers", .{ .err = err });
+                lp.log.debug(.frame, "Performance.notifyObservers", .{ .err = err });
             };
         }
     }

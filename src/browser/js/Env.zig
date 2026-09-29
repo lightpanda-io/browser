@@ -749,7 +749,7 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
                 .local = &local,
                 .handle = &message_handle,
             }, frame) catch |err| {
-                log.warn(.browser, "unhandled rejection handler", .{ .err = err, .target = "window" });
+                log.debug(.browser, "unhandled rejection handler", .{ .err = err, .target = "window" });
             };
         },
         .worker => |wsg| {
@@ -757,7 +757,7 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
                 .local = &local,
                 .handle = &message_handle,
             }) catch |err| {
-                log.warn(.browser, "unhandled rejection handler", .{ .err = err, .target = "worker" });
+                log.debug(.browser, "unhandled rejection handler", .{ .err = err, .target = "worker" });
             };
         },
     }

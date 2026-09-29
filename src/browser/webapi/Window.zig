@@ -488,7 +488,7 @@ pub fn setWindowReflectingHandlerFromAttribute(self: *Window, name: lp.String, v
     if (frame.js.stringToPersistedFunction(expr, &.{"event"}, &.{})) |func| {
         slot.* = func;
     } else |err| {
-        log.err(.js, "window reflecting handler", .{ .err = err, .str = expr });
+        log.debug(.js, "window reflecting handler", .{ .err = err, .str = expr });
         slot.* = null;
     }
 }
@@ -607,7 +607,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     const target = self.asEventTarget();
     if (!frame._event_manager.hasDirectListeners(target, "error", self._on_error)) {
         if (comptime lp.IS_TEST == false) {
-            log.warn(.js, "window.reportError", .{
+            log.debug(.js, "window.reportError", .{
                 .message = err.toStringSlice() catch "Unknown error",
             });
         }
@@ -662,7 +662,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
 
     if (comptime lp.IS_TEST == false) {
         if (!event._prevent_default) {
-            log.warn(.js, "window.reportError", .{
+            log.debug(.js, "window.reportError", .{
                 .message = error_event._message,
                 .filename = error_event._filename,
                 .line_number = error_event._line_number,
@@ -685,7 +685,7 @@ pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]
     const gop = try page.element_computed_styles.getOrPut(page.frame_arena, .{ .element = element, .pseudo = pseudo });
     if (!gop.found_existing) {
         if (pseudo == .other) {
-            log.warn(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pseudo_element.? });
+            log.debug(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pseudo_element.? });
         }
         gop.value_ptr.* = try CSSStyleProperties.init(element, true, frame);
     }
@@ -1387,7 +1387,6 @@ const CrossOriginWindow = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Window" {
-    testing.expectLog(&.{.http}); // stop aborts
     try testing.htmlRunner("window", .{});
 }
 

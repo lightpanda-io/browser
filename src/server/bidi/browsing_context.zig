@@ -110,7 +110,7 @@ fn create(cmd: *BiDi.Command) !void {
 
     const bidi = cmd.bidi;
     if (bidi.browsing_context != null) {
-        log.warn(.not_implemented, "bidi.BrowingContext", .{ .feature = "multiple user contexts" });
+        log.debug(.not_implemented, "bidi.BrowingContext", .{ .feature = "multiple user contexts" });
         return cmd.sendError("unsupported operation", "only a single browsing context is supported");
     }
 
@@ -254,7 +254,7 @@ fn startNavigation(cmd: *BiDi.Command, ctx: *Context, frame: *Frame, url: [:0]co
         bidi.user_context.session.initiateRootNavigation(frame._frame_id, url, nav_opts);
 
     nav_result catch |err| {
-        log.warn(.bidi, "navigate", .{ .err = err });
+        log.debug(.bidi, "navigate", .{ .err = err });
         if (wait != .none and ctx.pending_navigate == null) {
             // the lifecycle already answered it
             return;
@@ -343,7 +343,7 @@ fn locateNodes(cmd: *BiDi.Command) !void {
             else => return cmd.sendError("invalid argument", "locator value must be a string"),
         },
         .innerText, .accessibility, .context => {
-            log.warn(.not_implemented, "bidi.locateNodes", .{ .locator = @tagName(p.locator.type) });
+            log.debug(.not_implemented, "bidi.locateNodes", .{ .locator = @tagName(p.locator.type) });
             return cmd.sendError("unsupported operation", "locator type is not supported");
         },
     };

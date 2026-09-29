@@ -454,7 +454,7 @@ pub const Streaming = struct {
 
         h5e.html5ever_streaming_parser_finish(handle);
         if (self.pending_input.items.len != 0) {
-            lp.log.warn(.dom, "write during finish dropped", .{ .len = self.pending_input.items.len });
+            lp.log.debug(.dom, "write during finish dropped", .{ .len = self.pending_input.items.len });
             self.pending_input.clearRetainingCapacity();
         }
         try self.parser.flushPendingText();

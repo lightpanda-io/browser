@@ -227,17 +227,17 @@ pub fn logKVs(scope: Scope, level: Level, msg: []const u8, kvs: []const KV) void
         return;
     }
 
-    if (current_page) |page| {
-        if (level != .note and @intFromEnum(level) > @intFromEnum(page.max_level)) {
-            page.max_level = level;
-        }
-    }
-
     if (comptime lp.IS_TEST) {
         const expected = &expected_logs[@intFromEnum(scope)];
         if (expected.* > 0) {
             expected.* -= 1;
             return;
+        }
+    }
+
+    if (current_page) |page| {
+        if (level != .note and @intFromEnum(level) > @intFromEnum(page.max_level)) {
+            page.max_level = level;
         }
     }
 
@@ -328,9 +328,6 @@ fn logLogFmtPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.
 
 fn logPretty(scope: Scope, level: Level, msg: []const u8, kvs: []const KV, writer: *std.Io.Writer) !void {
     try logPrettyPrefix(scope, level, msg, writer);
-    if (current_page) |page| {
-        try writer.print("      $page = {d}\n", .{page.id});
-    }
     for (kvs) |kv| {
         try writer.print("      {s} = ", .{kv.key});
         try writeErased(.pretty, kv.value, writer);
@@ -358,15 +355,20 @@ fn logPrettyPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.
     try writer.writeAll(msg);
 
     {
-        // msg.len cannot be > 30, and @tagName(scope).len cannot be > 15
-        // so this is safe
-        const prefix_len = @tagName(scope).len + msg.len + 2;
-        const padding = 55 - prefix_len;
+        // msg.len cannot be > 30, and @tagName(scope).len cannot be > 15.
+        // The page tag eats into the dot leaders so the elapsed column stays
+        // aligned and the line stays within 80 columns.
+        const page_len = if (current_page) |page| std.fmt.count(" page={d}", .{page.id}) else 0;
+        const prefix_len = @tagName(scope).len + msg.len + 2 + page_len;
+        const padding = 55 -| prefix_len;
         for (0..padding / 2) |_| {
             try writer.writeAll(" .");
         }
         if (@mod(padding, 2) == 1) {
             try writer.writeByte(' ');
+        }
+        if (current_page) |page| {
+            try writer.print(" page={d}", .{page.id});
         }
         const el = elapsed();
         try writer.print(" \x1b[0m[+{d}{s}]", .{ el.time, el.unit });
@@ -769,7 +771,12 @@ test "log: page context" {
     }
 
     {
-        expectLog(&.{ .http, .http });
+        // Not expectLog: an expected line is consumed before it can raise
+        // max_level. Discard the output instead.
+        sink = struct {
+            fn discard(_: []const u8) void {}
+        }.discard;
+        defer sink = null;
         err(.http, "first", .{});
         warn(.http, "second", .{});
         try testing.expectEqual(.err, page.max_level);

@@ -126,7 +126,7 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !void
     try self.dispatchAbortEvent(exec);
     for (to_dispatch.items) |dep| {
         dep.dispatchAbortEvent(exec) catch |err| {
-            log.warn(.app, "abort dependent dispatch", .{ .err = err });
+            log.debug(.app, "abort dependent dispatch", .{ .err = err });
         };
     }
 }
@@ -272,7 +272,7 @@ const TimeoutCallback = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const self: *TimeoutCallback = @ptrCast(@alignCast(ctx));
         self.timeoutAbort() catch |err| {
-            log.warn(.app, "abort signal timeout", .{ .err = err });
+            log.debug(.app, "abort signal timeout", .{ .err = err });
         };
         return null;
     }

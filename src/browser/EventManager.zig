@@ -237,17 +237,17 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             if (event.is(@import("webapi/event/MouseEvent.zig")) != null) {
                 if (Frame.user_input.findClickActivationTarget(target, event._bubbles)) |activation_target| {
                     Frame.user_input.handleClick(frame, activation_target, target) catch |err| {
-                        log.warn(.event, "frame.click", .{ .err = err });
+                        log.debug(.event, "frame.click", .{ .err = err });
                     };
                 }
             }
         } else if (event._type_string.eql(comptime .wrap("keydown"))) {
             Frame.user_input.handleKeydown(frame, target, event) catch |err| {
-                log.warn(.event, "frame.keydown", .{ .err = err });
+                log.debug(.event, "frame.keydown", .{ .err = err });
             };
         } else if (event._type_string.eql(comptime .wrap("keyup"))) {
             Frame.user_input.handleKeyup(frame, target, event) catch |err| {
-                log.warn(.event, "frame.keyup", .{ .err = err });
+                log.debug(.event, "frame.keyup", .{ .err = err });
             };
         }
     }
@@ -338,7 +338,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
                     return error.ExecutionTerminated;
                 }
                 frame.page.recordJsError(err);
-                log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
+                log.debug(.event, "inline handler", .{ .err = err, .caught = caught });
                 break :ret null;
             };
             processHandlerReturnValue(event, handler_return);
@@ -399,7 +399,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
                         return error.ExecutionTerminated;
                     }
                     frame.page.recordJsError(err);
-                    log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
+                    log.debug(.event, "inline handler", .{ .err = err, .caught = caught });
                     break :ret null;
                 };
                 processHandlerReturnValue(event, handler_return);
@@ -603,7 +603,7 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
     };
 
     return html_element.getAttributeFunction(handler_type, self.frame) catch |err| {
-        log.warn(.event, "inline html callback", .{ .type = handler_type, .err = err });
+        log.debug(.event, "inline html callback", .{ .type = handler_type, .err = err });
         return null;
     };
 }
@@ -849,10 +849,10 @@ const ActivationState = struct {
         const state_changed = (input._input_type == .checkbox) or !self.old_checked;
         if (state_changed and input.asElement().asNode().isConnected()) {
             fireEvent(frame, input, "input") catch |err| {
-                log.warn(.event, "input event", .{ .err = err });
+                log.debug(.event, "input event", .{ .err = err });
             };
             fireEvent(frame, input, "change") catch |err| {
-                log.warn(.event, "change event", .{ .err = err });
+                log.debug(.event, "change event", .{ .err = err });
             };
         }
     }
