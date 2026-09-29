@@ -26,6 +26,9 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual("load", evt);
+    testing.expectEqual(1000, img.naturalWidth);
+    testing.expectEqual(750, img.naturalHeight);
+    testing.expectEqual(0, img.width); // Natural size does not set HTML attributes.
   });
 </script>
 
@@ -44,6 +47,7 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual("error", evt);
+    testing.expectEqual(0, img.naturalWidth);
   });
 </script>
 
@@ -63,8 +67,9 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual("load", evt);
-    // Drained, not decoded: still no dimensions.
-    testing.expectEqual(0, img.naturalWidth);
+    // The body is not decoded, but its header gives the natural size.
+    testing.expectEqual(320, img.naturalWidth);
+    testing.expectEqual(240, img.naturalHeight);
   });
 </script>
 
@@ -103,6 +108,7 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual("load", evt);
+    testing.expectEqual(0, img.naturalWidth); // SVG is not parsed as a bitmap header.
   });
 </script>
 
@@ -137,12 +143,51 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual("load", evt);
+    testing.expectEqual(1000, img.naturalWidth);
+    testing.expectEqual(750, img.naturalHeight);
+  });
+</script>
+
+<script id="img-jpeg-and-src-change" type=module>
+  const state = await testing.async();
+  const img = new Image();
+  const loaded = new Promise(resolve => img.addEventListener('load', resolve, { once: true }));
+  img.src = '/images/photo.jpg';
+  await loaded;
+  testing.expectEqual(1000, img.naturalWidth);
+  testing.expectEqual(750, img.naturalHeight);
+
+  const failed = new Promise(resolve => img.addEventListener('error', resolve, { once: true }));
+  img.src = '/images/404.png';
+  testing.expectEqual(0, img.naturalWidth); // Old dimensions are invalid immediately.
+  await failed;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, img.naturalWidth);
+    testing.expectEqual(0, img.naturalHeight);
+  });
+</script>
+
+<script id="img-removing-loaded-src-clears-dimensions" type=module>
+  const state = await testing.async();
+  const img = new Image();
+  const loaded = new Promise(resolve => img.addEventListener('load', resolve, { once: true }));
+  img.src = '/images/small.png';
+  await loaded;
+  testing.expectEqual(320, img.naturalWidth);
+  img.removeAttribute('src');
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, img.naturalWidth);
+    testing.expectEqual(0, img.naturalHeight);
   });
 </script>
 
 <script id="img-complete-tracks-the-fetch" type=module>
-  // complete is false only while a request is in flight. naturalWidth stays
-  // 0 either way: we fetch images, we don't decode them.
+  // complete is false while a request is in flight. Dimensions are only
+  // available after the header has arrived; no bitmap is decoded.
   const state = await testing.async();
   const img = document.createElement("img");
 
@@ -160,8 +205,8 @@
   await state.done(() => {
     testing.expectEqual(false, during);
     testing.expectEqual(true, after);
-    testing.expectEqual(0, img.naturalWidth);
-    testing.expectEqual(0, img.naturalHeight);
+    testing.expectEqual(1000, img.naturalWidth);
+    testing.expectEqual(750, img.naturalHeight);
   });
 </script>
 
@@ -219,6 +264,7 @@
     // The superseded 404 is dropped; only the winning fetch reports.
     testing.expectEqual(1, events.length);
     testing.expectEqual("load", events[0]);
+    testing.expectEqual(1000, img.naturalWidth);
   });
 </script>
 

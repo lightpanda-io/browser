@@ -26,6 +26,7 @@ const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
 const Element = @import("../webapi/Element.zig");
+const image_dimensions = @import("../image_dimensions.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
 
 const log = lp.log;
@@ -84,6 +85,7 @@ pub fn image(frame: *Frame, img: *Element.Html.Image, src: []const u8) !void {
         .credentials_mode = .include,
         .resource_type = .image,
         .headers_only = true,
+        .headers_only_prefix_bytes = 16 * 1024,
         .header_callback = ImageLoad.headerCallback,
         .data_callback = ImageLoad.dataCallback,
         .done_callback = ImageLoad.doneCallback,
@@ -116,6 +118,7 @@ const ImageLoad = struct {
     image: *Element.Html.Image,
     generation: u32,
     status: u16 = 0,
+    dimensions: ?image_dimensions.Dimensions = null,
 
     fn headerCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.HeaderResult {
         const self: *ImageLoad = @ptrCast(@alignCast(transfer.req.ctx));
@@ -123,8 +126,9 @@ const ImageLoad = struct {
         return .proceed;
     }
 
-    fn dataCallback(_: *HttpClient.Transfer, _: []const u8) !void {
-        // headers_only tears the transfer down at the first body byte.
+    fn dataCallback(transfer: *HttpClient.Transfer, prefix: []const u8) !void {
+        const self: *ImageLoad = @ptrCast(@alignCast(transfer.req.ctx));
+        self.dimensions = image_dimensions.parse(prefix);
     }
 
     fn doneCallback(ctx: *anyopaque) !void {
@@ -173,6 +177,12 @@ const ImageLoad = struct {
         const current = self.generation == img._generation;
         if (current) {
             img._complete = true;
+            if (kind == .load) {
+                if (self.dimensions) |dimensions| {
+                    img._natural_width = dimensions.width;
+                    img._natural_height = dimensions.height;
+                }
+            }
         }
 
         // Released before anything below, because everything below can run JS

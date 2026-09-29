@@ -40,6 +40,8 @@ pub const Proto = HtmlElement;
 _generation: u32 = 0,
 // Per spec, false only while a fetch is in flight.
 _complete: bool = true,
+_natural_width: u32 = 0,
+_natural_height: u32 = 0,
 // Hash of the URL the last update selected, so a <picture> mutation that
 // leaves the selection unchanged doesn't restart the load.
 _selected_hash: u64 = 0,
@@ -100,16 +102,12 @@ fn setLoading(self: *Image, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("loading"), .wrap(value), frame);
 }
 
-fn getNaturalWidth(_: *const Image) u32 {
-    // this is a valid response under a number of normal conditions, but could
-    // be used to detect the nature of Browser.
-    return 0;
+fn getNaturalWidth(self: *const Image) u32 {
+    return self._natural_width;
 }
 
-fn getNaturalHeight(_: *const Image) u32 {
-    // this is a valid response under a number of normal conditions, but could
-    // be used to detect the nature of Browser.
-    return 0;
+fn getNaturalHeight(self: *const Image) u32 {
+    return self._natural_height;
 }
 
 fn getComplete(self: *const Image) bool {
@@ -138,6 +136,8 @@ fn imageAddedCallback(self: *Image, frame: *Frame) !void {
 
     self._generation +%= 1;
     self._complete = true;
+    self._natural_width = 0;
+    self._natural_height = 0;
 
     const src = self.selectSource(frame);
     self._selected_hash = std.hash.Wyhash.hash(0, src);

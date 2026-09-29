@@ -2056,9 +2056,15 @@ pub const Request = struct {
     // origins and CDNs see (and answer) exactly what a real browser sends;
     // the body is then discarded, and torn off the wire if it doesn't fit in
     // HEADERS_ONLY_DRAIN_MAX. The consumer still gets the usual
-    // start/header/done sequence, with an empty body; `data_callback` never
-    // fires.
+    // start/header/done sequence, with an empty body unless the optional
+    // headers_only_prefix_bytes is set.
     headers_only: bool = false,
+
+    // Keep at most this many leading bytes while discarding the rest of a
+    // headers-only response. Used to identify image dimensions without
+    // downloading or retaining the entire image. The prefix is delivered to
+    // data_callback before done_callback. Capped at HEADERS_ONLY_DRAIN_MAX.
+    headers_only_prefix_bytes: usize = 0,
 
     // Should only be set when they need to differ from the owner's.
     frame_id: u32 = 0,
@@ -3959,6 +3965,14 @@ pub const Transfer = struct {
         res.bytes_received += chunk_len;
 
         if (transfer.req.headers_only) {
+            const limit = @min(transfer.req.headers_only_prefix_bytes, Request.HEADERS_ONLY_DRAIN_MAX);
+            if (res.buffer.items.len < limit) {
+                const count = @min(chunk_len, limit - res.buffer.items.len);
+                res.buffer.appendSlice(transfer.arena.allocator(), buffer[0..count]) catch |err| {
+                    res.callback_error = err;
+                    return http.writefunc_error;
+                };
+            }
             // Plenty of images have no Content-Length to decide this up front, so
             // decide it as the body arrives.
             if (res.bytes_received <= Request.HEADERS_ONLY_DRAIN_MAX) {
