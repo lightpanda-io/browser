@@ -657,13 +657,23 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     self._load_state = .parsing;
     self._last_navigate_error = null;
 
-    log.info(.frame, "navigate", .{
+    const page = self.page;
+    const page_scope = page.logScope();
+    defer page_scope.exit();
+
+    const is_root = self == &page.frame;
+    const log_data = .{
         .url = request_url,
         .method = opts.method,
         .reason = opts.reason,
         .body = opts.body != null,
         .type = self._type,
-    });
+    };
+    if (is_root) {
+        log.info(.frame, "navigation start", log_data);
+    } else {
+        log.info(.frame, "navigate", log_data);
+    }
 
     const http_client = &session.browser.http_client;
 

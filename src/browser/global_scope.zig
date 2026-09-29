@@ -186,6 +186,7 @@ pub const GlobalScope = union(enum) {
                 .frame_id = frame._frame_id,
                 .document_frame_id = frame._frame_id,
                 .loader_id = frame._loader_id,
+                .log_page = &frame.page.log_context,
             },
             .worker => |worker| .{
                 .scope = self,
@@ -194,6 +195,7 @@ pub const GlobalScope = union(enum) {
                 .frame_id = worker._frame_id,
                 .document_frame_id = worker._frame._frame_id,
                 .loader_id = worker._loader_id,
+                .log_page = &worker.page.log_context,
             },
         };
     }

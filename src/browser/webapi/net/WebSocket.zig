@@ -355,6 +355,9 @@ pub fn deliverEvents(self: *WebSocket) void {
     // alive even when a terminal event releases the base reference.
     defer self.releaseRef(self._exec.page);
 
+    const page_scope = self._exec.page.logScope();
+    defer page_scope.exit();
+
     self._delivering = true;
     defer self._delivering = false;
 

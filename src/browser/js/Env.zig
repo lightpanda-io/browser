@@ -503,7 +503,9 @@ pub fn runMicrotasks(self: *Env) void {
         var i: usize = 0;
         while (i < self.contexts.items.len) : (i += 1) {
             const ctx = self.contexts.items[i];
+            const page_scope = ctx.page.logScope();
             v8.v8__MicrotaskQueue__PerformCheckpoint(ctx.microtask_queue, v8_isolate);
+            page_scope.exit();
 
             if (self.terminatePending()) {
                 if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate)) {
