@@ -17,23 +17,25 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
 const lp = @import("lightpanda");
 
 const http = @import("../../../network/http.zig");
-const testing = @import("../../../testing.zig");
-const js = @import("../../js/js.zig");
-const Execution = js.Execution;
+
 const Page = @import("../../Page.zig");
+const js = @import("../../js/js.zig");
 const referrer = @import("../../referrer.zig");
-const AbortSignal = @import("../AbortSignal.zig");
-const Blob = @import("../Blob.zig");
-const ReadableStream = @import("../streams/ReadableStream.zig");
+
 const URL = @import("../URL.zig");
-const body_init = @import("body_init.zig");
-const BodyInit = body_init.BodyInit;
-const FormData = @import("FormData.zig");
+const Blob = @import("../Blob.zig");
+const AbortSignal = @import("../AbortSignal.zig");
+const ReadableStream = @import("../streams/ReadableStream.zig");
+
 const Headers = @import("Headers.zig");
+const FormData = @import("FormData.zig");
+const body_init = @import("body_init.zig");
+
+const Execution = js.Execution;
+const BodyInit = body_init.BodyInit;
 
 const Request = @This();
 
@@ -60,13 +62,13 @@ pub const Input = union(enum) {
 
 pub const InitOpts = struct {
     body: ?BodyInit = null,
-    cache: Cache = .default,
-    credentials: Credentials = .@"same-origin",
+    cache: ?Cache = null,
+    credentials: ?Credentials = null,
     headers: ?Headers.InitOpts = null,
     method: ?[]const u8 = null,
-    mode: Mode = .cors,
+    mode: ?Mode = null,
     priority: ?[]const u8 = null,
-    redirect: Redirect = .follow,
+    redirect: ?Redirect = null,
     referrer: ?[]const u8 = null,
     referrerPolicy: ?[]const u8 = null,
     signal: ?*AbortSignal = null,
@@ -135,9 +137,27 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .request => |r| r._method,
     };
 
-    const mode = switch (input) {
-        .url => opts.mode,
-        .request => |r| if (opts_ != null) opts.mode else r._mode,
+    // Absent init members inherit from the input Request.
+    const mode: Mode = if (opts.mode) |m| blk: {
+        if (m == .navigate) {
+            return error.TypeError;
+        }
+        break :blk m;
+    } else switch (input) {
+        .url => .cors,
+        .request => |r| if (r._mode == .navigate and opts_ != null) .@"same-origin" else r._mode,
+    };
+    const cache: Cache = opts.cache orelse switch (input) {
+        .url => .default,
+        .request => |r| r._cache,
+    };
+    const credentials: Credentials = opts.credentials orelse switch (input) {
+        .url => .@"same-origin",
+        .request => |r| r._credentials,
+    };
+    const redirect: Redirect = opts.redirect orelse switch (input) {
+        .url => .follow,
+        .request => |r| r._redirect,
     };
 
     const guard = headerGuard(mode);
@@ -212,9 +232,9 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         ._arena = arena,
         ._method = method,
         ._headers = headers,
-        ._cache = opts.cache,
-        ._credentials = opts.credentials,
-        ._redirect = opts.redirect,
+        ._cache = cache,
+        ._credentials = credentials,
+        ._redirect = redirect,
         ._mode = mode,
         ._body = body,
         ._body_stream = body_stream,
@@ -400,7 +420,7 @@ pub fn clone(self: *Request, exec: *const Execution) !*Request {
         ._url = try arena.dupeZ(u8, self._url),
         ._arena = arena,
         ._method = self._method,
-        ._headers = self._headers,
+        ._headers = if (self._headers) |h| try Headers.initGuarded(.{ .obj = h }, h._guard, exec) else null,
         ._cache = self._cache,
         ._credentials = self._credentials,
         ._redirect = self._redirect,
@@ -469,6 +489,7 @@ pub const JsApi = struct {
     pub const referrerPolicy = bridge.accessor(Request.getReferrerPolicy, null, .{});
 };
 
+const testing = @import("../../../testing.zig");
 test "WebApi: Request" {
     try testing.htmlRunner("net/request.html", .{});
 }
