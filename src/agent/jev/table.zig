@@ -593,7 +593,7 @@ pub const AskOpts = struct {
 /// the operation head *and* loses its target head, so the decider can never
 /// pick something the page cannot do.
 pub fn ask(arena: std.mem.Allocator, observed: Table, opts: AskOpts) std.mem.Allocator.Error!Ask {
-    var operations: std.ArrayList(ChoiceEntry) = .empty;
+    var offered: std.ArrayList(Operation) = .empty;
     var entries: std.ArrayList(QuestionEntry) = .empty;
 
     inline for (.{ Operation.CLICK, Operation.TYPE_TEXT, Operation.SELECT }) |op| {
@@ -602,7 +602,7 @@ pub fn ask(arena: std.mem.Allocator, observed: Table, opts: AskOpts) std.mem.All
         else
             try observed.criteria(arena, op);
         if (candidates.len > 0) {
-            try operations.append(arena, describe(op));
+            try offered.append(arena, op);
             try entries.append(arena, .{
                 .key = op.targetQuestion().?,
                 .value = .choiceText(targetInstructions(op), .init(candidates)),
@@ -611,22 +611,24 @@ pub fn ask(arena: std.mem.Allocator, observed: Table, opts: AskOpts) std.mem.All
     }
 
     inline for (.{ Operation.WAIT, Operation.DONE, Operation.BLOCKED }) |op| {
-        try operations.append(arena, describe(op));
+        try offered.append(arena, op);
     }
 
+    // The list holds the operations, not their rendered criteria, so the
+    // tag-to-blurb mapping happens once and `choiceEnum` reads the answer back
+    // against the same tags.
     try entries.insert(arena, 0, .{
         .key = "operation",
-        .value = .choiceText(prompts.next_action, .init(operations.items)),
+        .value = .choiceText(
+            prompts.next_action,
+            try zenai.typesafe.enumChoices(arena, Operation, offered.items, prompts.describe),
+        ),
     });
     return .{ .questions = .init(entries.items) };
 }
 
-const ChoiceEntry = zenai.typesafe.types.ChoiceCriteria.Entry;
-const Content = zenai.typesafe.types.Content;
-
-fn describe(comptime op: Operation) ChoiceEntry {
-    return .{ .key = @tagName(op), .value = .{ .text = prompts.describe(op) } };
-}
+const ChoiceEntry = zenai.typesafe.ChoiceEntry;
+const Content = zenai.typesafe.Content;
 
 /// Both halves are constant per operation, so the per-turn `allocPrint` the
 /// three heads used to do was ~1.5 KB of identical text rebuilt every step.
