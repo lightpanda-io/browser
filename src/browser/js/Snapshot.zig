@@ -871,6 +871,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     .definer = if (value.definer) |definer| @ptrCast(definer) else null,
                     .descriptor = null,
                     .index_of = null,
+                    .iterable_to_list = null,
                     .data = null,
                     .flags = 0,
                 };

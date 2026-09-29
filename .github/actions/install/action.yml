@@ -17,7 +17,7 @@ inputs:
   v8:
     description: 'v8 version to install'
     required: false
-    default: '14.9.207.35'
+    default: '15.5.35.13'
   cache-dir:
     description: 'cache dir to use'
     required: false
