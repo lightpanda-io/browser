@@ -19,8 +19,8 @@
             .hash = "N-V-__8AAJ2cNgAgfBtAw33Bxfu1IWISDeKKSr3DAqoAysIJ",
         },
         .nghttp2 = .{
-            .url = "https://github.com/nghttp2/nghttp2/releases/download/v1.69.0/nghttp2-1.69.0.tar.gz",
-            .hash = "N-V-__8AAMHpvwChC6orFCDB8MeiumT6OlfmKfmrWlak7Int",
+            .url = "https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.gz",
+            .hash = "N-V-__8AACay2gDbHrByjNGWvyH8G9Gp30uRgZqobYOF1nhb",
         },
         .@"boringssl-zig" = .{
             .url = "git+https://github.com/lightpanda-io/boringssl-zig.git#f07cc58fa4a051eb0985287e691db5dbb0e7e76f",
