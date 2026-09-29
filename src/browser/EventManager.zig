@@ -171,6 +171,12 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
         }
     }
 
+    // A TouchEvent's Touch.target, retargeted the same way as relatedTarget.
+    const original_touch: ?*EventTarget = if (event.touchTargetPtr()) |p| p.* else null;
+    if (rootIsShadowRoot(original_touch)) {
+        event._needs_retargeting = true;
+    }
+
     const frame = self.frame;
 
     // Set window.event to the currently dispatching event (WHATWG spec)
@@ -214,12 +220,18 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             if (event.relatedTargetPtr()) |related_ptr| {
                 related_ptr.* = null;
             }
+            if (event.touchTargetPtr()) |touch_ptr| {
+                touch_ptr.* = null;
+            }
         } else if (event._needs_retargeting and node_path_len > 0) {
             const last = path_buffer[node_path_len - 1];
             const adjusted = getAdjustedTarget(event._dispatch_target, last);
             event._target = if (rootIsShadowRoot(adjusted)) null else adjusted;
             if (event.relatedTargetPtr()) |related_ptr| {
                 related_ptr.* = getAdjustedTarget(original_related, last);
+            }
+            if (event.touchTargetPtr()) |touch_ptr| {
+                touch_ptr.* = getAdjustedTarget(original_touch, last);
             }
         }
         // Handle checkbox/radio activation rollback or commit
@@ -289,6 +301,13 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
         if (event.relatedTargetPtr()) |related_ptr| {
             if (related_ptr.*) |related| {
                 if (rootIsShadowRoot(getAdjustedTarget(related, last))) {
+                    clear_targets = true;
+                }
+            }
+        }
+        if (event.touchTargetPtr()) |touch_ptr| {
+            if (touch_ptr.*) |touch_target| {
+                if (rootIsShadowRoot(getAdjustedTarget(touch_target, last))) {
                     clear_targets = true;
                 }
             }
@@ -615,18 +634,26 @@ const AdjustedTargets = struct {
     target: ?*EventTarget,
     related: ?*EventTarget,
     related_ptr: ?*?*EventTarget,
+    touch: ?*EventTarget,
+    touch_ptr: ?*?*EventTarget,
 
     fn apply(event: *Event, current_target: *EventTarget) AdjustedTargets {
         const related_ptr = event.relatedTargetPtr();
+        const touch_ptr = event.touchTargetPtr();
         const original: AdjustedTargets = .{
             .target = event._target,
             .related = if (related_ptr) |p| p.* else null,
             .related_ptr = related_ptr,
+            .touch = if (touch_ptr) |p| p.* else null,
+            .touch_ptr = touch_ptr,
         };
 
         event._target = getAdjustedTarget(original.target, current_target);
         if (related_ptr) |p| {
             p.* = getAdjustedTarget(original.related, current_target);
+        }
+        if (touch_ptr) |p| {
+            p.* = getAdjustedTarget(original.touch, current_target);
         }
         return original;
     }
@@ -635,6 +662,9 @@ const AdjustedTargets = struct {
         event._target = self.target;
         if (self.related_ptr) |p| {
             p.* = self.related;
+        }
+        if (self.touch_ptr) |p| {
+            p.* = self.touch;
         }
     }
 };
