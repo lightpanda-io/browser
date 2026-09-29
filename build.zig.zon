@@ -23,8 +23,8 @@
             .hash = "N-V-__8AACay2gDbHrByjNGWvyH8G9Gp30uRgZqobYOF1nhb",
         },
         .@"boringssl-zig" = .{
-            .url = "git+https://github.com/lightpanda-io/boringssl-zig.git#f07cc58fa4a051eb0985287e691db5dbb0e7e76f",
-            .hash = "boringssl-0.1.0-VtJeWd1OAAAQ5AuNOZGP5a_5ZyNn5BfeE-jiKqEm2gsE",
+            .url = "git+https://github.com/lightpanda-io/boringssl-zig.git#5b5ad66f65c5cc4323680ab71284403598251678",
+            .hash = "boringssl-0.1.0-VtJeWc1RAADbO4ypofgJivLdDc6yj5O2ifTBlY-ZDHcH",
         },
         // .@"boringssl-zig" = .{ .path = "../boringssl-zig" },
         .curl = .{
