@@ -70,13 +70,13 @@ fn createUserContext(cmd: *BiDi.Command) !void {
         unhandledPromptBehavior: ?std.json.Value = null,
     });
     if (p.proxy != null or p.acceptInsecureCerts != null or p.unhandledPromptBehavior != null) {
-        log.warn(.not_implemented, "bidi.createUserContext", .{ .proxy = p.proxy != null, .acceptInsecureCerts = p.acceptInsecureCerts, .unhandledPromptBehavior = p.unhandledPromptBehavior != null });
+        log.debug(.not_implemented, "bidi.createUserContext", .{ .proxy = p.proxy != null, .acceptInsecureCerts = p.acceptInsecureCerts, .unhandledPromptBehavior = p.unhandledPromptBehavior != null });
         return cmd.sendError("unsupported operation", "user context options are not supported");
     }
 
     const bidi = cmd.bidi;
     if (bidi.user_context.isDefault() == false) {
-        log.warn(.not_implemented, "bidi.createUserContext", .{ .feature = "multiple user contexts" });
+        log.debug(.not_implemented, "bidi.createUserContext", .{ .feature = "multiple user contexts" });
         return cmd.sendError("unsupported operation", "only one user context can exist besides the default");
     }
 

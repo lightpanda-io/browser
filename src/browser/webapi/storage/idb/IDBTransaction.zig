@@ -333,7 +333,7 @@ pub fn abortWith(self: *IDBTransaction, exec: *Execution, reason: ?anyerror) err
             // which itself isn't an abort).
             request.failWithAbort();
             self._abort_requests.append(self._arena.allocator(), request) catch |err| {
-                log.warn(.storage, "idb abort collect", .{ .err = err });
+                log.debug(.storage, "idb abort collect", .{ .err = err });
             };
         }
     }
@@ -351,7 +351,7 @@ fn scheduleAbortDelivery(self: *IDBTransaction, exec: *Execution) void {
         .name = "IDBTransaction.abort",
         .finalizer = abortFinalize,
     }) catch |err| {
-        log.warn(.storage, "idb schedule abort", .{ .err = err });
+        log.debug(.storage, "idb schedule abort", .{ .err = err });
         self.releaseRef(exec.page);
         return;
     };
@@ -375,7 +375,7 @@ fn deliverAbort(ctx: *anyopaque) !?u32 {
 
     for (self._abort_requests.items) |request| {
         request.deliver(exec) catch |err| {
-            log.warn(.storage, "idb abort deliver", .{ .err = err });
+            log.debug(.storage, "idb abort deliver", .{ .err = err });
         };
     }
     self._abort_requests.clearRetainingCapacity();
@@ -394,7 +394,7 @@ fn abortFinalize(ctx: *anyopaque) void {
 // The abort event bubbles from the transaction to its connection.
 fn fireAbort(self: *IDBTransaction, exec: *Execution) void {
     const event = Event.initTrusted(comptime .wrap("abort"), .{ .bubbles = true }, exec.page) catch |err| {
-        log.warn(.storage, "idb abort event", .{ .err = err });
+        log.debug(.storage, "idb abort event", .{ .err = err });
         return;
     };
     event.acquireRef();
@@ -404,14 +404,14 @@ fn fireAbort(self: *IDBTransaction, exec: *Execution) void {
     event._target = et;
     event._dispatch_target = et;
     exec.dispatch(et, event, self._on_abort, .{ .context = "IDBTransaction.abort", .inject_target = false }) catch |err| {
-        log.warn(.storage, "idb abort dispatch", .{ .err = err });
+        log.debug(.storage, "idb abort dispatch", .{ .err = err });
     };
     if (event._stop_propagation) {
         return;
     }
     const db = self._db;
     exec.dispatch(db.asEventTarget(), event, db._on_abort, .{ .context = "IDBDatabase.abort", .inject_target = false }) catch |err| {
-        log.warn(.storage, "idb abort dispatch", .{ .err = err });
+        log.debug(.storage, "idb abort dispatch", .{ .err = err });
     };
 }
 
@@ -629,11 +629,11 @@ fn getFunctionFromSetter(setter: ?FunctionSetter) ?js.Function.Global {
 fn fire(self: *IDBTransaction, exec: *Execution, typ: lp.String, handler: ?js.Function.Global) void {
     self._settled = true;
     const event = Event.initTrusted(typ, null, exec.page) catch |err| {
-        log.warn(.storage, "idb transaction event", .{ .err = err });
+        log.debug(.storage, "idb transaction event", .{ .err = err });
         return;
     };
     exec.dispatch(self.asEventTarget(), event, handler, .{ .context = "IDBTransaction" }) catch |err| {
-        log.warn(.storage, "idb transaction dispatch", .{ .err = err });
+        log.debug(.storage, "idb transaction dispatch", .{ .err = err });
     };
 }
 
@@ -714,7 +714,7 @@ fn resumeDrain(waiter: *Engine.GateWaiter) void {
     self.scheduleDrain() catch |err| {
         // We were handed the gate; if we can't reschedule, hand it off so the
         // waiters behind us aren't stranded. Unpark may free self — last touch.
-        log.warn(.storage, "idb resume drain", .{ .err = err });
+        log.debug(.storage, "idb resume drain", .{ .err = err });
         _ = self._engine.releaseGate(&self._gate_waiter);
     };
 }
@@ -789,11 +789,11 @@ fn deliverBatch(self: *IDBTransaction, exec: *Execution) void {
             return;
         }
         request.execute(exec) catch |err| {
-            log.warn(.storage, "idb request execute", .{ .err = err });
+            log.debug(.storage, "idb request execute", .{ .err = err });
             request.setError(err);
         };
         request.deliver(exec) catch |err| {
-            log.warn(.storage, "idb request deliver", .{ .err = err });
+            log.debug(.storage, "idb request deliver", .{ .err = err });
         };
     }
 }

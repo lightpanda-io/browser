@@ -277,7 +277,7 @@ pub fn deliverResizes(frame: *Frame) void {
         frame._resize.delivery_depth = 0;
     };
     if (frame._resize.delivery_depth > 16) {
-        log.warn(.frame, "frame.ResizeLimit", .{ .type = frame._type, .url = frame.url });
+        log.debug(.frame, "frame.ResizeLimit", .{ .type = frame._type, .url = frame.url });
         frame._resize.delivery_depth = 0;
         return;
     }
@@ -291,7 +291,7 @@ pub fn deliverResizes(frame: *Frame) void {
         }
         const observer = frame._resize.observers.items[i];
         observer.deliverEntries(frame) catch |err| {
-            log.err(.frame, "frame.deliverResizes", .{ .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.frame, "frame.deliverResizes", .{ .err = err, .type = frame._type, .url = frame.url });
             if (err == error.ExecutionTerminated) {
                 return;
             }
@@ -338,7 +338,7 @@ fn disconnectRunawayIntersectionObservers(frame: *Frame) void {
     // only the crossing itself is logged.
     if (!frame._intersection.runaway) {
         frame._intersection.runaway = true;
-        log.err(.frame, "frame.IntersectionRunaway", .{ .type = frame._type, .url = frame.url });
+        log.debug(.frame, "frame.IntersectionRunaway", .{ .type = frame._type, .url = frame.url });
     }
 
     for (frame._intersection.observers.items) |observer| {
@@ -378,7 +378,7 @@ pub fn deliverIntersections(frame: *Frame) void {
         }
         const observer = frame._intersection.observers.items[i];
         observer.deliverEntries(frame) catch |err| {
-            log.err(.frame, "frame.deliverIntersections", .{ .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.frame, "frame.deliverIntersections", .{ .err = err, .type = frame._type, .url = frame.url });
             if (err == error.ExecutionTerminated) {
                 return;
             }
@@ -388,7 +388,7 @@ pub fn deliverIntersections(frame: *Frame) void {
 
 // No observer on the frame can make progress once this path is reached.
 fn disconnectRunawayMutationObservers(frame: *Frame) void {
-    log.err(.frame, "frame.MutationRunaway", .{ .type = frame._type, .url = frame.url });
+    log.debug(.frame, "frame.MutationRunaway", .{ .type = frame._type, .url = frame.url });
 
     var node: ?*std.DoublyLinkedList.Node = frame._mutation.observers.first;
     while (node) |n| {
@@ -423,7 +423,7 @@ pub fn deliverMutations(frame: *Frame) void {
     };
 
     if (frame._mutation.delivery_depth > 16) {
-        log.err(.frame, "frame.MutationLimit", .{ .type = frame._type, .url = frame.url });
+        log.debug(.frame, "frame.MutationLimit", .{ .type = frame._type, .url = frame.url });
         frame._mutation.delivery_depth = 0;
         capped = true;
         return;
@@ -456,7 +456,7 @@ pub fn deliverMutations(frame: *Frame) void {
 
     for (notify.items) |observer| {
         observer.deliverRecords(frame) catch |err| {
-            log.err(.frame, "frame.deliverMutations", .{ .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.frame, "frame.deliverMutations", .{ .err = err, .type = frame._type, .url = frame.url });
             if (err == error.ExecutionTerminated) {
                 return;
             }
@@ -471,7 +471,7 @@ pub fn deliverMutations(frame: *Frame) void {
         };
         const target = slot.asNode().asEventTarget();
         frame._event_manager.dispatch(target, event) catch |err| {
-            log.err(.frame, "deliverSlotchange.dispatch", .{ .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.frame, "deliverSlotchange.dispatch", .{ .err = err, .type = frame._type, .url = frame.url });
             if (err == error.ExecutionTerminated) {
                 return;
             }

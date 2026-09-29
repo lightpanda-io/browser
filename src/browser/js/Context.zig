@@ -423,7 +423,7 @@ fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, ur
             break :blk buf.written();
         };
 
-        log.warn(.js, "evaluate module", .{
+        log.debug(.js, "evaluate module", .{
             .stack = stack,
             .specifier = url,
             .message = message,
@@ -582,7 +582,7 @@ fn resolveModuleCallback(
         if (err == error.SpecifierResolutionFailed) {
             _ = self.isolate.throwException(self.isolate.createTypeError("Failed to resolve module specifier"));
         }
-        log.err(.js, "resolve module", .{
+        log.debug(.js, "resolve module", .{
             .err = err,
             .specifier = specifier,
         });
@@ -638,7 +638,7 @@ pub fn dynamicModuleCallback(
     };
 
     const promise = self._dynamicModuleCallback(normalized_specifier, resource, &local) catch |err| blk: {
-        log.err(.js, "dynamic module callback", .{
+        log.debug(.js, "dynamic module callback", .{
             .err = err,
         });
         break :blk local.rejectPromise(.{ .generic_error = "Out of memory" });
@@ -941,7 +941,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
 
         break :blk self.module(true, local, ms.src(), state.specifier, true) catch |err| {
             const caught = try_catch.caughtOrError(self.local_arena, err);
-            log.err(.js, "module compilation failed", .{
+            log.debug(.js, "module compilation failed", .{
                 .caught = caught,
                 .specifier = state.specifier,
             });

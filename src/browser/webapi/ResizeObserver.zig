@@ -190,7 +190,7 @@ pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
     defer ls.deinit();
 
     ls.toLocal(self._callback).tryCall(void, .{ entries.items, self }, &caught) catch |err| {
-        log.err(.frame, "ResizeObserver.deliverEntries", .{ .err = err, .caught = caught });
+        log.debug(.frame, "ResizeObserver.deliverEntries", .{ .err = err, .caught = caught });
         return err;
     };
 }

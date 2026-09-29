@@ -339,7 +339,7 @@ pub fn kill(self: *WebSocket) void {
 pub fn transportClosed(self: *WebSocket, err: ?anyerror) void {
     self.releaseTransport();
     self.bufferEvent(.{ .disconnected = err }) catch |err2| {
-        log.err(.websocket, "close failure", .{ .err = err2 });
+        log.debug(.websocket, "close failure", .{ .err = err2 });
         // Can't buffer. Drop the socket without running JS.
         self.kill();
     };
@@ -371,7 +371,7 @@ pub fn deliverEvents(self: *WebSocket) void {
             .open => {
                 self._ready_state = .open;
                 self.dispatchOpenEvent() catch |err| {
-                    log.err(.websocket, "open event fail", .{ .err = err });
+                    log.debug(.websocket, "open event fail", .{ .err = err });
                 };
             },
             .message => |msg| {
@@ -379,14 +379,14 @@ pub fn deliverEvents(self: *WebSocket) void {
                 // events after that
                 if (self._ready_state == .open) {
                     self.dispatchMessageEvent(msg.data, msg.frame_type) catch |err| {
-                        log.err(.websocket, "message event dispatch failed", .{ .err = err });
+                        log.debug(.websocket, "message event dispatch failed", .{ .err = err });
                     };
                 }
             },
             .close_frame => self.handleCloseFrame(),
             .local_close => {
                 self.dispatchCloseEvent(self._close_code, self._close_reason, false) catch |err| {
-                    log.err(.websocket, "close event dispatch failed", .{ .err = err });
+                    log.debug(.websocket, "close event dispatch failed", .{ .err = err });
                 };
                 self.deactivate();
             },
@@ -410,7 +410,7 @@ fn handleCloseFrame(self: *WebSocket) void {
     // (.disconnected follows).
     self._ready_state = .closing;
     self.queueMessage(.close) catch |err| {
-        log.err(.websocket, "reciprocal close", .{ .err = err, .url = self._url });
+        log.debug(.websocket, "reciprocal close", .{ .err = err, .url = self._url });
     };
 }
 
@@ -419,7 +419,7 @@ fn disconnected(self: *WebSocket, err_: ?anyerror) void {
     self._ready_state = .closed;
 
     if (err_) |err| {
-        log.warn(.websocket, "disconnected", .{ .err = err, .url = self._url });
+        log.debug(.websocket, "disconnected", .{ .err = err, .url = self._url });
     } else {
         log.info(.websocket, "disconnected", .{ .url = self._url, .reason = "closed" });
     }
@@ -433,12 +433,12 @@ fn disconnected(self: *WebSocket, err_: ?anyerror) void {
     // Spec requires error event before close on abnormal closure.
     if (!was_clean) {
         self.dispatchErrorEvent() catch |err| {
-            log.err(.websocket, "error event dispatch failed", .{ .err = err });
+            log.debug(.websocket, "error event dispatch failed", .{ .err = err });
         };
     }
 
     self.dispatchCloseEvent(code, reason, was_clean) catch |err| {
-        log.err(.websocket, "close event dispatch failed", .{ .err = err });
+        log.debug(.websocket, "close event dispatch failed", .{ .err = err });
     };
 }
 
@@ -804,7 +804,7 @@ fn sendDataCallback(buffer: [*]u8, buf_count: usize, buf_len: usize, data: *anyo
     }
     const conn: *http.Connection = @ptrCast(@alignCast(data));
     return _sendDataCallback(conn, buffer[0..buf_len]) catch |err| {
-        log.warn(.websocket, "send callback", .{ .err = err });
+        log.debug(.websocket, "send callback", .{ .err = err });
         return http.readfunc_pause;
     };
 }
@@ -890,7 +890,7 @@ fn receivedDataCallback(buffer: [*]const u8, buf_count: usize, buf_len: usize, d
     }
     const conn: *http.Connection = @ptrCast(@alignCast(data));
     _receivedDataCallback(conn, buffer[0..buf_len]) catch |err| {
-        log.warn(.websocket, "receive callback", .{ .err = err });
+        log.debug(.websocket, "receive callback", .{ .err = err });
         // TODO: are there errors, like an invalid frame, that we shouldn't treat
         // as an error?
         return http.writefunc_error;
@@ -1055,7 +1055,6 @@ pub const JsApi = struct {
 
 const testing = @import("../../../testing.zig");
 test "WebApi: WebSocket" {
-    testing.expectLog(&.{.websocket});
     try testing.htmlRunner("net/websocket.html", .{});
 }
 

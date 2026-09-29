@@ -25,7 +25,7 @@ pub fn processRequests(server: anytype, reader: *std.Io.Reader, input: ?std.Io.F
 
         const buffered_line = reader.takeDelimiter('\n') catch |err| switch (err) {
             error.StreamTooLong => {
-                log.err(.mcp, "Message too long", .{});
+                log.debug(.mcp, "Message too long", .{});
                 try server.sendError(.null, .InvalidRequest, "Message too long");
                 _ = reader.discardDelimiterInclusive('\n') catch |e| switch (e) {
                     error.EndOfStream => break,
@@ -83,7 +83,7 @@ pub fn handleMessage(server: anytype, arena: std.mem.Allocator, msg: []const u8)
     const req = std.json.parseFromSliceLeaky(protocol.Request, arena, msg, .{
         .ignore_unknown_fields = true,
     }) catch |err| {
-        log.warn(.mcp, "JSON Parse Error", .{ .err = err, .msg = msg });
+        log.debug(.mcp, "JSON Parse Error", .{ .err = err, .msg = msg });
         try server.sendError(.null, .ParseError, "Parse error");
         return;
     };
@@ -167,8 +167,6 @@ test "MCP.router - handleMessage - synchronous unit tests" {
 
     // 5. Parse error
     {
-        testing.expectLog(&.{.mcp});
-
         try handleMessage(server, aa, "invalid json");
         try testing.expectJson("{\"jsonrpc\": \"2.0\", \"id\": null, \"error\": {\"code\": -32700}}", out_alloc.writer.buffered());
     }

@@ -115,7 +115,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
     }) catch |err| {
-        log.err(.browser, "Worker request", .{ .url = resolved_url, .err = err });
+        log.debug(.browser, "Worker request", .{ .url = resolved_url, .err = err });
         frame.removeWorker(self);
         return err;
     };
@@ -127,7 +127,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     self._http_transfer = transfer;
 
     transfer.submit() catch |err| {
-        log.err(.browser, "Worker request", .{ .url = resolved_url, .err = err });
+        log.debug(.browser, "Worker request", .{ .url = resolved_url, .err = err });
         frame.removeWorker(self);
         return err;
     };
@@ -156,7 +156,7 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     const status = transfer.responseStatus() orelse return .abort;
     if (status < 200 or status >= 300) {
-        log.warn(.browser, "Worker status", .{
+        log.debug(.browser, "Worker status", .{
             .url = self._url,
             .status = status,
         });
@@ -235,7 +235,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
 
             js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_arena.?.allocator(), err);
-            log.err(.browser, "worker script error", .{ .url = self._url, .caught = caught });
+            log.debug(.browser, "worker script error", .{ .url = self._url, .caught = caught });
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);
             return;
         },
@@ -246,7 +246,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
 
             js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_arena.?.allocator(), err);
-            log.err(.browser, "worker module error", .{ .url = self._url, .caught = caught });
+            log.debug(.browser, "worker module error", .{ .url = self._url, .caught = caught });
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);
             return;
         },
@@ -271,7 +271,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // (or bother logging)
     const canceled = err == error.TransferCanceled;
     if (!canceled) {
-        log.err(.browser, "worker fetch error", .{
+        log.debug(.browser, "worker fetch error", .{
             .url = self._url,
             .err = err,
         });
@@ -299,7 +299,7 @@ fn releaseScriptArena(self: *Worker) void {
 // Fire an error event on the Worker object (parent context)
 fn fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Global) void {
     self._fireErrorEvent(message, error_value) catch |err| {
-        log.warn(.browser, "worker fire error", .{ .err = err, .message = message });
+        log.debug(.browser, "worker fire error", .{ .err = err, .message = message });
     };
 }
 

@@ -288,9 +288,9 @@ fn opensocketCallback(
     if (filter.isBlockedSockaddr(address)) {
         if (address.family == posix.AF.INET or address.family == posix.AF.INET6) {
             const ip = sys_net.addressFromSockaddr(@ptrCast(@alignCast(&address.addr)));
-            log.warn(.http, "blocked by IP filter", .{ .ip = ip });
+            log.debug(.http, "blocked by IP filter", .{ .ip = ip });
         } else {
-            log.warn(.http, "blocked by IP filter", .{ .family = address.family });
+            log.debug(.http, "blocked by IP filter", .{ .family = address.family });
         }
         return libcurl.CURL_SOCKET_BAD;
     }

@@ -107,7 +107,7 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
     }) catch |err| {
-        log.err(.browser, "SharedWorker request", .{ .url = owned_url, .err = err });
+        log.debug(.browser, "SharedWorker request", .{ .url = owned_url, .err = err });
         return err;
     };
 
@@ -117,7 +117,7 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
     self._http_transfer = transfer;
 
     transfer.submit() catch |err| {
-        log.err(.browser, "SharedWorker request", .{ .url = owned_url, .err = err });
+        log.debug(.browser, "SharedWorker request", .{ .url = owned_url, .err = err });
         return err;
     };
     return self;
@@ -195,7 +195,7 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     const status = transfer.responseStatus() orelse return .abort;
     if (status < 200 or status >= 300) {
-        log.warn(.browser, "SharedWorker status", .{
+        log.debug(.browser, "SharedWorker status", .{
             .url = self._url,
             .status = status,
         });
@@ -244,7 +244,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // TransferCanceled is teardown cancelling a still-inflight script fetch,
     // not a load failure.
     if (err != error.TransferCanceled) {
-        log.err(.browser, "shared worker fetch error", .{
+        log.debug(.browser, "shared worker fetch error", .{
             .url = self._url,
             .err = err,
         });
@@ -289,7 +289,7 @@ fn loadInitialScript(self: *SharedWorkerGlobalScope, script: []const u8) !void {
 
             js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_arena.?.allocator(), err);
-            log.err(.browser, "shared worker script error", .{ .url = self._url, .caught = caught });
+            log.debug(.browser, "shared worker script error", .{ .url = self._url, .caught = caught });
             return;
         },
         .module => js_context.module(false, &ls.local, script, self._url, true) catch |err| {
@@ -299,7 +299,7 @@ fn loadInitialScript(self: *SharedWorkerGlobalScope, script: []const u8) !void {
 
             js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_arena.?.allocator(), err);
-            log.err(.browser, "shared worker module error", .{ .url = self._url, .caught = caught });
+            log.debug(.browser, "shared worker module error", .{ .url = self._url, .caught = caught });
             return;
         },
     }
@@ -319,7 +319,7 @@ fn releaseScriptArena(self: *SharedWorkerGlobalScope) void {
 fn drainPendingConnects(self: *SharedWorkerGlobalScope) void {
     for (self._pending_connects.items) |port| {
         self.scheduleConnect(port) catch |err| {
-            log.warn(.browser, "shared worker drain failed", .{ .err = err });
+            log.debug(.browser, "shared worker drain failed", .{ .err = err });
         };
     }
     self._pending_connects.clearRetainingCapacity();

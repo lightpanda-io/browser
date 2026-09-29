@@ -1425,6 +1425,5 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Sanitizer" {
-    testing.expectLog(&.{.js});
     try testing.htmlRunner("sanitizer.html", .{});
 }

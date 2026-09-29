@@ -152,7 +152,7 @@ fn addAll(self: *Cache, inputs: []const Request.Input, exec: *const Execution) !
     for (requests, batch.slots) |request, *slot| {
         batch.pending += 1;
         Fetch.start(request, .{ .ctx = slot, .callback = Batch.fetched }, exec) catch |err| {
-            log.warn(.http, "Cache.add fetch", .{ .err = err, .url = request._url });
+            log.debug(.http, "Cache.add fetch", .{ .err = err, .url = request._url });
             batch.pending -= 1;
             batch.outcome = .failed;
             break;

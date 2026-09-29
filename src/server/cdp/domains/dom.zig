@@ -92,7 +92,7 @@ fn getDocument(cmd: *CDP.Command) !void {
     const params = try cmd.params(Params) orelse Params{};
 
     if (params.pierce) {
-        log.warn(.not_implemented, "DOM.getDocument", .{ .param = "pierce" });
+        log.debug(.not_implemented, "DOM.getDocument", .{ .param = "pierce" });
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
@@ -432,7 +432,7 @@ fn describeNode(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     if (params.pierce) {
-        log.warn(.not_implemented, "DOM.describeNode", .{ .param = "pierce" });
+        log.debug(.not_implemented, "DOM.describeNode", .{ .param = "pierce" });
     }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
@@ -627,7 +627,7 @@ fn getOuterHTML(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     if (params.includeShadowDOM) {
-        log.warn(.not_implemented, "DOM.getOuterHTML", .{ .param = "includeShadowDOM" });
+        log.debug(.not_implemented, "DOM.getOuterHTML", .{ .param = "includeShadowDOM" });
     }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;

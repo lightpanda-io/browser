@@ -184,7 +184,7 @@ fn run(self: *LightPanda) void {
 
         var sent: usize = 0;
         self.postEvents(&conn, batch.items, dropped, &sent) catch |err| {
-            log.warn(.telemetry, "postEvents", .{ .err = err, .events = batch.items.len, .dropped = dropped });
+            log.debug(.telemetry, "postEvents", .{ .err = err, .events = batch.items.len, .dropped = dropped });
         };
         const lost: u32 = @intCast(batch.items.len - sent);
 
@@ -247,7 +247,7 @@ fn postEvents(self: *LightPanda, conn: *http.Connection, events: []const telemet
 
 fn flush(self: *LightPanda, conn: *http.Connection) !void {
     self._flush(conn) catch |err| {
-        log.warn(.telemetry, "flush", .{ .err = err, .size = self.writer.written().len });
+        log.debug(.telemetry, "flush", .{ .err = err, .size = self.writer.written().len });
         return err;
     };
 }

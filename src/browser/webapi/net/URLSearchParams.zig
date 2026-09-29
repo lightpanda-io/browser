@@ -171,7 +171,7 @@ pub fn forEach(self: *URLSearchParams, cb_: js.Function, js_this_: ?js.Object) !
         const entry = self._params._entries.items[i];
         cb.call(void, .{ entry.value.str(), entry.name.str(), self }) catch |err| {
             // this is a non-JS error
-            log.warn(.js, "URLSearchParams.forEach", .{ .err = err });
+            log.debug(.js, "URLSearchParams.forEach", .{ .err = err });
         };
     }
 }

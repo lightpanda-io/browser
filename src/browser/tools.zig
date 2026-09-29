@@ -1213,7 +1213,7 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
                         last_err = err;
                         last_label = @tagName(engine.tag);
                         last_detail = detail;
-                        log.warn(.browser, @tagName(engine.tag) ++ " fallback", .{ .err = err });
+                        log.debug(.browser, @tagName(engine.tag) ++ " fallback", .{ .err = err });
                     }
                 } else |_| {}
             }
@@ -1292,7 +1292,7 @@ fn apiSearch(
 
     var response = client.search(query, engine.options) catch |err| {
         if (client.last_error.status) |status| {
-            log.warn(.browser, @tagName(engine.tag) ++ " non-2xx", .{
+            log.debug(.browser, @tagName(engine.tag) ++ " non-2xx", .{
                 .status = status,
                 .message = client.last_error.message,
             });
@@ -2309,7 +2309,7 @@ fn lookupLpEnv(name: []const u8) ?[:0]const u8 {
     if (!std.mem.startsWith(u8, name, "LP_")) return null;
     var name_buf: [256]u8 = undefined;
     if (name.len >= name_buf.len) {
-        log.warn(.browser, "getEnv name too long", .{ .name_len = name.len, .limit = name_buf.len - 1 });
+        log.debug(.browser, "getEnv name too long", .{ .name_len = name.len, .limit = name_buf.len - 1 });
         return null;
     }
     @memcpy(name_buf[0..name.len], name);
@@ -3029,7 +3029,6 @@ test "isPathSafe: absolute paths and traversal are rejected" {
 }
 
 test "markdown: a same-url page whose navigation failed is navigated again" {
-    testing.expectLog(&.{ .frame, .frame });
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 

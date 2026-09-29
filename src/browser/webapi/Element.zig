@@ -2232,11 +2232,11 @@ const ScrollEventTask = struct {
     fn dispatchEvent(self: *ScrollEventTask, comptime event_type: String) void {
         const Event = @import("Event.zig");
         const event = Event.initTrusted(event_type, .{ .bubbles = self.bubbles() }, self.frame.page) catch |err| {
-            log.warn(.dom, "element.scroll.event", .{ .err = err });
+            log.debug(.dom, "element.scroll.event", .{ .err = err });
             return;
         };
         self.frame._event_manager.dispatch(self.eventTarget(), event) catch |err| {
-            log.warn(.dom, "element.scroll.dispatch", .{ .err = err });
+            log.debug(.dom, "element.scroll.dispatch", .{ .err = err });
         };
     }
 };

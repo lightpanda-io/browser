@@ -163,7 +163,7 @@ fn buildCdpCookie(allocator: Allocator, param: CdpCookie) !Cookie {
     // This allows Puppeteer's frame.setCookie() to work, which may send cookies with
     // partitionKey as part of its cookie-setting workflow.
     if (param.partitionKey != null) {
-        log.warn(.not_implemented, "partition key", .{ .src = "buildCdpCookie" });
+        log.debug(.not_implemented, "partition key", .{ .src = "buildCdpCookie" });
     }
     // Still reject unsupported features
     if (param.priority != .Medium or param.sameParty != null or param.sourceScheme != null) {

@@ -771,7 +771,7 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                     ),
                     asUint("frameset") => {
                         if (comptime from_parser) {
-                            log.warn(.not_implemented, "framset", .{ .note = "<framset>...</frameset> in html is not handled properly" });
+                            log.debug(.not_implemented, "framset", .{ .note = "<framset>...</frameset> in html is not handled properly" });
                         }
                         return createHtmlElementT(
                             document,
@@ -1005,7 +1005,7 @@ fn constructForToken(frame: *Frame, definition: *CustomElementDefinition, tag_na
 
     const object = ls.toLocal(definition.constructor).newInstanceThrow() catch |err| {
         if (err != error.ExecutionTerminated) {
-            log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.js, "custom element constructor", .{ .name = name, .err = err, .type = frame._type, .url = frame.url });
             if (try_catch.exceptionValue()) |exc| {
                 // Spec: report the exception
                 frame.window.reportError(exc, frame) catch {};
@@ -1040,7 +1040,7 @@ fn constructForToken(frame: *Frame, definition: *CustomElementDefinition, tag_na
         return element;
     };
 
-    log.warn(.js, "custom element not usable", .{ .name = name, .reason = reason, .type = frame._type, .url = frame.url });
+    log.debug(.js, "custom element not usable", .{ .name = name, .reason = reason, .type = frame._type, .url = frame.url });
     frame.window.reportError(exc, frame) catch {};
     return error.CustomElementConstructionFailed;
 }
@@ -1076,7 +1076,7 @@ fn createHtmlElementT(document: *const Node.Document, comptime E: type, namespac
             return node;
         }
         @call(.auto, @field(E.Build, "created"), .{ node, frame }) catch |err| {
-            log.err(.frame, "build.created", .{ .tag = node.getNodeName(&frame.buf), .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.frame, "build.created", .{ .tag = node.getNodeName(&frame.buf), .err = err, .type = frame._type, .url = frame.url });
             return err;
         };
     }

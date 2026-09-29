@@ -319,7 +319,7 @@ pub fn forEach(self: *FormData, cb_: js.Function, js_this_: ?js.Object) !void {
     for (self._entries.items) |*entry| {
         cb.call(void, .{ entry.value.asString(), entry.name.str(), self }) catch |err| {
             // this is a non-JS error
-            log.warn(.js, "FormData.forEach", .{ .err = err });
+            log.debug(.js, "FormData.forEach", .{ .err = err });
         };
     }
 }

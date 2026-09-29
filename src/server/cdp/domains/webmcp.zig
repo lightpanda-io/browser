@@ -199,7 +199,7 @@ pub fn cancelAllPending(bc: *CDP.BrowserContext) void {
             .invocationId = &id.toInvocationId(invocation.id),
             .status = "Canceled",
         }, .{ .session_id = bc.session_id }) catch |err| {
-            log.err(.cdp, "WebMCP cancelAllPending", .{ .err = err });
+            log.debug(.cdp, "WebMCP cancelAllPending", .{ .err = err });
         };
     }
     bc.webmcp_invocations.clearRetainingCapacity();
@@ -210,7 +210,7 @@ fn onPromiseFulfilled(invocation: *Invocation, value: js.Value) anyerror!void {
     // removes it from the map and sends Canceled; we drop the late result.
     if (invocation.bc.webmcp_invocations.fetchRemove(invocation.id) == null) return;
     respondCompleted(invocation.bc.cdp, invocation.bc, invocation, value) catch |err| {
-        log.err(.cdp, "WebMCP fulfilled", .{ .err = err });
+        log.debug(.cdp, "WebMCP fulfilled", .{ .err = err });
     };
 }
 
@@ -218,7 +218,7 @@ fn onPromiseRejected(invocation: *Invocation, reason: js.Value) anyerror!void {
     if (invocation.bc.webmcp_invocations.fetchRemove(invocation.id) == null) return;
     const msg = reason.toStringSlice() catch "tool rejected";
     respondError(invocation.bc.cdp, invocation.bc, invocation, msg) catch |err| {
-        log.err(.cdp, "WebMCP rejected", .{ .err = err });
+        log.debug(.cdp, "WebMCP rejected", .{ .err = err });
     };
 }
 

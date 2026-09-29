@@ -105,7 +105,7 @@ fn emulateNetworkConditions(cmd: *CDP.Command) !void {
     }
     // -1 disables a throughput limit.
     if (params.latency > 0 or params.downloadThroughput > 0 or params.uploadThroughput > 0) {
-        log.warn(.not_implemented, "Network.emulateConditions", .{ .param = "throttling" });
+        log.debug(.not_implemented, "Network.emulateConditions", .{ .param = "throttling" });
     }
     return cmd.sendResult(null, .{});
 }
@@ -182,18 +182,18 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
         const value = header.value_ptr.*;
 
         if (Mime.isHttpToken(key) == false) {
-            log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header name must be a non-empty HTTP token" });
+            log.debug(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header name must be a non-empty HTTP token" });
             continue;
         }
 
         if (Mime.isHttpHeaderValue(value) == false) {
-            log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header value must be Latin-1 text without CR, LF or NUL" });
+            log.debug(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header value must be Latin-1 text without CR, LF or NUL" });
             continue;
         }
 
         if (std.ascii.eqlIgnoreCase(key, "user-agent")) {
             Config.validateUserAgent(value) catch |err| {
-                log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "userAgent", .value = value, .err = err });
+                log.debug(.cdp, "network.setExtraHTTPHeaders", .{ .param = "userAgent", .value = value, .err = err });
                 continue;
             };
         }
@@ -236,7 +236,7 @@ fn deleteCookies(cmd: *CDP.Command) !void {
     // This allows Puppeteer's frame.setCookie() to work, which sends deleteCookies
     // with partitionKey as part of its cookie-setting workflow.
     if (params.partitionKey != null) {
-        log.warn(.not_implemented, "partition key", .{ .src = "deleteCookies" });
+        log.debug(.not_implemented, "partition key", .{ .src = "deleteCookies" });
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;

@@ -411,7 +411,7 @@ pub const BrowserContext = struct {
         pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
             const self: *AttachedSession = @ptrCast(@alignCast(ctx));
             self.bc.sendInspectorMessage(msg, self.id) catch |err| {
-                log.err(.cdp, "send inspector response", .{ .err = err });
+                log.debug(.cdp, "send inspector response", .{ .err = err });
             };
         }
 
@@ -429,7 +429,7 @@ pub const BrowserContext = struct {
             }
 
             self.bc.sendInspectorMessage(msg, self.id) catch |err| {
-                log.err(.cdp, "send inspector event", .{ .err = err });
+                log.debug(.cdp, "send inspector event", .{ .err = err });
             };
         }
     };
@@ -683,7 +683,7 @@ pub const BrowserContext = struct {
     pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !GetOrPutIsolatedWorld {
         if (self.findIsolatedWorld(world_name)) |world| {
             if (world.grant_universal_access != grant_universal_access) {
-                log.warn(.cdp, "isolated world mismatch", .{ .name = world_name, .gua = grant_universal_access });
+                log.debug(.cdp, "isolated world mismatch", .{ .name = world_name, .gua = grant_universal_access });
             }
             return .{ .world = world, .found_existing = true };
         }

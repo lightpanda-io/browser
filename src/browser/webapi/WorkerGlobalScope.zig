@@ -429,7 +429,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         .credentials_mode = .same_origin,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {
-        log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });
+        log.debug(.http, "importScript", .{ .url = resolved_url, .err = err });
         return error.NetworkError;
     };
     {
@@ -438,13 +438,13 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     }
 
     var response = transfer.submitSync(.{}) catch |err| {
-        log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });
+        log.debug(.http, "importScript", .{ .url = resolved_url, .err = err });
         return error.NetworkError;
     };
     defer response.deinit();
 
     if (response.status != 200) {
-        log.warn(.http, "importScript", .{ .url = resolved_url, .status = response.status });
+        log.debug(.http, "importScript", .{ .url = resolved_url, .status = response.status });
         return error.NetworkError;
     }
 
@@ -459,7 +459,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     _ = ls.local.eval(response.body.items, url) catch |err| {
         self.page.recordJsError(err);
         const caught = try_catch.caughtOrError(arena, err);
-        log.err(.browser, "importScript", .{ .url = resolved_url, .caught = caught });
+        log.debug(.browser, "importScript", .{ .url = resolved_url, .caught = caught });
         return;
     };
 
@@ -512,7 +512,7 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
 
     if (comptime lp.IS_TEST == false) {
         if (!event._prevent_default) {
-            log.warn(.js, "worker.reportError", .{
+            log.debug(.js, "worker.reportError", .{
                 .message = error_event._message,
                 .filename = error_event._filename,
                 .line_number = error_event._line_number,

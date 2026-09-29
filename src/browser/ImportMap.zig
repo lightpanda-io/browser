@@ -136,7 +136,7 @@ fn parse(arena: Allocator, base: [:0]const u8, json_content: []const u8) !Import
         imports: ?SpecifierMap = null,
         scopes: ?std.json.ArrayHashMap(SpecifierMap) = null,
     }, arena, json_content, .{ .ignore_unknown_fields = true }) catch |err| {
-        log.warn(.js, "importmap json parse", .{ .err = err });
+        log.debug(.js, "importmap json parse", .{ .err = err });
         return error.InvalidImportMap;
     };
 
@@ -165,13 +165,13 @@ fn sortedNormalizedSpecifierMap(arena: Allocator, base: [:0]const u8, obj: Speci
         const resolved: ?[:0]const u8 = blk: {
             const url = kv.value_ptr.* orelse break :blk null;
             const resolved_url = parseIfLikeURL(arena, base, url) orelse {
-                log.warn(.js, "importmap bad address", .{ .specifier = key, .address = url });
+                log.debug(.js, "importmap bad address", .{ .specifier = key, .address = url });
                 break :blk null;
             };
 
             // Spec: if the key ends with "/" the address must end with "/" too.
             if (endsWithSlash(normalized_key) and !endsWithSlash(resolved_url)) {
-                log.warn(.js, "importmap slash mismatch", .{ .specifier = key, .address = url });
+                log.debug(.js, "importmap slash mismatch", .{ .specifier = key, .address = url });
                 break :blk null;
             }
             break :blk resolved_url;
@@ -200,7 +200,7 @@ fn sortedNormalizedScopes(arena: Allocator, base: [:0]const u8, obj: std.json.Ar
         // URL-like specifiers — bare strings without ./, ../, /, or a scheme
         // are still allowed if they resolve against the base.
         const prefix = parseScopeKey(arena, base, scope_key) catch |err| {
-            log.warn(.js, "importmap bad scope key", .{ .scope = scope_key, .err = err });
+            log.debug(.js, "importmap bad scope key", .{ .scope = scope_key, .err = err });
             continue;
         };
 

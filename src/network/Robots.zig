@@ -317,7 +317,7 @@ fn parseRulesWithUserAgent(
         if (true_line.len == 0) continue;
 
         const colon_idx = std.mem.indexOfScalar(u8, true_line, ':') orelse {
-            log.warn(.browser, "robots line missing colon", .{ .line = line });
+            log.debug(.browser, "robots line missing colon", .{ .line = line });
             continue;
         };
         const key_str = try std.ascii.allocLowerString(allocator, true_line[0..colon_idx]);
@@ -375,7 +375,7 @@ fn parseRulesWithUserAgent(
                         try wildcard_rules.append(allocator, Rule.allowRule(duped_value));
                     },
                     .not_in_entry => {
-                        log.warn(.browser, "robots unexpected rule", .{ .rule = "allow" });
+                        log.debug(.browser, "robots unexpected rule", .{ .rule = "allow" });
                         continue;
                     },
                 }
@@ -400,7 +400,7 @@ fn parseRulesWithUserAgent(
                         try wildcard_rules.append(allocator, Rule.disallowRule(duped_value));
                     },
                     .not_in_entry => {
-                        log.warn(.browser, "robots unexpected rule", .{ .rule = "disallow" });
+                        log.debug(.browser, "robots unexpected rule", .{ .rule = "disallow" });
                         continue;
                     },
                 }
