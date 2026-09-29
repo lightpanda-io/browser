@@ -1294,7 +1294,7 @@ const EchoDriver = struct {
         self.err = err;
     }
 
-    fn run(bc: *CDP.BrowserContext, frame_id: u32, body: []const u8) ![14]u8 {
+    fn run(bc: *CDP.BrowserContext, frame_id: u32, body: []const u8, partial: ?u32) ![14]u8 {
         const client = &bc.cdp.browser.http_client;
         var request_id: [14]u8 = undefined;
         _ = std.fmt.bufPrint(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
@@ -1306,6 +1306,7 @@ const EchoDriver = struct {
             .method = .POST,
             .url = "http://127.0.0.1:9582/echo_body",
             .body = body,
+            .partial = partial,
             .origin = bc.security_origin,
             .request_mode = .no_cors,
             .credentials_mode = .same_origin,
@@ -1341,8 +1342,8 @@ test "cdp.Network: enable maxResourceBufferSize evicts oversized bodies" {
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
 
-    const big = try EchoDriver.run(bc, page.frame_id, "12345678");
-    const small = try EchoDriver.run(bc, page.frame_id, "123");
+    const big = try EchoDriver.run(bc, page.frame_id, "12345678", null);
+    const small = try EchoDriver.run(bc, page.frame_id, "123", null);
 
     try ctx.processMessage(.{
         .id = 2,
@@ -1375,6 +1376,26 @@ test "cdp.Network: enable maxResourceBufferSize evicts oversized bodies" {
     try testing.expectEqual(0, bc.captured_responses_size);
 }
 
+test "cdp.Network: getResponseBody omits a partial body" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-PRT", .session_id = "SID-PRT" });
+    const page = try bc.session.createPage();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const request_id = try EchoDriver.run(bc, page.frame_id, "12345678", 4);
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Network.getResponseBody",
+        .params = .{ .requestId = &request_id },
+    });
+    try ctx.expectSentResult(.{ .body = "", .base64Encoded = false }, .{ .id = 2 });
+    try testing.expectEqual(0, bc.captured_responses_size);
+}
+
 test "cdp.Network: enable maxTotalBufferSize evicts oldest bodies first" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1389,8 +1410,8 @@ test "cdp.Network: enable maxTotalBufferSize evicts oldest bodies first" {
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
 
-    const first = try EchoDriver.run(bc, page.frame_id, "aaaaaa");
-    const second = try EchoDriver.run(bc, page.frame_id, "bbbbbb");
+    const first = try EchoDriver.run(bc, page.frame_id, "aaaaaa", null);
+    const second = try EchoDriver.run(bc, page.frame_id, "bbbbbb", null);
 
     try ctx.processMessage(.{
         .id = 2,
@@ -1435,7 +1456,7 @@ test "cdp.Network: enable maxPostDataSize omits inline postData" {
     try ctx.expectSentResult(null, .{ .id = 1 });
 
     const body = "{\"source\":\"xhr\",\"pageSize\":100}";
-    const request_id = try EchoDriver.run(bc, page.frame_id, body);
+    const request_id = try EchoDriver.run(bc, page.frame_id, body, null);
 
     try ctx.expectSentEvent("Network.requestWillBeSent", .{
         .requestId = &request_id,

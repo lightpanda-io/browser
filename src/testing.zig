@@ -1105,11 +1105,11 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     }
 
     // Bodies are non-empty so that libcurl always reaches the write callback,
-    // which is where a headers_only request decides whether to drain or abort.
+    // which is where a partial request decides whether to drain or abort.
     // ok.png takes the abort branch, small.png the drain branch; both must
     // behave identically as far as the DOM is concerned.
     if (std.mem.eql(u8, path, "/images/ok.png")) {
-        // > HttpClient.Request.HEADERS_ONLY_DRAIN_MAX. The synthetic PNG
+        // > HttpClient.Request.PARTIAL_DRAIN_MAX. The synthetic PNG
         // header advertises 1000 x 750 pixels; no bitmap is decoded.
         const body = try arena_allocator.alloc(u8, 16 * 1024 + 1);
         @memset(body, 'x');
