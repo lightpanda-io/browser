@@ -609,7 +609,9 @@ const ResponseWriter = struct {
             try jws.write(status);
 
             try jws.objectField("statusText");
-            try jws.write(@as(std.http.Status, @enumFromInt(status)).phrase() orelse "Unknown");
+            // The server's own phrase, not a canonical one: Chrome reports the
+            // wire, empty included.
+            try jws.write(transfer.statusText() orelse "");
         }
 
         {
