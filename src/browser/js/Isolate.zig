@@ -58,7 +58,7 @@ pub fn adjustAmountOfExternalAllocatedMemory(self: Isolate, delta: i64) void {
 }
 
 pub fn notifyContextDisposed(self: Isolate) void {
-    _ = v8.v8__Isolate__ContextDisposedNotification(self.handle);
+    v8.v8__Isolate__ContextDisposedNotification(self.handle);
 }
 
 pub fn getHeapStatistics(self: Isolate) v8.HeapStatistics {
