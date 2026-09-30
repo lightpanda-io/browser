@@ -532,7 +532,7 @@ pub fn extent(self: *Document) Extent {
     while (tw.next()) |node| : (index += 1) {
         const el = node.is(Element) orelse continue;
         const parent = el.parentElement() orelse continue;
-        if (parent.getTag() == .html or parent.getTag() == .body) {
+        if (parent.isRootContainer()) {
             continue;
         }
         if (style_manager.inlineSize(el, .height)) |height| {
