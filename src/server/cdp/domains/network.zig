@@ -609,9 +609,9 @@ const ResponseWriter = struct {
             try jws.write(status);
 
             try jws.objectField("statusText");
-            // A CDP client can fulfill a request with any u16; Status is enum(u10).
-            const phrase = if (status > 599) "Unknown" else @as(std.http.Status, @enumFromInt(status)).phrase() orelse "Unknown";
-            try jws.write(phrase);
+            // The server's own phrase, not a canonical one: Chrome reports the
+            // wire, empty included.
+            try jws.write(transfer.statusText() orelse "");
         }
 
         {
