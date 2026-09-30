@@ -713,7 +713,6 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
                 return frame.submitForm(element, button.getForm(frame), .{});
             }
         },
-        .select, .textarea => {},
         .label => {
             const label = html_element.subtype(Element.Html.Label);
             // Per HTML §4.10.4 "The label element", a label's activation

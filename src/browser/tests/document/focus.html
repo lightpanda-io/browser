@@ -4,6 +4,7 @@
   <input id="input1" type="text">
   <input id="input2" type="text">
   <button id="btn1">Button</button>
+  <label id="lbl1" for="input1">Label 1</label>
 </body>
 
 <script id="activeElement_default">
@@ -283,6 +284,25 @@
 
   btn.click();
   testing.expectEqual('BODY', document.activeElement.tagName);
+}
+</script>
+
+<script id="label_click_focuses_control">
+{
+  const input1 = $('#input1');
+  const lbl = $('#lbl1');
+
+  if (document.activeElement) {
+    document.activeElement.blur();
+  }
+
+  let focusCount = 0;
+  input1.addEventListener('focus', () => focusCount++);
+
+  // Unlike other elements, label.click() explicitly focuses its control
+  lbl.click();
+  testing.expectEqual(input1, document.activeElement);
+  testing.expectEqual(1, focusCount);
 }
 </script>
 
