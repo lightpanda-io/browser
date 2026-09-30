@@ -115,6 +115,10 @@ terminate_requested: std.atomic.Value(bool) = .init(false),
 // Set by the watchdog thread, consumed on the worker by terminateInterrupt so
 // the stalled script can be identified before it is killed.
 stall_report_requested_at: std.atomic.Value(u64) = .init(0),
+// How long the worker had stalled when the watchdog requested the report.
+// Published before stall_report_requested_at, so it's visible to whoever
+// observes that as non-zero.
+stall_report_stalled_ms: std.atomic.Value(u64) = .init(0),
 
 // Set while a V8 context (or the isolate) is being disposed.
 tearing_down: bool = false,
@@ -703,9 +707,17 @@ pub fn requestTerminate(self: *Env) void {
 
 // Called from the watchdog thread. Like requestTerminate, but the worker also
 // logs the running script's frame URL and stack before termination.
-pub fn requestTerminateForStall(self: *Env) void {
+pub fn requestTerminateForStall(self: *Env, stalled_ms: u64) void {
+    self.stall_report_stalled_ms.store(stalled_ms, .monotonic);
     self.stall_report_requested_at.store(@max(lp.datetime.milliTimestamp(.boot), 1), .release);
     self.requestTerminate();
+}
+
+// Boot-clock ms at which a stall report was requested but not yet logged by
+// the worker, or null. Read by the watchdog thread.
+pub fn pendingStallReport(self: *const Env) ?u64 {
+    const requested_at = self.stall_report_requested_at.load(.acquire);
+    return if (requested_at == 0) null else requested_at;
 }
 
 // Runs on the worker thread
@@ -760,7 +772,8 @@ fn stallReport(self: *Env, stack_buf: []u8) StallReport {
 fn logStall(self: *Env, requested_at: u64) void {
     var stack_buf: [1536]u8 = undefined;
     const report = self.stallReport(&stack_buf);
-    log.warn(.app, "watchdog stall script", .{
+    log.warn(.watchdog, "watchdog stall script", .{
+        .stalled_ms = self.stall_report_stalled_ms.load(.monotonic),
         .url = report.url,
         .page_url = report.page_url,
         // Large when the stall was in native code: the interrupt only lands
@@ -958,7 +971,7 @@ test "Env: stall report names the running frame and script stack" {
 }
 
 test "Env: watchdog termination logs the stalled script once" {
-    testing.expectLog(&.{.app});
+    testing.expectLog(&.{.watchdog});
 
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
@@ -975,8 +988,8 @@ test "Env: watchdog termination logs the stalled script once" {
         env: *Env,
         fn stall(self: *@This()) void {
             // Two in-flight interrupts must still produce one report.
-            self.env.requestTerminateForStall();
-            self.env.requestTerminateForStall();
+            self.env.requestTerminateForStall(31_000);
+            self.env.requestTerminateForStall(32_000);
         }
     };
     var state = State{ .env = env };
@@ -993,8 +1006,10 @@ test "Env: canceling a termination drops its pending stall report" {
     defer testing.test_session.closeAllPages();
 
     const env = frame.js.env;
-    env.requestTerminateForStall();
+    env.requestTerminateForStall(31_000);
+    try testing.expect(env.pendingStallReport() != null);
     env.cancelTerminate();
+    try testing.expectEqual(null, env.pendingStallReport());
     try testing.expectEqual(0, env.stall_report_requested_at.load(.acquire));
 
     var ls: js.Local.Scope = undefined;
