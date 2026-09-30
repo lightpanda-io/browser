@@ -1724,8 +1724,8 @@ test "server: bidi errors" {
     try c.bidiCommand("{\"id\":5,\"method\":\"session.over9000\"}");
     try assertBidiMessage(&c, .{ .type = "error", .id = 5, .@"error" = "unknown command", .message = "session.over9000" });
 
-    try c.bidiCommand("{\"id\":6,\"method\":\"storage.getCookies\"}");
-    try assertBidiMessage(&c, .{ .type = "error", .id = 6, .@"error" = "unknown command", .message = "storage.getCookies" });
+    try c.bidiCommand("{\"id\":6,\"method\":\"network.addIntercept\"}");
+    try assertBidiMessage(&c, .{ .type = "error", .id = 6, .@"error" = "unknown command", .message = "network.addIntercept" });
 
     try c.bidiCommand("{\"id\":7,\"method\":\"nodothere\"}");
     try assertBidiMessage(&c, .{ .type = "error", .id = 7, .@"error" = "unknown command", .message = "nodothere" });
@@ -2607,6 +2607,83 @@ fn expectWebsocketContains(ws: *TestClient, expected: []const u8) !void {
         std.debug.print("expected {s} in {s}\n", .{ expected, msg.data });
         return error.UnexpectedMessage;
     }
+}
+
+test "server: HTTP cookies" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    {
+        const res = try sessionCommand(&c, "POST", &session_id, "/cookie", "{\"cookie\":{\"name\":\"a\",\"value\":\"1\"}}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"invalid cookie domain\"") != null);
+    }
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/webdriver/elements.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/cookie", "{\"cookie\":{\"name\":\"a\",\"value\":\"1\",\"secure\":false}}")));
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/cookie", "{\"cookie\":{\"name\":\"b\",\"value\":\"2\",\"domain\":\"127.0.0.1\",\"httpOnly\":true,\"expiry\":4102444800,\"sameSite\":\"Strict\"}}")));
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/cookie", "{\"cookie\":{\"name\":\"c\",\"value\":\"3\",\"path\":\"/elsewhere\"}}")));
+    {
+        const res = try sessionCommand(&c, "POST", &session_id, "/cookie", "{\"cookie\":{\"name\":\"d\",\"value\":\"4\",\"domain\":\"example.com\"}}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"invalid cookie domain\"") != null);
+    }
+    {
+        const res = try sessionCommand(&c, "POST", &session_id, "/cookie", "{\"cookie\":{\"name\":\"d\",\"value\":\"4\",\"sameSite\":\"None\"}}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 Internal Server Error\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"unable to set cookie\"") != null);
+    }
+
+    // c's path doesn't cover the document, so it isn't the document's
+    const a_json = "{\"name\":\"a\",\"value\":\"1\",\"path\":\"/\",\"domain\":\"127.0.0.1\",\"secure\":false,\"httpOnly\":false,\"sameSite\":\"Lax\"}";
+    const b_json = "{\"name\":\"b\",\"value\":\"2\",\"path\":\"/\",\"domain\":\"127.0.0.1\",\"secure\":false,\"httpOnly\":true,\"expiry\":4102444800,\"sameSite\":\"Strict\"}";
+    try testing.expectEqual("{\"value\":[" ++ a_json ++ "," ++ b_json ++ "]}", responseBody(try sessionCommand(&c, "GET", &session_id, "/cookie", "")));
+    try testing.expectEqual("{\"value\":" ++ b_json ++ "}", responseBody(try sessionCommand(&c, "GET", &session_id, "/cookie/b", "")));
+    for ([_][]const u8{ "/cookie/c", "/cookie/nope" }) |path| {
+        const res = try sessionCommand(&c, "GET", &session_id, path, "");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"no such cookie\"") != null);
+    }
+
+    // the page sees them, bar the HttpOnly one
+    try testing.expectEqual("{\"value\":\"a=1\"}", try executeSync(&c, &session_id, "return document.cookie", "[]"));
+
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "DELETE", &session_id, "/cookie/a", "")));
+    try testing.expectEqual("{\"value\":[" ++ b_json ++ "]}", responseBody(try sessionCommand(&c, "GET", &session_id, "/cookie", "")));
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "DELETE", &session_id, "/cookie", "")));
+    try testing.expectEqual("{\"value\":[]}", responseBody(try sessionCommand(&c, "GET", &session_id, "/cookie", "")));
+}
+
+test "server: HTTP window rect" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    try testing.expectEqual("{\"value\":{\"x\":0,\"y\":0,\"width\":1920,\"height\":1080}}", responseBody(try sessionCommand(&c, "GET", &session_id, "/window/rect", "")));
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/webdriver/elements.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+
+    const small = "{\"value\":{\"x\":0,\"y\":0,\"width\":375,\"height\":812}}";
+    try testing.expectEqual(small, responseBody(try sessionCommand(&c, "POST", &session_id, "/window/rect", "{\"x\":10,\"y\":10,\"width\":375,\"height\":812}")));
+    try testing.expectEqual("{\"value\":\"375x812\"}", try executeSync(&c, &session_id, "return innerWidth + 'x' + innerHeight", "[]"));
+
+    // a partial update keeps the rest
+    try testing.expectEqual("{\"value\":{\"x\":0,\"y\":0,\"width\":400,\"height\":812}}", responseBody(try sessionCommand(&c, "POST", &session_id, "/window/rect", "{\"width\":400}")));
+
+    for ([_][]const u8{ "/window/maximize", "/window/minimize", "/window/fullscreen" }) |path| {
+        try testing.expectEqual("{\"value\":{\"x\":0,\"y\":0,\"width\":400,\"height\":812}}", responseBody(try sessionCommand(&c, "POST", &session_id, path, "{}")));
+    }
+
+    const res = try sessionCommand(&c, "POST", &session_id, "/window/rect", "{\"width\":1.5}");
+    try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
 }
 
 test "server: HTTP command errors" {
