@@ -344,7 +344,7 @@ pub const Tool = enum {
     pub fn definition(self: Tool) Definition {
         return switch (self) {
             .goto => .{
-                .description = "Navigate the current page to a URL. Returns a short status once `waitUntil` fires (default `load`), or a timeout notice; content rendered by post-load JavaScript may not be there yet (see `waitForState`). The page stays loaded for later reads and actions. To navigate and read in one call, pass `url` to `markdown`, `tree` or `html` instead; use `goto` when the next step is an action or `extract`.",
+                .description = "Navigate the current page to a URL. Returns the HTTP status once `waitUntil` fires (default `load`), or a timeout notice; a 4xx or 5xx means the page you got is an error page, not the content — check it before reading on; content rendered by post-load JavaScript may not be there yet (see `waitForState`). The page stays loaded for later reads and actions. To navigate and read in one call, pass `url` to `markdown`, `tree` or `html` instead; use `goto` when the next step is an action or `extract`.",
                 .summary = "Open a URL and keep the page in memory",
                 .input_schema = minify(
                     \\{
@@ -1064,12 +1064,26 @@ const schema_walker_prefix =
 ;
 const schema_walker_suffix = ")";
 
+/// The response status of the frame's own document, as `403 Forbidden`, or
+/// "unknown" before any response has arrived. `Frame.httpMetadata` has carried
+/// this all along and only the `fetch` CLI path ever read it, so an agent that
+/// navigated into a 403 or a 404 had no way to tell and would read the error
+/// page as content.
+fn navStatus(arena: std.mem.Allocator, frame: *const lp.Frame) []const u8 {
+    const status = frame._http_status orelse return "unknown";
+    const phrase = @as(std.http.Status, @enumFromInt(status)).phrase() orelse "";
+    if (phrase.len == 0) return std.fmt.allocPrint(arena, "{d}", .{status}) catch "unknown";
+    return std.fmt.allocPrint(arena, "{d} {s}", .{ status, phrase }) catch "unknown";
+}
+
 fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgs(GotoParams, arena, arguments);
-    return switch (try performGoto(session, registry, args.url, .{ .timeout = args.timeout, .wait_until = args.waitUntil })) {
-        .completed => "Navigated successfully.",
-        .timeout => "Navigation started but the page did not finish loading before the timeout.",
-    };
+    const result = try performGoto(session, registry, args.url, .{ .timeout = args.timeout, .wait_until = args.waitUntil });
+    const status = if (session.currentFrame()) |frame| navStatus(arena, frame) else "unknown";
+    return switch (result) {
+        .completed => std.fmt.allocPrint(arena, "Navigated successfully. HTTP {s}.", .{status}),
+        .timeout => std.fmt.allocPrint(arena, "Navigation started (HTTP {s}) but the page did not finish loading before the timeout.", .{status}),
+    } catch ToolError.InternalError;
 }
 
 const SearchParams = struct {
@@ -1645,8 +1659,8 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     if (result.text.len == 0) return result; // silenced save=; don't re-emit via nav suffix
 
     const page_title = after.getTitle() catch null;
-    const text = std.fmt.allocPrint(arena, "{s}\n(Navigated to {s}, title: {s})", .{
-        result.text, after.url, page_title orelse "(none)",
+    const text = std.fmt.allocPrint(arena, "{s}\n(Navigated to {s}, HTTP {s}, title: {s})", .{
+        result.text, after.url, navStatus(arena, after), page_title orelse "(none)",
     }) catch return ToolError.InternalError;
     return .{ .text = text };
 }
@@ -1920,8 +1934,8 @@ fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     }
 
     const page_title = page.getTitle() catch null;
-    return std.fmt.allocPrint(arena, "{s}.{s} Page url: {s}, title: {s}", .{
-        body, note, page.url, page_title orelse "(none)",
+    return std.fmt.allocPrint(arena, "{s}.{s} Page url: {s}, HTTP {s}, title: {s}", .{
+        body, note, page.url, navStatus(arena, page), page_title orelse "(none)",
     }) catch ToolError.InternalError;
 }
 
@@ -2732,7 +2746,28 @@ test "goto: a navigation stuck waiting for a connection is an error" {
     held.clearRetainingCapacity();
 
     const r = try call(aa, session, &registry, "goto", args, .{});
-    try std.testing.expectEqualStrings("Navigated successfully.", r.text);
+    try std.testing.expectEqualStrings("Navigated successfully. HTTP 200 OK.", r.text);
+}
+
+test "tools: navStatus names the status, or says it has none" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    // No response yet.
+    try std.testing.expectEqualStrings("unknown", navStatus(aa, frame));
+
+    frame._http_status = 403;
+    try std.testing.expectEqualStrings("403 Forbidden", navStatus(aa, frame));
+    frame._http_status = 404;
+    try std.testing.expectEqualStrings("404 Not Found", navStatus(aa, frame));
+
+    // A code std has no phrase for still reports the number.
+    frame._http_status = 599;
+    try std.testing.expectEqualStrings("599", navStatus(aa, frame));
 }
 
 test "parseValue: zero-filled optional backendNodeId treated as omitted" {
