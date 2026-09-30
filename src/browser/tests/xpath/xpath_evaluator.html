@@ -101,3 +101,38 @@
   testing.expectEqual(document, ev.createNSResolver(document));
 }
 </script>
+
+<script id=deep_nesting>
+{
+  // The descendant, following and preceding axes used to recurse per level.
+  const depth = 100000;
+  // Built bottom-up: appending under a deep parent walks its ancestors.
+  const chain = (prefix) => {
+    let top = document.createElement('div');
+    top.id = prefix + '_deepest';
+    for (let i = 1; i < depth; i++) {
+      const div = document.createElement('div');
+      div.appendChild(top);
+      top = div;
+    }
+    return top;
+  };
+
+  const root = document.createElement('section');
+  root.appendChild(chain('before'));
+  const mid = root.appendChild(document.createElement('span'));
+  root.appendChild(chain('after'));
+
+  const num = (expr, ctx) => document.evaluate(expr, ctx, null, XPathResult.NUMBER_TYPE, null).numberValue;
+  const first = (expr, ctx) => document.evaluate(expr, ctx, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+
+  // .//div takes the fused descendant fast path, descendant::div the axis.
+  testing.expectEqual(depth * 2, num('count(.//div)', root));
+  testing.expectEqual(depth * 2, num('count(descendant::div)', root));
+  testing.expectEqual(depth, num('count(preceding::div)', mid));
+  testing.expectEqual(depth, num('count(following::div)', mid));
+  // preceding is a reverse axis: position 1 is the nearest node, the deepest one.
+  testing.expectEqual('before_deepest', first('preceding::div[1]', mid).id);
+  testing.expectEqual('after_deepest', first('following::div[last()]', mid).id);
+}
+</script>
