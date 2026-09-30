@@ -153,6 +153,13 @@ fn fromC(c_context: *const v8.Context) ?*Context {
     return @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(c_context, 1)));
 }
 
+/// The entered Context, or null when none is entered (e.g. a V8 interrupt
+/// serviced outside script execution) or its Context struct is gone.
+pub fn current(isolate: *v8.Isolate) ?*Context {
+    const v8_context = v8.v8__Isolate__GetCurrentContext(isolate) orelse return null;
+    return fromC(v8_context);
+}
+
 /// Returns the Context and v8::Context for the given isolate.
 /// If the current context is from a destroyed Context (e.g., navigated-away iframe),
 /// falls back to the incumbent context (the calling context).

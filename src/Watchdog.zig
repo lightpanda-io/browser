@@ -133,7 +133,9 @@ fn run(self: *Watchdog) void {
             if (entry.fired == false) {
                 entry.fired = true;
                 log.warn(.app, "watchdog stall", .{ .stalled_ms = stalled_ms });
-                entry.env.requestTerminate();
+                // Also logs "watchdog stall script" (URL and JS stack) from
+                // the worker thread when the termination interrupt lands.
+                entry.env.requestTerminateForStall();
             }
         }
     }
