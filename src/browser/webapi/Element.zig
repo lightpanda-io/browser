@@ -1535,7 +1535,7 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
 // The document's <html>, or a <body> under it. These span the document and
 // scroll the viewport. A script can insert these tags anywhere, and a nested
 // one gets treated as a normal element.
-fn isRootContainer(self: *const Element) bool {
+pub fn isRootContainer(self: *const Element) bool {
     const parent = self.asConstNode().parentNode() orelse return false;
     return switch (self.getTag()) {
         .html => parent._type == .document,

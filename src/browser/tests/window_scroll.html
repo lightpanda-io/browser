@@ -155,3 +155,13 @@
   testing.expectEqual(300, nested_root.scrollHeight);
   nested_root.remove();
 </script>
+
+<script id=nested_root_tags_extend_the_document>
+  // A nested <body> is an ordinary wrapper, so a spacer inside it extends
+  // the document like one inside a <div>.
+  const spacer_root = document.body.appendChild(document.createElement('body'));
+  const root_spacer = spacer_root.appendChild(document.createElement('div'));
+  root_spacer.style.height = '20000px';
+  testing.expectTrue(document.documentElement.scrollHeight >= 20000);
+  spacer_root.remove();
+</script>
