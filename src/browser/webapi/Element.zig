@@ -553,6 +553,10 @@ pub fn insertAdjacentHTML(
     return he.insertAdjacentHTML(position, html_or_xml, frame);
 }
 
+pub fn requestFullscreen(_: *const Element, frame: *Frame) js.Promise {
+    return frame.js.local.?.rejectPromise(.{ .type_error = "Fullscreen is not supported" });
+}
+
 pub fn getOuterHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void {
     return dump.deep(self.asNode(), .{ .shadow = .skip }, writer, frame);
 }
@@ -1478,6 +1482,7 @@ const CheckVisibilityOpts = struct {
     opacityProperty: bool = false,
     visibilityProperty: bool = false,
 };
+
 pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Frame) bool {
     const opts = opts_ orelse CheckVisibilityOpts{};
     const owner = self.ownerFrame(frame) orelse return false;
@@ -2746,6 +2751,7 @@ pub const JsApi = struct {
     pub const getAnimations = bridge.function(Element.getAnimations, .{});
     pub const animate = bridge.function(Element.animate, .{});
     pub const checkVisibility = bridge.function(Element.checkVisibility, .{});
+    pub const requestFullscreen = bridge.function(Element.requestFullscreen, .{});
     pub const clientWidth = bridge.accessor(Element.getClientWidth, null, .{});
     pub const clientHeight = bridge.accessor(Element.getClientHeight, null, .{});
     pub const clientTop = bridge.accessor(Element.getClientTop, null, .{});

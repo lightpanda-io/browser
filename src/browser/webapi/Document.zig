@@ -1368,6 +1368,15 @@ fn getAdoptedStyleSheets(self: *Document, frame: *Frame) !js.Object.Global {
     return self._adopted_style_sheets.?;
 }
 
+fn getFullscreenElement(_: *const Document) ?*Element {
+    // see Element.requestFullscreen, nothing is ever fullscreen
+    return null;
+}
+
+fn exitFullscreen(_: *Document, frame: *Frame) js.Promise {
+    return frame.js.local.?.rejectPromise(.{ .type_error = "Document not in fullscreen" });
+}
+
 pub fn hasFocus(_: *Document) bool {
     log.debug(.not_implemented, "Document.hasFocus", .{});
     return true;
@@ -1724,6 +1733,10 @@ pub const JsApi = struct {
         }
     }.defaultView, null, .{});
     pub const hasFocus = bridge.function(Document.hasFocus, .{});
+    pub const fullscreenEnabled = bridge.property(false, .{ .template = false, .readonly = true });
+    pub const fullscreen = bridge.property(false, .{ .template = false, .readonly = true });
+    pub const fullscreenElement = bridge.accessor(Document.getFullscreenElement, null, .{});
+    pub const exitFullscreen = bridge.function(Document.exitFullscreen, .{});
 
     pub const prerendering = bridge.property(false, .{ .template = false });
     pub const characterSet = bridge.accessor(Document.getCharset, null, .{});

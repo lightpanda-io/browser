@@ -29,6 +29,7 @@ const Window = @import("webapi/Window.zig");
 const Element = @import("webapi/Element.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
+const Screen = @import("webapi/Screen.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const MediaQueryList = @import("webapi/css/MediaQueryList.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
@@ -91,6 +92,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
         .xhr => try self.dispatchDirect(target, event, target.subtype(XMLHttpRequestEventTarget).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .media_query_list => try self.dispatchDirect(target, event, target.subtype(MediaQueryList).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .performance => try self.dispatchDirect(target, event, target.subtype(Performance).inlineHandler(event._type_string), .{ .context = "dispatch" }),
+        .screen_orientation => try self.dispatchDirect(target, event, target.subtype(Screen.Orientation).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .window => try self.dispatchDirect(target, event, windowInlineHandler(target.subtype(Window), event._type_string), .{ .context = "dispatch" }),
         else => try self.dispatchDirect(target, event, null, .{ .context = "dispatch" }),
     }
