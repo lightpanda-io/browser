@@ -252,7 +252,7 @@ pub fn fireSuccess(self: *IDBRequest, exec: *Execution) !void {
 
     const event = try Event.initTrusted(comptime .wrap("success"), null, exec.page);
     event.acquireRef();
-    defer _ = event.releaseRef(exec.page);
+    defer event.releaseRef(exec.page);
 
     try exec.dispatch(self.asEventTarget(), event, self._on_success, .{ .context = "IDBRequest.success" });
 
@@ -281,7 +281,7 @@ fn fireError(self: *IDBRequest, exec: *Execution) !void {
 
     const event = try Event.initTrusted(comptime .wrap("error"), .{ .bubbles = true, .cancelable = true }, exec.page);
     event.acquireRef();
-    defer _ = event.releaseRef(exec.page);
+    defer event.releaseRef(exec.page);
 
     const et = self.asEventTarget();
     event._target = et;

@@ -988,10 +988,7 @@ fn allowEdit(frame: *Frame, target: *Element, before_data: ?[]const u8, text_dat
             .data = before_data,
             .inputType = input_type,
         }, frame)).asEvent();
-        before.acquireRef(); // need to check its _prevent_default
-        defer _ = before.releaseRef(frame.page);
-        try frame._event_manager.dispatch(target.asEventTarget(), before);
-        if (before._prevent_default) {
+        if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), before)) {
             return false;
         }
     }
@@ -1004,10 +1001,7 @@ fn allowEdit(frame: *Frame, target: *Element, before_data: ?[]const u8, text_dat
             .view = frame.window,
             .data = data,
         }, frame)).asEvent();
-        text_event.acquireRef(); // need to check its _prevent_default
-        defer _ = text_event.releaseRef(frame.page);
-        try frame._event_manager.dispatch(target.asEventTarget(), text_event);
-        return text_event._prevent_default == false;
+        return !try frame._event_manager.dispatchCancelable(target.asEventTarget(), text_event);
     }
 }
 
