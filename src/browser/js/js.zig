@@ -172,7 +172,8 @@ pub const ArrayBuffer = struct {
     }
 };
 
-// An ArrayBuffer or any typed array kind or a, exposed as its raw bytes.
+// An ArrayBuffer or any typed array kind or a DataView, exposed as its raw bytes.
+// But not from an underying SharedBuffer
 pub const BufferSource = struct {
     bytes: []const u8,
 };
@@ -289,6 +290,13 @@ pub fn arrayBufferData(array_buffer: *const v8.ArrayBuffer) ?*anyopaque {
     defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
     const backing_store = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr) orelse return null;
     return v8.v8__BackingStore__Data(backing_store);
+}
+
+pub fn arrayBufferIsShared(array_buffer: *const v8.ArrayBuffer) bool {
+    var backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
+    defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
+    const backing_store = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr) orelse return false;
+    return v8.v8__BackingStore__IsShared(backing_store);
 }
 
 // If a WebAPI takes a []const u8, then we'll coerce any JS value to that string
