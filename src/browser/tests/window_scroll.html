@@ -133,3 +133,25 @@
     testing.expectEqual(0, scrollends);
   });
 </script>
+
+<script id=nested_root_tags_are_not_roots>
+  // A <body> or <html> placed inside body is sized like any other element
+  // (5px each), not as the document root, which recursed forever.
+  const before = document.documentElement.scrollHeight;
+  const nested_body = document.body.appendChild(document.createElement('body'));
+  const nested_html = document.body.appendChild(document.createElement('html'));
+  testing.expectEqual(before + 10, document.documentElement.scrollHeight);
+  testing.expectTrue(document.documentElement.scrollWidth > 0);
+  nested_body.remove();
+  nested_html.remove();
+</script>
+
+<script id=nested_root_tags_are_ordinary_elements>
+  const nested_root = document.body.appendChild(document.createElement('body'));
+  const nested_child = nested_root.appendChild(document.createElement('div'));
+  nested_child.style.height = '300px';
+  // Sized from its content, not as the viewport or the document.
+  testing.expectEqual(300, nested_root.clientHeight);
+  testing.expectEqual(300, nested_root.scrollHeight);
+  nested_root.remove();
+</script>

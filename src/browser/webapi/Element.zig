@@ -1500,7 +1500,7 @@ pub const Axis = enum {
 
 pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.State {
     const tag = self.getTag();
-    const root = tag == .html or tag == .body;
+    const root = self.isRootContainer();
 
     if (self.ownerFrame(frame)) |owner| {
         const style_manager = &owner._style_manager;
@@ -1532,6 +1532,21 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
     return .{ .value = 5.0 };
 }
 
+// The document's <html>, or a <body> under it. These span the document and
+// scroll the viewport. A script can insert these tags anywhere, and a nested
+// one gets treated as a normal element.
+fn isRootContainer(self: *const Element) bool {
+    const parent = self.asConstNode().parentNode() orelse return false;
+    return switch (self.getTag()) {
+        .html => parent._type == .document,
+        .body => {
+            const html = parent.is(Element) orelse return false;
+            return html.getTag() == .html and html.isRootContainer();
+        },
+        else => false,
+    };
+}
+
 // We can't do this correctly without full styles and more rendering. We also
 // can't just ignore the children since some sites append nodes until a certain
 // width / height treshold is reached. If the size isn't explicit, we fallback
@@ -1559,10 +1574,10 @@ fn rootScrollSize(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
 }
 
 fn viewportAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
-    const tag = self.getTag();
-    if (tag != .html and tag != .body) {
+    if (!self.isRootContainer()) {
         return null;
     }
+    const tag = self.getTag();
     const doc = self.asNode().ownerDocument(frame) orelse frame.document;
     if ((tag == .body) != doc.isQuirksMode()) {
         return null;
@@ -1583,8 +1598,7 @@ pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
         return own.value;
     }
 
-    const tag = self.getTag();
-    if (tag == .html or tag == .body) {
+    if (self.isRootContainer()) {
         // html/body return their set value regardless of children.
         return own.value;
     }
@@ -1666,7 +1680,7 @@ pub fn scrollContainer(self: *Element, axes: ScrollAxes, frame: *Frame) ScrollTa
     const style_manager = &owner._style_manager;
     var current: ?*Element = self;
     while (current) |el| : (current = el.parentElement()) {
-        if (el.scrollsViewport()) break;
+        if (el.isRootContainer()) break;
         const scrolls = style_manager.overflowAxes(el);
         if ((axes.x and scrolls.x) or (axes.y and scrolls.y)) {
             return .{ .container = el };
@@ -1683,13 +1697,6 @@ pub fn containsOverscroll(self: *Element, axes: ScrollAxes, frame: *Frame) bool 
     return (axes.x and contains.x) or (axes.y and contains.y);
 }
 
-fn scrollsViewport(self: *const Element) bool {
-    return switch (self.getTag()) {
-        .html, .body => true,
-        else => false,
-    };
-}
-
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
@@ -1697,9 +1704,8 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
 
     const height = self.getElementAxis(frame, .height).value;
 
-    const tag = self.getTag();
     // The root scroller reports what the viewport scrolls over.
-    if (tag == .html or tag == .body) {
+    if (self.isRootContainer()) {
         return self.rootScrollSize(frame, .height) orelse height;
     }
 
@@ -1713,10 +1719,9 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 
     const width = self.getElementAxis(frame, .width).value;
 
-    const tag = self.getTag();
     // Roots don't sum their children side by side. The root scroller
     // reports what the viewport scrolls over.
-    if (tag == .html or tag == .body) {
+    if (self.isRootContainer()) {
         return self.rootScrollSize(frame, .width) orelse width;
     }
 
@@ -1727,7 +1732,7 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 /// without an explicit size the client and content measurements collapse onto
 /// the same sum. html and body scroll the viewport, clamped by Window.
 fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
-    if (self.scrollsViewport() or !self.getElementAxis(frame, axis).explicit) {
+    if (self.isRootContainer() or !self.getElementAxis(frame, axis).explicit) {
         return null;
     }
     const client = self.clientAxis(frame, axis);
