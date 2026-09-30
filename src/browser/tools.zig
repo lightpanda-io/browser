@@ -1071,7 +1071,10 @@ const schema_walker_suffix = ")";
 /// page as content.
 fn navStatus(arena: std.mem.Allocator, frame: *const lp.Frame) []const u8 {
     const status = frame._http_status orelse return "unknown";
-    const phrase = @as(std.http.Status, @enumFromInt(status)).phrase() orelse "";
+    // `std.http.Status` is an enum(u10) and `_http_status` is only clamped to
+    // u16 (`http.getResponseCode`), so a server answering with a 4-digit code
+    // would make the cast illegal behaviour rather than an unknown phrase.
+    const phrase = if (status > 599) "" else @as(std.http.Status, @enumFromInt(status)).phrase() orelse "";
     if (phrase.len == 0) return std.fmt.allocPrint(arena, "{d}", .{status}) catch "unknown";
     return std.fmt.allocPrint(arena, "{d} {s}", .{ status, phrase }) catch "unknown";
 }
@@ -2768,6 +2771,10 @@ test "tools: navStatus names the status, or says it has none" {
     // A code std has no phrase for still reports the number.
     frame._http_status = 599;
     try std.testing.expectEqualStrings("599", navStatus(aa, frame));
+
+    // Out of range for std.http.Status, which is an enum(u10).
+    frame._http_status = 9999;
+    try std.testing.expectEqualStrings("9999", navStatus(aa, frame));
 }
 
 test "parseValue: zero-filled optional backendNodeId treated as omitted" {
