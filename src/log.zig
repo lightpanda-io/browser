@@ -78,9 +78,34 @@ const Opts = struct {
     level: Level = if (lp.IS_DEBUG) .info else .warn,
     // Per-scope enabled flags; a `false` entry suppresses that scope's logs.
     scope_enabled: [num_scopes]bool = [_]bool{true} ** num_scopes,
+    color: ?bool = null,
 };
 
 pub var opts = Opts{};
+
+var color_enabled_cached: bool = undefined;
+var color_enabled_once = lp.once(initColorEnabled);
+
+fn initColorEnabled() void {
+    if (std.c.getenv("NO_COLOR")) |val| {
+        if (std.mem.span(val).len > 0) {
+            color_enabled_cached = false;
+            return;
+        }
+    }
+    color_enabled_cached = std.Io.File.stderr().isTty(lp.io) catch false;
+}
+
+pub fn isColorEnabled() bool {
+    color_enabled_once.call();
+    return color_enabled_cached;
+}
+
+pub fn colorEnabled() bool {
+    if (opts.color) |c| return c;
+    if (comptime lp.IS_TEST) return true;
+    return isColorEnabled();
+}
 
 /// Optional sink for formatted log lines. The agent's REPL terminal sets
 /// this so log output can be routed through `Spinner.emitAbove` instead
@@ -338,16 +363,31 @@ fn logPretty(scope: Scope, level: Level, msg: []const u8, kvs: []const KV, write
 
 fn logPrettyPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.Writer) !void {
     if (scope == .console and level == .fatal) {
-        try writer.writeAll("\x1b[0;104mWARN  ");
+        if (colorEnabled()) {
+            try writer.writeAll("\x1b[0;104mWARN  ");
+        } else {
+            try writer.writeAll("WARN  ");
+        }
     } else {
-        try writer.writeAll(switch (level) {
-            .debug => "\x1b[0;36mDEBUG\x1b[0m ",
-            .info => "\x1b[0;32mINFO\x1b[0m  ",
-            .warn => "\x1b[0;33mWARN\x1b[0m  ",
-            .err => "\x1b[0;31mERROR ",
-            .fatal => "\x1b[0;35mFATAL ",
-            .note => "\x1b[0;32mNOTE\x1b[0m  ",
-        });
+        if (colorEnabled()) {
+            try writer.writeAll(switch (level) {
+                .debug => "\x1b[0;36mDEBUG\x1b[0m ",
+                .info => "\x1b[0;32mINFO\x1b[0m  ",
+                .warn => "\x1b[0;33mWARN\x1b[0m  ",
+                .err => "\x1b[0;31mERROR ",
+                .fatal => "\x1b[0;35mFATAL ",
+                .note => "\x1b[0;32mNOTE\x1b[0m  ",
+            });
+        } else {
+            try writer.writeAll(switch (level) {
+                .debug => "DEBUG ",
+                .info => "INFO  ",
+                .warn => "WARN  ",
+                .err => "ERROR ",
+                .fatal => "FATAL ",
+                .note => "NOTE  ",
+            });
+        }
     }
 
     try writer.writeAll(@tagName(scope));
@@ -371,7 +411,11 @@ fn logPrettyPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.
             try writer.print(" page={d}", .{page.id});
         }
         const el = elapsed();
-        try writer.print(" \x1b[0m[+{d}{s}]", .{ el.time, el.unit });
+        if (colorEnabled()) {
+            try writer.print(" \x1b[0m[+{d}{s}]", .{ el.time, el.unit });
+        } else {
+            try writer.print(" [+{d}{s}]", .{ el.time, el.unit });
+        }
         try writer.writeByte('\n');
     }
 }
@@ -400,9 +444,13 @@ const Colored = struct {
     }
 
     pub fn format(self: Colored, writer: *std.Io.Writer) !void {
-        try writer.writeAll(self.code);
-        try writer.writeAll(self.text);
-        return writer.writeAll("\x1b[0m");
+        if (colorEnabled()) {
+            try writer.writeAll(self.code);
+            try writer.writeAll(self.text);
+            return writer.writeAll("\x1b[0m");
+        } else {
+            return writer.writeAll(self.text);
+        }
     }
 };
 
@@ -693,6 +741,33 @@ test "log: colored" {
     aw.clearRetainingCapacity();
     try writeValue(.pretty, green("--wait-ms"), &aw.writer);
     try testing.expectEqual("\x1b[0;32m--wait-ms\x1b[0m", aw.written());
+}
+
+test "log: color disabled (NO_COLOR / non-tty)" {
+    opts.format = .pretty;
+    opts.color = false;
+    defer {
+        opts.format = .pretty;
+        opts.color = null;
+    }
+
+    try testing.expectEqual(false, colorEnabled());
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+
+    try writeValue(.pretty, green("--wait-ms"), &aw.writer);
+    try testing.expectEqual("--wait-ms", aw.written());
+
+    aw.clearRetainingCapacity();
+    try logTo(.app, .info, "test", .{}, &aw.writer);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b") == null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "INFO  app : test") != null);
+
+    aw.clearRetainingCapacity();
+    try logTo(.app, .err, "test", .{}, &aw.writer);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b") == null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "ERROR app : test") != null);
 }
 
 test "log: data" {
