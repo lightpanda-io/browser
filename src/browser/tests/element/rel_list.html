@@ -22,6 +22,16 @@
 }
 </script>
 
+<script id=sandbox_supports>
+{
+  const sandbox = document.createElement('iframe').sandbox;
+  testing.expectEqual(false, sandbox.supports('allow-modals'));
+  testing.expectEqual(false, sandbox.supports('allow-popups-to-escape-sandbox'));
+  testing.expectEqual(false, sandbox.supports('allow-storage-access-by-user-activation'));
+  testing.expectEqual(false, sandbox.supports('unknown-token'));
+}
+</script>
+
 <a id=a1 rel="noopener"></a>
 <area id=ar1 rel="noopener">
 <output id=o1 for="x"></output>
