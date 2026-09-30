@@ -1469,8 +1469,10 @@ test "agent script runtime: mousedown focus follows mouse-focusability rules" {
         \\  add('span', 'dynChild', {}, add('div', 'dynFocus', { tabindex: '0' })).textContent = 'x';
         \\  add('div', 'dynNeg', { tabindex: '-1' }).textContent = 'neg';
         \\  add('div', 'dynBad', { tabindex: 'abc' }).textContent = 'bad';
-        \\  add('button', 'dynBadBtn', { tabindex: 'abc' }).addEventListener('mouseup', () => { window.badBtnFocusAtMouseup = document.activeElement.id; });
-        \\  add('div', 'toolbarBtn').addEventListener('mousedown', (e) => e.preventDefault());
+        \\  add('button', 'dynBadBtn', { tabindex: 'abc' });
+        \\  add('button', 'toolbarBtn').addEventListener('mousedown', (e) => e.preventDefault());
+        \\  add('input', 'dynLabInp');
+        \\  add('label', 'dynLabel', { for: 'dynLabInp' }).textContent = 'lab';
         \\  add('span', 'dynHostSpan', {}, add('div', 'dynHost', { contenteditable: 'true' })).textContent = 'hs';
         \\  add('span', 'dynInnerSpan', {}, add('div', 'dynInner', { contenteditable: 'true' }, add('div', 'dynOuter', { contenteditable: 'true' }))).textContent = 'is';
         \\  const SVG = 'http://www.w3.org/2000/svg';
@@ -1483,14 +1485,15 @@ test "agent script runtime: mousedown focus follows mouse-focusability rules" {
         \\page.click("#dynBad");
         \\expectActive("body", "unparsable tabindex was mouse-focusable");
         \\page.click("#dynBadBtn");
-        \\// Sampled at mouseup: click activation focuses a button regardless of
-        \\// what mousedown decided, which would mask the native focusability.
-        \\if (page.evaluate("window.badBtnFocusAtMouseup") !== "dynBadBtn") throw new Error("unparsable tabindex on a native button lost native mousedown focusability");
+        \\expectActive("dynBadBtn", "unparsable tabindex on a native button lost native mousedown focusability");
         \\// Toolbar idiom: preventDefault() on mousedown preserves existing focus.
         \\page.click("#inp");
         \\expectActive("inp", "setup failed");
         \\page.click("#toolbarBtn");
         \\expectActive("inp", "preventDefault on mousedown did not protect focus");
+        \\// Label click focuses its labeled control.
+        \\page.click("#dynLabel");
+        \\expectActive("dynLabInp", "clicking label did not focus its control");
         \\// Verified against Chrome.
         \\page.click("#dynHostSpan");
         \\expectActive("dynHost", "span inside contenteditable did not focus host");
