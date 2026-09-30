@@ -28,6 +28,7 @@ const Platform = @import("Platform.zig");
 const Inspector = @import("Inspector.zig");
 
 const App = @import("../../App.zig");
+const string = @import("../../string.zig");
 
 const Frame = @import("../Frame.zig");
 const Window = @import("../webapi/Window.zig");
@@ -738,9 +739,10 @@ fn stallReport(self: *Env, stack_buf: []u8) StallReport {
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
     var report: StallReport = .{};
-    if (Context.current(isolate)) |ctx| {
-        report.url = truncate(ctx.global.url(), STALL_URL_MAX);
-        report.page_url = truncate(switch (ctx.global) {
+    if (Context.fromIsolate(self.isolate)) |entry| {
+        const ctx, _ = entry;
+        report.url = string.truncateUtf8(ctx.global.url(), STALL_URL_MAX);
+        report.page_url = string.truncateUtf8(switch (ctx.global) {
             .frame => |frame| frame.page.frame.url,
             .worker => |worker| worker.page.frame.url,
         }, STALL_URL_MAX);
@@ -749,7 +751,7 @@ fn stallReport(self: *Env, stack_buf: []u8) StallReport {
     var writer: std.Io.Writer = .fixed(stack_buf);
     if (v8.v8__StackTrace__CurrentStackTrace__STATIC(isolate, STALL_STACK_FRAMES)) |stack| {
         // A full buffer truncates the stack; the frames written are kept.
-        writeStallStack(isolate, stack, &writer) catch {};
+        js.writeStackTrace(isolate, stack, &writer) catch {};
     }
     report.stack = writer.buffered();
     return report;
@@ -766,37 +768,6 @@ fn logStall(self: *Env, requested_at: u64) void {
         .interrupt_delay_ms = lp.datetime.milliTimestamp(.boot) -| requested_at,
         .stack = report.stack,
     });
-}
-
-fn writeStallStack(isolate: *v8.Isolate, stack: *const v8.StackTrace, writer: *std.Io.Writer) !void {
-    const separator = log.separator();
-    const frame_count: usize = @intCast(v8.v8__StackTrace__GetFrameCount(stack));
-    for (0..frame_count) |i| {
-        const frame = v8.v8__StackTrace__GetFrame(stack, isolate, @intCast(i)).?;
-
-        var name_buf: [128]u8 = undefined;
-        const name = utf8(isolate, v8.v8__StackFrame__GetFunctionName(frame), &name_buf);
-        var script_buf: [256]u8 = undefined;
-        const script = utf8(isolate, v8.v8__StackFrame__GetScriptNameOrSourceURL(frame), &script_buf);
-
-        try writer.print("{s}{s} ({s}:{d}:{d})", .{
-            separator,
-            if (name.len == 0) "<anonymous>" else name,
-            if (script.len == 0) "<unknown>" else script,
-            v8.v8__StackFrame__GetLineNumber(frame),
-            v8.v8__StackFrame__GetColumn(frame),
-        });
-    }
-}
-
-fn utf8(isolate: *v8.Isolate, str: ?*const v8.String, buf: []u8) []const u8 {
-    const s = str orelse return "";
-    const n = v8.v8__String__WriteUtf8(s, isolate, buf.ptr, buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
-    return buf[0..n];
-}
-
-fn truncate(s: []const u8, max: usize) []const u8 {
-    return s[0..@min(s.len, max)];
 }
 
 /// Clears a pending termination so V8 calls (e.g. those made during cleanup)
