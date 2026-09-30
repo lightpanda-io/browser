@@ -1105,13 +1105,15 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     }
 
     // Bodies are non-empty so that libcurl always reaches the write callback,
-    // which is where a headers_only request decides whether to drain or abort.
+    // which is where a partial request decides whether to drain or abort.
     // ok.png takes the abort branch, small.png the drain branch; both must
     // behave identically as far as the DOM is concerned.
     if (std.mem.eql(u8, path, "/images/ok.png")) {
-        // > HttpClient.Request.HEADERS_ONLY_DRAIN_MAX
+        // > HttpClient.Request.PARTIAL_DRAIN_MAX. The synthetic PNG
+        // header advertises 1000 x 750 pixels; no bitmap is decoded.
         const body = try arena_allocator.alloc(u8, 16 * 1024 + 1);
         @memset(body, 'x');
+        @memcpy(body[0..24], "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x03\xe8\x00\x00\x02\xee");
         return req.respond(body, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "image/png" },
@@ -1124,9 +1126,19 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     if (std.mem.startsWith(u8, path, "/images/small.png")) {
         const body = try arena_allocator.alloc(u8, 1024);
         @memset(body, 'x');
+        @memcpy(body[0..24], "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x01\x40\x00\x00\x00\xf0");
         return req.respond(body, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "image/png" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/images/photo.jpg")) {
+        const body = "\xff\xd8\xff\xe1\x00\x04\x00\x00\xff\xc0\x00\x0b\x08\x02\xee\x03\xe8\x01\x01\x11\x00";
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "image/jpeg" },
             },
         });
     }

@@ -1296,8 +1296,8 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     // Redirects rewrite req.url; the entry must be stored/renewed under the
     // URL this lookup ran against, not the final hop. req.url is arena-owned,
     // so the captured slice outlives any redirect rewrite.
-    const key: [:0]const u8 = if (req.headers_only)
-        try std.fmt.allocPrintSentinel(arena.allocator(), "headers-only:{s}", .{req.url}, 0)
+    const key: [:0]const u8 = if (req.partial != null)
+        try std.fmt.allocPrintSentinel(arena.allocator(), "partial:{s}", .{req.url}, 0)
     else
         req.url;
     transfer._cache_key = key;
@@ -1782,9 +1782,9 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // we match that behavior: when CURLE_WRITE_ERROR arrives but our callback
     // never errored and bytes were received, treat it as success.
     const effective_err: ?anyerror = if (msg.err) |err| blk: {
-        // Our own headers_only abort, not a failure: fall through so the
-        // response is materialized and delivered with an empty body.
-        if (err == error.WriteError and transfer.res.headers_only_abort) {
+        // Our own partial abort, not a failure: fall through so the
+        // response is materialized and delivered with the kept prefix.
+        if (err == error.WriteError and transfer.res.partial_abort) {
             break :blk null;
         }
         if (err == error.WriteError and transfer.res.callback_error == null and transfer.res.bytes_received > 0) {
@@ -2017,11 +2017,11 @@ pub const Request = struct {
     // internal requests transparently following redirects.
     const RedirectMode = enum { follow, manual, @"error" };
 
-    // How much of a headers_only body we'll read rather than abort. Draining
+    // How much of a partial body we'll read rather than abort. Draining
     // costs bandwidth but keeps the connection poolable; aborting saves
     // bandwidth but forces a reconnect. 16 KiB is the rough break-even: about
     // ten segments, versus a TCP handshake plus a TLS one.
-    const HEADERS_ONLY_DRAIN_MAX: usize = 16 * 1024;
+    const PARTIAL_DRAIN_MAX: usize = 16 * 1024;
 
     pub const CredentialsMode = enum {
         // Never send credentials, even same-origin.
@@ -2051,14 +2051,15 @@ pub const Request = struct {
     timeout_ms: u32 = 0,
     skip_cache: bool = false,
 
-    // The caller wants the status and the response headers, not the body.
-    // Unlike a HEAD, the request itself is byte-for-byte a normal GET, so
-    // origins and CDNs see (and answer) exactly what a real browser sends;
-    // the body is then discarded, and torn off the wire if it doesn't fit in
-    // HEADERS_ONLY_DRAIN_MAX. The consumer still gets the usual
-    // start/header/done sequence, with an empty body; `data_callback` never
-    // fires.
-    headers_only: bool = false,
+    // The caller wants the status, the response headers and at most this
+    // many leading body bytes (0 for none), not the whole body. Unlike a
+    // HEAD, the request itself is byte-for-byte a normal GET, so origins and
+    // CDNs see (and answer) exactly what a real browser sends; the rest of
+    // the body is discarded, and torn off the wire if it doesn't fit in
+    // PARTIAL_DRAIN_MAX, which also caps the prefix. The consumer gets the
+    // usual start/header/data/done sequence with the prefix as the body. CDP
+    // never sees the prefix: it isn't the response body.
+    partial: ?u32 = null,
 
     // Should only be set when they need to differ from the owner's.
     frame_id: u32 = 0,
@@ -3213,12 +3214,12 @@ pub const Transfer = struct {
         }
 
         // A cached body is stored decoded; its wire size is long gone. A
-        // headers_only fetch (images) tears the body off the wire: the
+        // partial fetch (images) tears the body off the wire: the
         // Content-Length, else whatever arrived before the abort, is the
         // best size we have for both.
         var decoded_body_size = t.decoded_body_size;
         var encoded_body_size = if (t.cache == .none) t.encoded_body_size else decoded_body_size;
-        if (self.req.headers_only) {
+        if (self.req.partial != null) {
             const known = if (self._content_length > 0) self._content_length else t.encoded_body_size;
             decoded_body_size = known;
             encoded_body_size = known;
@@ -3412,11 +3413,11 @@ pub const Transfer = struct {
             }
         }
 
-        // headers_only is exempt: the cap exists to bound how much body we
-        // buffer, and this transfer buffers none of it. Failing a 4 MB image
+        // A partial fetch is exempt: the cap exists to bound how much body we
+        // buffer, and this transfer buffers at most PARTIAL_DRAIN_MAX of it. Failing a 4 MB image
         // we were never going to read would turn the size limit into a
         // spurious `error` event on a perfectly good response.
-        if (opts.check_content_length and !self.req.headers_only) {
+        if (opts.check_content_length and self.req.partial == null) {
             if (self.getContentLength()) |cl| {
                 if (cl > self.client.max_response_size) {
                     return error.ResponseTooLarge;
@@ -3952,7 +3953,7 @@ pub const Transfer = struct {
                 return @intCast(chunk_len);
             }
 
-            if (transfer.req.headers_only == false) {
+            if (transfer.req.partial == null) {
                 if (transfer.getContentLength()) |cl| {
                     if (cl > transfer.client.max_response_size) {
                         res.callback_error = error.ResponseTooLarge;
@@ -3976,18 +3977,26 @@ pub const Transfer = struct {
 
         res.bytes_received += chunk_len;
 
-        if (transfer.req.headers_only) {
+        if (transfer.req.partial) |partial| {
+            const limit = @min(partial, Request.PARTIAL_DRAIN_MAX);
+            if (res.buffer.items.len < limit) {
+                const count = @min(chunk_len, limit - res.buffer.items.len);
+                res.buffer.appendSlice(transfer.arena.allocator(), buffer[0..count]) catch |err| {
+                    res.callback_error = err;
+                    return http.writefunc_error;
+                };
+            }
             // Plenty of images have no Content-Length to decide this up front, so
             // decide it as the body arrives.
-            if (res.bytes_received <= Request.HEADERS_ONLY_DRAIN_MAX) {
+            if (res.bytes_received <= Request.PARTIAL_DRAIN_MAX) {
                 return @intCast(chunk_len);
             }
 
             // Returning writefunc_error is the only way to end a transfer
             // early from a write callback; processOneMessage recognises the
             // flag and treats the resulting CURLE_WRITE_ERROR as a completed
-            // response with an empty body.
-            res.headers_only_abort = true;
+            // response with the kept prefix as its body.
+            res.partial_abort = true;
             return http.writefunc_error;
         }
 
@@ -4179,7 +4188,8 @@ pub const Transfer = struct {
                     }
                 },
                 .data => |chunk| {
-                    if (transfer._notify_cdp) {
+                    // A partial body is a prefix, not the response body.
+                    if (transfer._notify_cdp and req.partial == null) {
                         transfer.notify(.http_response_data, &.{
                             .data = chunk,
                             .transfer = transfer,
@@ -4328,10 +4338,10 @@ const Response = struct {
     first_data_received: bool = false,
 
     // Set when dataCallback deliberately killed the transfer to satisfy
-    // `Request.headers_only`. processOneMessage uses it to tell our own
-    // abort apart from a real CURLE_WRITE_ERROR and deliver the response
-    // (headers, status, empty body) as a success.
-    headers_only_abort: bool = false,
+    // `Request.partial`. processOneMessage uses it to tell our own abort
+    // apart from a real CURLE_WRITE_ERROR and deliver the response (headers,
+    // status, kept prefix) as a success.
+    partial_abort: bool = false,
 
     // Response body. Filled by dataCallback, consumed in processMessages.
     // See Stream.spare to see how this works in streaming mode
