@@ -328,6 +328,18 @@ pub const Tool = enum {
         };
     }
 
+    /// The result is a navigation outcome and nothing else, so `PageState` is
+    /// a faithful machine-readable form of it. `evaluate` is excluded though
+    /// it reports the same facts: there they are a suffix on the payload that
+    /// is the real answer, and a client following the usual "prefer
+    /// `structuredContent`" rule would keep the suffix and drop the payload.
+    pub fn reportsPageState(self: Tool) bool {
+        return switch (self) {
+            .goto, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => true,
+            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .waitForSelector, .waitForScript, .waitForState => false,
+        };
+    }
+
     /// Per-tool LLM-facing metadata. Tool identity (name + predicates) lives
     /// on the enclosing `Tool` enum; this struct just carries the strings.
     pub const Definition = struct {
@@ -828,7 +840,27 @@ pub const ToolResult = struct {
     /// Resolved before the action runs, because a navigation takes the node
     /// with it.
     selector: ?[]const u8 = null,
+    /// Set for the tools `Tool.reportsPageState` names.
+    page_state: ?PageState = null,
 };
+
+/// Where a call left the page. MCP serializes it as `structuredContent` so a
+/// client reads the status without regexing `Navigated successfully. HTTP 404
+/// Not Found.` back apart. The transport drops null optionals rather than
+/// writing them, so the matching `outputSchema` requires `url` alone.
+pub const PageState = struct {
+    url: []const u8,
+    httpStatus: ?u16,
+    title: ?[]const u8,
+};
+
+fn pageState(frame: *lp.Frame) PageState {
+    return .{
+        .url = frame.url,
+        .httpStatus = frame._http_status,
+        .title = frame.getTitle() catch null,
+    };
+}
 
 const GotoParams = struct {
     url: [:0]const u8,
@@ -911,6 +943,9 @@ pub fn call(
         return err;
     };
     result.selector = selector;
+    if (tool.reportsPageState()) {
+        if (session.currentFrame()) |frame| result.page_state = pageState(frame);
+    }
     return result;
 }
 
