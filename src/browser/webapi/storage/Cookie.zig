@@ -339,6 +339,14 @@ pub fn parseDomain(arena: Allocator, url_: ?[:0]const u8, explicit_domain: ?[]co
             try std.Uri.Component.percentEncode(&aw.writer, no_leading_dot, isHostChar);
             const owned_domain = toLower(aw.written());
 
+            if (isIpLiteral(owned_domain[1..]) or (encoded_host != null and isIpLiteral(encoded_host.?))) {
+                const host = encoded_host orelse return owned_domain[1..];
+                if (std.mem.eql(u8, host, owned_domain[1..])) {
+                    return owned_domain[1..];
+                }
+                return error.InvalidDomain;
+            }
+
             if (std.mem.indexOfScalarPos(u8, owned_domain, 1, '.') == null and std.mem.eql(u8, "localhost", owned_domain[1..]) == false) {
                 // can't set a cookie for a TLD
                 return error.InvalidDomain;
@@ -378,6 +386,11 @@ pub fn parseDomain(arena: Allocator, url_: ?[:0]const u8, explicit_domain: ?[]co
         if (host.len > 0) return host;
     }
     return error.InvalidDomain;
+}
+
+fn isIpLiteral(host: []const u8) bool {
+    _ = std.Io.net.IpAddress.parseLiteral(host) catch return false;
+    return true;
 }
 
 pub fn percentEncode(arena: Allocator, part: []const u8, comptime isValidChar: fn (u8) bool) ![]u8 {
@@ -1465,12 +1478,16 @@ test "Cookie: parse domain" {
     try expectAttribute(.{ .domain = ".lightpanda.io" }, "http://dev.lightpanda.io/", "b;domain=.lightpanda.io");
     try expectAttribute(.{ .domain = ".localhost" }, "http://localhost/", "b;domain=localhost");
     try expectAttribute(.{ .domain = ".localhost" }, "http://localhost/", "b;domain=.localhost");
+    try expectAttribute(.{ .domain = "127.0.0.1" }, "http://127.0.0.1/", "b;domain=127.0.0.1");
+    try expectAttribute(.{ .domain = "127.0.0.1" }, "http://127.0.0.1/", "b;domain=.127.0.0.1");
 
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=io");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=.io");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.lightpanda.io");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.lightpanda.com");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.example.com");
+    try expectError(error.InvalidDomain, "http://127.0.0.1/", "b;domain=0.0.1");
+    try expectError(error.InvalidDomain, "http://127.0.0.1/", "b;domain=127.0.0.2");
 
     try expectError(error.InvalidDomain, "http://attackerexample.com/", "b;domain=example.com");
     try expectError(error.InvalidDomain, "http://attackerexample.com/", "b;domain=.example.com");

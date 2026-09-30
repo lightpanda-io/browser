@@ -25,6 +25,7 @@ const js = @import("../../browser/js/js.zig");
 const URL = @import("../../browser/URL.zig");
 const Node = @import("../../browser/webapi/Node.zig");
 const Frame = @import("../../browser/Frame.zig");
+const Viewport = @import("../../browser/Viewport.zig");
 const Selector = @import("../../browser/webapi/selector/Selector.zig");
 const xpath = @import("../../browser/xpath/Evaluator.zig");
 const XPathParser = @import("../../browser/xpath/Parser.zig");
@@ -73,6 +74,7 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
         navigate,
         close,
         locateNodes,
+        setViewport,
     }, action) orelse return error.UnknownCommand;
 
     switch (command) {
@@ -81,6 +83,7 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
         .navigate => return bidiNavigate(cmd),
         .close => return close(cmd),
         .locateNodes => return locateNodes(cmd),
+        .setViewport => return setViewport(cmd),
     }
 }
 
@@ -496,6 +499,72 @@ fn appendNodes(remotes: *std.ArrayList(remote_value.Remote), arena: std.mem.Allo
     }
 }
 
+fn setViewport(cmd: *BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        context: ?[]const u8 = null,
+        userContexts: ?[]const []const u8 = null,
+        viewport: Setting(struct { width: u32, height: u32 }) = .keep,
+        devicePixelRatio: Setting(f32) = .keep,
+    });
+
+    const bidi = cmd.bidi;
+    if ((p.context == null) == (p.userContexts == null)) {
+        return cmd.sendError("invalid argument", "exactly one of context and userContexts is required");
+    }
+    if (p.context) |context| {
+        _ = (try requireContext(cmd, context)) orelse return;
+    }
+    if (p.userContexts) |user_contexts| {
+        for (user_contexts) |user_context| {
+            if (std.mem.eql(u8, user_context, bidi.user_context.id()) == false) {
+                return cmd.sendError("no such user context", "unknown user context");
+            }
+        }
+    }
+
+    var viewport = bidi.browser.getViewport();
+    switch (p.viewport) {
+        .keep => {},
+        .reset => {
+            viewport.width = Viewport.default.width;
+            viewport.height = Viewport.default.height;
+        },
+        .set => |size| {
+            if (size.width == 0 or size.height == 0) {
+                return cmd.sendError("invalid argument", "viewport dimensions must be positive");
+            }
+            viewport.width = size.width;
+            viewport.height = size.height;
+        },
+    }
+    switch (p.devicePixelRatio) {
+        .keep => {},
+        .reset => viewport.scale = Viewport.default.scale,
+        .set => |scale| {
+            if (scale <= 0) {
+                return cmd.sendError("invalid argument", "devicePixelRatio must be positive");
+            }
+            viewport.scale = scale;
+        },
+    }
+    bidi.browser.setViewportOverride(viewport);
+    return cmd.sendDone();
+}
+
+// A parameter that's left alone when absent, and reset to its default by null.
+fn Setting(comptime T: type) type {
+    return union(enum) {
+        keep,
+        reset,
+        set: T,
+
+        pub fn jsonParse(arena: std.mem.Allocator, source: anytype, opts: std.json.ParseOptions) !@This() {
+            const value = try std.json.innerParse(?T, arena, source, opts);
+            return if (value) |v| .{ .set = v } else .reset;
+        }
+    };
+}
+
 pub fn requireContext(cmd: *BiDi.Command, context: []const u8) !?*Context {
     if (cmd.bidi.browsing_context) |*ctx| {
         if (std.mem.eql(u8, &ctx.id, context)) {
@@ -841,4 +910,49 @@ test "bidi.browsing_context: window realm lifecycle" {
     try ctx.expectSentEvent("script.realmDestroyed", .{ .realm = realm1 });
     try ctx.expectSentEvent("script.realmCreated", .{ .realm = realm2, .type = "window", .context = context_id, .origin = "http://127.0.0.1:9582" });
     try ctx.expectSentResult(.{ .navigation = &bc.navigation_id }, .{ .id = 3 });
+}
+
+test "bidi.browsing_context: setViewport" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const context_id = try ctx.createContext(.{ .url = "bidi/values.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "browsingContext.setViewport",
+        .params = .{ .context = context_id, .viewport = .{ .width = 375, .height = 812 }, .devicePixelRatio = 3 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "script.evaluate",
+        .params = .{ .expression = "`${innerWidth}x${innerHeight}@${devicePixelRatio}`", .awaitPromise = false, .target = .{ .context = context_id } },
+    });
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "string", .value = "375x812@3" } }, .{ .id = 2 });
+
+    // an absent field is kept, a null one is reset
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "browsingContext.setViewport",
+        .params = .{ .userContexts = .{"default"}, .viewport = null },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    const viewport = ctx.bidi().browser.getViewport();
+    try testing.expectEqual(Viewport.default.width, viewport.width);
+    try testing.expectEqual(Viewport.default.height, viewport.height);
+    try testing.expectEqual(3, viewport.scale);
+
+    try ctx.processMessage(.{ .id = 4, .method = "browsingContext.setViewport", .params = .{ .viewport = null } });
+    try ctx.expectSentError("invalid argument", null, .{ .id = 4 });
+    try ctx.processMessage(.{ .id = 5, .method = "browsingContext.setViewport", .params = .{ .context = "nope" } });
+    try ctx.expectSentError("no such frame", null, .{ .id = 5 });
+    try ctx.processMessage(.{ .id = 6, .method = "browsingContext.setViewport", .params = .{ .userContexts = .{"nope"} } });
+    try ctx.expectSentError("no such user context", null, .{ .id = 6 });
+    try ctx.processMessage(.{
+        .id = 7,
+        .method = "browsingContext.setViewport",
+        .params = .{ .context = context_id, .viewport = .{ .width = 0, .height = 10 } },
+    });
+    try ctx.expectSentError("invalid argument", null, .{ .id = 7 });
 }

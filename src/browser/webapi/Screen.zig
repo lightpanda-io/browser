@@ -90,6 +90,16 @@ pub const Orientation = struct {
         return self._proto;
     }
 
+    pub fn getType(_: *const Orientation, frame: *Frame) []const u8 {
+        const orientation = frame.page.getViewport().orientation orelse return "landscape-primary";
+        return @tagName(orientation.type);
+    }
+
+    pub fn getAngle(_: *const Orientation, frame: *Frame) u16 {
+        const orientation = frame.page.getViewport().orientation orelse return 0;
+        return orientation.angle;
+    }
+
     pub const JsApi = struct {
         pub const bridge = js.Bridge(Orientation);
 
@@ -99,7 +109,7 @@ pub const Orientation = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const angle = bridge.property(0, .{ .template = false });
-        pub const @"type" = bridge.property("landscape-primary", .{ .template = false });
+        pub const angle = bridge.accessor(Orientation.getAngle, null, .{});
+        pub const @"type" = bridge.accessor(Orientation.getType, null, .{});
     };
 };
