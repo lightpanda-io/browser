@@ -171,7 +171,7 @@ fn dispatchBoundaryEvent(frame: *Frame, target: *Element, comptime mouse_typ: []
     };
 }
 
-pub const Gesture = struct {
+const Gesture = struct {
     button: i32 = mouse_button.main,
     buttons_down: u16 = 0,
     click_count: u32 = 0,
@@ -182,7 +182,7 @@ pub const Gesture = struct {
 };
 
 /// Dispatch a trusted pointer event; returns whether preventDefault() cancelled it.
-pub fn emitPointer(
+fn emitPointer(
     frame: *Frame,
     target: *Element,
     typ: []const u8,
@@ -212,7 +212,7 @@ pub fn emitPointer(
 }
 
 /// Dispatch a trusted mouse event; returns whether preventDefault() cancelled it.
-pub fn emitMouse(
+fn emitMouse(
     frame: *Frame,
     target: *Element,
     comptime typ: []const u8,
