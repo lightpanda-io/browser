@@ -748,22 +748,15 @@ fn _appendCallback(self: *Parser, parent_pn: *ParsedNode, node_or_text: h5e.Node
             self.maybeCheckpoint();
             self.inserted_since_checkpoint +|= 1;
             const parent = parent_pn.node;
-            if (wouldCycle(getParsed(cpn).node, parent)) {
+            const child_pn = getParsed(cpn);
+            if (leftWhereScriptPutIt(child_pn)) {
+                return;
+            }
+            if (wouldCycle(child_pn.node, parent)) {
                 // Inserting would build a cycle (script moved it inside the adopting node)
                 return;
             }
-            const child = try self.settleDocument(parent_pn, getParsed(cpn));
-            if (child._parent) |previous_parent| {
-                // html5ever says this can't happen, but we might be screwing up
-                // the node on our side. We shouldn't be, but we're seeing this
-                // in the wild, and I'm not sure why. In debug, let's crash so
-                // we can try to figure it out. In release, let's disconnect
-                // the child first.
-                if (comptime lp.IS_DEBUG) {
-                    unreachable;
-                }
-                self.frame.removeNode(previous_parent, child, .{ .reconnect_to = parent });
-            }
+            const child = try self.settleDocument(parent_pn, child_pn);
             try self.frame.appendNew(parent, child);
         },
         .text => |txt| {
@@ -779,12 +772,6 @@ fn settleDocument(self: *Parser, parent_pn: *ParsedNode, child_pn: *ParsedNode) 
     const frame = self.frame;
     const parent = parent_pn.node;
     const child = child_pn.node;
-
-    // A custom element constructor may have put the child in the tree
-    // itself; that is as observable as being placed by html5ever.
-    if (child._parent != null) {
-        child_pn.placed = true;
-    }
 
     var document = parent.getDocument(frame);
     const child_document = child.getDocument(frame);
@@ -900,19 +887,16 @@ fn _appendBeforeSiblingCallback(self: *Parser, sibling_pn: *ParsedNode, node_or_
     const parent = sibling.parentNode() orelse return error.NoParent;
     const node: *Node = switch (node_or_text.toUnion()) {
         .node => |cpn| blk: {
-            if (wouldCycle(getParsed(cpn).node, parent)) {
+            const child_pn = getParsed(cpn);
+            if (leftWhereScriptPutIt(child_pn)) {
+                return;
+            }
+            if (wouldCycle(child_pn.node, parent)) {
                 // See _appendCallback: the would-be cycle drops the node.
                 return;
             }
             var parent_pn = ParsedNode{ .node = parent, .data = null, .placed = true };
-            const child = try self.settleDocument(&parent_pn, getParsed(cpn));
-            if (child._parent) |previous_parent| {
-                // A custom element constructor may have inserted the node into the
-                // DOM before the parser officially places it (e.g. via foster
-                // parenting). Detach it first so insertNodeRelative's assertion holds.
-                self.frame.removeNode(previous_parent, child, .{ .reconnect_to = parent });
-            }
-            break :blk child;
+            break :blk try self.settleDocument(&parent_pn, child_pn);
         },
         .text => |txt| blk: {
             self.creation_document = parent.getDocument(self.frame);
@@ -941,6 +925,17 @@ fn _appendBasedOnParentNodeCallback(self: *Parser, element_pn: *ParsedNode, prev
     } else {
         try self._appendCallback(prev_element_pn, node_or_text);
     }
+}
+
+// A custom element's constructor or attributeChangedCallback runs between
+// the element's creation and its insertion. If the callback gives it a parent,
+// then the parser must leave it there and is considered placed into the tree.
+fn leftWhereScriptPutIt(node_pn: *ParsedNode) bool {
+    if (node_pn.node._parent == null) {
+        return false;
+    }
+    node_pn.placed = true;
+    return true;
 }
 
 fn wouldCycle(node: *Node, parent: *Node) bool {
