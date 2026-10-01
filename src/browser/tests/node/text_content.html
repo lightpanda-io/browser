@@ -42,3 +42,18 @@
   testing.expectEqual('attr2', attr.textContent);
   testing.expectEqual(div, $('#attr2'));
 </script>
+
+<script id=null_and_undefined>
+  const p = document.createElement('p');
+  p.innerHTML = '<b>x</b>';
+  p.textContent = null;
+  testing.expectEqual('<p></p>', p.outerHTML);
+
+  p.innerHTML = '<b>x</b>';
+  p.textContent = undefined;
+  testing.expectEqual('<p></p>', p.outerHTML);
+
+  const text = document.createTextNode('abc');
+  text.textContent = null;
+  testing.expectEqual('', text.data);
+</script>
