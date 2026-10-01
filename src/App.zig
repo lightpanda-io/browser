@@ -149,7 +149,7 @@ pub fn askTypesafe(
 
     const client = &self.typesafe_client.?;
     return client.ask(state, questions, options) catch |err| {
-        if (err == error.ApiError) failure.* = try client.last_error.clone(arena);
+        if (err == error.ApiError) failure.* = try client.last_error.dupe(arena);
         return err;
     };
 }
