@@ -505,6 +505,22 @@ fn attributeContainsWord(value: []const u8, word: []const u8) bool {
     return false;
 }
 
+// https://html.spec.whatwg.org/multipage/semantics-other.html#selector-read-write
+fn isReadWrite(el: *Node.Element) bool {
+    if (el.is(Node.Element.Html.Input)) |input| {
+        const readonly_applies = switch (input._input_type) {
+            .text, .password, .email, .url, .tel, .search, .number => true,
+            .date, .time, .@"datetime-local", .month, .week => true,
+            else => false,
+        };
+        return readonly_applies and !el.hasAttributeInterned("readonly") and !el.isDisabled();
+    }
+    if (el.is(Node.Element.Html.TextArea) != null) {
+        return !el.hasAttributeInterned("readonly") and !el.isDisabled();
+    }
+    return el.isEditingHost();
+}
+
 fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
     const node = el.asNode();
     switch (pseudo) {
@@ -569,12 +585,8 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .in_range => return false,
         .out_of_range => return false,
         .placeholder_shown => return false,
-        .read_only => {
-            return el.hasAttributeInterned("readonly");
-        },
-        .read_write => {
-            return el.hasAttributeInterned("readonly") == false;
-        },
+        .read_only => return !isReadWrite(el),
+        .read_write => return isReadWrite(el),
         .default => return false,
 
         // User interaction
