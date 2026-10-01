@@ -1318,12 +1318,9 @@ fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, timeout_ms
     return .{ .text = markdown_ };
 }
 
-/// Duped out of the client before `deinit` takes it; otherwise the model sees
+/// Cloned out of the client before `deinit` takes it; otherwise the model sees
 /// only the error name.
-const Failure = struct {
-    status: ?u10 = null,
-    message: []const u8 = "",
-};
+const Failure = zenai.http.ErrorDetail;
 
 fn searchFailed(arena: std.mem.Allocator, label: []const u8, err: anyerror, detail: Failure) ToolError!ToolResult {
     var aw: std.Io.Writer.Allocating = .init(arena);
@@ -1351,9 +1348,9 @@ fn apiFailed(arena: std.mem.Allocator, subject: []const u8, err: anyerror, detai
 fn writeFailure(w: *std.Io.Writer, err: anyerror, detail: Failure) !void {
     try w.print("failed: {s}", .{@errorName(err)});
     if (detail.status) |status| try w.print(" (HTTP {d})", .{status});
-    if (detail.message.len > 0) {
+    if (detail.message) |message| {
         try w.writeAll(": ");
-        try writeSingleLine(w, detail.message);
+        try writeSingleLine(w, message);
     }
 }
 
@@ -1385,10 +1382,7 @@ fn apiSearch(
                 .status = status,
                 .message = client.last_error.message,
             });
-            detail.* = .{
-                .status = status,
-                .message = if (client.last_error.message) |m| (arena.dupe(u8, m) catch "") else "",
-            };
+            detail.* = try client.last_error.clone(arena);
         }
         return err;
     };
@@ -1778,11 +1772,11 @@ fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
         else => return ToolError.InternalError,
     };
 
-    var detail: zenai.http.ErrorDetail = .{};
+    var detail: Failure = .{};
     var response = session.browser.app.askTypesafe(arena, state, prepared.questions, .{}, &detail) catch |err| switch (err) {
         error.MissingApiKey => return .{ .text = "classify: " ++ zenai.typesafe.env_var_name ++ " environment variable is not set", .is_error = true },
         error.OutOfMemory => return ToolError.OutOfMemory,
-        else => return apiFailed(arena, "classify", err, .{ .status = detail.status, .message = detail.message orelse "" }),
+        else => return apiFailed(arena, "classify", err, detail),
     };
     defer response.deinit();
 
@@ -3145,7 +3139,7 @@ test "searchFailed: a rate limit says so, a bare failure stays short" {
 
     const limited = try searchFailed(aa, "keenable", error.ApiError, .{
         .status = 429,
-        .message = "Public API hourly limit reached.\nWait 2 minutes to continue.",
+        .message = try aa.dupe(u8, "Public API hourly limit reached.\nWait 2 minutes to continue."),
     });
     try std.testing.expect(limited.is_error);
     try std.testing.expect(std.mem.indexOf(u8, limited.text, "(HTTP 429)") != null);
