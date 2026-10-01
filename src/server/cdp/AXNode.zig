@@ -1167,7 +1167,7 @@ const Walker = struct {
 
 fn hasAriaHiddenTrue(elt: *DOMNode.Element) bool {
     if (elt.getAttributeInterned("aria-hidden")) |value| {
-        return std.mem.eql(u8, value, "true");
+        return std.ascii.eqlIgnoreCase(value, "true");
     }
     return false;
 }
@@ -1306,10 +1306,8 @@ fn isHidden(elt: *DOMNode.Element, frame: *Frame, options: HiddenOptions) bool {
 }
 
 fn hasHidingAttribute(elt: *DOMNode.Element) bool {
-    if (elt.getAttributeInterned("aria-hidden")) |value| {
-        if (std.mem.eql(u8, value, "true")) {
-            return true;
-        }
+    if (hasAriaHiddenTrue(elt)) {
+        return true;
     }
     return elt.hasAttributeInterned("hidden") or elt.hasAttributeSafe(comptime .wrap("inert"));
 }
@@ -2131,4 +2129,48 @@ test "AXNode: generic containers share memoized ignore answers" {
         const el = (try root.querySelector(e[0], frame)).?;
         try testing.expectEqual(e[1], try AXNode.fromNode(el.asNode()).isIgnore(frame, false, false, &fresh));
     }
+}
+
+test "AXNode: aria-hidden is case-insensitive" {
+    const frame = try testing.base.createFrame();
+    defer testing.base.test_session.closeAllPages();
+
+    const root = try frame.window._document.createElement("div", null, frame);
+    try root.setInnerHTML(
+        \\<div id="hidden-upper" aria-hidden="TRUE"><p>hidden-upper</p></div>
+        \\<div id="hidden-mixed" aria-hidden="True"><p>hidden-mixed</p></div>
+        \\<div id="visible-false" aria-hidden="false"><p>visible-false</p></div>
+    , frame);
+
+    const hidden_upper = (try root.querySelector("#hidden-upper", frame)).?;
+    const hidden_mixed = (try root.querySelector("#hidden-mixed", frame)).?;
+    const visible_false = (try root.querySelector("#visible-false", frame)).?;
+
+    try testing.expect(hasAriaHiddenTrue(hidden_upper));
+    try testing.expect(hasHidingAttribute(hidden_upper));
+    try testing.expect(hasAriaHiddenTrue(hidden_mixed));
+    try testing.expect(hasHidingAttribute(hidden_mixed));
+    try testing.expect(!hasAriaHiddenTrue(visible_false));
+    try testing.expect(!hasHidingAttribute(visible_false));
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const node = try registry.register(root.asNode());
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer temp_arena.release();
+
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = node,
+        .registry = &registry,
+        .frame = frame,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+    }, .{});
+    defer testing.allocator.free(json);
+
+    try testing.expect(std.mem.indexOf(u8, json, "hidden-upper") == null);
+    try testing.expect(std.mem.indexOf(u8, json, "hidden-mixed") == null);
+    try testing.expect(std.mem.indexOf(u8, json, "visible-false") != null);
 }
