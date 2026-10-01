@@ -350,6 +350,16 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         if (err.* == null) {
             err.* = frame._last_navigate_error;
         }
+        if (err.* == null) {
+            if (frame._bot_challenge) |challenge| {
+                log.warn(.app, "bot challenge", .{
+                    .url = frame.url,
+                    .status = frame._http_status,
+                    .provider = challenge,
+                });
+                err.* = error.BotChallenge;
+            }
+        }
         if (frame._http_status) |status| {
             if (status >= 400) {
                 http_error = true;

@@ -4098,7 +4098,7 @@ pub const Transfer = struct {
     }
 
     pub fn getContentLength(self: *const Transfer) ?usize {
-        const cl = self.getContentLengthRawValue() orelse return null;
+        const cl = self.responseHeader("content-length") orelse return null;
         return std.fmt.parseInt(usize, cl, 10) catch null;
     }
 
@@ -4110,20 +4110,47 @@ pub const Transfer = struct {
         return self._body_len;
     }
 
-    fn getContentLengthRawValue(self: *const Transfer) ?[]const u8 {
+    // First value of a response header. `name` must be lowercase.
+    pub fn responseHeader(self: *const Transfer, name: [:0]const u8) ?[]const u8 {
         // Materialized headers (dispatch time, any source).
         for (self.res.headers) |hdr| {
-            if (std.mem.eql(u8, hdr.name, "content-length")) {
+            if (std.mem.eql(u8, hdr.name, name)) {
                 return hdr.value;
             }
         }
 
         // Mid-stream (curl's write callback): read from the live conn.
         if (self._conn) |c| {
-            const cl = c.getResponseHeader("content-length", 0) orelse return null;
-            return cl.value;
+            const value = c.getResponseHeader(name, 0) orelse return null;
+            return value.value;
         }
 
+        return null;
+    }
+
+    pub fn botChallenge(self: *const Transfer) ?BotChallenge {
+        const status = self.responseStatus() orelse return null;
+        switch (status) {
+            403 => {
+                const value = self.responseHeader("cf-mitigated") orelse return null;
+                if (std.ascii.eqlIgnoreCase(value, "challenge")) {
+                    return .cloudflare;
+                }
+            },
+            429 => {
+                const value = self.responseHeader("x-vercel-mitigated") orelse return null;
+                if (std.ascii.eqlIgnoreCase(value, "challenge")) {
+                    return .vercel;
+                }
+            },
+            202, 405 => {
+                const action = self.responseHeader("x-amzn-waf-action") orelse return null;
+                if (std.ascii.eqlIgnoreCase(action, "captcha") or std.ascii.eqlIgnoreCase(action, "challenge")) {
+                    return .aws_waf;
+                }
+            },
+            else => {},
+        }
         return null;
     }
 
@@ -4439,6 +4466,12 @@ const Synthetic = struct {
         transfer._content_length = body.len;
         try transfer.bufferEvents(body);
     }
+};
+
+pub const BotChallenge = enum {
+    aws_waf,
+    cloudflare,
+    vercel,
 };
 
 const testing = @import("../testing.zig");

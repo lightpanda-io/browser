@@ -304,6 +304,7 @@ _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
 _http_status: ?u16 = null,
+_bot_challenge: ?HttpClient.BotChallenge = null,
 _http_headers: std.ArrayList(HttpHeader) = .empty,
 
 _referrer: ?[]const u8 = null,
@@ -816,6 +817,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     }
 
     self._http_status = null;
+    self._bot_challenge = null;
     self._http_headers = .empty;
 
     self._referrer = null;
@@ -1515,6 +1517,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     }
 
     self._http_status = transfer.responseStatus();
+    self._bot_challenge = transfer.botChallenge();
     var it = transfer.responseHeaderIterator();
     while (it.next()) |hdr| {
         try self._http_headers.append(self.arena, .{
