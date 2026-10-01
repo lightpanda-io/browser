@@ -709,6 +709,28 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/v1/systemone")) {
+        const mock_resp =
+            \\{
+            \\  "model": "jev-latest",
+            \\  "answers": {
+            \\    "isBlocked": {"type": "noul", "noul": 0.95},
+            \\    "isCaptcha": {"type": "noul", "noul": 0.05},
+            \\    "is_blocked": {"type": "noul", "noul": 0.95},
+            \\    "is_consent_wall": {"type": "noul", "noul": 0.02},
+            \\    "is_empty_catalog": {"type": "noul", "noul": 0.01},
+            \\    "__category": {"type": "choice", "choice": "product", "probabilities": {"product": 0.95, "catalog": 0.05}, "confidence": 0.95},
+            \\    "page_type": {"type": "choice", "choice": "product", "probabilities": {"product": 0.9, "catalog": 0.1}, "confidence": 0.9}
+            \\  }
+            \\}
+        ;
+        return req.respond(mock_resp, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/json" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/xhr/redirect")) {
         return req.respond("", .{
             .status = .found,

@@ -29,6 +29,7 @@ const Network = @import("network/Network.zig");
 const Watchdog = @import("Watchdog.zig");
 const Sanitizer = @import("browser/webapi/Sanitizer.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
+const zenai = @import("zenai");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -47,6 +48,9 @@ app_dir_path: ?[]const u8,
 
 regex_context: *Regex.Context,
 default_sanitizer: *Sanitizer,
+
+typesafe_client: ?zenai.typesafe.Client = null,
+typesafe_mutex: std.Io.Mutex = .init,
 
 pub fn init(allocator: Allocator, config: *const Config) !*App {
     const platform = try Platform.init(.{
@@ -77,6 +81,8 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
         .arena_pool = undefined,
         .default_sanitizer = undefined,
         .watchdog = .init(config.watchdogMs()),
+        .typesafe_client = null,
+        .typesafe_mutex = .init,
     };
     try app.watchdog.start();
     errdefer app.watchdog.deinit();
@@ -115,7 +121,36 @@ pub fn deinit(self: *App) void {
     self.default_sanitizer.deinitDefault();
     self.arena_pool.deinit();
 
+    if (self.typesafe_client) |*c| {
+        c.deinit();
+        self.typesafe_client = null;
+    }
+
     allocator.destroy(self);
+}
+
+pub fn askTypesafe(
+    self: *App,
+    state: zenai.typesafe.Content,
+    questions: zenai.typesafe.Questions,
+    options: zenai.typesafe.types.AskOptions,
+) !zenai.typesafe.Client.Response(zenai.typesafe.types.AskResponse) {
+    self.typesafe_mutex.lockUncancelable(lp.io);
+    defer self.typesafe_mutex.unlock(lp.io);
+
+    if (self.typesafe_client == null) {
+        const key = zenai.typesafe.envApiKey(lp.environ()) orelse return error.MissingApiKey;
+        const base_url = lp.environ().getPosix("TYPESAFE_BASE_URL") orelse zenai.typesafe.Client.default_base_url;
+
+        self.typesafe_client = zenai.typesafe.Client.init(lp.io, self.allocator, key, .{
+            .base_url = base_url,
+            // Blocks the browser thread: fail fast.
+            .retry_policy = .disabled,
+            .request_timeout_ms = 10_000,
+        });
+    }
+
+    return try self.typesafe_client.?.ask(state, questions, options);
 }
 
 fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {

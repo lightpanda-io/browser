@@ -58,6 +58,7 @@ pub const screenshot = @import("browser/screenshot.zig");
 pub const RenderTree = @import("browser/RenderTree.zig");
 pub const interactive = @import("browser/interactive.zig");
 pub const structured_data = @import("browser/structured_data.zig");
+pub const classify = @import("browser/classify.zig");
 pub const GlobalScope = @import("browser/global_scope.zig").GlobalScope;
 
 pub const js = @import("browser/js/js.zig");

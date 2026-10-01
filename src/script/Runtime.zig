@@ -471,6 +471,9 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
                 };
                 self.setReturnJson(context, info, normalized);
             },
+            .classify => {
+                self.setReturnJson(context, info, text);
+            },
             else => self.setReturnString(info, text),
         },
         .fail => |message| self.throwError(message),
@@ -740,6 +743,7 @@ fn buildArgs(
     const argc: usize = @intCast(v8.v8__FunctionCallbackInfo__Length(info));
     return switch (tool) {
         .extract => try self.extractArgs(arena, context, info, argc),
+        .classify => try self.classifyArgs(arena, context, info, argc),
         else => try self.marshalArgs(arena, context, info, argc, Schema.positionalFor(tool)),
     };
 }
@@ -806,6 +810,49 @@ fn extractArgs(
         else => return error.InvalidArguments,
     };
     return try objectWith(arena, "schema", .{ .string = schema });
+}
+
+fn classifyArgs(
+    self: *Runtime,
+    arena: std.mem.Allocator,
+    context: *const v8.Context,
+    info: *const v8.FunctionCallbackInfo,
+    argc: usize,
+) BuildArgsError!std.json.Value {
+    if (argc < 1 or argc > 2) return error.InvalidArguments;
+    const arg0 = try self.argJson(arena, context, info, 0);
+    var questions_val = arg0;
+    var selector_val: ?[]const u8 = null;
+
+    if (argc == 2) {
+        const arg1 = try self.argJson(arena, context, info, 1);
+        if (arg1 == .object) {
+            if (arg1.object.get("selector")) |s| {
+                if (s == .string) selector_val = s.string;
+            }
+        } else if (arg1 == .string) {
+            selector_val = arg1.string;
+        } else return error.InvalidArguments;
+    } else if (arg0 == .object and arg0.object.get("questions") != null) {
+        questions_val = arg0.object.get("questions").?;
+        if (arg0.object.get("selector")) |s| {
+            if (s == .string) selector_val = s.string;
+        }
+    }
+
+    const questions_str = switch (questions_val) {
+        .string => |s| s,
+        .array, .object => try std.json.Stringify.valueAlloc(arena, questions_val, .{}),
+        else => return error.InvalidArguments,
+    };
+
+    if (selector_val) |s| {
+        var obj: std.json.ObjectMap = .empty;
+        try obj.put(arena, "questions", .{ .string = questions_str });
+        try obj.put(arena, "selector", .{ .string = s });
+        return .{ .object = obj };
+    }
+    return try objectWith(arena, "questions", .{ .string = questions_str });
 }
 
 fn extractSchemaString(arena: std.mem.Allocator, value: std.json.Value) error{OutOfMemory}![]const u8 {
@@ -1018,6 +1065,76 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
 
     const frame = testing.test_session.currentFrame().?;
     try testing.expect(std.mem.indexOf(u8, frame.url, "/src/browser/tests/mcp_actions.html") != null);
+}
+
+test "agent script runtime: page.classify executes presets, categories and structured questions" {
+    defer testing.test_session.closeAllPages();
+
+    _ = setenv(@constCast("TYPESAFE_API_KEY"), @constCast("test-key"), 1);
+    defer _ = unsetenv(@constCast("TYPESAFE_API_KEY"));
+
+    _ = setenv(@constCast("TYPESAFE_BASE_URL"), @constCast("http://127.0.0.1:9582"), 1);
+    defer _ = unsetenv(@constCast("TYPESAFE_BASE_URL"));
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\
+        \\// 1. Presets array
+        \\const presets = await page.classify(["isBlocked", "isCaptcha"]);
+        \\if (typeof presets !== "object" || presets === null) throw new Error("expected presets to return an object");
+        \\if (presets.isBlocked !== 0.95) throw new Error("expected isBlocked === 0.95, got " + presets.isBlocked);
+        \\if (presets.isCaptcha !== 0.05) throw new Error("expected isCaptcha === 0.05, got " + presets.isCaptcha);
+        \\
+        \\// 2. Category shorthand array
+        \\const category = await page.classify(["product", "catalog"]);
+        \\if (category !== "product") throw new Error("expected category === 'product', got " + category);
+        \\
+        \\// 3. Object with yes/no check
+        \\const checks = await page.classify({ is_blocked: "Is it blocked?" });
+        \\if (checks.is_blocked !== 0.95) throw new Error("expected is_blocked === 0.95, got " + checks.is_blocked);
+        \\
+        \\// 4. Structured question
+        \\const details = await page.classify({ page_type: { question: "What is it?", options: ["product", "catalog"] } });
+        \\if (details.page_type.choice !== "product") throw new Error("expected details.page_type.choice === 'product'");
+        \\if (details.page_type.confidence !== 0.9) throw new Error("expected details.page_type.confidence === 0.9");
+    );
+}
+
+test "agent script runtime: page.classify missing API key throws" {
+    defer testing.test_session.closeAllPages();
+
+    // Drop the cached client so the key is resolved again.
+    if (testing.test_app.typesafe_client) |*c| {
+        c.deinit();
+        testing.test_app.typesafe_client = null;
+    }
+    _ = unsetenv(@constCast("TYPESAFE_API_KEY"));
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\let caught = false;
+        \\try {
+        \\  await page.classify(["isBlocked"]);
+        \\} catch (err) {
+        \\  caught = true;
+        \\  if (!err.message.includes("TYPESAFE_API_KEY")) throw new Error("unexpected error: " + err.message);
+        \\}
+        \\if (!caught) throw new Error("expected classify without API key to throw");
+    );
 }
 
 test "agent script runtime: Page must be called with new" {

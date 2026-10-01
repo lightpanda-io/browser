@@ -113,6 +113,7 @@ pub fn positionalFor(tool: BrowserTool) []const []const u8 {
         .press => &.{ "selector", "key" },
         // Only the recorder reads this; the runtime marshals extract separately.
         .extract => &.{"schema"},
+        .classify => &.{"questions"},
         else => &.{},
     };
 }

@@ -266,13 +266,14 @@ pub const Tool = enum {
     getUrl,
     getCookies,
     getEnv,
+    classify,
 
     /// State-mutating: surfaces in JavaScript recordings. Read-only tools
     /// (queries, env probes) stay out so a replay doesn't bloat the script
     /// with noise.
     pub fn isRecorded(self: Tool) bool {
         return switch (self) {
-            .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => true,
+            .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .classify => true,
             .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
@@ -284,7 +285,7 @@ pub const Tool = enum {
     pub fn isAsync(self: Tool) bool {
         return switch (self) {
             .goto => true,
-            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .evaluate, .extract, .classify, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -294,7 +295,7 @@ pub const Tool = enum {
     pub fn waitsForReadiness(self: Tool) bool {
         return switch (self) {
             .waitForSelector, .waitForScript, .waitForState => true,
-            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .evaluate, .extract, .classify, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -305,7 +306,7 @@ pub const Tool = enum {
     pub fn navigatesToUrl(self: Tool) bool {
         return switch (self) {
             .markdown, .html, .screenshot, .links, .tree, .interactiveElements, .structuredData, .detectForms => true,
-            .goto, .search, .evaluate, .extract, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .search, .evaluate, .extract, .classify, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -315,7 +316,7 @@ pub const Tool = enum {
         return switch (self) {
             .click, .fill, .hover, .selectOption, .setChecked => &.{"selector"},
             .screenshot => &.{"path"},
-            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => &.{},
+            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .classify, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => &.{},
         };
     }
 
@@ -323,7 +324,7 @@ pub const Tool = enum {
     /// markdown, evaluate return value) rather than a status line on stderr.
     pub fn producesData(self: Tool) bool {
         return switch (self) {
-            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
+            .search, .markdown, .html, .links, .evaluate, .extract, .classify, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
             .goto, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => false,
         };
     }
@@ -336,7 +337,7 @@ pub const Tool = enum {
     pub fn reportsPageState(self: Tool) bool {
         return switch (self) {
             .goto, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => true,
-            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .waitForSelector, .waitForScript, .waitForState => false,
+            .search, .markdown, .html, .links, .evaluate, .extract, .classify, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .waitForSelector, .waitForScript, .waitForState => false,
         };
     }
 
@@ -496,6 +497,20 @@ pub const Tool = enum {
                     \\    "save": { "type": "string", "description": "Optional bridge-store key. The extracted JSON is stored under this name and exposed as `lp.<name>` in subsequent /evaluate calls." }
                     \\  },
                     \\  "required": ["schema"]
+                    \\}
+                ),
+            },
+            .classify => .{
+                .description = "Classify the page or an element subtree using TypeSafe System One (Jev). `questions` is a JSON array of preset names (isBlocked, isCaptcha, isConsentWall, isEmptyCatalog) or categories, or a JSON object of questions.",
+                .summary = "Classify page state using semantic questions or presets",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "questions": { "type": "string", "description": "JSON string: array of presets or categories, or object of questions" },
+                    \\    "selector": { "type": "string", "description": "Optional CSS selector to classify a specific element subtree instead of the full page" }
+                    \\  },
+                    \\  "required": ["questions"]
                     \\}
                 ),
             },
@@ -1002,6 +1017,7 @@ fn dispatch(
         .findElement => execFindElement(arena, session, registry, substituted),
         .evaluate => execEvaluate(arena, session, registry, substituted),
         .extract => execExtract(arena, session, registry, substituted),
+        .classify => execClassify(arena, session, registry, substituted),
         .getEnv => .{ .text = try execGetEnv(arena, substituted) },
         .consoleLogs => .{ .text = try execConsoleLogs(arena, session) },
         .getUrl => .{ .text = try execGetUrl(session) },
@@ -1720,6 +1736,41 @@ fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRe
     };
 
     return result;
+}
+
+fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
+    const Params = struct {
+        questions: []const u8,
+        selector: ?[]const u8 = null,
+        backendNodeId: ?NodeRegistry.Id = null,
+    };
+    const args = try parseArgs(Params, arena, arguments);
+    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+
+    const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
+    const prepared = lp.classify.prepareQuestions(arena, args.questions) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => return .{ .text = try std.fmt.allocPrint(arena, "classify: invalid questions: {s}", .{@errorName(err)}), .is_error = true },
+    };
+
+    const state = lp.classify.buildState(arena, page, node) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => return ToolError.InternalError,
+    };
+
+    var response = session.browser.app.askTypesafe(state, prepared.questions, .{}) catch |err| switch (err) {
+        error.MissingApiKey => return .{ .text = "classify: TYPESAFE_API_KEY environment variable is not set", .is_error = true },
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => return .{ .text = try std.fmt.allocPrint(arena, "classify: typesafe error: {s}", .{@errorName(err)}), .is_error = true },
+    };
+    defer response.deinit();
+
+    const formatted = lp.classify.formatResponse(arena, response.value, prepared) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => return ToolError.InternalError,
+    };
+
+    return .{ .text = formatted };
 }
 
 const eval_promise_timeout_ms: u32 = 30_000;
