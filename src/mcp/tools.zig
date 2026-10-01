@@ -35,7 +35,7 @@ const read_only: protocol.ToolAnnotations = .{ .readOnlyHint = true, .destructiv
 /// storage, and waiting lets page scripts run, so neither qualifies.
 fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
     return switch (tool) {
-        .nodeDetails, .findElement, .getUrl, .getCookies, .getEnv, .extract => read_only,
+        .nodeDetails, .findElement, .getUrl, .getCookies, .getEnv, .extract, .classify => read_only,
         // Drains the buffer: a second call returns something else.
         .consoleLogs => .{ .readOnlyHint = true, .destructiveHint = false, .openWorldHint = false },
         .goto, .search, .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => .{ .destructiveHint = false, .idempotentHint = true },
