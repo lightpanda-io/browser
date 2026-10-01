@@ -124,11 +124,15 @@ pub fn deinit(self: *App) void {
     allocator.destroy(self);
 }
 
+/// On `error.ApiError`, `failure` gets the API's status and message, duped
+/// into `arena` before another caller can overwrite them.
 pub fn askTypesafe(
     self: *App,
+    arena: Allocator,
     state: zenai.typesafe.Content,
     questions: zenai.typesafe.Questions,
     options: zenai.typesafe.types.AskOptions,
+    failure: *zenai.http.ErrorDetail,
 ) !zenai.typesafe.Client.Response(zenai.typesafe.types.AskResponse) {
     self.typesafe_mutex.lockUncancelable(lp.io);
     defer self.typesafe_mutex.unlock(lp.io);
@@ -145,7 +149,14 @@ pub fn askTypesafe(
         });
     }
 
-    return try self.typesafe_client.?.ask(state, questions, options);
+    const client = &self.typesafe_client.?;
+    return client.ask(state, questions, options) catch |err| {
+        if (err == error.ApiError) failure.* = .{
+            .status = client.last_error.status,
+            .message = if (client.last_error.message) |m| try arena.dupe(u8, m) else null,
+        };
+        return err;
+    };
 }
 
 fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {

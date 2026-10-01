@@ -329,6 +329,14 @@ pub const Tool = enum {
         };
     }
 
+    /// Result text is JSON, so a script gets the parsed value, not the string.
+    pub fn returnsJson(self: Tool) bool {
+        return switch (self) {
+            .extract, .classify => true,
+            .goto, .search, .markdown, .html, .links, .evaluate, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => false,
+        };
+    }
+
     /// The result is a navigation outcome and nothing else, so `PageState` is
     /// a faithful machine-readable form of it. `evaluate` is excluded though
     /// it reports the same facts: there they are a suffix on the payload that
@@ -1319,20 +1327,33 @@ const Failure = struct {
 
 fn searchFailed(arena: std.mem.Allocator, label: []const u8, err: anyerror, detail: Failure) ToolError!ToolResult {
     var aw: std.Io.Writer.Allocating = .init(arena);
-    writeFailure(&aw.writer, label, err, detail) catch return ToolError.OutOfMemory;
+    writeSearchFailure(&aw.writer, label, err, detail) catch return ToolError.OutOfMemory;
     return .{ .text = aw.written(), .is_error = true };
 }
 
-fn writeFailure(w: *std.Io.Writer, label: []const u8, err: anyerror, detail: Failure) !void {
-    try w.print("{s} search failed: {s}", .{ label, @errorName(err) });
+fn writeSearchFailure(w: *std.Io.Writer, label: []const u8, err: anyerror, detail: Failure) !void {
+    try w.print("{s} search ", .{label});
+    try writeFailure(w, err, detail);
+    // The one failure where the right move is not "try another query".
+    if (detail.status == 429) {
+        try w.writeAll(". This engine is rate-limited right now; wait before retrying, or read the answer from a page instead.");
+    }
+}
+
+/// `subject` failed against a remote API, with the status and message it gave.
+fn apiFailed(arena: std.mem.Allocator, subject: []const u8, err: anyerror, detail: Failure) ToolError!ToolResult {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    aw.writer.print("{s} ", .{subject}) catch return ToolError.OutOfMemory;
+    writeFailure(&aw.writer, err, detail) catch return ToolError.OutOfMemory;
+    return .{ .text = aw.written(), .is_error = true };
+}
+
+fn writeFailure(w: *std.Io.Writer, err: anyerror, detail: Failure) !void {
+    try w.print("failed: {s}", .{@errorName(err)});
     if (detail.status) |status| try w.print(" (HTTP {d})", .{status});
     if (detail.message.len > 0) {
         try w.writeAll(": ");
         try writeSingleLine(w, detail.message);
-    }
-    // The one failure where the right move is not "try another query".
-    if (detail.status == 429) {
-        try w.writeAll(". This engine is rate-limited right now; wait before retrying, or read the answer from a page instead.");
     }
 }
 
@@ -1740,7 +1761,7 @@ fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRe
 
 fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
     const Params = struct {
-        questions: []const u8,
+        questions: std.json.Value,
         selector: ?[]const u8 = null,
     };
     const args = try parseArgs(Params, arena, arguments);
@@ -1757,10 +1778,11 @@ fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
         else => return ToolError.InternalError,
     };
 
-    var response = session.browser.app.askTypesafe(state, prepared.questions, .{}) catch |err| switch (err) {
+    var detail: zenai.http.ErrorDetail = .{};
+    var response = session.browser.app.askTypesafe(arena, state, prepared.questions, .{}, &detail) catch |err| switch (err) {
         error.MissingApiKey => return .{ .text = "classify: " ++ zenai.typesafe.env_var_name ++ " environment variable is not set", .is_error = true },
         error.OutOfMemory => return ToolError.OutOfMemory,
-        else => return .{ .text = try std.fmt.allocPrint(arena, "classify: typesafe error: {s}", .{@errorName(err)}), .is_error = true },
+        else => return apiFailed(arena, "classify", err, .{ .status = detail.status, .message = detail.message orelse "" }),
     };
     defer response.deinit();
 

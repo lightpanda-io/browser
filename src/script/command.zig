@@ -244,8 +244,10 @@ fn writeJsFieldValue(
     field: []const u8,
     value: std.json.Value,
 ) (std.Io.Writer.Error || error{OutOfMemory})!void {
-    if (tool == .extract and std.mem.eql(u8, field, "schema") and value == .string) {
-        try writeExtractSchema(arena, writer, value.string);
+    const json_source = (tool == .extract and std.mem.eql(u8, field, "schema")) or
+        (tool == .classify and std.mem.eql(u8, field, "questions"));
+    if (json_source and value == .string) {
+        try writeJsonSource(arena, writer, value.string);
         return;
     }
     const prefer_template = (tool == .evaluate and std.mem.eql(u8, field, "script")) or
@@ -302,19 +304,19 @@ fn writeJsValue(
     }
 }
 
-fn writeExtractSchema(
+/// A string field holding JSON is written as the object or array it encodes;
+/// anything else stays a string literal.
+fn writeJsonSource(
     arena: std.mem.Allocator,
     writer: *std.Io.Writer,
-    schema_src: []const u8,
+    source: []const u8,
 ) (std.Io.Writer.Error || error{OutOfMemory})!void {
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, schema_src, .{}) catch {
-        return writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.indexOfScalar(u8, schema_src, '\n') != null });
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, source, .{}) catch null;
+    if (parsed) |value| switch (value) {
+        .object, .array => return writeJsValue(arena, writer, value, .{}),
+        else => {},
     };
-    if (parsed == .object) {
-        try writeJsValue(arena, writer, parsed, .{});
-    } else {
-        try writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.indexOfScalar(u8, schema_src, '\n') != null });
-    }
+    try writeJsValue(arena, writer, .{ .string = source }, .{ .prefer_template = std.mem.indexOfScalar(u8, source, '\n') != null });
 }
 
 fn writeJsObjectKey(writer: *std.Io.Writer, key: []const u8) std.Io.Writer.Error!void {
@@ -482,6 +484,32 @@ test "formatJs: evaluate and extract strings" {
         defer aw.deinit();
         try cmd.formatJs(aa, &aw.writer);
         try testing.expectString("extract({ schema: { title: \"h1\" } });", aw.written());
+    }
+}
+
+test "formatJs: classify questions replay as literals" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    {
+        const cmd = try Command.parse(aa, "/classify '{\"isBlocked\":true}'");
+        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer aw.deinit();
+        try cmd.formatJs(aa, &aw.writer);
+        try testing.expectString("classify({ isBlocked: true });", aw.written());
+    }
+    {
+        var questions: std.json.ObjectMap = .empty;
+        try questions.put(aa, "isBlocked", .{ .bool = true });
+        var args: std.json.ObjectMap = .empty;
+        try args.put(aa, "questions", .{ .object = questions });
+        try args.put(aa, "selector", .{ .string = "main" });
+        const cmd = Command.fromToolCall(.classify, .{ .object = args });
+        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer aw.deinit();
+        try cmd.formatJs(aa, &aw.writer);
+        try testing.expectString("classify({ questions: { isBlocked: true }, selector: \"main\" });", aw.written());
     }
 }
 

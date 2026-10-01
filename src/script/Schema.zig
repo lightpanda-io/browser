@@ -182,8 +182,10 @@ pub fn isBarePositional(self: Schema, args: std.json.ObjectMap) bool {
     if (self.required.len != 1 or self.positional.len == 0) return false;
     if (!std.mem.eql(u8, self.required[0], self.positional[0])) return false;
     if (self.visibleArgCount(args) != 1) return false;
-    const v = args.get(self.required[0]) orelse return false;
-    return v == .string;
+    return switch (args.get(self.required[0]) orelse return false) {
+        .string, .object, .array => true,
+        else => false,
+    };
 }
 
 /// The field a single leading positional binds to: the lone required field,

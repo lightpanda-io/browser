@@ -464,15 +464,12 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
     };
 
     switch (result) {
-        .ok => |text| switch (tool) {
-            .extract => {
-                const normalized = self.normalizeExtractReturnJson(arena, text) catch |err| switch (err) {
-                    error.OutOfMemory => return self.throwError("out of memory"),
-                };
-                self.setReturnJson(context, info, normalized);
-            },
-            .classify => self.setReturnJson(context, info, text),
-            else => self.setReturnString(info, text),
+        .ok => |text| {
+            if (!tool.returnsJson()) return self.setReturnString(info, text);
+            const json = if (tool == .extract) self.normalizeExtractReturnJson(arena, text) catch |err| switch (err) {
+                error.OutOfMemory => return self.throwError("out of memory"),
+            } else text;
+            self.setReturnJson(context, info, json);
         },
         .fail => |message| self.throwError(message),
     }
@@ -827,11 +824,10 @@ fn classifyArgs(
         }
     }
 
-    var args = try objectWith(arena, "questions", .{ .string = switch (questions) {
-        .string => |s| s,
-        .array, .object => try std.json.Stringify.valueAlloc(arena, questions, .{}),
+    var args = try objectWith(arena, "questions", switch (questions) {
+        .string, .array, .object => questions,
         else => return error.InvalidArguments,
-    } });
+    });
     const selector = switch (options orelse return args) {
         .string => |s| s,
         .object => |opts| if (opts.get("selector")) |s| switch (s) {
