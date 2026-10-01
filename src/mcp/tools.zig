@@ -21,6 +21,7 @@ const browser_tool_list = blk: {
             .title = td.summary,
             .description = td.description,
             .inputSchema = td.input_schema,
+            .outputSchema = if (@field(BrowserTool, f.name).reportsPageState()) page_state_schema else null,
             .annotations = annotations(@field(BrowserTool, f.name)),
         };
     }
@@ -46,6 +47,20 @@ fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
         .scroll => .{ .destructiveHint = false, .openWorldHint = false },
     };
 }
+
+/// Mirrors `browser_tools.PageState`. Inlined once per declaring tool, so it
+/// stays terse: every client pays for it on `tools/list`.
+const page_state_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "url": { "type": "string", "description": "URL of the page the call left loaded." },
+    \\    "httpStatus": { "type": "integer", "description": "Response status of that page's own document. Absent when no response has arrived. 4xx/5xx means an error page, not the content." },
+    \\    "title": { "type": "string", "description": "Document title. Empty or absent when the page has none." }
+    \\  },
+    \\  "required": ["url"]
+    \\}
+);
 
 const save_schema = browser_tools.minify(
     \\{
@@ -176,6 +191,15 @@ fn dispatchBrowserTool(
         const Content = struct { protocol.ImageContent(lp.screenshot.Prepared), protocol.TextContent([]const u8) };
         return server.sendResult(id, protocol.CallToolResult(Content){
             .content = .{ .{ .data = image, .mimeType = "image/png" }, .{ .text = result.text } },
+            .isError = result.is_error,
+        });
+    }
+    if (result.page_state) |page_state| {
+        const Content = []const protocol.TextContent([]const u8);
+        const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
+        return server.sendResult(id, protocol.StructuredCallToolResult(Content, browser_tools.PageState){
+            .content = &content,
+            .structuredContent = page_state,
             .isError = result.is_error,
         });
     }
@@ -333,6 +357,90 @@ test "MCP - tools/list carries titles and annotations" {
         }
     }
     try testing.expectEqual(expected.len, found);
+}
+
+test "MCP - outputSchema is declared exactly where structuredContent follows" {
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, all_tools, .{});
+    defer testing.allocator.free(json);
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    for (parsed.value.array.items) |tool| {
+        const name = tool.object.get("name").?.string;
+        const declares = tool.object.get("outputSchema") != null;
+        // `save`/`session_*` are MCP-only and have no `BrowserTool` tag.
+        const expected = if (std.meta.stringToEnum(BrowserTool, name)) |t| t.reportsPageState() else false;
+        try testing.expectEqual(expected, declares);
+        if (!declares) continue;
+        const schema = tool.object.get("outputSchema").?.object;
+        try testing.expectEqual("object", schema.get("type").?.string);
+        try testing.expectEqual(@as(usize, 1), schema.get("required").?.array.items.len);
+        try testing.expectEqual("url", schema.get("required").?.array.items[0].string);
+    }
+}
+
+test "MCP - structuredContent on a navigation" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const goto =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "goto",
+        \\    "arguments": { "url": "http://localhost:9582/src/browser/tests/mcp_actions.html" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, goto);
+    // The fixture has no <title>, so `title` is empty rather than absent.
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .content = &.{.{ .type = "text", .text = "Navigated successfully. HTTP 200 OK." }},
+        .structuredContent = .{
+            .url = "http://localhost:9582/src/browser/tests/mcp_actions.html",
+            .httpStatus = 200,
+            .title = "",
+        },
+    } }, out.written());
+
+    // A read tool reports no page state, so no `structuredContent` to mistake
+    // for its payload.
+    out.clearRetainingCapacity();
+    const get_url =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": { "name": "getUrl", "arguments": {} }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, get_url);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "structuredContent") == null);
+
+    // An action reports where it left the page, navigation or not.
+    out.clearRetainingCapacity();
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 3,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#btn" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expectJson(.{ .id = 3, .result = .{
+        .structuredContent = .{
+            .url = "http://localhost:9582/src/browser/tests/mcp_actions.html",
+            .httpStatus = 200,
+            .title = "",
+        },
+    } }, out.written());
 }
 
 test "MCP - evaluate error reporting" {
