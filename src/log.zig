@@ -43,6 +43,7 @@ pub const Scope = enum {
     storage,
     telemetry,
     unknown_prop,
+    watchdog,
     websocket,
     cors,
 };

@@ -28,6 +28,7 @@ const Platform = @import("Platform.zig");
 const Inspector = @import("Inspector.zig");
 
 const App = @import("../../App.zig");
+const string = @import("../../string.zig");
 
 const Frame = @import("../Frame.zig");
 const Window = @import("../webapi/Window.zig");
@@ -109,6 +110,15 @@ terminate_mutex: std.Io.Mutex = .init,
 // Set from network thread, saying termination should happen. Read from worker
 // thread making sure terminate hasn't been canceled.
 terminate_requested: std.atomic.Value(bool) = .init(false),
+
+// Boot-clock ms at which the watchdog asked for a stall report; 0 = none.
+// Set by the watchdog thread, consumed on the worker by terminateInterrupt so
+// the stalled script can be identified before it is killed.
+stall_report_requested_at: std.atomic.Value(u64) = .init(0),
+// How long the worker had stalled when the watchdog requested the report.
+// Published before stall_report_requested_at, so it's visible to whoever
+// observes that as non-zero.
+stall_report_stalled_ms: std.atomic.Value(u64) = .init(0),
 
 // Set while a V8 context (or the isolate) is being disposed.
 tearing_down: bool = false,
@@ -695,12 +705,82 @@ pub fn requestTerminate(self: *Env) void {
     v8.v8__Isolate__RequestInterrupt(self.isolate.handle, terminateInterrupt, self);
 }
 
+// Called from the watchdog thread. Like requestTerminate, but the worker also
+// logs the running script's frame URL and stack before termination.
+pub fn requestTerminateForStall(self: *Env, stalled_ms: u64) void {
+    self.stall_report_stalled_ms.store(stalled_ms, .monotonic);
+    self.stall_report_requested_at.store(@max(lp.datetime.milliTimestamp(.boot), 1), .release);
+    self.requestTerminate();
+}
+
+// Boot-clock ms at which a stall report was requested but not yet logged by
+// the worker, or null. Read by the watchdog thread.
+pub fn pendingStallReport(self: *const Env) ?u64 {
+    const requested_at = self.stall_report_requested_at.load(.acquire);
+    return if (requested_at == 0) null else requested_at;
+}
+
 // Runs on the worker thread
 fn terminateInterrupt(_: ?*v8.Isolate, data: ?*anyopaque) callconv(.c) void {
     const self: *Env = @ptrCast(@alignCast(data.?));
     if (self.terminate_requested.load(.acquire)) {
+        const requested_at = self.stall_report_requested_at.swap(0, .acq_rel);
+        if (requested_at != 0) {
+            self.logStall(requested_at);
+        }
         v8.v8__Isolate__TerminateExecution(self.isolate.handle);
     }
+}
+
+const STALL_STACK_FRAMES = 12;
+const STALL_URL_MAX = 512;
+
+const StallReport = struct {
+    url: []const u8 = "",
+    page_url: []const u8 = "",
+    stack: []const u8 = "",
+};
+
+// Runs on the worker thread, inside a V8 interrupt: reads the current stack
+// but never runs JavaScript. Everything returned is either in `stack_buf` or
+// owned by the frame, so it's only valid until the caller returns.
+fn stallReport(self: *Env, stack_buf: []u8) StallReport {
+    const isolate = self.isolate.handle;
+    var hs: v8.HandleScope = undefined;
+    v8.v8__HandleScope__CONSTRUCT(&hs, isolate);
+    defer v8.v8__HandleScope__DESTRUCT(&hs);
+
+    var report: StallReport = .{};
+    if (Context.fromIsolate(self.isolate)) |entry| {
+        const ctx, _ = entry;
+        report.url = string.truncateUtf8(ctx.global.url(), STALL_URL_MAX);
+        report.page_url = string.truncateUtf8(switch (ctx.global) {
+            .frame => |frame| frame.page.frame.url,
+            .worker => |worker| worker.page.frame.url,
+        }, STALL_URL_MAX);
+    }
+
+    var writer: std.Io.Writer = .fixed(stack_buf);
+    if (v8.v8__StackTrace__CurrentStackTrace__STATIC(isolate, STALL_STACK_FRAMES)) |stack| {
+        // A full buffer truncates the stack; the frames written are kept.
+        js.writeStackTrace(isolate, stack, &writer) catch {};
+    }
+    report.stack = writer.buffered();
+    return report;
+}
+
+fn logStall(self: *Env, requested_at: u64) void {
+    var stack_buf: [1536]u8 = undefined;
+    const report = self.stallReport(&stack_buf);
+    log.warn(.watchdog, "watchdog stall script", .{
+        .stalled_ms = self.stall_report_stalled_ms.load(.monotonic),
+        .url = report.url,
+        .page_url = report.page_url,
+        // Large when the stall was in native code: the interrupt only lands
+        // once control is back in JavaScript.
+        .interrupt_delay_ms = lp.datetime.milliTimestamp(.boot) -| requested_at,
+        .stack = report.stack,
+    });
 }
 
 /// Clears a pending termination so V8 calls (e.g. those made during cleanup)
@@ -711,6 +791,7 @@ pub fn cancelTerminate(self: *Env) void {
     self.terminate_mutex.lockUncancelable(lp.io);
     defer self.terminate_mutex.unlock(lp.io);
     self.terminate_requested.store(false, .release);
+    self.stall_report_requested_at.store(0, .release);
     v8.v8__Isolate__CancelTerminateExecution(self.isolate.handle);
 }
 
@@ -840,6 +921,101 @@ test "Env: a heap limit reached during teardown does not arm a termination" {
     const granted = env.onNearHeapLimit(limit, limit);
     try testing.expectEqual(false, env.terminatePending());
     try testing.expect(granted > limit);
+}
+
+test "Env: stall report names the running frame and script stack" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const State = struct {
+        env: *Env,
+        url: [64]u8 = undefined,
+        url_len: usize = 0,
+        page_url_matches: bool = false,
+        stack: [1536]u8 = undefined,
+        stack_len: usize = 0,
+
+        fn capture(self: *@This()) void {
+            var buf: [1536]u8 = undefined;
+            const report = self.env.stallReport(&buf);
+            self.url_len = @min(report.url.len, self.url.len);
+            @memcpy(self.url[0..self.url_len], report.url[0..self.url_len]);
+            self.page_url_matches = std.mem.eql(u8, report.url, report.page_url);
+            self.stack_len = report.stack.len;
+            @memcpy(self.stack[0..self.stack_len], report.stack);
+        }
+    };
+    var state = State{ .env = frame.js.env };
+
+    const driver = try local.exec(
+        \\(function(capture) {
+        \\  function stallOuter() { stallInner(); }
+        \\  function stallInner() { capture(); }
+        \\  stallOuter();
+        \\})
+    , "https://example.com/stall.js");
+    const driver_fn = js.Function{ .local = local, .handle = @ptrCast(driver.handle) };
+    try driver_fn.call(void, .{local.newCallback(State.capture, &state)});
+
+    try testing.expectEqual(frame.url, state.url[0..state.url_len]);
+    try testing.expectEqual(true, state.page_url_matches);
+    const stack = state.stack[0..state.stack_len];
+    const inner = std.mem.indexOf(u8, stack, "stallInner (https://example.com/stall.js:3:") orelse return error.MissingInnerFrame;
+    const outer = std.mem.indexOf(u8, stack, "stallOuter (https://example.com/stall.js:2:") orelse return error.MissingOuterFrame;
+    try testing.expect(inner < outer);
+}
+
+test "Env: watchdog termination logs the stalled script once" {
+    testing.expectLog(&.{.watchdog});
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const env = frame.js.env;
+    defer env.cancelTerminate();
+
+    const State = struct {
+        env: *Env,
+        fn stall(self: *@This()) void {
+            // Two in-flight interrupts must still produce one report.
+            self.env.requestTerminateForStall(31_000);
+            self.env.requestTerminateForStall(32_000);
+        }
+    };
+    var state = State{ .env = env };
+
+    const driver = try local.exec("(function(stall) { stall(); for(;;){} })", null);
+    const driver_fn = js.Function{ .local = local, .handle = @ptrCast(driver.handle) };
+    var caught: js.TryCatch.Caught = .{};
+    try testing.expectError(error.ExecutionTerminated, driver_fn.tryCall(void, .{local.newCallback(State.stall, &state)}, &caught));
+    try testing.expectEqual(0, env.stall_report_requested_at.load(.acquire));
+}
+
+test "Env: canceling a termination drops its pending stall report" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const env = frame.js.env;
+    env.requestTerminateForStall(31_000);
+    try testing.expect(env.pendingStallReport() != null);
+    env.cancelTerminate();
+    try testing.expectEqual(null, env.pendingStallReport());
+    try testing.expectEqual(0, env.stall_report_requested_at.load(.acquire));
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try testing.expectEqual(3, try (try ls.local.exec("1 + 2", null)).toI32());
 }
 
 test "Env: Worker context " {
