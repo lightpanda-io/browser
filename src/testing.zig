@@ -531,6 +531,11 @@ var test_http_server_thread: ?std.Thread = null;
 var test_ws_server: ?TestWSServer = null;
 var test_ws_server_thread: ?std.Thread = null;
 
+/// The real port behind 9582, for clients that bypass libcurl's remap.
+pub fn testHttpPort() u16 {
+    return test_http_server.?.listener.?.socket.address.getPort();
+}
+
 // Server-side state for the /sse/* endpoints. sse_flag proves progressive
 // delivery (see /sse/streaming); sse_reconnect_hits makes /sse/reconnect
 // serve a different stream on the second connection.
@@ -594,7 +599,7 @@ test "tests:beforeAll" {
 /// binds ephemeral ones so that several can run at once.
 fn routeTestPorts() !void {
     const routes = [_]struct { u16, u16 }{
-        .{ 9582, test_http_server.?.listener.?.socket.address.getPort() },
+        .{ 9582, testHttpPort() },
         .{ 9584, test_ws_server.?.port },
     };
 
