@@ -249,7 +249,7 @@ fn validateNodeInsertion(parent: *Node, node: *Node) !void {
     }
 
     // Check if node contains parent (would create a cycle)
-    if (node.contains(parent)) {
+    if (node.isHostIncludingInclusiveAncestorOf(parent)) {
         return error.HierarchyError;
     }
 
@@ -274,7 +274,7 @@ fn ensurePreInsertValidity(parent: *Node, node: *Node, child: ?*Node, comptime m
         else => return error.HierarchyError,
     }
 
-    if (node.contains(parent)) {
+    if (node.isHostIncludingInclusiveAncestorOf(parent)) {
         return error.HierarchyError;
     }
 
@@ -700,6 +700,20 @@ pub fn contains(self: *const Node, child_: ?*const Node) bool {
     return false;
 }
 
+// Like contains(), but also climbs from a shadow root or template contents.
+pub fn isHostIncludingInclusiveAncestorOf(self: *const Node, other: *Node) bool {
+    var node = other;
+    while (node != self) {
+        if (node._parent) |parent| {
+            node = parent;
+        } else {
+            const fragment = node.is(DocumentFragment) orelse return false;
+            node = (fragment.getHost() orelse return false).asNode();
+        }
+    }
+    return true;
+}
+
 pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
     // A document node does not have an owner.
     if (self._type == .document) {
@@ -967,7 +981,7 @@ pub fn moveBefore(self: *Node, node_val: js.Value, child_val: js.Value, frame: *
         else => return error.HierarchyError,
     }
 
-    if (node.contains(self)) {
+    if (node.isHostIncludingInclusiveAncestorOf(self)) {
         return error.HierarchyError;
     }
 
