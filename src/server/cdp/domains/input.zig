@@ -186,7 +186,7 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
             // Puppeteer sends 0.5 for all three on every tap, so a page
             // reading pressure sees the client's value and not a default.
             radiusX: f64 = 1,
-            radiusY: ?f64 = null, // defaults to radiusX, as in Chrome
+            radiusY: f64 = 1,
             rotationAngle: f64 = 0,
             force: f64 = 1,
         },
@@ -241,7 +241,7 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
             .y = wire.y,
             .identifier = wire.id,
             .radius_x = wire.radiusX,
-            .radius_y = wire.radiusY orelse wire.radiusX,
+            .radius_y = wire.radiusY,
             .rotation_angle = wire.rotationAngle,
             .force = wire.force,
         };
@@ -1264,8 +1264,7 @@ test "cdp.input: dispatchTouchEvent reports the client's radius, angle and force
         } },
     });
 
-    // A point that leaves them out gets Chrome's defaults instead, and an
-    // omitted radiusY follows radiusX rather than falling back to 1.
+    // Chrome defaults each omitted radius independently to 1.
     try ctx.processMessage(.{
         .id = 2,
         .method = "Input.dispatchTouchEvent",
@@ -1274,8 +1273,16 @@ test "cdp.input: dispatchTouchEvent reports the client's radius, angle and force
         } },
     });
 
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchStart", .touchPoints = &.{
+            .{ .x = x, .y = y, .radiusY = 4 },
+        } },
+    });
+
     try testing.expect((try ls.local.compileAndRun(
-        \\JSON.stringify(seen) === JSON.stringify([[0.5, 0.5, 0, 0.5], [3, 3, 45, 1]])
+        \\JSON.stringify(seen) === JSON.stringify([[0.5, 0.5, 0, 0.5], [3, 1, 45, 1], [1, 4, 0, 1]])
     , null)).isTrue());
 }
 
