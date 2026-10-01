@@ -1110,6 +1110,11 @@ test "agent script runtime: page.classify executes presets, categories and struc
         \\const details = await page.classify({ page_type: { question: "What is it?", options: ["product", "catalog"] } });
         \\if (details.page_type.choice !== "product") throw new Error("expected details.page_type.choice === 'product'");
         \\if (details.page_type.confidence !== 0.9) throw new Error("expected details.page_type.confidence === 0.9");
+        \\
+        \\// 5. Score question
+        \\const scored = await page.classify({ completeness: { question: "How complete?", levels: ["empty", "partial", "full"] } });
+        \\if (scored.completeness.level !== "full") throw new Error("expected level === 'full', got " + scored.completeness.level);
+        \\if (scored.completeness.probabilities.full !== 0.85) throw new Error("expected probabilities keyed by level label");
     );
 }
 

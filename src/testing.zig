@@ -720,7 +720,8 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
             \\    "is_consent_wall": {"type": "noul", "noul": 0.02},
             \\    "is_empty_catalog": {"type": "noul", "noul": 0.01},
             \\    "__category": {"type": "choice", "choice": "product", "probabilities": {"product": 0.95, "catalog": 0.05}, "confidence": 0.95},
-            \\    "page_type": {"type": "choice", "choice": "product", "probabilities": {"product": 0.9, "catalog": 0.1}, "confidence": 0.9}
+            \\    "page_type": {"type": "choice", "choice": "product", "probabilities": {"product": 0.9, "catalog": 0.1}, "confidence": 0.9},
+            \\    "completeness": {"type": "score", "score": 1.8, "legend": {"0": "empty", "1": "partial", "2": "full"}, "probabilities": {"0": 0.05, "1": 0.1, "2": 0.85}, "confidence": 0.85}
             \\  }
             \\}
         ;

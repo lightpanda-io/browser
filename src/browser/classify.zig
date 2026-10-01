@@ -73,6 +73,8 @@ pub const ResponseKind = enum {
 pub const QuestionSpec = struct {
     key: []const u8,
     is_noul: bool,
+    /// A score question's level labels, low to high; empty otherwise.
+    levels: []const []const u8 = &.{},
 };
 
 pub const PreparedQuestions = struct {
@@ -137,6 +139,7 @@ pub fn prepareQuestions(arena: std.mem.Allocator, questions_json: []const u8) Pr
                 const val = entry.value_ptr.*;
 
                 var is_noul = false;
+                var levels: []const []const u8 = &.{};
                 var q: zenai.typesafe.Question = undefined;
 
                 switch (val) {
@@ -178,7 +181,20 @@ pub fn prepareQuestions(arena: std.mem.Allocator, questions_json: []const u8) Pr
                             break :blk key;
                         };
 
-                        if (inner_obj.get("options") orelse inner_obj.get("criteria")) |opts_val| {
+                        if (inner_obj.get("levels")) |levels_val| {
+                            if (levels_val != .array) return error.InvalidQuestionFormat;
+                            const items = levels_val.array.items;
+                            if (items.len < 2 or items.len > 10) return error.InvalidQuestionFormat;
+                            const labels = try arena.alloc([]const u8, items.len);
+                            const criteria = try arena.alloc(zenai.typesafe.Content, items.len);
+                            for (items, labels, criteria) |item, *label, *level| {
+                                if (item != .string) return error.InvalidQuestionFormat;
+                                label.* = item.string;
+                                level.* = .{ .text = item.string };
+                            }
+                            q = .scoreText(instructions, criteria);
+                            levels = labels;
+                        } else if (inner_obj.get("options") orelse inner_obj.get("criteria")) |opts_val| {
                             switch (opts_val) {
                                 .array => |opt_arr| {
                                     const choice_entries = try arena.alloc(zenai.typesafe.ChoiceEntry, opt_arr.items.len);
@@ -215,7 +231,7 @@ pub fn prepareQuestions(arena: std.mem.Allocator, questions_json: []const u8) Pr
                 }
 
                 entries[i] = .{ .key = key, .value = q };
-                specs[i] = .{ .key = key, .is_noul = is_noul };
+                specs[i] = .{ .key = key, .is_noul = is_noul, .levels = levels };
             }
 
             return .{
@@ -319,13 +335,7 @@ pub fn formatResponse(
                         .noul => |n| {
                             try std.json.Stringify.value(n.noul, .{}, writer);
                         },
-                        .score => |s| {
-                            try writer.writeAll("{\"score\":");
-                            try std.json.Stringify.value(s.score, .{}, writer);
-                            try writer.writeAll(",\"confidence\":");
-                            try std.json.Stringify.value(s.confidence, .{}, writer);
-                            try writer.writeAll("}");
-                        },
+                        .score => |s| try writeScore(writer, s, spec.levels),
                     }
                 }
             }
@@ -333,6 +343,30 @@ pub fn formatResponse(
         },
     }
     return aw.written();
+}
+
+/// A score answer with its level indices swapped for the labels asked, and
+/// `level` naming the one nearest the score.
+fn writeScore(writer: *std.Io.Writer, answer: zenai.typesafe.types.ScoreAnswer, levels: []const []const u8) !void {
+    try writer.writeAll("{\"score\":");
+    try std.json.Stringify.value(answer.score, .{}, writer);
+    if (levels.len > 0) {
+        const nearest: usize = @intFromFloat(std.math.clamp(@round(answer.score), 0, @as(f64, @floatFromInt(levels.len - 1))));
+        try writer.writeAll(",\"level\":");
+        try std.json.Stringify.value(levels[nearest], .{}, writer);
+    }
+    try writer.writeAll(",\"confidence\":");
+    try std.json.Stringify.value(answer.confidence, .{}, writer);
+    try writer.writeAll(",\"probabilities\":{");
+    for (answer.probabilities.entries, 0..) |entry, i| {
+        if (i > 0) try writer.writeByte(',');
+        const index = std.fmt.parseInt(usize, entry.key, 10) catch null;
+        const label = if (index != null and index.? < levels.len) levels[index.?] else entry.key;
+        try std.json.Stringify.value(label, .{}, writer);
+        try writer.writeByte(':');
+        try std.json.Stringify.value(entry.value, .{}, writer);
+    }
+    try writer.writeAll("}}");
 }
 
 const testing = @import("../testing.zig");
@@ -409,6 +443,54 @@ test "browser.classify: prepareQuestions object with strings and options" {
     try testing.expectEqual(2, prepared.specs.len);
     try testing.expect(prepared.questions.has("is_blocked"));
     try testing.expect(prepared.questions.has("page_type"));
+}
+
+test "browser.classify: prepareQuestions score levels" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const json =
+        \\{"content": {"question": "How complete is the main content?", "levels": ["empty", "partial", "full"]}}
+    ;
+    const prepared = try prepareQuestions(arena.allocator(), json);
+    try testing.expectEqual(1, prepared.specs.len);
+    try testing.expect(!prepared.specs[0].is_noul);
+    try testing.expectEqual(3, prepared.specs[0].levels.len);
+    try testing.expect(prepared.questions.get("content").? == .score);
+}
+
+test "browser.classify: prepareQuestions rejects too few or too many levels" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    try testing.expectError(error.InvalidQuestionFormat, prepareQuestions(arena.allocator(), "{\"a\": {\"levels\": [\"only\"]}}"));
+    try testing.expectError(error.InvalidQuestionFormat, prepareQuestions(arena.allocator(), "{\"a\": {\"levels\": [\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\",\"9\",\"10\",\"11\"]}}"));
+    try testing.expectError(error.InvalidQuestionFormat, prepareQuestions(arena.allocator(), "{\"a\": {\"levels\": [1, 2]}}"));
+}
+
+test "browser.classify: formatResponse score names the levels" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const prepared = try prepareQuestions(arena.allocator(), "{\"content\": {\"question\": \"How complete?\", \"levels\": [\"empty\", \"partial\", \"full\"]}}");
+    const response: zenai.typesafe.types.AskResponse = .{
+        .answers = .init(&.{
+            .{ .key = "content", .value = .{ .score = .{
+                .score = 1.2,
+                .confidence = 0.8,
+                .probabilities = .init(&.{
+                    .{ .key = "0", .value = 0.05 },
+                    .{ .key = "1", .value = 0.7 },
+                    .{ .key = "2", .value = 0.25 },
+                }),
+            } } },
+        }),
+    };
+
+    const formatted = try formatResponse(arena.allocator(), response, prepared);
+    try std.testing.expectEqualStrings(
+        \\{"content":{"score":1.2,"level":"partial","confidence":0.8,"probabilities":{"empty":0.05,"partial":0.7,"full":0.25}}}
+    , formatted);
 }
 
 test "browser.classify: formatResponse single_choice" {
