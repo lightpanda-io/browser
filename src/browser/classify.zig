@@ -31,6 +31,11 @@ pub const Preset = enum {
     isCaptcha,
     isConsentWall,
     isEmptyCatalog,
+    isErrorPage,
+    isLoginWall,
+    isPaywall,
+    isUnsupportedBrowser,
+    isLoading,
 
     pub fn description(self: Preset) []const u8 {
         return switch (self) {
@@ -38,6 +43,11 @@ pub const Preset = enum {
             .isCaptcha => "Is the primary view obstructed by a CAPTCHA or human verification challenge?",
             .isConsentWall => "Is the primary view obstructed by a cookie consent banner?",
             .isEmptyCatalog => "Does the page indicate no matching products were found?",
+            .isErrorPage => "Does the page show an error, such as page not found or server error, instead of its content? A search or listing with no results is not an error.",
+            .isLoginWall => "Does the page show a sign-in form or prompt instead of its content?",
+            .isPaywall => "Is the content hidden or cut off behind a subscription or payment prompt?",
+            .isUnsupportedBrowser => "Does the page say this browser is unsupported or out of date, or that JavaScript must be enabled, instead of showing its content?",
+            .isLoading => "Is the main content still loading, shown only as spinners, skeleton placeholders or loading text?",
         };
     }
 
@@ -46,6 +56,11 @@ pub const Preset = enum {
         if (std.mem.eql(u8, name, "isCaptcha") or std.mem.eql(u8, name, "is_captcha")) return .isCaptcha;
         if (std.mem.eql(u8, name, "isConsentWall") or std.mem.eql(u8, name, "is_consent_wall")) return .isConsentWall;
         if (std.mem.eql(u8, name, "isEmptyCatalog") or std.mem.eql(u8, name, "is_empty_catalog")) return .isEmptyCatalog;
+        if (std.mem.eql(u8, name, "isErrorPage") or std.mem.eql(u8, name, "is_error_page")) return .isErrorPage;
+        if (std.mem.eql(u8, name, "isLoginWall") or std.mem.eql(u8, name, "is_login_wall")) return .isLoginWall;
+        if (std.mem.eql(u8, name, "isPaywall") or std.mem.eql(u8, name, "is_paywall")) return .isPaywall;
+        if (std.mem.eql(u8, name, "isUnsupportedBrowser") or std.mem.eql(u8, name, "is_unsupported_browser")) return .isUnsupportedBrowser;
+        if (std.mem.eql(u8, name, "isLoading") or std.mem.eql(u8, name, "is_loading")) return .isLoading;
         return null;
     }
 };
