@@ -96,12 +96,12 @@ fn initColorEnabled() void {
     color_enabled_cached = std.Io.File.stderr().isTty(lp.io) catch false;
 }
 
-pub fn isColorEnabled() bool {
+fn isColorEnabled() bool {
     color_enabled_once.call();
     return color_enabled_cached;
 }
 
-pub fn colorEnabled() bool {
+fn colorEnabled() bool {
     if (opts.color) |c| return c;
     if (comptime lp.IS_TEST) return true;
     return isColorEnabled();
