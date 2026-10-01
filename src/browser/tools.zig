@@ -501,7 +501,7 @@ pub const Tool = enum {
                 ),
             },
             .classify => .{
-                .description = "Classify the page or an element subtree using TypeSafe System One (Jev). `questions` is a JSON array of categories (returns the one that fits), or a JSON object of questions keyed by the name each answer comes back under: `true` for a preset (isBlocked, isCaptcha, isConsentWall, isEmptyCatalog, isErrorPage, isLoginWall, isPaywall, isUnsupportedBrowser, isLoading; an empty object `{}` asks all of them), a string for a yes/no question (returns its probability), `{question, options}` for a choice, or `{question, levels}` for a score on 2-10 levels ordered low to high (returns the `score` between level indices, the nearest `level`, and per-level `probabilities`). A missing answer is null.",
+                .description = "Classify the page or an element subtree using TypeSafe System One (Jev). `questions` is a JSON array of categories (returns the one that fits), or a JSON object of questions keyed by the name each answer comes back under: `true` for a preset (" ++ lp.classify.Preset.names ++ "; an empty object `{}` asks all of them), a string for a yes/no question (returns its probability), `{question, options}` for a choice, or `{question, levels}` for a score on 2-10 levels ordered low to high (returns the `score` between level indices, the nearest `level`, and per-level `probabilities`). A missing answer is null.",
                 .summary = "Classify page state using semantic questions or presets",
                 .input_schema = minify(
                     \\{
@@ -1742,12 +1742,11 @@ fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     const Params = struct {
         questions: []const u8,
         selector: ?[]const u8 = null,
-        backendNodeId: ?NodeRegistry.Id = null,
     };
     const args = try parseArgs(Params, arena, arguments);
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
 
-    const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
+    const node = try resolveScope(session, registry, page, args.selector, null);
     const prepared = lp.classify.prepareQuestions(arena, args.questions) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return .{ .text = try std.fmt.allocPrint(arena, "classify: invalid questions: {s}", .{@errorName(err)}), .is_error = true },
@@ -1759,7 +1758,7 @@ fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     };
 
     var response = session.browser.app.askTypesafe(state, prepared.questions, .{}) catch |err| switch (err) {
-        error.MissingApiKey => return .{ .text = "classify: TYPESAFE_API_KEY environment variable is not set", .is_error = true },
+        error.MissingApiKey => return .{ .text = "classify: " ++ zenai.typesafe.env_var_name ++ " environment variable is not set", .is_error = true },
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return .{ .text = try std.fmt.allocPrint(arena, "classify: typesafe error: {s}", .{@errorName(err)}), .is_error = true },
     };

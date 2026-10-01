@@ -26,6 +26,9 @@ const zenai = @import("zenai");
 const Frame = lp.Frame;
 const DOMNode = @import("webapi/Node.zig");
 
+const Question = zenai.typesafe.Question;
+const Content = zenai.typesafe.Content;
+
 pub const Preset = enum {
     isBlocked,
     isCaptcha,
@@ -51,36 +54,43 @@ pub const Preset = enum {
         };
     }
 
+    /// Accepts the camelCase name or its snake_case spelling.
     pub fn fromString(name: []const u8) ?Preset {
-        if (std.mem.eql(u8, name, "isBlocked") or std.mem.eql(u8, name, "is_blocked")) return .isBlocked;
-        if (std.mem.eql(u8, name, "isCaptcha") or std.mem.eql(u8, name, "is_captcha")) return .isCaptcha;
-        if (std.mem.eql(u8, name, "isConsentWall") or std.mem.eql(u8, name, "is_consent_wall")) return .isConsentWall;
-        if (std.mem.eql(u8, name, "isEmptyCatalog") or std.mem.eql(u8, name, "is_empty_catalog")) return .isEmptyCatalog;
-        if (std.mem.eql(u8, name, "isErrorPage") or std.mem.eql(u8, name, "is_error_page")) return .isErrorPage;
-        if (std.mem.eql(u8, name, "isLoginWall") or std.mem.eql(u8, name, "is_login_wall")) return .isLoginWall;
-        if (std.mem.eql(u8, name, "isPaywall") or std.mem.eql(u8, name, "is_paywall")) return .isPaywall;
-        if (std.mem.eql(u8, name, "isUnsupportedBrowser") or std.mem.eql(u8, name, "is_unsupported_browser")) return .isUnsupportedBrowser;
-        if (std.mem.eql(u8, name, "isLoading") or std.mem.eql(u8, name, "is_loading")) return .isLoading;
+        inline for (comptime std.enums.values(Preset)) |preset| {
+            if (std.mem.eql(u8, name, @tagName(preset)) or std.mem.eql(u8, name, comptime snakeCase(@tagName(preset)))) return preset;
+        }
         return null;
     }
+
+    /// Every preset name, comma-separated, for tool descriptions.
+    pub const names = blk: {
+        var out: []const u8 = "";
+        for (std.enums.values(Preset), 0..) |preset, i| {
+            out = out ++ (if (i == 0) "" else ", ") ++ @tagName(preset);
+        }
+        break :blk out;
+    };
 };
+
+fn snakeCase(comptime camel: []const u8) []const u8 {
+    comptime {
+        var out: []const u8 = "";
+        for (camel) |c| {
+            const part: []const u8 = if (std.ascii.isUpper(c)) &.{ '_', std.ascii.toLower(c) } else &.{c};
+            out = out ++ part;
+        }
+        return out;
+    }
+}
 
 pub const ResponseKind = enum {
     single_choice,
     questions_object,
 };
 
-pub const QuestionSpec = struct {
-    key: []const u8,
-    is_noul: bool,
-    /// A score question's level labels, low to high; empty otherwise.
-    levels: []const []const u8 = &.{},
-};
-
 pub const PreparedQuestions = struct {
     questions: zenai.typesafe.Questions,
     kind: ResponseKind,
-    specs: []const QuestionSpec,
 };
 
 pub const PrepareError = error{
@@ -89,6 +99,8 @@ pub const PrepareError = error{
     InvalidQuestionFormat,
     OutOfMemory,
 };
+
+const category_key = "__category";
 
 pub fn prepareQuestions(arena: std.mem.Allocator, questions_json: []const u8) PrepareError!PreparedQuestions {
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, questions_json, .{}) catch
@@ -100,190 +112,114 @@ pub fn prepareQuestions(arena: std.mem.Allocator, questions_json: []const u8) Pr
 
             // An array is always the categories of one choice question; presets
             // go through the object form.
-            for (arr.items) |item| {
-                if (item != .string) return error.InvalidQuestionFormat;
-            }
-
-            const choice_entries = try arena.alloc(zenai.typesafe.ChoiceEntry, arr.items.len);
-            for (arr.items, 0..) |item, i| {
-                choice_entries[i] = .{ .key = item.string, .value = null };
-            }
-
             const entries = try arena.alloc(zenai.typesafe.QuestionEntry, 1);
             entries[0] = .{
-                .key = "__category",
-                .value = .choiceText("What kind of page is this?", .init(choice_entries)),
+                .key = category_key,
+                .value = .choiceText("What kind of page is this?", try stringChoices(arena, arr.items)),
             };
-            const specs = try arena.alloc(QuestionSpec, 1);
-            specs[0] = .{
-                .key = "__category",
-                .is_noul = false,
-            };
-
-            return .{
-                .questions = .init(entries),
-                .kind = .single_choice,
-                .specs = specs,
-            };
+            return .{ .questions = .init(entries), .kind = .single_choice };
         },
         .object => |obj| {
             if (obj.count() == 0) return preparePresets(arena);
 
             const entries = try arena.alloc(zenai.typesafe.QuestionEntry, obj.count());
-            const specs = try arena.alloc(QuestionSpec, obj.count());
-
-            var it = obj.iterator();
-            var i: usize = 0;
-            while (it.next()) |entry| : (i += 1) {
-                const key = entry.key_ptr.*;
-                const val = entry.value_ptr.*;
-
-                var is_noul = false;
-                var levels: []const []const u8 = &.{};
-                var q: zenai.typesafe.Question = undefined;
-
-                switch (val) {
-                    .bool => |b| {
-                        if (!b) return error.InvalidQuestionFormat;
-                        const instructions = if (Preset.fromString(key)) |preset|
-                            preset.description()
-                        else
-                            key;
-                        q = .noulText(instructions);
-                        is_noul = true;
-                    },
-                    .string => |s| {
-                        const instructions = if (s.len == 0) blk: {
-                            const preset = Preset.fromString(key) orelse return error.InvalidQuestionFormat;
-                            break :blk preset.description();
-                        } else s;
-                        q = .noulText(instructions);
-                        is_noul = true;
-                    },
-                    .array => |opt_arr| {
-                        const choice_entries = try arena.alloc(zenai.typesafe.ChoiceEntry, opt_arr.items.len);
-                        for (opt_arr.items, 0..) |opt_item, oi| {
-                            if (opt_item != .string) return error.InvalidQuestionFormat;
-                            choice_entries[oi] = .{ .key = opt_item.string, .value = null };
-                        }
-                        q = .choiceText(key, .init(choice_entries));
-                        is_noul = false;
-                    },
-                    .object => |inner_obj| {
-                        // Look for `question` or `instructions`
-                        const instructions = blk: {
-                            if (inner_obj.get("question")) |qv| {
-                                if (qv == .string) break :blk qv.string;
-                            }
-                            if (inner_obj.get("instructions")) |iv| {
-                                if (iv == .string) break :blk iv.string;
-                            }
-                            break :blk key;
-                        };
-
-                        if (inner_obj.get("levels")) |levels_val| {
-                            if (levels_val != .array) return error.InvalidQuestionFormat;
-                            const items = levels_val.array.items;
-                            if (items.len < 2 or items.len > 10) return error.InvalidQuestionFormat;
-                            const labels = try arena.alloc([]const u8, items.len);
-                            const criteria = try arena.alloc(zenai.typesafe.Content, items.len);
-                            for (items, labels, criteria) |item, *label, *level| {
-                                if (item != .string) return error.InvalidQuestionFormat;
-                                label.* = item.string;
-                                level.* = .{ .text = item.string };
-                            }
-                            q = .scoreText(instructions, criteria);
-                            levels = labels;
-                        } else if (inner_obj.get("options") orelse inner_obj.get("criteria")) |opts_val| {
-                            switch (opts_val) {
-                                .array => |opt_arr| {
-                                    const choice_entries = try arena.alloc(zenai.typesafe.ChoiceEntry, opt_arr.items.len);
-                                    for (opt_arr.items, 0..) |opt_item, oi| {
-                                        if (opt_item != .string) return error.InvalidQuestionFormat;
-                                        choice_entries[oi] = .{ .key = opt_item.string, .value = null };
-                                    }
-                                    q = .choiceText(instructions, .init(choice_entries));
-                                    is_noul = false;
-                                },
-                                .object => |crit_obj| {
-                                    const choice_entries = try arena.alloc(zenai.typesafe.ChoiceEntry, crit_obj.count());
-                                    var crit_it = crit_obj.iterator();
-                                    var ci: usize = 0;
-                                    while (crit_it.next()) |crit_entry| : (ci += 1) {
-                                        const crit_val = crit_entry.value_ptr.*;
-                                        const opt_content: ?zenai.typesafe.Content = if (crit_val == .string)
-                                            .{ .text = crit_val.string }
-                                        else
-                                            null;
-                                        choice_entries[ci] = .{ .key = crit_entry.key_ptr.*, .value = opt_content };
-                                    }
-                                    q = .choiceText(instructions, .init(choice_entries));
-                                    is_noul = false;
-                                },
-                                else => return error.InvalidQuestionFormat,
-                            }
-                        } else {
-                            q = .noulText(instructions);
-                            is_noul = true;
-                        }
-                    },
-                    else => return error.InvalidQuestionFormat,
-                }
-
-                entries[i] = .{ .key = key, .value = q };
-                specs[i] = .{ .key = key, .is_noul = is_noul, .levels = levels };
+            for (entries, obj.keys(), obj.values()) |*entry, key, val| {
+                entry.* = .{ .key = key, .value = try prepareQuestion(arena, key, val) };
             }
-
-            return .{
-                .questions = .init(entries),
-                .kind = .questions_object,
-                .specs = specs,
-            };
+            return .{ .questions = .init(entries), .kind = .questions_object };
         },
         else => return error.InvalidQuestionFormat,
     }
+}
+
+fn prepareQuestion(arena: std.mem.Allocator, key: []const u8, val: std.json.Value) PrepareError!Question {
+    switch (val) {
+        .bool => |b| {
+            if (!b) return error.InvalidQuestionFormat;
+            return .noulText(if (Preset.fromString(key)) |preset| preset.description() else key);
+        },
+        .string => |s| {
+            if (s.len > 0) return .noulText(s);
+            const preset = Preset.fromString(key) orelse return error.InvalidQuestionFormat;
+            return .noulText(preset.description());
+        },
+        .array => |arr| return .choiceText(key, try stringChoices(arena, arr.items)),
+        .object => |obj| return objectQuestion(arena, key, obj),
+        else => return error.InvalidQuestionFormat,
+    }
+}
+
+fn objectQuestion(arena: std.mem.Allocator, key: []const u8, obj: std.json.ObjectMap) PrepareError!Question {
+    const instructions = blk: {
+        if (obj.get("question")) |qv| if (qv == .string) break :blk qv.string;
+        if (obj.get("instructions")) |iv| if (iv == .string) break :blk iv.string;
+        break :blk key;
+    };
+
+    if (obj.get("levels")) |levels_val| {
+        if (levels_val != .array) return error.InvalidQuestionFormat;
+        const items = levels_val.array.items;
+        if (items.len < 2 or items.len > 10) return error.InvalidQuestionFormat;
+        const criteria = try arena.alloc(Content, items.len);
+        for (items, criteria) |item, *level| {
+            if (item != .string) return error.InvalidQuestionFormat;
+            level.* = .{ .text = item.string };
+        }
+        return .scoreText(instructions, criteria);
+    }
+
+    const options = obj.get("options") orelse obj.get("criteria") orelse return .noulText(instructions);
+    switch (options) {
+        .array => |arr| return .choiceText(instructions, try stringChoices(arena, arr.items)),
+        .object => |crit_obj| {
+            const choice_entries = try arena.alloc(zenai.typesafe.ChoiceEntry, crit_obj.count());
+            for (choice_entries, crit_obj.keys(), crit_obj.values()) |*entry, crit_key, crit_val| {
+                entry.* = .{
+                    .key = crit_key,
+                    .value = if (crit_val == .string) .{ .text = crit_val.string } else null,
+                };
+            }
+            return .choiceText(instructions, .init(choice_entries));
+        },
+        else => return error.InvalidQuestionFormat,
+    }
+}
+
+fn stringChoices(arena: std.mem.Allocator, items: []const std.json.Value) PrepareError!zenai.typesafe.types.ChoiceCriteria {
+    const entries = try arena.alloc(zenai.typesafe.ChoiceEntry, items.len);
+    for (items, entries) |item, *entry| {
+        if (item != .string) return error.InvalidQuestionFormat;
+        entry.* = .{ .key = item.string, .value = null };
+    }
+    return .init(entries);
 }
 
 /// Every preset, keyed by its name: what an empty questions object asks.
 fn preparePresets(arena: std.mem.Allocator) error{OutOfMemory}!PreparedQuestions {
     const presets = std.enums.values(Preset);
     const entries = try arena.alloc(zenai.typesafe.QuestionEntry, presets.len);
-    const specs = try arena.alloc(QuestionSpec, presets.len);
-    for (presets, entries, specs) |preset, *entry, *spec| {
+    for (presets, entries) |preset, *entry| {
         entry.* = .{ .key = @tagName(preset), .value = .noulText(preset.description()) };
-        spec.* = .{ .key = @tagName(preset), .is_noul = true };
     }
-    return .{
-        .questions = .init(entries),
-        .kind = .questions_object,
-        .specs = specs,
-    };
+    return .{ .questions = .init(entries), .kind = .questions_object };
 }
 
-pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode) !zenai.typesafe.Content {
-    const title = page.getTitle() catch null;
+pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode) !Content {
     const render_state = lp.RenderTree.resolve(arena, node, .{}, page) catch return error.OutOfMemory;
     var aw: std.Io.Writer.Allocating = .init(arena);
     lp.markdown.dump(render_state, .{ .max_bytes = 8192 }, &aw.writer, page) catch return error.InternalError;
-    const text_content = aw.written();
 
-    var buf: std.Io.Writer.Allocating = .init(arena);
-    try buf.writer.writeAll("{\"url\":");
-    try std.json.Stringify.value(page.url, .{}, &buf.writer);
-    try buf.writer.writeAll(",\"title\":");
-    try std.json.Stringify.value(title, .{}, &buf.writer);
+    var state: std.json.ObjectMap = .empty;
+    try state.put(arena, "url", .{ .string = page.url });
+    try state.put(arena, "title", if (page.getTitle() catch null) |title| .{ .string = title } else .null);
     if (page._http_status) |status| {
-        try buf.writer.print(",\"status\":{d}", .{status});
+        try state.put(arena, "status", .{ .integer = status });
     }
-    try buf.writer.writeAll(",\"content\":");
-    try std.json.Stringify.value(text_content, .{}, &buf.writer);
-    try buf.writer.writeAll("}");
-
-    return .{ .text = buf.written() };
+    try state.put(arena, "content", .{ .string = aw.written() });
+    return .{ .json = .{ .object = state } };
 }
 
 pub const FormatError = error{
-    AnswerMissing,
     OutOfMemory,
     WriteFailed,
 } || zenai.typesafe.types.ChoiceError;
@@ -294,52 +230,30 @@ pub fn formatResponse(
     prepared: PreparedQuestions,
 ) FormatError![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
-    const writer = &aw.writer;
+    var jw: std.json.Stringify = .{ .writer = &aw.writer };
 
     switch (prepared.kind) {
-        .single_choice => {
-            const chosen = try response.choice("__category", prepared.questions);
-            try std.json.Stringify.value(chosen, .{}, writer);
-        },
+        .single_choice => try jw.write(try response.choice(category_key, prepared.questions)),
         .questions_object => {
-            try writer.writeByte('{');
-            for (prepared.specs, 0..) |spec, i| {
-                if (i > 0) try writer.writeByte(',');
-                try std.json.Stringify.value(spec.key, .{}, writer);
-                try writer.writeByte(':');
+            try jw.beginObject();
+            for (prepared.questions.entries) |entry| {
+                try jw.objectField(entry.key);
                 // A missing answer is null, not a confident "no".
-                if (spec.is_noul) {
-                    try std.json.Stringify.value(response.noul(spec.key), .{}, writer);
-                } else {
-                    const ans = response.answer(spec.key) orelse {
-                        try writer.writeAll("null");
-                        continue;
-                    };
-                    switch (ans) {
-                        .choice => |c| {
-                            try writer.writeAll("{\"choice\":");
-                            try std.json.Stringify.value(c.choice, .{}, writer);
-                            try writer.writeAll(",\"confidence\":");
-                            try std.json.Stringify.value(c.confidence, .{}, writer);
-                            try writer.writeAll(",\"probabilities\":{");
-                            var first_prob = true;
-                            for (c.probabilities.entries) |pe| {
-                                if (!first_prob) try writer.writeByte(',');
-                                first_prob = false;
-                                try std.json.Stringify.value(pe.key, .{}, writer);
-                                try writer.writeByte(':');
-                                try std.json.Stringify.value(pe.value, .{}, writer);
-                            }
-                            try writer.writeAll("}}");
-                        },
-                        .noul => |n| {
-                            try std.json.Stringify.value(n.noul, .{}, writer);
-                        },
-                        .score => |s| try writeScore(writer, s, spec.levels),
-                    }
+                const answer = response.answer(entry.key) orelse {
+                    try jw.write(null);
+                    continue;
+                };
+                switch (answer) {
+                    .noul => |n| try jw.write(n.noul),
+                    .choice => |c| try jw.write(.{
+                        .choice = c.choice,
+                        .confidence = c.confidence,
+                        .probabilities = c.probabilities,
+                    }),
+                    .score => |s| try writeScore(&jw, s, entry.value),
                 }
             }
-            try writer.writeByte('}');
+            try jw.endObject();
         },
     }
     return aw.written();
@@ -347,26 +261,28 @@ pub fn formatResponse(
 
 /// A score answer with its level indices swapped for the labels asked, and
 /// `level` naming the one nearest the score.
-fn writeScore(writer: *std.Io.Writer, answer: zenai.typesafe.types.ScoreAnswer, levels: []const []const u8) !void {
-    try writer.writeAll("{\"score\":");
-    try std.json.Stringify.value(answer.score, .{}, writer);
+fn writeScore(jw: *std.json.Stringify, answer: zenai.typesafe.types.ScoreAnswer, question: Question) !void {
+    const levels: []const Content = if (question == .score) question.score.criteria else &.{};
+
+    try jw.beginObject();
+    try jw.objectField("score");
+    try jw.write(answer.score);
     if (levels.len > 0) {
-        const nearest: usize = @intFromFloat(std.math.clamp(@round(answer.score), 0, @as(f64, @floatFromInt(levels.len - 1))));
-        try writer.writeAll(",\"level\":");
-        try std.json.Stringify.value(levels[nearest], .{}, writer);
+        const nearest: usize = @round(std.math.clamp(answer.score, 0, @as(f64, @floatFromInt(levels.len - 1))));
+        try jw.objectField("level");
+        try jw.write(levels[nearest].text);
     }
-    try writer.writeAll(",\"confidence\":");
-    try std.json.Stringify.value(answer.confidence, .{}, writer);
-    try writer.writeAll(",\"probabilities\":{");
-    for (answer.probabilities.entries, 0..) |entry, i| {
-        if (i > 0) try writer.writeByte(',');
-        const index = std.fmt.parseInt(usize, entry.key, 10) catch null;
-        const label = if (index != null and index.? < levels.len) levels[index.?] else entry.key;
-        try std.json.Stringify.value(label, .{}, writer);
-        try writer.writeByte(':');
-        try std.json.Stringify.value(entry.value, .{}, writer);
+    try jw.objectField("confidence");
+    try jw.write(answer.confidence);
+    try jw.objectField("probabilities");
+    try jw.beginObject();
+    for (answer.probabilities.entries) |entry| {
+        const index = std.fmt.parseInt(usize, entry.key, 10) catch levels.len;
+        try jw.objectField(if (index < levels.len) levels[index].text else entry.key);
+        try jw.write(entry.value);
     }
-    try writer.writeAll("}}");
+    try jw.endObject();
+    try jw.endObject();
 }
 
 const testing = @import("../testing.zig");
@@ -377,9 +293,9 @@ test "browser.classify: prepareQuestions presets in the object form" {
 
     const prepared = try prepareQuestions(arena.allocator(), "{\"isBlocked\": true, \"isCaptcha\": true}");
     try testing.expectEqual(ResponseKind.questions_object, prepared.kind);
-    try testing.expectEqual(2, prepared.specs.len);
-    try testing.expect(prepared.specs[0].is_noul);
-    try std.testing.expectEqualStrings("isBlocked", prepared.specs[0].key);
+    try testing.expectEqual(2, prepared.questions.entries.len);
+    try testing.expect(prepared.questions.entries[0].value == .noul);
+    try std.testing.expectEqualStrings("isBlocked", prepared.questions.entries[0].key);
     try testing.expect(prepared.questions.has("isBlocked"));
     try testing.expect(prepared.questions.has("isCaptcha"));
 }
@@ -390,10 +306,10 @@ test "browser.classify: prepareQuestions empty object asks every preset" {
 
     const prepared = try prepareQuestions(arena.allocator(), "{}");
     try testing.expectEqual(ResponseKind.questions_object, prepared.kind);
-    try testing.expectEqual(std.enums.values(Preset).len, prepared.specs.len);
-    for (std.enums.values(Preset), prepared.specs) |preset, spec| {
-        try std.testing.expectEqualStrings(@tagName(preset), spec.key);
-        try testing.expect(spec.is_noul);
+    try testing.expectEqual(std.enums.values(Preset).len, prepared.questions.entries.len);
+    for (std.enums.values(Preset), prepared.questions.entries) |preset, entry| {
+        try std.testing.expectEqualStrings(@tagName(preset), entry.key);
+        try testing.expect(entry.value == .noul);
         try testing.expect(prepared.questions.has(@tagName(preset)));
     }
 }
@@ -411,7 +327,7 @@ test "browser.classify: prepareQuestions array of preset names is still categori
 
     const prepared = try prepareQuestions(arena.allocator(), "[\"isBlocked\", \"isCaptcha\"]");
     try testing.expectEqual(ResponseKind.single_choice, prepared.kind);
-    try testing.expect(prepared.questions.has("__category"));
+    try testing.expect(prepared.questions.has(category_key));
 }
 
 test "browser.classify: prepareQuestions category array" {
@@ -420,9 +336,9 @@ test "browser.classify: prepareQuestions category array" {
 
     const prepared = try prepareQuestions(arena.allocator(), "[\"product\", \"catalog\", \"login\"]");
     try testing.expectEqual(ResponseKind.single_choice, prepared.kind);
-    try testing.expectEqual(1, prepared.specs.len);
-    try testing.expect(!prepared.specs[0].is_noul);
-    try testing.expect(prepared.questions.has("__category"));
+    try testing.expectEqual(1, prepared.questions.entries.len);
+    try testing.expect(prepared.questions.entries[0].value == .choice);
+    try testing.expect(prepared.questions.has(category_key));
 }
 
 test "browser.classify: prepareQuestions object with strings and options" {
@@ -440,7 +356,7 @@ test "browser.classify: prepareQuestions object with strings and options" {
     ;
     const prepared = try prepareQuestions(arena.allocator(), json);
     try testing.expectEqual(ResponseKind.questions_object, prepared.kind);
-    try testing.expectEqual(2, prepared.specs.len);
+    try testing.expectEqual(2, prepared.questions.entries.len);
     try testing.expect(prepared.questions.has("is_blocked"));
     try testing.expect(prepared.questions.has("page_type"));
 }
@@ -453,10 +369,9 @@ test "browser.classify: prepareQuestions score levels" {
         \\{"content": {"question": "How complete is the main content?", "levels": ["empty", "partial", "full"]}}
     ;
     const prepared = try prepareQuestions(arena.allocator(), json);
-    try testing.expectEqual(1, prepared.specs.len);
-    try testing.expect(!prepared.specs[0].is_noul);
-    try testing.expectEqual(3, prepared.specs[0].levels.len);
+    try testing.expectEqual(1, prepared.questions.entries.len);
     try testing.expect(prepared.questions.get("content").? == .score);
+    try testing.expectEqual(3, prepared.questions.entries[0].value.score.criteria.len);
 }
 
 test "browser.classify: prepareQuestions rejects too few or too many levels" {
