@@ -221,12 +221,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     // The element the pointer is currently over, set by the last pointerMove
     // whose origin resolved to an element.
     var target: ?*Element = null;
-    var pressed = false;
-    // The buttons bitmask of the currently depressed button, carried on move
-    // and boundary events while dragging.
-    var pressed_mask: u16 = 0;
-    var down_target: ?*Element = null;
-    var pointer_suppressed: bool = false;
+    var pointer: Frame.user_input.PointerButtons = .{};
     var click_count: u32 = 0;
     var last_click_button: i32 = 0;
     var last_click_target: ?*Element = null;
@@ -252,65 +247,44 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                 }
             }
             const el = target orelse continue;
-            const g: Frame.user_input.Gesture = .{
-                .buttons_down = pressed_mask,
+            Frame.user_input.moveSequence(frame, el, .{
+                .buttons_down = pointer.held,
                 .modifiers = frame.page.input_modifiers,
-            };
-            if (!is_touch) {
-                Frame.user_input.updateHoverTarget(frame, el, .{
-                    .buttons = pressed_mask,
-                    .modifiers = frame.page.input_modifiers,
-                    .with_pointer = true,
-                });
-            }
-            _ = Frame.user_input.emitPointer(frame, el, "pointermove", g, 0) catch {};
-            if (!is_touch) {
-                _ = Frame.user_input.emitMouse(frame, el, "mousemove", g, 0) catch {};
-            } else if (pressed) {
+                .emit_mouse_compat = !is_touch,
+            }) catch {};
+            if (is_touch and pointer.held != 0) {
                 dispatchTouch(el, "touchmove", frame);
             }
         } else if (action_type.eql(comptime .wrap("pointerDown"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
-            pressed = true;
-            pressed_mask = Frame.user_input.buttonsBitmask(button);
-            down_target = el;
             if (last_click_target == el and last_click_button == button) {
                 click_count += 1;
             } else {
                 click_count = 1;
             }
-            const g: Frame.user_input.Gesture = .{
+            pointer.press(frame, el, .{
                 .button = button,
-                .buttons_down = pressed_mask,
                 .click_count = click_count,
                 .modifiers = frame.page.input_modifiers,
                 .emit_mouse_compat = !is_touch,
-            };
-            pointer_suppressed = Frame.user_input.pressSequence(frame, el, g, pointer_suppressed) catch false;
+            }) catch {};
             if (is_touch) {
                 dispatchTouch(el, "touchstart", frame);
             }
         } else if (action_type.eql(comptime .wrap("pointerUp"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
-            pressed = false;
-            pressed_mask = 0;
-            const click_target = Frame.user_input.commonClickTarget(down_target orelse el, el);
             last_click_button = button;
-            last_click_target = click_target;
-            const g: Frame.user_input.Gesture = .{
+            last_click_target = pointer.release(frame, el, .{
                 .button = button,
                 .click_count = click_count,
                 .modifiers = frame.page.input_modifiers,
                 .emit_mouse_compat = !is_touch,
-            };
-            Frame.user_input.releaseSequence(frame, el, g, pointer_suppressed, click_target) catch {};
+            }) catch null;
             if (is_touch) {
                 dispatchTouch(el, "touchend", frame);
             }
-            down_target = null;
-            pointer_suppressed = false;
         }
         // "pause" carries timing only and is ignored. ("pointerCancel" is not
         // emitted by the testdriver Actions builder.)

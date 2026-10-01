@@ -315,7 +315,7 @@ test "cdp.input: dispatchMouseEvent mouseReleased fires mouseup" {
     try testing.expect(result.isTrue());
 }
 
-test "cdp.input: dispatchMouseEvent non-primary buttons fire auxclick" {
+test "cdp.input: dispatchMouseEvent button activation events match Chrome" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -337,7 +337,7 @@ test "cdp.input: dispatchMouseEvent non-primary buttons fire auxclick" {
 
     _ = try ls.local.compileAndRun(
         \\window.clicks = [];
-        \\for (const t of ['click', 'auxclick', 'contextmenu']) {
+        \\for (const t of ['mousedown', 'mouseup', 'click', 'auxclick', 'contextmenu']) {
         \\  document.getElementById('hoverTarget')
         \\    .addEventListener(t, (e) => { window.clicks.push(t + ':' + e.button); });
         \\}
@@ -346,23 +346,32 @@ test "cdp.input: dispatchMouseEvent non-primary buttons fire auxclick" {
     const rect_x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x", null)).toF64();
     const rect_y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y", null)).toF64();
 
+    const presses = [_]struct { button: []const u8, click_count: i32, expected: []const u8 }{
+        .{ .button = "middle", .click_count = 1, .expected = "mousedown:1 mouseup:1 auxclick:1" },
+        .{ .button = "right", .click_count = 1, .expected = "mousedown:2 contextmenu:2 mouseup:2 auxclick:2" },
+        .{ .button = "back", .click_count = 1, .expected = "mousedown:3 mouseup:3 auxclick:3" },
+        .{ .button = "forward", .click_count = 1, .expected = "mousedown:4 mouseup:4 auxclick:4" },
+        .{ .button = "left", .click_count = 0, .expected = "mousedown:0 mouseup:0" },
+        .{ .button = "right", .click_count = 0, .expected = "mousedown:2 contextmenu:2 mouseup:2" },
+    };
     var id: u32 = 1;
-    for ([_][]const u8{ "middle", "right", "back", "forward" }) |button| {
+    for (presses) |press| {
+        _ = try ls.local.compileAndRun("window.clicks = []", null);
         try ctx.processMessage(.{
             .id = id,
             .method = "Input.dispatchMouseEvent",
-            .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = button, .clickCount = 1 },
+            .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = press.button, .clickCount = press.click_count },
         });
         try ctx.processMessage(.{
             .id = id + 1,
             .method = "Input.dispatchMouseEvent",
-            .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = button, .clickCount = 1 },
+            .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = press.button, .clickCount = press.click_count },
         });
         id += 2;
-    }
 
-    const result = try ls.local.compileAndRun("window.clicks.join(' ') === 'auxclick:1 contextmenu:2 auxclick:2 auxclick:3 auxclick:4'", null);
-    try testing.expect(result.isTrue());
+        const got = try (try ls.local.compileAndRun("window.clicks.join(' ')", null)).toStringSlice();
+        try testing.expectEqual(press.expected, got);
+    }
 }
 
 test "cdp.input: dispatchMouseEvent mousePressed honors preventDefault for focus" {
@@ -737,7 +746,7 @@ test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click
 
     _ = try ls.local.compileAndRun(
         \\const t = document.getElementById('hoverTarget');
-        \\t.addEventListener('mousedown', (e) => { window.downButton = e.button; });
+        \\t.addEventListener('mousedown', (e) => { window.downButton ??= e.button; });
         \\t.addEventListener('contextmenu', (e) => { window.ctxButton = e.button; });
         \\t.addEventListener('dblclick', () => { window.dbl = true; });
     , null);
@@ -745,7 +754,7 @@ test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click
     const rect_x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x", null)).toF64();
     const rect_y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y", null)).toF64();
 
-    // Right button: press carries button=2, release fires contextmenu (not click).
+    // Right button: press carries button=2 and fires contextmenu.
     try ctx.processMessage(.{
         .id = 1,
         .method = "Input.dispatchMouseEvent",
@@ -760,6 +769,11 @@ test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click
     // Left button with clickCount 2 fires dblclick.
     try ctx.processMessage(.{
         .id = 3,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 2 },
+    });
+    try ctx.processMessage(.{
+        .id = 4,
         .method = "Input.dispatchMouseEvent",
         .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 2 },
     });
@@ -1036,9 +1050,7 @@ test "cdp.input: mousePressed and mouseReleased on a disabled button emit no eve
     try testing.expect(result.isTrue());
 }
 
-// Asserts only the pointer events: pointerdown/pointerup fire at the mask's
-// 0/nonzero transitions and a mid-gesture button change is a pointermove (the
-// activation order below is a pre-existing, non-spec deviation from Chrome).
+// The pointerdown is cancelled, so no compat mouse events fire. Matches Chrome.
 test "cdp.input: a mouse chord fires pointermove for the mid-gesture button change, not a second pointerdown/pointerup" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1085,7 +1097,7 @@ test "cdp.input: a mouse chord fires pointermove for the mid-gesture button chan
 
     const result = try ls.local.compileAndRun(
         \\JSON.stringify(window.seqChord) === JSON.stringify([
-        \\  'pointerdown:1', 'pointermove:3', 'pointermove:1', 'contextmenu:1', 'auxclick:1', 'pointerup:0', 'click:0'
+        \\  'pointerdown:1', 'pointermove:3', 'contextmenu:3', 'pointermove:1', 'auxclick:1', 'pointerup:0'
         \\])
     , null);
     try testing.expect(result.isTrue());
@@ -1140,7 +1152,7 @@ test "cdp.input: a primary click fired mid-chord carries the still-held buttons 
 
     const result = try ls.local.compileAndRun(
         \\JSON.stringify(window.seqChord) === JSON.stringify([
-        \\  'pointerdown:1', 'pointermove:3', 'pointermove:2', 'click:2', 'pointerup:0', 'contextmenu:0', 'auxclick:0'
+        \\  'pointerdown:1', 'pointermove:3', 'contextmenu:3', 'pointermove:2', 'click:2', 'pointerup:0'
         \\])
     , null);
     try testing.expect(result.isTrue());
