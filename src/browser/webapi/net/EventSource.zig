@@ -348,8 +348,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 fn corsAllowed(self: *const EventSource, transfer: *Transfer) bool {
     var allow_origin: ?[]const u8 = null;
     var allow_credentials: ?[]const u8 = null;
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
+    for (transfer.responseHeaders()) |hdr| {
         if (std.mem.eql(u8, hdr.name, "access-control-allow-origin")) {
             allow_origin = hdr.value;
         } else if (std.mem.eql(u8, hdr.name, "access-control-allow-credentials")) {

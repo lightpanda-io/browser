@@ -417,7 +417,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
             break;
         }
     }
-    try self.applyResponseHeaders(.{ .list = .{ .list = resp.headers } });
+    try self.applyResponseHeaders(resp.headers);
 
     try self._response_data.appendSlice(self._arena.allocator(), resp.body.items);
 
@@ -654,9 +654,8 @@ fn applyContentType(self: *XMLHttpRequest, content_type: []const u8) !void {
     self._response_mime_raw = try self._arena.dupe(u8, std.mem.trim(u8, content_type, &std.ascii.whitespace));
 }
 
-fn applyResponseHeaders(self: *XMLHttpRequest, headers: http.HeaderIterator) !void {
-    var it = headers;
-    while (it.next()) |hdr| {
+fn applyResponseHeaders(self: *XMLHttpRequest, headers: []const http.Header) !void {
+    for (headers) |hdr| {
         if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
             continue;
         }
@@ -687,7 +686,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         };
     }
 
-    try self.applyResponseHeaders(transfer.responseHeaderIterator());
+    try self.applyResponseHeaders(transfer.responseHeaders());
 
     self._response_status = transfer.responseStatus().?;
     if (transfer.statusText()) |st| {

@@ -282,8 +282,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         res._type = .basic;
     }
 
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
+    for (transfer.responseHeaders()) |hdr| {
         try res._headers.append(hdr.name, hdr.value, exec);
     }
 

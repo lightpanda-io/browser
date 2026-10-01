@@ -491,8 +491,7 @@ const CorsPreflightContext = struct {
         var acac: ?[]const u8 = null;
         var acma: ?[]const u8 = null;
 
-        var iter = transfer.responseHeaderIterator();
-        while (iter.next()) |hdr| {
+        for (transfer.responseHeaders()) |hdr| {
             if (std.mem.eql(u8, hdr.name, ACCESS_CONTROL_ALLOW_ORIGIN)) {
                 acao = hdr.value;
             } else if (std.mem.eql(u8, hdr.name, ACCESS_CONTROL_ALLOW_METHODS)) {

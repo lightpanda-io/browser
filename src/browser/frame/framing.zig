@@ -24,8 +24,7 @@ const HttpClient = @import("../../network/HttpClient.zig");
 // https://html.spec.whatwg.org/multipage/document-lifecycle.html#the-x-frame-options-header
 pub fn allowed(frame: *const Frame, transfer: *HttpClient.Transfer) bool {
     var options: XFrameOptions = .{};
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
+    for (transfer.responseHeaders()) |hdr| {
         if (std.mem.eql(u8, hdr.name, "content-security-policy")) {
             if (hasFrameAncestors(hdr.value)) {
                 // has priority over any x-frame-options
