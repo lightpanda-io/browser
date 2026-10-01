@@ -1,6 +1,6 @@
 .{
     .name = .browser,
-    .version = "1.0.0-dev",
+    .version = "1.1.0-dev",
     .fingerprint = 0xda130f3af836cea0, // Changing this has security and trust implications.
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
