@@ -25,6 +25,7 @@ const zenai = @import("zenai");
 
 const Frame = lp.Frame;
 const DOMNode = @import("webapi/Node.zig");
+const NodeRegistry = lp.NodeRegistry;
 
 const Question = zenai.typesafe.Question;
 const Content = zenai.typesafe.Content;
@@ -208,10 +209,17 @@ fn preparePresets(arena: std.mem.Allocator) error{OutOfMemory}!PreparedQuestions
     return .{ .questions = .init(entries), .kind = .questions_object };
 }
 
-pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode) !Content {
-    const render_state = lp.RenderTree.resolve(arena, node, .{}, page) catch return error.OutOfMemory;
+/// Most of the page `buildState` sends, in bytes.
+const max_state_bytes = 8192;
+
+/// The page as Jev sees it: url, title, status, and the semantic tree of
+/// `node` as text. The tree keeps what markdown drops and the questions turn
+/// on (form fields, dialogs, the title of an iframe holding a CAPTCHA) and,
+/// without node ids, is about as long; links carry where they go.
+pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode, registry: *NodeRegistry) !Content {
+    const tree = lp.SemanticTree.init(arena, node, registry, page, .{ .ids = false, .link_urls = true }) catch return error.InternalError;
     var aw: std.Io.Writer.Allocating = .init(arena);
-    lp.markdown.dump(render_state, .{ .max_bytes = 8192 }, &aw.writer, page) catch return error.InternalError;
+    tree.textStringify(&aw.writer) catch return error.InternalError;
 
     var state: std.json.ObjectMap = .empty;
     try state.put(arena, "url", .{ .string = page.url });
@@ -219,8 +227,16 @@ pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode) !Conte
     if (page._http_status) |status| {
         try state.put(arena, "status", .{ .integer = status });
     }
-    try state.put(arena, "content", .{ .string = aw.written() });
+    try state.put(arena, "content", .{ .string = truncateUtf8(aw.written(), max_state_bytes) });
     return .{ .json = .{ .object = state } };
+}
+
+/// At most `max` bytes of `text`, cut on a UTF-8 boundary.
+fn truncateUtf8(text: []const u8, max: usize) []const u8 {
+    if (text.len <= max) return text;
+    var end = max;
+    while (end > 0 and text[end] & 0xC0 == 0x80) end -= 1;
+    return text[0..end];
 }
 
 pub const FormatError = error{
