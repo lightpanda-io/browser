@@ -16,41 +16,29 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//   var b64 = Base64Writer.init(&out.writer, .standard);
-//   try producer.write(&b64.writer);
-//   try b64.finish();
-
 const std = @import("std");
 const Writer = std.Io.Writer;
 
+const Base64 = @import("sys/simdutf.zig").Base64;
+
+/// Usage:
+/// ```zig
+/// var b64 = Base64Writer.init(&out.writer, .standard);
+/// try producer.write(&b64.writer);
+/// try b64.finish();
+/// ```
 const Base64Writer = @This();
 
 inner: *Writer,
 writer: Writer,
 pending_len: u2 = 0,
 pending: [3]u8 = undefined,
-codec: *const std.base64.Base64Encoder,
+codec: Base64.Type,
 
-const Codec = enum {
-    standard,
-    standard_no_pad,
-    url_safe,
-    url_safe_no_pad,
-
-    fn encoder(self: Codec) *const std.base64.Base64Encoder {
-        return switch (self) {
-            .standard => &std.base64.standard.Encoder,
-            .standard_no_pad => &std.base64.standard_no_pad.Encoder,
-            .url_safe => &std.base64.url_safe.Encoder,
-            .url_safe_no_pad => &std.base64.url_safe_no_pad.Encoder,
-        };
-    }
-};
-
-pub fn init(inner: *Writer, codec: Codec) Base64Writer {
+pub fn init(inner: *Writer, codec: Base64.Type) Base64Writer {
     return .{
         .inner = inner,
-        .codec = codec.encoder(),
+        .codec = codec,
         .writer = .{
             .vtable = &vtable,
             .buffer = &.{},
@@ -86,7 +74,7 @@ fn feed(self: *Base64Writer, bytes: []const u8) Writer.Error!void {
         }
         if (self.pending_len < 3) return;
         var group: [4]u8 = undefined;
-        try self.inner.writeAll(self.codec.encode(&group, &self.pending));
+        try self.inner.writeAll(Base64.Encoder.encode(self.codec, &group, &self.pending));
         self.pending_len = 0;
     }
 
@@ -98,7 +86,7 @@ fn feed(self: *Base64Writer, bytes: []const u8) Writer.Error!void {
     var i: usize = 0;
     while (i < full) {
         const n = @min(in_step, full - i);
-        try self.inner.writeAll(self.codec.encode(&out, src[i .. i + n]));
+        try self.inner.writeAll(Base64.Encoder.encode(self.codec, &out, src[i .. i + n]));
         i += n;
     }
 
@@ -112,23 +100,50 @@ fn feed(self: *Base64Writer, bytes: []const u8) Writer.Error!void {
 pub fn finish(self: *Base64Writer) Writer.Error!void {
     if (self.pending_len == 0) return;
     var group: [4]u8 = undefined;
-    try self.inner.writeAll(self.codec.encode(&group, self.pending[0..self.pending_len]));
+    try self.inner.writeAll(Base64.Encoder.encode(self.codec, &group, self.pending[0..self.pending_len]));
     self.pending_len = 0;
 }
 
 const testing = @import("testing.zig");
-test "Base64Writer: matches std for every chunking" {
-    var input: [1000]u8 = undefined;
+const test_codecs = [_]Base64.Type{ .default, .default_no_padding, .url, .url_with_padding };
+
+test "Base64Writer: RFC 4648 vectors" {
+    // One column per test_codecs entry. The last row is where the alphabets
+    // differ ('+/' vs '-_').
+    const cases = [_]struct { []const u8, [test_codecs.len][]const u8 }{
+        .{ "", .{ "", "", "", "" } },
+        .{ "f", .{ "Zg==", "Zg", "Zg", "Zg==" } },
+        .{ "fo", .{ "Zm8=", "Zm8", "Zm8", "Zm8=" } },
+        .{ "foo", .{ "Zm9v", "Zm9v", "Zm9v", "Zm9v" } },
+        .{ "foob", .{ "Zm9vYg==", "Zm9vYg", "Zm9vYg", "Zm9vYg==" } },
+        .{ "fooba", .{ "Zm9vYmE=", "Zm9vYmE", "Zm9vYmE", "Zm9vYmE=" } },
+        .{ "foobar", .{ "Zm9vYmFy", "Zm9vYmFy", "Zm9vYmFy", "Zm9vYmFy" } },
+        .{ "\xfb\xff", .{ "+/8=", "+/8", "-_8", "-_8=" } },
+    };
+    for (cases) |case| {
+        const input, const expected = case;
+        for (test_codecs, expected) |codec, want| {
+            for ([_]usize{ 1, 64 }) |chunk| {
+                const got = try testEncode(codec, input, chunk);
+                defer testing.allocator.free(got);
+                try testing.expectEqual(want, got);
+            }
+        }
+    }
+}
+
+test "Base64Writer: chunked writes match a one-shot encode" {
+    // Long enough for one write to span two 3072-byte bulk steps plus a tail.
+    var input: [6145]u8 = undefined;
     for (&input, 0..) |*b, i| b.* = @truncate(i *% 31 +% 7);
 
-    inline for (.{ Codec.standard, Codec.standard_no_pad, Codec.url_safe, Codec.url_safe_no_pad }) |codec| {
-        const enc = codec.encoder();
-        for ([_]usize{ 0, 1, 2, 3, 4, 5, 6, 7, 100, 999, 1000 }) |len| {
-            const expected = try testing.allocator.alloc(u8, enc.calcSize(len));
-            defer testing.allocator.free(expected);
-            _ = enc.encode(expected, input[0..len]);
+    for (test_codecs) |codec| {
+        for ([_]usize{ 0, 1, 2, 3, 4, 5, 6, 7, 100, 3071, 3072, 3073, 6145 }) |len| {
+            const buf = try testing.allocator.alloc(u8, Base64.Encoder.calcSize(codec, len));
+            defer testing.allocator.free(buf);
+            const expected = Base64.Encoder.encode(codec, buf, input[0..len]);
 
-            for ([_]usize{ 1, 2, 3, 4, 5, 7, 64, 3071, 3072, 3073, 4096 }) |chunk| {
+            for ([_]usize{ 1, 2, 3, 4, 5, 7, 64, 3071, 3072, 3073, 4096, 7000 }) |chunk| {
                 const got = try testEncode(codec, input[0..len], chunk);
                 defer testing.allocator.free(got);
                 try testing.expectEqual(expected, got);
@@ -141,14 +156,14 @@ test "Base64Writer: writer helpers" {
     var aw: Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
 
-    var b64 = Base64Writer.init(&aw.writer, .standard);
+    var b64 = Base64Writer.init(&aw.writer, .default);
     try b64.writer.print("{s}-{d}", .{ "hello", 42 });
     try b64.writer.splatByteAll('!', 5);
     try b64.finish();
     try testing.expectEqual("aGVsbG8tNDIhISEhIQ==", aw.written());
 }
 
-fn testEncode(codec: Codec, input: []const u8, chunk: usize) ![]const u8 {
+fn testEncode(codec: Base64.Type, input: []const u8, chunk: usize) ![]const u8 {
     var aw: Writer.Allocating = .init(testing.allocator);
     errdefer aw.deinit();
 

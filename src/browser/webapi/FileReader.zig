@@ -29,6 +29,9 @@ const Blob = @import("Blob.zig");
 const EventTarget = @import("EventTarget.zig");
 const ProgressEvent = @import("event/ProgressEvent.zig");
 
+const simdutf = @import("../../sys/simdutf.zig");
+const Base64 = simdutf.Base64;
+
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
@@ -426,10 +429,8 @@ const Progress = struct {
 /// Encodes binary data as a data URL with base64 encoding.
 /// Format: data:[<mediatype>][;base64],<data>
 pub fn encodeDataURL(arena: Allocator, mime: []const u8, data: []const u8) ![]const u8 {
-    const base64 = std.base64.standard.Encoder;
-
     // Calculate size needed for base64 encoding
-    const encoded_size = base64.calcSize(data.len);
+    const encoded_size = Base64.Encoder.calcSize(.default, data.len);
 
     // Allocate buffer for the full data URL
     // Format: "data:" + mime + ";base64," + encoded_data
@@ -449,7 +450,7 @@ pub fn encodeDataURL(arena: Allocator, mime: []const u8, data: []const u8) ![]co
     @memcpy(buf[pos..][0..suffix.len], suffix);
     pos += suffix.len;
 
-    _ = base64.encode(buf[pos..], data);
+    _ = Base64.Encoder.encode(.default, buf[pos..], data);
 
     return buf;
 }

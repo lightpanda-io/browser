@@ -43,6 +43,9 @@ const save = @import("save.zig");
 const welcome = @import("welcome.zig");
 const string = @import("../string.zig");
 
+const simdutf = @import("../sys/simdutf.zig");
+const Base64 = simdutf.Base64;
+
 const Agent = @This();
 
 /// Raised by init/listModels after they've printed a user-facing message to
@@ -1902,8 +1905,8 @@ fn buildUserMessageParts(
                 .{ path, content },
             );
         } else {
-            const b64 = try ma.alloc(u8, std.base64.standard.Encoder.calcSize(content.len));
-            _ = std.base64.standard.Encoder.encode(b64, content);
+            const b64 = try ma.alloc(u8, Base64.Encoder.calcSize(.default, content.len));
+            _ = Base64.Encoder.encode(.default, b64, content);
             try inline_parts.append(ma, .{ .image = .{
                 .data = b64,
                 .mime_type = try ma.dupe(u8, mime),

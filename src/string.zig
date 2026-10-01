@@ -19,6 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const simdutf = @import("sys/simdutf.zig");
+
 const Allocator = std.mem.Allocator;
 
 const M = @This();
@@ -487,34 +489,10 @@ pub fn truncateUtf8(bytes: []const u8, max_bytes: usize) []const u8 {
 /// as UTF-8. For bytes that aren't valid UTF-8 but must become a valid UTF-8
 /// string (JSON, filenames).
 pub fn latin1ToUtf8(allocator: Allocator, bytes: []const u8) ![]u8 {
-    var extra: usize = 0;
-    for (bytes) |b| {
-        if (b >= 0x80) {
-            extra += 1;
-        }
-    }
-    if (comptime lp.IS_DEBUG) {
-        // The way this is currently used:
-        // 1 - the caller always wants the value duped,
-        // 2 - the caller only got here because utf8ValidateSlice failed.
-        // If both of those ever change, maybe it's worth reconsidering whether
-        // this API unconditionally dupes.
-        std.debug.assert(extra != 0);
-    }
-
-    const out = try allocator.alloc(u8, bytes.len + extra);
-    var i: usize = 0;
-    for (bytes) |b| {
-        if (b < 0x80) {
-            out[i] = b;
-            i += 1;
-        } else {
-            out[i] = 0xC0 | (b >> 6);
-            out[i + 1] = 0x80 | (b & 0x3F);
-            i += 2;
-        }
-    }
-    return out;
+    const size = simdutf.v8__simdutf_utf8_length_from_latin1(bytes.ptr, bytes.len);
+    const dest = try allocator.alloc(u8, size);
+    //errdefer allocator.free(dest);
+    return dest[0..simdutf.v8__simdutf_convert_latin1_to_utf8(bytes.ptr, bytes.len, dest.ptr)];
 }
 
 // Discriminatory type that signals the bridge to use arena instead of call_arena
