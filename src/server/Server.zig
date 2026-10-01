@@ -2094,6 +2094,45 @@ test "server: HTTP page commands" {
     try testing.expectEqual("{\"value\":\"" ++ url ++ "\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
 }
 
+test "server: HTTP history commands" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    // nothing to go back to yet
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/back", "{}")));
+    try testing.expectEqual("{\"value\":\"about:blank\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
+
+    const first = "http://127.0.0.1:9582/src/browser/tests/webdriver/elements.html";
+    const second = "http://127.0.0.1:9582/src/browser/tests/webdriver/input.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ first ++ "\"}")));
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ second ++ "\"}")));
+
+    // cross-document: answered once the other document is loaded
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/back", "{}")));
+    try testing.expectEqual("{\"value\":\"" ++ first ++ "\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
+    try testing.expectEqual("{\"value\":\"complete\"}", responseBody(try sessionCommand(&c, "POST", &session_id, "/execute/sync", "{\"script\":\"return document.readyState\",\"args\":[]}")));
+
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/forward", "{}")));
+    try testing.expectEqual("{\"value\":\"" ++ second ++ "\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
+
+    // nothing to go forward to
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/forward", "{}")));
+    try testing.expectEqual("{\"value\":\"" ++ second ++ "\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
+
+    // same-document: no load to wait for, the document stays
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/execute/sync",
+        \\{"script":"window.pops = []; window.onpopstate = function(e) { pops.push(location.hash) }; history.pushState(null, '', '#pushed')","args":[]}
+    )));
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/back", "{}")));
+    try testing.expectEqual("{\"value\":\"" ++ second ++ "\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/forward", "{}")));
+    try testing.expectEqual("{\"value\":\"" ++ second ++ "#pushed\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
+    try testing.expectEqual("{\"value\":\",#pushed\"}", responseBody(try sessionCommand(&c, "POST", &session_id, "/execute/sync", "{\"script\":\"return pops.join()\",\"args\":[]}")));
+}
+
 test "server: HTTP element commands" {
     const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
     defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));

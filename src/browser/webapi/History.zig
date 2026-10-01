@@ -110,18 +110,17 @@ fn goInner(delta: i32, frame: *Frame) !void {
     const index = @as(usize, @intCast(index_s));
     const entry = frame._session.navigation._entries.items[index];
 
-    if (entry._url) |url| {
-        if (frame.isSameOrigin(url)) {
-            const target = frame.window.asEventTarget();
-            if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
-                const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
-                try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
-            }
-            // hashchange is queued by navigateInner.
-        }
-    }
-
     _ = try frame._session.navigation.navigateInner(entry._url, .{ .traverse = index }, frame);
+
+    const url = entry._url orelse return;
+    if (frame.isSameOrigin(url)) {
+        const target = frame.window.asEventTarget();
+        if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
+            const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
+            try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
+        }
+        // hashchange is queued by navigateInner.
+    }
 }
 
 pub fn back(_: *History, frame: *Frame) !void {
