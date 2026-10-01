@@ -30,10 +30,11 @@ const ArenaPool = @import("../ArenaPool.zig");
 const http = @import("http.zig");
 const Robots = @import("Robots.zig");
 const Network = @import("Network.zig");
-const Transfer = @import("HttpClient.zig").Transfer;
+const HttpClient = @import("HttpClient.zig");
 const SingleFlight = @import("SingleFlight.zig");
 
 const log = lp.log;
+const Transfer = HttpClient.Transfer;
 
 const RobotsGate = @This();
 
@@ -129,6 +130,7 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
 const Outcome = union(enum) {
     decision: Robots.RobotStore.Decision,
     robots: Robots.Robots,
+    challenged,
 };
 
 // The robots.txt fetch resolved: hand every waiter back to the pipeline,
@@ -144,6 +146,11 @@ fn flushPending(self: *RobotsGate, robots_url: []const u8, outcome: Outcome) voi
         const decision: Robots.RobotStore.Decision = switch (outcome) {
             .decision => |d| d,
             .robots => |r| if (r.isAllowed(URL.getPathname(transfer.req.url))) .allowed else .blocked,
+            .challenged => {
+                lp.metrics.robots_access.incr(.deny);
+                transfer.failAsync(error.BotChallenge);
+                continue;
+            },
         };
 
         if (decision == .blocked) {
@@ -168,6 +175,7 @@ const RobotsContext = struct {
     robots_url: [:0]const u8,
     buffer: std.ArrayList(u8),
     status: u16 = 0,
+    challenge: ?HttpClient.BotChallenge = null,
 
     fn headerCallback(transfer: *Transfer) anyerror!Transfer.HeaderResult {
         const self: *RobotsContext = @ptrCast(@alignCast(transfer.req.ctx));
@@ -175,6 +183,7 @@ const RobotsContext = struct {
             log.debug(.browser, "robots status", .{ .status = hdr.status, .robots_url = self.robots_url });
             self.status = hdr.status;
         }
+        self.challenge = transfer.botChallenge();
         lp.metrics.robots_status.incr(http.statusCategory(self.status));
         try self.buffer.ensureTotalCapacityPrecise(self.arena.allocator(), transfer.bodyLen());
         return .proceed;
@@ -191,6 +200,18 @@ const RobotsContext = struct {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
         const robots_url = self.robots_url;
         const network = self.gate.network;
+
+        if (self.challenge) |challenge| {
+            // Nothing here can solve it, but the challenge might be gone by
+            // the next request, so don't cache it.
+            log.warn(.http, "robots.txt bot challenge", .{
+                .url = robots_url,
+                .status = self.status,
+                .provider = challenge,
+            });
+            self.settle(.{ .outcome = .challenged, .cache = false });
+            return;
+        }
 
         switch (self.status) {
             200 => {
@@ -293,6 +314,7 @@ const RobotsContext = struct {
                 .robots => |r| network.robot_store.put(self.robots_url, r) catch |err| {
                     log.warn(.browser, "cache robots rules", .{ .url = self.robots_url, .err = err });
                 },
+                .challenged => {},
             }
         }
     }
