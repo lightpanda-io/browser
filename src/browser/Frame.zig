@@ -3759,14 +3759,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
             break :blk s.is(HtmlElement);
         };
         const submit_event = (try SubmitEvent.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true, .submitter = submitter_html }, self)).asEvent();
-
-        // so submit_event is still valid when we check _prevent_default
-        submit_event.acquireRef();
-        defer _ = submit_event.releaseRef(self.page);
-
-        try self._event_manager.dispatch(form_element.asEventTarget(), submit_event);
-        // If the submit event was prevented, don't submit the form
-        if (submit_event._prevent_default) {
+        if (try self._event_manager.dispatchCancelable(form_element.asEventTarget(), submit_event)) {
             return;
         }
     }

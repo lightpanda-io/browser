@@ -420,14 +420,7 @@ pub fn click(self: *HtmlElement, frame: *Frame) !void {
         .pointerId = -1,
     }, frame)).asEvent();
 
-    // Keep the event alive past dispatch (which runs handlers/microtasks) so we
-    // can read _prevent_default afterwards.
-    event.acquireRef();
-    defer _ = event.releaseRef(frame.page);
-
-    try frame._event_manager.dispatch(self.asEventTarget(), event);
-
-    if (event._prevent_default == false) {
+    if (!try frame._event_manager.dispatchCancelable(self.asEventTarget(), event)) {
         // toggle the popover_target
         const explicit: ?*Element = switch (self._type) {
             .button => self.subtype(Button)._popover_target,
