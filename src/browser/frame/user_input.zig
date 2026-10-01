@@ -180,58 +180,79 @@ fn dispatchBoundaryEvent(frame: *Frame, target: *Element, comptime mouse_typ: []
     };
 }
 
-/// Event fields for the trusted mouse/pointer dispatchers, bundled so `button`
-/// (which button changed) and `buttons` (the held mask) can't be transposed.
-const PointerInput = struct {
-    x: f64,
-    y: f64,
+pub const Gesture = struct {
     button: i32 = mouse_button.main,
-    buttons: u16 = 0,
-    detail: u32 = 0,
+    buttons_down: u16 = 1,
+    click_count: u32 = 1,
+    coords: ?struct { x: f64, y: f64 } = null,
     modifiers: Modifiers = .{},
+    emit_pointer_events: bool = true,
+    emit_mouse_compat: bool = true,
+    pressure: f32 = 0.5,
+    update_hover: bool = false,
+    focus_error: enum { warn, propagate } = .warn,
 };
 
-/// Dispatch a trusted mouse event; returns whether preventDefault() cancelled it.
-fn dispatchMouseEventOn(frame: *Frame, target: *Element, comptime typ: []const u8, in: PointerInput) !bool {
-    const event: *MouseEvent = try .initTrusted(comptime .wrap(typ), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .clientX = in.x,
-        .clientY = in.y,
-        .button = in.button,
-        .buttons = in.buttons,
-        .detail = in.detail,
-        .ctrlKey = in.modifiers.ctrl,
-        .shiftKey = in.modifiers.shift,
-        .altKey = in.modifiers.alt,
-        .metaKey = in.modifiers.meta,
-    }, frame);
-    return frame._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
-}
-
-/// Dispatch a trusted pointer event (always mouse-sourced: pointerType,
-/// pointerId, isPrimary fixed); returns whether preventDefault() cancelled it.
-fn dispatchPointerEventOn(frame: *Frame, target: *Element, comptime typ: []const u8, in: PointerInput) !bool {
+/// Dispatch a trusted pointer event; returns whether preventDefault() cancelled it.
+pub fn emitPointer(
+    frame: *Frame,
+    target: *Element,
+    typ: []const u8,
+    g: Gesture,
+    detail: u32,
+    buttons: u16,
+) !bool {
+    const owner = target.ownerFrame(frame) orelse frame;
+    const x = if (g.coords) |c| c.x else 0;
+    const y = if (g.coords) |c| c.y else 0;
     const event: *PointerEvent = try .initTrusted(typ, .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
-        .clientX = in.x,
-        .clientY = in.y,
-        .button = in.button,
-        .buttons = in.buttons,
-        .detail = in.detail,
+        .clientX = x,
+        .clientY = y,
+        .button = g.button,
+        .buttons = buttons,
+        .detail = detail,
         .pointerId = 1,
         .pointerType = "mouse",
         .isPrimary = true,
-        .pressure = if (in.buttons != 0) 0.5 else 0.0,
-        .ctrlKey = in.modifiers.ctrl,
-        .shiftKey = in.modifiers.shift,
-        .altKey = in.modifiers.alt,
-        .metaKey = in.modifiers.meta,
-    }, frame);
-    return frame._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
+        .pressure = if (buttons != 0) g.pressure else 0.0,
+        .ctrlKey = g.modifiers.ctrl,
+        .shiftKey = g.modifiers.shift,
+        .altKey = g.modifiers.alt,
+        .metaKey = g.modifiers.meta,
+    }, owner);
+    return owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
+}
+
+/// Dispatch a trusted mouse event; returns whether preventDefault() cancelled it.
+pub fn emitMouse(
+    frame: *Frame,
+    target: *Element,
+    comptime typ: []const u8,
+    g: Gesture,
+    detail: u32,
+    buttons: u16,
+) !bool {
+    const owner = target.ownerFrame(frame) orelse frame;
+    const x = if (g.coords) |c| c.x else 0;
+    const y = if (g.coords) |c| c.y else 0;
+    const event: *MouseEvent = try .initTrusted(comptime .wrap(typ), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+        .button = g.button,
+        .buttons = buttons,
+        .detail = detail,
+        .ctrlKey = g.modifiers.ctrl,
+        .shiftKey = g.modifiers.shift,
+        .altKey = g.modifiers.alt,
+        .metaKey = g.modifiers.meta,
+    }, owner);
+    return owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
 }
 
 /// MouseEvent/PointerEvent.buttons bitmask for a MouseEvent.button value.
@@ -256,6 +277,9 @@ pub const PointerButtons = struct {
     /// Whether the gesture's opening pointerdown suppressed the compat mouse
     /// events; held for the whole gesture so each split message reads it here.
     mousedown_suppressed: bool = false,
+    /// Where the last pointerdown landed: the click fires at the nearest
+    /// common inclusive ancestor of down and up targets when they differ.
+    down_target: ?*Element = null,
 
     /// `starts_gesture` is false for a chorded press (another button held).
     pub fn press(self: *PointerButtons, button: i32) struct { starts_gesture: bool, held: u16 } {
@@ -271,7 +295,10 @@ pub const PointerButtons = struct {
         const was_suppressed = self.mousedown_suppressed;
         self.held &= ~buttonsBitmask(button);
         const ends_gesture = self.held == 0;
-        if (ends_gesture) self.mousedown_suppressed = false;
+        if (ends_gesture) {
+            self.mousedown_suppressed = false;
+            self.down_target = null;
+        }
         return .{ .ends_gesture = ends_gesture, .held = self.held, .was_suppressed = was_suppressed };
     }
 
@@ -281,36 +308,123 @@ pub const PointerButtons = struct {
     }
 };
 
-const PressResult = struct {
-    /// pointerdown's preventDefault() suppressed the compat mousedown here and
-    /// the paired mouseup on release.
-    suppress_mouse: bool,
-    /// mousedown's focus default action is suppressed (always when
-    /// suppress_mouse is).
-    suppress_focus: bool,
-};
-
-/// pointerdown, then mousedown unless pointerdown was cancelled. `in.detail`
-/// applies to mousedown only.
-fn dispatchPointerPress(frame: *Frame, target: *Element, in: PointerInput) !PressResult {
-    var pointer = in;
-    pointer.detail = 0;
-    const suppress_mouse = try dispatchPointerEventOn(frame, target, "pointerdown", pointer);
-    if (suppress_mouse) {
-        return .{ .suppress_mouse = true, .suppress_focus = true };
+/// A click whose mousedown and mouseup landed on different elements fires at
+/// their nearest common inclusive ancestor element.
+pub fn commonClickTarget(down: *Element, up: *Element) *Element {
+    if (down == up) {
+        return up;
     }
-    const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", in);
-    return .{ .suppress_mouse = false, .suppress_focus = suppress_focus };
+    var current: ?*Node = down.asNode();
+    while (current) |node| : (current = node.parentNode()) {
+        if (node.contains(up.asNode())) {
+            return node.is(Element) orelse break;
+        }
+    }
+    return up;
 }
 
-/// pointerup, then mouseup unless the gesture's pointerdown was cancelled.
-/// `in.detail` applies to mouseup only.
-fn dispatchPointerRelease(frame: *Frame, target: *Element, in: PointerInput, suppress_mouse: bool) !void {
-    var pointer = in;
-    pointer.detail = 0;
-    _ = try dispatchPointerEventOn(frame, target, "pointerup", pointer);
-    if (suppress_mouse == false) {
-        _ = try dispatchMouseEventOn(frame, target, "mouseup", in);
+pub fn pressSequence(
+    frame: *Frame,
+    target: *Element,
+    g: Gesture,
+    suppressed_out: *bool,
+) !void {
+    if (target.isDisabled()) {
+        suppressed_out.* = true;
+        return;
+    }
+
+    if (g.update_hover) {
+        updateHoverTarget(frame, target, .{
+            .x = if (g.coords) |c| c.x else 0,
+            .y = if (g.coords) |c| c.y else 0,
+            .buttons = g.buttons_down,
+            .modifiers = g.modifiers,
+            .with_pointer = true,
+        });
+    }
+
+    const bit = buttonsBitmask(g.button);
+    const starts_gesture = (g.buttons_down & ~bit) == 0;
+
+    var pointer_suppressed = if (starts_gesture) false else suppressed_out.*;
+    if (g.emit_pointer_events) {
+        if (starts_gesture) {
+            pointer_suppressed = try emitPointer(frame, target, "pointerdown", g, 0, g.buttons_down);
+        } else {
+            _ = try emitPointer(frame, target, "pointermove", g, 0, g.buttons_down);
+        }
+    }
+
+    suppressed_out.* = pointer_suppressed;
+    if (pointer_suppressed) {
+        return;
+    }
+
+    if (g.emit_mouse_compat) {
+        const mouse_suppressed = try emitMouse(frame, target, "mousedown", g, g.click_count, g.buttons_down);
+        if (!mouse_suppressed) {
+            focusForMouseDown(frame, target) catch |err| switch (g.focus_error) {
+                .warn => log.debug(.app, "mousedown focus", .{ .err = err }),
+                .propagate => return err,
+            };
+        }
+    }
+}
+
+pub fn releaseSequence(
+    frame: *Frame,
+    up_target: *Element,
+    g: Gesture,
+    suppressed: bool,
+    click_target: ?*Element,
+) !void {
+    if (up_target.isDisabled()) {
+        return;
+    }
+
+    const ends_gesture = (g.buttons_down == 0);
+
+    if (ends_gesture) {
+        if (g.emit_pointer_events) {
+            _ = try emitPointer(frame, up_target, "pointerup", g, 0, g.buttons_down);
+        }
+        if (g.emit_mouse_compat and !suppressed) {
+            const detail = if (g.click_count > 0) g.click_count else 1;
+            _ = try emitMouse(frame, up_target, "mouseup", g, detail, g.buttons_down);
+        }
+    } else {
+        if (g.emit_pointer_events) {
+            _ = try emitPointer(frame, up_target, "pointermove", g, 0, g.buttons_down);
+        }
+        if (g.emit_mouse_compat and !suppressed) {
+            const detail = if (g.click_count > 0) g.click_count else 1;
+            _ = try emitMouse(frame, up_target, "mouseup", g, detail, g.buttons_down);
+        }
+    }
+
+    const click_el = click_target orelse up_target;
+    if (click_el.isDisabled()) {
+        return;
+    }
+
+    if (g.emit_mouse_compat) {
+        const detail = if (g.click_count > 0) g.click_count else 1;
+        switch (g.button) {
+            mouse_button.main => {
+                _ = try emitPointer(frame, click_el, "click", g, detail, g.buttons_down);
+                if (detail % 2 == 0 and detail > 0) {
+                    _ = try emitMouse(frame, click_el, "dblclick", g, detail, g.buttons_down);
+                }
+            },
+            mouse_button.auxiliary => {
+                _ = try emitMouse(frame, click_el, "auxclick", g, detail, g.buttons_down);
+            },
+            mouse_button.secondary => {
+                _ = try emitMouse(frame, click_el, "contextmenu", g, detail, g.buttons_down);
+            },
+            else => {},
+        }
     }
 }
 
@@ -318,15 +432,22 @@ fn dispatchPointerRelease(frame: *Frame, target: *Element, in: PointerInput, sup
 /// off pointerdown/mousedown, not click alone. A focus failure is logged, not
 /// returned.
 pub fn triggerClick(frame: *Frame, target: *Element, modifiers: Modifiers) !void {
-    const press = try dispatchPointerPress(frame, target, .{ .x = 0, .y = 0, .buttons = 1, .detail = 1, .modifiers = modifiers });
-    if (press.suppress_focus == false) {
-        focusForMouseDown(frame, target) catch |err| log.debug(.app, "click mousedown focus", .{ .err = err });
-    }
+    const g: Gesture = .{
+        .button = mouse_button.main,
+        .buttons_down = 1,
+        .click_count = 1,
+        .modifiers = modifiers,
+        .emit_pointer_events = true,
+        .emit_mouse_compat = true,
+        .update_hover = true,
+        .focus_error = .warn,
+    };
+    var suppressed = false;
+    try pressSequence(frame, target, g, &suppressed);
 
-    const up: PointerInput = .{ .x = 0, .y = 0, .detail = 1, .modifiers = modifiers };
-    try dispatchPointerRelease(frame, target, up, press.suppress_mouse);
-    // click is a PointerEvent, matching HTMLElement.click().
-    _ = try dispatchPointerEventOn(frame, target, "click", up);
+    var up_g = g;
+    up_g.buttons_down = 0;
+    try releaseSequence(frame, target, up_g, suppressed, target);
 }
 
 pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
@@ -347,29 +468,23 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count
     }
 
     const gesture = frame.page.input_pointer.press(button);
-    // clickCount 0 (omitted) stays 0, not forced to 1: Chrome and Firefox
-    // both fire mousedown with detail 0 in that case.
-    const detail: u32 = if (click_count > 0) @intCast(click_count) else 0;
-    const in: PointerInput = .{ .x = x, .y = y, .button = button, .buttons = gesture.held, .detail = detail };
-
     if (gesture.starts_gesture) {
-        // Stash the pointerdown outcome before the fallible focus call: the
-        // release half is a separate message and can't observe it otherwise.
-        const press = try dispatchPointerPress(frame, target, in);
-        frame.page.input_pointer.mousedown_suppressed = press.suppress_mouse;
-        if (press.suppress_focus == false) {
-            try focusForMouseDown(frame, target);
-        }
-    } else {
-        // A chorded press is a buttons-mask change (pointermove), not a second
-        // pointerdown: https://www.w3.org/TR/pointerevents3/#chorded-button-interactions
-        _ = try dispatchPointerEventOn(frame, target, "pointermove", .{ .x = x, .y = y, .button = button, .buttons = gesture.held });
-        if (frame.page.input_pointer.mousedown_suppressed == false) {
-            const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", in);
-            if (suppress_focus == false) {
-                try focusForMouseDown(frame, target);
-            }
-        }
+        frame.page.input_pointer.down_target = target;
+    }
+    const detail: u32 = if (click_count > 0) @intCast(click_count) else 0;
+    const g: Gesture = .{
+        .button = button,
+        .buttons_down = gesture.held,
+        .click_count = detail,
+        .coords = .{ .x = x, .y = y },
+        .emit_pointer_events = true,
+        .emit_mouse_compat = true,
+        .focus_error = .warn,
+    };
+    var suppressed = frame.page.input_pointer.mousedown_suppressed;
+    try pressSequence(frame, target, g, &suppressed);
+    if (gesture.starts_gesture) {
+        frame.page.input_pointer.mousedown_suppressed = suppressed;
     }
 }
 
@@ -400,10 +515,8 @@ pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
 pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
     // Consume the state before any early return, so a release that misses
     // every element can't leave it for the next message to misread.
+    const down_target = frame.page.input_pointer.down_target;
     const gesture = frame.page.input_pointer.release(button);
-    const remaining = gesture.held;
-    const ends_gesture = gesture.ends_gesture;
-    const was_suppressed = gesture.was_suppressed;
 
     const target = (try frame.window._document.elementFromPoint(x, y, frame)) orelse return;
     if (comptime lp.IS_DEBUG) {
@@ -418,31 +531,17 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
     }
 
     const detail: u32 = if (click_count > 0) @intCast(click_count) else 1;
-
-    if (ends_gesture) {
-        try dispatchPointerRelease(frame, target, .{ .x = x, .y = y, .button = button, .detail = detail }, was_suppressed);
-    } else {
-        // A chorded release (another button still held) is a buttons-mask
-        // change, not pointerup.
-        _ = try dispatchPointerEventOn(frame, target, "pointermove", .{ .x = x, .y = y, .button = button, .buttons = remaining });
-        if (!was_suppressed) {
-            _ = try dispatchMouseEventOn(frame, target, "mouseup", .{ .x = x, .y = y, .button = button, .buttons = remaining, .detail = detail });
-        }
-    }
-
-    // After mouseup, the activation event depends on the button.
-    switch (button) {
-        mouse_button.main => {
-            _ = try dispatchPointerEventOn(frame, target, "click", .{ .x = x, .y = y, .buttons = remaining, .detail = detail });
-            // A second click in quick succession also fires dblclick.
-            if (click_count == 2) {
-                _ = try dispatchMouseEventOn(frame, target, "dblclick", .{ .x = x, .y = y, .button = button, .buttons = remaining, .detail = detail });
-            }
-        },
-        mouse_button.auxiliary => _ = try dispatchMouseEventOn(frame, target, "auxclick", .{ .x = x, .y = y, .button = button, .buttons = remaining, .detail = detail }),
-        mouse_button.secondary => _ = try dispatchMouseEventOn(frame, target, "contextmenu", .{ .x = x, .y = y, .button = button, .buttons = remaining, .detail = detail }),
-        else => {},
-    }
+    const click_target = if (down_target) |dt| commonClickTarget(dt, target) else target;
+    const g: Gesture = .{
+        .button = button,
+        .buttons_down = gesture.held,
+        .click_count = detail,
+        .coords = .{ .x = x, .y = y },
+        .emit_pointer_events = true,
+        .emit_mouse_compat = true,
+        .focus_error = .warn,
+    };
+    try releaseSequence(frame, target, g, gesture.was_suppressed, click_target);
 }
 
 pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f64) !void {

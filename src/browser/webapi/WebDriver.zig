@@ -60,12 +60,7 @@ fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) ![]co
 // synchronously so the events are observable when the testdriver promise
 // resolves.
 pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
-    if (element.is(Element.Html)) |html| {
-        switch (html._type) {
-            .button, .input, .textarea, .select, .option, .optgroup => if (element.isDisabled()) return,
-            else => {},
-        }
-    }
+    if (element.isDisabled()) return;
 
     // A dispatch error must never reject the testdriver command.
     Frame.user_input.triggerClick(frame, element, frame.page.input_modifiers) catch |err| {
@@ -237,6 +232,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     // Where the last pointerDown landed: the click fires at the nearest common
     // inclusive ancestor of the down and up targets when they differ.
     var down_target: ?*Element = null;
+    var pointer_suppressed: bool = false;
     var click_count: u32 = 0;
     var last_click_button: i32 = 0;
     var last_click_target: ?*Element = null;
@@ -263,7 +259,9 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             }
             const el = target orelse continue;
             if (is_touch) {
-                dispatchPointer(el, "pointermove", 0, pressed_mask, frame);
+                _ = Frame.user_input.emitPointer(frame, el, "pointermove", .{
+                    .modifiers = frame.page.input_modifiers,
+                }, 0, pressed_mask) catch {};
                 if (pressed) {
                     dispatchTouch(el, "touchmove", frame);
                 }
@@ -273,8 +271,12 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                     .modifiers = frame.page.input_modifiers,
                     .with_pointer = true,
                 });
-                dispatchPointer(el, "pointermove", 0, pressed_mask, frame);
-                _ = dispatchMouse(el, "mousemove", 0, pressed_mask, 0, frame);
+                _ = Frame.user_input.emitPointer(frame, el, "pointermove", .{
+                    .modifiers = frame.page.input_modifiers,
+                }, 0, pressed_mask) catch {};
+                _ = Frame.user_input.emitMouse(frame, el, "mousemove", .{
+                    .modifiers = frame.page.input_modifiers,
+                }, 0, pressed_mask) catch {};
             }
         } else if (action_type.eql(comptime .wrap("pointerDown"))) {
             const el = target orelse continue;
@@ -287,62 +289,66 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             } else {
                 click_count = 1;
             }
-            dispatchPointer(el, "pointerdown", button, Frame.user_input.buttonsBitmask(button), frame);
             if (is_touch) {
+                const g: Frame.user_input.Gesture = .{
+                    .button = button,
+                    .buttons_down = pressed_mask,
+                    .click_count = click_count,
+                    .modifiers = frame.page.input_modifiers,
+                    .emit_pointer_events = true,
+                    .emit_mouse_compat = false,
+                };
+                Frame.user_input.pressSequence(frame, el, g, &pointer_suppressed) catch {};
                 dispatchTouch(el, "touchstart", frame);
             } else {
-                const suppressed = dispatchMouse(el, "mousedown", button, Frame.user_input.buttonsBitmask(button), click_count, frame);
-                if (!suppressed) {
-                    Frame.user_input.focusForMouseDown(frame, el) catch |err| {
-                        log.debug(.app, "webdriver mousedown focus", .{ .err = err });
-                    };
-                }
+                const g: Frame.user_input.Gesture = .{
+                    .button = button,
+                    .buttons_down = pressed_mask,
+                    .click_count = click_count,
+                    .modifiers = frame.page.input_modifiers,
+                    .emit_pointer_events = true,
+                    .emit_mouse_compat = true,
+                    .focus_error = .warn,
+                };
+                Frame.user_input.pressSequence(frame, el, g, &pointer_suppressed) catch {};
             }
         } else if (action_type.eql(comptime .wrap("pointerUp"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
             pressed = false;
             pressed_mask = 0;
-            dispatchPointer(el, "pointerup", button, 0, frame);
+            const click_target = Frame.user_input.commonClickTarget(down_target orelse el, el);
+            last_click_button = button;
+            last_click_target = click_target;
             if (is_touch) {
+                const g: Frame.user_input.Gesture = .{
+                    .button = button,
+                    .buttons_down = 0,
+                    .click_count = click_count,
+                    .modifiers = frame.page.input_modifiers,
+                    .emit_pointer_events = true,
+                    .emit_mouse_compat = false,
+                };
+                Frame.user_input.releaseSequence(frame, el, g, pointer_suppressed, click_target) catch {};
                 dispatchTouch(el, "touchend", frame);
             } else {
-                _ = dispatchMouse(el, "mouseup", button, 0, click_count, frame);
-                const click_target = commonClickTarget(down_target orelse el, el);
-                last_click_button = button;
-                last_click_target = click_target;
-                if (button == 0) {
-                    _ = dispatchMouse(click_target, "click", button, 0, click_count, frame);
-                    if (click_count % 2 == 0) {
-                        _ = dispatchMouse(click_target, "dblclick", button, 0, click_count, frame);
-                    }
-                } else {
-                    if (button == 2) {
-                        _ = dispatchMouse(click_target, "contextmenu", button, 0, click_count, frame);
-                    }
-                    _ = dispatchMouse(click_target, "auxclick", button, 0, click_count, frame);
-                }
+                const g: Frame.user_input.Gesture = .{
+                    .button = button,
+                    .buttons_down = 0,
+                    .click_count = click_count,
+                    .modifiers = frame.page.input_modifiers,
+                    .emit_pointer_events = true,
+                    .emit_mouse_compat = true,
+                    .focus_error = .warn,
+                };
+                Frame.user_input.releaseSequence(frame, el, g, pointer_suppressed, click_target) catch {};
             }
             down_target = null;
+            pointer_suppressed = false;
         }
         // "pause" carries timing only and is ignored. ("pointerCancel" is not
         // emitted by the testdriver Actions builder.)
     }
-}
-
-// A click whose mousedown and mouseup landed on different elements fires at
-// their nearest common inclusive ancestor element.
-fn commonClickTarget(down: *Element, up: *Element) *Element {
-    if (down == up) {
-        return up;
-    }
-    var current: ?*@import("Node.zig") = down.asNode();
-    while (current) |node| : (current = node.parentNode()) {
-        if (node.contains(up.asNode())) {
-            return node.is(Element) orelse break;
-        }
-    }
-    return up;
 }
 
 fn performWheelSource(source: js.Object, frame: *Frame) !void {
@@ -529,51 +535,6 @@ fn readI32(obj: js.Object, key: []const u8, default: i32) i32 {
         return default;
     }
     return val.toI32() catch default;
-}
-
-fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, frame: *Frame) void {
-    const modifiers = frame.page.input_modifiers;
-    const event = PointerEvent.initTrusted(typ, .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .button = button,
-        .buttons = buttons,
-        .pointerId = 1,
-        .pointerType = "mouse",
-        .isPrimary = true,
-        .ctrlKey = modifiers.ctrl,
-        .shiftKey = modifiers.shift,
-        .altKey = modifiers.alt,
-        .metaKey = modifiers.meta,
-    }, frame) catch |err| {
-        log.debug(.app, "webdriver pointer event", .{ .err = err, .type = typ });
-        return;
-    };
-    dispatch(el.asEventTarget(), event.asEvent(), frame, typ);
-}
-
-fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, detail: u32, frame: *Frame) bool {
-    const modifiers = frame.page.input_modifiers;
-    const event = MouseEvent.initTrusted(comptime .wrap(typ), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .button = button,
-        .buttons = buttons,
-        .detail = detail,
-        .ctrlKey = modifiers.ctrl,
-        .shiftKey = modifiers.shift,
-        .altKey = modifiers.alt,
-        .metaKey = modifiers.meta,
-    }, frame) catch |err| {
-        log.debug(.app, "webdriver mouse event", .{ .err = err, .type = typ });
-        return false;
-    };
-    return frame._event_manager.dispatchCancelable(el.asEventTarget(), event.asEvent()) catch |err| {
-        log.debug(.app, "webdriver dispatch", .{ .err = err, .type = typ });
-        return false;
-    };
 }
 
 // The action's x/y, which the caller already resolved the target from. An

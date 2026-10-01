@@ -946,6 +946,46 @@ test "cdp.input: a cancelled pointerdown suppresses mousedown and mouseup across
     try testing.expect(result.isTrue());
 }
 
+test "cdp.input: mousePressed and mouseReleased on a disabled button emit no events" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('btnDisabled').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('btnDisabled').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 1 },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 1 },
+    });
+
+    const result = try ls.local.compileAndRun(
+        \\JSON.stringify(window.disabledEvents) === '[]'
+    , null);
+    try testing.expect(result.isTrue());
+}
+
 // Asserts only the pointer events: pointerdown/pointerup fire at the mask's
 // 0/nonzero transitions and a mid-gesture button change is a pointermove (the
 // activation order below is a pre-existing, non-spec deviation from Chrome).
