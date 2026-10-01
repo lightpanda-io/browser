@@ -1092,6 +1092,12 @@ test "agent script runtime: page.classify executes presets, categories and struc
         \\if (presets.isBlocked !== 0.95) throw new Error("expected isBlocked === 0.95, got " + presets.isBlocked);
         \\if (presets.isCaptcha !== 0.05) throw new Error("expected isCaptcha === 0.05, got " + presets.isCaptcha);
         \\
+        \\// An empty object asks every preset; the mock answers isBlocked and isCaptcha only.
+        \\const all = await page.classify({});
+        \\if (all.isBlocked !== 0.95) throw new Error("expected all.isBlocked === 0.95, got " + all.isBlocked);
+        \\if (all.isConsentWall !== null) throw new Error("expected all.isConsentWall === null, got " + all.isConsentWall);
+        \\if (!("isEmptyCatalog" in all)) throw new Error("expected every preset key in the answer");
+        \\
         \\// 2. Category shorthand array
         \\const category = await page.classify(["product", "catalog"]);
         \\if (category !== "product") throw new Error("expected category === 'product', got " + category);

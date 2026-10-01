@@ -110,7 +110,7 @@ pub fn prepareQuestions(arena: std.mem.Allocator, questions_json: []const u8) Pr
             };
         },
         .object => |obj| {
-            if (obj.count() == 0) return error.EmptyQuestions;
+            if (obj.count() == 0) return preparePresets(arena);
 
             const entries = try arena.alloc(zenai.typesafe.QuestionEntry, obj.count());
             const specs = try arena.alloc(QuestionSpec, obj.count());
@@ -211,6 +211,22 @@ pub fn prepareQuestions(arena: std.mem.Allocator, questions_json: []const u8) Pr
         },
         else => return error.InvalidQuestionFormat,
     }
+}
+
+/// Every preset, keyed by its name: what an empty questions object asks.
+fn preparePresets(arena: std.mem.Allocator) error{OutOfMemory}!PreparedQuestions {
+    const presets = std.enums.values(Preset);
+    const entries = try arena.alloc(zenai.typesafe.QuestionEntry, presets.len);
+    const specs = try arena.alloc(QuestionSpec, presets.len);
+    for (presets, entries, specs) |preset, *entry, *spec| {
+        entry.* = .{ .key = @tagName(preset), .value = .noulText(preset.description()) };
+        spec.* = .{ .key = @tagName(preset), .is_noul = true };
+    }
+    return .{
+        .questions = .init(entries),
+        .kind = .questions_object,
+        .specs = specs,
+    };
 }
 
 pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode) !zenai.typesafe.Content {
@@ -317,6 +333,27 @@ test "browser.classify: prepareQuestions presets in the object form" {
     try std.testing.expectEqualStrings("isBlocked", prepared.specs[0].key);
     try testing.expect(prepared.questions.has("isBlocked"));
     try testing.expect(prepared.questions.has("isCaptcha"));
+}
+
+test "browser.classify: prepareQuestions empty object asks every preset" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const prepared = try prepareQuestions(arena.allocator(), "{}");
+    try testing.expectEqual(ResponseKind.questions_object, prepared.kind);
+    try testing.expectEqual(std.enums.values(Preset).len, prepared.specs.len);
+    for (std.enums.values(Preset), prepared.specs) |preset, spec| {
+        try std.testing.expectEqualStrings(@tagName(preset), spec.key);
+        try testing.expect(spec.is_noul);
+        try testing.expect(prepared.questions.has(@tagName(preset)));
+    }
+}
+
+test "browser.classify: prepareQuestions rejects an empty array" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    try testing.expectError(error.EmptyQuestions, prepareQuestions(arena.allocator(), "[]"));
 }
 
 test "browser.classify: prepareQuestions array of preset names is still categories" {
