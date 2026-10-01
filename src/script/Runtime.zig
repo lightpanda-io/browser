@@ -1086,8 +1086,8 @@ test "agent script runtime: page.classify executes presets, categories and struc
         \\const page = new Page();
         \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\
-        \\// 1. Presets array
-        \\const presets = await page.classify(["isBlocked", "isCaptcha"]);
+        \\// 1. Presets
+        \\const presets = await page.classify({ isBlocked: true, isCaptcha: true });
         \\if (typeof presets !== "object" || presets === null) throw new Error("expected presets to return an object");
         \\if (presets.isBlocked !== 0.95) throw new Error("expected isBlocked === 0.95, got " + presets.isBlocked);
         \\if (presets.isCaptcha !== 0.05) throw new Error("expected isCaptcha === 0.05, got " + presets.isCaptcha);

@@ -197,7 +197,7 @@ fn note(tool: browser_tools.Tool) []const u8 {
         .goto => "Navigates the page (re-navigating reuses the same object). Waits for `load`. Rejects on navigation failure; a **timeout does NOT reject** (the page may still be usable). Default timeout 10000 ms.",
         .evaluate => "Page-side JS escape hatch; returns text (JSON for objects/arrays).",
         .extract => "The only primitive returning a real JS value (object/array). The schema is its only argument. See schema below.",
-        .classify => "Classifies page state or candidate elements via TypeSafe Jev. Accepts presets, questions, or category options.",
+        .classify => "Classifies page state or candidate elements via TypeSafe Jev: an array of categories, or an object of presets and questions. Replay calls Jev live and needs `TYPESAFE_API_KEY`.",
         .waitForSelector => "`waitFor*` default timeout 5000 ms.",
         .waitForScript => "Re-evaluates page JS until truthy.",
         .waitForState => "",

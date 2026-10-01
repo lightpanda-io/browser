@@ -501,13 +501,13 @@ pub const Tool = enum {
                 ),
             },
             .classify => .{
-                .description = "Classify the page or an element subtree using TypeSafe System One (Jev). `questions` is a JSON array of preset names (isBlocked, isCaptcha, isConsentWall, isEmptyCatalog) or categories, or a JSON object of questions.",
+                .description = "Classify the page or an element subtree using TypeSafe System One (Jev). `questions` is a JSON array of categories (returns the one that fits), or a JSON object of questions keyed by the name each answer comes back under: `true` for a preset (isBlocked, isCaptcha, isConsentWall, isEmptyCatalog), a string for a yes/no question (returns its probability), or `{question, options}` for a choice. A missing answer is null.",
                 .summary = "Classify page state using semantic questions or presets",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "questions": { "type": "string", "description": "JSON string: array of presets or categories, or object of questions" },
+                    \\    "questions": { "type": "string", "description": "JSON string: array of categories, or object of questions" },
                     \\    "selector": { "type": "string", "description": "Optional CSS selector to classify a specific element subtree instead of the full page" }
                     \\  },
                     \\  "required": ["questions"]
