@@ -623,7 +623,7 @@ pub fn frameNavigateFailed(bc: *CDP.BrowserContext, event: *const Notification.F
             },
         },
         .sessionId = session_id,
-    });
+    }, .{});
 }
 
 // Fired from Frame.deinit while the frame's JS is still alive.
@@ -677,7 +677,7 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
                 .loaderId = loader_id,
             },
             .sessionId = session_id,
-        });
+        }, .{});
     }
 
     if (bc.page_life_cycle_events) {
