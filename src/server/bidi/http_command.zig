@@ -47,6 +47,8 @@ pub const element_key = "element-6066-11e4-a52e-4f735466cecf";
 pub const Command = union(enum) {
     navigate_to: NavigateTo,
     get_current_url,
+    back,
+    forward,
     refresh,
     get_title,
     get_window_handle,
@@ -222,6 +224,8 @@ const Route = struct {
 const routes = [_]Route{
     .init(.POST, "/url", .navigate_to),
     .init(.GET, "/url", .get_current_url),
+    .init(.POST, "/back", .back),
+    .init(.POST, "/forward", .forward),
     .init(.POST, "/refresh", .refresh),
     .init(.GET, "/title", .get_title),
     .init(.GET, "/window", .get_window_handle),
@@ -334,6 +338,8 @@ pub fn process(cmd: *BiDi.Command) !void {
     switch (cmd.input.http) {
         .navigate_to => |p| return navigateTo(cmd, p),
         .get_current_url => return getCurrentUrl(cmd),
+        .back => return traverse(cmd, -1),
+        .forward => return traverse(cmd, 1),
         .refresh => return refresh(cmd),
         .get_title => return getTitle(cmd),
         .get_window_handle => return getWindowHandle(cmd),
@@ -385,6 +391,17 @@ fn navigateTo(cmd: *BiDi.Command, p: NavigateTo) !void {
 fn getCurrentUrl(cmd: *BiDi.Command) !void {
     const frame = (try currentFrame(cmd)) orelse return;
     return cmd.sendResult(frame.url);
+}
+
+// POST /session/{id}/back and /forward. With no entry to go to, there's
+// nothing to do.
+fn traverse(cmd: *BiDi.Command, delta: i32) !void {
+    const ctx = (try currentContext(cmd)) orelse return;
+    const frame = (try currentFrame(cmd)) orelse return;
+    if (browsing_context.canTraverse(frame, delta) == false) {
+        return cmd.sendDone();
+    }
+    return browsing_context.traverse(cmd, ctx, frame, delta);
 }
 
 // POST /session/{id}/refresh.
@@ -1104,6 +1121,8 @@ test "bidi.http_command: parse" {
     try testing.expect(try parse(arena, .GET, "/element/7/text", "") == .get_element_text);
 
     try testing.expect(try parse(arena, .GET, "/url", "") == .get_current_url);
+    try testing.expect(try parse(arena, .POST, "/back", "{}") == .back);
+    try testing.expect(try parse(arena, .POST, "/forward", "{}") == .forward);
     try testing.expect(try parse(arena, .GET, "/window/handles", "") == .get_window_handles);
     try testing.expect(try parse(arena, .DELETE, "/actions", "") == .release_actions);
 

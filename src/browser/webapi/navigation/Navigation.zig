@@ -442,6 +442,9 @@ pub fn navigateInner(
 
             if (is_same_document) {
                 frame.url = new_url;
+                try frame.window._location._url.setHref(new_url, &frame.js.execution);
+                // `:target` matches off the fragment, which might have just changed.
+                frame.styleChanged();
 
                 committed.resolve("navigation traverse", {});
                 // todo: Fire navigate event
