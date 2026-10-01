@@ -1472,7 +1472,7 @@ fn searchExplicit(arena: std.mem.Allocator, session: *lp.Session, comptime engin
     return .{ .text = markdown_ };
 }
 
-/// Cloned out of the client before `deinit` takes it; otherwise the model sees
+/// Duped out of the client before `deinit` takes it; otherwise the model sees
 /// only the error name.
 const Failure = zenai.http.ErrorDetail;
 
@@ -1537,7 +1537,7 @@ fn apiSearch(
                 .status = status,
                 .message = client.last_error.message,
             });
-            detail.* = try client.last_error.clone(arena);
+            detail.* = try client.last_error.dupe(arena);
         }
         return err;
     };
