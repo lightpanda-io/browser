@@ -679,9 +679,8 @@ const ResponseWriter = struct {
             // common to get these from a server (e.g. for Cache-Control), but
             // Chrome joins these. So we have to too.
             const arena = self.arena;
-            var it = transfer.responseHeaderIterator();
             var map: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-            while (it.next()) |hdr| {
+            for (transfer.responseHeaders()) |hdr| {
                 const gop = try map.getOrPut(arena, hdr.name);
                 if (gop.found_existing) {
                     // yes, chrome joins multi-value headers with a \n

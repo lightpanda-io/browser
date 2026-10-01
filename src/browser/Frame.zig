@@ -1518,8 +1518,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
 
     self._http_status = transfer.responseStatus();
     self._bot_challenge = transfer.botChallenge();
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
+    for (transfer.responseHeaders()) |hdr| {
         try self._http_headers.append(self.arena, .{
             .name = try self.arena.dupe(u8, hdr.name),
             .value = try self.arena.dupe(u8, hdr.value),
@@ -1568,8 +1567,7 @@ fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
     }
 
     const disposition: HttpClient.Header = blk: {
-        var it = transfer.responseHeaderIterator();
-        while (it.next()) |hdr| {
+        for (transfer.responseHeaders()) |hdr| {
             if (std.mem.eql(u8, hdr.name, "content-disposition")) {
                 break :blk hdr;
             }

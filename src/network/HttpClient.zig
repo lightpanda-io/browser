@@ -47,7 +47,6 @@ const Allocator = std.mem.Allocator;
 
 pub const Method = http.Method;
 pub const Header = http.Header;
-const HeaderIterator = http.HeaderIterator;
 
 // This is loosely tied to a browser Frame. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -1466,8 +1465,7 @@ const SyncContext = struct {
         }
 
         if (self.options.copy_headers) {
-            var it = transfer.responseHeaderIterator();
-            while (it.next()) |hdr| {
+            for (transfer.responseHeaders()) |hdr| {
                 try self.headers.append(allocator, .{
                     .name = try allocator.dupe(u8, hdr.name),
                     .value = try allocator.dupe(u8, hdr.value),
@@ -3259,7 +3257,7 @@ pub const Transfer = struct {
             .decoded_body_size = decoded_body_size,
             .status = status,
             .content_type = content_type,
-            .content_encoding = findHeader(self.res.headers, "content-encoding") orelse "",
+            .content_encoding = self.responseHeader("content-encoding") orelse "",
             .from_cache = t.cache != .none,
             .timing_allow = timing_allow,
         }) catch |err| {
@@ -3396,9 +3394,7 @@ pub const Transfer = struct {
         // in the arena so it survives the conn release.
         self.res.header.?.url = (try arena.dupeZ(u8, std.mem.span(self.res.header.?.url))).ptr;
 
-        var it = HeaderIterator{ .curl = .{ .conn = conn } };
-        const headers = try it.collect(arena.allocator());
-        self.setResponseHeaders(headers.items);
+        self.setResponseHeaders(try conn.collectResponseHeaders(arena.allocator()));
 
         if (self.req.credentialsAllowed()) {
             if (self.cookie_jar) |jar| {
@@ -3954,7 +3950,12 @@ pub const Transfer = struct {
             }
 
             if (transfer.req.partial == null) {
-                if (transfer.getContentLength()) |cl| {
+                // Headers aren't materialized yet; read them off the conn.
+                const content_length: ?usize = blk: {
+                    const hdr = conn.getResponseHeader("content-length", 0) orelse break :blk null;
+                    break :blk std.fmt.parseInt(usize, hdr.value, 10) catch null;
+                };
+                if (content_length) |cl| {
                     if (cl > transfer.client.max_response_size) {
                         res.callback_error = error.ResponseTooLarge;
                         return http.writefunc_error;
@@ -4088,13 +4089,10 @@ pub const Transfer = struct {
         return rh.redirect_count;
     }
 
-    pub fn responseHeaderIterator(self: *Transfer) HeaderIterator {
-        if (self.res.headers.len > 0 or self._conn == null) {
-            return .{ .list = .{ .list = self.res.headers } };
-        }
-        // Mid-stream (pump time): headers aren't materialized yet, read
-        // them off the live conn.
-        return .{ .curl = .{ .conn = self._conn.? } };
+    // Response headers are only available once materialized (i.e. from
+    // dispatch). Before that, at pump time, read them off the conn.
+    pub fn responseHeaders(self: *const Transfer) []const http.Header {
+        return self.res.headers;
     }
 
     pub fn getContentLength(self: *const Transfer) ?usize {
@@ -4110,22 +4108,10 @@ pub const Transfer = struct {
         return self._body_len;
     }
 
-    // First value of a response header. `name` must be lowercase.
-    pub fn responseHeader(self: *const Transfer, name: [:0]const u8) ?[]const u8 {
-        // Materialized headers (dispatch time, any source).
-        for (self.res.headers) |hdr| {
-            if (std.mem.eql(u8, hdr.name, name)) {
-                return hdr.value;
-            }
-        }
-
-        // Mid-stream (curl's write callback): read from the live conn.
-        if (self._conn) |c| {
-            const value = c.getResponseHeader(name, 0) orelse return null;
-            return value.value;
-        }
-
-        return null;
+    // First value of a response header. `name` must be lowercase. Same
+    // materialization caveat as responseHeaders.
+    pub fn responseHeader(self: *const Transfer, name: []const u8) ?[]const u8 {
+        return findHeader(self.res.headers, name);
     }
 
     pub fn botChallenge(self: *const Transfer) ?BotChallenge {
@@ -4344,7 +4330,7 @@ const ResourceTiming = struct {
 // Reset on every retry (auth retry, redirect) via Transfer.reset — only
 // the cross-retry counters (_auth_challenge, _redirect_count) live on
 // Transfer itself. Consumers read it through the accessors above
-// (status / contentType / responseHeaderIterator / getContentLength).
+// (status / contentType / responseHeaders / getContentLength).
 const Response = struct {
     header: ?http.ResponseHead = null,
 
@@ -4953,6 +4939,41 @@ test "HttpClient: Transfer.setHeader replaces by case-insensitive name" {
     try testing.expectEqual(.author, headers[1].source);
     try testing.expectEqual("X-New", headers[2].name);
     try testing.expectEqual("yes", headers[2].value);
+}
+
+test "HttpClient: Transfer.botChallenge" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    const arena = try pool.acquire(.small, "test");
+    defer arena.release();
+
+    var transfer = testTransfer(arena);
+    const Case = struct {
+        status: u16,
+        headers: []const http.Header,
+        expected: ?BotChallenge,
+    };
+    const cases = [_]Case{
+        .{ .status = 403, .headers = &.{ .{ .name = "server", .value = "cloudflare" }, .{ .name = "cf-mitigated", .value = "challenge" } }, .expected = .cloudflare },
+        // the header alone isn't enough, the status gates the lookup
+        .{ .status = 200, .headers = &.{.{ .name = "cf-mitigated", .value = "challenge" }}, .expected = null },
+        .{ .status = 403, .headers = &.{.{ .name = "server", .value = "cloudflare" }}, .expected = null },
+        .{ .status = 429, .headers = &.{.{ .name = "x-vercel-mitigated", .value = "challenge" }}, .expected = .vercel },
+        .{ .status = 405, .headers = &.{.{ .name = "x-amzn-waf-action", .value = "captcha" }}, .expected = .aws_waf },
+        .{ .status = 202, .headers = &.{.{ .name = "x-amzn-waf-action", .value = "challenge" }}, .expected = .aws_waf },
+        // a mitigation other than a challenge
+        .{ .status = 405, .headers = &.{.{ .name = "x-amzn-waf-action", .value = "block" }}, .expected = null },
+    };
+
+    // no response yet
+    try testing.expectEqual(null, transfer.botChallenge());
+
+    for (cases) |case| {
+        transfer.setResponseHead(case.status, null);
+        transfer.setResponseHeaders(case.headers);
+        try testing.expectEqual(case.expected, transfer.botChallenge());
+    }
 }
 
 test "HttpClient: Transfer.appendHeader combines same-source values" {
