@@ -96,15 +96,19 @@ fn initColorEnabled() void {
     color_enabled_cached = std.Io.File.stderr().isTty(lp.io) catch false;
 }
 
-fn isColorEnabled() bool {
+fn colorEnabled() bool {
+    if (opts.color) |c| return c;
+    if (comptime lp.IS_TEST) return true;
     color_enabled_once.call();
     return color_enabled_cached;
 }
 
-fn colorEnabled() bool {
-    if (opts.color) |c| return c;
-    if (comptime lp.IS_TEST) return true;
-    return isColorEnabled();
+fn writeColor(code: []const u8, writer: *std.Io.Writer) !void {
+    if (colorEnabled()) try writer.writeAll(code);
+}
+
+fn clearColor(writer: *std.Io.Writer) !void {
+    if (colorEnabled()) try writer.writeAll("\x1b[0m");
 }
 
 /// Optional sink for formatted log lines. The agent's REPL terminal sets
@@ -363,31 +367,29 @@ fn logPretty(scope: Scope, level: Level, msg: []const u8, kvs: []const KV, write
 
 fn logPrettyPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.Writer) !void {
     if (scope == .console and level == .fatal) {
-        if (colorEnabled()) {
-            try writer.writeAll("\x1b[0;104mWARN  ");
-        } else {
-            try writer.writeAll("WARN  ");
-        }
+        try writeColor("\x1b[0;104m", writer);
+        try writer.writeAll("WARN  ");
     } else {
-        if (colorEnabled()) {
-            try writer.writeAll(switch (level) {
-                .debug => "\x1b[0;36mDEBUG\x1b[0m ",
-                .info => "\x1b[0;32mINFO\x1b[0m  ",
-                .warn => "\x1b[0;33mWARN\x1b[0m  ",
-                .err => "\x1b[0;31mERROR ",
-                .fatal => "\x1b[0;35mFATAL ",
-                .note => "\x1b[0;32mNOTE\x1b[0m  ",
-            });
-        } else {
-            try writer.writeAll(switch (level) {
-                .debug => "DEBUG ",
-                .info => "INFO  ",
-                .warn => "WARN  ",
-                .err => "ERROR ",
-                .fatal => "FATAL ",
-                .note => "NOTE  ",
-            });
+        const color_code = switch (level) {
+            .debug => "\x1b[0;36m",
+            .info, .note => "\x1b[0;32m",
+            .warn => "\x1b[0;33m",
+            .err => "\x1b[0;31m",
+            .fatal => "\x1b[0;35m",
+        };
+        try writeColor(color_code, writer);
+        try writer.writeAll(switch (level) {
+            .debug => "DEBUG",
+            .info => "INFO ",
+            .warn => "WARN ",
+            .err => "ERROR",
+            .fatal => "FATAL",
+            .note => "NOTE ",
+        });
+        if (level != .err and level != .fatal) {
+            try clearColor(writer);
         }
+        try writer.writeByte(' ');
     }
 
     try writer.writeAll(@tagName(scope));
@@ -411,12 +413,9 @@ fn logPrettyPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.
             try writer.print(" page={d}", .{page.id});
         }
         const el = elapsed();
-        if (colorEnabled()) {
-            try writer.print(" \x1b[0m[+{d}{s}]", .{ el.time, el.unit });
-        } else {
-            try writer.print(" [+{d}{s}]", .{ el.time, el.unit });
-        }
-        try writer.writeByte('\n');
+        try writer.writeByte(' ');
+        try clearColor(writer);
+        try writer.print("[+{d}{s}]\n", .{ el.time, el.unit });
     }
 }
 
@@ -444,13 +443,9 @@ const Colored = struct {
     }
 
     pub fn format(self: Colored, writer: *std.Io.Writer) !void {
-        if (colorEnabled()) {
-            try writer.writeAll(self.code);
-            try writer.writeAll(self.text);
-            return writer.writeAll("\x1b[0m");
-        } else {
-            return writer.writeAll(self.text);
-        }
+        try writeColor(self.code, writer);
+        try writer.writeAll(self.text);
+        try clearColor(writer);
     }
 };
 
