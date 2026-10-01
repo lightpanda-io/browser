@@ -52,7 +52,6 @@ pub const Preset = enum {
 
 pub const ResponseKind = enum {
     single_choice,
-    presets_object,
     questions_object,
 };
 
@@ -82,37 +81,8 @@ pub fn prepareQuestions(arena: std.mem.Allocator, questions_json: []const u8) Pr
         .array => |arr| {
             if (arr.items.len == 0) return error.EmptyQuestions;
 
-            // Check if every element matches a preset name.
-            var all_presets = true;
-            for (arr.items) |item| {
-                if (item != .string or Preset.fromString(item.string) == null) {
-                    all_presets = false;
-                    break;
-                }
-            }
-
-            if (all_presets) {
-                const entries = try arena.alloc(zenai.typesafe.QuestionEntry, arr.items.len);
-                const specs = try arena.alloc(QuestionSpec, arr.items.len);
-                for (arr.items, 0..) |item, i| {
-                    const preset = Preset.fromString(item.string).?;
-                    entries[i] = .{
-                        .key = item.string,
-                        .value = .noulText(preset.description()),
-                    };
-                    specs[i] = .{
-                        .key = item.string,
-                        .is_noul = true,
-                    };
-                }
-                return .{
-                    .questions = .init(entries),
-                    .kind = .presets_object,
-                    .specs = specs,
-                };
-            }
-
-            // Otherwise, treat as an array of categories for a single choice question.
+            // An array is always the categories of one choice question; presets
+            // go through the object form.
             for (arr.items) |item| {
                 if (item != .string) return error.InvalidQuestionFormat;
             }
@@ -284,17 +254,20 @@ pub fn formatResponse(
             const chosen = try response.choice("__category", prepared.questions);
             try std.json.Stringify.value(chosen, .{}, writer);
         },
-        .presets_object, .questions_object => {
+        .questions_object => {
             try writer.writeByte('{');
             for (prepared.specs, 0..) |spec, i| {
                 if (i > 0) try writer.writeByte(',');
                 try std.json.Stringify.value(spec.key, .{}, writer);
                 try writer.writeByte(':');
+                // A missing answer is null, not a confident "no".
                 if (spec.is_noul) {
-                    const prob = response.noul(spec.key) orelse 0.0;
-                    try std.json.Stringify.value(prob, .{}, writer);
+                    try std.json.Stringify.value(response.noul(spec.key), .{}, writer);
                 } else {
-                    const ans = response.answer(spec.key) orelse return error.AnswerMissing;
+                    const ans = response.answer(spec.key) orelse {
+                        try writer.writeAll("null");
+                        continue;
+                    };
                     switch (ans) {
                         .choice => |c| {
                             try writer.writeAll("{\"choice\":");
@@ -333,17 +306,26 @@ pub fn formatResponse(
 
 const testing = @import("../testing.zig");
 
-test "browser.classify: prepareQuestions preset array" {
+test "browser.classify: prepareQuestions presets in the object form" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
-    const prepared = try prepareQuestions(arena.allocator(), "[\"isBlocked\", \"isCaptcha\"]");
-    try testing.expectEqual(ResponseKind.presets_object, prepared.kind);
+    const prepared = try prepareQuestions(arena.allocator(), "{\"isBlocked\": true, \"isCaptcha\": true}");
+    try testing.expectEqual(ResponseKind.questions_object, prepared.kind);
     try testing.expectEqual(2, prepared.specs.len);
     try testing.expect(prepared.specs[0].is_noul);
     try std.testing.expectEqualStrings("isBlocked", prepared.specs[0].key);
     try testing.expect(prepared.questions.has("isBlocked"));
     try testing.expect(prepared.questions.has("isCaptcha"));
+}
+
+test "browser.classify: prepareQuestions array of preset names is still categories" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const prepared = try prepareQuestions(arena.allocator(), "[\"isBlocked\", \"isCaptcha\"]");
+    try testing.expectEqual(ResponseKind.single_choice, prepared.kind);
+    try testing.expect(prepared.questions.has("__category"));
 }
 
 test "browser.classify: prepareQuestions category array" {
@@ -399,11 +381,11 @@ test "browser.classify: formatResponse single_choice" {
     try std.testing.expectEqualStrings("\"product\"", formatted);
 }
 
-test "browser.classify: formatResponse presets_object" {
+test "browser.classify: formatResponse presets" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
-    const prepared = try prepareQuestions(arena.allocator(), "[\"isBlocked\", \"isCaptcha\"]");
+    const prepared = try prepareQuestions(arena.allocator(), "{\"isBlocked\": true, \"isCaptcha\": true}");
     const response: zenai.typesafe.types.AskResponse = .{
         .answers = .init(&.{
             .{ .key = "isBlocked", .value = .{ .noul = .{ .noul = 0.92 } } },
@@ -413,4 +395,15 @@ test "browser.classify: formatResponse presets_object" {
 
     const formatted = try formatResponse(arena.allocator(), response, prepared);
     try std.testing.expectEqualStrings("{\"isBlocked\":0.92,\"isCaptcha\":0.08}", formatted);
+}
+
+test "browser.classify: formatResponse writes null for a missing answer" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const prepared = try prepareQuestions(arena.allocator(), "{\"isBlocked\": true, \"kind\": [\"a\", \"b\"]}");
+    const response: zenai.typesafe.types.AskResponse = .{};
+
+    const formatted = try formatResponse(arena.allocator(), response, prepared);
+    try std.testing.expectEqualStrings("{\"isBlocked\":null,\"kind\":null}", formatted);
 }
