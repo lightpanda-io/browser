@@ -169,8 +169,14 @@ pub fn processMessage(self: *CDP, msg: []const u8) !void {
     return self.dispatch(arena.allocator(), .{ .cdp = self }, msg);
 }
 
-pub fn sendJSON(self: *CDP, message: anytype) !void {
-    try self.link.sendJSON(message, .{ .emit_null_optional_fields = false });
+pub const SendJSONOpts = struct {
+    size_hint: usize = 0,
+};
+pub fn sendJSON(self: *CDP, message: anytype, opts: SendJSONOpts) !void {
+    try self.link.sendJSON(message, .{
+        .size_hint = opts.size_hint,
+        .stringify = .{ .emit_null_optional_fields = false },
+    });
 }
 
 // Parse-then-dispatch entry point. Used by:
@@ -370,7 +376,7 @@ pub fn sendEvent(self: *CDP, method: []const u8, p: anytype, opts: SendEventOpts
         .method = method,
         .params = if (comptime @typeInfo(@TypeOf(p)) == .null) struct {}{} else p,
         .sessionId = opts.session_id,
-    });
+    }, .{});
 }
 
 pub const BrowserContext = struct {
@@ -1450,9 +1456,9 @@ pub const Command = struct {
         cdp: *CDP,
         capture: *std.Io.Writer,
 
-        pub fn sendJSON(self: Sender, message: anytype) !void {
+        pub fn sendJSON(self: Sender, message: anytype, opts: SendJSONOpts) !void {
             switch (self) {
-                .cdp => |cdp| return cdp.sendJSON(message),
+                .cdp => |cdp| return cdp.sendJSON(message, opts),
                 .capture => |writer| {
                     return std.json.Stringify.value(message, .{
                         .emit_null_optional_fields = false,
@@ -1480,13 +1486,15 @@ pub const Command = struct {
         return self.browser_context.?;
     }
 
-    const SendResultOpts = struct {};
-    pub fn sendResult(self: *Command, result: anytype, _: SendResultOpts) !void {
+    const SendResultOpts = struct {
+        size_hint: usize = 0, // hint about the final serialized size
+    };
+    pub fn sendResult(self: *Command, result: anytype, opts: SendResultOpts) !void {
         return self.sender.sendJSON(.{
             .id = self.input.id,
             .result = if (comptime @typeInfo(@TypeOf(result)) == .null) struct {}{} else result,
             .sessionId = self.input.session_id,
-        });
+        }, .{ .size_hint = opts.size_hint });
     }
 
     pub fn sendEvent(self: *Command, method: []const u8, p: anytype, opts: SendEventOpts) !void {
@@ -1500,7 +1508,7 @@ pub const Command = struct {
             .id = self.input.id,
             .@"error" = .{ .code = code, .message = message },
             .sessionId = self.input.session_id,
-        });
+        }, .{});
     }
 
     const Input = struct {

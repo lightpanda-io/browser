@@ -196,13 +196,18 @@ pub fn sendPong(self: *Link, data: []const u8) !void {
 // Websocket frames have a variable-length header (2-10 bytes server->client).
 // We serialize into a buffer whose first 10 bytes are reserved, then
 // backfill the header right-aligned and send the slice.
-pub fn sendJSON(self: *Link, message: anytype, opts: std.json.Stringify.Options) !void {
+pub const SendOpts = struct {
+    stringify: std.json.Stringify.Options = .{},
+    size_hint: usize = 0,
+};
+pub fn sendJSON(self: *Link, message: anytype, opts: SendOpts) !void {
     const allocator = self.acquireSendArena();
     defer self.releaseSendArena();
 
-    var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 512);
+    // 512 covers the envelope (id, sessionId, field names) around the payload.
+    var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 512 + opts.size_hint);
     try aw.writer.writeAll(&[_]u8{0} ** 10);
-    try std.json.Stringify.value(message, opts, &aw.writer);
+    try std.json.Stringify.value(message, opts.stringify, &aw.writer);
     const framed = WS.fillHeader(aw.toArrayList());
     return self.send(framed);
 }
