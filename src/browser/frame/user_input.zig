@@ -239,7 +239,7 @@ fn emitMouse(
 
 /// MouseEvent/PointerEvent.buttons bitmask for a MouseEvent.button value.
 /// https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/buttons
-pub fn buttonsBitmask(button: i32) u16 {
+fn buttonsBitmask(button: i32) u16 {
     return switch (button) {
         mouse_button.main => 1,
         mouse_button.secondary => 2,
@@ -345,10 +345,6 @@ pub fn moveSequence(frame: *Frame, target: *Element, g: Gesture) !void {
 /// Returns whether the gesture's compat mouse events are suppressed: by the
 /// opening pointerdown, or for a chorded press, `chord_suppressed` carried over.
 fn pressSequence(frame: *Frame, target: *Element, g: Gesture, chord_suppressed: bool) !bool {
-    if (target.isDisabled()) {
-        return true;
-    }
-
     const starts_gesture = (g.buttons_down & ~buttonsBitmask(g.button)) == 0;
     // A chorded press is a buttons-mask change (pointermove), not a second
     // pointerdown: https://www.w3.org/TR/pointerevents3/#chorded-button-interactions
@@ -362,7 +358,9 @@ fn pressSequence(frame: *Frame, target: *Element, g: Gesture, chord_suppressed: 
         return suppressed;
     }
 
-    if (!suppressed and !try emitMouse(frame, target, "mousedown", g, g.click_count)) {
+    // A disabled control gets the pointer events, contextmenu and auxclick,
+    // but no mouse events, click or focus, as in Chrome.
+    if (!suppressed and !target.isDisabled() and !try emitMouse(frame, target, "mousedown", g, g.click_count)) {
         focusForMouseDown(frame, target) catch |err| log.debug(.app, "mousedown focus", .{ .err = err });
     }
     // Chrome on Linux and macOS fires contextmenu on press, even when the
@@ -376,22 +374,21 @@ fn pressSequence(frame: *Frame, target: *Element, g: Gesture, chord_suppressed: 
 /// A null `click_target` releases without a click, as for a later release in
 /// a chord.
 fn releaseSequence(frame: *Frame, up_target: *Element, g: Gesture, suppressed: bool, click_target: ?*Element) !void {
-    if (up_target.isDisabled()) {
-        return;
-    }
-
     _ = try emitPointer(frame, up_target, if (g.buttons_down == 0) "pointerup" else "pointermove", g, 0);
-    if (g.emit_mouse_compat and !suppressed) {
+    if (g.emit_mouse_compat and !suppressed and !up_target.isDisabled()) {
         _ = try emitMouse(frame, up_target, "mouseup", g, g.click_count);
     }
 
     // clickCount 0 releases without a click, as in Chrome.
     const click_el = click_target orelse return;
-    if (!g.emit_mouse_compat or g.click_count == 0 or (click_el != up_target and click_el.isDisabled())) {
+    if (!g.emit_mouse_compat or g.click_count == 0) {
         return;
     }
 
     if (g.button == mouse_button.main) {
+        if (click_el.isDisabled()) {
+            return;
+        }
         _ = try emitPointer(frame, click_el, "click", g, g.click_count);
         if (g.click_count % 2 == 0) {
             _ = try emitMouse(frame, click_el, "dblclick", g, g.click_count);
@@ -405,9 +402,6 @@ fn releaseSequence(frame: *Frame, up_target: *Element, g: Gesture, suppressed: b
 /// off pointerdown/mousedown, not click alone. A focus failure is logged, not
 /// returned.
 pub fn triggerClick(frame: *Frame, target: *Element, modifiers: Modifiers) !void {
-    if (target.isDisabled()) {
-        return;
-    }
     try moveSequence(frame, target, .{ .modifiers = modifiers });
 
     const g: Gesture = .{ .click_count = 1, .modifiers = modifiers };

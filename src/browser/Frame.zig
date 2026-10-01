@@ -451,6 +451,20 @@ pub fn deinit(self: *Frame) void {
         frame.deinit();
     }
 
+    // The Page outlives an iframe or popup that re-navigates: don't leave its
+    // pointer state on this document's elements.
+    const page = self.page;
+    if (page.input_hover_target) |el| {
+        if (el.ownerFrame(self) == self) {
+            page.input_hover_target = null;
+        }
+    }
+    if (page.input_pointer.down_target) |el| {
+        if (el.ownerFrame(self) == self) {
+            page.input_pointer.reset();
+        }
+    }
+
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame.deinit", .{ .url = self.url, .type = self._type });
     }
@@ -477,8 +491,6 @@ pub fn deinit(self: *Frame) void {
     if (self.window._navigator._service_worker) |container| {
         container.detach();
     }
-
-    const page = self.page;
 
     if (self._queued_navigation) |qn| {
         qn.arena.release();

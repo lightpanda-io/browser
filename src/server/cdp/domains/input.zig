@@ -1010,7 +1010,9 @@ test "cdp.input: a cancelled pointerdown suppresses mousedown and mouseup across
     try testing.expect(result.isTrue());
 }
 
-test "cdp.input: mousePressed and mouseReleased on a disabled button emit no events" {
+// A disabled control gets the pointer events, contextmenu and auxclick, but no
+// mouse events or click. Matches Chrome.
+test "cdp.input: a disabled button gets only pointer and context events" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -1043,9 +1045,21 @@ test "cdp.input: mousePressed and mouseReleased on a disabled button emit no eve
         .method = "Input.dispatchMouseEvent",
         .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 1 },
     });
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "right", .clickCount = 1 },
+    });
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "right", .clickCount = 1 },
+    });
 
     const result = try ls.local.compileAndRun(
-        \\JSON.stringify(window.disabledEvents) === '[]'
+        \\JSON.stringify(window.disabledEvents) === JSON.stringify([
+        \\  'pointerdown', 'pointerup', 'pointerdown', 'contextmenu', 'pointerup', 'auxclick'
+        \\])
     , null);
     try testing.expect(result.isTrue());
 }
@@ -1694,4 +1708,30 @@ test "cdp.input: dispatchKeyEvent Enter clicks buttons and submits once" {
         const got = try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSlice();
         try testing.expectEqualSlices(u8, c.expect, got);
     }
+}
+
+test "cdp.input: re-navigating an iframe drops the pointer state on its elements" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "cdp/input_iframe.html" });
+    const main = bc.mainFrame().?;
+    const page = main.page;
+    const child = main.child_frames.items[0];
+    const text = child.document.getElementById("text", child) orelse unreachable;
+
+    try lp.actions.click(text.asNode(), child);
+    try page.input_pointer.press(child, text, .{});
+    try testing.expect(page.input_hover_target == text);
+    try testing.expect(page.input_pointer.down_target == text);
+
+    var ls: lp.js.Local.Scope = undefined;
+    main.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun("document.querySelector('iframe').src = 'iframe/input_child.html?again'", null);
+    _ = try bc.session.processQueuedNavigation();
+
+    try testing.expect(page.input_hover_target == null);
+    try testing.expect(page.input_pointer.down_target == null);
+    try testing.expectEqual(0, page.input_pointer.held);
 }
