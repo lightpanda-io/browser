@@ -2509,3 +2509,199 @@ test "cdp.input: dispatchKeyEvent Enter clicks buttons and submits once" {
         try testing.expectEqualSlices(u8, c.expect, got);
     }
 }
+
+test "cdp.input: touch tap emits pointer and compatibility activation in order" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun(
+        \\window.tapEvents = [];
+        \\const tapTarget = document.getElementById('btn');
+        \\for (const type of ['pointerover', 'pointerenter', 'pointerdown', 'touchstart', 'pointerup', 'pointerout', 'pointerleave', 'touchend', 'mouseover', 'mouseenter', 'mousemove', 'mousedown', 'focus', 'mouseup', 'click']) {
+        \\  tapTarget.addEventListener(type, e => tapEvents.push({type: e.type, pointerType: e.pointerType, id: e.pointerId, button: e.button, buttons: e.buttons, detail: e.detail, trusted: e.isTrusted, x: e.clientX, y: e.clientY, width: e.width, height: e.height, pressure: e.pressure, shift: e.shiftKey}));
+        \\}
+    , null);
+    const x = try (try ls.local.compileAndRun("tapTarget.getBoundingClientRect().x + 1", null)).toF64();
+    const y = try (try ls.local.compileAndRun("tapTarget.getBoundingClientRect().y + 1", null)).toF64();
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchStart", .modifiers = 8, .touchPoints = &.{.{ .x = x, .y = y, .id = 7, .radiusX = 3, .radiusY = 4, .force = 0.7 }} },
+    });
+    try testing.expect((try ls.local.compileAndRun("!window.clicked && tapEvents.map(e => e.type).join(',') === 'pointerover,pointerenter,pointerdown,touchstart'", null)).isTrue());
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchEnd", .modifiers = 8, .touchPoints = &.{} },
+    });
+    try testing.expect((try ls.local.compileAndRun(
+        \\tapEvents.map(e => e.type).join(',') === 'pointerover,pointerenter,pointerdown,touchstart,pointerup,pointerout,pointerleave,touchend,mouseover,mouseenter,mousemove,mousedown,focus,mouseup,click' && window.clicked && document.activeElement === tapTarget &&
+        \\tapEvents.every(e => e.trusted) &&
+        \\tapEvents.filter(e => e.pointerType).every(e => e.pointerType === 'touch' && e.id === 2 && e.shift) &&
+        \\tapEvents.find(e => e.type === 'pointerdown').width === 6 && tapEvents.find(e => e.type === 'pointerdown').height === 8 && tapEvents.find(e => e.type === 'pointerdown').pressure === 0.7 &&
+        \\tapEvents.find(e => e.type === 'pointerup').buttons === 0 && tapEvents.find(e => e.type === 'pointerup').pressure === 0 &&
+        \\tapEvents.find(e => e.type === 'mousedown').buttons === 1 && tapEvents.find(e => e.type === 'mousedown').detail === 1 &&
+        \\tapEvents.find(e => e.type === 'mouseup').buttons === 0 && tapEvents.find(e => e.type === 'click').detail === 1
+    , null)).isTrue());
+    try testing.expect(frame.page.input_touch_contact == null);
+    try testing.expectEqual(@as(u16, 0), frame.page.input_pointer.held);
+}
+
+test "cdp.input: touch tap cancellation distinguishes touch pointer and mouse defaults" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun(
+        \\const tapTarget = document.getElementById('chk');
+        \\window.preventType = '';
+        \\window.tapEvents = [];
+        \\for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'touchstart', 'touchmove', 'touchend', 'touchcancel', 'mousemove', 'mousedown', 'mouseup', 'click']) {
+        \\  tapTarget.addEventListener(type, e => { tapEvents.push(e.type); if (e.type === preventType) e.preventDefault(); }, {passive: false});
+        \\}
+    , null);
+    const x = try (try ls.local.compileAndRun("tapTarget.getBoundingClientRect().x + 1", null)).toF64();
+    const y = try (try ls.local.compileAndRun("tapTarget.getBoundingClientRect().y + 1", null)).toF64();
+    const cases = .{
+        .{ "touchstart", "!tapTarget.checked && !tapEvents.includes('mousedown') && !tapEvents.includes('click')" },
+        .{ "touchmove", "!tapTarget.checked && !tapEvents.includes('mousedown') && !tapEvents.includes('click')" },
+        .{ "touchend", "!tapTarget.checked && !tapEvents.includes('mousedown') && !tapEvents.includes('click')" },
+        .{ "pointerdown", "tapTarget.checked && tapEvents.includes('click') && !tapEvents.includes('mousedown') && !tapEvents.includes('mouseup') && !tapEvents.includes('mousemove') && document.activeElement.id === 'inp'" },
+        .{ "pointerup", "tapTarget.checked && tapEvents.includes('mousedown') && tapEvents.includes('mouseup')" },
+        .{ "mousedown", "tapTarget.checked && document.activeElement.id === 'inp'" },
+        .{ "click", "!tapTarget.checked && tapEvents.includes('mousedown') && tapEvents.includes('mouseup')" },
+        .{ "touchcancel", "!tapTarget.checked && tapEvents.includes('pointercancel') && !tapEvents.includes('pointerup') && !tapEvents.includes('mousedown') && !tapEvents.includes('click')" },
+        .{ "", "tapTarget.checked && tapEvents.includes('mousedown') && tapEvents.includes('mouseup') && document.activeElement === tapTarget" },
+    };
+    inline for (cases) |case| {
+        _ = try ls.local.compileAndRun("tapTarget.checked = false; tapEvents = []; document.getElementById('inp').focus(); preventType = '" ++ case[0] ++ "';", null);
+        try ctx.processMessage(.{
+            .id = 1,
+            .method = "Input.dispatchTouchEvent",
+            .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y }} },
+        });
+        if (comptime std.mem.eql(u8, case[0], "touchmove")) {
+            try ctx.processMessage(.{
+                .id = 2,
+                .method = "Input.dispatchTouchEvent",
+                .params = .{ .type = "touchMove", .touchPoints = &.{.{ .x = x + 1, .y = y }} },
+            });
+        }
+        try ctx.processMessage(.{
+            .id = 3,
+            .method = "Input.dispatchTouchEvent",
+            .params = .{ .type = if (comptime std.mem.eql(u8, case[0], "touchcancel")) "touchCancel" else "touchEnd", .touchPoints = &.{} },
+        });
+        const passed = (try ls.local.compileAndRun(case[1], null)).isTrue();
+        if (!passed) std.debug.print("failed prevention case: {s}\n", .{case[0]});
+        try testing.expect(passed);
+        try testing.expect(frame.page.input_touch_contact == null);
+    }
+}
+
+test "cdp.input: touch pointer retains its target while compatibility events hit test release" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun(
+        \\const startTarget = document.getElementById('btn');
+        \\const releaseTarget = document.getElementById('inp');
+        \\window.tapEvents = [];
+        \\for (const type of ['pointerdown', 'pointermove', 'pointerup', 'touchstart', 'touchmove', 'touchend', 'mousedown', 'mouseup', 'click']) {
+        \\  document.addEventListener(type, e => tapEvents.push(e.type + ':' + e.target.id), {passive: false});
+        \\}
+    , null);
+    const x = try (try ls.local.compileAndRun("startTarget.getBoundingClientRect().x + 1", null)).toF64();
+    const y = try (try ls.local.compileAndRun("startTarget.getBoundingClientRect().y + 1", null)).toF64();
+    const release_x = try (try ls.local.compileAndRun("releaseTarget.getBoundingClientRect().x + 1", null)).toF64();
+    const release_y = try (try ls.local.compileAndRun("releaseTarget.getBoundingClientRect().y + 1", null)).toF64();
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y }} },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchEnd", .touchPoints = &.{.{ .x = release_x, .y = release_y }} },
+    });
+    try testing.expect((try ls.local.compileAndRun("tapEvents.join(',') === 'pointerdown:btn,touchstart:btn,pointerup:btn,touchend:btn,mousedown:inp,mouseup:inp,click:inp'", null)).isTrue());
+
+    // A drag retains pointer/touch delivery but must not activate on release.
+    _ = try ls.local.compileAndRun("tapEvents = [];", null);
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y }} },
+    });
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchMove", .touchPoints = &.{.{ .x = release_x, .y = release_y }} },
+    });
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchEnd", .touchPoints = &.{} },
+    });
+    try testing.expect((try ls.local.compileAndRun("tapEvents.join(',') === 'pointerdown:btn,touchstart:btn,pointermove:btn,touchmove:btn,pointerup:btn,touchend:btn'", null)).isTrue());
+}
+
+test "cdp.input: passive prevention and finger jitter do not suppress repeated taps" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun(
+        \\const tapTarget = document.getElementById('btn');
+        \\window.clickIds = [];
+        \\tapTarget.addEventListener('touchstart', e => e.preventDefault(), {passive: true});
+        \\tapTarget.addEventListener('click', e => clickIds.push(e.pointerId));
+    , null);
+    const x = try (try ls.local.compileAndRun("tapTarget.getBoundingClientRect().x + 1", null)).toF64();
+    const y = try (try ls.local.compileAndRun("tapTarget.getBoundingClientRect().y + 1", null)).toF64();
+    for (0..2) |_| {
+        try ctx.processMessage(.{
+            .id = 1,
+            .method = "Input.dispatchTouchEvent",
+            .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y, .id = 2147483647 }} },
+        });
+        try ctx.processMessage(.{
+            .id = 2,
+            .method = "Input.dispatchTouchEvent",
+            .params = .{ .type = "touchMove", .touchPoints = &.{.{ .x = x + 1, .y = y, .id = 2147483647 }} },
+        });
+        try ctx.processMessage(.{
+            .id = 3,
+            .method = "Input.dispatchTouchEvent",
+            .params = .{ .type = "touchEnd", .touchPoints = &.{} },
+        });
+    }
+    try testing.expect((try ls.local.compileAndRun("clickIds.join(',') === '2,3'", null)).isTrue());
+}

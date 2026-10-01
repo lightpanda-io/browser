@@ -248,7 +248,11 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             // activation behavior (ancestors only for bubbling events).
             if (event.is(@import("webapi/event/MouseEvent.zig")) != null) {
                 if (Frame.user_input.findClickActivationTarget(target, event._bubbles)) |activation_target| {
-                    Frame.user_input.handleClick(frame, activation_target, target) catch |err| {
+                    // A touch tap already made its focus decision during the
+                    // compatibility mousedown. Do not undo its cancellation
+                    // (or pointerdown suppression) in click activation.
+                    const focus_control = if (event.is(@import("webapi/event/PointerEvent.zig"))) |pointer| pointer._pointer_type != .touch else true;
+                    Frame.user_input.handleClick(frame, activation_target, target, focus_control) catch |err| {
                         log.debug(.event, "frame.click", .{ .err = err });
                     };
                 }

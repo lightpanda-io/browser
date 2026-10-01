@@ -193,6 +193,7 @@ input_hover_target: ?*Element = null,
 // Last CDP touch contact. Empty TouchEnd/TouchCancel reuse this instead of
 // re-hit-testing at (0, 0).
 input_touch_contact: ?@import("frame/user_input.zig").TouchContact = null,
+input_touch_next_pointer_id: i32 = 2,
 
 // Per-gesture button state for the synthetic mouse pointer; see
 // user_input.PointerButtons.

@@ -551,6 +551,10 @@ pub const TouchPoint = struct {
 pub const TouchContact = struct {
     target: *Element,
     point: TouchPoint,
+    start: TouchPoint,
+    pointer_id: i32,
+    suppress_mouse: bool = false,
+    suppress_click: bool = false,
 };
 
 pub const TouchType = enum {
@@ -572,6 +576,10 @@ pub const TouchType = enum {
 /// touchcancel can stay pinned to the touchstart element instead of
 /// re-resolving at the current point.
 pub fn dispatchTouchEventOn(frame: *Frame, target: *Element, typ: TouchType, point: TouchPoint, modifiers: Modifiers) !void {
+    _ = try dispatchTouchEventCancelable(frame, target, typ, point, modifiers);
+}
+
+fn dispatchTouchEventCancelable(frame: *Frame, target: *Element, typ: TouchType, point: TouchPoint, modifiers: Modifiers) !bool {
     const active = !typ.isLift();
 
     const event: *TouchEvent = try .initTrustedWithTouch(typ.name(), .{
@@ -598,7 +606,64 @@ pub fn dispatchTouchEventOn(frame: *Frame, target: *Element, typ: TouchType, poi
         event.asEvent()._cancelable_unless_passive = true;
     }
 
-    try frame._event_manager.dispatch(target.asEventTarget(), event.asEvent());
+    return frame._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
+}
+
+fn dispatchTouchPointerEventOn(frame: *Frame, target: *Element, comptime typ: []const u8, contact: TouchContact, point: TouchPoint, modifiers: Modifiers) !bool {
+    const lift = comptime std.mem.eql(u8, typ, "pointerup") or std.mem.eql(u8, typ, "pointercancel") or
+        std.mem.eql(u8, typ, "pointerout") or std.mem.eql(u8, typ, "pointerleave") or std.mem.eql(u8, typ, "click");
+    const boundary = comptime std.mem.eql(u8, typ, "pointerenter") or std.mem.eql(u8, typ, "pointerleave");
+    const event: *PointerEvent = try .initTrusted(typ, .{
+        .bubbles = !boundary,
+        .cancelable = !boundary and !comptime std.mem.eql(u8, typ, "pointercancel"),
+        .composed = !boundary,
+        .clientX = point.x,
+        .clientY = point.y,
+        .button = if (comptime std.mem.eql(u8, typ, "pointermove")) -1 else mouse_button.main,
+        .buttons = if (lift) 0 else 1,
+        .detail = if (comptime std.mem.eql(u8, typ, "click")) 1 else 0,
+        .pointerId = contact.pointer_id,
+        .pointerType = "touch",
+        .isPrimary = true,
+        .width = if (lift) 1 else point.radius_x * 2,
+        .height = if (lift) 1 else point.radius_y * 2,
+        .pressure = if (lift) 0 else point.force,
+        .ctrlKey = modifiers.ctrl,
+        .shiftKey = modifiers.shift,
+        .altKey = modifiers.alt,
+        .metaKey = modifiers.meta,
+    }, frame);
+    return frame._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
+}
+
+fn dispatchTouchPointerEnter(frame: *Frame, contact: TouchContact, modifiers: Modifiers) !void {
+    _ = try dispatchTouchPointerEventOn(frame, contact.target, "pointerover", contact, contact.point, modifiers);
+    var count: usize = 0;
+    var current: ?*Node = contact.target.asNode();
+    while (current) |node| : (current = node.parentNode()) {
+        if (node.is(Element) != null) count += 1;
+    }
+    while (count > 0) : (count -= 1) {
+        var remaining = count;
+        current = contact.target.asNode();
+        while (current) |node| : (current = node.parentNode()) {
+            const element = node.is(Element) orelse continue;
+            remaining -= 1;
+            if (remaining == 0) {
+                _ = try dispatchTouchPointerEventOn(frame, element, "pointerenter", contact, contact.point, modifiers);
+                break;
+            }
+        }
+    }
+}
+
+fn dispatchTouchPointerLeave(frame: *Frame, contact: TouchContact, point: TouchPoint, modifiers: Modifiers) !void {
+    _ = try dispatchTouchPointerEventOn(frame, contact.target, "pointerout", contact, point, modifiers);
+    var current: ?*Node = contact.target.asNode();
+    while (current) |node| : (current = node.parentNode()) {
+        const element = node.is(Element) orelse continue;
+        _ = try dispatchTouchPointerEventOn(frame, element, "pointerleave", contact, point, modifiers);
+    }
 }
 
 pub fn hasActiveTouch(frame: *Frame) bool {
@@ -623,8 +688,27 @@ pub fn triggerTouch(frame: *Frame, typ: TouchType, point: TouchPoint, modifiers:
             .type = frame._type,
         });
     }
-    try dispatchTouchEventOn(frame, resolved, typ, point, modifiers);
-    page.input_touch_contact = .{ .target = resolved, .point = point };
+    var contact: TouchContact = if (typ == .touchstart) .{
+        .target = resolved,
+        .point = point,
+        .start = point,
+        .pointer_id = page.input_touch_next_pointer_id,
+    } else page.input_touch_contact orelse return;
+    contact.point = point;
+    if (typ == .touchstart) {
+        page.input_touch_next_pointer_id = if (contact.pointer_id == std.math.maxInt(i32)) 2 else contact.pointer_id + 1;
+        try dispatchTouchPointerEnter(frame, contact, modifiers);
+        contact.suppress_mouse = try dispatchTouchPointerEventOn(frame, resolved, "pointerdown", contact, point, modifiers);
+    } else {
+        // Keep small finger jitter tappable, but never activate after a drag.
+        const dx = point.x - contact.start.x;
+        const dy = point.y - contact.start.y;
+        contact.suppress_click = contact.suppress_click or dx * dx + dy * dy > 15 * 15;
+        _ = try dispatchTouchPointerEventOn(frame, resolved, "pointermove", contact, point, modifiers);
+    }
+    const prevented = try dispatchTouchEventCancelable(frame, resolved, typ, point, modifiers);
+    contact.suppress_click = contact.suppress_click or prevented;
+    page.input_touch_contact = contact;
 }
 
 /// Playwright sends an empty touchPoints list, so there's nowhere to read a
@@ -642,7 +726,27 @@ pub fn triggerTouchLift(frame: *Frame, typ: TouchType, point: ?TouchPoint, modif
     // released point can move the position but not rename the contact.
     var lift = point orelse contact.point;
     lift.identifier = contact.point.identifier;
-    try dispatchTouchEventOn(frame, contact.target, typ, lift, modifiers);
+    if (typ == .touchcancel) {
+        _ = try dispatchTouchPointerEventOn(frame, contact.target, "pointercancel", contact, lift, modifiers);
+    } else {
+        _ = try dispatchTouchPointerEventOn(frame, contact.target, "pointerup", contact, lift, modifiers);
+    }
+    try dispatchTouchPointerLeave(frame, contact, lift, modifiers);
+    const prevented = try dispatchTouchEventCancelable(frame, contact.target, typ, lift, modifiers);
+    if (typ == .touchcancel or contact.suppress_click or prevented) return;
+
+    // Compatibility mouse events use the release hit-test, after touchend
+    // listeners have had a chance to change the DOM. Pointer/touch delivery
+    // above remains pinned to the original contact target.
+    const target = (try frame.window._document.elementFromPoint(lift.x, lift.y, frame)) orelse return;
+    updateHoverTarget(frame, target, .{ .x = lift.x, .y = lift.y, .modifiers = modifiers });
+    if (!contact.suppress_mouse) {
+        _ = try dispatchMouseEventOn(frame, target, "mousemove", .{ .x = lift.x, .y = lift.y, .modifiers = modifiers });
+        const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", .{ .x = lift.x, .y = lift.y, .buttons = 1, .detail = 1, .modifiers = modifiers });
+        if (!suppress_focus) try focusForMouseDown(frame, target);
+        _ = try dispatchMouseEventOn(frame, target, "mouseup", .{ .x = lift.x, .y = lift.y, .detail = 1, .modifiers = modifiers });
+    }
+    _ = try dispatchTouchPointerEventOn(frame, target, "click", contact, lift, modifiers);
 }
 
 /// Whether the element has a click activation behavior that handleClick
@@ -792,7 +896,7 @@ const JavascriptUrlTask = struct {
 // target is the element that's being activated. Imagine a span inside an anchor
 // the span is clicked (event_target), but it's the anchor that we're activating
 // (target).
-pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
+pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node, focus_control: bool) !void {
     // TODO: Also support <area> elements when implement
     const element = target.is(Element) orelse return;
 
@@ -812,7 +916,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
         },
         .input => {
             const input = html_element.subtype(Element.Html.Input);
-            try element.focus(frame);
+            if (focus_control) try element.focus(frame);
             // Per HTML §4.10.18.6.4 "Image Button state (type=image)", clicking an
             // image button submits its form. The form-data set already gets the
             // submitter's coordinate fields appended via FormData.collectForm
@@ -823,12 +927,12 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
         },
         .button => {
             const button = html_element.subtype(Element.Html.Button);
-            try element.focus(frame);
+            if (focus_control) try element.focus(frame);
             if (std.mem.eql(u8, button.getType(), "submit")) {
                 return frame.submitForm(element, button.getForm(frame), .{});
             }
         },
-        .select, .textarea => try element.focus(frame),
+        .select, .textarea => if (focus_control) try element.focus(frame),
         .label => {
             const label = html_element.subtype(Element.Html.Label);
             // Per HTML §4.10.4 "The label element", a label's activation
