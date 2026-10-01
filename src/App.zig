@@ -88,8 +88,6 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
         .arena_pool = undefined,
         .default_sanitizer = undefined,
         .watchdog = .init(config.watchdogMs()),
-        .typesafe_client = null,
-        .typesafe_mutex = .init,
     };
     try app.watchdog.start();
     errdefer app.watchdog.deinit();
@@ -129,10 +127,7 @@ pub fn deinit(self: *App) void {
     self.render_fonts.deinit(allocator);
     self.arena_pool.deinit();
 
-    if (self.typesafe_client) |*c| {
-        c.deinit();
-        self.typesafe_client = null;
-    }
+    if (self.typesafe_client) |*c| c.deinit();
 
     allocator.destroy(self);
 }
