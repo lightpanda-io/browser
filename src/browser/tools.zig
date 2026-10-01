@@ -1767,7 +1767,7 @@ fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
         else => return .{ .text = try std.fmt.allocPrint(arena, "classify: invalid questions: {s}", .{@errorName(err)}), .is_error = true },
     };
 
-    const state = lp.classify.buildState(arena, page, node) catch |err| switch (err) {
+    const state = lp.classify.buildState(arena, page, node, registry) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return ToolError.InternalError,
     };

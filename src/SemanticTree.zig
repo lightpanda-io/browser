@@ -43,11 +43,20 @@ arena: std.mem.Allocator,
 prune: bool,
 interactive_only: bool,
 max_depth: u32,
+ids: bool,
+link_urls: bool,
 
 pub const Opts = struct {
     prune: bool = true,
     interactive_only: bool = false,
     max_depth: u32 = std.math.maxInt(u32) - 1,
+    /// Text form: lead each line with its backendNodeId and mark interactive
+    /// nodes `[i]`, for a reader that acts on nodes. A model that only reads
+    /// the page gets nothing from either.
+    ids: bool = true,
+    /// Text form: follow each link with ` -> ` and where it goes, without the
+    /// query or fragment, and as a bare path when it stays on this site.
+    link_urls: bool = false,
 };
 
 /// `frame` only seeds the owner lookup; the tree is walked with the frame
@@ -63,6 +72,8 @@ pub fn init(arena: std.mem.Allocator, node: *Node, registry: *NodeRegistry, fram
         .prune = opts.prune,
         .interactive_only = opts.interactive_only,
         .max_depth = opts.max_depth,
+        .ids = opts.ids,
+        .link_urls = opts.link_urls,
     };
 }
 
@@ -499,16 +510,40 @@ fn isStructuralRole(role: []const u8) bool {
     return structural_roles.has(role);
 }
 
+/// Where a link goes, for a reader judging it: the resolved href without
+/// its query or fragment, and only the path when it stays on this site.
+fn linkTarget(self: Self, node: *Node) ?[]const u8 {
+    const el = node.is(Element) orelse return null;
+    const raw = el.getAttributeInterned("href") orelse return null;
+    const frame = self.frame;
+    const resolved = lp.URL.resolve(self.arena, frame.base(), raw, .{ .encoding = frame.charset }) catch raw;
+    const end = std.mem.indexOfAny(u8, resolved, "?#") orelse resolved.len;
+    const target = resolved[0..end];
+
+    const origin = originOf(frame.url);
+    if (origin.len > 0 and std.mem.startsWith(u8, target, origin)) {
+        const path = target[origin.len..];
+        if (path.len == 0 or path[0] == '/') return if (path.len == 0) "/" else path;
+    }
+    return target;
+}
+
+/// `scheme://host[:port]` of an absolute URL, or empty when it has none.
+fn originOf(url: []const u8) []const u8 {
+    const scheme_end = std.mem.indexOf(u8, url, "://") orelse return "";
+    const host_start = scheme_end + 3;
+    const host_end = std.mem.indexOfAnyPos(u8, url, host_start, "/?#") orelse url.len;
+    return url[0..host_end];
+}
+
 const TextVisitor = struct {
     writer: *std.Io.Writer,
     tree: Self,
     depth: usize,
+    /// Per open node, whether it took a line and so indents its children.
+    indents: std.ArrayList(bool) = .empty,
 
     pub fn visit(self: *TextVisitor, node: *Node, data: *NodeData) !bool {
-        for (0..self.depth) |_| {
-            try self.writer.writeByte(' ');
-        }
-
         var name_to_print: ?[]const u8 = null;
         if (data.name) |n| {
             if (n.len > 0) {
@@ -523,20 +558,47 @@ const TextVisitor = struct {
 
         const is_text_only = std.mem.eql(u8, data.role, "StaticText") or std.mem.eql(u8, data.role, "none") or std.mem.eql(u8, data.role, "generic");
 
-        try self.writer.print("{d}", .{data.id});
-        if (data.interactive) {
-            try self.writer.writeAll(if (data.disabled) " [i:disabled]" else " [i]");
+        // Without ids, a wrapper with no role, name or state would be a blank
+        // line: skip it and let its children take its place.
+        const has_value = if (data.value) |v| v.len > 0 else false;
+        if (!self.tree.ids and is_text_only and name_to_print == null and !has_value and data.checked == null and data.options == null) {
+            try self.indents.append(self.tree.arena, false);
+            return true;
+        }
+        try self.indents.append(self.tree.arena, true);
+
+        for (0..self.depth) |_| {
+            try self.writer.writeByte(' ');
+        }
+
+        // Fields are space-separated; without an id the line starts at its
+        // first field.
+        var sep: []const u8 = "";
+        if (self.tree.ids) {
+            try self.writer.print("{d}", .{data.id});
+            if (data.interactive) {
+                try self.writer.writeAll(if (data.disabled) " [i:disabled]" else " [i]");
+            }
+            sep = " ";
         }
         if (!is_text_only) {
-            try self.writer.print(" {s}", .{data.role});
+            try self.writer.print("{s}{s}", .{ sep, data.role });
+            sep = " ";
         }
         if (name_to_print) |n| {
-            try self.writer.print(" '{s}'", .{n});
+            try self.writer.print("{s}'{s}'", .{ sep, n });
+            sep = " ";
+        }
+        if (self.tree.link_urls and std.mem.eql(u8, data.role, "link")) {
+            if (self.tree.linkTarget(node)) |target| {
+                try self.writer.print("{s}-> {s}", .{ sep, target });
+                sep = " ";
+            }
         }
 
         if (data.value) |v| {
             if (v.len > 0) {
-                try self.writer.print(" value='{s}'", .{v});
+                try self.writer.print("{s}value='{s}'", .{ sep, v });
             }
         }
 
@@ -579,7 +641,8 @@ const TextVisitor = struct {
     }
 
     pub fn leave(self: *TextVisitor) !void {
-        if (self.depth > 0) {
+        const indented = self.indents.pop() orelse true;
+        if (indented and self.depth > 0) {
             self.depth -= 1;
         }
     }
@@ -785,6 +848,41 @@ test "SemanticTree backendDOMNodeId" {
     defer testing.allocator.free(json_str);
 
     try testing.expect(std.mem.indexOf(u8, json_str, "\"backendDOMNodeId\":") != null);
+}
+
+test "SemanticTree text without ids, with link targets" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    frame.url = "http://localhost/";
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<div><div><a href="/account/login?next=%2Fq3">Continue</a></div></div>
+        \\<a href="https://ad.example.net/clk;kw=acme?ord=1#top">Learn more</a>
+        \\<a href="http://localhost">Home</a>
+        \\<button>Send</button>
+    );
+
+    const st: Self = try .init(testing.arena_allocator, div.asNode(), &registry, frame, .{ .ids = false, .link_urls = true });
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try st.textStringify(&aw.writer);
+    const text = aw.written();
+
+    try testing.expect(std.mem.indexOf(u8, text, "link 'Continue' -> /account/login\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "link 'Learn more' -> https://ad.example.net/clk;kw=acme\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "link 'Home' -> /\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "button 'Send'\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "[i]") == null);
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, text, "\n"), '\n');
+    while (lines.next()) |line| {
+        const field = std.mem.trimStart(u8, line, " ");
+        try testing.expect(field.len > 0);
+        try testing.expect(!std.ascii.isDigit(field[0]));
+    }
 }
 
 test "SemanticTree max_depth" {
