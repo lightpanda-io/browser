@@ -747,8 +747,12 @@ fn _appendCallback(self: *Parser, parent_pn: *ParsedNode, node_or_text: h5e.Node
             try self.flushPendingText();
             self.maybeCheckpoint();
             self.inserted_since_checkpoint +|= 1;
-            const child = try self.settleDocument(parent_pn, getParsed(cpn));
             const parent = parent_pn.node;
+            if (wouldCycle(getParsed(cpn).node, parent)) {
+                // Inserting would build a cycle (script moved it inside the adopting node)
+                return;
+            }
+            const child = try self.settleDocument(parent_pn, getParsed(cpn));
             if (child._parent) |previous_parent| {
                 // html5ever says this can't happen, but we might be screwing up
                 // the node on our side. We shouldn't be, but we're seeing this
@@ -896,6 +900,10 @@ fn _appendBeforeSiblingCallback(self: *Parser, sibling_pn: *ParsedNode, node_or_
     const parent = sibling.parentNode() orelse return error.NoParent;
     const node: *Node = switch (node_or_text.toUnion()) {
         .node => |cpn| blk: {
+            if (wouldCycle(getParsed(cpn).node, parent)) {
+                // See _appendCallback: the would-be cycle drops the node.
+                return;
+            }
             var parent_pn = ParsedNode{ .node = parent, .data = null, .placed = true };
             const child = try self.settleDocument(&parent_pn, getParsed(cpn));
             if (child._parent) |previous_parent| {
@@ -933,6 +941,26 @@ fn _appendBasedOnParentNodeCallback(self: *Parser, element_pn: *ParsedNode, prev
     } else {
         try self._appendCallback(prev_element_pn, node_or_text);
     }
+}
+
+fn wouldCycle(node: *Node, parent: *Node) bool {
+    if (node == parent) {
+        return true;
+    }
+    // we can optimize this a bit and avoid calling `isHostIncludingInclusiveAncestorOf`
+    // in some cases
+    if (node.firstChild() == null) {
+        const element = node.is(Element) orelse return false;
+        if (element._flags.shadow_host == false) {
+            const template = element.is(Element.Html.Template) orelse return false;
+            if (template._content.asNode().firstChild() == null) {
+                // the node has no child and it isn't a template with children
+                // (it can't contain parent then)
+                return false;
+            }
+        }
+    }
+    return node.isHostIncludingInclusiveAncestorOf(parent);
 }
 
 fn getParsed(ref: *anyopaque) *ParsedNode {
