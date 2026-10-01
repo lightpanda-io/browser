@@ -46,6 +46,8 @@ pub const Proto = EventTarget;
 
 _proto: *EventTarget,
 _time_origin: u64,
+// Wall-clock (Unix epoch) microseconds at the same moment, exposed as timeOrigin.
+_time_origin_unix: u64,
 _arena: Allocator,
 _factory: *Factory,
 // Marks and measures. Kept in startTime order (see insertOrdered), as the
@@ -90,6 +92,7 @@ pub fn init(factory: *Factory, arena: Allocator) !*Performance {
         ._arena = arena,
         ._factory = factory,
         ._time_origin = highResTimestamp(),
+        ._time_origin_unix = lp.datetime.microTimestamp(.real),
     });
 }
 
@@ -115,7 +118,7 @@ pub fn now(self: *const Performance) f64 {
 
 fn getTimeOrigin(self: *const Performance) f64 {
     // Return as milliseconds
-    return @as(f64, @floatFromInt(self._time_origin)) / 1000.0;
+    return @as(f64, @floatFromInt(self._time_origin_unix)) / 1000.0;
 }
 
 fn getNavigation(self: *Performance) *PerformanceNavigation {
