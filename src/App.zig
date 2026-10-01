@@ -139,10 +139,8 @@ pub fn askTypesafe(
 
     if (self.typesafe_client == null) {
         const key = zenai.typesafe.envApiKey(lp.environ()) orelse return error.MissingApiKey;
-        const base_url = lp.environ().getPosix("TYPESAFE_BASE_URL") orelse zenai.typesafe.Client.default_base_url;
-
         self.typesafe_client = zenai.typesafe.Client.init(lp.io, self.allocator, key, .{
-            .base_url = base_url,
+            .base_url = zenai.typesafe.envBaseUrl(lp.environ()),
             // Blocks the browser thread: fail fast.
             .retry_policy = .disabled,
             .request_timeout_ms = 10_000,
@@ -151,10 +149,7 @@ pub fn askTypesafe(
 
     const client = &self.typesafe_client.?;
     return client.ask(state, questions, options) catch |err| {
-        if (err == error.ApiError) failure.* = .{
-            .status = client.last_error.status,
-            .message = if (client.last_error.message) |m| try arena.dupe(u8, m) else null,
-        };
+        if (err == error.ApiError) failure.* = try client.last_error.clone(arena);
         return err;
     };
 }

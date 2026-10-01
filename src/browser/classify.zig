@@ -254,7 +254,7 @@ pub fn formatResponse(
                         .confidence = c.confidence,
                         .probabilities = c.probabilities,
                     }),
-                    .score => |s| try writeScore(&jw, s, entry.value),
+                    .score => |s| try writeScore(&jw, s),
                 }
             }
             try jw.endObject();
@@ -263,30 +263,35 @@ pub fn formatResponse(
     return aw.written();
 }
 
-/// A score answer with its level indices swapped for the labels asked, and
-/// `level` naming the one nearest the score.
-fn writeScore(jw: *std.json.Stringify, answer: zenai.typesafe.types.ScoreAnswer, question: Question) !void {
-    const levels: []const Content = if (question == .score) question.score.criteria else &.{};
-
+/// A score answer with its level indices swapped for the legend's labels,
+/// and `level` naming the one nearest the score.
+fn writeScore(jw: *std.json.Stringify, answer: zenai.typesafe.types.ScoreAnswer) !void {
     try jw.beginObject();
     try jw.objectField("score");
     try jw.write(answer.score);
-    if (levels.len > 0) {
-        const nearest: usize = @round(std.math.clamp(answer.score, 0, @as(f64, @floatFromInt(levels.len - 1))));
+    if (answer.nearestLevel()) |nearest| {
         try jw.objectField("level");
-        try jw.write(levels[nearest].text);
+        try jw.write(levelLabel(answer, nearest.key));
     }
     try jw.objectField("confidence");
     try jw.write(answer.confidence);
     try jw.objectField("probabilities");
     try jw.beginObject();
     for (answer.probabilities.entries) |entry| {
-        const index = std.fmt.parseInt(usize, entry.key, 10) catch levels.len;
-        try jw.objectField(if (index < levels.len) levels[index].text else entry.key);
+        try jw.objectField(levelLabel(answer, entry.key));
         try jw.write(entry.value);
     }
     try jw.endObject();
     try jw.endObject();
+}
+
+/// The text the legend gives level `index`, or the index itself.
+fn levelLabel(answer: zenai.typesafe.types.ScoreAnswer, index: []const u8) []const u8 {
+    const level = answer.legend.get(index) orelse return index;
+    return switch (level) {
+        .text => |text| text,
+        .json => index,
+    };
 }
 
 const testing = @import("../testing.zig");
@@ -411,6 +416,11 @@ test "browser.classify: formatResponse score names the levels" {
             .{ .key = "content", .value = .{ .score = .{
                 .score = 1.2,
                 .confidence = 0.8,
+                .legend = .init(&.{
+                    .{ .key = "0", .value = .{ .text = "empty" } },
+                    .{ .key = "1", .value = .{ .text = "partial" } },
+                    .{ .key = "2", .value = .{ .text = "full" } },
+                }),
                 .probabilities = .init(&.{
                     .{ .key = "0", .value = 0.05 },
                     .{ .key = "1", .value = 0.7 },
