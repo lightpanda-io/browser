@@ -2236,6 +2236,8 @@ test "server: HTTP element input" {
     const btn = try findElement(&c, &session_id, "css selector", "#btn");
     try testing.expectEqual("{\"value\":null}", responseBody(try elementPost(&c, &session_id, btn, "/click", "{}")));
     try testing.expectEqual("{\"value\":\"focus@btn click@btn\"}", try executeSync(&c, &session_id, take_events, "[]"));
+    // The pointer arrives before the press: no button is held yet.
+    try testing.expectEqual("{\"value\":\"p0@btn 0@btn\"}", try executeSync(&c, &session_id, "return window.over.join(' ');", "[]"));
 
     {
         const gone = try findElement(&c, &session_id, "css selector", "#gone");

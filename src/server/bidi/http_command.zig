@@ -660,7 +660,6 @@ fn elementClick(cmd: *BiDi.Command, p: ElementId) !void {
             break :blk;
         }
 
-        Frame.user_input.updateHoverTarget(frame, element, .{ .with_pointer = true });
         try Frame.user_input.triggerClick(frame, element, .{});
 
         // a multiple <select> toggles the option, any other selects it
@@ -670,8 +669,7 @@ fn elementClick(cmd: *BiDi.Command, p: ElementId) !void {
         }
         try option.setSelected(selected, frame);
         try lp.actions.dispatchInputAndChangeEvents(select_element, frame);
-    } else if (element.isDisabled() == false) {
-        Frame.user_input.updateHoverTarget(frame, element, .{ .with_pointer = true });
+    } else {
         try Frame.user_input.triggerClick(frame, element, .{});
     }
     return browsing_context.answerAfterNavigation(cmd, ctx, frame);

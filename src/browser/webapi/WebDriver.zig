@@ -29,9 +29,7 @@ const Element = @import("Element.zig");
 const EventTarget = @import("EventTarget.zig");
 
 const Cookie = @import("storage/Cookie.zig");
-const MouseEvent = @import("event/MouseEvent.zig");
 const TouchEvent = @import("event/TouchEvent.zig");
-const PointerEvent = @import("event/PointerEvent.zig");
 const KeyboardEvent = @import("event/KeyboardEvent.zig");
 const Label = @import("element/html/Label.zig");
 
@@ -60,8 +58,6 @@ fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) ![]co
 // synchronously so the events are observable when the testdriver promise
 // resolves.
 pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
-    if (element.isDisabled()) return;
-
     // A dispatch error must never reject the testdriver command.
     Frame.user_input.triggerClick(frame, element, frame.page.input_modifiers) catch |err| {
         log.debug(.app, "webdriver click", .{ .err = err });
@@ -229,8 +225,6 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     // The buttons bitmask of the currently depressed button, carried on move
     // and boundary events while dragging.
     var pressed_mask: u16 = 0;
-    // Where the last pointerDown landed: the click fires at the nearest common
-    // inclusive ancestor of the down and up targets when they differ.
     var down_target: ?*Element = null;
     var pointer_suppressed: bool = false;
     var click_count: u32 = 0;
@@ -258,25 +252,22 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                 }
             }
             const el = target orelse continue;
-            if (is_touch) {
-                _ = Frame.user_input.emitPointer(frame, el, "pointermove", .{
-                    .modifiers = frame.page.input_modifiers,
-                }, 0, pressed_mask) catch {};
-                if (pressed) {
-                    dispatchTouch(el, "touchmove", frame);
-                }
-            } else {
+            const g: Frame.user_input.Gesture = .{
+                .buttons_down = pressed_mask,
+                .modifiers = frame.page.input_modifiers,
+            };
+            if (!is_touch) {
                 Frame.user_input.updateHoverTarget(frame, el, .{
                     .buttons = pressed_mask,
                     .modifiers = frame.page.input_modifiers,
                     .with_pointer = true,
                 });
-                _ = Frame.user_input.emitPointer(frame, el, "pointermove", .{
-                    .modifiers = frame.page.input_modifiers,
-                }, 0, pressed_mask) catch {};
-                _ = Frame.user_input.emitMouse(frame, el, "mousemove", .{
-                    .modifiers = frame.page.input_modifiers,
-                }, 0, pressed_mask) catch {};
+            }
+            _ = Frame.user_input.emitPointer(frame, el, "pointermove", g, 0) catch {};
+            if (!is_touch) {
+                _ = Frame.user_input.emitMouse(frame, el, "mousemove", g, 0) catch {};
+            } else if (pressed) {
+                dispatchTouch(el, "touchmove", frame);
             }
         } else if (action_type.eql(comptime .wrap("pointerDown"))) {
             const el = target orelse continue;
@@ -289,28 +280,16 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             } else {
                 click_count = 1;
             }
+            const g: Frame.user_input.Gesture = .{
+                .button = button,
+                .buttons_down = pressed_mask,
+                .click_count = click_count,
+                .modifiers = frame.page.input_modifiers,
+                .emit_mouse_compat = !is_touch,
+            };
+            pointer_suppressed = Frame.user_input.pressSequence(frame, el, g, pointer_suppressed) catch false;
             if (is_touch) {
-                const g: Frame.user_input.Gesture = .{
-                    .button = button,
-                    .buttons_down = pressed_mask,
-                    .click_count = click_count,
-                    .modifiers = frame.page.input_modifiers,
-                    .emit_pointer_events = true,
-                    .emit_mouse_compat = false,
-                };
-                Frame.user_input.pressSequence(frame, el, g, &pointer_suppressed) catch {};
                 dispatchTouch(el, "touchstart", frame);
-            } else {
-                const g: Frame.user_input.Gesture = .{
-                    .button = button,
-                    .buttons_down = pressed_mask,
-                    .click_count = click_count,
-                    .modifiers = frame.page.input_modifiers,
-                    .emit_pointer_events = true,
-                    .emit_mouse_compat = true,
-                    .focus_error = .warn,
-                };
-                Frame.user_input.pressSequence(frame, el, g, &pointer_suppressed) catch {};
             }
         } else if (action_type.eql(comptime .wrap("pointerUp"))) {
             const el = target orelse continue;
@@ -320,28 +299,15 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             const click_target = Frame.user_input.commonClickTarget(down_target orelse el, el);
             last_click_button = button;
             last_click_target = click_target;
+            const g: Frame.user_input.Gesture = .{
+                .button = button,
+                .click_count = click_count,
+                .modifiers = frame.page.input_modifiers,
+                .emit_mouse_compat = !is_touch,
+            };
+            Frame.user_input.releaseSequence(frame, el, g, pointer_suppressed, click_target) catch {};
             if (is_touch) {
-                const g: Frame.user_input.Gesture = .{
-                    .button = button,
-                    .buttons_down = 0,
-                    .click_count = click_count,
-                    .modifiers = frame.page.input_modifiers,
-                    .emit_pointer_events = true,
-                    .emit_mouse_compat = false,
-                };
-                Frame.user_input.releaseSequence(frame, el, g, pointer_suppressed, click_target) catch {};
                 dispatchTouch(el, "touchend", frame);
-            } else {
-                const g: Frame.user_input.Gesture = .{
-                    .button = button,
-                    .buttons_down = 0,
-                    .click_count = click_count,
-                    .modifiers = frame.page.input_modifiers,
-                    .emit_pointer_events = true,
-                    .emit_mouse_compat = true,
-                    .focus_error = .warn,
-                };
-                Frame.user_input.releaseSequence(frame, el, g, pointer_suppressed, click_target) catch {};
             }
             down_target = null;
             pointer_suppressed = false;
