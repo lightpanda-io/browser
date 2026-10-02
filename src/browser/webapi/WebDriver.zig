@@ -60,12 +60,7 @@ fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) ![]co
 // synchronously so the events are observable when the testdriver promise
 // resolves.
 pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
-    if (element.is(Element.Html)) |html| {
-        switch (html._type) {
-            .button, .input, .textarea, .select, .option, .optgroup => if (element.isDisabled()) return,
-            else => {},
-        }
-    }
+    if (element.isDisabled()) return;
 
     // A dispatch error must never reject the testdriver command.
     Frame.user_input.triggerClick(frame, element, frame.page.input_modifiers) catch |err| {
