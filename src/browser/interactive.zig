@@ -234,7 +234,7 @@ fn walkInteractive(
         // Names walk labels and text; filter on role first. Role-less elements
         // (listener/tabindex only) sit outside AccName; their text is the only handle.
         const name = try axn.getName(frame, arena, &label_index) orelse
-            if (role == null) try getTextContent(node, arena) else null;
+            if (role == null) try getTextContent(node, arena, null) else null;
         if (filter.name) |nf| {
             const n = name orelse continue;
             const hit = switch (nf) {
@@ -414,7 +414,11 @@ fn axRole(axn: AXNode) ?[]const u8 {
     return if (std.mem.eql(u8, role, "none")) null else role;
 }
 
-pub fn getTextContent(node: *Node, arena: Allocator) !?[]const u8 {
+/// `max_bytes` stops the walk once that much text has been gathered. A
+/// caller that truncates the result would otherwise concatenate an entire
+/// subtree to keep a prefix of it, which is quadratic down a chain of nested
+/// clickable containers.
+pub fn getTextContent(node: *Node, arena: Allocator, max_bytes: ?usize) !?[]const u8 {
     var tw: TreeWalker.FullExcludeSelf = .init(node, .{});
 
     var arr: std.ArrayList(u8) = .empty;
@@ -445,6 +449,10 @@ pub fn getTextContent(node: *Node, arena: Allocator) !?[]const u8 {
                         }
                         try arr.appendSlice(arena, content);
                         try arr.append(arena, ' ');
+                    }
+                    if (max_bytes) |cap| {
+                        const gathered = if (single_chunk) |sc| sc.len else arr.items.len;
+                        if (gathered >= cap) break;
                     }
                 }
             }
@@ -737,4 +745,23 @@ test "browser.interactive: hidden elements are skipped" {
     try testing.expectEqual(1, elements.len);
     try testing.expectEqual("button", elements[0].tag_name);
     try testing.expectEqual("Visible", elements[0].name.?);
+}
+
+test "browser.interactive: getTextContent stops at the byte cap" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<span>aaaa</span><span>bbbb</span><span>cccc</span><span>dddd</span>
+    );
+
+    const whole = (try getTextContent(div.asNode(), frame.call_arena, null)).?;
+    try testing.expectEqual("aaaa bbbb cccc dddd", whole);
+
+    // Enough chunks are gathered to cover the cap, and the walk stops there
+    // rather than concatenating the rest to have it truncated away.
+    const capped = (try getTextContent(div.asNode(), frame.call_arena, 6)).?;
+    try testing.expectEqual("aaaa bbbb", capped);
 }
