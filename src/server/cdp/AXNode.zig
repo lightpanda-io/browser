@@ -1552,6 +1552,33 @@ test "AXnode: stripWhitespaces" {
 }
 
 const testing = @import("testing.zig");
+/// The first serialized node with `role` (any when null) whose name contains
+/// `name_needle`.
+fn findNode(nodes: []const std.json.Value, role: ?[]const u8, name_needle: []const u8) ?std.json.ObjectMap {
+    for (nodes) |node_val| {
+        const obj = node_val.object;
+        if (role) |r| {
+            const role_val = (obj.get("role") orelse continue).object.get("value") orelse continue;
+            if (!std.mem.eql(u8, role_val.string, r)) continue;
+        }
+        const name_val = (obj.get("name") orelse continue).object.get("value") orelse continue;
+        if (name_val == .string and std.mem.indexOf(u8, name_val.string, name_needle) != null) {
+            return obj;
+        }
+    }
+    return null;
+}
+
+/// The AXValue of a serialized node's property.
+fn nodeProperty(node: std.json.ObjectMap, name: []const u8) ?std.json.ObjectMap {
+    for ((node.get("properties") orelse return null).array.items) |prop| {
+        if (std.mem.eql(u8, prop.object.get("name").?.string, name)) {
+            return prop.object.get("value").?.object;
+        }
+    }
+    return null;
+}
+
 test "AXNode: writer" {
     var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
@@ -1620,26 +1647,11 @@ test "AXNode: writer" {
     }
     try testing.expect(saw_parent_id);
 
-    // Find the h1 node and verify its level property is serialized as a string
-    for (nodes) |node_val| {
-        const obj = node_val.object;
-        const role_obj = obj.get("role") orelse continue;
-        const role_val = role_obj.object.get("value") orelse continue;
-        if (!std.mem.eql(u8, role_val.string, "heading")) continue;
-
-        const props = obj.get("properties").?.array.items;
-        for (props) |prop| {
-            const prop_obj = prop.object;
-            const name_str = prop_obj.get("name").?.string;
-            if (!std.mem.eql(u8, name_str, "level")) continue;
-            const level_value = prop_obj.get("value").?.object;
-            try testing.expectEqual("integer", level_value.get("type").?.string);
-            // CDP spec: integer values must be serialized as strings
-            try testing.expectEqual("1", level_value.get("value").?.string);
-            return;
-        }
-    }
-    return error.HeadingNodeNotFound;
+    const heading = findNode(nodes, "heading", "") orelse return error.HeadingNodeNotFound;
+    const level = nodeProperty(heading, "level") orelse return error.HeadingLevelNotFound;
+    try testing.expectEqual("integer", level.get("type").?.string);
+    // CDP spec: integer values must be serialized as strings
+    try testing.expectEqual("1", level.get("value").?.string);
 }
 
 test "AXNode: writer prunes hidden and resolves labels" {
@@ -1678,74 +1690,24 @@ test "AXNode: writer prunes hidden and resolves labels" {
         "under-inert",
         "in-inert-shadow",
     };
-    for (nodes) |node_val| {
-        const obj = node_val.object;
-        const name_obj = obj.get("name") orelse continue;
-        const value = name_obj.object.get("value") orelse continue;
-        if (value != .string) continue;
-        for (hidden_texts) |bad| {
-            try testing.expect(std.mem.indexOf(u8, value.string, bad) == null);
-        }
+    for (hidden_texts) |bad| {
+        try testing.expect(findNode(nodes, null, bad) == null);
     }
 
     // Visible text is exposed, including under a [hidden] that `display: block`
     // overrides.
-    for ([_][]const u8{ "visible-para", "hidden-overridden" }) |needle| {
-        var found_visible = false;
-        for (nodes) |node_val| {
-            const obj = node_val.object;
-            const name_obj = obj.get("name") orelse continue;
-            const value = name_obj.object.get("value") orelse continue;
-            if (value == .string and std.mem.indexOf(u8, value.string, needle) != null) {
-                found_visible = true;
-                break;
-            }
-        }
-        try testing.expect(found_visible);
-    }
+    try testing.expect(findNode(nodes, null, "visible-para") != null);
+    try testing.expect(findNode(nodes, null, "hidden-overridden") != null);
 
     // A visibility:visible descendant of a visibility:hidden element is exposed
-    var found_override = false;
-    for (nodes) |node_val| {
-        const obj = node_val.object;
-        const ignored = obj.get("ignored") orelse continue;
-        if (ignored.bool) continue;
-        const role_val = (obj.get("role") orelse continue).object.get("value") orelse continue;
-        if (!std.mem.eql(u8, role_val.string, "link")) continue;
-        const name_val = (obj.get("name") orelse continue).object.get("value") orelse continue;
-        if (name_val == .string and std.mem.eql(u8, name_val.string, "visible-in-hidden")) {
-            found_override = true;
-        }
-    }
-    try testing.expect(found_override);
+    const link = findNode(nodes, "link", "visible-in-hidden") orelse return error.LinkNotFound;
+    try testing.expectEqual(false, link.get("ignored").?.bool);
 
     // The search input gets its name from <label for=search-input>.
-    var search_named = false;
-    for (nodes) |node_val| {
-        const obj = node_val.object;
-        const role_obj = obj.get("role") orelse continue;
-        const role_val = role_obj.object.get("value") orelse continue;
-        if (!std.mem.eql(u8, role_val.string, "searchbox")) continue;
-        const name_val = obj.get("name").?.object.get("value").?;
-        if (name_val == .string and std.mem.indexOf(u8, name_val.string, "Search") != null) {
-            search_named = true;
-        }
-    }
-    try testing.expect(search_named);
+    try testing.expect(findNode(nodes, "searchbox", "Search") != null);
 
     // The wrapped input gets its name from its ancestor <label>.
-    var wrapped_named = false;
-    for (nodes) |node_val| {
-        const obj = node_val.object;
-        const role_obj = obj.get("role") orelse continue;
-        const role_val = role_obj.object.get("value") orelse continue;
-        if (!std.mem.eql(u8, role_val.string, "textbox")) continue;
-        const name_val = obj.get("name").?.object.get("value").?;
-        if (name_val == .string and std.mem.indexOf(u8, name_val.string, "Wrap") != null) {
-            wrapped_named = true;
-        }
-    }
-    try testing.expect(wrapped_named);
+    try testing.expect(findNode(nodes, "textbox", "Wrap") != null);
 
     // Labels associated with hidden checkboxes/radios are promoted:
     // the label appears with the control's role + state so agents can
@@ -1768,32 +1730,9 @@ test "AXNode: writer prunes hidden and resolves labels" {
         .{ .name_needle = "Inert option", .role = "checkbox", .checked = "false" },
     };
     for (expected) |exp| {
-        var found = false;
-        for (nodes) |node_val| {
-            const obj = node_val.object;
-            const role_obj = obj.get("role") orelse continue;
-            const role_val = role_obj.object.get("value") orelse continue;
-            if (!std.mem.eql(u8, role_val.string, exp.role)) continue;
-            const name_obj = obj.get("name") orelse continue;
-            const name_value = name_obj.object.get("value") orelse continue;
-            if (name_value != .string) continue;
-            if (std.mem.indexOf(u8, name_value.string, exp.name_needle) == null) continue;
-
-            // Verify the `checked` property was emitted with the right value.
-            const props = obj.get("properties").?.array.items;
-            var checked_matches = false;
-            for (props) |prop| {
-                const prop_obj = prop.object;
-                if (!std.mem.eql(u8, prop_obj.get("name").?.string, "checked")) continue;
-                const val = prop_obj.get("value").?.object.get("value").?.string;
-                if (std.mem.eql(u8, val, exp.checked)) checked_matches = true;
-                break;
-            }
-            try testing.expect(checked_matches);
-            found = true;
-            break;
-        }
-        try testing.expect(found);
+        const label = findNode(nodes, exp.role, exp.name_needle) orelse return error.PromotedLabelNotFound;
+        const checked = nodeProperty(label, "checked") orelse return error.CheckedPropertyNotFound;
+        try testing.expectEqual(exp.checked, checked.get("value").?.string);
     }
 }
 
@@ -1904,29 +1843,10 @@ test "AXNode: writer maps password input to textbox" {
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
     defer parsed.deinit();
 
-    for (parsed.value.array.items) |node_val| {
-        const obj = node_val.object;
-        const role_obj = obj.get("role") orelse continue;
-        const role_val = role_obj.object.get("value") orelse continue;
-        if (!std.mem.eql(u8, role_val.string, "textbox")) continue;
-
-        const name_obj = obj.get("name") orelse continue;
-        const name_value = name_obj.object.get("value") orelse continue;
-        if (name_value != .string or !std.mem.eql(u8, name_value.string, "Password")) continue;
-
-        try testing.expectEqual(false, obj.get("ignored").?.bool);
-
-        const props = obj.get("properties").?.array.items;
-        for (props) |prop| {
-            const prop_obj = prop.object;
-            if (!std.mem.eql(u8, prop_obj.get("name").?.string, "required")) continue;
-            const required = prop_obj.get("value").?.object.get("value").?.bool;
-            try testing.expectEqual(true, required);
-            return;
-        }
-        return error.PasswordRequiredPropertyNotFound;
-    }
-    return error.PasswordTextboxNodeNotFound;
+    const textbox = findNode(parsed.value.array.items, "textbox", "Password") orelse return error.PasswordTextboxNodeNotFound;
+    try testing.expectEqual(false, textbox.get("ignored").?.bool);
+    const required = nodeProperty(textbox, "required") orelse return error.PasswordRequiredPropertyNotFound;
+    try testing.expectEqual(true, required.get("value").?.bool);
 }
 
 test "AXNode: Writer query filters by accessible name" {
