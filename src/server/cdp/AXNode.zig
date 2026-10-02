@@ -86,10 +86,9 @@ pub const Writer = struct {
 
         try w.beginArray();
         if (self.filter != null) {
-            try self.walkQuery(self.root.dom, &ignore_cache, w);
+            try self.walkQuery(&ignore_cache, w);
         } else {
-            const root = AXNode.fromNode(self.root.dom);
-            try self.writeTree(root, hiddenState(self.root.dom, self.frame), &ignore_cache, w);
+            try self.writeTree(&ignore_cache, w);
         }
         return w.endArray();
     }
@@ -119,9 +118,9 @@ pub const Writer = struct {
         try w.write(s);
     }
 
-    fn writeTree(self: *const Writer, root: AXNode, root_hidden: Hidden, ignore_cache: *IgnoreCache, w: anytype) !void {
-        var walker: Walker = .init(root.dom);
-        var descend = try self.writeNode(self.root.id, root, root_hidden, ignore_cache, w);
+    fn writeTree(self: *const Writer, ignore_cache: *IgnoreCache, w: anytype) !void {
+        var walker: Walker = .init(self.root.dom, self.frame);
+        var descend = try self.writeNode(self.root.id, .fromNode(self.root.dom), walker.hidden(self.root.dom), ignore_cache, w);
         while (walker.next(descend)) |dom_node| {
             descend = false;
             switch (dom_node._type) {
@@ -137,7 +136,7 @@ pub const Writer = struct {
                 else => continue,
             }
 
-            const hidden = hiddenState(dom_node, self.frame);
+            const hidden = walker.hidden(dom_node);
             if (hidden == .pruned) {
                 continue;
             }
@@ -628,12 +627,13 @@ pub const Writer = struct {
         }
     }
 
-    // Query-mode walk. Visits every node under `root` (including AX-ignored
+    // Query-mode walk. Visits every node under the root (including AX-ignored
     // ones, per the queryAXTree spec) and defers emission to emitMatch.
-    fn walkQuery(self: *const Writer, root: *DOMNode, ignore_cache: *IgnoreCache, w: anytype) !void {
-        var walker: Walker = .init(root);
+    fn walkQuery(self: *const Writer, ignore_cache: *IgnoreCache, w: anytype) !void {
+        const root = self.root.dom;
+        var walker: Walker = .init(root, self.frame);
         const root_axn: AXNode = .fromNode(root);
-        try self.emitMatch(root_axn, false, ignore_cache, w);
+        try self.emitMatch(root_axn, walker.hidden(root), ignore_cache, w);
         // <head>, <script>, <style> never expose AX content — skip their children.
         var descend = !root_axn.ignoreChildren();
         while (walker.next(descend)) |node| {
@@ -643,7 +643,7 @@ pub const Writer = struct {
                 else => continue,
             }
             const axn: AXNode = .fromNode(node);
-            try self.emitMatch(axn, walker.inAriaHidden(), ignore_cache, w);
+            try self.emitMatch(axn, walker.hidden(node), ignore_cache, w);
             descend = !axn.ignoreChildren();
         }
     }
@@ -652,7 +652,7 @@ pub const Writer = struct {
     // the queryAXTree flat-match shape: nodeId, backendDOMNodeId, ignored,
     // role, name, plus empty properties / childIds (clients fetch full
     // properties via getFullAXTree on a matched nodeId).
-    fn emitMatch(self: *const Writer, axn: AXNode, in_aria_hidden: bool, ignore_cache: *IgnoreCache, w: anytype) !void {
+    fn emitMatch(self: *const Writer, axn: AXNode, hidden: Hidden, ignore_cache: *IgnoreCache, w: anytype) !void {
         const filter = self.filter.?;
         const resolved = self.resolveRole(axn) catch return;
 
@@ -666,7 +666,7 @@ pub const Writer = struct {
         }
 
         const node = try self.registry.register(axn.dom);
-        const ignored = in_aria_hidden or hiddenState(axn.dom, self.frame) != .visible or try axn.isIgnore(self.frame, ignore_cache);
+        const ignored = hidden != .visible or try axn.isIgnore(self.frame, ignore_cache);
 
         try w.beginObject();
 
@@ -1108,22 +1108,32 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer) !void {
     }
 }
 
-/// Pre-order walk counting aria-hidden ancestors (root included), which
-/// TreeWalker can't: it leaves subtrees without saying so.
+/// Pre-order walk tracking the outermost ancestor, including those above the
+/// root, whose attribute (aria-hidden, inert, hidden) hides its subtree;
+/// TreeWalker leaves subtrees without saying so. CSS needs no tracking: the
+/// StyleManager resolves it through the ancestors.
 const Walker = struct {
     root: *DOMNode,
     current: *DOMNode,
-    aria_hidden_ancestors: u32 = 0,
+    frame: *Frame,
+    hiding_ancestor: ?*DOMNode,
 
-    fn init(root: *DOMNode) Walker {
-        return .{ .root = root, .current = root };
+    fn init(root: *DOMNode, frame: *Frame) Walker {
+        var hiding_ancestor: ?*DOMNode = null;
+        var node = root._parent;
+        while (node) |n| : (node = n._parent) {
+            if (hidesSubtree(n)) hiding_ancestor = n;
+        }
+        return .{ .root = root, .current = root, .frame = frame, .hiding_ancestor = hiding_ancestor };
     }
 
     /// `descend` false skips the current node's children.
     fn next(self: *Walker, descend: bool) ?*DOMNode {
         if (descend) {
             if (self.current.firstChild()) |child| {
-                if (isAriaHidden(self.current)) self.aria_hidden_ancestors += 1;
+                if (self.hiding_ancestor == null and hidesSubtree(self.current)) {
+                    self.hiding_ancestor = self.current;
+                }
                 self.current = child;
                 return child;
             }
@@ -1136,27 +1146,23 @@ const Walker = struct {
                 return sibling;
             }
             node = node._parent.?;
-            if (isAriaHidden(node)) self.aria_hidden_ancestors -= 1;
+            if (node == self.hiding_ancestor) {
+                self.hiding_ancestor = null;
+            }
         }
         return null;
     }
 
-    fn inAriaHidden(self: *const Walker) bool {
-        return self.aria_hidden_ancestors > 0;
+    /// Only valid for the node `next` just returned, or the root.
+    fn hidden(self: *const Walker, node: *DOMNode) Hidden {
+        return if (self.hiding_ancestor != null) .pruned else hiddenState(node, self.frame);
     }
 
-    fn isAriaHidden(node: *DOMNode) bool {
+    fn hidesSubtree(node: *DOMNode) bool {
         const el = node.is(DOMNode.Element) orelse return false;
-        return hasAriaHiddenTrue(el);
+        return hasHidingAttribute(el);
     }
 };
-
-fn hasAriaHiddenTrue(elt: *DOMNode.Element) bool {
-    if (elt.getAttributeInterned("aria-hidden")) |value| {
-        return std.mem.eql(u8, value, "true");
-    }
-    return false;
-}
 
 fn isLabellableTag(tag: DOMNode.Element.Tag) bool {
     return switch (tag) {
@@ -1296,7 +1302,8 @@ fn hiddenState(node: *DOMNode, frame: *Frame) Hidden {
 }
 
 fn hasHidingAttribute(elt: *DOMNode.Element) bool {
-    return hasAriaHiddenTrue(elt) or elt.hasAttributeInterned("hidden") or elt.hasAttributeSafe(comptime .wrap("inert"));
+    const aria_hidden = elt.getAttributeInterned("aria-hidden") orelse "";
+    return std.mem.eql(u8, aria_hidden, "true") or elt.hasAttributeInterned("hidden") or elt.hasAttributeSafe(comptime .wrap("inert"));
 }
 
 fn ignoreText(node: *DOMNode) bool {
@@ -1347,7 +1354,7 @@ const IgnoreCache = struct {
     allocator: std.mem.Allocator,
     map: std.AutoHashMapUnmanaged(*DOMNode, bool) = .empty,
 
-    /// Keyed on the node alone: never reached under aria-hidden (callers
+    /// Keyed on the node alone: never reached under a hiding ancestor (callers
     /// check it first). `root` isn't cached, walks ask about each node once.
     fn isGenericIgnored(self: *IgnoreCache, root: *DOMNode, frame: *Frame) !bool {
         if (self.map.get(root)) |ignored| return ignored;
@@ -1663,6 +1670,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
         "under-visibility-hidden",
         "under-hidden-attr",
         "under-aria-hidden",
+        "under-inert",
     };
     for (nodes) |node_val| {
         const obj = node_val.object;
@@ -1947,6 +1955,46 @@ test "AXNode: Writer query filters by accessible name" {
         const name_val = n.object.get("name").?.object.get("value").?.string;
         try testing.expectEqual("Search", name_val);
     }
+}
+
+test "AXNode: Writer query and subtree root see a hiding ancestor" {
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer temp_arena.release();
+
+    var writer: Writer = .{
+        .root = try registry.register(frame.window._document.asNode()),
+        .registry = &registry,
+        .frame = frame,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+        .filter = .{ .accessible_name = "under-inert" },
+    };
+    const query = try std.json.Stringify.valueAlloc(testing.allocator, writer, .{});
+    defer testing.allocator.free(query);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, query, .{});
+    defer parsed.deinit();
+    // Chrome returns no match (an ignored node has no name); we may, but ignored
+    for (parsed.value.array.items) |n| {
+        try testing.expectEqual(true, n.object.get("ignored").?.bool);
+    }
+
+    const button = (try frame.window._document.querySelector(.wrap("#under-inert"), frame)).?;
+    writer.root = try registry.register(button.asNode());
+    writer.filter = null;
+    const tree = try std.json.Stringify.valueAlloc(testing.allocator, writer, .{});
+    defer testing.allocator.free(tree);
+
+    try testing.expect(std.mem.indexOf(u8, tree, "\"ignored\":true") != null);
+    try testing.expect(std.mem.indexOf(u8, tree, "\"childIds\":[]") != null);
 }
 
 test "AXNode: Writer query combined role+name filter promotes hidden-input labels" {
