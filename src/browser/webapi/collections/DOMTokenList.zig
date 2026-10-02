@@ -70,10 +70,12 @@ pub fn item(self: *const DOMTokenList, index: usize, frame: *Frame) !?[]const u8
 }
 
 /// https://dom.spec.whatwg.org/#dom-domtokenlist-supports
-/// Only `rel` defines supported tokens here; per spec every other backing
-/// attribute throws. Loaders probe `relList.supports("modulepreload")` and
-/// fall back to fetch()-based legacy loading when it fails.
+/// `sandbox` defines supported tokens, but none of its permissions are
+/// implemented here. Other attributes without supported tokens throw.
 pub fn supports(self: *const DOMTokenList, token: []const u8, frame: *Frame) !bool {
+    if (std.ascii.eqlIgnoreCase(self._attribute_name.str(), "sandbox")) {
+        return false;
+    }
     if (!std.ascii.eqlIgnoreCase(self._attribute_name.str(), "rel")) {
         return error.TypeError;
     }
