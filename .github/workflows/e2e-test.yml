@@ -278,7 +278,7 @@ jobs:
       CG: actions-runner/lpd_${{ github.run_id }}_${{ github.run_attempt }}
 
     # use a self host runner.
-    runs-on: lpd-bench-hetzner
+    runs-on: lpd-bench-scaleway
     timeout-minutes: 15
 
     steps:
