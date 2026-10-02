@@ -24,13 +24,14 @@ const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
-const Element = @import("../../Element.zig");
-const HtmlElement = @import("../Html.zig");
-const Form = @import("Form.zig");
 const Event = @import("../../Event.zig");
-const ValidityState = @import("ValidityState.zig");
+const Element = @import("../../Element.zig");
 
+const HtmlElement = @import("../Html.zig");
 const popover = @import("../popover.zig");
+
+const Form = @import("Form.zig");
+const ValidityState = @import("ValidityState.zig");
 
 const Button = @This();
 

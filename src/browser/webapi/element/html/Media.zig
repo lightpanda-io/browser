@@ -18,17 +18,20 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
+const Factory = @import("../../../Factory.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
-const Factory = @import("../../../Factory.zig");
-const HtmlElement = @import("../Html.zig");
 const Event = @import("../../Event.zig");
+
+const HtmlElement = @import("../Html.zig");
+const MediaError = @import("../../media/MediaError.zig");
+
 pub const Audio = @import("Audio.zig");
 pub const Video = @import("Video.zig");
-const MediaError = @import("../../media/MediaError.zig");
 
 const Media = @This();
 
