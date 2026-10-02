@@ -64,7 +64,7 @@ pub const Writer = struct {
     const ResolvedRole = struct {
         role: []const u8,
         // Non-null when the current node is a <label> whose target control is
-        // a CSS-hidden checkbox/radio. Callers use this to emit the control's
+        // a hidden checkbox/radio. Callers use this to emit the control's
         // checked/disabled properties on the promoted label.
         promoted_input: ?*DOMNode.Element.Html.Input,
     };
@@ -93,9 +93,9 @@ pub const Writer = struct {
         return w.endArray();
     }
 
-    // Resolve the displayed role for `axn`, accounting for label-promotion
-    // when a <label> targets a CSS-hidden checkbox/radio. Shared between the
-    // tree (writeNode) and query (emitMatch) paths so the two can't drift.
+    /// Resolve the displayed role for `axn`, accounting for label-promotion
+    /// when a <label> targets a hidden checkbox/radio. Shared between the
+    /// tree (writeNode) and query (emitMatch) paths so the two can't drift.
     fn resolveRole(self: *const Writer, axn: AXNode) !ResolvedRole {
         if (labelPromotionTarget(axn, self.frame)) |input| {
             return .{
@@ -1108,10 +1108,10 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer) !void {
     }
 }
 
-/// Pre-order walk tracking the outermost ancestor, including those above the
-/// root in the flat tree, whose aria-hidden or inert hides its subtree;
+/// Pre-order walk tracking the outermost aria-hidden or inert ancestor, since
 /// TreeWalker leaves subtrees without saying so. CSS needs no tracking: the
-/// StyleManager resolves it through the ancestors.
+/// StyleManager resolves it through the ancestors. The walk stays in the light
+/// tree; only the root's ancestors are looked up through the flat tree.
 const Walker = struct {
     root: *DOMNode,
     current: *DOMNode,
@@ -1119,12 +1119,7 @@ const Walker = struct {
     hiding_ancestor: ?*DOMNode,
 
     fn init(root: *DOMNode, frame: *Frame) Walker {
-        var hiding_ancestor: ?*DOMNode = null;
-        var node = root.flatTreeParent(frame);
-        while (node) |n| : (node = n.flatTreeParent(frame)) {
-            if (hidesSubtree(n)) hiding_ancestor = n;
-        }
-        return .{ .root = root, .current = root, .frame = frame, .hiding_ancestor = hiding_ancestor };
+        return .{ .root = root, .current = root, .frame = frame, .hiding_ancestor = hidingAncestor(root, frame) };
     }
 
     /// `descend` false skips the current node's children.
@@ -1156,11 +1151,6 @@ const Walker = struct {
     /// Only valid for the node `next` just returned, or the root.
     fn hidden(self: *const Walker, node: *DOMNode) Hidden {
         return if (self.hiding_ancestor != null) .pruned else hiddenState(node, self.frame);
-    }
-
-    fn hidesSubtree(node: *DOMNode) bool {
-        const el = node.is(DOMNode.Element) orelse return false;
-        return hasHidingAttribute(el);
     }
 };
 
@@ -1201,16 +1191,16 @@ fn nameFromContentRole(role_: ?[]const u8) bool {
     return name_for_content_roles.has(role);
 }
 
-// CSS-only toggle switches and custom radios commonly visually-style a
-// `<label>` while `display:none`-ing the real `<input>`. Chromium matches
-// this by pruning the input from the AX tree, which leaves the label as a
-// generic role=none element and an agent walking the tree has nothing
-// interactive to click.
-//
-// When a `<label>` targets a hidden checkbox or radio, promote it: emit
-// the label with the input's role and state. Browsers already forward
-// label clicks to the associated input, so the label's backendDOMNodeId
-// is a valid click target.
+/// CSS-only toggle switches and custom radios commonly visually-style a
+/// `<label>` while `display:none`-ing the real `<input>`. Chromium matches
+/// this by pruning the input from the AX tree, which leaves the label as a
+/// generic role=none element and an agent walking the tree has nothing
+/// interactive to click.
+///
+/// When a `<label>` targets a hidden checkbox or radio, promote it: emit
+/// the label with the input's role and state. Browsers already forward
+/// label clicks to the associated input, inert included, so the label's
+/// backendDOMNodeId is a valid click target.
 fn labelPromotionTarget(
     axn: AXNode,
     frame: *Frame,
@@ -1224,19 +1214,18 @@ fn labelPromotionTarget(
 
     const label = el.as(DOMNode.Element.Html.Label);
     const control = label.getControl(frame) orelse return null;
-
-    // Only promote when the control is hidden; otherwise it appears
-    // normally and the label stays as-is. Reached outside a walk, so the
-    // control's ancestors are checked here.
-    const walker: Walker = .init(control.asNode(), frame);
-    if (walker.hidden(control.asNode()) == .visible) return null;
-
     if (control.getTag() != .input) return null;
     const input = control.as(DOMNode.Element.Html.Input);
-    return switch (input._input_type) {
-        .checkbox, .radio => input,
-        else => null,
-    };
+    switch (input._input_type) {
+        .checkbox, .radio => {},
+        else => return null,
+    }
+
+    const control_node = control.asNode();
+    if (hidingAncestor(control_node, frame) == null and hiddenState(control_node, frame) == .visible) {
+        return null;
+    }
+    return input;
 }
 
 fn writeLabelName(
@@ -1292,7 +1281,7 @@ const Hidden = enum { visible, invisible, pruned };
 /// Text takes its parent's state.
 fn hiddenState(node: *DOMNode, frame: *Frame) Hidden {
     const elt = node.is(DOMNode.Element) orelse node.parentElement() orelse return .visible;
-    if (hasHidingAttribute(elt)) {
+    if (hidesSubtree(elt.asNode())) {
         return .pruned;
     }
     const owner = elt.ownerFrame(frame) orelse return .visible;
@@ -1303,10 +1292,23 @@ fn hiddenState(node: *DOMNode, frame: *Frame) Hidden {
     return if (style_manager.hasVisibilityHiddenInherited(elt)) .invisible else .visible;
 }
 
-fn hasHidingAttribute(elt: *DOMNode.Element) bool {
-    // [hidden] is the StyleManager's: an author display rule overrides it
+/// Not [hidden]: an author display rule can override it, so the StyleManager
+/// owns it.
+fn hidesSubtree(node: *DOMNode) bool {
+    const elt = node.is(DOMNode.Element) orelse return false;
     const aria_hidden = elt.getAttributeInterned("aria-hidden") orelse "";
     return std.mem.eql(u8, aria_hidden, "true") or elt.hasAttributeSafe(comptime .wrap("inert"));
+}
+
+/// The first flat-tree ancestor of `node` whose attributes hide its subtree.
+fn hidingAncestor(node: *DOMNode, frame: *Frame) ?*DOMNode {
+    var current = node.flatTreeParent(frame);
+    while (current) |ancestor| : (current = ancestor.flatTreeParent(frame)) {
+        if (hidesSubtree(ancestor)) {
+            return ancestor;
+        }
+    }
+    return null;
 }
 
 fn ignoreText(node: *DOMNode) bool {
@@ -1686,8 +1688,8 @@ test "AXNode: writer prunes hidden and resolves labels" {
         }
     }
 
-    // Visible text leaks into the tree as a StaticText child, including under
-    // a [hidden] an author display rule overrides.
+    // Visible text is exposed, including under a [hidden] that `display: block`
+    // overrides.
     for ([_][]const u8{ "visible-para", "hidden-overridden" }) |needle| {
         var found_visible = false;
         for (nodes) |node_val| {
@@ -1745,7 +1747,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
     }
     try testing.expect(wrapped_named);
 
-    // Labels associated with CSS-hidden checkboxes/radios are promoted:
+    // Labels associated with hidden checkboxes/radios are promoted:
     // the label appears with the control's role + state so agents can
     // interact with CSS-only toggle switches.
     const Expected = struct {
@@ -2001,7 +2003,6 @@ test "AXNode: Writer query and subtree root see a hiding ancestor" {
     const shadow_button = host.getShadowRoot(frame).?.getElementById("in-inert-shadow", frame).?;
 
     writer.filter = null;
-    // The inert host is above the shadow root
     for ([_]*DOMNode.Element{ button, shadow_button }) |root| {
         writer.root = try registry.register(root.asNode());
         const tree = try std.json.Stringify.valueAlloc(testing.allocator, writer, .{});

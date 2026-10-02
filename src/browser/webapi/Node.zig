@@ -1721,8 +1721,7 @@ pub fn assignedSlot(self: *Node, frame: *const Frame) ?*Element.Html.Slot {
     return frame.page._assigned_slots.get(self);
 }
 
-// An inert element applies to all its chidren, so walk up to see if we have
-// an inert parent
+/// Inert applies to the whole subtree, so any inert flat-tree ancestor counts.
 pub fn isInert(self: *Node, frame: *const Frame) bool {
     var current: ?*Node = self;
     while (current) |node| : (current = node.flatTreeParent(frame)) {
