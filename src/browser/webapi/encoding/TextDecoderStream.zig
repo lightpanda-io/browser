@@ -51,20 +51,20 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, exec: *const Execution) !Text
     const decodeFn: TransformStream.ZigTransformFn = blk: {
         if (opts.ignoreBOM) {
             break :blk struct {
-                fn decode(controller: *TransformStream.DefaultController, chunk: js.Value) !void {
+                fn decode(_: ?*anyopaque, controller: *TransformStream.DefaultController, chunk: js.Value) !void {
                     return decodeTransform(controller, chunk, true);
                 }
             }.decode;
         } else {
             break :blk struct {
-                fn decode(controller: *TransformStream.DefaultController, chunk: js.Value) !void {
+                fn decode(_: ?*anyopaque, controller: *TransformStream.DefaultController, chunk: js.Value) !void {
                     return decodeTransform(controller, chunk, false);
                 }
             }.decode;
         }
     };
 
-    const transform = try TransformStream.initWithZigTransform(decodeFn, exec);
+    const transform = try TransformStream.initWithZigTransformer(.{ .transform = decodeFn }, exec);
 
     return .{
         ._transform = transform,
