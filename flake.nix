@@ -26,6 +26,7 @@
 
   outputs =
     {
+      self,
       nixpkgs,
       zigPkgs,
       zlsPkg,
@@ -49,6 +50,17 @@
 
         rustToolchain = fenix.packages.${system}.stable.toolchain;
 
+        buildTools =
+          pkgs: with pkgs; [
+            zig
+            zls
+            rustToolchain
+            python3
+            pkg-config
+            cmake
+            gperf
+          ];
+
         # We need crtbeginS.o for building.
         crtFiles = pkgs.runCommand "crt-files" { } ''
           mkdir -p $out/lib
@@ -60,16 +72,9 @@
           name = "fhs-shell";
           multiArch = true;
           targetPkgs =
-            pkgs: with pkgs; [
-              # Build Tools
-              zig
-              zls
-              rustToolchain
-              python3
-              pkg-config
-              cmake
-              gperf
-
+            pkgs:
+            buildTools pkgs
+            ++ (with pkgs; [
               # GCC
               gcc
               gcc.cc.lib
@@ -80,12 +85,33 @@
               glib.dev
               glibc.dev
               zlib
-            ];
+            ]);
+        };
+
+        # macOS needs no FHS env. The stdenv shell pins DEVELOPER_DIR to a
+        # nixpkgs Apple SDK, which zig picks up through xcrun, so builds don't
+        # depend on the local Xcode (Zig 0.16's libc++ doesn't build against
+        # the macOS 27 SDK).
+        darwinShell = pkgs.mkShell {
+          packages = buildTools pkgs;
+        };
+
+        # `-Dversion` with build metadata, as there is no .git in the Nix sandbox.
+        zonVersion = builtins.head (
+          builtins.match ".*\\.version = \"([^\"]+)\".*" (builtins.readFile ./build.zig.zon)
+        );
+        lightpanda = pkgs.callPackage ./nix/package.nix {
+          inherit rustToolchain;
+          src = self;
+          version = "${zonVersion}+${self.shortRev or self.dirtyShortRev or "unknown"}";
         };
 
       in
       {
-        devShells.default = fhs.env;
+        packages.default = lightpanda;
+        packages.lightpanda = lightpanda;
+
+        devShells.default = if pkgs.stdenv.isDarwin then darwinShell else fhs.env;
       }
     );
 }
