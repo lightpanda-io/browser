@@ -163,3 +163,39 @@
     testing.expectEqual('initial', callbackCalls[1].newValue);
 }
 </script>
+
+<script id="style_declaration">
+{
+    let calls = [];
+
+    class StyleObserver extends HTMLElement {
+        static get observedAttributes() {
+            return ['style'];
+        }
+
+        attributeChangedCallback(name, oldValue, newValue) {
+            calls.push(newValue);
+        }
+    }
+
+    customElements.define('style-observer', StyleObserver);
+    const el = document.createElement('style-observer');
+
+    // each write runs the callback before returning
+    el.style.setProperty('color', 'red');
+    testing.expectEqual(['color: red;'], calls);
+
+    el.style.cssText = 'width: 1px;';
+    testing.expectEqual(2, calls.length);
+
+    el.style.borderWidth = '2px';
+    testing.expectEqual(3, calls.length);
+
+    el.style.cssFloat = 'left';
+    testing.expectEqual(4, calls.length);
+
+    el.style.removeProperty('width');
+    testing.expectEqual(5, calls.length);
+    testing.expectEqual(el.getAttribute('style'), calls[4]);
+}
+</script>
