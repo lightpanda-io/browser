@@ -814,13 +814,18 @@
     testing.expectEqual(true, button.checkVisibility());
 
     const hidden = document.createElement("div");
-    hidden.style.cssText = "visibility: hidden; --c: red";
+    hidden.style.cssText = "visibility: hidden; --c: red; font-size: 30px";
     document.body.appendChild(hidden);
     const span = document.createElement("span");
-    hidden.attachShadow({ mode: "open" }).appendChild(span);
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("x", "2em");
+    const hidden_shadow = hidden.attachShadow({ mode: "open" });
+    hidden_shadow.appendChild(span);
+    hidden_shadow.appendChild(svg);
     testing.expectEqual(false, span.checkVisibility({ visibilityProperty: true }));
     testing.expectEqual("hidden", getComputedStyle(span).visibility);
     testing.expectEqual("red", getComputedStyle(span).getPropertyValue("--c"));
+    testing.expectEqual(60, svg.x.baseVal.value);
 
     none.remove();
     hidden.remove();
