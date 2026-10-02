@@ -89,8 +89,7 @@ pub const Writer = struct {
             try self.walkQuery(self.root.dom, &ignore_cache, w);
         } else {
             const root = AXNode.fromNode(self.root.dom);
-            const root_hidden = if (self.root.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame) else false;
-            try self.writeTree(root, root_hidden, &ignore_cache, w);
+            try self.writeTree(root, hiddenState(self.root.dom, self.frame), &ignore_cache, w);
         }
         return w.endArray();
     }
@@ -120,9 +119,9 @@ pub const Writer = struct {
         try w.write(s);
     }
 
-    fn writeTree(self: *const Writer, root: AXNode, root_hidden: bool, ignore_cache: *IgnoreCache, w: anytype) !void {
+    fn writeTree(self: *const Writer, root: AXNode, root_hidden: Hidden, ignore_cache: *IgnoreCache, w: anytype) !void {
         var walker: Walker = .init(root.dom);
-        var descend = try self.writeNode(self.root.id, root, false, root_hidden, ignore_cache, w);
+        var descend = try self.writeNode(self.root.id, root, root_hidden, ignore_cache, w);
         while (walker.next(descend)) |dom_node| {
             descend = false;
             switch (dom_node._type) {
@@ -134,20 +133,16 @@ pub const Writer = struct {
                         continue;
                     }
                 },
-                .element => {
-                    // Prune hidden subtrees entirely (display:none,
-                    // visibility:hidden, aria-hidden, hidden, inert). Matches
-                    // Chromium: these elements aren't exposed to the AX tree.
-                    const el = dom_node.as(DOMNode.Element);
-                    if (walker.inAriaHidden() or isHidden(el, self.frame)) {
-                        continue;
-                    }
-                },
+                .element => {},
                 else => continue,
             }
 
+            const hidden = hiddenState(dom_node, self.frame);
+            if (hidden == .pruned) {
+                continue;
+            }
             const node = try self.registry.register(dom_node);
-            descend = try self.writeNode(node.id, .fromNode(dom_node), walker.inAriaHidden(), false, ignore_cache, w);
+            descend = try self.writeNode(node.id, .fromNode(dom_node), hidden, ignore_cache, w);
         }
     }
 
@@ -483,7 +478,7 @@ pub const Writer = struct {
     }
 
     // write a node. returns true if children must be written.
-    fn writeNode(self: *const Writer, id: u32, axn: AXNode, in_aria_hidden: bool, hidden: bool, ignore_cache: *IgnoreCache, w: anytype) !bool {
+    fn writeNode(self: *const Writer, id: u32, axn: AXNode, hidden: Hidden, ignore_cache: *IgnoreCache, w: anytype) !bool {
         try w.beginObject();
 
         try w.objectField("nodeId");
@@ -498,7 +493,7 @@ pub const Writer = struct {
         try w.objectField("role");
         try self.writeAXValue(.{ .role = resolved.role }, w);
 
-        const ignore = try axn.isIgnore(self.frame, in_aria_hidden, hidden, ignore_cache);
+        const ignore = hidden != .visible or try axn.isIgnore(self.frame, ignore_cache);
         try w.objectField("ignored");
         try w.write(ignore);
 
@@ -558,13 +553,8 @@ pub const Writer = struct {
         }
 
         // Children
-        const write_children = axn.ignoreChildren() == false and hidden == false;
+        const write_children = axn.ignoreChildren() == false and hidden != .pruned;
         const skip_text = ignoreText(axn.dom);
-
-        const child_in_aria_hidden = in_aria_hidden or blk: {
-            const self_el = n.is(DOMNode.Element) orelse break :blk false;
-            break :blk hasAriaHiddenTrue(self_el);
-        };
 
         try w.objectField("childIds");
         try w.beginArray();
@@ -577,12 +567,9 @@ pub const Writer = struct {
                     continue;
                 }
 
-                // Skip hidden element children so childIds matches the
-                // subtree-pruning done in writeTree.
-                if (child.is(DOMNode.Element)) |child_el| {
-                    if (child_in_aria_hidden or isHidden(child_el, self.frame)) {
-                        continue;
-                    }
+                // Matches writeTree's pruning
+                if (hiddenState(child, self.frame) == .pruned) {
+                    continue;
                 }
 
                 const child_node = try registry.register(child);
@@ -679,8 +666,7 @@ pub const Writer = struct {
         }
 
         const node = try self.registry.register(axn.dom);
-        const hidden = if (axn.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame) else false;
-        const ignored = try axn.isIgnore(self.frame, in_aria_hidden, hidden, ignore_cache);
+        const ignored = in_aria_hidden or hiddenState(axn.dom, self.frame) != .visible or try axn.isIgnore(self.frame, ignore_cache);
 
         try w.beginObject();
 
@@ -1235,7 +1221,7 @@ fn labelPromotionTarget(
 
     // Only promote when the control is hidden; otherwise it appears
     // normally and the label stays as-is.
-    if (!isHidden(control, frame)) return null;
+    if (hiddenState(control.asNode(), frame) == .visible) return null;
 
     if (control.getTag() != .input) return null;
     const input = control.as(DOMNode.Element.Html.Input);
@@ -1291,22 +1277,26 @@ fn scratchAllocator(temp_arena: ?*lp.Arena, frame: *Frame) std.mem.Allocator {
     return if (temp_arena) |a| a.allocator() else frame.call_arena;
 }
 
-/// Chromium's AX tree prunes display:none and visibility:hidden alike.
-fn isHidden(elt: *DOMNode.Element, frame: *Frame) bool {
+/// `invisible` (visibility:hidden) ignores only the node: a descendant can set
+/// `visibility: visible`. `pruned` ignores the whole subtree.
+const Hidden = enum { visible, invisible, pruned };
+
+/// Text takes its parent's state.
+fn hiddenState(node: *DOMNode, frame: *Frame) Hidden {
+    const elt = node.is(DOMNode.Element) orelse node.parentElement() orelse return .visible;
     if (hasHidingAttribute(elt)) {
-        return true;
+        return .pruned;
     }
-    const owner = elt.ownerFrame(frame) orelse return false;
-    return owner._style_manager.isHidden(elt, .{ .check_visibility = true });
+    const owner = elt.ownerFrame(frame) orelse return .visible;
+    const style_manager = &owner._style_manager;
+    if (style_manager.isHidden(elt, .{})) {
+        return .pruned;
+    }
+    return if (style_manager.hasVisibilityHiddenInherited(elt)) .invisible else .visible;
 }
 
 fn hasHidingAttribute(elt: *DOMNode.Element) bool {
-    if (elt.getAttributeInterned("aria-hidden")) |value| {
-        if (std.mem.eql(u8, value, "true")) {
-            return true;
-        }
-    }
-    return elt.hasAttributeInterned("hidden") or elt.hasAttributeSafe(comptime .wrap("inert"));
+    return hasAriaHiddenTrue(elt) or elt.hasAttributeInterned("hidden") or elt.hasAttributeSafe(comptime .wrap("inert"));
 }
 
 fn ignoreText(node: *DOMNode) bool {
@@ -1357,17 +1347,21 @@ const IgnoreCache = struct {
     allocator: std.mem.Allocator,
     map: std.AutoHashMapUnmanaged(*DOMNode, bool) = .empty,
 
-    /// Keyed on the node alone: never reached under aria-hidden (ignoreSelf
-    /// says .ignored). `root` isn't cached, walks ask about each node once.
+    /// Keyed on the node alone: never reached under aria-hidden (callers
+    /// check it first). `root` isn't cached, walks ask about each node once.
     fn isGenericIgnored(self: *IgnoreCache, root: *DOMNode, frame: *Frame) !bool {
         if (self.map.get(root)) |ignored| return ignored;
 
         var tw = TreeWalker.FullExcludeSelf.init(root, .{});
         const exposed = while (tw.next()) |node| {
-            const node_hidden = if (node.is(DOMNode.Element)) |el| isHidden(el, frame) else false;
-            switch (AXNode.fromNode(node).ignoreSelf(false, node_hidden)) {
+            const hidden = hiddenState(node, frame);
+            if (hidden == .pruned) {
+                tw.skipChildren();
+                continue;
+            }
+            switch (AXNode.fromNode(node).ignoreSelf()) {
                 .ignored => tw.skipChildren(),
-                .exposed => break node,
+                .exposed => if (hidden == .visible) break node,
                 .generic => {
                     // Until an exposed node turns up under it.
                     const gop = try self.map.getOrPut(self.allocator, node);
@@ -1390,10 +1384,8 @@ const IgnoreCache = struct {
     }
 };
 
-/// `hidden` comes from the caller: the tree walk prunes, so its children never
-/// are; the root and the query walk probe the whole chain.
-fn isIgnore(self: AXNode, frame: *Frame, in_aria_hidden: bool, hidden: bool, cache: *IgnoreCache) !bool {
-    return switch (self.ignoreSelf(in_aria_hidden, hidden)) {
+fn isIgnore(self: AXNode, frame: *Frame, cache: *IgnoreCache) !bool {
+    return switch (self.ignoreSelf()) {
         .ignored => true,
         .exposed => false,
         .generic => cache.isGenericIgnored(self.dom, frame),
@@ -1401,9 +1393,9 @@ fn isIgnore(self: AXNode, frame: *Frame, in_aria_hidden: bool, hidden: bool, cac
 }
 
 /// isIgnore for `self` alone, leaving generic containers to the caller.
-fn ignoreSelf(self: AXNode, in_aria_hidden: bool, hidden: bool) enum { ignored, exposed, generic } {
+fn ignoreSelf(self: AXNode) enum { ignored, exposed, generic } {
     // Don't ignore non-Element node: CData, Document...
-    const elt = self.dom.is(DOMNode.Element) orelse return if (in_aria_hidden) .ignored else .exposed;
+    const elt = self.dom.is(DOMNode.Element) orelse return .exposed;
     // Ignore non-HTML elements: svg...
     if (elt._type != .html) {
         return .ignored;
@@ -1438,14 +1430,6 @@ fn ignoreSelf(self: AXNode, in_aria_hidden: bool, hidden: bool) enum { ignored, 
         if (std.ascii.eqlIgnoreCase(role, "none") or std.ascii.eqlIgnoreCase(role, "presentation")) {
             return .ignored;
         }
-    }
-
-    if (in_aria_hidden) {
-        return .ignored;
-    }
-
-    if (hidden) {
-        return .ignored;
     }
 
     // Generic containers with no semantic value
@@ -1702,6 +1686,21 @@ test "AXNode: writer prunes hidden and resolves labels" {
         }
     }
     try testing.expect(found_visible);
+
+    // A visibility:visible descendant of a visibility:hidden element is exposed
+    var found_override = false;
+    for (nodes) |node_val| {
+        const obj = node_val.object;
+        const ignored = obj.get("ignored") orelse continue;
+        if (ignored.bool) continue;
+        const role_val = (obj.get("role") orelse continue).object.get("value") orelse continue;
+        if (!std.mem.eql(u8, role_val.string, "link")) continue;
+        const name_val = (obj.get("name") orelse continue).object.get("value") orelse continue;
+        if (name_val == .string and std.mem.eql(u8, name_val.string, "visible-in-hidden")) {
+            found_override = true;
+        }
+    }
+    try testing.expect(found_override);
 
     // The search input gets its name from <label for=search-input>.
     var search_named = false;
@@ -2116,7 +2115,7 @@ test "AXNode: generic containers share memoized ignore answers" {
     const expected = [_]struct { []const u8, bool }{ .{ "#a", false }, .{ "#b", true }, .{ "#c", false }, .{ "#d", false } };
     for (expected) |e| {
         const el = (try root.querySelector(e[0], frame)).?;
-        try testing.expectEqual(e[1], try AXNode.fromNode(el.asNode()).isIgnore(frame, false, false, &cache));
+        try testing.expectEqual(e[1], try AXNode.fromNode(el.asNode()).isIgnore(frame, &cache));
     }
     // Filled by #a's scan.
     try testing.expectEqual(3, cache.map.count());
@@ -2124,6 +2123,6 @@ test "AXNode: generic containers share memoized ignore answers" {
     var fresh: IgnoreCache = .{ .allocator = testing.arena_allocator };
     for (expected[1..]) |e| {
         const el = (try root.querySelector(e[0], frame)).?;
-        try testing.expectEqual(e[1], try AXNode.fromNode(el.asNode()).isIgnore(frame, false, false, &fresh));
+        try testing.expectEqual(e[1], try AXNode.fromNode(el.asNode()).isIgnore(frame, &fresh));
     }
 }
