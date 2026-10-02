@@ -17,6 +17,10 @@
 </form>
 <script>
   window.events = [];
+  window.over = [];
+  for (const type of ['pointerover', 'mouseover']) {
+    document.addEventListener(type, (e) => window.over.push(`${type}:${e.button}:${e.buttons}@${e.target.id}`));
+  }
   for (const type of ['click', 'input', 'change', 'keydown', 'focus', 'blur']) {
     document.addEventListener(type, (e) => {
       const key = type === 'keydown' ? ':' + (e.shiftKey ? 'S-' : '') + e.key : '';
