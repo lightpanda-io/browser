@@ -614,6 +614,10 @@ pub const NamedNodeMap = struct {
         return self.list().getAttribute(name, self._element, frame);
     }
 
+    fn getByNameNS(self: *const NamedNodeMap, namespace: ?[]const u8, local_name: String, frame: *Frame) !?*Attribute {
+        return self._element.getAttributeNodeNS(namespace, local_name, frame);
+    }
+
     pub fn set(self: *const NamedNodeMap, attribute: *Attribute, frame: *Frame) !?*Attribute {
         return self._element.setAttributeNode(attribute, frame);
     }
@@ -624,6 +628,10 @@ pub const NamedNodeMap = struct {
         const attr = (try self.getByName(name, frame)) orelse return null;
         try self.list().delete(name, self._element, frame);
         return attr;
+    }
+
+    fn removeByNameNS(self: *const NamedNodeMap, namespace: ?[]const u8, local_name: String, frame: *Frame) !?*Attribute {
+        return self.removeByName(try self._element.attributeNameNS(namespace, local_name, frame), frame);
     }
 
     pub fn iterator(self: *const NamedNodeMap, frame: *Frame) !*Iterator {
@@ -682,8 +690,12 @@ pub const NamedNodeMap = struct {
         }.wrap, .{ .null_as_undefined = true });
 
         pub const getNamedItem = bridge.function(NamedNodeMap.getByName, .{});
+        pub const getNamedItemNS = bridge.function(NamedNodeMap.getByNameNS, .{});
         pub const setNamedItem = bridge.function(NamedNodeMap.set, .{ .ce_reactions = true });
+        // Attributes don't carry a namespace, so this is setNamedItem.
+        pub const setNamedItemNS = bridge.function(NamedNodeMap.set, .{ .ce_reactions = true });
         pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{ .ce_reactions = true });
+        pub const removeNamedItemNS = bridge.function(NamedNodeMap.removeByNameNS, .{ .ce_reactions = true });
         pub const item = bridge.function(_item, .{});
         fn _item(self: *const NamedNodeMap, index: i32, frame: *Frame) !?*Attribute {
             // the bridge.indexed handles this, so if we want
