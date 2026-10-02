@@ -26,6 +26,7 @@ const CDP = @import("../CDP.zig");
 const js = @import("../../../browser/js/js.zig");
 const URL = @import("../../../browser/URL.zig");
 const Frame = @import("../../../browser/Frame.zig");
+const referrer = @import("../../../browser/referrer.zig");
 const Notification = @import("../../../Notification.zig");
 
 const log = lp.log;
@@ -327,11 +328,17 @@ fn registerIsolatedWorldContext(arena: Allocator, bc: *CDP.BrowserContext, world
 fn navigate(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         url: [:0]const u8,
-        // referrer: ?[]const u8 = null,
+        referrer: ?[:0]const u8 = null,
         // transitionType: ?[]const u8 = null, // TODO: enum
         // frameId: ?[]const u8 = null,
-        // referrerPolicy: ?[]const u8 = null, // TODO: enum
+        referrerPolicy: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
+
+    // Chrome applies the default policy, not unsafe-url, when none is given.
+    const policy: referrer.Policy = if (params.referrerPolicy) |name|
+        cdp_referrer_policies.get(name) orelse return cmd.sendError(-32602, "Invalid referrerPolicy", .{})
+    else
+        .default;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
@@ -352,6 +359,8 @@ fn navigate(cmd: *CDP.Command) !void {
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
         .kind = .{ .push = null },
+        .referer = if (params.referrer) |source| try referrer.compute(frame.call_arena, policy, source, encoded_url) else null,
+        .referrer_policy = policy,
     };
 
     if (canNavigateInPlace(bc, frame)) {
@@ -359,6 +368,17 @@ fn navigate(cmd: *CDP.Command) !void {
     }
     try session.initiateRootNavigation(frame._frame_id, encoded_url, opts);
 }
+
+const cdp_referrer_policies = std.StaticStringMap(referrer.Policy).initComptime(.{
+    .{ "noReferrer", .no_referrer },
+    .{ "noReferrerWhenDowngrade", .no_referrer_when_downgrade },
+    .{ "origin", .origin },
+    .{ "originWhenCrossOrigin", .origin_when_cross_origin },
+    .{ "sameOrigin", .same_origin },
+    .{ "strictOrigin", .strict_origin },
+    .{ "strictOriginWhenCrossOrigin", .strict_origin_when_cross_origin },
+    .{ "unsafeUrl", .unsafe_url },
+});
 
 fn stopLoading(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
@@ -2582,6 +2602,52 @@ test "cdp.frame: address-bar Page.navigate sends no Referer" {
         const v = try ls.local.exec("document.body.innerText.includes('referer=NONE')", null);
         try testing.expect(v.toBool());
     }
+}
+
+test "cdp.frame: Page.navigate referrer goes through the referrer policy" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-NREF", .url = "hi.html", .target_id = "FID-000000NREF".* });
+
+    const cases = [_]struct { referrer: [:0]const u8, policy: ?[]const u8, expected: []const u8 }{
+        .{ .referrer = "http://ref.example/path?q=1", .policy = null, .expected = "referer=http://ref.example/" },
+        .{ .referrer = "http://ref.example/path?q=1", .policy = "unsafeUrl", .expected = "referer=http://ref.example/path?q=1" },
+        .{ .referrer = "http://127.0.0.1:9582/from?q=1", .policy = null, .expected = "referer=http://127.0.0.1:9582/from?q=1" },
+        .{ .referrer = "http://ref.example/path", .policy = "noReferrer", .expected = "referer=NONE" },
+        .{ .referrer = "https://ref.example/path", .policy = null, .expected = "referer=NONE" },
+        .{ .referrer = "data:text/plain,hi", .policy = "unsafeUrl", .expected = "referer=NONE" },
+    };
+
+    for (cases, 0..) |case, i| {
+        try ctx.processMessage(.{
+            .id = 60 + i,
+            .method = "Page.navigate",
+            .params = .{ .url = "http://127.0.0.1:9582/echo_referer", .referrer = case.referrer, .referrerPolicy = case.policy },
+        });
+        try testing.waitForPage(bc);
+
+        const f = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("document.body.innerText", null);
+        try testing.expectEqualSlices(u8, case.expected, try v.toStringSlice());
+    }
+}
+
+test "cdp.frame: Page.navigate rejects an unknown referrerPolicy" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-NRP", .url = "hi.html", .target_id = "FID-0000000NRP".* });
+
+    try ctx.processMessage(.{
+        .id = 70,
+        .method = "Page.navigate",
+        .params = .{ .url = "http://127.0.0.1:9582/echo_referer", .referrerPolicy = "nope" },
+    });
+    try ctx.expectSentError(-32602, "Invalid referrerPolicy", .{ .id = 70 });
 }
 
 test "cdp.frame: addScriptToEvaluateOnNewDocument runImmediately evaluates in the current document" {
