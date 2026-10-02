@@ -28,7 +28,15 @@ const TransformStream = @This();
 
 pub const DefaultController = TransformStreamDefaultController;
 
-pub const ZigTransformFn = *const fn (*TransformStreamDefaultController, js.Value) anyerror!void;
+pub const ZigTransformFn = *const fn (ctx: ?*anyopaque, *TransformStreamDefaultController, js.Value) anyerror!void;
+pub const ZigFlushFn = *const fn (ctx: ?*anyopaque, *TransformStreamDefaultController) anyerror!void;
+
+/// A transformer implemented in Zig; `ctx` is passed back to both callbacks.
+pub const ZigTransformer = struct {
+    ctx: ?*anyopaque = null,
+    transform: ZigTransformFn,
+    flush: ?ZigFlushFn = null,
+};
 
 _readable: *ReadableStream,
 _writable: *WritableStream,
@@ -40,7 +48,7 @@ const Transformer = struct {
     transform: ?js.Function.Global = null,
 };
 
-pub fn init(transformer_: ?Transformer, exec: *const Execution) !*TransformStream {
+pub fn init(maybe_transformer: ?Transformer, exec: *const Execution) !*TransformStream {
     const readable = try ReadableStream.init(null, null, exec);
 
     const self = try exec._factory.create(TransformStream{
@@ -49,27 +57,31 @@ pub fn init(transformer_: ?Transformer, exec: *const Execution) !*TransformStrea
         ._controller = undefined,
     });
 
+    const flush_fn, const start_fn, const transform_fn = blk: {
+        if (maybe_transformer) |t| {
+            break :blk .{ t.flush, t.start, t.transform };
+        }
+        break :blk .{ null, null, null };
+    };
+
     const transform_controller = try TransformStreamDefaultController.init(
         self,
-        if (transformer_) |t| t.transform else null,
-        if (transformer_) |t| t.flush else null,
+        transform_fn,
+        flush_fn,
         null,
         exec,
     );
     self._controller = transform_controller;
-
     self._writable = try WritableStream.initForTransform(self, exec);
 
-    if (transformer_) |transformer| {
-        if (transformer.start) |start| {
-            try start.call(void, .{transform_controller});
-        }
+    if (start_fn) |start| {
+        try start.call(void, .{transform_controller});
     }
 
     return self;
 }
 
-pub fn initWithZigTransform(zig_transform: ZigTransformFn, exec: *const Execution) !*TransformStream {
+pub fn initWithZigTransformer(zig_transformer: ZigTransformer, exec: *const Execution) !*TransformStream {
     const readable = try ReadableStream.init(null, null, exec);
 
     const self = try exec._factory.create(TransformStream{
@@ -78,7 +90,7 @@ pub fn initWithZigTransform(zig_transform: ZigTransformFn, exec: *const Executio
         ._controller = undefined,
     });
 
-    const transform_controller = try TransformStreamDefaultController.init(self, null, null, zig_transform, exec);
+    const transform_controller = try TransformStreamDefaultController.init(self, null, null, zig_transformer, exec);
     self._controller = transform_controller;
 
     self._writable = try WritableStream.initForTransform(self, exec);
@@ -86,10 +98,9 @@ pub fn initWithZigTransform(zig_transform: ZigTransformFn, exec: *const Executio
 }
 
 pub fn transformWrite(self: *TransformStream, chunk: js.Value, exec: *const Execution) !void {
-    if (self._controller._zig_transform_fn) |zig_fn| {
+    if (self._controller._zig_transformer) |zig| {
         // Zig-level transform (used by TextEncoderStream etc.)
-        try zig_fn(self._controller, chunk);
-        return;
+        return zig.transform(zig.ctx, self._controller, chunk);
     }
 
     if (self._controller._transform_fn) |transform_fn| {
@@ -104,7 +115,11 @@ pub fn transformWrite(self: *TransformStream, chunk: js.Value, exec: *const Exec
 }
 
 pub fn transformClose(self: *TransformStream, exec: *const Execution) !void {
-    if (self._controller._flush_fn) |flush_fn| {
+    if (self._controller._zig_transformer) |zig| {
+        if (zig.flush) |flush| {
+            try flush(zig.ctx, self._controller);
+        }
+    } else if (self._controller._flush_fn) |flush_fn| {
         var ls: js.Local.Scope = undefined;
         exec.js.localScope(&ls);
         defer ls.deinit();
@@ -148,25 +163,33 @@ pub const TransformStreamDefaultController = struct {
     _stream: *TransformStream,
     _transform_fn: ?js.Function.Global,
     _flush_fn: ?js.Function.Global,
-    _zig_transform_fn: ?ZigTransformFn,
+    _zig_transformer: ?ZigTransformer,
 
     pub fn init(
         stream: *TransformStream,
         transform_fn: ?js.Function.Global,
         flush_fn: ?js.Function.Global,
-        zig_transform_fn: ?ZigTransformFn,
+        zig_transformer: ?ZigTransformer,
         exec: *const Execution,
     ) !*TransformStreamDefaultController {
         return exec._factory.create(TransformStreamDefaultController{
             ._stream = stream,
             ._transform_fn = transform_fn,
             ._flush_fn = flush_fn,
-            ._zig_transform_fn = zig_transform_fn,
+            ._zig_transformer = zig_transformer,
         });
     }
 
     pub fn enqueue(self: *TransformStreamDefaultController, chunk: ReadableStreamDefaultController.Chunk) !void {
         try self._stream._readable._controller.enqueue(chunk);
+    }
+
+    pub fn enqueueNoSideEffects(self: *TransformStreamDefaultController, chunk: ReadableStreamDefaultController.Chunk) !void {
+        try self._stream._readable._controller.enqueueNoSideEffects(chunk);
+    }
+
+    pub fn fulfillPendingReads(self: *TransformStreamDefaultController) void {
+        self._stream._readable._controller.fulfillPendingReads();
     }
 
     /// Enqueue a raw JS value, preserving its type. Used by the JS-facing API.
@@ -176,6 +199,11 @@ pub const TransformStreamDefaultController = struct {
 
     fn doError(self: *TransformStreamDefaultController, reason: []const u8) !void {
         try self._stream._readable._controller.doError(reason);
+    }
+
+    pub fn typeError(self: *TransformStreamDefaultController, message: []const u8) !void {
+        try self._stream._readable._controller.typeError(message);
+        self._stream._writable._controller.doError(message);
     }
 
     pub fn terminate(self: *TransformStreamDefaultController) !void {

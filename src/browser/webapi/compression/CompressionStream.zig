@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026 Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -17,55 +17,50 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
+const Execution = js.Execution;
 
+const zlib = @import("zlib.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
 const WritableStream = @import("../streams/WritableStream.zig");
 const TransformStream = @import("../streams/TransformStream.zig");
 
-const Execution = js.Execution;
-
-const TextEncoderStream = @This();
+const CompressionStream = @This();
 
 _transform: *TransformStream,
+_zlib: zlib.Stream(.compress),
 
-pub fn init(exec: *const Execution) !TextEncoderStream {
-    const transform = try TransformStream.initWithZigTransformer(.{ .transform = &encodeTransform }, exec);
-    return .{
-        ._transform = transform,
-    };
+pub fn init(format: zlib.Format, exec: *const Execution) !*CompressionStream {
+    const self = try exec._factory.create(CompressionStream{
+        ._transform = undefined,
+        ._zlib = .init(exec, format),
+    });
+    self._transform = try TransformStream.initWithZigTransformer(self._zlib.transformer(), exec);
+    return self;
 }
 
-fn encodeTransform(_: ?*anyopaque, controller: *TransformStream.DefaultController, chunk: js.Value) !void {
-    // chunk should be a JS string; encode it as UTF-8 bytes (Uint8Array)
-    const str = chunk.isString() orelse return error.InvalidChunk;
-    const slice = try str.toSlice();
-    try controller.enqueue(.{ .uint8array = .{ .values = slice } });
-}
-
-pub fn getReadable(self: *const TextEncoderStream) *ReadableStream {
+pub fn getReadable(self: *const CompressionStream) *ReadableStream {
     return self._transform.getReadable();
 }
 
-pub fn getWritable(self: *const TextEncoderStream) *WritableStream {
+pub fn getWritable(self: *const CompressionStream) *WritableStream {
     return self._transform.getWritable();
 }
 
 pub const JsApi = struct {
-    pub const bridge = js.Bridge(TextEncoderStream);
+    pub const bridge = js.Bridge(CompressionStream);
 
     pub const Meta = struct {
-        pub const name = "TextEncoderStream";
+        pub const name = "CompressionStream";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(TextEncoderStream.init, .{});
-    pub const encoding = bridge.property("utf-8", .{ .template = false });
-    pub const readable = bridge.accessor(TextEncoderStream.getReadable, null, .{});
-    pub const writable = bridge.accessor(TextEncoderStream.getWritable, null, .{});
+    pub const constructor = bridge.constructor(CompressionStream.init, .{});
+    pub const readable = bridge.accessor(CompressionStream.getReadable, null, .{});
+    pub const writable = bridge.accessor(CompressionStream.getWritable, null, .{});
 };
 
 const testing = @import("../../../testing.zig");
-test "WebApi: TextEncoderStream" {
-    try testing.htmlRunner("streams/transform_stream.html", .{});
+test "WebApi: CompressionStream" {
+    try testing.htmlRunner("compression/compression_stream.html", .{});
 }
