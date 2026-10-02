@@ -106,16 +106,9 @@ const ErrorReason = enum {
     BlockedByResponse,
 };
 
-fn commandSessionId(cmd: *CDP.Command, bc: *CDP.BrowserContext) ![]const u8 {
-    if (cmd.input.session_id) |session_id| {
-        return cmd.cdp.resolveSessionId(session_id) orelse error.UnknownSessionId;
-    }
-    return bc.session_id orelse error.UnknownSessionId;
-}
-
 fn disable(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    bc.fetchDisableForSession(try commandSessionId(cmd, bc));
+    bc.fetchDisableForSession(try cmd.sessionId(bc));
     return cmd.sendResult(null, .{});
 }
 
@@ -127,7 +120,7 @@ fn enable(cmd: *CDP.Command) !void {
         }
     }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try bc.fetchEnable(params.patterns, params.handleAuthRequests, try commandSessionId(cmd, bc));
+    try bc.fetchEnable(params.patterns, params.handleAuthRequests, try cmd.sessionId(bc));
     return cmd.sendResult(null, .{});
 }
 

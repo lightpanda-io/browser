@@ -530,6 +530,7 @@ pub fn spawnWorker(self: *Server, protocol: Driver.Protocol, origin: Worker.Orig
 
     lp.metrics.serve_connections.incr(protocol);
     lp.metrics.serve_active_connections.incr(protocol);
+    _ = self.app.live_drivers.fetchAdd(1, .monotonic);
 
     self.worker_wg.start();
     const thread = std.Thread.spawn(.{}, Worker.start, .{ worker, origin }) catch |err| {
@@ -751,6 +752,7 @@ fn releaseWorkerSlot(self: *Server, worker: *Worker) void {
     worker.driver = null;
     worker.inbox.deinit();
     lp.metrics.serve_active_connections.decr(worker.protocol);
+    _ = self.app.live_drivers.fetchSub(1, .monotonic);
     self.worker_pool.release(worker);
     self.slotFreed();
 }

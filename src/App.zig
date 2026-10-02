@@ -48,6 +48,10 @@ app_dir_path: ?[]const u8,
 regex_context: *Regex.Context,
 default_sanitizer: *Sanitizer,
 
+// Virtual time moves a process-wide clock, so a serve connection may only
+// skip it while it's the only one.
+live_drivers: std.atomic.Value(u32) = .init(0),
+
 pub fn init(allocator: Allocator, config: *const Config) !*App {
     const platform = try Platform.init(.{
         .v8_flags = config.v8Flags(),
