@@ -50,6 +50,8 @@ struct ParsedNode {
     _node: *const c_void,
     data: *const ElementData,
     _placed: bool,
+    _root: *const c_void,
+    _root_version: usize,
 }
 
 fn element_data<'a>(target: Ref) -> &'a ElementData {
