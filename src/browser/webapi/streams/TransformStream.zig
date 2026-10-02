@@ -184,6 +184,14 @@ pub const TransformStreamDefaultController = struct {
         try self._stream._readable._controller.enqueue(chunk);
     }
 
+    pub fn enqueueNoSideEffects(self: *TransformStreamDefaultController, chunk: ReadableStreamDefaultController.Chunk) !void {
+        try self._stream._readable._controller.enqueueNoSideEffects(chunk);
+    }
+
+    pub fn fulfillPendingReads(self: *TransformStreamDefaultController) void {
+        self._stream._readable._controller.fulfillPendingReads();
+    }
+
     /// Enqueue a raw JS value, preserving its type. Used by the JS-facing API.
     pub fn enqueueValue(self: *TransformStreamDefaultController, value: js.Value) !void {
         try self._stream._readable._controller.enqueueValue(value);
@@ -191,6 +199,11 @@ pub const TransformStreamDefaultController = struct {
 
     fn doError(self: *TransformStreamDefaultController, reason: []const u8) !void {
         try self._stream._readable._controller.doError(reason);
+    }
+
+    pub fn typeError(self: *TransformStreamDefaultController, message: []const u8) !void {
+        try self._stream._readable._controller.typeError(message);
+        self._stream._writable._controller.doError(message);
     }
 
     pub fn terminate(self: *TransformStreamDefaultController) !void {
