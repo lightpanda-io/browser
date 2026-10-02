@@ -28,9 +28,21 @@
             <p id="p-under-aria-hidden">under-aria-hidden</p>
         </div>
 
+        <div hidden style="display: block">
+            <p id="hidden-overridden">hidden-overridden</p>
+        </div>
+
+        <label for="inert-check" id="inert-check-label">Inert option</label>
         <div inert>
             <button id="under-inert">under-inert</button>
+            <input type="checkbox" id="inert-check">
         </div>
+
+        <div id="inert-host" inert></div>
+        <script>
+            document.getElementById("inert-host").attachShadow({ mode: "open" }).innerHTML =
+                '<button id="in-inert-shadow">in-inert-shadow</button>';
+        </script>
 
         <p id="visible-para">visible-para</p>
 

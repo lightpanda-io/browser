@@ -1109,7 +1109,7 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer) !void {
 }
 
 /// Pre-order walk tracking the outermost ancestor, including those above the
-/// root, whose attribute (aria-hidden, inert, hidden) hides its subtree;
+/// root in the flat tree, whose aria-hidden or inert hides its subtree;
 /// TreeWalker leaves subtrees without saying so. CSS needs no tracking: the
 /// StyleManager resolves it through the ancestors.
 const Walker = struct {
@@ -1120,8 +1120,8 @@ const Walker = struct {
 
     fn init(root: *DOMNode, frame: *Frame) Walker {
         var hiding_ancestor: ?*DOMNode = null;
-        var node = root._parent;
-        while (node) |n| : (node = n._parent) {
+        var node = root.flatTreeParent(frame);
+        while (node) |n| : (node = n.flatTreeParent(frame)) {
             if (hidesSubtree(n)) hiding_ancestor = n;
         }
         return .{ .root = root, .current = root, .frame = frame, .hiding_ancestor = hiding_ancestor };
@@ -1226,8 +1226,10 @@ fn labelPromotionTarget(
     const control = label.getControl(frame) orelse return null;
 
     // Only promote when the control is hidden; otherwise it appears
-    // normally and the label stays as-is.
-    if (hiddenState(control.asNode(), frame) == .visible) return null;
+    // normally and the label stays as-is. Reached outside a walk, so the
+    // control's ancestors are checked here.
+    const walker: Walker = .init(control.asNode(), frame);
+    if (walker.hidden(control.asNode()) == .visible) return null;
 
     if (control.getTag() != .input) return null;
     const input = control.as(DOMNode.Element.Html.Input);
@@ -1302,8 +1304,9 @@ fn hiddenState(node: *DOMNode, frame: *Frame) Hidden {
 }
 
 fn hasHidingAttribute(elt: *DOMNode.Element) bool {
+    // [hidden] is the StyleManager's: an author display rule overrides it
     const aria_hidden = elt.getAttributeInterned("aria-hidden") orelse "";
-    return std.mem.eql(u8, aria_hidden, "true") or elt.hasAttributeInterned("hidden") or elt.hasAttributeSafe(comptime .wrap("inert"));
+    return std.mem.eql(u8, aria_hidden, "true") or elt.hasAttributeSafe(comptime .wrap("inert"));
 }
 
 fn ignoreText(node: *DOMNode) bool {
@@ -1671,6 +1674,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
         "under-hidden-attr",
         "under-aria-hidden",
         "under-inert",
+        "in-inert-shadow",
     };
     for (nodes) |node_val| {
         const obj = node_val.object;
@@ -1682,18 +1686,21 @@ test "AXNode: writer prunes hidden and resolves labels" {
         }
     }
 
-    // The visible paragraph's text leaks into the tree as a StaticText child.
-    var found_visible = false;
-    for (nodes) |node_val| {
-        const obj = node_val.object;
-        const name_obj = obj.get("name") orelse continue;
-        const value = name_obj.object.get("value") orelse continue;
-        if (value == .string and std.mem.indexOf(u8, value.string, "visible-para") != null) {
-            found_visible = true;
-            break;
+    // Visible text leaks into the tree as a StaticText child, including under
+    // a [hidden] an author display rule overrides.
+    for ([_][]const u8{ "visible-para", "hidden-overridden" }) |needle| {
+        var found_visible = false;
+        for (nodes) |node_val| {
+            const obj = node_val.object;
+            const name_obj = obj.get("name") orelse continue;
+            const value = name_obj.object.get("value") orelse continue;
+            if (value == .string and std.mem.indexOf(u8, value.string, needle) != null) {
+                found_visible = true;
+                break;
+            }
         }
+        try testing.expect(found_visible);
     }
-    try testing.expect(found_visible);
 
     // A visibility:visible descendant of a visibility:hidden element is exposed
     var found_override = false;
@@ -1755,6 +1762,8 @@ test "AXNode: writer prunes hidden and resolves labels" {
         .{ .name_needle = "Option B", .role = "radio", .checked = "false" },
         // Wrapping label pattern, checkbox hidden, unchecked.
         .{ .name_needle = "Accept terms", .role = "checkbox", .checked = "false" },
+        // `for=`-associated: checkbox under an inert ancestor.
+        .{ .name_needle = "Inert option", .role = "checkbox", .checked = "false" },
     };
     for (expected) |exp| {
         var found = false;
@@ -1988,13 +1997,19 @@ test "AXNode: Writer query and subtree root see a hiding ancestor" {
     }
 
     const button = (try frame.window._document.querySelector(.wrap("#under-inert"), frame)).?;
-    writer.root = try registry.register(button.asNode());
-    writer.filter = null;
-    const tree = try std.json.Stringify.valueAlloc(testing.allocator, writer, .{});
-    defer testing.allocator.free(tree);
+    const host = (try frame.window._document.querySelector(.wrap("#inert-host"), frame)).?;
+    const shadow_button = host.getShadowRoot(frame).?.getElementById("in-inert-shadow", frame).?;
 
-    try testing.expect(std.mem.indexOf(u8, tree, "\"ignored\":true") != null);
-    try testing.expect(std.mem.indexOf(u8, tree, "\"childIds\":[]") != null);
+    writer.filter = null;
+    // The inert host is above the shadow root
+    for ([_]*DOMNode.Element{ button, shadow_button }) |root| {
+        writer.root = try registry.register(root.asNode());
+        const tree = try std.json.Stringify.valueAlloc(testing.allocator, writer, .{});
+        defer testing.allocator.free(tree);
+
+        try testing.expect(std.mem.indexOf(u8, tree, "\"ignored\":true") != null);
+        try testing.expect(std.mem.indexOf(u8, tree, "\"childIds\":[]") != null);
+    }
 }
 
 test "AXNode: Writer query combined role+name filter promotes hidden-input labels" {

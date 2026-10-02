@@ -1725,21 +1725,26 @@ pub fn assignedSlot(self: *Node, frame: *const Frame) ?*Element.Html.Slot {
 // an inert parent
 pub fn isInert(self: *Node, frame: *const Frame) bool {
     var current: ?*Node = self;
-    while (current) |node| {
+    while (current) |node| : (current = node.flatTreeParent(frame)) {
         if (node.is(Element)) |el| {
             if (el._namespace == .html and el.hasAttributeSafe(comptime .wrap("inert"))) {
                 return true;
             }
         }
-        if (node.assignedSlot(frame)) |slot| {
-            current = slot.asNode();
-        } else if (node.is(ShadowRoot)) |shadow| {
-            current = shadow._host.asNode();
-        } else {
-            current = node._parent;
-        }
     }
     return false;
+}
+
+/// The parent in the flat tree: an assigned slottable's slot, a shadow root's
+/// host, else the DOM parent.
+pub fn flatTreeParent(self: *Node, frame: *const Frame) ?*Node {
+    if (self.assignedSlot(frame)) |slot| {
+        return slot.asNode();
+    }
+    if (self.is(ShadowRoot)) |shadow| {
+        return shadow._host.asNode();
+    }
+    return self._parent;
 }
 
 pub const JsApi = struct {
