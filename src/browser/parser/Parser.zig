@@ -34,13 +34,13 @@ const Allocator = std.mem.Allocator;
 const CHECKPOINT_INTERVAL = 1024;
 const TERMINATE_CHECK_INTERVAL = 1024;
 
-pub const ParsedNode = struct {
+// Mirrored in src/rust/html5ever/sink
+pub const ParsedNode = extern struct {
     node: *Node,
 
     // Data associated with this element to be passed back to html5ever as needed
     // We only have this for Elements. For other types, like comments, it's null.
-    // html5ever should never ask us for this data on a non-element, and we'll
-    // assert that, with this optional, to make sure our assumption is correct.
+    // html5ever should never ask us for this data on a non-element.
     data: ?*anyopaque,
 
     // Set once html5ever has put the node in the tree or given it children.
@@ -229,7 +229,6 @@ pub fn parse(self: *Parser, html: []const u8) void {
         &self.container,
         self,
         createElementCallback,
-        getDataCallback,
         appendCallback,
         parseErrorCallback,
         popCallback,
@@ -260,7 +259,6 @@ pub fn parseWithEncoding(self: *Parser, html: []const u8, charset: []const u8) v
         &self.container,
         self,
         createElementCallback,
-        getDataCallback,
         appendCallback,
         parseErrorCallback,
         popCallback,
@@ -288,7 +286,6 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
         &self.container,
         self,
         createXMLElementCallback,
-        getDataCallback,
         appendCallback,
         xmlParseErrorCallback,
         popCallback,
@@ -324,7 +321,6 @@ pub fn parseFragment(self: *Parser, html: []const u8) void {
         self,
         createElementCallback,
         createContextElementCallback,
-        getDataCallback,
         appendCallback,
         parseErrorCallback,
         popCallback,
@@ -380,7 +376,6 @@ pub const Streaming = struct {
             &self.parser.container,
             &self.parser,
             createElementCallback,
-            getDataCallback,
             appendCallback,
             parseErrorCallback,
             popCallback,
@@ -715,14 +710,6 @@ fn _attachDeclarativeShadowCallback(self: *Parser, host_node: *Node, template_no
     const template = template_el.is(Element.Html.Template) orelse return 0;
     template._content = shadow.asDocumentFragment();
     return 1;
-}
-
-fn getDataCallback(ctx: *anyopaque) callconv(.c) *anyopaque {
-    const pn: *ParsedNode = @ptrCast(@alignCast(ctx));
-    // For non-elements, data is null. But, we expect this to only ever
-    // be called for elements.
-    lp.assert(pn.data != null, "Parser.getDataCallback null data", .{});
-    return pn.data.?;
 }
 
 fn appendCallback(ctx: *anyopaque, parent_ref: *anyopaque, node_or_text: h5e.NodeOrText) callconv(.c) void {
