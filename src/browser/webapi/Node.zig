@@ -1746,6 +1746,17 @@ pub fn flatTreeParent(self: *Node, frame: *const Frame) ?*Node {
     return self._parent;
 }
 
+/// The flat-tree parent element: shadow content inherits from its host, a
+/// slotted node from its slot.
+pub fn flatTreeParentElement(self: *Node, frame: *const Frame) ?*Element {
+    const parent = self.flatTreeParent(frame) orelse return null;
+    if (parent.is(Element)) |el| {
+        return el;
+    }
+    // A shadow root's flat-tree parent is its host
+    return (parent.flatTreeParent(frame) orelse return null).is(Element);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Node);
 

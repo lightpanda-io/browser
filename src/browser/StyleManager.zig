@@ -702,18 +702,6 @@ fn visibilityProps(self: *StyleManager, el: *Element) Visibility.Computed {
     return self.visibility.inheritedProps(self.arena.allocator(), el, self.frame);
 }
 
-/// The element `el` inherits from: its flat-tree parent, so shadow content
-/// inherits from the host and a slotted node from its slot.
-fn inheritanceParent(el: *Element, frame: *const Frame) ?*Element {
-    var node = el.asNode().flatTreeParent(frame);
-    while (node) |n| : (node = n.flatTreeParent(frame)) {
-        if (n.is(Element)) |parent| {
-            return parent;
-        }
-    }
-    return null;
-}
-
 /// Callers must have run rebuildIfDirty, which resets the memo.
 fn geometryProps(self: *StyleManager, el: *Element) Geometry.Computed {
     return self.geometry.ownProps(self.arena.allocator(), el, self.frame);
@@ -855,7 +843,7 @@ fn Group(comptime Spec: type) type {
             self.path.clearRetainingCapacity();
             var above: Computed = .{};
             var current: ?*Element = el;
-            while (current) |elem| : (current = inheritanceParent(elem, frame)) {
+            while (current) |elem| : (current = elem.asNode().flatTreeParentElement(frame)) {
                 if (memo.get(elem)) |cached| {
                     above = cached;
                     break;
@@ -1665,7 +1653,7 @@ pub fn customPropertyValue(self: *StyleManager, el: *Element, property_name: Str
     };
 
     var current: ?*Element = el;
-    while (current) |elem| : (current = inheritanceParent(elem, self.frame)) {
+    while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
         if (self.inlineStyleValue(elem, property_name)) |value| {
             return value;
         }
@@ -1744,7 +1732,7 @@ fn computedFontSizeAt(self: *StyleManager, element: ?*Element, depth: u8) f64 {
         return DEFAULT_FONT_SIZE;
     }
     const current = element orelse return DEFAULT_FONT_SIZE;
-    const parent = inheritanceParent(current, self.frame);
+    const parent = current.asNode().flatTreeParentElement(self.frame);
 
     if (self.inlineStyleValue(current, comptime .wrap("font-size"))) |raw| {
         if (self.parseFontSize(raw, parent, depth + 1)) |size| {

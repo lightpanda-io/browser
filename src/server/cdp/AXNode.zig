@@ -1110,8 +1110,9 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer) !void {
 
 /// Pre-order walk tracking the outermost aria-hidden or inert ancestor, since
 /// TreeWalker leaves subtrees without saying so. CSS needs no tracking: the
-/// StyleManager resolves it through the ancestors. The walk stays in the light
-/// tree; only the root's ancestors are looked up through the flat tree.
+/// StyleManager resolves it through flat-tree ancestors. The walk itself stays
+/// in the light tree; only the root's ancestors are looked up through the flat
+/// tree.
 const Walker = struct {
     root: *DOMNode,
     current: *DOMNode,
@@ -1278,9 +1279,9 @@ fn scratchAllocator(temp_arena: ?*lp.Arena, frame: *Frame) std.mem.Allocator {
 /// `visibility: visible`. `pruned` ignores the whole subtree.
 const Hidden = enum { visible, invisible, pruned };
 
-/// Text takes its parent's state.
+/// Text takes its flat-tree parent's state.
 fn hiddenState(node: *DOMNode, frame: *Frame) Hidden {
-    const elt = node.is(DOMNode.Element) orelse node.parentElement() orelse return .visible;
+    const elt = node.is(DOMNode.Element) orelse node.flatTreeParentElement(frame) orelse return .visible;
     if (hidesSubtree(elt.asNode())) {
         return .pruned;
     }
