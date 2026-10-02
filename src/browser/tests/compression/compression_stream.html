@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script>
+  const FORMATS = ['gzip', 'deflate', 'deflate-raw'];
+
+  async function readAll(readable) {
+    return readRest(readable.getReader(), []);
+  }
+
+  // Reads `reader` to the end, after the `chunks` already read from it.
+  async function readRest(reader, chunks) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    return concat(chunks);
+  }
+
+  function concat(chunks) {
+    let length = 0;
+    for (const chunk of chunks) {
+      if (!(chunk instanceof Uint8Array)) throw new Error('chunk is not a Uint8Array');
+      // The spec only enqueues non-empty pieces.
+      if (chunk.length === 0) throw new Error('chunk is empty');
+      length += chunk.length;
+    }
+    const out = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return out;
+  }
+
+  function equal(a, b) {
+    return a.length === b.length && a.every((byte, i) => byte === b[i]);
+  }
+
+  async function run(stream, chunks) {
+    const writer = stream.writable.getWriter();
+    const output = readAll(stream.readable);
+    for (const chunk of chunks) writer.write(chunk);
+    writer.close();
+    return output;
+  }
+
+  // Deterministic, poorly compressible bytes
+  function noise(len) {
+    const out = new Uint8Array(len);
+    let x = 12345;
+    for (let i = 0; i < len; i++) {
+      x = (x * 1103515245 + 12345) >>> 0;
+      out[i] = x >>> 24;
+    }
+    return out;
+  }
+
+  async function rejection(promise) {
+    try {
+      await promise;
+    } catch (e) {
+      return e.name;
+    }
+    return 'resolved';
+  }
+</script>
+
+<script id=constructor>
+  {
+    for (const format of FORMATS) {
+      const cs = new CompressionStream(format);
+      testing.expectTrue(cs.readable instanceof ReadableStream);
+      testing.expectTrue(cs.writable instanceof WritableStream);
+    }
+
+    for (const format of ['GZIP', 'zlib', '', undefined]) {
+      testing.withError((err) => testing.expectEqual('TypeError', err.name), () => new CompressionStream(format));
+    }
+    testing.withError((err) => testing.expectEqual('TypeError', err.name), () => new CompressionStream());
+  }
+</script>
+
+<script id=matches_zlib type=module>
+  const state = await testing.async();
+
+  const hello = new TextEncoder().encode('hello');
+  const results = {};
+  for (const format of FORMATS) {
+    results[format] = await run(new CompressionStream(format), [hello]);
+  }
+
+  state.resolve();
+  await state.done(() => {
+    // Byte-for-byte what zlib.compress(b'hello') gives in Python.
+    testing.expectEqual([120, 156, 203, 72, 205, 201, 201, 7, 0, 6, 44, 2, 21], Array.from(results['deflate']));
+    testing.expectEqual([203, 72, 205, 201, 201, 7, 0], Array.from(results['deflate-raw']));
+
+    // gzip: magic + CM, then (after mtime, xfl, os) the same body, CRC32 and ISIZE.
+    const gzip = results['gzip'];
+    testing.expectEqual([31, 139, 8, 0], Array.from(gzip.slice(0, 4)));
+    testing.expectEqual([203, 72, 205, 201, 201, 7, 0, 134, 166, 16, 54, 5, 0, 0, 0], Array.from(gzip.slice(10)));
+  });
+</script>
+
+<script id=round_trip type=module>
+  const state = await testing.async();
+
+  // Big enough for the output to span several internal buffers.
+  const input = noise(200 * 1024);
+  const chunks = [input.subarray(0, 1), input.subarray(1, 70000), input.subarray(70000)];
+
+  const results = {};
+  for (const format of FORMATS) {
+    const compressed = await run(new CompressionStream(format), chunks);
+    const decompressed = await run(new DecompressionStream(format), [compressed]);
+    results[format] = decompressed.length === input.length && decompressed.every((b, i) => b === input[i]);
+  }
+
+  state.resolve();
+  await state.done(() => {
+    for (const format of FORMATS) {
+      testing.expectEqual(true, results[format]);
+    }
+  });
+</script>
+
+<script id=empty_input type=module>
+  const state = await testing.async();
+
+  const results = {};
+  for (const format of FORMATS) {
+    // Only empty chunks: still a complete, valid stream.
+    const compressed = await run(new CompressionStream(format), [new Uint8Array(0), new ArrayBuffer(0)]);
+    results[format] = {
+      length: compressed.length,
+      decompressed: Array.from(await run(new DecompressionStream(format), [compressed])),
+    };
+  }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(20, results['gzip'].length);
+    testing.expectEqual(8, results['deflate'].length);
+    testing.expectEqual(2, results['deflate-raw'].length);
+    for (const format of FORMATS) {
+      testing.expectEqual([], results[format].decompressed);
+    }
+  });
+</script>
+
+<script id=buffer_sources type=module>
+  const state = await testing.async();
+
+  const bytes = new TextEncoder().encode('xhello!');
+  const view = bytes.subarray(1, 6);
+  const sources = [
+    view,
+    view.slice().buffer,
+    new DataView(bytes.buffer, 1, 5),
+    new Uint16Array(new Uint8Array([104, 101, 108, 108, 111, 0]).buffer).subarray(0, 2),
+  ];
+
+  const results = [];
+  for (const source of sources) {
+    const compressed = await run(new CompressionStream('deflate-raw'), [source]);
+    const decompressed = await run(new DecompressionStream('deflate-raw'), [compressed]);
+    results.push(new TextDecoder().decode(decompressed));
+  }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['hello', 'hello', 'hello', 'hell'], results);
+  });
+</script>
+
+<script id=bad_chunks type=module>
+  const state = await testing.async();
+
+  const results = [];
+  for (const chunk of ['hello', undefined, null, 42, {}, [1, 2, 3]]) {
+    const cs = new CompressionStream('gzip');
+    const writer = cs.writable.getWriter();
+    const reader = cs.readable.getReader();
+    const pending_read = rejection(reader.read());
+    results.push([
+      await rejection(writer.write(chunk)),
+      await pending_read,
+      await rejection(reader.read()),
+      await rejection(writer.write(new Uint8Array([1]))),
+    ]);
+  }
+
+  state.resolve();
+  await state.done(() => {
+    for (const result of results) {
+      testing.expectEqual(['TypeError', 'TypeError', 'TypeError', 'TypeError'], result);
+    }
+  });
+</script>
+
+<script id=cancelled_readable type=module>
+  const state = await testing.async();
+
+  const cs = new CompressionStream('gzip');
+  const writer = cs.writable.getWriter();
+  await cs.readable.cancel();
+
+  // Enough poorly compressible data that deflate has output to enqueue.
+  const write = await rejection(writer.write(noise(200 * 1024)));
+  const next_write = await rejection(writer.write(new Uint8Array([1])));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('TypeError', write);
+    testing.expectEqual('TypeError', next_write);
+  });
+</script>
+
+<script id=pipe_through type=module>
+  const state = await testing.async();
+
+  const text = 'hello world '.repeat(1000);
+  const compressed = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
+  const bytes = await new Response(compressed).arrayBuffer();
+
+  const decompressed = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  const result = await new Response(decompressed).text();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectTrue(bytes.byteLength < 200);
+    testing.expectEqual(text, result);
+  });
+</script>
+
+<script id=tiny_writes type=module>
+  const state = await testing.async();
+
+  // deflate buffers most one-byte writes without producing anything; none of
+  // that may surface as an empty chunk (concat rejects those).
+  const input = noise(4096);
+  const chunks = Array.from(input, (_, i) => input.subarray(i, i + 1));
+
+  const results = {};
+  for (const format of FORMATS) {
+    const compressed = await run(new CompressionStream(format), chunks);
+    results[format] = equal(await run(new DecompressionStream(format), [compressed]), input);
+  }
+
+  state.resolve();
+  await state.done(() => {
+    for (const format of FORMATS) {
+      testing.expectEqual(true, results[format]);
+    }
+  });
+</script>
+
+<script id=reentrant_write>
+  {
+    // A classic script runs as a task, so resolving the pending read runs its
+    // callback right away: it writes again and closes while the first write
+    // is still handing out its output.
+    const state_promise = testing.async();
+
+    const first = noise(64 * 1024);
+    const second = new TextEncoder().encode('second write');
+    const cs = new CompressionStream('deflate');
+    const writer = cs.writable.getWriter();
+    const reader = cs.readable.getReader();
+
+    const chunks = [];
+    let nested = null;
+    reader.read().then(({ value }) => {
+      chunks.push(value);
+      nested = Promise.all([rejection(writer.write(second)), rejection(writer.close())]);
+    });
+    const outer = rejection(writer.write(first));
+
+    state_promise.then(async (state) => {
+      const compressed = await readRest(reader, chunks);
+      const decompressed = await run(new DecompressionStream('deflate'), [compressed]);
+      const results = {
+        outer: await outer,
+        nested: await nested,
+        same: equal(decompressed, concat([first, second])),
+      };
+
+      state.resolve();
+      await state.done(() => {
+        testing.expectEqual({ outer: 'resolved', nested: ['resolved', 'resolved'], same: true }, results);
+      });
+    });
+  }
+</script>
+
+<script id=close_after_error>
+  {
+    // A bad chunk errors the stream. Rejecting the pending read runs this
+    // callback right away (a classic script runs as a task), and it closes
+    // the writable while the stream is still being errored.
+    const state_promise = testing.async();
+
+    const cs = new CompressionStream('gzip');
+    const writer = cs.writable.getWriter();
+    let close = null;
+    const read = cs.readable.getReader().read().catch((e) => {
+      close = rejection(writer.close());
+      return e.name;
+    });
+    const write = rejection(writer.write('not a BufferSource'));
+
+    state_promise.then(async (state) => {
+      const results = { write: await write, read: await read, close: await close };
+
+      state.resolve();
+      await state.done(() => {
+        testing.expectEqual({ write: 'TypeError', read: 'TypeError', close: 'TypeError' }, results);
+      });
+    });
+  }
+</script>
+
+<script id=detached_input>
+  {
+    // A classic script runs as a task, so the pending read is resolved inside
+    // write(). Looking up `then` on its result detaches the input: zlib must
+    // be done with it by then.
+    const state_promise = testing.async();
+
+    const input = noise(200 * 1024);
+    const copy = input.slice();
+    const cs = new CompressionStream('deflate');
+    const writer = cs.writable.getWriter();
+    const reader = cs.readable.getReader();
+    const first = reader.read();
+
+    let detached = false;
+    Object.defineProperty(Object.prototype, 'then', {
+      configurable: true,
+      get() {
+        delete Object.prototype.then;
+        input.buffer.transfer();
+        detached = true;
+      },
+    });
+    const write = rejection(writer.write(input));
+    writer.close();
+
+    state_promise.then(async (state) => {
+      const compressed = await readRest(reader, [(await first).value]);
+      const decompressed = await run(new DecompressionStream('deflate'), [compressed]);
+      const results = {
+        detached: detached && input.byteLength === 0,
+        write: await write,
+        same: equal(decompressed, copy),
+      };
+
+      state.resolve();
+      await state.done(() => {
+        testing.expectEqual({ detached: true, write: 'resolved', same: true }, results);
+      });
+    });
+  }
+</script>
