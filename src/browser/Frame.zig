@@ -3537,11 +3537,11 @@ pub const NavigateOpts = struct {
     header: ?[:0]const u8 = null,
     // Set by scheduleNavigationWithArena from the originating frame's URL so
     // anchor click / form submit / location.href navigations carry a Referer.
-    // null on CDP Page.navigate (address-bar) and Page.reload — matches Chrome.
+    // null on Page.reload and on a CDP Page.navigate without `referrer` —
+    // matches Chrome.
     referer: ?[]const u8 = null,
-    // The originating frame's policy, paired with `referer` so redirect hops
-    // can recompute the header. null (e.g. a CDP-supplied referrer) leaves
-    // the Referer untouched across redirects.
+    // The policy that produced `referer`, so redirect hops can recompute the
+    // header. null leaves the Referer untouched across redirects.
     referrer_policy: ?referrer.Policy = null,
     // The "site for cookies" of the document that initiated a top-level
     // navigation, used when computing SameSite. Distinct from `referer`
