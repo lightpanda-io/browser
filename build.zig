@@ -1037,11 +1037,11 @@ fn linkIsocline(b: *Build, mod: *Build.Module) void {
 /// - If the flag contains a full semantic version (e.g., `1.2.3`), it replaces
 ///   the base version entirely.
 /// - If the flag contains a simple string (e.g., `nightly`), it replaces only
-///   the pre-release tag of the base version (e.g., `1.0.0-dev` -> `1.0.0-nightly`).
+///   the pre-release tag of the base version (e.g., `1.1.0-dev` -> `1.1.0-nightly`).
 ///
 /// For versions that have a pre-release tag and no explicit build metadata,
 /// this function automatically enriches the version with the git commit count
-/// and short hash (e.g., `1.0.0-dev.5243+dbe45229`).
+/// and short hash (e.g., `1.1.0-dev.5243+dbe45229`).
 fn resolveVersion(b: *std.Build) std.SemanticVersion {
     const opt_version = b.option([]const u8, "version", "Override the version of this build");
 
