@@ -928,6 +928,14 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/xhr/bad_gzip")) {
+        return req.respond("not actually gzip", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Encoding", .value = "gzip" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/xhr/no_content_type")) {
         return req.respond("untyped", .{});
     }
