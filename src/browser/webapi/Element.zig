@@ -1301,7 +1301,7 @@ pub fn focus(self: *Element, frame: *Frame) !void {
     const doc = owner.document;
     const old_active = doc._active_element;
     if (old_active == self) {
-        return;
+        return focusContainer(owner);
     }
 
     if (self.isFocusable(owner) == false) {
@@ -1334,6 +1334,21 @@ pub fn focus(self: *Element, frame: *Frame) !void {
     // Dispatch focusin on new element (bubbles, composed)
     const focusin_event = try FocusEvent.initTrusted(comptime .wrap("focusin"), .{ .bubbles = true, .composed = true, .relatedTarget = old_related }, owner);
     try owner._event_manager.dispatch(new_target, focusin_event.asEvent());
+
+    focusContainer(owner);
+}
+
+// The focus chain runs through navigable containers: the <iframe> holding a
+// document with a focused element is itself the focused area of its parent
+// document, and so on up. So the parent's activeElement is that <iframe>, and
+// keyboard input routed from the top-level document reaches the element.
+// https://html.spec.whatwg.org/multipage/interaction.html#focus-chain
+fn focusContainer(owner: *Frame) void {
+    const container = owner.iframe orelse return;
+    const parent = owner.parent orelse return;
+    container.asElement().focus(parent) catch |err| {
+        log.debug(.js, "focus container", .{ .err = err });
+    };
 }
 
 pub fn blur(self: *Element, frame: *Frame) !void {
