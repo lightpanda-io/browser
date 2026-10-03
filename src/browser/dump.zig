@@ -24,6 +24,7 @@ const LimitedWriter = @import("../LimitedWriter.zig");
 const Node = @import("webapi/Node.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
 const IFrame = @import("webapi/element/html/IFrame.zig");
+const Template = @import("webapi/element/html/Template.zig");
 
 pub const Opts = struct {
     with_base: bool = false,
@@ -307,7 +308,9 @@ const Walk = struct {
                     if (opts.with_frames and el.is(IFrame) != null) {
                         return self.open(end_tag, .{ .document = el.as(IFrame).getContentDocument() });
                     }
-                    if (node.firstChild()) |first| {
+                    // A template serializes its contents, not its own children.
+                    const content_root = if (el.is(Template)) |template| template.getContent().asNode() else node;
+                    if (content_root.firstChild()) |first| {
                         return self.open(end_tag, .{ .siblings = first });
                     }
                     // No children: skip the stack
