@@ -164,3 +164,31 @@
     testing.expectEqual('1', texts('#nth_list li:nth-last-of-type( 3 )'));
 }
 </script>
+
+<div id="of_type_custom"><x-a>a1</x-a><x-b>b1</x-b><foo>f1</foo><x-b>b2</x-b><bar>r1</bar></div>
+<div id="of_type_custom_many"></div>
+<script id="of_type_custom">
+{
+    const texts = (sel) => Array.from(document.querySelectorAll(sel)).map((e) => e.textContent).join();
+    testing.expectEqual('a1,b1,f1,r1', texts('#of_type_custom > :first-of-type'));
+    testing.expectEqual('a1,f1,b2,r1', texts('#of_type_custom > :last-of-type'));
+    testing.expectEqual('a1,f1,r1', texts('#of_type_custom > :only-of-type'));
+    testing.expectEqual('b1', texts('#of_type_custom x-b:nth-of-type(1)'));
+    testing.expectEqual('b2', texts('#of_type_custom x-b:nth-of-type(2)'));
+    testing.expectEqual('b1', texts('#of_type_custom x-b:nth-last-of-type(2)'));
+    testing.expectEqual('r1', texts('#of_type_custom bar:first-of-type'));
+
+    // enough siblings to go through the cached ordinals
+    const many = $('#of_type_custom_many');
+    for (let i = 1; i <= 40; i++) {
+        const el = document.createElement(i % 2 ? 'x-a' : 'x-b');
+        el.textContent = i;
+        many.appendChild(el);
+    }
+    testing.expectEqual('2', texts('#of_type_custom_many > x-b:nth-of-type(1)'));
+    testing.expectEqual('6', texts('#of_type_custom_many > x-b:nth-of-type(3)'));
+    testing.expectEqual('38', texts('#of_type_custom_many > x-b:nth-last-of-type(2)'));
+    testing.expectEqual('1,2', texts('#of_type_custom_many > :first-of-type'));
+    testing.expectEqual('39,40', texts('#of_type_custom_many > :last-of-type'));
+}
+</script>
