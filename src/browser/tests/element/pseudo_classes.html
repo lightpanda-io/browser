@@ -129,3 +129,25 @@
     outer.remove();
 }
 </script>
+
+<div id="rw">
+    <input id="rw_text">
+    <input id="rw_readonly" readonly>
+    <input id="rw_disabled" disabled>
+    <input id="rw_checkbox" type="checkbox">
+    <input id="rw_number" type="number">
+    <textarea id="rw_textarea"></textarea>
+    <textarea id="rw_textarea_ro" readonly></textarea>
+    <div id="rw_editable" contenteditable>
+        <p id="rw_editable_child"><b id="rw_editable_grandchild"></b></p>
+        <p id="rw_not_editable" contenteditable="false"><b id="rw_not_editable_child"></b></p>
+    </div>
+    <p id="rw_p"></p>
+</div>
+<script id="read_write">
+{
+    const ids = (sel) => Array.from(document.querySelectorAll('#rw ' + sel)).map((e) => e.id).join();
+    testing.expectEqual('rw_text,rw_number,rw_textarea,rw_editable,rw_editable_child,rw_editable_grandchild', ids(':read-write'));
+    testing.expectEqual('rw_readonly,rw_disabled,rw_checkbox,rw_textarea_ro,rw_not_editable,rw_not_editable_child,rw_p', ids(':read-only'));
+}
+</script>
