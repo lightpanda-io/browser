@@ -1213,6 +1213,18 @@ pub fn isEditingHost(self: *Element) bool {
     return std.ascii.eqlIgnoreCase(value, "false") == false;
 }
 
+// An editing host or a descendant of one: the nearest contenteditable
+// attribute decides.
+pub fn isEditable(self: *Element) bool {
+    var current: ?*Element = self;
+    while (current) |el| : (current = el.parentElement()) {
+        if (el.getAttributeSafe(.wrap("contenteditable")) != null) {
+            return el.isEditingHost();
+        }
+    }
+    return false;
+}
+
 /// Focusable without a tabindex attribute.
 fn isNativelyFocusable(self: *Element) bool {
     if (self.is(Html) == null) {

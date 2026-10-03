@@ -518,7 +518,7 @@ fn isReadWrite(el: *Node.Element) bool {
     if (el.is(Node.Element.Html.TextArea) != null) {
         return !el.hasAttributeInterned("readonly") and !el.isDisabled();
     }
-    return el.isEditingHost();
+    return el.isEditable();
 }
 
 fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
