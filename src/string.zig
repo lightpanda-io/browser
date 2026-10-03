@@ -389,6 +389,7 @@ pub const String = extern struct {
             },
             15 => switch (@as(u120, @bitCast(input[0..15].*))) {
                 asUint("text-decoration") => return "text-decoration",
+                asUint("contenteditable") => return "contenteditable",
                 asUint("justify-content") => return "justify-content",
                 asUint("aria-labelledby") => return "aria-labelledby",
                 else => {},

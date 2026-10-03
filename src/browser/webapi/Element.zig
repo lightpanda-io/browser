@@ -1222,7 +1222,7 @@ pub fn isSvgLink(self: *Element) bool {
 
 // An editing host takes focus like a form control does.
 pub fn isEditingHost(self: *Element) bool {
-    const value = self.getAttributeSafe(.wrap("contenteditable")) orelse return false;
+    const value = self.getAttributeInterned("contenteditable") orelse return false;
     return std.ascii.eqlIgnoreCase(value, "false") == false;
 }
 
@@ -1231,7 +1231,7 @@ pub fn isEditingHost(self: *Element) bool {
 pub fn isEditable(self: *Element) bool {
     var current: ?*Element = self;
     while (current) |el| : (current = el.parentElement()) {
-        if (el.getAttributeSafe(.wrap("contenteditable")) != null) {
+        if (el.getAttributeInterned("contenteditable") != null) {
             return el.isEditingHost();
         }
     }
