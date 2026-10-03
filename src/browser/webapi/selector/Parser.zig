@@ -429,6 +429,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
 
         if (std.mem.eql(u8, name, "nth-child")) {
             const pattern = try self.parseNthPattern();
+            _ = self.skipSpaces();
             if (self.peek() != ')') return error.InvalidPseudoClass;
             self.input = self.input[1..];
             return .{ .nth_child = pattern };
@@ -436,6 +437,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
 
         if (std.mem.eql(u8, name, "nth-last-child")) {
             const pattern = try self.parseNthPattern();
+            _ = self.skipSpaces();
             if (self.peek() != ')') return error.InvalidPseudoClass;
             self.input = self.input[1..];
             return .{ .nth_last_child = pattern };
@@ -443,6 +445,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
 
         if (std.mem.eql(u8, name, "nth-of-type")) {
             const pattern = try self.parseNthPattern();
+            _ = self.skipSpaces();
             if (self.peek() != ')') return error.InvalidPseudoClass;
             self.input = self.input[1..];
             return .{ .nth_of_type = pattern };
@@ -450,6 +453,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
 
         if (std.mem.eql(u8, name, "nth-last-of-type")) {
             const pattern = try self.parseNthPattern();
+            _ = self.skipSpaces();
             if (self.peek() != ')') return error.InvalidPseudoClass;
             self.input = self.input[1..];
             return .{ .nth_last_of_type = pattern };
