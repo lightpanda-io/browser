@@ -25,6 +25,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const builtin = @import("builtin");
 const log = lp.log;
 const zenai = @import("zenai");
 const Config = lp.Config;
@@ -140,14 +141,14 @@ fn storeSaveAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8, tokens
         .account_id = tokens.account_id,
     });
     // Secrets file: owner-only perms.
-    try writeJsonAtomic(path, map, .fromMode(0o600));
+    try writeJsonAtomic(path, map, if (comptime builtin.os.tag == .windows) .default_file else .fromMode(0o600));
 }
 
 fn storeDeleteAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8) !void {
     const path = try storePath(arena, dir);
     var map = readStoreFile(arena, path);
     if (!map.map.swapRemove(id)) return;
-    try writeJsonAtomic(path, map, .fromMode(0o600));
+    try writeJsonAtomic(path, map, if (comptime builtin.os.tag == .windows) .default_file else .fromMode(0o600));
 }
 
 /// Remove the stored token for `id`. No-op when absent.

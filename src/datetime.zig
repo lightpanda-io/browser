@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 
@@ -615,8 +616,20 @@ fn paddingTwoDigits(value: usize) [2]u8 {
 
 pub fn localTime(ts: i64) !LibcTm {
     var tm: LibcTm = undefined;
-    if (localtime_r(&ts, &tm) == null) {
-        return error.InvalidArgument;
+    if (comptime builtin.os.tag == .windows) {
+        // localtime_r is POSIX-only; the MSVC CRT equivalent is
+        // localtime_s, with the arguments swapped and an errno_t
+        // (0 on success) in place of the NULL-on-failure return.
+        // tm_gmtoff/tm_zone have no MSVC counterpart and stay
+        // undefined; no caller reads them (Document.zig formats
+        // only the date and time fields).
+        if (localtime_s(&tm, &ts) != 0) {
+            return error.InvalidArgument;
+        }
+    } else {
+        if (localtime_r(&ts, &tm) == null) {
+            return error.InvalidArgument;
+        }
     }
     return tm;
 }
@@ -635,6 +648,7 @@ const LibcTm = extern struct {
     tm_zone: ?[*:0]const u8,
 };
 extern "c" fn localtime_r(timep: *const i64, result: *LibcTm) ?*LibcTm;
+extern "c" fn localtime_s(result: *LibcTm, timep: *const i64) c_int;
 
 const Parser = struct {
     input: []const u8,

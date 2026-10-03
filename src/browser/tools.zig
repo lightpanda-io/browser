@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const zenai = @import("zenai");
+const builtin = @import("builtin");
 
 const NodeRegistry = @import("../NodeRegistry.zig");
 
@@ -1210,10 +1211,30 @@ fn joinEngines(comptime field: enum { tag, env_var }, comptime last_sep: []const
 /// the keyless clause is the one part not generated from the table.
 pub const search_cascade_prose = "tries " ++ joinEngines(.tag, ", then ") ++ " in order, each when its API key (" ++ joinEngines(.env_var, " or ") ++ ") is set; keenable also works without a key through its public endpoint (rate-limited per client IP)";
 
+/// getPosix for Windows: std's getWindows takes a WTF-16
+/// key and returns a WTF-16 value, so the key is built on
+/// the stack and the value is transcoded to a null-
+/// terminated UTF-8 string. The copy is intentionally kept:
+/// it backs a string that lives as long as the process
+/// environment it was read from, matching getPosix, which
+/// returns pointers into the global environ on POSIX.
+fn envGet(environ: std.process.Environ, key: []const u8) ?[:0]const u8 {
+    if (comptime builtin.os.tag == .windows) {
+        if (key.len == 0 or key.len >= 2048) return null;
+        var wkey: [2048]u16 = undefined;
+        for (key, 0..) |c, i| wkey[i] = c;
+        wkey[key.len] = 0;
+        const wkey_z: [:0]u16 = wkey[0..key.len :0];
+        const wvalue = environ.getWindows(wkey_z.ptr) orelse return null;
+        return std.unicode.utf16LeToUtf8AllocZ(std.heap.page_allocator, wvalue) catch return null;
+    }
+    return environ.getPosix(key);
+}
+
 /// The key `engine` uses right now; `null` selects a keyless engine's
 /// public endpoint.
 fn engineKey(comptime engine: anytype) error{MissingApiKey}!?[]const u8 {
-    if (lp.environ().getPosix(engine.env_var)) |key| return key;
+    if (envGet(lp.environ(), engine.env_var)) |key| return key;
     return if (comptime isKeyless(engine.Client)) null else error.MissingApiKey;
 }
 
@@ -2337,13 +2358,37 @@ fn formatLpEnvNames(arena: std.mem.Allocator, env_names: []const []const u8) Too
 /// `std.os.environ` slice or name pointers into entries would dangle.
 pub fn lpEnvNames(arena: std.mem.Allocator) error{OutOfMemory}![]const []const u8 {
     var env_names: std.ArrayList([]const u8) = .empty;
-    var ptr = std.c.environ;
-    while (ptr[0]) |entry| : (ptr += 1) {
-        const line = std.mem.span(entry);
-        const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
-        const name = line[0..eq_idx];
-        if (!std.mem.startsWith(u8, name, "LP_")) continue;
-        try env_names.append(arena, try arena.dupe(u8, name));
+    if (comptime builtin.os.tag == .windows) {
+        // std.c.environ is a mingw CRT global with no MSVC
+        // counterpart (it stays undefined at link), so walk the
+        // PEB environment block directly — UTF-16 "NAME=VALUE"
+        // entries terminated by an empty one — the same block
+        // std.process.Environ's Windows path reads.
+        const env_ptr = std.os.windows.peb().ProcessParameters.Environment;
+        var i: usize = 0;
+        while (env_ptr[i] != 0) {
+            const key_value = std.mem.sliceTo(env_ptr[i..], 0);
+            // Skip past a leading '=' (the "=C:=..." drive
+            // entries); names must contain a '=' to be listed.
+            if (std.mem.findScalarPos(u16, key_value, 1, '=')) |equal_index| {
+                const name_w = key_value[0..equal_index];
+                if (name_w.len >= 3 and name_w[0] == 'L' and name_w[1] == 'P' and name_w[2] == '_') {
+                    const name = std.unicode.utf16LeToUtf8Alloc(arena, name_w) catch continue;
+                    try env_names.append(arena, name);
+                }
+            }
+            // skip past the NUL terminator
+            i += key_value.len + 1;
+        }
+    } else {
+        var ptr = std.c.environ;
+        while (ptr[0]) |entry| : (ptr += 1) {
+            const line = std.mem.span(entry);
+            const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+            const name = line[0..eq_idx];
+            if (!std.mem.startsWith(u8, name, "LP_")) continue;
+            try env_names.append(arena, try arena.dupe(u8, name));
+        }
     }
     std.mem.sort([]const u8, env_names.items, {}, struct {
         fn lt(_: void, a: []const u8, b: []const u8) bool {

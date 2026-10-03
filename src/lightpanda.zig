@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const log = @import("log.zig");
 pub const mcp = @import("mcp.zig");
@@ -85,6 +86,7 @@ pub const io: std.Io = io_threaded.io();
 /// need the real process environment (env-var lookups, spawned children) use
 /// this instead.
 pub fn environ() std.process.Environ {
+    if (builtin.os.tag == .windows) return .{ .block = .global };
     return .{ .block = .{ .slice = std.mem.span(std.c.environ) } };
 }
 
