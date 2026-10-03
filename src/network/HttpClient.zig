@@ -1901,9 +1901,20 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // callbacks run later, from dispatch(), never from here.
 
     if (effective_err != null and !is_conn_close_recv) {
+        const err = transfer.res.callback_error orelse effective_err.?;
+        if (try transfer.deliversHeaderBeforeError(msg.conn)) {
+            try transfer.materializeResponse(msg.conn, .{ .check_content_length = false });
+            if (self.enforceCorsResponse(msg, transfer)) {
+                return true;
+            }
+            self.removeConn(msg.conn);
+            transfer._conn = null;
+            try transfer.bufferHeaderThenError(err);
+            return true;
+        }
         self.removeConn(msg.conn);
         transfer._conn = null;
-        transfer.failAsync(transfer.res.callback_error orelse effective_err.?);
+        transfer.failAsync(err);
         return true;
     }
 
@@ -2098,6 +2109,12 @@ pub const Request = struct {
     // When false, the caller does not guarantee that the body outlives the
     // transfer, and thus we'll need to dupe it.
     body_outlives_request: bool = false,
+
+    // Should an error after the header arives still call the header_callback.
+    // Most cases just want the error. But fetch() is considered resolved once
+    // we get the header, so where the error happens (before or after headers
+    // is important)
+    header_before_body_error: bool = false,
 
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
@@ -3277,6 +3294,33 @@ pub const Transfer = struct {
         };
     }
 
+    fn deliversHeaderBeforeError(self: *const Transfer, conn: *const http.Connection) !bool {
+        if (self.req.header_before_body_error == false or self.res.headers_complete == false) {
+            return false;
+        }
+        if (self.res.stream.started) {
+            // The header was already delivered.
+            return false;
+        }
+        const status = try conn.getResponseCode();
+        if (isRedirectStatus(status) and self.req.redirect != .manual and conn.getResponseHeader("location", 0) != null) {
+            // this isn't the final response.
+            return false;
+        }
+        return true;
+    }
+
+    // The header made it, the body didn't. Some cases (header_before_body_error = true)
+    // want the header delivered first. (By default though, we just deliver the
+    // error)
+    fn bufferHeaderThenError(self: *Transfer, err: anyerror) !void {
+        try self._events.ensureUnusedCapacity(self.arena.allocator(), 3);
+        self._events.appendAssumeCapacity(.start);
+        self._events.appendAssumeCapacity(.header);
+        self._events.appendAssumeCapacity(.{ .err = err });
+        self.scheduleDispatch();
+    }
+
     // Buffer the standard success event sequence. `body` is either owned by
     // transfer.arena OR, through some other mechanism, outlives the transfer.
     fn bufferEvents(self: *Transfer, body: []const u8) !void {
@@ -3893,6 +3937,16 @@ pub const Transfer = struct {
             return chunk_len;
         }
 
+        if (std.mem.trim(u8, line, "\r\n").len == 0) {
+            // End of a header block. A 1xx is followed by another one.
+            const conn: *http.Connection = @ptrCast(@alignCast(data));
+            const status = conn.getResponseCode() catch return chunk_len;
+            if (status >= 200) {
+                conn.transport.http.res.headers_complete = true;
+            }
+            return chunk_len;
+        }
+
         if (announcesBody(line) == false) {
             return chunk_len;
         }
@@ -4361,6 +4415,9 @@ const Response = struct {
 
     skip_body: bool = false,
     first_data_received: bool = false,
+
+    // The final (non-1xx) response's header block has been fully received.
+    headers_complete: bool = false,
 
     // Set when dataCallback deliberately killed the transfer to satisfy
     // `Request.partial`. processOneMessage uses it to tell our own abort

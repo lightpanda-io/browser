@@ -1416,7 +1416,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         \\   'pointerup:0:0:0:mouse:true', 'mouseup:0:0:1::true', 'click:0:0:1:mouse:true'
         \\ ]) &&
         \\ JSON.stringify(window.seqPrevented) === JSON.stringify(['pointerdown', 'pointerup', 'click']) &&
-        \\ JSON.stringify(window.disabledEvents) === '[]' &&
+        \\ JSON.stringify(window.disabledEvents) === JSON.stringify(['pointerdown', 'pointerup']) &&
         \\ window.focusTargetFocused === true && window.plainBlurred === true &&
         \\ window.clicked === true && window.inputVal === 'hello' &&
         \\ window.changed === true && window.selChanged === 'opt2' &&

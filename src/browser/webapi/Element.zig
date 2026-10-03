@@ -708,16 +708,21 @@ pub fn getAttributeNS(
     local_name: String,
     frame: *Frame,
 ) !?String {
+    return self.getAttribute(try self.attributeNameNS(namespace_, local_name, frame), frame);
+}
+
+// The stored name a namespaced lookup resolves to. We don't really support
+// namespaces, but if the namespace has a fixed prefix and the prefixed
+// attribute exists, that's the one.
+pub fn attributeNameNS(self: *const Element, namespace_: ?[]const u8, local_name: String, frame: *Frame) !String {
     if (namespace_) |namespace| {
-        // we don't really support namespaces, but if the namespace has a fixed
-        // prefix, we can try to fetch the attribute with it
         if (try prefixedAttributeName(namespace, local_name.str(), frame)) |prefixed| {
-            if (try self.getAttribute(.wrap(prefixed), frame)) |value| {
-                return value;
+            if (try self.hasAttribute(.wrap(prefixed), frame)) {
+                return .wrap(prefixed);
             }
         }
     }
-    return self.getAttribute(local_name, frame);
+    return local_name;
 }
 
 fn prefixedAttributeName(namespace: []const u8, local_name: []const u8, frame: *Frame) !?[]const u8 {
@@ -831,6 +836,10 @@ pub fn hasAttributes(self: *const Element) bool {
 
 pub fn getAttributeNode(self: *Element, name: String, frame: *Frame) !?*Attribute {
     return self._attributes.getAttribute(name, self, frame);
+}
+
+pub fn getAttributeNodeNS(self: *Element, namespace_: ?[]const u8, local_name: String, frame: *Frame) !?*Attribute {
+    return self.getAttributeNode(try self.attributeNameNS(namespace_, local_name, frame), frame);
 }
 
 pub fn setAttribute(self: *Element, name: String, value: String, frame: *Frame) !void {
@@ -975,6 +984,10 @@ pub fn setAttributeNode(self: *Element, attr: *Attribute, frame: *Frame) !?*Attr
 
 pub fn removeAttribute(self: *Element, name: String, frame: *Frame) !void {
     return self._attributes.delete(name, self, frame);
+}
+
+pub fn removeAttributeNS(self: *Element, namespace_: ?[]const u8, local_name: String, frame: *Frame) !void {
+    return self.removeAttribute(try self.attributeNameNS(namespace_, local_name, frame), frame);
 }
 
 pub fn removeAttributeSafe(self: *Element, name: String, frame: *Frame) void {
@@ -1211,6 +1224,18 @@ pub fn isSvgLink(self: *Element) bool {
 pub fn isEditingHost(self: *Element) bool {
     const value = self.getAttributeSafe(.wrap("contenteditable")) orelse return false;
     return std.ascii.eqlIgnoreCase(value, "false") == false;
+}
+
+// An editing host or a descendant of one: the nearest contenteditable
+// attribute decides.
+pub fn isEditable(self: *Element) bool {
+    var current: ?*Element = self;
+    while (current) |el| : (current = el.parentElement()) {
+        if (el.getAttributeSafe(.wrap("contenteditable")) != null) {
+            return el.isEditingHost();
+        }
+    }
+    return false;
 }
 
 /// Focusable without a tabindex attribute.
@@ -2694,8 +2719,12 @@ pub const JsApi = struct {
     pub const getAttribute = bridge.function(Element.getAttribute, .{});
     pub const getAttributeNS = bridge.function(Element.getAttributeNS, .{});
     pub const getAttributeNode = bridge.function(Element.getAttributeNode, .{});
+    pub const getAttributeNodeNS = bridge.function(Element.getAttributeNodeNS, .{});
     pub const setAttributeNode = bridge.function(Element.setAttributeNode, .{ .ce_reactions = true });
+    // Attributes don't carry a namespace, so this is setAttributeNode.
+    pub const setAttributeNodeNS = bridge.function(Element.setAttributeNode, .{ .ce_reactions = true });
     pub const removeAttribute = bridge.function(Element.removeAttribute, .{ .ce_reactions = true });
+    pub const removeAttributeNS = bridge.function(Element.removeAttributeNS, .{ .ce_reactions = true });
     pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{ .ce_reactions = true });
     pub const getAttributeNames = bridge.function(Element.getAttributeNames, .{});
     pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .ce_reactions = true });

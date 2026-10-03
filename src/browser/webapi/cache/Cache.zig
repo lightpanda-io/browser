@@ -299,6 +299,9 @@ fn unstorable(response: *const Response) ?[]const u8 {
     if (response._body == .stream) {
         return "Response with a ReadableStream body is unsupported";
     }
+    if (response._body == .errored) {
+        return "Response body is errored";
+    }
     for (response._headers._list._entries.items) |*header| {
         if (std.ascii.eqlIgnoreCase(header.name.str(), "vary") == false) {
             continue;

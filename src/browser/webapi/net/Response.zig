@@ -62,6 +62,7 @@ const Body = union(enum) {
     empty,
     bytes: []const u8,
     stream: *ReadableStream,
+    errored,
 };
 
 const InitOpts = struct {
@@ -316,6 +317,18 @@ pub fn getBody(self: *Response, exec: *const Execution) !?*ReadableStream {
             }
             return stream;
         },
+        .errored => {
+            if (self._body_stream) |stream| {
+                return stream;
+            }
+            const stream = try ReadableStream.init(null, null, exec);
+            try stream._controller.doError("Failed to read response body");
+            self._body_stream = stream;
+            if (self._body_used) {
+                try lockStream(stream, exec);
+            }
+            return stream;
+        },
     };
 }
 
@@ -334,7 +347,7 @@ fn getBodyUsed(self: *const Response) bool {
     return switch (self._body) {
         .empty => false,
         .stream => |stream| stream._disturbed,
-        .bytes => self._body_used,
+        .bytes, .errored => self._body_used,
     };
 }
 
@@ -343,7 +356,7 @@ fn checkUnusable(self: *const Response, local: *const js.Local) !void {
     const stream = switch (self._body) {
         .empty => return,
         .stream => |stream| stream,
-        .bytes => self._body_stream orelse {
+        .bytes, .errored => self._body_stream orelse {
             if (self._body_used) {
                 return local.typeError("Body has already been read");
             }
@@ -360,10 +373,11 @@ fn consume(self: *Response, exec: *const Execution) !void {
     const local = exec.js.local.?;
     try self.checkUnusable(local);
     self._body_used = true;
-    if (self._body == .bytes) {
-        if (self._body_stream) |stream| {
+    switch (self._body) {
+        .bytes, .errored => if (self._body_stream) |stream| {
             try lockStream(stream, exec);
-        }
+        },
+        .empty, .stream => {},
     }
 }
 
@@ -373,6 +387,7 @@ pub fn consumeBytes(self: *Response, exec: *const Execution) ![]const u8 {
         .empty => "",
         .bytes => |b| b,
         .stream => exec.js.local.?.typeError("Response with a ReadableStream body is unsupported"),
+        .errored => exec.js.local.?.typeError("Failed to read response body"),
     };
 }
 
@@ -410,6 +425,11 @@ fn consumeAs(self: *Response, kind: Package, exec: *const Execution) !js.Promise
     const content_type = try self._headers.get("content-type", exec);
     switch (self._body) {
         .stream => |stream| return StreamConsumer.start(stream, kind, content_type, exec),
+        .errored => {
+            var resolver = local.createPromiseResolver();
+            resolver.rejectError("response body", .{ .type_error = "Failed to read response body" });
+            return resolver.promise();
+        },
         .bytes, .empty => {},
     }
 
@@ -551,8 +571,7 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
     const session = exec.session;
     const body_len = switch (self._body) {
         .bytes => |b| b.len,
-        .empty => 0,
-        .stream => 0,
+        .empty, .stream, .errored => 0,
     };
     const arena = try session.getPinnedArena(body_len + self._url.len + 256, "Response.clone");
     errdefer arena.release();
@@ -561,6 +580,7 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
         .bytes => |b| .{ .bytes = try arena.dupe(u8, b) },
         .empty => .empty,
         .stream => .empty, // TODO: implement stream tee for proper cloning
+        .errored => .errored,
     };
     const status_text = try arena.dupe(u8, self._status_text);
     const url = try arena.dupeSentinel(u8, self._url, 0);

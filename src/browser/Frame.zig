@@ -452,6 +452,20 @@ pub fn deinit(self: *Frame) void {
         frame.deinit();
     }
 
+    // The Page outlives an iframe or popup that re-navigates: don't leave its
+    // pointer state on this document's elements.
+    const page = self.page;
+    if (page.input_hover_target) |el| {
+        if (el.ownerFrame(self) == self) {
+            page.input_hover_target = null;
+        }
+    }
+    if (page.input_pointer.down_target) |el| {
+        if (el.ownerFrame(self) == self) {
+            page.input_pointer.reset();
+        }
+    }
+
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame.deinit", .{ .url = self.url, .type = self._type });
     }
@@ -478,8 +492,6 @@ pub fn deinit(self: *Frame) void {
     if (self.window._navigator._service_worker) |container| {
         container.detach();
     }
-
-    const page = self.page;
 
     if (self._queued_navigation) |qn| {
         qn.arena.release();
@@ -2671,10 +2683,9 @@ pub fn notifyNetworkAlmostIdle(self: *Frame) void {
 // called from the parser. Text-node merging is the parser's responsibility
 // (see Parser.appendTextChunk in src/browser/parser/Parser.zig); this is the
 // "insert this fully-formed node as a new last child of parent" entry point.
-pub fn appendNew(self: *Frame, parent: *Node, child: *Node) !void {
+pub fn appendNew(self: *Frame, parent: *Node, child: *Node, parent_root: ?*Node) !void {
     lp.assert(child._parent == null, "Frame.appendNew", .{});
-    // opts is meaningless when from_parser (the first param) is true.
-    try self._insertNodeRelative(true, parent, child, .append, .{});
+    try self._insertNodeRelative(true, parent, child, .append, .{ .parser_root = parent_root });
 }
 
 // called from the parser when the node and all its children have been added
@@ -2994,6 +3005,8 @@ const InsertNodeOpts = struct {
     // the ready work itself once every node is in place, so an earlier
     // script observes its later siblings already inserted.
     run_ready: bool = true,
+    // The parent's root (parser only, avoids having to look it up)
+    parser_root: ?*Node = null,
 };
 pub fn insertNodeRelative(self: *Frame, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, relative, opts);
@@ -3066,14 +3079,14 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
         }
 
         if (child.is(Element)) |el| {
-            // Invoke connectedCallback for custom elements during parsing.
-            // For main document parsing we know nodes are connected (fast path);
-            // for fragment parsing (innerHTML) we check connectivity.
-            if (child.isConnected() or child.isInShadowTree()) {
+            const root = opts.parser_root orelse parent.getRootNode(.{});
+            if (idMapsForRoot(root)) |id_maps| {
                 if (el.getId()) |id| {
-                    try self.addElementId(parent, el, id);
+                    try self.addElementIdWithMaps(id_maps, el, id);
                 }
-                try Element.Html.Custom.enqueueConnectedCallbackOnElement(true, el, self);
+                if (rootIsConnected(root)) {
+                    try Element.Html.Custom.enqueueConnectedCallbackOnElement(true, el, self);
+                }
             }
         }
         return;

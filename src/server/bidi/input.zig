@@ -207,6 +207,7 @@ const Source = struct {
         last_click_ms: u64 = 0,
         last_click_x: f64 = 0,
         last_click_y: f64 = 0,
+        last_click_button: u8 = 0,
         click_count: i32 = 0,
     };
 
@@ -579,10 +580,13 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
             }
             try pointer.pressed.append(allocator, button);
 
-            // A press near the last click, soon enough after it, counts up
+            // A press of the same button near the last click, soon enough
+            // after it, counts up
             const now = lp.datetime.milliTimestamp(.boot);
             const near = @abs(pointer.x - pointer.last_click_x) <= 2 and @abs(pointer.y - pointer.last_click_y) <= 2;
-            pointer.click_count = if (near and now - pointer.last_click_ms <= 500) pointer.click_count + 1 else 1;
+            const repeat = near and button == pointer.last_click_button and now - pointer.last_click_ms <= 500;
+            pointer.click_count = if (repeat) pointer.click_count + 1 else 1;
+            pointer.last_click_button = button;
             pointer.last_click_ms = now;
             pointer.last_click_x = pointer.x;
             pointer.last_click_y = pointer.y;
@@ -988,6 +992,26 @@ test "bidi.input: click via element origin" {
         .type = "string",
         .value = "mousemove@btn mousedown:b2@btn mouseup:b2@btn",
     } }, .{ .id = 7 });
+
+    // A left click right after the right one starts a new count: no dblclick.
+    try ctx.processMessage(.{
+        .id = 8,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "mouse",
+            .actions = .{
+                .{ .type = "pointerDown", .button = 0 },
+                .{ .type = "pointerUp", .button = 0 },
+            },
+        }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 8 });
+    try evaluate(&ctx, 9, context_id, "window.events.slice(11).join(' ')");
+    try ctx.expectSentResult(.{ .type = "success", .result = .{
+        .type = "string",
+        .value = "mousedown@btn mouseup@btn click@btn",
+    } }, .{ .id = 9 });
 }
 
 test "bidi.input: keys and modifiers" {

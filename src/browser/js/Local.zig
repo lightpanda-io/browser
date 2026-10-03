@@ -1375,7 +1375,7 @@ fn resolveT(comptime T: type, value: *T) Resolved {
     const Meta = T.JsApi.Meta;
     return .{
         .ptr = value,
-        .class_id = Meta.class_id,
+        .class_id = if (@hasDecl(Meta, "wrap_as")) Meta.wrap_as.Meta.class_id else Meta.class_id,
         .prototype_chain = &Meta.prototype_chain,
         .finalizer = blk: {
             const FT = (comptime findFinalizerType(T)) orelse break :blk null;

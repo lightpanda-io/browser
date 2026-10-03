@@ -88,6 +88,11 @@ const ScheduleOpts = struct {
     mode: Mode = .normal,
 };
 
+// setTimeout/setInterval take the delay as a WebIDL long: wrapped to 32 bits, negatives clamped to 0.
+pub fn delayFromJs(delay_ms: ?i32) u32 {
+    return @intCast(@max(delay_ms orelse 0, 0));
+}
+
 pub fn schedule(
     self: *Timers,
     exec: *js.Execution,

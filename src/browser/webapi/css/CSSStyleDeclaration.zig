@@ -1061,7 +1061,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const cssText = bridge.accessor(CSSStyleDeclaration.getCssText, CSSStyleDeclaration.setCssText, .{});
+    pub const cssText = bridge.accessor(CSSStyleDeclaration.getCssText, CSSStyleDeclaration.setCssText, .{ .ce_reactions = true });
     pub const length = bridge.accessor(CSSStyleDeclaration.length, null, .{});
     pub const item = bridge.function(_item, .{});
 
@@ -1074,9 +1074,9 @@ pub const JsApi = struct {
 
     pub const getPropertyValue = bridge.function(CSSStyleDeclaration.getPropertyValue, .{});
     pub const getPropertyPriority = bridge.function(CSSStyleDeclaration.getPropertyPriority, .{});
-    pub const setProperty = bridge.function(CSSStyleDeclaration.setProperty, .{});
-    pub const removeProperty = bridge.function(CSSStyleDeclaration.removeProperty, .{});
-    pub const cssFloat = bridge.accessor(CSSStyleDeclaration.getFloat, CSSStyleDeclaration.setFloat, .{});
+    pub const setProperty = bridge.function(CSSStyleDeclaration.setProperty, .{ .ce_reactions = true });
+    pub const removeProperty = bridge.function(CSSStyleDeclaration.removeProperty, .{ .ce_reactions = true });
+    pub const cssFloat = bridge.accessor(CSSStyleDeclaration.getFloat, CSSStyleDeclaration.setFloat, .{ .ce_reactions = true });
 };
 
 const testing = @import("../../../testing.zig");

@@ -591,3 +591,36 @@
     });
   }
 </script>
+
+<script id=fetch_bad_content_encoding type=module>
+  {
+    const state = await testing.async();
+    const url = 'http://127.0.0.1:9582/xhr/bad_gzip';
+    const response = await fetch(url);
+    const errors = [];
+    for (const method of ['arrayBuffer', 'blob', 'bytes', 'formData', 'json', 'text']) {
+      const res = await fetch(url);
+      try {
+        await res[method]();
+        errors.push(null);
+      } catch (e) {
+        errors.push([e instanceof TypeError, res.bodyUsed]);
+      }
+    }
+    let stream_error = null;
+    try {
+      await response.body.getReader().read();
+    } catch (e) {
+      stream_error = e;
+    }
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(200, response.status);
+      for (const err of errors) {
+        testing.expectEqual([true, true], err);
+      }
+      testing.expectEqual(true, stream_error !== null);
+    });
+  }
+</script>

@@ -643,13 +643,8 @@ pub fn setContentEditable(self: *HtmlElement, value: []const u8, frame: *Frame) 
 }
 
 pub fn getIsContentEditable(self: *HtmlElement) bool {
-    var current: ?*Element = self.asElement();
-    while (current) |el| : (current = el.parentElement()) {
-        const raw = el.getAttributeSafe(.wrap("contenteditable")) orelse continue;
-        if (!std.ascii.eqlIgnoreCase(raw, "false")) {
-            log.info(.not_implemented, "IsContentEditable", .{});
-        }
-        break;
+    if (self.asElement().isEditable()) {
+        log.info(.not_implemented, "IsContentEditable", .{});
     }
     return false;
 }

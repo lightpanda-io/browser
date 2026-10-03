@@ -429,3 +429,38 @@
   testing.expectEqual('id', Object.getOwnPropertyDescriptor(attrs, 'id').value.name);
 }
 </script>
+
+<script id=namespaced>
+  {
+    const XLINK = 'http://www.w3.org/1999/xlink';
+    const el = document.createElement('div');
+    el.setAttribute('xlink:href', '#a');
+    el.setAttribute('title', 't');
+
+    testing.expectEqual('#a', el.getAttributeNodeNS(XLINK, 'href').value);
+    testing.expectEqual('t', el.getAttributeNodeNS(null, 'title').value);
+    testing.expectEqual(null, el.getAttributeNodeNS(null, 'nope'));
+
+    el.removeAttributeNS(XLINK, 'href');
+    testing.expectEqual(false, el.hasAttribute('xlink:href'));
+    el.removeAttributeNS(null, 'title');
+    testing.expectEqual(false, el.hasAttribute('title'));
+    // removing a missing attribute is a no-op
+    el.removeAttributeNS(null, 'nope');
+
+    const attr = document.createAttribute('data-n');
+    attr.value = '1';
+    testing.expectEqual(null, el.setAttributeNodeNS(attr));
+    testing.expectEqual(el, attr.ownerElement);
+
+    const attrs = el.attributes;
+    testing.expectEqual(attr, attrs.getNamedItemNS(null, 'data-n'));
+    testing.expectEqual(null, attrs.getNamedItemNS(null, 'nope'));
+    testing.expectEqual(attr, attrs.removeNamedItemNS(null, 'data-n'));
+    testing.expectEqual(null, attr.ownerElement);
+    testing.expectEqual(0, attrs.length);
+
+    testing.expectEqual(null, attrs.setNamedItemNS(attr));
+    testing.expectEqual('1', el.getAttribute('data-n'));
+  }
+</script>

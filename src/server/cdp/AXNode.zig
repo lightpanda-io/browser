@@ -89,7 +89,7 @@ pub const Writer = struct {
             try self.walkQuery(self.root.dom, &ignore_cache, w);
         } else {
             const root = AXNode.fromNode(self.root.dom);
-            const root_hidden = if (self.root.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame, .{}) else false;
+            const root_hidden = if (self.root.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame) else false;
             try self.writeTree(root, root_hidden, &ignore_cache, w);
         }
         return w.endArray();
@@ -139,7 +139,7 @@ pub const Writer = struct {
                     // visibility:hidden, aria-hidden, hidden, inert). Matches
                     // Chromium: these elements aren't exposed to the AX tree.
                     const el = dom_node.as(DOMNode.Element);
-                    if (walker.inAriaHidden() or isHidden(el, self.frame, .{ .ancestors = false })) {
+                    if (walker.inAriaHidden() or isHidden(el, self.frame)) {
                         continue;
                     }
                 },
@@ -580,7 +580,7 @@ pub const Writer = struct {
                 // Skip hidden element children so childIds matches the
                 // subtree-pruning done in writeTree.
                 if (child.is(DOMNode.Element)) |child_el| {
-                    if (child_in_aria_hidden or isHidden(child_el, self.frame, .{ .ancestors = false })) {
+                    if (child_in_aria_hidden or isHidden(child_el, self.frame)) {
                         continue;
                     }
                 }
@@ -679,7 +679,7 @@ pub const Writer = struct {
         }
 
         const node = try self.registry.register(axn.dom);
-        const hidden = if (axn.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame, .{}) else false;
+        const hidden = if (axn.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame) else false;
         const ignored = try axn.isIgnore(self.frame, in_aria_hidden, hidden, ignore_cache);
 
         try w.beginObject();
@@ -1235,7 +1235,7 @@ fn labelPromotionTarget(
 
     // Only promote when the control is hidden; otherwise it appears
     // normally and the label stays as-is.
-    if (!isHidden(control, frame, .{})) return null;
+    if (!isHidden(control, frame)) return null;
 
     if (control.getTag() != .input) return null;
     const input = control.as(DOMNode.Element.Html.Input);
@@ -1291,18 +1291,13 @@ fn scratchAllocator(temp_arena: ?*lp.Arena, frame: *Frame) std.mem.Allocator {
     return if (temp_arena) |a| a.allocator() else frame.call_arena;
 }
 
-const HiddenOptions = struct { ancestors: bool = true };
-
 /// Chromium's AX tree prunes display:none and visibility:hidden alike.
-fn isHidden(elt: *DOMNode.Element, frame: *Frame, options: HiddenOptions) bool {
+fn isHidden(elt: *DOMNode.Element, frame: *Frame) bool {
     if (hasHidingAttribute(elt)) {
         return true;
     }
     const owner = elt.ownerFrame(frame) orelse return false;
-    return owner._style_manager.isHidden(elt, .{
-        .check_visibility = true,
-        .ancestors = options.ancestors,
-    });
+    return owner._style_manager.isHidden(elt, .{ .check_visibility = true });
 }
 
 fn hasHidingAttribute(elt: *DOMNode.Element) bool {
@@ -1367,7 +1362,7 @@ const IgnoreCache = struct {
 
         var tw = TreeWalker.FullExcludeSelf.init(root, .{});
         const exposed = while (tw.next()) |node| {
-            const node_hidden = if (node.is(DOMNode.Element)) |el| isHidden(el, frame, .{ .ancestors = false }) else false;
+            const node_hidden = if (node.is(DOMNode.Element)) |el| isHidden(el, frame) else false;
             switch (AXNode.fromNode(node).ignoreSelf(false, node_hidden)) {
                 .ignored => tw.skipChildren(),
                 .exposed => break node,

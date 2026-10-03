@@ -353,3 +353,25 @@
 //     testing.expectEqual('c', childCalls[0].newValue);
 // }
 </script>
+
+<my-unresolved id="unresolved"></my-unresolved>
+<script id="undefined_prototype">
+{
+    const parsed = document.getElementById('unresolved');
+    testing.expectEqual(HTMLElement.prototype, Object.getPrototypeOf(parsed));
+
+    const created = document.createElement('my-unresolved');
+    testing.expectEqual(HTMLElement.prototype, Object.getPrototypeOf(created));
+
+    const windowless = document.implementation.createHTMLDocument('');
+    const imported = windowless.createElement('my-unresolved');
+    testing.expectEqual(HTMLElement.prototype, Object.getPrototypeOf(imported));
+
+    class MyUnresolved extends HTMLElement {}
+    customElements.define('my-unresolved', MyUnresolved);
+    testing.expectEqual(MyUnresolved.prototype, Object.getPrototypeOf(parsed));
+    // define() only upgrades connected elements
+    testing.expectEqual(HTMLElement.prototype, Object.getPrototypeOf(created));
+    testing.expectEqual(HTMLElement.prototype, Object.getPrototypeOf(imported));
+}
+</script>

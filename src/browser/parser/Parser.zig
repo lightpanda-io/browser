@@ -46,6 +46,10 @@ pub const ParsedNode = extern struct {
     // Set once html5ever has put the node in the tree or given it children.
     // Until then the node is unobservable and its document is only a guess.
     placed: bool = false,
+
+    // Memo of the node's root, valid while page.dom_version == root_version.
+    root: ?*Node = null,
+    root_version: usize = 0,
 };
 
 // Attributes of an element the parser rebuilds (see settleDocument): the ones
@@ -183,7 +187,7 @@ fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
     // Fresh text run: the first chunk lives on _data only. buf stays empty
     // until (and unless) a second chunk arrives.
     const new_text = try Frame.node_factory.createTextNode(parent.getDocument(self.frame), txt);
-    try self.frame.appendNew(parent, new_text);
+    try self.frame.appendNew(parent, new_text, null);
     self.inserted_since_checkpoint +|= 1;
     self.pending_text = .{
         .parent = parent,
@@ -624,7 +628,7 @@ fn _appendDoctypeToDocument(self: *Parser, name: []const u8, public_id: []const 
     });
 
     // Append it to the document
-    try frame.appendNew(self.container.node, doctype.asNode());
+    try frame.appendNew(self.container.node, doctype.asNode(), null);
 }
 
 fn addAttrsIfMissingCallback(ctx: *anyopaque, target_ref: *anyopaque, attributes: h5e.AttributeIterator) callconv(.c) void {
@@ -744,7 +748,10 @@ fn _appendCallback(self: *Parser, parent_pn: *ParsedNode, node_or_text: h5e.Node
                 return;
             }
             const child = try self.settleDocument(parent_pn, child_pn);
-            try self.frame.appendNew(parent, child);
+            const root = self.rootOf(parent_pn);
+            try self.frame.appendNew(parent, child, root);
+            child_pn.root = root;
+            child_pn.root_version = parent_pn.root_version;
         },
         .text => |txt| {
             const parent = parent_pn.node;
@@ -753,6 +760,22 @@ fn _appendCallback(self: *Parser, parent_pn: *ParsedNode, node_or_text: h5e.Node
         },
         .failed => {},
     }
+}
+
+// Avoids walking to the root for every parsed element. When the parser inserts
+// new node, the root node of existing nodes doesn't change and we don't bump
+// dom_version, so we can cache this.
+fn rootOf(self: *Parser, pn: *ParsedNode) *Node {
+    const version = self.frame.page.dom_version;
+    if (pn.root) |root| {
+        if (pn.root_version == version) {
+            return root;
+        }
+    }
+    const root = pn.node.getRootNode(.{});
+    pn.root = root;
+    pn.root_version = version;
+    return root;
 }
 
 fn settleDocument(self: *Parser, parent_pn: *ParsedNode, child_pn: *ParsedNode) !*Node {
