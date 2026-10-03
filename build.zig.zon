@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/200123d4a5eee5136aa96a3933c651cc3d2c069f.tar.gz",
-            .hash = "v8-0.0.0-xddH67dJAwAdG6Puk7KzLsWsEzP8kqxLDfS-6tpkKS5B",
+            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/cd9a233aa5f864aead12a670791feb0185627907.tar.gz",
+            .hash = "v8-0.0.0-xddH63FOAwBedfXw8zVTp-FjuG0L-ixlMRgQrULnYqOC",
         },
         // .v8 = .{ .path = "../zig-v8-fork" },
         .brotli = .{

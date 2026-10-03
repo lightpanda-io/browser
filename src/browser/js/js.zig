@@ -167,6 +167,10 @@ pub fn TypedArray(comptime T: type) type {
 pub const ArrayBuffer = struct {
     values: []const u8,
 
+    // Larger lengths throw a RangeError. Nothing real needs more, and an
+    // overcommitted buffer that size can take the whole process down.
+    pub const MAX_LENGTH = 4 * 1024 * 1024 * 1024;
+
     pub fn dupe(self: ArrayBuffer, allocator: Allocator) !ArrayBuffer {
         return .{ .values = try allocator.dupe(u8, self.values) };
     }
