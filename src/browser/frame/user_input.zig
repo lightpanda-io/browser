@@ -593,22 +593,18 @@ fn isEditingHost(node: *Node) bool {
 }
 
 fn outermostEditingHost(target: *Element) ?*Element {
-    var node: ?*Node = target.asNode();
-    var editable: ?*Node = null;
-    while (node) |n| : (node = n._parent) {
-        if (isEditingHost(n)) {
-            editable = n;
+    var host: ?*Element = null;
+    var current: ?*Element = target;
+    while (current) |el| : (current = el.parentElement()) {
+        if (el.getAttributeInterned("contenteditable") == null) {
+            continue;
+        }
+        if (el.isEditingHost() == false) {
             break;
         }
+        host = el;
     }
-    var host = editable orelse return null;
-    while (host._parent) |p| {
-        if (!isEditingHost(p)) {
-            break;
-        }
-        host = p;
-    }
-    return host.is(Element);
+    return host;
 }
 
 /// Mousedown default action. A mousedown outside any focusable element moves
