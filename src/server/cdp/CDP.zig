@@ -262,6 +262,16 @@ fn dispatchStartupCommand(command: *Command, method: []const u8) !void {
         return dispatchCommand(command, method);
     }
 
+    // Navigating the placeholder session has no page behind it: an
+    // empty result here would look like success while nothing
+    // happened, leaving the client waiting for lifecycle events
+    // that never come. Say so, and point at the way to get a real
+    // target. (Clients that filter pages out of auto-attach never
+    // see this session at all; see Target.setAutoAttach.)
+    if (std.mem.eql(u8, method, "Page.navigate")) {
+        return command.sendError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{});
+    }
+
     return command.sendResult(null, .{});
 }
 
