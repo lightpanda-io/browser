@@ -196,17 +196,11 @@ pub fn commitNavigation(self: *Navigation, frame: *Frame) !void {
 
     try self.updateEntries(url, kind, frame, false);
 
-    // A traversal or reload recreates the document of the entry it lands on.
-    // Every entry that shared the old document now belongs to the new one.
+    // A traversal or reload recreates the document of the entry it lands on:
+    // the new frame takes over that document's id, so the other entries of
+    // that document stay same-document with it.
     switch (kind) {
-        .traverse, .reload => {
-            const old_loader_id = self.getCurrentEntry()._loader_id;
-            for (self._entries.items) |entry| {
-                if (entry._loader_id == old_loader_id) {
-                    entry._loader_id = frame._loader_id;
-                }
-            }
-        },
+        .traverse, .reload => frame._history_document_id = self.getCurrentEntry()._document_id,
         .push, .replace => {},
     }
 
@@ -266,7 +260,7 @@ pub fn pushEntry(
             ._key = id_str,
             ._url = url,
             ._state = state,
-            ._loader_id = frame._loader_id,
+            ._document_id = frame._history_document_id,
         },
     });
 
@@ -308,7 +302,7 @@ pub fn replaceEntry(
             ._key = previous._key,
             ._url = url,
             ._state = state,
-            ._loader_id = frame._loader_id,
+            ._document_id = frame._history_document_id,
         },
     });
 

@@ -33,10 +33,10 @@ _id: []const u8,
 _key: []const u8,
 _url: ?[:0]const u8,
 _state: NavigationState,
-// The document this entry belongs to, as that document's frame loader id.
-// Entries created by pushState/replaceState or a fragment navigation share
-// their document's id; traversing between them stays in that document.
-_loader_id: u32,
+// The document this entry belongs to (Frame._history_document_id). Entries
+// created by pushState/replaceState or a fragment navigation share their
+// document's id; traversing between them stays in that document.
+_document_id: u32,
 
 _on_dispose: ?js.Function.Global = null,
 
@@ -69,7 +69,7 @@ pub fn key(self: *const NavigationHistoryEntry) []const u8 {
 // that the URLs match: pushState can change the path or query of an entry
 // without leaving its document.
 pub fn sameDocument(self: *const NavigationHistoryEntry, frame: *Frame) bool {
-    return self._loader_id == frame._loader_id;
+    return self._document_id == frame._history_document_id;
 }
 
 pub fn url(self: *const NavigationHistoryEntry) ?[:0]const u8 {

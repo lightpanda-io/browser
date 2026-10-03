@@ -96,6 +96,11 @@ _frame_id: u32,
 // navigate.
 _loader_id: u32,
 
+// The session-history document this frame shows: its own _loader_id, unless a
+// traversal or reload recreated an earlier document, whose id it then takes
+// over so that document's other history entries stay same-document with it.
+_history_document_id: u32,
+
 page: *Page,
 
 _session: *Session,
@@ -345,6 +350,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     })).asDocument();
 
     const arena = page.frame_arena;
+    const loader_id = session.nextLoaderId();
 
     self.* = .{
         .js = undefined,
@@ -359,7 +365,8 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         .local_arena = local_arena.allocator(),
         ._frame_id = frame_id,
         ._session = session,
-        ._loader_id = session.nextLoaderId(),
+        ._loader_id = loader_id,
+        ._history_document_id = loader_id,
         ._factory = factory,
         ._pending_loads = 1, // always 1 for the ScriptManager
         ._type = if (parent == null) .root else .frame,
