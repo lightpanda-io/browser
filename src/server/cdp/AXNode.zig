@@ -116,7 +116,7 @@ pub const Writer = struct {
     // be serialized as JSON strings even though we track them internally as u32.
     fn writeIdString(id: u32, w: anytype) !void {
         var buf: [10]u8 = undefined;
-        const s = try std.fmt.bufPrint(&buf, "{d}", .{id});
+        const s = try std.mem.print(&buf, "{d}", .{id});
         try w.write(s);
     }
 
@@ -206,7 +206,7 @@ pub const Writer = struct {
 
                 // Use a small stack buffer to format the number (max "9999. " = 6 chars)
                 var buf: [6]u8 = undefined;
-                const marker_text = try std.fmt.bufPrint(&buf, "{d}. ", .{count});
+                const marker_text = try std.mem.print(&buf, "{d}. ", .{count});
                 try w.write(marker_text);
             },
             else => unreachable,
@@ -299,7 +299,7 @@ pub const Writer = struct {
                 // CDP spec requires integer values to be serialized as strings.
                 // 20 bytes is enough for the decimal representation of a 64-bit integer.
                 var buf: [20]u8 = undefined;
-                const s = try std.fmt.bufPrint(&buf, "{d}", .{v});
+                const s = try std.mem.print(&buf, "{d}", .{v});
                 try w.write(s);
             },
             inline else => |v| try w.write(v),
@@ -1684,7 +1684,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
         const value = name_obj.object.get("value") orelse continue;
         if (value != .string) continue;
         for (hidden_texts) |bad| {
-            try testing.expect(std.mem.indexOf(u8, value.string, bad) == null);
+            try testing.expect(std.mem.find(u8, value.string, bad) == null);
         }
     }
 
@@ -1694,7 +1694,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
         const obj = node_val.object;
         const name_obj = obj.get("name") orelse continue;
         const value = name_obj.object.get("value") orelse continue;
-        if (value == .string and std.mem.indexOf(u8, value.string, "visible-para") != null) {
+        if (value == .string and std.mem.find(u8, value.string, "visible-para") != null) {
             found_visible = true;
             break;
         }
@@ -1709,7 +1709,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
         const role_val = role_obj.object.get("value") orelse continue;
         if (!std.mem.eql(u8, role_val.string, "searchbox")) continue;
         const name_val = obj.get("name").?.object.get("value").?;
-        if (name_val == .string and std.mem.indexOf(u8, name_val.string, "Search") != null) {
+        if (name_val == .string and std.mem.find(u8, name_val.string, "Search") != null) {
             search_named = true;
         }
     }
@@ -1723,7 +1723,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
         const role_val = role_obj.object.get("value") orelse continue;
         if (!std.mem.eql(u8, role_val.string, "textbox")) continue;
         const name_val = obj.get("name").?.object.get("value").?;
-        if (name_val == .string and std.mem.indexOf(u8, name_val.string, "Wrap") != null) {
+        if (name_val == .string and std.mem.find(u8, name_val.string, "Wrap") != null) {
             wrapped_named = true;
         }
     }
@@ -1757,7 +1757,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
             const name_obj = obj.get("name") orelse continue;
             const name_value = name_obj.object.get("value") orelse continue;
             if (name_value != .string) continue;
-            if (std.mem.indexOf(u8, name_value.string, exp.name_needle) == null) continue;
+            if (std.mem.find(u8, name_value.string, exp.name_needle) == null) continue;
 
             // Verify the `checked` property was emitted with the right value.
             const props = obj.get("properties").?.array.items;
@@ -2096,8 +2096,8 @@ test "AXNode: writer prunes children when root is hidden" {
     }, .{});
     defer testing.allocator.free(json);
 
-    try testing.expect(std.mem.indexOf(u8, json, "under-display-none") == null);
-    try testing.expect(std.mem.indexOf(u8, json, "\"childIds\":[]") != null);
+    try testing.expect(std.mem.find(u8, json, "under-display-none") == null);
+    try testing.expect(std.mem.find(u8, json, "\"childIds\":[]") != null);
 }
 
 test "AXNode: generic containers share memoized ignore answers" {
@@ -2165,7 +2165,7 @@ test "AXNode: aria-hidden is case-insensitive" {
     }, .{});
     defer testing.allocator.free(json);
 
-    try testing.expect(std.mem.indexOf(u8, json, "hidden-upper") == null);
-    try testing.expect(std.mem.indexOf(u8, json, "hidden-mixed") == null);
-    try testing.expect(std.mem.indexOf(u8, json, "visible-false") != null);
+    try testing.expect(std.mem.find(u8, json, "hidden-upper") == null);
+    try testing.expect(std.mem.find(u8, json, "hidden-mixed") == null);
+    try testing.expect(std.mem.find(u8, json, "visible-false") != null);
 }

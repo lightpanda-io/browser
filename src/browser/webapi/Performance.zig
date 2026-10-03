@@ -350,7 +350,7 @@ fn gated(self: *const Performance, allow: bool, micros: u64) f64 {
 // https://mimesniff.spec.whatwg.org/#minimize-a-supported-mime-type
 fn minimizeMimeType(header: []const u8) []const u8 {
     var buf: [255]u8 = undefined;
-    const raw = std.mem.trim(u8, header[0 .. std.mem.indexOfScalar(u8, header, ';') orelse header.len], " \t");
+    const raw = std.mem.trim(u8, header[0 .. std.mem.findScalar(u8, header, ';') orelse header.len], " \t");
     if (raw.len > buf.len) {
         return "";
     }
@@ -435,7 +435,7 @@ fn contentEncoding(header: []const u8) []const u8 {
     if (header.len == 0) {
         return "";
     }
-    if (std.mem.indexOfScalar(u8, header, ',') != null) {
+    if (std.mem.findScalar(u8, header, ',') != null) {
         return "multiple";
     }
     var buf: [8]u8 = undefined;

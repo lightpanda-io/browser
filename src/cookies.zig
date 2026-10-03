@@ -282,7 +282,7 @@ pub const NetscapeFormat = struct {
             // off that dot, so the column is what decides it here.
             const bare_domain = if (fields.domain.len > 0 and fields.domain[0] == '.') fields.domain[1..] else fields.domain;
             const domain = if (fields.include_subdomains)
-                try std.fmt.allocPrint(allocator, ".{s}", .{bare_domain})
+                try allocator.print(".{s}", .{bare_domain})
             else
                 try allocator.dupe(u8, bare_domain);
 

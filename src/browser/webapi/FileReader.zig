@@ -150,7 +150,7 @@ fn setOnProgress(self: *FileReader, cb: ?js.Function.Global) !void {
 }
 
 fn getReadyState(self: *const FileReader) u8 {
-    return @intFromEnum(self._ready_state);
+    return @backingInt(self._ready_state);
 }
 
 fn getResult(self: *const FileReader) ?Result {
@@ -466,9 +466,9 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(FileReader.init, .{});
 
     // State constants
-    pub const EMPTY = bridge.property(@intFromEnum(FileReader.ReadyState.empty), .{ .template = true });
-    pub const LOADING = bridge.property(@intFromEnum(FileReader.ReadyState.loading), .{ .template = true });
-    pub const DONE = bridge.property(@intFromEnum(FileReader.ReadyState.done), .{ .template = true });
+    pub const EMPTY = bridge.property(@backingInt(FileReader.ReadyState.empty), .{ .template = true });
+    pub const LOADING = bridge.property(@backingInt(FileReader.ReadyState.loading), .{ .template = true });
+    pub const DONE = bridge.property(@backingInt(FileReader.ReadyState.done), .{ .template = true });
 
     // Properties
     pub const readyState = bridge.accessor(FileReader.getReadyState, null, .{});

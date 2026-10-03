@@ -235,7 +235,7 @@ fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []c
                 error.InvalidMethod, error.UnknownDomain, error.UnknownMethod => {
                     lp.metrics.serve_unknown_commands.incr(.cdp);
                     // Chrome's code and wording; drivers feature-detect on it.
-                    const message = std.fmt.allocPrint(command.arena, "'{s}' wasn't found", .{input.method}) catch return err;
+                    const message = command.arena.print("'{s}' wasn't found", .{input.method}) catch return err;
                     command.sendError(-32601, message, .{}) catch return err;
                 },
                 else => command.sendError(-31998, @errorName(err), .{}) catch return err,
@@ -267,7 +267,7 @@ fn dispatchStartupCommand(command: *Command, method: []const u8) !void {
 
 fn dispatchCommand(command: *Command, method: []const u8) !void {
     const domain = blk: {
-        const i = std.mem.indexOfScalarPos(u8, method, 0, '.') orelse {
+        const i = std.mem.findScalarPos(u8, method, 0, '.') orelse {
             return error.InvalidMethod;
         };
         command.input.action = method[i + 1 ..];
@@ -426,7 +426,7 @@ pub const BrowserContext = struct {
             if (log.enabled(.cdp, .debug)) {
                 // msg should be {"method":<method>,...
                 lp.assert(std.mem.startsWith(u8, msg, "{\"method\":"), "onInspectorEvent prefix", .{});
-                const method_end = std.mem.indexOfScalar(u8, msg, ',') orelse {
+                const method_end = std.mem.findScalar(u8, msg, ',') orelse {
                     log.err(.cdp, "invalid inspector event", .{ .msg = msg });
                     return;
                 };
@@ -1354,7 +1354,7 @@ pub const IsolatedWorld = struct {
     }
 
     pub fn isSeeded(self: *const IsolatedWorld, frame_id: u32) bool {
-        return std.mem.indexOfScalar(u32, self.seeded_frames.items, frame_id) != null;
+        return std.mem.findScalar(u32, self.seeded_frames.items, frame_id) != null;
     }
 
     // Keyed by Frame, not frame id: a retired root Page keeps its frame id

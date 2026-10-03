@@ -511,7 +511,7 @@ pub fn getAccessKeyLabel(self: *HtmlElement, frame: *Frame) ![]const u8 {
     if (codepoints != 1) {
         return "";
     }
-    return std.fmt.allocPrint(frame.local_arena, "Alt+{s}", .{value});
+    return frame.local_arena.print("Alt+{s}", .{value});
 }
 
 pub fn getPopover(self: *HtmlElement) ?[]const u8 {
@@ -555,7 +555,7 @@ pub fn getTabIndex(self: *HtmlElement) i32 {
 
 pub fn setTabIndex(self: *HtmlElement, value: i32, frame: *Frame) !void {
     var buf: [12]u8 = undefined;
-    const str = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    const str = std.mem.print(&buf, "{d}", .{value}) catch unreachable;
     try self.asElement().setAttributeSafe(comptime .wrap("tabindex"), .wrap(str), frame);
 }
 
@@ -1806,7 +1806,7 @@ fn renderedTextFragment(document: *const Node.Document, value: []const u8, frame
 
     var rest = value;
     while (true) {
-        const text_end = std.mem.indexOfAny(u8, rest, "\r\n") orelse rest.len;
+        const text_end = std.mem.findAny(u8, rest, "\r\n") orelse rest.len;
         if (text_end > 0) {
             try nodes.append(arena, .{ .text = rest[0..text_end] });
         }

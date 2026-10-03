@@ -301,7 +301,7 @@ fn paramsFromString(allocator: Allocator, input_: []const u8, buf: []u8) !KeyVal
         var name: String = undefined;
         var value: String = undefined;
 
-        if (std.mem.indexOfScalarPos(u8, entry, 0, '=')) |idx| {
+        if (std.mem.findScalarPos(u8, entry, 0, '=')) |idx| {
             name = try unescape(allocator, entry[0..idx], buf);
             value = try unescape(allocator, entry[idx + 1 ..], buf);
         } else {

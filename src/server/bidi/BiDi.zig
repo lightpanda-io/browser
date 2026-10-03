@@ -322,7 +322,7 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
     lp.metrics.serve_commands.incr(.bidi);
 
     // A BiDi method is always "<module>.<command>".
-    const i = std.mem.indexOfScalar(u8, method, '.') orelse {
+    const i = std.mem.findScalar(u8, method, '.') orelse {
         return unknownCommand(&cmd, method);
     };
     const module = std.meta.stringToEnum(enum {

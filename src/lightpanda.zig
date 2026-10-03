@@ -73,7 +73,7 @@ pub const Command = @import("script/command.zig").Command;
 
 pub var metrics = @import("Metrics.zig"){};
 pub const IS_TEST = @import("builtin").is_test;
-pub const IS_DEBUG = @import("builtin").mode == .Debug;
+pub const IS_DEBUG = @import("builtin").mode == .debug;
 
 /// Process-wide Io instance for blocking syscalls (fs, net, time, futex).
 /// Single-threaded-init only disables Io.async/Io.concurrent task spawning;
@@ -667,7 +667,7 @@ test "writeJsonEnvelope: null frame" {
         .dump = "",
         .content = "",
     }, aw.written());
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "\"error\":null") != null);
+    try testing.expect(std.mem.find(u8, aw.written(), "\"error\":null") != null);
 }
 
 test "writeJsonEnvelope: page error" {

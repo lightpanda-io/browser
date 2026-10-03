@@ -211,7 +211,7 @@ pub fn run(self: *HttpServer, address: sys_net.IpAddress) !void {
 
     self.listener = listener;
     // On non-Linux stop() closes the listener itself to unblock accept.
-    defer if (builtin.os.tag == .linux) {
+    defer if (builtin.target.os.tag == .linux) {
         _ = std.c.close(listener);
     };
 
@@ -234,7 +234,7 @@ pub fn run(self: *HttpServer, address: sys_net.IpAddress) !void {
 /// only on close(), in which case run() must not close it again.
 pub fn stop(self: *HttpServer) void {
     self.shutting_down.store(true, .release);
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .linux => sys_net.shutdown(self.listener, .recv) catch {},
         else => _ = std.c.close(self.listener),
     }
@@ -486,7 +486,7 @@ fn checkHeaders(arena: std.mem.Allocator, request: *std.http.Server.Request) !?[
 /// `application/json`, case-insensitive, ignoring parameters (`; charset=`).
 fn isJsonContentType(content_type: ?[]const u8) bool {
     const ct = content_type orelse return false;
-    const end = std.mem.indexOfScalar(u8, ct, ';') orelse ct.len;
+    const end = std.mem.findScalar(u8, ct, ';') orelse ct.len;
     const media_type = std.mem.trim(u8, ct[0..end], " \t");
     return std.ascii.eqlIgnoreCase(media_type, "application/json");
 }

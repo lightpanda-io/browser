@@ -439,9 +439,9 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
         },
         .substring => |expected| {
             return if (attr.case_insensitive)
-                std.ascii.indexOfIgnoreCase(value, expected) != null
+                std.ascii.findIgnoreCase(value, expected) != null
             else
-                std.mem.indexOf(u8, value, expected) != null;
+                std.mem.find(u8, value, expected) != null;
         },
         .starts_with => |expected| {
             return if (attr.case_insensitive)
@@ -492,7 +492,7 @@ fn attributeContainsWord(value: []const u8, word: []const u8) bool {
         const trimmed = std.mem.trimStart(u8, remaining, &std.ascii.whitespace);
         if (trimmed.len == 0) return false;
 
-        const end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
+        const end = std.mem.findAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
         const current_word = trimmed[0..end];
 
         if (std.mem.eql(u8, current_word, word)) {
@@ -663,7 +663,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         // Custom elements
         .defined => {
             const tag_name = el.getTagNameLower();
-            if (std.mem.indexOfScalar(u8, tag_name, '-') == null) return true;
+            if (std.mem.findScalar(u8, tag_name, '-') == null) return true;
             const registry = &frame.window._custom_elements;
             return registry.get(tag_name) != null;
         },
@@ -1045,7 +1045,7 @@ pub const NthCache = struct {
         of_type_from_end: u32,
     };
 
-    const TypeCounts = [@typeInfo(Node.Element.Tag).@"enum".fields.len]u32;
+    const TypeCounts = [@typeInfo(Node.Element.Tag).@"enum".field_names.len]u32;
 
     pub fn deinit(self: *NthCache) void {
         self.entries.deinit(self.allocator);
@@ -1070,7 +1070,7 @@ pub const NthCache = struct {
         while (it.next()) |child| {
             const el = child.is(Node.Element) orelse continue;
             child_count += 1;
-            const of_type = &type_counts[@intFromEnum(el.getTag())];
+            const of_type = &type_counts[@backingInt(el.getTag())];
             of_type.* += 1;
             try self.entries.put(self.allocator, child, .{
                 .child = child_count,
@@ -1087,7 +1087,7 @@ pub const NthCache = struct {
         while (it.next()) |child| {
             const el = child.is(Node.Element) orelse continue;
             seen_count += 1;
-            const tag = @intFromEnum(el.getTag());
+            const tag = @backingInt(el.getTag());
             seen_types[tag] += 1;
 
             const ordinals = self.entries.getPtr(child).?;

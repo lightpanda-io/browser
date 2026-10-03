@@ -252,11 +252,11 @@ pub fn TextEntry(comptime T: type) type {
                     return @intCast(@min(next, value.len));
                 },
                 .line_start => {
-                    const nl = std.mem.lastIndexOfScalar(u8, value[0..pos], '\n') orelse return 0;
+                    const nl = std.mem.findScalarLast(u8, value[0..pos], '\n') orelse return 0;
                     return @intCast(nl + 1);
                 },
                 .line_end => {
-                    const nl = std.mem.indexOfScalarPos(u8, value, pos, '\n') orelse return @intCast(value.len);
+                    const nl = std.mem.findScalarPos(u8, value, pos, '\n') orelse return @intCast(value.len);
                     return @intCast(nl);
                 },
             }

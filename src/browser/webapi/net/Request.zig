@@ -120,7 +120,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
 
     const url = switch (input) {
         .url => |u| try URL.resolve(arena.allocator(), exec.base(), u, .{ .encoding = exec.charset.* }),
-        .request => |r| try arena.dupeZ(u8, r._url),
+        .request => |r| try arena.dupeSentinel(u8, r._url, 0),
     };
 
     const opts = opts_ orelse InitOpts{};
@@ -212,7 +212,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
     } else if (opts_ != null) .client else switch (input) {
         .url => .client,
         .request => |r| switch (r._referrer) {
-            .url => |u| .{ .url = try arena.dupeZ(u8, u) },
+            .url => |u| .{ .url = try arena.dupeSentinel(u8, u, 0) },
             else => r._referrer,
         },
     };
@@ -417,7 +417,7 @@ pub fn clone(self: *Request, exec: *const Execution) !*Request {
 
     const request = try arena.create(Request);
     request.* = .{
-        ._url = try arena.dupeZ(u8, self._url),
+        ._url = try arena.dupeSentinel(u8, self._url, 0),
         ._arena = arena,
         ._method = self._method,
         ._headers = if (self._headers) |h| try Headers.initGuarded(.{ .obj = h }, h._guard, exec) else null,
@@ -428,7 +428,7 @@ pub fn clone(self: *Request, exec: *const Execution) !*Request {
         ._body = if (body) |b| try arena.dupe(u8, b) else null,
         ._signal = self._signal,
         ._referrer = switch (self._referrer) {
-            .url => |u| .{ .url = try arena.dupeZ(u8, u) },
+            .url => |u| .{ .url = try arena.dupeSentinel(u8, u, 0) },
             else => self._referrer,
         },
         ._referrer_policy = self._referrer_policy,

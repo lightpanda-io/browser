@@ -291,7 +291,7 @@ pub fn setDouble(el: *Element, comptime attr: []const u8, value: f64, frame: *Fr
 
 fn setInteger(el: *Element, comptime attr: []const u8, value: i64, frame: *Frame) !void {
     var buf: [24]u8 = undefined;
-    const str = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    const str = std.mem.print(&buf, "{d}", .{value}) catch unreachable;
     try el.setAttributeSafe(.wrap(attr), .wrap(str), frame);
 }
 

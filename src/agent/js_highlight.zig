@@ -31,7 +31,7 @@ const StringSpan = struct { end: usize, closed: bool };
 /// good enough for coloring, not parsing.
 fn scanString(text: []const u8, start: usize) StringSpan {
     if (start >= text.len) return .{ .end = start, .closed = false };
-    const close = std.mem.indexOfScalarPos(u8, text, start + 1, text[start]) orelse
+    const close = std.mem.findScalarPos(u8, text, start + 1, text[start]) orelse
         return .{ .end = text.len, .closed = false };
     return .{ .end = close + 1, .closed = true };
 }
@@ -59,7 +59,7 @@ pub fn nextDollarRef(text: []const u8, from: usize, end: usize, interpolation: b
             continue;
         }
         if (interpolation and i + 1 < end and text[i + 1] == '{') {
-            const close = std.mem.indexOfScalarPos(u8, text[0..end], i + 2, '}');
+            const close = std.mem.findScalarPos(u8, text[0..end], i + 2, '}');
             return .{ .start = i, .end = if (close) |c| c + 1 else end, .kind = .interpolation };
         }
         const ref_end = dollarRefEnd(text, i, end);
@@ -79,13 +79,13 @@ pub fn tokenize(text: []const u8, state: State, sink: anytype) State {
 
     switch (state) {
         .block_comment => {
-            const close = std.mem.indexOfPos(u8, text, 0, "*/");
+            const close = std.mem.findPos(u8, text, 0, "*/");
             i = if (close) |p| p + 2 else text.len;
             if (i > 0) sink.emit(0, i, .comment);
             if (close == null) return .block_comment;
         },
         .template => {
-            const close = std.mem.indexOfScalarPos(u8, text, 0, '`');
+            const close = std.mem.findScalarPos(u8, text, 0, '`');
             i = if (close) |p| p + 1 else text.len;
             emitString(text, 0, i, true, sink);
             if (close == null) return .template;
@@ -98,11 +98,11 @@ pub fn tokenize(text: []const u8, state: State, sink: anytype) State {
         if (ch == '/' and i + 1 < text.len and (text[i + 1] == '/' or text[i + 1] == '*')) {
             const start = i;
             if (text[i + 1] == '/') {
-                i = std.mem.indexOfScalarPos(u8, text, i + 2, '\n') orelse text.len;
+                i = std.mem.findScalarPos(u8, text, i + 2, '\n') orelse text.len;
                 sink.emit(start, i - start, .comment);
                 continue;
             }
-            const close = std.mem.indexOfPos(u8, text, i + 2, "*/");
+            const close = std.mem.findPos(u8, text, i + 2, "*/");
             i = if (close) |p| p + 2 else text.len;
             sink.emit(start, i - start, .comment);
             if (close == null) return .block_comment;

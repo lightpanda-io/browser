@@ -112,10 +112,10 @@ pub fn release(cmd: *BiDi.Command) !void {
 
     for (state.sources.items) |*source| {
         switch (source.kind) {
-            .key => while (source.key.pressed.getLastOrNull()) |cp| {
+            .key => while (source.key.pressed.last()) |cp| {
                 dispatch(bidi, frame, source, &.{ .key_up = cp }) catch |err| return dispatchFailed(cmd, err);
             },
-            .pointer => while (source.pointer.pressed.getLastOrNull()) |button| {
+            .pointer => while (source.pointer.pressed.last()) |button| {
                 dispatch(bidi, frame, source, &.{ .pointer_up = button }) catch |err| return dispatchFailed(cmd, err);
             },
             .none, .wheel => {},
@@ -559,7 +559,7 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
             const key = &source.key;
             const info = keyInfo(cp, key.modifiers.shift);
             setModifier(&key.modifiers, info.modifier, true);
-            if (std.mem.indexOfScalar(u21, key.pressed.items, cp) == null) {
+            if (std.mem.findScalar(u21, key.pressed.items, cp) == null) {
                 try key.pressed.append(allocator, cp);
             }
             try dispatchKey(frame, "keydown", &info, &key.modifiers);
@@ -568,14 +568,14 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
             const key = &source.key;
             const info = keyInfo(cp, key.modifiers.shift);
             setModifier(&key.modifiers, info.modifier, false);
-            if (std.mem.indexOfScalar(u21, key.pressed.items, cp)) |i| {
+            if (std.mem.findScalar(u21, key.pressed.items, cp)) |i| {
                 _ = key.pressed.orderedRemove(i);
             }
             try dispatchKey(frame, "keyup", &info, &key.modifiers);
         },
         .pointer_down => |button| {
             const pointer = &source.pointer;
-            if (std.mem.indexOfScalar(u8, pointer.pressed.items, button) != null) {
+            if (std.mem.findScalar(u8, pointer.pressed.items, button) != null) {
                 return; // already down; the spec makes this a no-op
             }
             try pointer.pressed.append(allocator, button);
@@ -595,7 +595,7 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
         },
         .pointer_up => |button| {
             const pointer = &source.pointer;
-            const i = std.mem.indexOfScalar(u8, pointer.pressed.items, button) orelse return;
+            const i = std.mem.findScalar(u8, pointer.pressed.items, button) orelse return;
             _ = pointer.pressed.orderedRemove(i);
             try user_input.triggerMouseRelease(frame, pointer.x, pointer.y, button, pointer.click_count);
         },
@@ -641,7 +641,7 @@ pub fn typeText(frame: *Frame, text: []const u8) !void {
             continue;
         }
 
-        if (std.mem.indexOfScalar(u21, held.items, cp)) |i| {
+        if (std.mem.findScalar(u21, held.items, cp)) |i| {
             _ = held.orderedRemove(i);
             setModifier(&modifiers, info.modifier, false);
             try dispatchKey(frame, "keyup", &info, &modifiers);

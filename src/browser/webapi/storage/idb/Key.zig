@@ -383,7 +383,7 @@ fn evaluatePath(value: js.Value, key_path: []const u8) ?js.Value {
 // this before consuming a generated key so a doomed write doesn't advance the
 // key generator.
 pub fn canInjectKey(value: js.Value, key_path: []const u8) bool {
-    const last_dot = std.mem.lastIndexOfScalar(u8, key_path, '.') orelse return value.isObject();
+    const last_dot = std.mem.findScalarLast(u8, key_path, '.') orelse return value.isObject();
 
     var current = value;
     var it = std.mem.splitScalar(u8, key_path[0..last_dot], '.');
@@ -404,7 +404,7 @@ pub fn canInjectKey(value: js.Value, key_path: []const u8) bool {
 // Inject a key into a value at a (non-empty) key path, creating intermediate
 // objects as needed. Requires canInjectKey(value, key_path).
 pub fn injectKey(local: *const Local, value: js.Value, key_path: []const u8, key: js.Value) !void {
-    const last_dot = std.mem.lastIndexOfScalar(u8, key_path, '.');
+    const last_dot = std.mem.findScalarLast(u8, key_path, '.');
     const final = if (last_dot) |i| key_path[i + 1 ..] else key_path;
 
     var current = value.toObject();

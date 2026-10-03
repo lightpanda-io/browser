@@ -195,7 +195,7 @@ fn createTarget(cmd: *CDP.Command) !void {
         frame.js.localScope(&ls);
         defer ls.deinit();
 
-        const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
+        const aux_data = try cmd.arena.print("{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
         bc.inspector().contextCreated(
             &ls.local,
             "",

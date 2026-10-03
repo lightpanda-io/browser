@@ -83,7 +83,7 @@ pub fn selectableSrcset(self: *const Source, frame: *Frame) ?[]const u8 {
 
 // Nothing is decoded, so claim the formats a mainstream browser does.
 fn isSupportedImageType(mime: []const u8) bool {
-    const essence = std.mem.trim(u8, mime[0 .. std.mem.indexOfScalar(u8, mime, ';') orelse mime.len], &std.ascii.whitespace);
+    const essence = std.mem.trim(u8, mime[0 .. std.mem.findScalar(u8, mime, ';') orelse mime.len], &std.ascii.whitespace);
     if (essence.len == 0) {
         return true;
     }

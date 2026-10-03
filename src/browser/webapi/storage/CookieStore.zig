@@ -443,7 +443,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
         if (init.value.len == 0) {
             return error.InvalidCookieName;
         }
-        if (std.mem.indexOfScalar(u8, init.value, '=') != null) {
+        if (std.mem.findScalar(u8, init.value, '=') != null) {
             return error.InvalidCookieName;
         }
     }
@@ -451,7 +451,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
     // Reject inputs the cookie model can't represent. `=` is allowed in
     // values but not in names; `;` and the control characters (U+0000–U+001F,
     // U+007F) break the cookie wire format and so are forbidden in both.
-    if (std.mem.indexOfScalar(u8, init.name, '=') != null) {
+    if (std.mem.findScalar(u8, init.name, '=') != null) {
         return error.InvalidCookieName;
     }
     if (hasForbiddenChar(init.name)) {
@@ -470,7 +470,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
     if (init.path.len > 1024) {
         return error.InvalidCookiePath;
     }
-    if (std.mem.indexOfAny(u8, init.path, ";\r\n\x00") != null) {
+    if (std.mem.findAny(u8, init.path, ";\r\n\x00") != null) {
         return error.InvalidCookiePath;
     }
     if (init.domain) |d| {
@@ -481,7 +481,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
         if (d.len > 1024) {
             return error.InvalidCookieDomain;
         }
-        if (std.mem.indexOfAny(u8, d, ";\r\n\x00") != null) {
+        if (std.mem.findAny(u8, d, ";\r\n\x00") != null) {
             return error.InvalidCookieDomain;
         }
     }

@@ -758,7 +758,7 @@ fn inverse(self: *const DOMMatrixReadOnly, page: *Page) !*DOMMatrix {
         return DOMMatrix.create(v, self._is_2d, page);
     }
     // Non-invertible matrices become all-NaN with is2D = false.
-    return DOMMatrix.create(.{std.math.nan(f64)} ** 16, false, page);
+    return DOMMatrix.create(@splat(std.math.nan(f64)), false, page);
 }
 
 fn toFloat32Array(self: *const DOMMatrixReadOnly, exec: *const js.Execution) !js.TypedArray(f32) {
@@ -783,7 +783,7 @@ pub fn toString(self: *const DOMMatrixReadOnly, exec: *const js.Execution) ![]co
                 return error.InvalidStateError;
             }
         }
-        return std.fmt.allocPrint(exec.local_arena, "matrix({d}, {d}, {d}, {d}, {d}, {d})", .{
+        return exec.local_arena.print("matrix({d}, {d}, {d}, {d}, {d}, {d})", .{
             m[0], m[1], m[4], m[5], m[12], m[13],
         });
     }
@@ -792,7 +792,7 @@ pub fn toString(self: *const DOMMatrixReadOnly, exec: *const js.Execution) ![]co
             return error.InvalidStateError;
         }
     }
-    return std.fmt.allocPrint(exec.local_arena, "matrix3d({d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d})", .{
+    return exec.local_arena.print("matrix3d({d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d})", .{
         m[0],  m[1],  m[2],  m[3],
         m[4],  m[5],  m[6],  m[7],
         m[8],  m[9],  m[10], m[11],

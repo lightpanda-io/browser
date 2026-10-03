@@ -135,11 +135,11 @@ pub const Key = union(enum) {
 
     pub fn fromString(allocator: std.mem.Allocator, str: []const u8) !Key {
         const key_type_info = @typeInfo(Key);
-        inline for (key_type_info.@"union".fields) |field| {
-            if (comptime std.mem.eql(u8, field.name, "standard")) continue;
+        inline for (key_type_info.@"union".field_names) |field_name| {
+            if (comptime std.mem.eql(u8, field_name, "standard")) continue;
 
-            if (std.mem.eql(u8, field.name, str)) {
-                return @unionInit(Key, field.name, {});
+            if (std.mem.eql(u8, field_name, str)) {
+                return @unionInit(Key, field_name, {});
             }
         }
 
@@ -486,10 +486,10 @@ pub const JsApi = struct {
     pub const getModifierState = bridge.function(KeyboardEvent.getModifierState, .{});
     pub const initKeyboardEvent = bridge.function(KeyboardEvent.initKeyboardEvent, .{});
 
-    pub const DOM_KEY_LOCATION_STANDARD = bridge.property(@intFromEnum(Location.DOM_KEY_LOCATION_STANDARD), .{ .template = true });
-    pub const DOM_KEY_LOCATION_LEFT = bridge.property(@intFromEnum(Location.DOM_KEY_LOCATION_LEFT), .{ .template = true });
-    pub const DOM_KEY_LOCATION_RIGHT = bridge.property(@intFromEnum(Location.DOM_KEY_LOCATION_RIGHT), .{ .template = true });
-    pub const DOM_KEY_LOCATION_NUMPAD = bridge.property(@intFromEnum(Location.DOM_KEY_LOCATION_NUMPAD), .{ .template = true });
+    pub const DOM_KEY_LOCATION_STANDARD = bridge.property(@backingInt(Location.DOM_KEY_LOCATION_STANDARD), .{ .template = true });
+    pub const DOM_KEY_LOCATION_LEFT = bridge.property(@backingInt(Location.DOM_KEY_LOCATION_LEFT), .{ .template = true });
+    pub const DOM_KEY_LOCATION_RIGHT = bridge.property(@backingInt(Location.DOM_KEY_LOCATION_RIGHT), .{ .template = true });
+    pub const DOM_KEY_LOCATION_NUMPAD = bridge.property(@backingInt(Location.DOM_KEY_LOCATION_NUMPAD), .{ .template = true });
 };
 
 const testing = @import("../../../testing.zig");

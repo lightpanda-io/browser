@@ -517,7 +517,7 @@ pub fn lookupPrefixForElement(self: *Element, namespace: []const u8, frame: *Fra
 
 fn _prefix(self: *const Element) ?[]const u8 {
     const name = self.getTagNameLower();
-    if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
+    if (std.mem.findPos(u8, name, 0, ":")) |pos| {
         return name[0..pos];
     }
     return null;
@@ -525,7 +525,7 @@ fn _prefix(self: *const Element) ?[]const u8 {
 
 pub fn getLocalName(self: *Element) []const u8 {
     const name = self.getTagNameLower();
-    if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
+    if (std.mem.findPos(u8, name, 0, ":")) |pos| {
         return name[pos + 1 ..];
     }
 
@@ -738,7 +738,7 @@ fn prefixedAttributeName(namespace: []const u8, local_name: []const u8, frame: *
         }
         return null;
     };
-    return try std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix, local_name });
+    return try frame.local_arena.print("{s}:{s}", .{ prefix, local_name });
 }
 
 pub fn getAttributeSafe(self: *const Element, name: String) ?[]const u8 {
@@ -854,12 +854,12 @@ pub fn setAttributeNS(
     value: String,
     frame: *Frame,
 ) !void {
-    const local_start = if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx| blk: {
+    const local_start = if (std.mem.findScalarPos(u8, qualified_name, 0, ':')) |idx| blk: {
         if (idx == 0 or idx == qualified_name.len - 1) {
             // cannot be at the start or end of the qname
             return error.InvalidCharacterError;
         }
-        if (std.mem.indexOfScalarPos(u8, qualified_name, idx + 1, ':') != null) {
+        if (std.mem.findScalarPos(u8, qualified_name, idx + 1, ':') != null) {
             // and can only have one
             return error.InvalidCharacterError;
         }

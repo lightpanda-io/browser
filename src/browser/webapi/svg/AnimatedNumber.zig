@@ -78,7 +78,7 @@ fn setBaseVal(self: *AnimatedNumber, value: f32, frame: *Frame) !void {
     if (!std.math.isFinite(value)) {
         return error.TypeError;
     }
-    const serialized = try std.fmt.allocPrint(frame.local_arena, "{d}", .{value});
+    const serialized = try frame.local_arena.print("{d}", .{value});
     try self._element.setAttributeSafe(self._attr_name, .wrap(serialized), frame);
 }
 

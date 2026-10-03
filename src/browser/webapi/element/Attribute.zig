@@ -531,7 +531,7 @@ pub fn validateAttributeName(name: String) !void {
         return error.InvalidCharacterError;
     }
 
-    if (std.mem.indexOfAny(u8, name_str, invalid_name_chars) != null) {
+    if (std.mem.findAny(u8, name_str, invalid_name_chars) != null) {
         return error.InvalidCharacterError;
     }
 }
@@ -726,7 +726,7 @@ fn formatAttribute(name: []const u8, value: []const u8, writer: *std.Io.Writer) 
     }
 
     try writer.writeByte('"');
-    const offset = std.mem.indexOfAny(u8, value, "`' &\"<>=") orelse {
+    const offset = std.mem.findAny(u8, value, "`' &\"<>=") orelse {
         try writer.writeAll(value);
         return writer.writeByte('"');
     };
@@ -782,7 +782,7 @@ fn writeEscapedAttributeValue(value: []const u8, first_offset: usize, writer: *s
     });
 
     var remaining = value[first_offset + 1 ..];
-    while (std.mem.indexOfAny(u8, remaining, "&\"<>")) |offset| {
+    while (std.mem.findAny(u8, remaining, "&\"<>")) |offset| {
         try writer.writeAll(remaining[0..offset]);
         try writer.writeAll(switch (remaining[offset]) {
             '&' => "&amp;",

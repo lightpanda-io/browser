@@ -113,7 +113,7 @@ pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
     var url_buf: [1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&url_buf);
     var unescaped_file_path = try URL.unescape(fba.allocator(), file_path);
-    if (std.mem.indexOfScalarPos(u8, unescaped_file_path, 0, '?')) |pos| {
+    if (std.mem.findScalarPos(u8, unescaped_file_path, 0, '?')) |pos| {
         unescaped_file_path = unescaped_file_path[0..pos];
     }
     const file = std.Io.Dir.cwd().openFile(lp.io, unescaped_file_path, .{}) catch |err| switch (err) {

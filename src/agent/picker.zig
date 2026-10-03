@@ -118,8 +118,8 @@ const RawTerminal = struct {
         raw.lflag.ICANON = false;
         raw.lflag.IEXTEN = false;
         raw.lflag.ISIG = false;
-        raw.cc[@intFromEnum(std.c.V.MIN)] = 0;
-        raw.cc[@intFromEnum(std.c.V.TIME)] = 1;
+        raw.cc[@backingInt(std.c.V.MIN)] = 0;
+        raw.cc[@backingInt(std.c.V.TIME)] = 1;
         std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, raw) catch return error.NotInteractive;
         // Under `ansi.kitty_disambiguate` (pushed by `Terminal.readLine`),
         // cursor keys arrive as CSI-u the byte reader can't parse; push the

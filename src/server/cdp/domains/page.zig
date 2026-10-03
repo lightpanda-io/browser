@@ -210,7 +210,7 @@ fn addScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
     }
 
     var id_buf: [16]u8 = undefined;
-    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{script_id}) catch "1";
+    const id_str = std.mem.print(&id_buf, "{d}", .{script_id}) catch "1";
     return cmd.sendResult(.{
         .identifier = id_str,
     }, .{});
@@ -307,9 +307,9 @@ fn createIsolatedWorldContext(arena: Allocator, bc: *CDP.BrowserContext, world: 
 fn registerIsolatedWorldContext(arena: Allocator, bc: *CDP.BrowserContext, world: *CDP.IsolatedWorld, js_context: *js.Context, frame: *const Frame, loader_id: ?[]const u8) !void {
     const frame_id = &id.toFrameId(frame._frame_id);
     const aux_data = if (loader_id) |lid|
-        try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, lid })
+        try arena.print("{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, lid })
     else
-        try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{frame_id});
+        try arena.print("{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{frame_id});
 
     var ls: js.Local.Scope = undefined;
     js_context.localScope(&ls);
@@ -393,13 +393,13 @@ fn doReload(cmd: *CDP.Command) !void {
     // we free the old frame's arena. Replaying the same HTTP
     // method on reload matches Chrome's F5 behavior — POST navigations
     // re-submit, GET navigations re-fetch.
-    const reload_url = try cmd.arena.dupeZ(u8, frame.url);
+    const reload_url = try cmd.arena.dupeSentinel(u8, frame.url, 0);
     const prev_nav = frame._navigated_options;
     const prev_body: ?[]const u8, const prev_header: ?[:0]const u8 = blk: {
         const p = prev_nav orelse break :blk .{ null, null };
         break :blk .{
             if (p.body) |b| try cmd.arena.dupe(u8, b) else null,
-            if (p.header) |h| try cmd.arena.dupeZ(u8, h) else null,
+            if (p.header) |h| try cmd.arena.dupeSentinel(u8, h, 0) else null,
         };
     };
 
@@ -737,7 +737,7 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     }, .{ .session_id = session_id });
 
     {
-        const aux_data = try std.fmt.allocPrint(arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
+        const aux_data = try arena.print("{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
 
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
@@ -1139,7 +1139,7 @@ fn printToPDF(cmd: *CDP.Command) !void {
     const handle = try cmd.cdp.streams.add(try aw.toOwnedSlice());
     return cmd.sendResult(.{
         .data = "",
-        .stream = try std.fmt.allocPrint(cmd.arena, "{d}", .{handle}),
+        .stream = try cmd.arena.print("{d}", .{handle}),
     }, .{});
 }
 
@@ -1937,7 +1937,7 @@ test "cdp.frame: printToPDF" {
         // Inline base64, landscape: Letter swapped, in points.
         try ctx.processMessage(.{ .id = 11, .method = "Page.printToPDF", .params = .{ .landscape = true } });
         const pdf = try pdfResult(&ctx, 11);
-        try testing.expectEqual(true, std.mem.indexOf(u8, pdf, "/MediaBox [0 0 792.000 612.000]") != null);
+        try testing.expectEqual(true, std.mem.find(u8, pdf, "/MediaBox [0 0 792.000 612.000]") != null);
     }
 
     {
@@ -2108,7 +2108,7 @@ test "cdp.page: stopLoading finishes a streaming document with what has arrived"
         _ = try runner.tickForFrame(frame_id, 20, .{});
         const frame = bc.mainFrame() orelse unreachable;
         if (bc.session.browser.http_client.findTransfer(frame._req_id)) |transfer| {
-            if (std.mem.indexOf(u8, transfer.res.buffer.items, "first") != null) {
+            if (std.mem.find(u8, transfer.res.buffer.items, "first") != null) {
                 break;
             }
         }

@@ -113,7 +113,7 @@ fn hasNoCorsUnsafeBytes(value: []const u8) bool {
 }
 
 fn isSafelistedContentType(value: []const u8) bool {
-    const semi = std.mem.indexOfScalar(u8, value, ';') orelse value.len;
+    const semi = std.mem.findScalar(u8, value, ';') orelse value.len;
     const mime = std.mem.trim(u8, value[0..semi], &std.ascii.whitespace);
     return std.ascii.eqlIgnoreCase(mime, "application/x-www-form-urlencoded") or
         std.ascii.eqlIgnoreCase(mime, "multipart/form-data") or
@@ -414,7 +414,7 @@ const CorsPreflightContext = struct {
         const capped_ms = capped_s * 1000;
 
         const methods_wildcard = acam != null and std.mem.eql(u8, acam.?, "*") and !self.wants_credentials;
-        var methods = std.EnumSet(http.Method).initEmpty();
+        var methods = std.EnumSet(http.Method).empty;
         if (!methods_wildcard) {
             if (acam) |list| {
                 var it = std.mem.splitScalar(u8, list, ',');
@@ -575,7 +575,7 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer, authored_headers: []con
     const arena = try arena_pool.acquire(.tiny, "CorsGate.CorsPreflightContext");
     errdefer arena_pool.release(arena);
 
-    const owned_url = try arena.dupeZ(u8, transfer.req.url);
+    const owned_url = try arena.dupeSentinel(u8, transfer.req.url, 0);
     const owned_key = try arena.dupe(u8, key);
     const owned_origin = try arena.dupe(u8, origin);
 
