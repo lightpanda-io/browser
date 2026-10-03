@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const URL = @import("../URL.zig");
 const NavigationState = @import("root.zig").NavigationState;
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
@@ -34,6 +33,10 @@ _id: []const u8,
 _key: []const u8,
 _url: ?[:0]const u8,
 _state: NavigationState,
+// The document this entry belongs to, as that document's frame loader id.
+// Entries created by pushState/replaceState or a fragment navigation share
+// their document's id; traversing between them stays in that document.
+_loader_id: u32,
 
 _on_dispose: ?js.Function.Global = null,
 
@@ -61,9 +64,12 @@ pub fn key(self: *const NavigationHistoryEntry) []const u8 {
     return self._key;
 }
 
-fn sameDocument(self: *const NavigationHistoryEntry, frame: *Frame) bool {
-    const got_url = self._url orelse return false;
-    return URL.eqlDocument(got_url, frame.base());
+// https://html.spec.whatwg.org/multipage/browsing-the-web.html#traverse-the-history
+// Same document means the entry's document is the frame's current one, not
+// that the URLs match: pushState can change the path or query of an entry
+// without leaving its document.
+pub fn sameDocument(self: *const NavigationHistoryEntry, frame: *Frame) bool {
+    return self._loader_id == frame._loader_id;
 }
 
 pub fn url(self: *const NavigationHistoryEntry) ?[:0]const u8 {
