@@ -524,7 +524,7 @@ pub const Global = struct {
     str: String,
 };
 
-fn asUint(comptime string: anytype) std.meta.Int(
+fn asUint(comptime string: anytype) @Int(
     .unsigned,
     @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
 ) {
@@ -535,6 +535,27 @@ fn asUint(comptime string: anytype) std.meta.Int(
     }
 
     return @bitCast(@as(*const [byteLength]u8, string).*);
+}
+
+/// `s` concatenated `n` times, the replacement for the removed `s ** n`.
+pub fn repeat(comptime s: []const u8, comptime n: usize) *const [s.len * n:0]u8 {
+    return &Repeated(s, n).value;
+}
+
+fn Repeated(comptime s: []const u8, comptime n: usize) type {
+    return struct {
+        const value: [s.len * n:0]u8 = blk: {
+            var buf: [s.len * n:0]u8 = undefined;
+            if (s.len == 1) {
+                buf = @splat(s[0]);
+            } else {
+                @setEvalBranchQuota(1000 + 10 * n);
+                for (0..n) |i| @memcpy(buf[i * s.len ..][0..s.len], s);
+            }
+            buf[buf.len] = 0;
+            break :blk buf;
+        };
+    };
 }
 
 const testing = @import("testing.zig");
@@ -576,7 +597,7 @@ test "editDistance" {
     try testing.expectEqual(@as(usize, 3), editDistance("", "abc"));
     try testing.expectEqual(@as(usize, 3), editDistance("abc", ""));
 
-    const long = "x" ** 64;
+    const long = repeat("x", 64);
     try testing.expectEqual(@as(usize, 0), editDistance(long, long));
     try testing.expectEqual(std.math.maxInt(usize), editDistance(long ++ "x", long));
 }
@@ -618,11 +639,11 @@ test "latin1ToUtf8" {
 
 test "String" {
     const other_short = try String.init(undefined, "other_short", .{});
-    const other_long = try String.init(testing.allocator, "other_long" ** 100, .{});
+    const other_long = try String.init(testing.allocator, repeat("other_long", 100), .{});
     defer other_long.deinit(testing.allocator);
 
     inline for (0..100) |i| {
-        const input = "a" ** i;
+        const input = repeat("a", i);
         const str = try String.init(testing.allocator, input, .{});
         defer str.deinit(testing.allocator);
 
@@ -634,7 +655,7 @@ test "String" {
         try testing.expectEqual(false, str.eqlSlice("other_short"));
 
         try testing.expectEqual(false, str.eql(other_long));
-        try testing.expectEqual(false, str.eqlSlice("other_long" ** 100));
+        try testing.expectEqual(false, str.eqlSlice(repeat("other_long", 100)));
     }
 }
 
@@ -651,8 +672,8 @@ test "String.trim" {
     try expect("hi", "  hi  ", " "); // SSO, both ends
     try expect("hello", "hello", " "); // nothing to trim (no allocation)
     try expect("", "   ", " "); // fully trimmed away
-    try expect("x" ** 20, "   " ++ ("x" ** 20) ++ "\t", &.{ ' ', '\t' }); // heap stays heap (view)
-    try expect("abc", "abc" ++ ("  " ** 6), " "); // heap trims down to SSO
+    try expect(repeat("x", 20), "   " ++ (repeat("x", 20)) ++ "\t", &.{ ' ', '\t' }); // heap stays heap (view)
+    try expect("abc", "abc" ++ (repeat("  ", 6)), " "); // heap trims down to SSO
 }
 
 test "String.concat" {

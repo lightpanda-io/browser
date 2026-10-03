@@ -211,7 +211,7 @@ pub fn run(self: *HttpServer, address: sys_net.IpAddress) !void {
 
     self.listener = listener;
     // On non-Linux stop() closes the listener itself to unblock accept.
-    defer if (builtin.os.tag == .linux) {
+    defer if (builtin.target.os.tag == .linux) {
         _ = std.c.close(listener);
     };
 
@@ -234,7 +234,7 @@ pub fn run(self: *HttpServer, address: sys_net.IpAddress) !void {
 /// only on close(), in which case run() must not close it again.
 pub fn stop(self: *HttpServer) void {
     self.shutting_down.store(true, .release);
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .linux => sys_net.shutdown(self.listener, .recv) catch {},
         else => _ = std.c.close(self.listener),
     }

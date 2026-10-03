@@ -116,7 +116,7 @@ pub const Writer = struct {
     // be serialized as JSON strings even though we track them internally as u32.
     fn writeIdString(id: u32, w: anytype) !void {
         var buf: [10]u8 = undefined;
-        const s = try std.fmt.bufPrint(&buf, "{d}", .{id});
+        const s = try std.mem.print(&buf, "{d}", .{id});
         try w.write(s);
     }
 
@@ -206,7 +206,7 @@ pub const Writer = struct {
 
                 // Use a small stack buffer to format the number (max "9999. " = 6 chars)
                 var buf: [6]u8 = undefined;
-                const marker_text = try std.fmt.bufPrint(&buf, "{d}. ", .{count});
+                const marker_text = try std.mem.print(&buf, "{d}. ", .{count});
                 try w.write(marker_text);
             },
             else => unreachable,
@@ -299,7 +299,7 @@ pub const Writer = struct {
                 // CDP spec requires integer values to be serialized as strings.
                 // 20 bytes is enough for the decimal representation of a 64-bit integer.
                 var buf: [20]u8 = undefined;
-                const s = try std.fmt.bufPrint(&buf, "{d}", .{v});
+                const s = try std.mem.print(&buf, "{d}", .{v});
                 try w.write(s);
             },
             inline else => |v| try w.write(v),

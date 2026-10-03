@@ -6,7 +6,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how to open a pull request (CLA, dev 
 
 Run `make download-v8` once first: it fetches the prebuilt V8 archive into `.lp-cache/`, which `build.zig` picks up automatically. Without it every build compiles V8 from source (10+ minutes).
 
-The C and Rust dependencies are built in ReleaseFast whatever `-Doptimize` is, so debug and release builds share them. Pass `ZIGFLAGS=-Ddebug_deps` to step into a dependency with a debugger.
+The C and Rust dependencies are built with `-Doptimize=fast` whatever `-Doptimize` is, so debug and release builds share them. Pass `ZIGFLAGS=-Ddebug_deps` to step into a dependency with a debugger.
 
 ```bash
 make test                                       # Run all tests

@@ -1163,7 +1163,7 @@ fn attributeValue(self: *Parser, arena: Allocator) ![]const u8 {
     return arena.dupe(u8, value);
 }
 
-fn asUint(comptime string: anytype) std.meta.Int(
+fn asUint(comptime string: anytype) @Int(
     .unsigned,
     @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
 ) {

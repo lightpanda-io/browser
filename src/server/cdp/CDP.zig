@@ -235,7 +235,7 @@ fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []c
                 error.InvalidMethod, error.UnknownDomain, error.UnknownMethod => {
                     lp.metrics.serve_unknown_commands.incr(.cdp);
                     // Chrome's code and wording; drivers feature-detect on it.
-                    const message = std.fmt.allocPrint(command.arena, "'{s}' wasn't found", .{input.method}) catch return err;
+                    const message = command.arena.print("'{s}' wasn't found", .{input.method}) catch return err;
                     command.sendError(-32601, message, .{}) catch return err;
                 },
                 else => command.sendError(-31998, @errorName(err), .{}) catch return err,

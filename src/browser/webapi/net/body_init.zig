@@ -94,7 +94,7 @@ pub const BodyInit = union(enum) {
                 var buf = std.Io.Writer.Allocating.init(arena);
                 try fd.write(arena, .{ .encoding = .{ .formdata = &boundary } }, &buf.writer);
 
-                const ct = try std.fmt.allocPrint(arena, "multipart/form-data; boundary={s}", .{boundary});
+                const ct = try arena.print("multipart/form-data; boundary={s}", .{boundary});
                 return .{
                     .bytes = buf.written(),
                     .content_type = ct,
@@ -211,7 +211,7 @@ test "BodyInit: FormData emits multipart with random boundary" {
     try testing.expect(std.mem.indexOf(u8, r.bytes, "Content-Disposition: form-data; name=\"email\"") != null);
     try testing.expect(std.mem.indexOf(u8, r.bytes, "alice") != null);
     try testing.expect(std.mem.indexOf(u8, r.bytes, "alice@example.com") != null);
-    const closer = try std.fmt.allocPrint(arena.allocator(), "--{s}--\r\n", .{boundary});
+    const closer = try arena.allocator().print("--{s}--\r\n", .{boundary});
     try testing.expect(std.mem.endsWith(u8, r.bytes, closer));
 }
 

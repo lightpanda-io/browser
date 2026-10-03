@@ -106,8 +106,7 @@ pub const TestContext = struct {
                 bc.target_id = "TID-000000000Z".*;
             }
             const page = try bc.session.createPage();
-            const full_url = try std.fmt.allocPrintSentinel(
-                base.arena_allocator,
+            const full_url = try base.arena_allocator.printSentinel(
                 "http://127.0.0.1:9582/src/browser/tests/{s}",
                 .{url},
                 0,

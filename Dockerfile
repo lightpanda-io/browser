@@ -52,12 +52,12 @@ RUN case $TARGETPLATFORM in \
     mv libc_v8.a v8/libc_v8.a
 
 # build v8 snapshot
-RUN zig build -Doptimize=ReleaseFast \
+RUN zig build -Doptimize=fast \
     -Dprebuilt_v8_path=v8/libc_v8.a \
     snapshot_creator -- src/snapshot.bin
 
 # build release
-RUN zig build -Doptimize=ReleaseFast \
+RUN zig build -Doptimize=fast \
     -Dsnapshot_path=../../snapshot.bin \
     -Dprebuilt_v8_path=v8/libc_v8.a \
     -Dorderfile=orderfile/lightpanda.ld

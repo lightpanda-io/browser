@@ -63,7 +63,7 @@ fn buildGreedy(self: SelectorPath, target: *Element) !?[]const u8 {
     var el = target.parentElement();
     while (el) |ancestor| {
         el = ancestor.parentElement();
-        const trial = try std.fmt.allocPrint(self.arena, "{s} {s}", .{ try self.localSegment(ancestor), candidate });
+        const trial = try self.arena.print("{s} {s}", .{ try self.localSegment(ancestor), candidate });
         const trial_count = self.matchCount(trial);
         if (trial_count != 0 and trial_count < count) {
             candidate = trial;
@@ -92,7 +92,7 @@ fn buildStrictPath(self: SelectorPath, target: *Element) !?[]const u8 {
 fn localSegment(self: SelectorPath, el: *Element) ![]const u8 {
     if (el.getId()) |id| {
         if (id.len != 0) {
-            const id_sel = try std.fmt.allocPrint(self.arena, "#{s}", .{try CSS.escape(id, self.frame)});
+            const id_sel = try self.arena.print("#{s}", .{try CSS.escape(id, self.frame)});
             if (self.isFirstMatch(el, id_sel)) return id_sel;
         }
     }
@@ -101,7 +101,7 @@ fn localSegment(self: SelectorPath, el: *Element) ![]const u8 {
 
     if (!self.siblingMatches(el, base)) return base;
     if (try self.hasSegment(el, base)) |sel| return sel;
-    if (nthOfType(el)) |n| return try std.fmt.allocPrint(self.arena, "{s}:nth-of-type({d})", .{ base, n });
+    if (nthOfType(el)) |n| return try self.arena.print("{s}:nth-of-type({d})", .{ base, n });
     return base;
 }
 
@@ -118,7 +118,7 @@ fn hasSegment(self: SelectorPath, el: *Element, base: []const u8) !?[]const u8 {
         try self.enqueueChildren(&queue, d);
 
         const desc = (try self.descriptor(d)) orelse continue;
-        const candidate = try std.fmt.allocPrint(self.arena, "{s}:has({s})", .{ base, desc });
+        const candidate = try self.arena.print("{s}:has({s})", .{ base, desc });
         if (self.isFirstMatch(el, candidate)) return candidate;
     }
     return null;
@@ -150,7 +150,7 @@ fn qualifyByAttrs(self: SelectorPath, base: []const u8, el: *Element, comptime a
     inline for (attrs) |attr| {
         if (el.getAttributeSafe(comptime .wrap(attr))) |value| {
             if (value.len != 0 and isPlainAttrValue(value)) {
-                sel = try std.fmt.allocPrint(self.arena, "{s}[{s}=\"{s}\"]", .{ sel, attr, value });
+                sel = try self.arena.print("{s}[{s}=\"{s}\"]", .{ sel, attr, value });
                 added = true;
             }
         }

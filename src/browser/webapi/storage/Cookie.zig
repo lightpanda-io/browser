@@ -23,6 +23,7 @@ const URL = @import("../../URL.zig");
 const DateTime = @import("../../../datetime.zig").DateTime;
 const Notification = @import("../../../Notification.zig");
 const public_suffix_list = @import("../../../data/public_suffix_list.zig").lookup;
+const repeat = @import("../../../string.zig").repeat;
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -895,15 +896,15 @@ test "Jar: add limit" {
         .domain = "lightpanda.io",
         .path = "/",
         .expires = null,
-        .value = "v" ** 4096 ++ "v",
+        .value = repeat("v", 4096) ++ "v",
     }, now, true));
 
     // generate unique names.
     const names = comptime blk: {
-        @setEvalBranchQuota(max_jar_size);
+        @setEvalBranchQuota(max_jar_size * 10);
         var result: [max_jar_size][]const u8 = undefined;
         for (0..max_jar_size) |i| {
-            result[i] = "v" ** i;
+            result[i] = repeat("v", i);
         }
         break :blk result;
     };
@@ -1511,8 +1512,8 @@ test "Cookie: parse domain" {
 }
 
 test "Cookie: parse limit" {
-    try expectError(error.CookieHeaderSizeExceeded, "http://lightpanda.io/", "v" ** 8192 ++ ";domain=lightpanda.io");
-    try expectError(error.CookieSizeExceeded, "http://lightpanda.io/", "v" ** 4096 ++ "v;domain=lightpanda.io");
+    try expectError(error.CookieHeaderSizeExceeded, "http://lightpanda.io/", repeat("v", 8192) ++ ";domain=lightpanda.io");
+    try expectError(error.CookieSizeExceeded, "http://lightpanda.io/", repeat("v", 4096) ++ "v;domain=lightpanda.io");
 }
 
 const ExpectedCookie = struct {
@@ -1545,14 +1546,14 @@ fn expectAttribute(expected: anytype, url_: ?[:0]const u8, set_cookie: []const u
     var cookie = try Cookie.parse(testing.allocator, url_ orelse test_url, set_cookie);
     defer cookie.deinit();
 
-    inline for (@typeInfo(@TypeOf(expected)).@"struct".fields) |f| {
-        if (comptime std.mem.eql(u8, f.name, "expires")) {
+    inline for (@typeInfo(@TypeOf(expected)).@"struct".field_names) |field_name| {
+        if (comptime std.mem.eql(u8, field_name, "expires")) {
             switch (@typeInfo(@TypeOf(expected.expires))) {
                 .int, .comptime_int => try testing.expectDelta(@as(f64, @floatFromInt(expected.expires)), cookie.expires, 1.0),
                 else => try testing.expectDelta(expected.expires, cookie.expires, 1.0),
             }
         } else {
-            try testing.expectEqual(@field(expected, f.name), @field(cookie, f.name));
+            try testing.expectEqual(@field(expected, field_name), @field(cookie, field_name));
         }
     }
 }

@@ -72,13 +72,13 @@ const kind_styles = blk: {
     const n = std.enums.values(js_highlight.Kind).len;
     var arr: [n]?[:0]const u8 = @splat(null);
     for (styles) |s| for (s.kinds) |kind| {
-        if (arr[@intFromEnum(kind)] != null) @compileError("kind styled twice: " ++ @tagName(kind));
-        arr[@intFromEnum(kind)] = s.name;
+        if (arr[@backingInt(kind)] != null) @compileError("kind styled twice: " ++ @tagName(kind));
+        arr[@backingInt(kind)] = s.name;
     };
     var out: [n][:0]const u8 = undefined;
     for (arr, 0..) |name, i| {
         out[i] = name orelse @compileError("js_highlight.Kind with no ps-* style: " ++
-            @tagName(@as(js_highlight.Kind, @enumFromInt(i))));
+            @tagName(@as(js_highlight.Kind, @fromBackingInt(@intCast(i)))));
     }
     break :blk out;
 };
@@ -169,7 +169,7 @@ fn addPrefixedCompletion(
     partial: []const u8,
 ) void {
     if (!std.ascii.startsWithIgnoreCase(name, partial)) return;
-    const text = std.fmt.bufPrintZ(buf, "{s}{s}{s}", .{ prefix, name, suffix }) catch return;
+    const text = std.mem.printSentinel(buf, "{s}{s}{s}", .{ prefix, name, suffix }, 0) catch return;
     _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
 }
 
@@ -408,7 +408,7 @@ fn addPathCompletions(
     var name_buf: [completion_buf_len]u8 = undefined;
     while (matches.next()) |m| {
         const suffix: []const u8 = if (m.is_dir) "/" else "";
-        const full = std.fmt.bufPrint(&name_buf, "{s}{s}", .{ matches.dir_part, m.name }) catch continue;
+        const full = std.mem.print(&name_buf, "{s}{s}", .{ matches.dir_part, m.name }) catch continue;
         addPrefixedCompletion(cenv, buf, input, prefix, full, suffix, body);
     }
 }
@@ -580,7 +580,7 @@ fn ghostPathFirstMatch(body: []const u8) [*c]const u8 {
     defer matches.deinit();
     const m = matches.next() orelse return null;
     const suffix: []const u8 = if (m.is_dir) "/" else "";
-    const text = std.fmt.bufPrintZ(&hint_buf, "{s}{s}", .{ m.name[matches.base.len..], suffix }) catch return null;
+    const text = std.mem.printSentinel(&hint_buf, "{s}{s}", .{ m.name[matches.base.len..], suffix }, 0) catch return null;
     return text.ptr;
 }
 
@@ -589,7 +589,7 @@ fn ghostPathFirstMatch(body: []const u8) [*c]const u8 {
 fn ghostFirstMatch(names: []const []const u8, body: []const u8, lead: []const u8) [*c]const u8 {
     for (names) |v| {
         if (!std.ascii.startsWithIgnoreCase(v, body)) continue;
-        const text = std.fmt.bufPrintZ(&hint_buf, "{s}{s}", .{ lead, v[body.len..] }) catch return null;
+        const text = std.mem.printSentinel(&hint_buf, "{s}{s}", .{ lead, v[body.len..] }, 0) catch return null;
         return text.ptr;
     }
     return null;
@@ -621,7 +621,7 @@ fn renderSchemaHint(schema: *const Schema, body: []const u8, ends_ws: bool) [*c]
         for (schema.hints) |slot| {
             if (a.isUsed(slot.name)) continue;
             if (!std.ascii.startsWithIgnoreCase(slot.name, pk)) continue;
-            const text = std.fmt.bufPrintZ(&hint_buf, "{s}=…", .{slot.name[pk.len..]}) catch return null;
+            const text = std.mem.printSentinel(&hint_buf, "{s}=…", .{slot.name[pk.len..]}, 0) catch return null;
             return text.ptr;
         }
         return null;
@@ -725,7 +725,7 @@ const IcSink = struct {
     henv: ?*c.ic_highlight_env_t,
 
     pub fn emit(self: IcSink, start: usize, len: usize, kind: js_highlight.Kind) void {
-        c.ic_highlight(self.henv, @intCast(start), @intCast(len), kind_styles[@intFromEnum(kind)].ptr);
+        c.ic_highlight(self.henv, @intCast(start), @intCast(len), kind_styles[@backingInt(kind)].ptr);
     }
 };
 

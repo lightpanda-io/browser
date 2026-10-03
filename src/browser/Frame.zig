@@ -696,7 +696,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         else if (is_srcdoc)
             "about:srcdoc"
         else
-            try self.arena.dupeZ(u8, request_url);
+            try self.arena.dupeSentinel(u8, request_url, 0);
 
         // even though about:blank navigations may share the same _data_, we
         // have to do this to make sure window.location is at a unique _address_.
@@ -825,7 +825,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     self.url = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
-            break :blk try self.arena.dupeZ(u8, request_url);
+            break :blk try self.arena.dupeSentinel(u8, request_url, 0);
         }
         break :blk try std.mem.concatWithSentinel(self.arena, u8, &.{ "http://", request_url }, 0);
     };
@@ -836,7 +836,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .reason = opts.reason,
         .method = opts.method,
         .body = if (opts.body) |b| try self.arena.dupe(u8, b) else null,
-        .header = if (opts.header) |h| try self.arena.dupeZ(u8, h) else null,
+        .header = if (opts.header) |h| try self.arena.dupeSentinel(u8, h, 0) else null,
     };
 
     const transfer = try http_client.newRequest(.{
@@ -947,7 +947,7 @@ pub fn scheduleNavigation(self: *Frame, request_url: []const u8, opts: NavigateO
 fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
     const resolved_url, const is_about_something = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
-            break :blk .{ try arena.dupeZ(u8, request_url), false };
+            break :blk .{ try arena.dupeSentinel(u8, request_url, 0), false };
         }
 
         if (std.mem.eql(u8, request_url, "about:blank")) {
@@ -1012,7 +1012,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
     if (!opts.force and is_fragment_navigation) {
         const old_url = target.url;
-        target.url = try target.arena.dupeZ(u8, resolved_url);
+        target.url = try target.arena.dupeSentinel(u8, resolved_url, 0);
 
         const location = try Location.init(target.url, target);
         location.acquireRef();
@@ -1061,7 +1061,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     // that from its owner. Only a top-level navigation's initiator is another
     // document.
     if (nav_opts.initiator_url == null and target.parent == null and std.mem.startsWith(u8, referrer_source, "http")) {
-        nav_opts.initiator_url = .{ .url = try arena.dupeZ(u8, referrer_source) };
+        nav_opts.initiator_url = .{ .url = try arena.dupeSentinel(u8, referrer_source, 0) };
     }
     if (nav_opts.initiator_origin == null) {
         if (originator.origin) |o| {
@@ -1468,7 +1468,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     const response_url = transfer.req.url;
     if (std.mem.eql(u8, response_url, self.url) == false) {
         // would be different than self.url in the case of a redirect
-        self.url = try self.arena.dupeZ(u8, response_url);
+        self.url = try self.arena.dupeSentinel(u8, response_url, 0);
         self.origin = try URL.getOrigin(self.arena, self.url);
     }
 
@@ -3868,10 +3868,10 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         opts.body = buf.written();
         opts.header = switch (encoding) {
             .urlencode => "Content-Type: application/x-www-form-urlencoded",
-            .formdata => |b| try std.fmt.allocPrintSentinel(arena.allocator(), "Content-Type: multipart/form-data; boundary={s}", .{b}, 0),
+            .formdata => |b| try arena.allocator().printSentinel("Content-Type: multipart/form-data; boundary={s}", .{b}, 0),
             // Per WHATWG HTML §4.10.21.6, text/plain submissions include the form's
             // resolved encoding (accept-charset or document charset).
-            .plaintext => try std.fmt.allocPrintSentinel(arena.allocator(), "Content-Type: text/plain; charset={s}", .{charset}, 0),
+            .plaintext => try arena.allocator().printSentinel("Content-Type: text/plain; charset={s}", .{charset}, 0),
         };
     } else {
         action = try URL.concatQueryString(arena.allocator(), action, buf.written());

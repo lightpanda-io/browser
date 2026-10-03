@@ -66,7 +66,7 @@ pub const State = struct {
     stroke_style: Style = .{ .color = color.RGBA.Named.black },
 
     font_size: f64 = 10,
-    font_buf: [font_capacity]u8 = default_font.* ++ [_]u8{0} ** (font_capacity - default_font.len),
+    font_buf: [font_capacity]u8 = default_font.* ++ @as([font_capacity - default_font.len]u8, @splat(0)),
     font_len: u16 = default_font.len,
     font_overflow: ?[]const u8 = null,
 

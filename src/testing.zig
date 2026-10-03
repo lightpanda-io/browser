@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const repeat = @import("string.zig").repeat;
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -66,8 +67,8 @@ pub fn expectEqual(expected: anytype, actual: anytype) !void {
             }
         },
         .@"struct" => |structType| {
-            inline for (structType.fields) |field| {
-                try expectEqual(@field(expected, field.name), @field(actual, field.name));
+            inline for (structType.field_names) |field_name| {
+                try expectEqual(@field(expected, field_name), @field(actual, field_name));
             }
             return;
         },
@@ -90,9 +91,9 @@ pub fn expectEqual(expected: anytype, actual: anytype) !void {
             const actualTag = @as(Tag, actual);
             try expectEqual(expectedTag, actualTag);
 
-            inline for (std.meta.fields(@TypeOf(actual))) |fld| {
-                if (std.mem.eql(u8, fld.name, @tagName(actualTag))) {
-                    try expectEqual(@field(expected, fld.name), @field(actual, fld.name));
+            inline for (@typeInfo(@TypeOf(actual)).@"union".field_names) |field_name| {
+                if (std.mem.eql(u8, field_name, @tagName(actualTag))) {
+                    try expectEqual(@field(expected, field_name), @field(actual, field_name));
                     return;
                 }
             }
@@ -148,7 +149,7 @@ fn isStringArray(comptime T: type) bool {
 }
 
 const TraitFn = fn (type) bool;
-pub fn is(comptime id: std.builtin.TypeId) TraitFn {
+pub fn is(comptime id: std.lang.TypeId) TraitFn {
     const Closure = struct {
         fn trait(comptime T: type) bool {
             return id == @typeInfo(T);
@@ -157,7 +158,7 @@ pub fn is(comptime id: std.builtin.TypeId) TraitFn {
     return Closure.trait;
 }
 
-fn isPtrTo(comptime id: std.builtin.TypeId) TraitFn {
+fn isPtrTo(comptime id: std.lang.TypeId) TraitFn {
     const Closure = struct {
         fn trait(comptime T: type) bool {
             if (!comptime isSingleItemPtr(T)) return false;
@@ -421,8 +422,7 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
     const page = try test_session.createPage();
     defer page.close();
 
-    const url = try std.fmt.allocPrintSentinel(
-        arena_allocator,
+    const url = try arena_allocator.printSentinel(
         "http://127.0.0.1:9582/{s}",
         .{test_file},
         0,
@@ -495,8 +495,7 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !Session.Pag
     const page = try test_session.createPage();
     errdefer page.close();
 
-    const url = try std.fmt.allocPrintSentinel(
-        arena_allocator,
+    const url = try arena_allocator.printSentinel(
         "http://127.0.0.1:9582/{s}{s}",
         .{ WEB_API_TEST_ROOT, test_file },
         0,
@@ -658,7 +657,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.eql(u8, path, "/xhr")) {
-        return req.respond("1234567890" ** 10, .{
+        return req.respond(repeat("1234567890", 10), .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
             },
@@ -767,7 +766,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     // whose origin must change between its request and its response.
     if (std.mem.startsWith(u8, path, "/redirect-cross-origin/")) {
         var location_buf: [1024]u8 = undefined;
-        const location = try std.fmt.bufPrint(&location_buf, "http://localhost:9582/{s}", .{path["/redirect-cross-origin/".len..]});
+        const location = try std.mem.print(&location_buf, "http://localhost:9582/{s}", .{path["/redirect-cross-origin/".len..]});
         return req.respond("", .{
             .status = .found,
             .extra_headers = &.{
@@ -889,7 +888,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         };
         slot.* += 1;
         var buf: [64]u8 = undefined;
-        const body = try std.fmt.bufPrint(&buf, "window.__serve_count_{s} = {d};", .{ name, slot.* });
+        const body = try std.mem.print(&buf, "window.__serve_count_{s} = {d};", .{ name, slot.* });
         return req.respond(body, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/javascript" },
@@ -900,7 +899,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
 
     if (std.mem.startsWith(u8, path, "/status/")) {
         const code = try std.fmt.parseInt(u16, path["/status/".len..], 10);
-        return req.respond("", .{ .status = @enumFromInt(code) });
+        return req.respond("", .{ .status = @fromBackingInt(@intCast(code)) });
     }
 
     if (std.mem.eql(u8, path, "/xhr/reason")) {
@@ -1198,7 +1197,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
             }
         }
         var html_buf: [512]u8 = undefined;
-        const html = try std.fmt.bufPrint(&html_buf, "<html><body>referer={s}</body></html>", .{referer});
+        const html = try std.mem.print(&html_buf, "<html><body>referer={s}</body></html>", .{referer});
         return req.respond(html, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
@@ -1225,7 +1224,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         // method the navigation used. Used by the Page.reload-replays-POST test.
         const method_name = @tagName(req.head.method);
         var html_buf: [128]u8 = undefined;
-        const html = try std.fmt.bufPrint(&html_buf, "<html><body>method={s}</body></html>", .{method_name});
+        const html = try std.mem.print(&html_buf, "<html><body>method={s}</body></html>", .{method_name});
         return req.respond(html, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
@@ -1265,7 +1264,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         var pos: usize = 0;
         var it = req.iterateHeaders();
         while (it.next()) |header| {
-            const line = try std.fmt.bufPrint(buf[pos..], "{s}: {s}\n", .{ header.name, header.value });
+            const line = try std.mem.print(buf[pos..], "{s}: {s}\n", .{ header.name, header.value });
             pos += line.len;
         }
         return req.respond(buf[0..pos], .{
@@ -1374,7 +1373,7 @@ pub const expectLog = log.expectLog;
 /// Suppresses every line from `scopes` for the rest of the test.
 pub fn silenceLog(comptime scopes: []const log.Scope) void {
     inline for (scopes) |scope| {
-        log.opts.scope_enabled[@intFromEnum(scope)] = false;
+        log.opts.scope_enabled[@backingInt(scope)] = false;
     }
 }
 
@@ -1393,7 +1392,7 @@ test "tests:afterEach" {
             continue;
         }
         failed = true;
-        const scope: log.Scope = @enumFromInt(i);
+        const scope: log.Scope = @fromBackingInt(@intCast(i));
         std.debug.print("expected {d} more {s} log line(s)\n", .{ count, @tagName(scope) });
     }
 

@@ -34,6 +34,7 @@ const Driver = @import("Driver.zig");
 
 const Inbox = @import("../Inbox.zig");
 const http_command = @import("bidi/http_command.zig");
+const repeat = @import("../string.zig").repeat;
 
 const log = lp.log;
 const posix = std.posix;
@@ -156,7 +157,7 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
             json_version_response = try http.buildJSONVersionResponse(app, bound_address.getPort());
             errdefer allocator.free(json_version_response);
 
-            bidi_session_url = try std.fmt.allocPrint(allocator, "ws://{s}:{d}/session/", .{ config.advertiseHost(), bound_address.getPort() });
+            bidi_session_url = try allocator.print("ws://{s}:{d}/session/", .{ config.advertiseHost(), bound_address.getPort() });
             errdefer allocator.free(bidi_session_url);
 
             try sys_net.listen(l, config.maxPendingConnections());
@@ -374,7 +375,7 @@ fn accept(self: *Server, now: u64) !void {
 fn configureSocket(socket: posix.socket_t) void {
     setSocketOption(socket, posix.SOL.SOCKET, posix.SO.KEEPALIVE, @as(c_int, 1), "SO_KEEPALIVE");
 
-    const idle_opt = switch (builtin.os.tag) {
+    const idle_opt = switch (builtin.target.os.tag) {
         .macos, .ios => posix.TCP.KEEPALIVE,
         else => posix.TCP.KEEPIDLE,
     };
@@ -382,7 +383,7 @@ fn configureSocket(socket: posix.socket_t) void {
     setSocketOption(socket, posix.IPPROTO.TCP, posix.TCP.KEEPINTVL, Config.CDP_KEEPALIVE_INTVL_S, "TCP_KEEPINTVL");
     setSocketOption(socket, posix.IPPROTO.TCP, posix.TCP.KEEPCNT, Config.CDP_KEEPALIVE_CNT, "TCP_KEEPCNT");
 
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         setSocketOption(socket, posix.IPPROTO.TCP, std.os.linux.TCP.USER_TIMEOUT, Config.CDP_TCP_USER_TIMEOUT_MS, "TCP_USER_TIMEOUT");
     }
 }
@@ -851,7 +852,7 @@ fn fdBudget(config: *const Config) usize {
     return @intCast(@max(budget, 8));
 }
 
-const IOEngine = switch (builtin.os.tag) {
+const IOEngine = switch (builtin.target.os.tag) {
     .linux => EPoll,
     .macos, .ios, .tvos, .watchos, .freebsd, .netbsd, .dragonfly, .openbsd => KQueue,
     else => unreachable,
@@ -1448,7 +1449,7 @@ test "Client: http header past the initial buffer" {
 
     // A header this size doesn't fit the buffer a connection starts with; it
     // grows to take it rather than rejecting the request.
-    const res = try c.httpRequest("GET /over/9000 HTTP/1.1\r\n" ++ "Header: " ++ ("a" ** 4100) ++ "\r\n\r\n");
+    const res = try c.httpRequest("GET /over/9000 HTTP/1.1\r\n" ++ "Header: " ++ (repeat("a", 4100)) ++ "\r\n\r\n");
     try testing.expectEqual("HTTP/1.1 404 \r\n" ++
         "Connection: Close\r\n" ++
         "Content-Length: 9\r\n\r\n" ++
@@ -1462,7 +1463,7 @@ test "Client: http request past the limit" {
     // The body never arrives: Content-Length alone is enough to turn it down,
     // so we never read (or make room for) any of it.
     var buf: [128]u8 = undefined;
-    const request = try std.fmt.bufPrint(&buf, "POST /session HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{
+    const request = try std.mem.print(&buf, "POST /session HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{
         @as(u64, testing.test_app.config.cdpMaxHTTPMessageSize()) + 1,
     });
     const res = try c.httpRequest(request);
@@ -1546,7 +1547,7 @@ test "Client: http handshake origin" {
         defer c.deinit();
 
         var buf: [256]u8 = undefined;
-        const res = try c.httpRequest(try std.fmt.bufPrint(&buf, with_origin, .{origin}));
+        const res = try c.httpRequest(try std.mem.print(&buf, with_origin, .{origin}));
         try testing.expectEqual("HTTP/1.1 403 \r\n" ++
             "Connection: Close\r\n" ++
             "Content-Length: 18\r\n\r\n" ++
@@ -1591,7 +1592,7 @@ test "Client: http handshake host" {
         try assertHTTPError(
             403,
             "Host not allowed",
-            try std.fmt.bufPrint(&buf, with_host, .{host}),
+            try std.mem.print(&buf, with_host, .{host}),
         );
     }
 
@@ -1601,7 +1602,7 @@ test "Client: http handshake host" {
         var c = try createTestClient();
         defer c.deinit();
         var buf: [256]u8 = undefined;
-        const res = try c.httpRequest(try std.fmt.bufPrint(&buf, with_host, .{"localhost:9583"}));
+        const res = try c.httpRequest(try std.mem.print(&buf, with_host, .{"localhost:9583"}));
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 101 Switching Protocols\r\n"));
     }
 }
@@ -1770,7 +1771,7 @@ test "server: bidi browsingContext" {
 
     const url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html";
     var buf: [256]u8 = undefined;
-    try c.bidiCommand(try std.fmt.bufPrint(
+    try c.bidiCommand(try std.mem.print(
         &buf,
         "{{\"id\":5,\"method\":\"browsingContext.navigate\",\"params\":{{\"context\":\"{s}\",\"url\":\"" ++ url ++ "\",\"wait\":\"complete\"}}}}",
         .{&context_id},
@@ -1797,7 +1798,7 @@ test "server: bidi browsingContext" {
     try c.bidiCommand("{\"id\":7,\"method\":\"browsingContext.create\",\"params\":{\"type\":\"tab\"}}");
     try assertBidiMessage(&c, .{ .type = "error", .id = 7, .@"error" = "unsupported operation" });
 
-    try c.bidiCommand(try std.fmt.bufPrint(
+    try c.bidiCommand(try std.mem.print(
         &buf,
         "{{\"id\":8,\"method\":\"browsingContext.close\",\"params\":{{\"context\":\"{s}\"}}}}",
         .{&context_id},
@@ -1819,7 +1820,7 @@ test "server: HTTP session bootstrap" {
         // The session already exists on the advertised URL: no session.new
         // needed (or possible), everything else works as usual.
         var path_buf: [64]u8 = undefined;
-        try c.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+        try c.handshake(try std.mem.print(&path_buf, "/session/{s}", .{&session_id}));
 
         try c.bidiCommand("{\"id\":1,\"method\":\"session.status\"}");
         try assertBidiMessage(&c, .{ .type = "success", .id = 1, .result = .{ .ready = false, .message = "session already started" } });
@@ -1836,7 +1837,7 @@ test "server: HTTP session bootstrap" {
         var c2 = try createTestClient();
         defer c2.deinit();
         var path_buf: [64]u8 = undefined;
-        const res = try c2.upgradeRequest(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+        const res = try c2.upgradeRequest(try std.mem.print(&path_buf, "/session/{s}", .{&session_id}));
         try testing.expectEqual("HTTP/1.1 409 \r\nConnection: Close\r\nContent-Length: 25\r\n\r\nSession already connected", res);
     }
 
@@ -1855,7 +1856,7 @@ test "server: HTTP session bootstrap" {
         var c2 = try createTestClient();
         defer c2.deinit();
         var path_buf: [64]u8 = undefined;
-        const res = try c2.upgradeRequest(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+        const res = try c2.upgradeRequest(try std.mem.print(&path_buf, "/session/{s}", .{&session_id}));
         try testing.expectEqual("HTTP/1.1 404 \r\nConnection: Close\r\nContent-Length: 9\r\n\r\nNot found", res);
     }
 }
@@ -1867,7 +1868,7 @@ test "server: HTTP session outlives its websocket" {
     defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
 
     var path_buf: [64]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id});
+    const path = try std.mem.print(&path_buf, "/session/{s}", .{&session_id});
 
     {
         var c = try createTestClient();
@@ -1923,7 +1924,7 @@ test "server: HTTP session idle timeout" {
         var c = try createTestClient();
         defer c.deinit();
         var request_buf: [128]u8 = undefined;
-        const res = try c.httpRequest(try std.fmt.bufPrint(&request_buf, "DELETE /session/{s} HTTP/1.1\r\nContent-Length: 0\r\n\r\n", .{&session_id}));
+        const res = try c.httpRequest(try std.mem.print(&request_buf, "DELETE /session/{s} HTTP/1.1\r\nContent-Length: 0\r\n\r\n", .{&session_id}));
         if (std.mem.startsWith(u8, res, "HTTP/1.1 404 ")) {
             break;
         }
@@ -2013,7 +2014,7 @@ test "server: HTTP navigate" {
     var ws = try createTestClient();
     defer ws.deinit();
     var path_buf: [64]u8 = undefined;
-    try ws.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+    try ws.handshake(try std.mem.print(&path_buf, "/session/{s}", .{&session_id}));
     try ws.bidiCommand("{\"id\":1,\"method\":\"browsingContext.getTree\"}");
     const msg = try ws.readWebsocketMessage() orelse return error.NoMessage;
     defer if (msg.cleanup_fragment) ws.reader.cleanup();
@@ -2037,7 +2038,7 @@ test "server: HTTP page commands" {
     };
     {
         const body = responseBody(try sessionCommand(&c, "GET", &session_id, "/window/handles", ""));
-        try testing.expectEqual(try std.fmt.allocPrint(testing.arena_allocator, "{{\"value\":[\"{s}\"]}}", .{handle}), body);
+        try testing.expectEqual(try testing.arena_allocator.print("{{\"value\":[\"{s}\"]}}", .{handle}), body);
     }
 
     const url = "http://127.0.0.1:9582/src/browser/tests/bidi/input.html";
@@ -2049,7 +2050,7 @@ test "server: HTTP page commands" {
         try testing.expect(std.mem.startsWith(u8, body, "{\"value\":\"<!DOCTYPE html>\\n<html><head><title>bidi input</title>"));
     }
     {
-        const res = try c.httpRequestAlloc(try std.fmt.allocPrint(testing.arena_allocator, "GET /session/{s}/screenshot HTTP/1.1\r\n\r\n", .{&session_id}));
+        const res = try c.httpRequestAlloc(try testing.arena_allocator.print("GET /session/{s}/screenshot HTTP/1.1\r\n\r\n", .{&session_id}));
         defer testing.allocator.free(res);
         // base64 of the PNG signature
         try testing.expect(std.mem.startsWith(u8, responseBody(res), "{\"value\":\"iVBORw0KGgo"));
@@ -2069,8 +2070,8 @@ test "server: HTTP page commands" {
         var ws = try createTestClient();
         defer ws.deinit();
         var path_buf: [64]u8 = undefined;
-        try ws.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
-        try ws.bidiCommand(try std.fmt.allocPrint(testing.arena_allocator,
+        try ws.handshake(try std.mem.print(&path_buf, "/session/{s}", .{&session_id}));
+        try ws.bidiCommand(try testing.arena_allocator.print(
             \\{{"id":1,"method":"browsingContext.locateNodes","params":{{"context":"{s}","locator":{{"type":"css","value":"#btn"}}}}}}
         , .{handle}));
         try expectWebsocketContains(&ws, "\"sharedId\":\"1\"");
@@ -2078,7 +2079,7 @@ test "server: HTTP page commands" {
         try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/actions", actions)));
         try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "DELETE", &session_id, "/actions", "")));
 
-        try ws.bidiCommand(try std.fmt.allocPrint(testing.arena_allocator,
+        try ws.bidiCommand(try testing.arena_allocator.print(
             \\{{"id":2,"method":"script.evaluate","params":{{"expression":"window.events.join(' ')","awaitPromise":false,"target":{{"context":"{s}"}}}}}}
         , .{handle}));
         try expectWebsocketContains(&ws, "\"value\":\"mousemove@btn mousedown@btn mouseup@btn click@btn keydown:a@btn keyup:a@btn\"");
@@ -2216,14 +2217,14 @@ test "server: HTTP element commands" {
 
     // scoped to an element: the two <p> inside #box, not the rest of the page
     {
-        const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}/elements", .{box});
+        const path = try testing.arena_allocator.print("/element/{s}/elements", .{box});
         const res = responseBody(try sessionCommand(&c, "POST", &session_id, path, "{\"using\":\"css selector\",\"value\":\".item\"}"));
         const references = try elementReferences(res);
         try testing.expectEqual(2, references.len);
         try testing.expectEqual(msg, references[0]);
     }
     {
-        const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}/element", .{box});
+        const path = try testing.arena_allocator.print("/element/{s}/element", .{box});
         const res = responseBody(try sessionCommand(&c, "POST", &session_id, path, "{\"using\":\"tag name\",\"value\":\"p\"}"));
         const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, res, .{});
         try testing.expectEqual(msg, parsed.object.get("value").?.object.get(http_command.element_key).?.string);
@@ -2247,13 +2248,13 @@ test "server: HTTP element commands" {
         var ws = try createTestClient();
         defer ws.deinit();
         var path_buf: [64]u8 = undefined;
-        try ws.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
-        try ws.bidiCommand(try std.fmt.allocPrint(testing.arena_allocator,
+        try ws.handshake(try std.mem.print(&path_buf, "/session/{s}", .{&session_id}));
+        try ws.bidiCommand(try testing.arena_allocator.print(
             \\{{"id":1,"method":"script.evaluate","params":{{"expression":"document.getElementById('msg').remove()","awaitPromise":false,"target":{{"context":"{s}"}}}}}}
         , .{handle}));
         try expectWebsocketContains(&ws, "\"type\":\"success\"");
 
-        const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}/text", .{msg});
+        const path = try testing.arena_allocator.print("/element/{s}/text", .{msg});
         const res = try sessionCommand(&c, "GET", &session_id, path, "");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
         try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"stale element reference\"") != null);
@@ -2353,7 +2354,7 @@ test "server: HTTP element input" {
 }
 
 fn elementPost(c: *TestClient, session_id: *const [36]u8, id: []const u8, suffix: []const u8, body: []const u8) ![]const u8 {
-    const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}{s}", .{ id, suffix });
+    const path = try testing.arena_allocator.print("/element/{s}{s}", .{ id, suffix });
     return sessionCommand(c, "POST", session_id, path, body);
 }
 
@@ -2410,7 +2411,7 @@ test "server: HTTP execute script" {
         try testing.expectEqual(reference, try findElement(&c, &session_id, "css selector", "#msg"));
         try testing.expectEqual("{\"value\":\"hello\"}", try elementCommand(&c, &session_id, reference, "/text"));
 
-        const args = try std.fmt.allocPrint(testing.arena_allocator, "[{{\"" ++ http_command.element_key ++ "\":\"{s}\"}}]", .{reference});
+        const args = try testing.arena_allocator.print("[{{\"" ++ http_command.element_key ++ "\":\"{s}\"}}]", .{reference});
         try testing.expectEqual("{\"value\":\"msg\"}", try executeSync(&c, &session_id, "return arguments[0].id;", args));
     }
 
@@ -2434,12 +2435,12 @@ test "server: HTTP execute script" {
         const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, body, .{});
         const reference = parsed.object.get("value").?.object.get(http_command.element_key).?.string;
 
-        const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}/text", .{reference});
+        const path = try testing.arena_allocator.print("/element/{s}/text", .{reference});
         const res = try sessionCommand(&c, "GET", &session_id, path, "");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
         try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"stale element reference\"") != null);
 
-        const args = try std.fmt.allocPrint(testing.arena_allocator, "[{{\"" ++ http_command.element_key ++ "\":\"{s}\"}}]", .{reference});
+        const args = try testing.arena_allocator.print("[{{\"" ++ http_command.element_key ++ "\":\"{s}\"}}]", .{reference});
         const arg_res = try executeRaw(&c, &session_id, "sync", "return 1;", args);
         try testing.expect(std.mem.indexOf(u8, arg_res, "\"error\":\"stale element reference\"") != null);
     }
@@ -2570,7 +2571,7 @@ test "server: HTTP execute script" {
         var ws = try createTestClient();
         defer ws.deinit();
         var path_buf: [64]u8 = undefined;
-        try ws.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+        try ws.handshake(try std.mem.print(&path_buf, "/session/{s}", .{&session_id}));
 
         // the script never calls back, so its connection parks
         var parked = try createTestClient();
@@ -2578,7 +2579,7 @@ test "server: HTTP execute script" {
         try writeSessionCommand(&parked, "POST", &session_id, "/execute/async", "{\"script\":\"// never calls back\",\"args\":[]}");
         lp.io.sleep(.fromMilliseconds(50), .awake) catch {};
 
-        try ws.bidiCommand(try std.fmt.allocPrint(testing.arena_allocator,
+        try ws.bidiCommand(try testing.arena_allocator.print(
             \\{{"id":1,"method":"browsingContext.navigate","params":{{"context":"{s}","url":"about:blank","wait":"complete"}}}}
         , .{handle}));
 
@@ -2593,8 +2594,8 @@ test "server: HTTP execute script" {
 fn executeRaw(c: *TestClient, session_id: *const [36]u8, kind: []const u8, script: []const u8, args: []const u8) ![]const u8 {
     const arena = testing.arena_allocator;
     const quoted = try std.json.Stringify.valueAlloc(arena, script, .{});
-    const body = try std.fmt.allocPrint(arena, "{{\"script\":{s},\"args\":{s}}}", .{ quoted, args });
-    const path = try std.fmt.allocPrint(arena, "/execute/{s}", .{kind});
+    const body = try arena.print("{{\"script\":{s},\"args\":{s}}}", .{ quoted, args });
+    const path = try arena.print("/execute/{s}", .{kind});
     return sessionCommand(c, "POST", session_id, path, body);
 }
 
@@ -2607,7 +2608,7 @@ fn executeAsync(c: *TestClient, session_id: *const [36]u8, script: []const u8, a
 }
 
 fn findElement(c: *TestClient, session_id: *const [36]u8, using: []const u8, value: []const u8) ![]const u8 {
-    const body = try std.fmt.allocPrint(testing.arena_allocator, "{{\"using\":\"{s}\",\"value\":\"{s}\"}}", .{ using, value });
+    const body = try testing.arena_allocator.print("{{\"using\":\"{s}\",\"value\":\"{s}\"}}", .{ using, value });
     const res = responseBody(try sessionCommand(c, "POST", session_id, "/element", body));
     const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, res, .{});
     const reference = parsed.object.get("value").?.object;
@@ -2616,7 +2617,7 @@ fn findElement(c: *TestClient, session_id: *const [36]u8, using: []const u8, val
 
 // The raw response, so a test can assert on an error too.
 fn findElements(c: *TestClient, session_id: *const [36]u8, using: []const u8, value: []const u8) ![]const u8 {
-    const body = try std.fmt.allocPrint(testing.arena_allocator, "{{\"using\":\"{s}\",\"value\":\"{s}\"}}", .{ using, value });
+    const body = try testing.arena_allocator.print("{{\"using\":\"{s}\",\"value\":\"{s}\"}}", .{ using, value });
     return sessionCommand(c, "POST", session_id, "/elements", body);
 }
 
@@ -2631,7 +2632,7 @@ fn elementReferences(body: []const u8) ![]const []const u8 {
 }
 
 fn elementCommand(c: *TestClient, session_id: *const [36]u8, id: []const u8, suffix: []const u8) ![]const u8 {
-    const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}{s}", .{ id, suffix });
+    const path = try testing.arena_allocator.print("/element/{s}{s}", .{ id, suffix });
     return responseBody(try sessionCommand(c, "GET", session_id, path, ""));
 }
 
@@ -2742,7 +2743,7 @@ test "server: HTTP command errors" {
         var c = try createTestClient();
         defer c.deinit();
         var request_buf: [128]u8 = undefined;
-        const res = try c.httpRequest(try std.fmt.bufPrint(&request_buf, "DELETE /session/{s}/url HTTP/1.1\r\n\r\n", .{&session_id}));
+        const res = try c.httpRequest(try std.mem.print(&request_buf, "DELETE /session/{s}/url HTTP/1.1\r\n\r\n", .{&session_id}));
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
         try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown command\",\"message\":\"unknown command\",\"stacktrace\":\"\"}}"));
     }
@@ -2783,7 +2784,7 @@ fn sessionCommand(c: *TestClient, method: []const u8, session_id: *const [36]u8,
 
 fn writeSessionCommand(c: *TestClient, method: []const u8, session_id: *const [36]u8, command: []const u8, body: []const u8) !void {
     var head_buf: [128]u8 = undefined;
-    try sys_net.writeAll(c.socket, try std.fmt.bufPrint(&head_buf, "{s} /session/{s}{s} HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{ method, session_id, command, body.len }));
+    try sys_net.writeAll(c.socket, try std.mem.print(&head_buf, "{s} /session/{s}{s} HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{ method, session_id, command, body.len }));
     try sys_net.writeAll(c.socket, body);
 }
 
@@ -2794,7 +2795,7 @@ fn createHTTPSession(body: []const u8, expect_ws_url: bool) ![36]u8 {
 
     // the body can arrive after the headers
     var head_buf: [128]u8 = undefined;
-    try sys_net.writeAll(c.socket, try std.fmt.bufPrint(&head_buf, "POST /session HTTP/1.1\r\n" ++
+    try sys_net.writeAll(c.socket, try std.mem.print(&head_buf, "POST /session HTTP/1.1\r\n" ++
         "Content-Type: application/json;charset=UTF-8\r\n" ++
         "Content-Length: {d}\r\n\r\n", .{body.len}));
     lp.io.sleep(.fromMilliseconds(20), .awake) catch {};
@@ -2826,7 +2827,7 @@ fn deleteHTTPSession(session_id: *const [36]u8, expect_live: bool) !void {
     var c = try createTestClient();
     defer c.deinit();
     var request_buf: [128]u8 = undefined;
-    const res = try c.httpRequest(try std.fmt.bufPrint(&request_buf, "DELETE /session/{s} HTTP/1.1\r\nContent-Length: 0\r\n\r\n", .{session_id}));
+    const res = try c.httpRequest(try std.mem.print(&request_buf, "DELETE /session/{s} HTTP/1.1\r\nContent-Length: 0\r\n\r\n", .{session_id}));
     if (expect_live) {
         try testing.expectEqual("HTTP/1.1 200 OK\r\n" ++
             "Content-Length: 14\r\n" ++
@@ -3328,7 +3329,7 @@ const TestClient = struct {
 
     fn upgradeRequest(self: *TestClient, path: []const u8) ![]const u8 {
         var request_buf: [256]u8 = undefined;
-        const request = try std.fmt.bufPrint(&request_buf, "GET {s}   HTTP/1.1\r\n" ++
+        const request = try std.mem.print(&request_buf, "GET {s}   HTTP/1.1\r\n" ++
             "Connection: upgrade\r\n" ++
             "Upgrade: websocket\r\n" ++
             "sec-websocket-version:13\r\n" ++

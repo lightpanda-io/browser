@@ -367,7 +367,7 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
             }
         }
 
-        const owned_url = try arena.dupeZ(u8, url);
+        const owned_url = try arena.dupeSentinel(u8, url, 0);
         if (cacheable and !gop.found_existing) {
             gop.key_ptr.* = owned_url;
         }
@@ -529,7 +529,7 @@ fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *
         };
         const nested_gop = try self.module_cache.getOrPut(self.arena.allocator(), normalized_specifier);
         if (!nested_gop.found_existing) {
-            const owned_specifier = try self.arena.dupeZ(u8, normalized_specifier);
+            const owned_specifier = try self.arena.dupeSentinel(u8, normalized_specifier, 0);
             nested_gop.key_ptr.* = owned_specifier;
             nested_gop.value_ptr.* = .{};
             try script_manager.preloadImport(owned_specifier, url, .{});
@@ -537,7 +537,7 @@ fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *
             // Entry exists but module failed to compile previously.
             // The imported_modules entry may have been consumed, so
             // re-preload to ensure waitForImport can find it.
-            // Key was stored via dupeZ so it has a sentinel in memory.
+            // Key was stored via dupeSentinel so it has a sentinel in memory.
             const key = nested_gop.key_ptr.*;
             const key_z: [:0]const u8 = key.ptr[0..key.len :0];
             try script_manager.preloadImport(key_z, url, .{});

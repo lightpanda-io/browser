@@ -476,7 +476,7 @@ pub const Listener = struct {
                 };
             },
             .string => |string| {
-                const str = try arena.dupeZ(u8, string.str());
+                const str = try arena.dupeSentinel(u8, string.str(), 0);
                 local.eval(str, null) catch |err| {
                     if (err == error.ExecutionTerminated) {
                         return error.ExecutionTerminated;

@@ -57,7 +57,7 @@ pub fn allowed(frame: *const Frame, transfer: *HttpClient.Transfer) bool {
 fn hasFrameAncestors(csp: []const u8) bool {
     const name = "frame-ancestors";
     var pos: usize = 0;
-    while (std.ascii.indexOfIgnoreCasePos(csp, pos, name)) |start| {
+    while (std.ascii.findIgnoreCasePos(csp, pos, name)) |start| {
         pos = start + name.len;
 
         // A directive name starts a policy (',') or a directive (';'), so

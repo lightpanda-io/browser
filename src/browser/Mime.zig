@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const repeat = @import("../string.zig").repeat;
 const Allocator = std.mem.Allocator;
 
 const Mime = @This();
@@ -28,8 +29,14 @@ charset_len: usize = default_charset_len,
 is_default_charset: bool = true,
 
 /// String "UTF-8" continued by null characters.
-const default_charset = .{ 'U', 'T', 'F', '-', '8' } ++ .{0} ** 36;
+const default_charset = charsetBuf("UTF-8");
 const default_charset_len = 5;
+
+fn charsetBuf(comptime name: []const u8) [41]u8 {
+    var buf: [41]u8 = @splat(0);
+    @memcpy(buf[0..name.len], name);
+    return buf;
+}
 
 /// Mime with unknown Content-Type, empty params and empty charset.
 pub const unknown = Mime{ .content_type = .{ .unknown = {} } };
@@ -376,7 +383,7 @@ pub fn sniff(body: []const u8) ?Mime {
             // UTF-16 big-endian BOM
             return .{
                 .content_type = .{ .text_plain = {} },
-                .charset = .{ 'U', 'T', 'F', '-', '1', '6', 'B', 'E' } ++ .{0} ** 33,
+                .charset = comptime charsetBuf("UTF-16BE"),
                 .charset_len = 8,
                 .is_default_charset = false,
             };
@@ -385,7 +392,7 @@ pub fn sniff(body: []const u8) ?Mime {
             // UTF-16 little-endian BOM
             return .{
                 .content_type = .{ .text_plain = {} },
-                .charset = .{ 'U', 'T', 'F', '-', '1', '6', 'L', 'E' } ++ .{0} ** 33,
+                .charset = comptime charsetBuf("UTF-16LE"),
                 .charset_len = 8,
                 .is_default_charset = false,
             };
@@ -1017,7 +1024,7 @@ test "Mime: parse charset (WHATWG parameter semantics)" {
     try expect(.{ .content_type = .{ .text_html = {} }, .charset = "UTF-8" }, "text/html;charset =gbk");
 
     // A long preceding parameter doesn't hide a later charset.
-    try expect(.{ .content_type = .{ .text_html = {} }, .charset = "gbk" }, "text/html;" ++ ("a" ** 130) ++ "=x;charset=gbk");
+    try expect(.{ .content_type = .{ .text_html = {} }, .charset = "gbk" }, "text/html;" ++ (repeat("a", 130)) ++ "=x;charset=gbk");
 }
 
 test "Mime: isHTML" {

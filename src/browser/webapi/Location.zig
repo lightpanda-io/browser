@@ -114,7 +114,7 @@ fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
         }
         // Scratch only: scheduleNavigation dupes the URL into its own arena
         // synchronously, so the local arena suffices.
-        break :blk try std.fmt.allocPrint(frame.local_arena, "#{s}", .{hash});
+        break :blk try frame.local_arena.print("#{s}", .{hash});
     };
 
     // Per the Location hash setter, when the fragment doesn't change no

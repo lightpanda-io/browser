@@ -29,6 +29,7 @@ const Slot = @import("webapi/element/html/Slot.zig");
 
 const LimitedWriter = @import("../LimitedWriter.zig");
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
+const repeat = @import("../string.zig").repeat;
 
 pub const Opts = struct {
     max_bytes: ?u32 = null,
@@ -895,7 +896,7 @@ test "browser.markdown: max_bytes truncates with marker" {
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>" ++ ("AAAA " ** 100) ++ "</p>");
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>" ++ (repeat("AAAA ", 100)) ++ "</p>");
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();

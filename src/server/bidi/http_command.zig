@@ -213,8 +213,8 @@ const Route = struct {
             @field(value, parameter) = std.Uri.percentDecodeInPlace(try arena.dupe(u8, captured[i]));
         }
         const parsed = try parseBody(Body(T, self.parameters), arena, body);
-        inline for (@typeInfo(@TypeOf(parsed)).@"struct".fields) |field| {
-            @field(value, field.name) = @field(parsed, field.name);
+        inline for (@typeInfo(@TypeOf(parsed)).@"struct".field_names) |field_name| {
+            @field(value, field_name) = @field(parsed, field_name);
         }
         return @unionInit(Command, name, value);
     }
@@ -292,23 +292,15 @@ pub fn parse(arena: Allocator, method: Method, path: []const u8, body: []const u
 // What's left of a command once its path parameters, which are its leading
 // fields, are taken out: the part that comes from the body.
 fn Body(comptime T: type, comptime parameters: []const []const u8) type {
-    const fields = @typeInfo(T).@"struct".fields;
-    for (parameters, fields[0..parameters.len]) |parameter, field| {
-        if (!std.mem.eql(u8, parameter, field.name)) {
-            @compileError(@typeName(T) ++ ": field '" ++ field.name ++ "' should be the path parameter '" ++ parameter ++ "'");
+    const info = @typeInfo(T).@"struct";
+    for (parameters, info.field_names[0..parameters.len]) |parameter, field_name| {
+        if (!std.mem.eql(u8, parameter, field_name)) {
+            @compileError(@typeName(T) ++ ": field '" ++ field_name ++ "' should be the path parameter '" ++ parameter ++ "'");
         }
     }
 
-    const rest = fields[parameters.len..];
-    var field_names: [rest.len][:0]const u8 = undefined;
-    var types: [rest.len]type = undefined;
-    var attrs: [rest.len]std.builtin.Type.StructField.Attributes = undefined;
-    for (rest, 0..) |field, i| {
-        field_names[i] = field.name;
-        types[i] = field.type;
-        attrs[i] = .{ .@"align" = field.alignment, .default_value_ptr = field.default_value_ptr };
-    }
-    return @Struct(.auto, null, &field_names, &types, &attrs);
+    const n = parameters.len;
+    return @Struct(.auto, null, info.field_names[n..], info.field_types[n..], info.field_attrs[n..]);
 }
 
 // Both are split on '/', so a leading empty segment lines up on either side.
@@ -318,7 +310,7 @@ fn parseBody(comptime T: type, arena: Allocator, body: []const u8) ParseError!T 
         // POSTs without parameters still send a body ("{}"); nothing to read
         return {};
     }
-    if (@typeInfo(T).@"struct".fields.len == 0) {
+    if (@typeInfo(T).@"struct".field_names.len == 0) {
         // everything the command takes came from the path
         return .{};
     }
@@ -925,7 +917,7 @@ pub const Reference = struct {
 
     pub fn init(arena: Allocator, registry: *NodeRegistry, node: *Node) !Reference {
         const registered = try registry.register(node);
-        return .{ .shared_id = try std.fmt.allocPrint(arena, "{d}", .{registered.id}) };
+        return .{ .shared_id = try arena.print("{d}", .{registered.id}) };
     }
 
     fn initFromCommand(cmd: *BiDi.Command, node: *Node) !Reference {

@@ -1156,7 +1156,7 @@ fn parserAttributeName(frame: *Frame, qname: Parser.QualName) ![]const u8 {
     if (prefix.len == 0) {
         return local;
     }
-    return std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix, local });
+    return frame.local_arena.print("{s}:{s}", .{ prefix, local });
 }
 
 // Called when `new MyElement()` is invoked directly in JS (not via the
@@ -1300,7 +1300,7 @@ fn isXmlNameChar(c: u21) bool {
         (c >= 0x203F and c <= 0x2040);
 }
 
-fn asUint(comptime string: anytype) std.meta.Int(
+fn asUint(comptime string: anytype) @Int(
     .unsigned,
     @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
 ) {

@@ -385,7 +385,7 @@ const JsonVisitor = struct {
         try self.jw.beginObject();
 
         try self.jw.objectField("nodeId");
-        try self.jw.write(try std.fmt.allocPrint(self.tree.arena, "{d}", .{data.id}));
+        try self.jw.write(try self.tree.arena.print("{d}", .{data.id}));
 
         try self.jw.objectField("backendDOMNodeId");
         try self.jw.write(data.id);

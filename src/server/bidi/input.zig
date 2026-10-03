@@ -112,10 +112,10 @@ pub fn release(cmd: *BiDi.Command) !void {
 
     for (state.sources.items) |*source| {
         switch (source.kind) {
-            .key => while (source.key.pressed.getLastOrNull()) |cp| {
+            .key => while (source.key.pressed.last()) |cp| {
                 dispatch(bidi, frame, source, &.{ .key_up = cp }) catch |err| return dispatchFailed(cmd, err);
             },
-            .pointer => while (source.pointer.pressed.getLastOrNull()) |button| {
+            .pointer => while (source.pointer.pressed.last()) |button| {
                 dispatch(bidi, frame, source, &.{ .pointer_up = button }) catch |err| return dispatchFailed(cmd, err);
             },
             .none, .wheel => {},

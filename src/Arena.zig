@@ -109,8 +109,8 @@ pub fn dupe(self: *Arena, comptime T: type, m: []const T) ![]T {
     return self.allocator().dupe(T, m);
 }
 
-pub fn dupeZ(self: *Arena, comptime T: type, m: []const T) ![:0]T {
-    return self.allocator().dupeZ(T, m);
+pub fn dupeSentinel(self: *Arena, comptime T: type, m: []const T, comptime sentinel: T) ![:sentinel]T {
+    return self.allocator().dupeSentinel(T, m, sentinel);
 }
 
 // Arena is being released. Account goes back to 0 (everything is being released)

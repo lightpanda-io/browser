@@ -733,7 +733,7 @@ fn prefixedAttributeName(namespace: []const u8, local_name: []const u8, frame: *
         }
         return null;
     };
-    return try std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix, local_name });
+    return try frame.local_arena.print("{s}:{s}", .{ prefix, local_name });
 }
 
 pub fn getAttributeSafe(self: *const Element, name: String) ?[]const u8 {

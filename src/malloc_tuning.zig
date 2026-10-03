@@ -41,7 +41,7 @@ const M_MMAP_THRESHOLD: c_int = -3;
 extern "c" fn mallopt(param: c_int, value: c_int) c_int;
 
 pub fn apply() void {
-    if (comptime (builtin.os.tag != .linux or builtin.abi.isGnu() == false)) {
+    if (comptime (builtin.target.os.tag != .linux or builtin.target.abi.isGnu() == false)) {
         return;
     }
     if (userConfigured()) {

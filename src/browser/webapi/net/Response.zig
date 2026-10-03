@@ -563,7 +563,7 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
         .stream => .empty, // TODO: implement stream tee for proper cloning
     };
     const status_text = try arena.dupe(u8, self._status_text);
-    const url = try arena.dupeZ(u8, self._url);
+    const url = try arena.dupeSentinel(u8, self._url, 0);
 
     const cloned = try arena.create(Response);
     cloned.* = .{

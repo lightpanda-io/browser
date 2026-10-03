@@ -479,21 +479,14 @@ pub fn chained(self: *Factory, values: anytype) !*ChainedLeaf(@TypeOf(values)) {
 }
 
 pub fn chainedWithAllocator(allocator: Allocator, values: anytype) !*ChainedLeaf(@TypeOf(values)) {
-    const fields = @typeInfo(@TypeOf(values)).@"struct".fields;
-    const types = comptime blk: {
-        var types: [fields.len]type = undefined;
-        for (fields, 0..) |f, i| {
-            types[i] = f.type;
-        }
-        break :blk types;
-    };
+    const types = @typeInfo(@TypeOf(values)).@"struct".field_types;
     comptime {
         for (types[1..], 0..) |T, i| {
             assert(reflect.Proto(T).? == types[i]);
         }
     }
 
-    const chain = try PrototypeChain(&types).allocate(allocator);
+    const chain = try PrototypeChain(types).allocate(allocator);
     inline for (0..types.len) |i| {
         const ptr = chain.get(i);
         ptr.* = values[i];
@@ -505,8 +498,8 @@ pub fn chainedWithAllocator(allocator: Allocator, values: anytype) !*ChainedLeaf
 }
 
 fn ChainedLeaf(comptime Values: type) type {
-    const fields = @typeInfo(Values).@"struct".fields;
-    return fields[fields.len - 1].type;
+    const field_types = @typeInfo(Values).@"struct".field_types;
+    return field_types[field_types.len - 1];
 }
 
 pub fn document(self: *Factory, child: anytype) !*@TypeOf(child) {
@@ -684,8 +677,8 @@ fn typeInit(comptime Parent: type, value: anytype) Parent.Type {
 }
 
 fn subtypeTag(comptime Parent: type, comptime V: type) Parent.Type {
-    for (@typeInfo(Parent.Type).@"enum".fields) |f| {
-        const tag: Parent.Type = @enumFromInt(f.value);
+    for (@typeInfo(Parent.Type).@"enum".field_values) |field_value| {
+        const tag: Parent.Type = @fromBackingInt(field_value);
         if (Parent.Subtype(tag) == V) return tag;
     }
     @compileError(@typeName(V) ++ " is not a subtype of " ++ @typeName(Parent));
@@ -699,9 +692,9 @@ fn subtypeTag(comptime Parent: type, comptime V: type) Parent.Type {
 // This only works because we never have a union with a field S and another
 // field *S.
 fn unionFieldName(comptime T: type, comptime V: type) []const u8 {
-    inline for (@typeInfo(T).@"union".fields) |field| {
-        if (reflect.Struct(field.type) == reflect.Struct(V)) {
-            return field.name;
+    inline for (@typeInfo(T).@"union".field_names, @typeInfo(T).@"union".field_types) |field_name, field_type| {
+        if (reflect.Struct(field_type) == reflect.Struct(V)) {
+            return field_name;
         }
     }
     @compileError(@typeName(V) ++ " is not a valid type for " ++ @typeName(T) ++ ".type");

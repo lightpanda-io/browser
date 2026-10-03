@@ -13,16 +13,16 @@ const McpTool = protocol.Tool;
 /// Tool identity comes from the `BrowserTool` tag — `tool_defs` only
 /// carries the LLM-facing description and JSON schema.
 const browser_tool_list = blk: {
-    const fields = @typeInfo(BrowserTool).@"enum".fields;
-    var tools: [fields.len]McpTool = undefined;
-    for (browser_tools.tool_defs, fields, 0..) |td, f, i| {
+    const field_names = @typeInfo(BrowserTool).@"enum".field_names;
+    var tools: [field_names.len]McpTool = undefined;
+    for (browser_tools.tool_defs, field_names, 0..) |td, field_name, i| {
         tools[i] = .{
-            .name = f.name,
+            .name = field_name,
             .title = td.summary,
             .description = td.description,
             .inputSchema = td.input_schema,
-            .outputSchema = if (@field(BrowserTool, f.name).reportsPageState()) page_state_schema else null,
-            .annotations = annotations(@field(BrowserTool, f.name)),
+            .outputSchema = if (@field(BrowserTool, field_name).reportsPageState()) page_state_schema else null,
+            .annotations = annotations(@field(BrowserTool, field_name)),
         };
     }
     break :blk tools;
@@ -226,14 +226,14 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         return sendErrorContent(server, id, "out of memory");
 
     writeScript(args.path, script) catch |err| {
-        const msg = std.fmt.allocPrint(arena, "could not write {s}: {s}", .{ args.path, @errorName(err) }) catch
+        const msg = arena.print("could not write {s}: {s}", .{ args.path, @errorName(err) }) catch
             return sendErrorContent(server, id, "could not write script file");
         return sendErrorContent(server, id, msg);
     };
 
     const where = browser_tools.absolutePath(arena, args.path);
     const lines = std.mem.count(u8, script, "\n") + 1;
-    const msg = std.fmt.allocPrint(arena, "saved {d} line(s) to {s}", .{ lines, where }) catch
+    const msg = arena.print("saved {d} line(s) to {s}", .{ lines, where }) catch
         return sendErrorContent(server, id, "out of memory");
 
     try sendToolResultText(server, id, msg, false);
@@ -321,7 +321,7 @@ fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void 
 }
 
 fn sendToolResultFmt(server: *Server, arena: std.mem.Allocator, id: std.json.Value, comptime fmt: []const u8, args: anytype) !void {
-    const msg = std.fmt.allocPrint(arena, fmt, args) catch
+    const msg = arena.print(fmt, args) catch
         return sendErrorContent(server, id, "out of memory");
     return sendToolResultText(server, id, msg, false);
 }
@@ -1238,7 +1238,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const btn = frame.document.getElementById("btn", frame).?.asNode();
         const btn_id = (try server.active_session.registry.register(btn)).id;
         var btn_id_buf: [12]u8 = undefined;
-        const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
+        const btn_id_str = std.mem.print(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
         const click_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}" });
         try router.handleMessage(server, aa, click_msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "Clicked element") != null);
@@ -1247,7 +1247,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     for ([_][]const u8{ "#btnPreventDefault", "#btnDisabled", "#focusTarget", "#plain" }) |selector| {
-        const msg = try std.fmt.allocPrint(aa, "{{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{{\"name\":\"click\",\"arguments\":{{\"selector\":\"{s}\"}}}}}}", .{selector});
+        const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{{\"name\":\"click\",\"arguments\":{{\"selector\":\"{s}\"}}}}}}", .{selector});
         try router.handleMessage(server, aa, msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "Clicked element") != null);
         out.clearRetainingCapacity();
@@ -1257,7 +1257,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const inp = frame.document.getElementById("inp", frame).?.asNode();
         const inp_id = (try server.active_session.registry.register(inp)).id;
         var inp_id_buf: [12]u8 = undefined;
-        const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
+        const inp_id_str = std.mem.print(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
         const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"value\":\"hello\"}}}" });
         try router.handleMessage(server, aa, fill_msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "Filled element") != null);
@@ -1269,7 +1269,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const sel = frame.document.getElementById("sel", frame).?.asNode();
         const sel_id = (try server.active_session.registry.register(sel)).id;
         var sel_id_buf: [12]u8 = undefined;
-        const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
+        const sel_id_str = std.mem.print(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
         const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"value\":\"opt2\"}}}" });
         try router.handleMessage(server, aa, fill_sel_msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "Filled element") != null);
@@ -1284,9 +1284,9 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     const plain = frame.document.getElementById("plain", frame).?.asNode();
     const plain_id = (try server.active_session.registry.register(plain)).id;
     for ([_]struct { id: lp.NodeRegistry.Id, y: i32 }{ .{ .id = scrollbox_id, .y = 50 }, .{ .id = plain_id, .y = 7 } }) |c| {
-        const msg = try std.fmt.allocPrint(aa, "{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":{d}}}}}}}", .{ c.id, c.y });
+        const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":{d}}}}}}}", .{ c.id, c.y });
         try router.handleMessage(server, aa, msg);
-        const expected = try std.fmt.allocPrint(aa, "Scrolled element (backendNodeId: {d}) to x: 0, y: {d}", .{ c.id, c.y });
+        const expected = try aa.print("Scrolled element (backendNodeId: {d}) to x: 0, y: {d}", .{ c.id, c.y });
         try testing.expect(std.mem.indexOf(u8, out.written(), expected) != null);
         out.clearRetainingCapacity();
     }
@@ -1297,9 +1297,9 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const leaf_id = (try server.active_session.registry.register(leaf)).id;
         const outer = frame.document.getElementById("outerscroll", frame).?.asNode();
         const outer_id = (try server.active_session.registry.register(outer)).id;
-        const msg = try std.fmt.allocPrint(aa, "{{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
+        const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
         try router.handleMessage(server, aa, msg);
-        const expected = try std.fmt.allocPrint(aa, "Scrolled scroll container (backendNodeId: {d}) of element (backendNodeId: {d}) to x: 0, y: 30", .{ outer_id, leaf_id });
+        const expected = try aa.print("Scrolled scroll container (backendNodeId: {d}) of element (backendNodeId: {d}) to x: 0, y: 30", .{ outer_id, leaf_id });
         try testing.expect(std.mem.indexOf(u8, out.written(), expected) != null);
         out.clearRetainingCapacity();
     }
@@ -1311,7 +1311,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         try router.handleMessage(server, aa,
             \\{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"scroll","arguments":{"selector":"#innerleaf","y":30}}}
         );
-        const expected = try std.fmt.allocPrint(aa, "Scrolled scroll container (backendNodeId: {d}) of element (selector: #innerleaf) to x: 0, y: 30", .{outer_id});
+        const expected = try aa.print("Scrolled scroll container (backendNodeId: {d}) of element (selector: #innerleaf) to x: 0, y: 30", .{outer_id});
         try testing.expect(std.mem.indexOf(u8, out.written(), expected) != null);
         out.clearRetainingCapacity();
     }
@@ -1322,9 +1322,9 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const leaf_id = (try server.active_session.registry.register(leaf)).id;
         const outer = frame.document.getElementById("sheetscroll", frame).?.asNode();
         const outer_id = (try server.active_session.registry.register(outer)).id;
-        const msg = try std.fmt.allocPrint(aa, "{{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
+        const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
         try router.handleMessage(server, aa, msg);
-        const expected = try std.fmt.allocPrint(aa, "Scrolled scroll container (backendNodeId: {d}) of element (backendNodeId: {d}) to x: 0, y: 30", .{ outer_id, leaf_id });
+        const expected = try aa.print("Scrolled scroll container (backendNodeId: {d}) of element (backendNodeId: {d}) to x: 0, y: 30", .{ outer_id, leaf_id });
         try testing.expect(std.mem.indexOf(u8, out.written(), expected) != null);
         out.clearRetainingCapacity();
     }
@@ -1347,7 +1347,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const el = frame.document.getElementById("hoverTarget", frame).?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"hover\",\"arguments\":{\"backendNodeId\":", id_str, "}}}" });
         try router.handleMessage(server, aa, msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "Hovered element") != null);
@@ -1358,7 +1358,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const el = frame.document.getElementById("keyTarget", frame).?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"press\",\"arguments\":{\"key\":\"Enter\",\"backendNodeId\":", id_str, "}}}" });
         try router.handleMessage(server, aa, msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "Pressed key") != null);
@@ -1369,7 +1369,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const el = frame.document.getElementById("sel2", frame).?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"selectOption\",\"arguments\":{\"backendNodeId\":", id_str, ",\"value\":\"b\"}}}" });
         try router.handleMessage(server, aa, msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "Selected option") != null);
@@ -1380,7 +1380,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const el = frame.document.getElementById("chk", frame).?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
         try router.handleMessage(server, aa, msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
@@ -1391,7 +1391,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const el = frame.document.getElementById("rad", frame).?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
         try router.handleMessage(server, aa, msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
@@ -1456,7 +1456,7 @@ test "MCP - click that navigates clears node registry" {
     try testing.expect(server.active_session.registry.lookup_by_id.contains(link_id));
 
     var id_buf: [12]u8 = undefined;
-    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{link_id}) catch unreachable;
+    const id_str = std.mem.print(&id_buf, "{d}", .{link_id}) catch unreachable;
     const click_msg = try std.mem.concat(aa, u8, &.{
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":",
         id_str,

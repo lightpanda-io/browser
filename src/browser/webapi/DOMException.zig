@@ -73,7 +73,7 @@ fn getCode(self: *const DOMException) u8 {
     return switch (self._code) {
         // no legacy numeric code
         .operation_error, .data_error, .constraint_error, .version_error, .transaction_inactive_error, .read_only_error => 0,
-        else => @intFromEnum(self._code),
+        else => @backingInt(self._code),
     };
 }
 
@@ -162,7 +162,7 @@ pub fn toString(self: *const DOMException, exec: *js.Execution) ![]const u8 {
             else => break :blk self.getMessage(),
         }
     };
-    return std.fmt.bufPrint(exec.buf, "{s}: {s}", .{ self.getName(), msg }) catch return msg;
+    return std.mem.print(exec.buf, "{s}: {s}", .{ self.getName(), msg }) catch return msg;
 }
 
 const Code = enum(u8) {

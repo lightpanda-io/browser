@@ -122,7 +122,7 @@ pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
 }
 
 pub fn getPlatform(_: *const Navigator) []const u8 {
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .macos => "MacIntel",
         .windows => "Win32",
         .linux => "Linux x86_64",

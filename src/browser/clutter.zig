@@ -102,7 +102,7 @@ fn describe(node: *Node) []const u8 {
     const S = struct {
         threadlocal var buf: [96]u8 = undefined;
     };
-    return std.fmt.bufPrint(&S.buf, "{s}.{s}#{s}", .{ @tagName(el.getTag()), el.getClassName() orelse "", el.getId() orelse "" }) catch S.buf[0..];
+    return std.mem.print(&S.buf, "{s}.{s}#{s}", .{ @tagName(el.getTag()), el.getClassName() orelse "", el.getId() orelse "" }) catch S.buf[0..];
 }
 
 const Stats = struct {

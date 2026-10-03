@@ -542,7 +542,7 @@ fn _createElementCallback(self: *Parser, data: *anyopaque, qname: h5e.QualName, 
     // like createElementNS. html5ever never sets a prefix; xml5ever does.
     const name = if (qname.prefix.unwrap()) |prefix| blk: {
         if (prefix.len == 0) break :blk local;
-        break :blk try std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix.slice(), local });
+        break :blk try frame.local_arena.print("{s}:{s}", .{ prefix.slice(), local });
     } else local;
     const namespace_string = qname.ns.slice();
     const namespace = if (namespace_string.len == 0) default_namespace else Element.Namespace.parse(namespace_string);
@@ -953,7 +953,7 @@ fn getNode(ref: *anyopaque) *Node {
     return getParsed(ref).node;
 }
 
-fn asUint(comptime string: anytype) std.meta.Int(
+fn asUint(comptime string: anytype) @Int(
     .unsigned,
     @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
 ) {

@@ -458,7 +458,7 @@ zig build -Dwpt_extensions run -- fetch \
 it's useful to build in `releaseFast` mode to make tests faster.
 
 ```
-zig build -Dwpt_extensions -Doptimize=ReleaseFast run -- serve ...
+zig build -Dwpt_extensions -Doptimize=fast run -- serve ...
 ```
 
 ## Contributing

@@ -312,9 +312,9 @@ fn match(self: *const URLPattern, input: ?Input, base_url: ?[]const u8, exec: *c
             // The IDL conversion yields a fresh dictionary; that, not the
             // caller's object, is what ends up in result.inputs.
             const dict = local.newObject();
-            inline for (@typeInfo(Init).@"struct".fields) |f| {
-                if (@field(dict_init, f.name)) |v| {
-                    _ = try dict.set(f.name, v, .{});
+            inline for (@typeInfo(Init).@"struct".field_names) |field_name| {
+                if (@field(dict_init, field_name)) |v| {
+                    _ = try dict.set(field_name, v, .{});
                 }
             }
             inputs = local.newArray(1);
@@ -357,7 +357,7 @@ fn match(self: *const URLPattern, input: ?Input, base_url: ?[]const u8, exec: *c
         const groups = local.newObject();
         var key_buf: [16]u8 = undefined;
         for (component.group_names, 1..) |group_name, i| {
-            const key = std.fmt.bufPrint(&key_buf, "{d}", .{i}) catch unreachable;
+            const key = std.mem.print(&key_buf, "{d}", .{i}) catch unreachable;
             _ = try groups.set(group_name, try exec_result.get(key), .{});
         }
         @field(result, name) = .{ .input = value, .groups = groups };
@@ -874,7 +874,7 @@ fn urlHost(url: *const U.Url) []const u8 {
 
 fn urlPort(arena: Allocator, url: *const U.Url) Error![]const u8 {
     const port = U.urlGetPort(url) orelse return "";
-    return std.fmt.allocPrint(arena, "{d}", .{port});
+    return arena.print("{d}", .{port});
 }
 
 fn urlPath(url: *const U.Url) []const u8 {
@@ -1005,7 +1005,7 @@ fn canonicalizePort(arena: Allocator, value: []const u8, protocol: ?[]const u8) 
     if (digits == 0) {
         return error.TypeError;
     }
-    const serialized = try std.fmt.allocPrint(arena, "{d}", .{port});
+    const serialized = try arena.print("{d}", .{port});
     if (protocol) |p| {
         if (defaultPort(p)) |default| {
             if (std.mem.eql(u8, default, serialized)) {
@@ -1546,7 +1546,7 @@ const Parser = struct {
         if (name_token) |t| {
             name = t.value;
         } else if (regexp_or_wildcard != null) {
-            name = try std.fmt.allocPrint(self.env.arena, "{d}", .{self.next_numeric_name});
+            name = try self.env.arena.print("{d}", .{self.next_numeric_name});
             self.next_numeric_name += 1;
         }
         for (self.parts.items) |part| {

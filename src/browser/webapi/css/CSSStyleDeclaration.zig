@@ -195,7 +195,7 @@ fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame
         .width => element.boxAxis(frame, .width),
         .height => element.boxAxis(frame, .height),
     };
-    return std.fmt.allocPrint(frame.local_arena, "{d}px", .{value}) catch "auto";
+    return frame.local_arena.print("{d}px", .{value}) catch "auto";
 }
 
 pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {

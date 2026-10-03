@@ -72,7 +72,7 @@ pub fn randomFilename(arena: std.mem.Allocator) ![]const u8 {
         var n_bytes: [8]u8 = undefined;
         lp.io.random(&n_bytes);
         const n = std.mem.readInt(u64, &n_bytes, .little);
-        const path = try std.fmt.allocPrint(arena, "session-{x}.js", .{n});
+        const path = try arena.print("session-{x}.js", .{n});
         if (!(try fileExists(path))) return path;
     }
     return error.NameCollision;

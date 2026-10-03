@@ -47,7 +47,7 @@ pub fn resolve(
     }
     defer href.deinit();
 
-    return allocator.dupeZ(u8, href.slice());
+    return allocator.dupeSentinel(u8, href.slice(), 0);
 }
 
 /// Resolves a user-provided "address bar" URL the way curl does. Bare host like
@@ -55,7 +55,7 @@ pub fn resolve(
 pub fn resolveNavigation(allocator: Allocator, url: []const u8, options: ResolveOptions) ![:0]const u8 {
     return resolve(allocator, "", url, options) catch |err| switch (err) {
         error.TypeError => {
-            const with_scheme = try std.fmt.allocPrintSentinel(allocator, "http://{s}", .{url}, 0);
+            const with_scheme = try allocator.printSentinel("http://{s}", .{url}, 0);
             return resolve(allocator, "", with_scheme, options);
         },
         else => return err,
@@ -241,7 +241,7 @@ pub fn isLoopbackHost(hostname: []const u8) bool {
     const address = std.Io.net.IpAddress.parseLiteral(host) catch return false;
     return switch (address) {
         .ip4 => |ip4| ip4.bytes[0] == 127,
-        .ip6 => |ip6| std.mem.eql(u8, &ip6.bytes, &([_]u8{0} ** 15 ++ [_]u8{1})),
+        .ip6 => |ip6| std.mem.eql(u8, &ip6.bytes, &(@as([15]u8, @splat(0)) ++ [_]u8{1})),
     };
 }
 
@@ -332,7 +332,7 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
                 // Not a port (probably IPv6)
                 if (has_user_info) {
                     // Need to allocate to exclude user info
-                    return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ raw[0 .. scheme_end + 1], host_part });
+                    return try allocator.print("{s}//{s}", .{ raw[0 .. scheme_end + 1], host_part });
                 }
                 // Can return a slice
                 return raw[0..authority_end];
@@ -348,14 +348,14 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
             // Need to allocate to build origin without default port and/or user info
             const hostname = host_part[0..colon_pos_in_host];
             if (is_default) {
-                return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ protocol, hostname });
+                return try allocator.print("{s}//{s}", .{ protocol, hostname });
             } else {
-                return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ protocol, host_part });
+                return try allocator.print("{s}//{s}", .{ protocol, host_part });
             }
         }
     } else if (has_user_info) {
         // No port, but has user info - need to allocate
-        return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ raw[0 .. scheme_end + 1], host_part });
+        return try allocator.print("{s}//{s}", .{ raw[0 .. scheme_end + 1], host_part });
     }
 
     // Common case: no user info, no default port - return slice (zero allocation!)
@@ -409,7 +409,7 @@ fn buildUrl(
     search: []const u8,
     hash: []const u8,
 ) ![:0]const u8 {
-    return std.fmt.allocPrintSentinel(allocator, "{s}//{s}{s}{s}{s}", .{
+    return allocator.printSentinel("{s}//{s}{s}{s}{s}", .{
         protocol,
         host,
         pathname,
@@ -426,7 +426,7 @@ pub fn setProtocol(current: [:0]const u8, value: []const u8, allocator: Allocato
 
     // Add : suffix if not present
     const protocol = if (value.len > 0 and value[value.len - 1] != ':')
-        try std.fmt.allocPrint(allocator, "{s}:", .{value})
+        try allocator.print("{s}:", .{value})
     else
         value;
 
@@ -455,7 +455,7 @@ pub fn setHost(current: [:0]const u8, value: []const u8, allocator: Allocator) !
         // No port in new value - preserve existing port
         const current_port = getPort(current);
         if (current_port.len > 0) {
-            break :blk try std.fmt.allocPrint(allocator, "{s}:{s}", .{ value, current_port });
+            break :blk try allocator.print("{s}:{s}", .{ value, current_port });
         }
         break :blk value;
     };
@@ -466,7 +466,7 @@ pub fn setHost(current: [:0]const u8, value: []const u8, allocator: Allocator) !
 pub fn setHostname(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
     const current_port = getPort(current);
     const new_host = if (current_port.len > 0)
-        try std.fmt.allocPrint(allocator, "{s}:{s}", .{ value, current_port })
+        try allocator.print("{s}:{s}", .{ value, current_port })
     else
         value;
 
@@ -492,7 +492,7 @@ pub fn setPort(current: [:0]const u8, value: ?[]const u8, allocator: Allocator) 
         if (std.mem.eql(u8, protocol, "http:") and std.mem.eql(u8, port_str, "80")) {
             break :blk hostname;
         }
-        break :blk try std.fmt.allocPrint(allocator, "{s}:{s}", .{ hostname, port_str });
+        break :blk try allocator.print("{s}:{s}", .{ hostname, port_str });
     } else hostname;
 
     return buildUrl(allocator, protocol, new_host, pathname, search, hash);
@@ -508,7 +508,7 @@ pub fn setPathname(current: [:0]const u8, value: []const u8, allocator: Allocato
 
     // Add / prefix if not present and value is not empty
     const pathname = if (encoded.len > 0 and encoded[0] != '/')
-        try std.fmt.allocPrint(allocator, "/{s}", .{encoded})
+        try allocator.print("/{s}", .{encoded})
     else
         encoded;
 
@@ -525,7 +525,7 @@ pub fn setSearch(current: [:0]const u8, value: []const u8, allocator: Allocator)
 
     // Add ? prefix if not present and value is not empty
     const search = if (encoded.len > 0 and value[0] != '?')
-        try std.fmt.allocPrint(allocator, "?{s}", .{encoded})
+        try allocator.print("?{s}", .{encoded})
     else
         encoded;
 
@@ -542,7 +542,7 @@ pub fn setHash(current: [:0]const u8, value: []const u8, allocator: Allocator) !
 
     // Add # prefix if not present and value is not empty
     const hash = if (encoded.len > 0 and encoded[0] != '#')
-        try std.fmt.allocPrint(allocator, "#{s}", .{encoded})
+        try allocator.print("#{s}", .{encoded})
     else
         encoded;
 
@@ -586,7 +586,7 @@ fn buildUrlWithUserInfo(
     if (username.len == 0 and password.len == 0) {
         return buildUrl(allocator, protocol, host, pathname, search, hash);
     } else if (password.len == 0) {
-        return std.fmt.allocPrintSentinel(allocator, "{s}//{s}@{s}{s}{s}{s}", .{
+        return allocator.printSentinel("{s}//{s}@{s}{s}{s}{s}", .{
             protocol,
             username,
             host,
@@ -595,7 +595,7 @@ fn buildUrlWithUserInfo(
             hash,
         }, 0);
     } else {
-        return std.fmt.allocPrintSentinel(allocator, "{s}//{s}:{s}@{s}{s}{s}{s}", .{
+        return allocator.printSentinel("{s}//{s}:{s}@{s}{s}{s}{s}", .{
             protocol,
             username,
             password,
@@ -609,7 +609,7 @@ fn buildUrlWithUserInfo(
 
 pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []const u8) ![:0]const u8 {
     if (query_string.len == 0) {
-        return arena.dupeZ(u8, url);
+        return arena.dupeSentinel(u8, url, 0);
     }
 
     var buf: std.ArrayList(u8) = .empty;
@@ -633,8 +633,7 @@ pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []cons
 
 pub fn getRobotsUrl(arena: Allocator, url: [:0]const u8) ![:0]const u8 {
     const origin = try getOrigin(arena, url) orelse return error.NoOrigin;
-    return try std.fmt.allocPrintSentinel(
-        arena,
+    return try arena.printSentinel(
         "{s}/robots.txt",
         .{origin},
         0,

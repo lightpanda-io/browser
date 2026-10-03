@@ -26,6 +26,7 @@ const crypto = @import("../sys/libcrypto.zig");
 
 const IpFilter = @import("IpFilter.zig");
 const Certificates = @import("Certificates.zig");
+const repeat = @import("../string.zig").repeat;
 
 const log = lp.log;
 const posix = std.posix;
@@ -347,9 +348,9 @@ pub const Connection = struct {
     // copies the string, so `allocator` only backs the transient join.
     pub fn addHeader(self: *Connection, allocator: std.mem.Allocator, name: []const u8, value: []const u8) !void {
         const joined = if (value.len == 0)
-            try std.fmt.allocPrintSentinel(allocator, "{s};", .{name}, 0)
+            try allocator.printSentinel("{s};", .{name}, 0)
         else
-            try std.fmt.allocPrintSentinel(allocator, "{s}: {s}", .{ name, value }, 0);
+            try allocator.printSentinel("{s}: {s}", .{ name, value }, 0);
         return self.addRawHeader(joined);
     }
 
@@ -633,7 +634,7 @@ pub const Connection = struct {
     pub fn getHttpVersion(self: *const Connection) !libcurl.CurlHttpVersion {
         var version: c_long = undefined;
         try libcurl.curl_easy_getinfo(self._easy, .http_version, &version);
-        return @enumFromInt(version);
+        return @fromBackingInt(@intCast(version));
     }
 
     pub fn getConnectHeader(self: *const Connection, name: [:0]const u8, index: usize) ?HeaderValue {
@@ -1038,7 +1039,7 @@ test "StatusText.fromStatusLine" {
     // curl's synthesized HTTP/2 status line has no phrase
     try testing.expectEqualSlices(u8, "", StatusText.fromStatusLine("HTTP/2 200 \r\n").get().?);
     try testing.expectEqualSlices(u8, "", StatusText.fromStatusLine("HTTP/1.1 200\r\n").get().?);
-    try testing.expectEqual(StatusText.MAX_LEN, StatusText.fromStatusLine("HTTP/1.1 200 " ++ "x" ** 200).get().?.len);
+    try testing.expectEqual(StatusText.MAX_LEN, StatusText.fromStatusLine("HTTP/1.1 200 " ++ repeat("x", 200)).get().?.len);
 }
 
 test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {
@@ -1046,7 +1047,7 @@ test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {
 
     const filter = IpFilter.init(true, null);
     var sa = makeSockAddrV4(.{ 127, 0, 0, 1 });
-    const result = opensocketCallback(@ptrCast(@constCast(&filter)), @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
+    const result = opensocketCallback(@ptrCast(@constCast(&filter)), @backingInt(libcurl.CurlSockType.ipcxn), &sa);
     try testing.expectEqual(libcurl.CURL_SOCKET_BAD, result);
 }
 
@@ -1055,7 +1056,7 @@ test "opensocketCallback: public IPv4 opens a real socket" {
     const filter = IpFilter.init(true, null);
     var sa = makeSockAddrV4(.{ 8, 8, 8, 8 });
 
-    const fd = opensocketCallback(@ptrCast(@constCast(&filter)), @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
+    const fd = opensocketCallback(@ptrCast(@constCast(&filter)), @backingInt(libcurl.CurlSockType.ipcxn), &sa);
     defer _ = std.c.close(fd);
 
     // A real fd is always >= 0
@@ -1064,7 +1065,7 @@ test "opensocketCallback: public IPv4 opens a real socket" {
 
 test "opensocketCallback: null clientp returns CURL_SOCKET_BAD (fail-closed)" {
     var sa = makeSockAddrV4(.{ 8, 8, 8, 8 });
-    const result = opensocketCallback(null, @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
+    const result = opensocketCallback(null, @backingInt(libcurl.CurlSockType.ipcxn), &sa);
     try testing.expectEqual(libcurl.CURL_SOCKET_BAD, result);
 }
 
@@ -1072,7 +1073,7 @@ test "opensocketCallback: block_private=false allows private IP" {
     // When block_private is false the filter blocks nothing
     const filter = IpFilter.init(false, null);
     var sa = makeSockAddrV4(.{ 127, 0, 0, 1 });
-    const fd = opensocketCallback(@ptrCast(@constCast(&filter)), @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
+    const fd = opensocketCallback(@ptrCast(@constCast(&filter)), @backingInt(libcurl.CurlSockType.ipcxn), &sa);
     defer _ = std.c.close(fd);
 
     try testing.expect(fd >= 0);

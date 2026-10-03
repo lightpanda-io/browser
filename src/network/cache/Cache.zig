@@ -465,7 +465,7 @@ pub fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutR
     }
 
     return .{
-        .url = try arena.dupeZ(u8, url),
+        .url = try arena.dupeSentinel(u8, url, 0),
         .content_type = if (candidate.content_type) |ct| try arena.dupe(u8, ct) else "application/octet-stream",
         .status = status,
         .stored_at = candidate.timestamp,

@@ -439,7 +439,7 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
         },
         .substring => |expected| {
             return if (attr.case_insensitive)
-                std.ascii.indexOfIgnoreCase(value, expected) != null
+                std.ascii.findIgnoreCase(value, expected) != null
             else
                 std.mem.indexOf(u8, value, expected) != null;
         },
@@ -1033,7 +1033,7 @@ pub const NthCache = struct {
         of_type_from_end: u32,
     };
 
-    const TypeCounts = [@typeInfo(Node.Element.Tag).@"enum".fields.len]u32;
+    const TypeCounts = [@typeInfo(Node.Element.Tag).@"enum".field_names.len]u32;
 
     pub fn deinit(self: *NthCache) void {
         self.entries.deinit(self.allocator);
@@ -1058,7 +1058,7 @@ pub const NthCache = struct {
         while (it.next()) |child| {
             const el = child.is(Node.Element) orelse continue;
             child_count += 1;
-            const of_type = &type_counts[@intFromEnum(el.getTag())];
+            const of_type = &type_counts[@backingInt(el.getTag())];
             of_type.* += 1;
             try self.entries.put(self.allocator, child, .{
                 .child = child_count,
@@ -1075,7 +1075,7 @@ pub const NthCache = struct {
         while (it.next()) |child| {
             const el = child.is(Node.Element) orelse continue;
             seen_count += 1;
-            const tag = @intFromEnum(el.getTag());
+            const tag = @backingInt(el.getTag());
             seen_types[tag] += 1;
 
             const ordinals = self.entries.getPtr(child).?;

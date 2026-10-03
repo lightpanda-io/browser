@@ -218,7 +218,7 @@ fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
     };
 
     const tm = try dt.localTime(timestamp);
-    return std.fmt.allocPrint(frame.local_arena, "{d:0>2}/{d:0>2}/{d} {d:0>2}:{d:0>2}:{d:0>2}", .{
+    return frame.local_arena.print("{d:0>2}/{d:0>2}/{d} {d:0>2}:{d:0>2}:{d:0>2}", .{
         @as(u32, @intCast(tm.tm_mon + 1)),
         @as(u32, @intCast(tm.tm_mday)),
         tm.tm_year + 1900,
@@ -1223,7 +1223,7 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
     }
 
     frame.domChanged();
-    self._write_insertion_point = children_to_insert.getLast();
+    self._write_insertion_point = children_to_insert.last().?;
 }
 
 pub fn open(self: *Document, call_frame: *Frame) !*Document {

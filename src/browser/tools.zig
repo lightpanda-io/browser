@@ -783,11 +783,11 @@ const url_params_schema = minify(
     \\}
 );
 
-/// Materialized form of `Tool.definition` keyed by `@intFromEnum(Tool)`.
+/// Materialized form of `Tool.definition` keyed by `@backingInt(Tool)`.
 /// Built at comptime by iterating every `Tool` tag — order and count
 /// can't drift because both come from the enum itself.
-pub const tool_defs: [@typeInfo(Tool).@"enum".fields.len]Tool.Definition = blk: {
-    var arr: [@typeInfo(Tool).@"enum".fields.len]Tool.Definition = undefined;
+pub const tool_defs: [@typeInfo(Tool).@"enum".field_names.len]Tool.Definition = blk: {
+    var arr: [@typeInfo(Tool).@"enum".field_names.len]Tool.Definition = undefined;
     for (std.enums.values(Tool), 0..) |t, i| arr[i] = t.definition();
     break :blk arr;
 };
@@ -795,10 +795,10 @@ pub const tool_defs: [@typeInfo(Tool).@"enum".fields.len]Tool.Definition = blk: 
 /// Comptime-built flat array of tool names, in `Tool` declaration order.
 /// Use this when callers only need the names (slash-command lookup, MCP
 /// `tools/list`).
-pub const names: [@typeInfo(Tool).@"enum".fields.len][]const u8 = blk: {
-    const fields = @typeInfo(Tool).@"enum".fields;
-    var arr: [fields.len][]const u8 = undefined;
-    for (fields, 0..) |f, i| arr[i] = f.name;
+pub const names: [@typeInfo(Tool).@"enum".field_names.len][]const u8 = blk: {
+    const field_names = @typeInfo(Tool).@"enum".field_names;
+    var arr: [field_names.len][]const u8 = undefined;
+    for (field_names, 0..) |field_name, i| arr[i] = field_name;
     break :blk arr;
 };
 
@@ -913,7 +913,7 @@ pub fn call(
     // `multi_tool_use.parallel` wrapper) learns the name is wrong instead of
     // retrying it with different arguments.
     const tool = std.meta.stringToEnum(Tool, tool_name) orelse return .{
-        .text = try std.fmt.allocPrint(arena, "Unknown tool: {s}", .{tool_name}),
+        .text = try arena.print("Unknown tool: {s}", .{tool_name}),
         .is_error = true,
     };
     if (diagnoseArgs(arena, arguments)) |msg|
@@ -1012,7 +1012,7 @@ fn dispatch(
 fn formatNavigationError(arena: std.mem.Allocator, session: *lp.Session) ?[]const u8 {
     const frame = session.currentFrame() orelse return null;
     const err = frame._last_navigate_error orelse return null;
-    return std.fmt.allocPrint(arena, "navigation failed: {s}", .{@errorName(err)}) catch null;
+    return arena.print("navigation failed: {s}", .{@errorName(err)}) catch null;
 }
 
 /// Run JavaScript against the current page. The script need not be
@@ -1023,7 +1023,7 @@ pub fn evalScript(
     registry: *NodeRegistry,
     script: []const u8,
 ) ToolError!ToolResult {
-    const z = try arena.dupeZ(u8, script);
+    const z = try arena.dupeSentinel(u8, script, 0);
     const page = try ensurePage(session, registry, null, null);
     return runEval(arena, page, z, null);
 }
@@ -1109,9 +1109,9 @@ fn navStatus(arena: std.mem.Allocator, frame: *const lp.Frame) []const u8 {
     // `std.http.Status` is an enum(u10) and `_http_status` is only clamped to
     // u16 (`http.getResponseCode`), so a server answering with a 4-digit code
     // would make the cast illegal behaviour rather than an unknown phrase.
-    const phrase = if (status > 599) "" else @as(std.http.Status, @enumFromInt(status)).phrase() orelse "";
-    if (phrase.len == 0) return std.fmt.allocPrint(arena, "{d}", .{status}) catch "unknown";
-    return std.fmt.allocPrint(arena, "{d} {s}", .{ status, phrase }) catch "unknown";
+    const phrase = if (status > 599) "" else @as(std.http.Status, @fromBackingInt(@intCast(status))).phrase() orelse "";
+    if (phrase.len == 0) return arena.print("{d}", .{status}) catch "unknown";
+    return arena.print("{d} {s}", .{ status, phrase }) catch "unknown";
 }
 
 fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1119,8 +1119,8 @@ fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     const result = try performGoto(session, registry, args.url, .{ .timeout = args.timeout, .wait_until = args.waitUntil });
     const status = if (session.currentFrame()) |frame| navStatus(arena, frame) else "unknown";
     return switch (result) {
-        .completed => std.fmt.allocPrint(arena, "Navigated successfully. HTTP {s}.", .{status}),
-        .timeout => std.fmt.allocPrint(arena, "Navigation started (HTTP {s}) but the page did not finish loading before the timeout.", .{status}),
+        .completed => arena.print("Navigated successfully. HTTP {s}.", .{status}),
+        .timeout => arena.print("Navigation started (HTTP {s}) but the page did not finish loading before the timeout.", .{status}),
     } catch ToolError.InternalError;
 }
 
@@ -1521,17 +1521,17 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
 
     if (args.path) |path| {
         const content_height = writePng(&prepared, path) catch |err| return .{
-            .text = std.fmt.allocPrint(arena, "could not write {s}: {s}", .{ path, @errorName(err) }) catch return ToolError.OutOfMemory,
+            .text = arena.print("could not write {s}: {s}", .{ path, @errorName(err) }) catch return ToolError.OutOfMemory,
             .is_error = true,
         };
         // The renderer reports the content height; a fixed strip is its own height.
         const height = if (prepared.opts.height == 0) content_height else prepared.opts.height;
-        return .{ .text = std.fmt.allocPrint(arena, "Saved {d}x{d} PNG to {s}", .{ prepared.opts.width, height, absolutePath(arena, path) }) catch return ToolError.OutOfMemory };
+        return .{ .text = arena.print("Saved {d}x{d} PNG to {s}", .{ prepared.opts.width, height, absolutePath(arena, path) }) catch return ToolError.OutOfMemory };
     }
 
     prepared.fit(inline_image_max_width, inline_image_max_height) catch return ToolError.InternalError;
     return .{
-        .text = std.fmt.allocPrint(arena, "PNG, {d}x{d}", .{ prepared.opts.width, prepared.opts.height }) catch return ToolError.OutOfMemory,
+        .text = arena.print("PNG, {d}x{d}", .{ prepared.opts.width, prepared.opts.height }) catch return ToolError.OutOfMemory,
         .image = prepared,
     };
 }
@@ -1646,14 +1646,12 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
 
     // Block scope preserves a trailing expression's value and keeps top-level
     // `let`/`const` from leaking; top-level `await`/`return` need the async IIFE.
-    const block_script = std.fmt.allocPrintSentinel(
-        arena,
+    const block_script = arena.printSentinel(
         "{{ {s}\n}}",
         .{args.script},
         0,
     ) catch return ToolError.OutOfMemory;
-    const iife_script = std.fmt.allocPrintSentinel(
-        arena,
+    const iife_script = arena.printSentinel(
         "(async function(){{ \"use strict\"; {s} }})()",
         .{args.script},
         0,
@@ -1697,7 +1695,7 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     if (result.text.len == 0) return result; // silenced save=; don't re-emit via nav suffix
 
     const page_title = after.getTitle() catch null;
-    const text = std.fmt.allocPrint(arena, "{s}\n(Navigated to {s}, HTTP {s}, title: {s})", .{
+    const text = arena.print("{s}\n(Navigated to {s}, HTTP {s}, title: {s})", .{
         result.text, after.url, navStatus(arena, after), page_title orelse "(none)",
     }) catch return ToolError.InternalError;
     return .{ .text = text };
@@ -1811,7 +1809,7 @@ fn bridgePrelude(arena: std.mem.Allocator, store: *const BridgeStore) ![:0]const
         try aw.writer.writeAll(kv.value_ptr.*);
     }
     try aw.writer.writeAll("};");
-    return arena.dupeZ(u8, aw.written());
+    return arena.dupeSentinel(u8, aw.written(), 0);
 }
 
 const bridge_postlude: [:0]const u8 = "JSON.stringify(globalThis.lp)";
@@ -1925,7 +1923,7 @@ fn formatActionResult(
     target: ActionTarget,
     suffix: []const u8,
 ) ToolError![]const u8 {
-    return std.fmt.allocPrint(arena, "{s} ({f}){s}", .{ prefix, target, suffix }) catch ToolError.InternalError;
+    return arena.print("{s} ({f}){s}", .{ prefix, target, suffix }) catch ToolError.InternalError;
 }
 
 /// What `finalizeAction` compares against; take it before the action runs.
@@ -1972,7 +1970,7 @@ fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     }
 
     const page_title = page.getTitle() catch null;
-    return std.fmt.allocPrint(arena, "{s}.{s} Page url: {s}, HTTP {s}, title: {s}", .{
+    return arena.print("{s}.{s} Page url: {s}, HTTP {s}, title: {s}", .{
         body, note, page.url, navStatus(arena, page), page_title orelse "(none)",
     }) catch ToolError.InternalError;
 }
@@ -2009,7 +2007,7 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     lp.actions.fill(resolved.node, text, resolved.page) catch |err| return mapActionError(err);
 
     // Show the original reference (e.g. $LP_PASSWORD) in the result, not the resolved value
-    const suffix = std.fmt.allocPrint(arena, " with \"{s}\"", .{raw_text}) catch return ToolError.InternalError;
+    const suffix = arena.print(" with \"{s}\"", .{raw_text}) catch return ToolError.InternalError;
     const body = try formatActionResult(arena, "Filled element", resolved.target, suffix);
     return finalizeAction(arena, session, registry, scope, body);
 }
@@ -2032,15 +2030,15 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeReg
     const result = lp.actions.scroll(if (resolved) |r| r.node else null, args.x, args.y, page) catch |err| return mapActionError(err);
 
     const body = (switch (result.target) {
-        .window => std.fmt.allocPrint(arena, "Scrolled window to x: {d}, y: {d}", .{ result.x, result.y }),
-        .node => std.fmt.allocPrint(arena, "Scrolled element ({f}) to x: {d}, y: {d}", .{
+        .window => arena.print("Scrolled window to x: {d}, y: {d}", .{ result.x, result.y }),
+        .node => arena.print("Scrolled element ({f}) to x: {d}, y: {d}", .{
             resolved.?.target,
             result.x,
             result.y,
         }),
         .container => |container| blk: {
             const registered = registry.register(container) catch return ToolError.InternalError;
-            break :blk std.fmt.allocPrint(arena, "Scrolled scroll container ({f}) of element ({f}) to x: {d}, y: {d}", .{
+            break :blk arena.print("Scrolled scroll container ({f}) of element ({f}) to x: {d}, y: {d}", .{
                 ActionTarget{ .backend_node_id = registered.id },
                 resolved.?.target,
                 result.x,
@@ -2087,7 +2085,7 @@ fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry:
     };
 
     const registered = registry.register(node) catch return ToolError.InternalError;
-    return std.fmt.allocPrint(arena, "Element found. backendNodeId: {d}", .{registered.id}) catch return ToolError.InternalError;
+    return arena.print("Element found. backendNodeId: {d}", .{registered.id}) catch return ToolError.InternalError;
 }
 
 fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -2138,7 +2136,7 @@ fn execWaitForState(arena: std.mem.Allocator, session: *lp.Session, arguments: ?
         },
     };
 
-    return std.fmt.allocPrint(arena, "Page reached {s}.", .{@tagName(args.state)}) catch return ToolError.InternalError;
+    return arena.print("Page reached {s}.", .{@tagName(args.state)}) catch return ToolError.InternalError;
 }
 
 fn execHover(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -2182,7 +2180,7 @@ fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
 
     // Pressing Enter on a form input triggers implicit form submission;
     // `finalizeAction` drains the queued navigation before tagging the body.
-    const body = std.fmt.allocPrint(arena, "Pressed key '{s}'", .{args.key}) catch return ToolError.InternalError;
+    const body = arena.print("Pressed key '{s}'", .{args.key}) catch return ToolError.InternalError;
     return finalizeAction(arena, session, registry, scope, body);
 }
 
@@ -2199,7 +2197,7 @@ fn execSelectOption(arena: std.mem.Allocator, session: *lp.Session, registry: *N
 
     lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| return mapActionError(err);
 
-    const prefix = std.fmt.allocPrint(arena, "Selected option '{s}'", .{args.value}) catch return ToolError.InternalError;
+    const prefix = arena.print("Selected option '{s}'", .{args.value}) catch return ToolError.InternalError;
     const body = try formatActionResult(arena, prefix, resolved.target, "");
     return finalizeAction(arena, session, registry, scope, body);
 }
@@ -2218,7 +2216,7 @@ fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     lp.actions.setChecked(resolved.node, args.checked, resolved.page) catch |err| return mapActionError(err);
 
     const state_str: []const u8 = if (args.checked) "checked" else "unchecked";
-    const suffix = std.fmt.allocPrint(arena, " to {s}", .{state_str}) catch return ToolError.InternalError;
+    const suffix = arena.print(" to {s}", .{state_str}) catch return ToolError.InternalError;
     const body = try formatActionResult(arena, "Set element", resolved.target, suffix);
     return finalizeAction(arena, session, registry, scope, body);
 }
@@ -2247,7 +2245,7 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *No
                 's' => options.dot_all = true,
                 'm' => options.multiline = true,
                 else => return .{
-                    .text = try std.fmt.allocPrint(arena, "findElement: unsupported regex flag '{c}' in '{s}'", .{ flag, name }),
+                    .text = try arena.print("findElement: unsupported regex flag '{c}' in '{s}'", .{ flag, name }),
                     .is_error = true,
                 },
             };
@@ -2255,7 +2253,7 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *No
             const regex = session.browser.app.regex_context.compile(lit.body, options, &diag) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.InvalidRegex => return .{
-                    .text = try std.fmt.allocPrint(arena, "findElement: invalid name regex '{s}': {s} at offset {d}", .{ lit.body, diag.message(), diag.offset }),
+                    .text = try arena.print("findElement: invalid name regex '{s}': {s} at offset {d}", .{ lit.body, diag.message(), diag.offset }),
                     .is_error = true,
                 },
             };
@@ -2315,7 +2313,7 @@ fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]
 
     if (args.name) |name| {
         if (lookupLpEnv(name)) |value| return value;
-        return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{name}) catch ToolError.InternalError;
+        return arena.print("Environment variable '{s}' is not set", .{name}) catch ToolError.InternalError;
     }
 
     const env_names = lpEnvNames(arena) catch return ToolError.InternalError;
@@ -2390,7 +2388,7 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
 
     const filter_url: ?[:0]const u8 = blk: {
         if (args.all) break :blk null;
-        if (args.url) |u| break :blk arena.dupeZ(u8, u) catch return ToolError.InternalError;
+        if (args.url) |u| break :blk arena.dupeSentinel(u8, u, 0) catch return ToolError.InternalError;
         if (session.currentFrame()) |f| break :blk f.url;
         return "No current page. Pass `url` to filter by host or `all=true` to list every cookie.";
     };
@@ -2410,7 +2408,7 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
     }
     if (count == 0) {
         const label = filter_url orelse "(unfiltered)";
-        return std.fmt.allocPrint(arena, "No cookies for {s}.", .{label}) catch ToolError.InternalError;
+        return arena.print("No cookies for {s}.", .{label}) catch ToolError.InternalError;
     }
     return aw.written();
 }
@@ -2544,7 +2542,7 @@ fn diagnoseArgs(arena: std.mem.Allocator, arguments: ?std.json.Value) ?[]const u
     if (args.object.get("state")) |v| switch (v) {
         .string => |s| if (std.meta.stringToEnum(lp.Config.WaitUntil, s) == null)
             return formatEnumError(arena, "state", s, lp.Config.WaitUntil),
-        else => return std.fmt.allocPrint(arena, "state must be a string", .{}) catch null,
+        else => return arena.print("state must be a string", .{}) catch null,
     };
 
     return null;
@@ -2553,9 +2551,9 @@ fn diagnoseArgs(arena: std.mem.Allocator, arguments: ?std.json.Value) ?[]const u
 fn formatEnumError(arena: std.mem.Allocator, field: []const u8, got: []const u8, comptime E: type) ?[]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     aw.writer.print("invalid {s} '{s}'. Expected one of: ", .{ field, got }) catch return null;
-    inline for (std.meta.fields(E), 0..) |f, i| {
+    inline for (@typeInfo(E).@"enum".field_names, 0..) |field_name, i| {
         if (i > 0) aw.writer.writeAll(", ") catch return null;
-        aw.writer.writeAll(f.name) catch return null;
+        aw.writer.writeAll(field_name) catch return null;
     }
     return aw.written();
 }
@@ -2601,7 +2599,7 @@ pub fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
     if (v != .object) return v;
 
     const schemas = lp.Schema.all();
-    const tool_idx = @intFromEnum(tool);
+    const tool_idx = @backingInt(tool);
     if (tool_idx >= schemas.len) return v;
     const schema = schemas[tool_idx];
 
@@ -2719,7 +2717,7 @@ pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) err
     var changed = false;
     for (pairs.items) |p| {
         if (std.mem.indexOf(u8, current, p.value) == null) continue;
-        const placeholder = try std.fmt.allocPrint(arena, "${s}", .{p.name});
+        const placeholder = try arena.print("${s}", .{p.name});
         current = try std.mem.replaceOwned(u8, arena, current, p.value, placeholder);
         changed = true;
     }
@@ -2751,12 +2749,12 @@ test "tree and nodeDetails read the node's own frame" {
     const input_id = (try registry.register(input)).id;
 
     const aa = testing.arena_allocator;
-    const tree_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try std.fmt.allocPrint(aa, "{{\"backendNodeId\":{d}}}", .{html_id}), .{});
+    const tree_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{html_id}), .{});
     const tree = try call(aa, page.session, &registry, "tree", tree_args, .{});
     try std.testing.expect(std.mem.indexOf(u8, tree.text, "child-label") != null);
     try std.testing.expect(std.mem.indexOf(u8, tree.text, "parent-") == null);
 
-    const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try std.fmt.allocPrint(aa, "{{\"backendNodeId\":{d}}}", .{input_id}), .{});
+    const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{input_id}), .{});
     const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{});
     try std.testing.expect(std.mem.indexOf(u8, details.text, "child-label") != null);
 }

@@ -100,7 +100,7 @@ pub const Command = union(enum) {
         }
 
         fn schema(self: ToolCall) *const Schema {
-            return &Schema.all()[@intFromEnum(self.tool)];
+            return &Schema.all()[@backingInt(self.tool)];
         }
 
         /// Skip the line when the recorded form would not round-trip:
@@ -160,10 +160,10 @@ pub const Command = union(enum) {
 
         const split = Schema.splitNameRest(trimmed[1..]) orelse return error.MissingName;
 
-        inline for (std.meta.fields(LlmCommand)) |f| {
-            if (std.ascii.eqlIgnoreCase(split.name, f.name)) {
+        inline for (@typeInfo(LlmCommand).@"enum".field_names) |field_name| {
+            if (std.ascii.eqlIgnoreCase(split.name, field_name)) {
                 if (split.rest.len > 0) return error.MalformedKv;
-                return .{ .llm = @field(LlmCommand, f.name) };
+                return .{ .llm = @field(LlmCommand, field_name) };
             }
         }
 

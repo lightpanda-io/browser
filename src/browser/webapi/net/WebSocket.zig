@@ -167,10 +167,10 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
 
         // yup, this is what we're supposed to do.
         if (std.mem.eql(u8, scheme, "http:")) {
-            break :blk try std.fmt.allocPrintSentinel(arena.allocator(), "ws{s}", .{resolved["http".len..]}, 0);
+            break :blk try arena.allocator().printSentinel("ws{s}", .{resolved["http".len..]}, 0);
         }
         if (std.mem.eql(u8, scheme, "https:")) {
-            break :blk try std.fmt.allocPrintSentinel(arena.allocator(), "wss{s}", .{resolved["https".len..]}, 0);
+            break :blk try arena.allocator().printSentinel("wss{s}", .{resolved["https".len..]}, 0);
         }
 
         return error.SyntaxError;
@@ -659,7 +659,7 @@ pub fn getUrl(self: *const WebSocket) []const u8 {
 }
 
 fn getReadyState(self: *const WebSocket) u16 {
-    return @intFromEnum(self._ready_state);
+    return @backingInt(self._ready_state);
 }
 
 fn getBufferedAmount(self: *const WebSocket) u32 {
@@ -1031,10 +1031,10 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(WebSocket.init, .{});
 
-    pub const CONNECTING = bridge.property(@intFromEnum(ReadyState.connecting), .{ .template = true });
-    pub const OPEN = bridge.property(@intFromEnum(ReadyState.open), .{ .template = true });
-    pub const CLOSING = bridge.property(@intFromEnum(ReadyState.closing), .{ .template = true });
-    pub const CLOSED = bridge.property(@intFromEnum(ReadyState.closed), .{ .template = true });
+    pub const CONNECTING = bridge.property(@backingInt(ReadyState.connecting), .{ .template = true });
+    pub const OPEN = bridge.property(@backingInt(ReadyState.open), .{ .template = true });
+    pub const CLOSING = bridge.property(@backingInt(ReadyState.closing), .{ .template = true });
+    pub const CLOSED = bridge.property(@backingInt(ReadyState.closed), .{ .template = true });
 
     pub const url = bridge.accessor(WebSocket.getUrl, null, .{});
     pub const readyState = bridge.accessor(WebSocket.getReadyState, null, .{});

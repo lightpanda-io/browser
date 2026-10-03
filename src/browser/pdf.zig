@@ -291,7 +291,7 @@ const Document = struct {
         const layout = self.layout;
         const lines = layout.lines();
         for (layout.blocks(), 0..) |b, bi| {
-            if (b.kind == @intFromEnum(screenshot.LpBlock.Kind.rule)) {
+            if (b.kind == @backingInt(screenshot.LpBlock.Kind.rule)) {
                 const pg, const py = self.pageOf(b.y);
                 if (self.selected[pg]) {
                     try rect(&self.pages[pg].writer, layout.raw.rule_color, b.x, py, self.column_w - b.x, 1);
@@ -311,7 +311,7 @@ const Document = struct {
                 const h = boxes[j].bottom - boxes[i].top;
                 if (self.selected[pg]) {
                     const w = &self.pages[pg].writer;
-                    if (b.kind == @intFromEnum(screenshot.LpBlock.Kind.pre) and self.opts.print_background) {
+                    if (b.kind == @backingInt(screenshot.LpBlock.Kind.pre) and self.opts.print_background) {
                         const x0 = b.x - layout.raw.pre_pad;
                         try rect(w, layout.raw.pre_bg, x0, top, self.column_w - x0, h);
                     }
@@ -351,7 +351,7 @@ const Document = struct {
     /// Each line's vertical extent. A <pre> grows its first and last line by
     /// the padding so the background stays with the text across a break.
     fn lineBoxes(self: *const Document, b: screenshot.LpLayoutBlock, block_lines: []const screenshot.LpLine) ![]const Box {
-        const pad: f32 = if (b.kind == @intFromEnum(screenshot.LpBlock.Kind.pre)) self.layout.raw.pre_pad else 0;
+        const pad: f32 = if (b.kind == @backingInt(screenshot.LpBlock.Kind.pre)) self.layout.raw.pre_pad else 0;
         const boxes = try self.arena.alloc(Box, block_lines.len);
         for (boxes, block_lines, 0..) |*box, line, i| {
             box.* = .{
@@ -584,11 +584,11 @@ fn paginate(arena: Allocator, layout: *const screenshot.Layout, page_h: f32) ![]
     try breaks.append(arena, 0);
     const lines = layout.lines();
     for (layout.blocks()) |b| {
-        if (b.kind == @intFromEnum(screenshot.LpBlock.Kind.rule)) {
+        if (b.kind == @backingInt(screenshot.LpBlock.Kind.rule)) {
             try fit(arena, &breaks, b.y, b.y + 1, page_h);
             continue;
         }
-        const pad: f32 = if (b.kind == @intFromEnum(screenshot.LpBlock.Kind.pre)) layout.raw.pre_pad else 0;
+        const pad: f32 = if (b.kind == @backingInt(screenshot.LpBlock.Kind.pre)) layout.raw.pre_pad else 0;
         for (lines[b.lines..][0..b.lines_len], 0..) |line, i| {
             const top = line.top - if (i == 0) pad else 0;
             const bottom = line.bottom + if (i + 1 == b.lines_len) pad else 0;
@@ -673,10 +673,10 @@ const FontUse = struct {
         const ttf = &self.ttf;
         const k = 1000 / @as(f32, @floatFromInt(ttf.upem));
         const gids = try self.sortedGids(arena);
-        const name = try std.fmt.allocPrint(arena, "{s}+{s}", .{ SUBSET_TAG, self.info.name[0..self.info.name_len] });
+        const name = try arena.print("{s}+{s}", .{ SUBSET_TAG, self.info.name[0..self.info.name_len] });
 
         const file = ttf.subset(arena, gids) catch ttf.data;
-        const file_id = try out.stream(try std.fmt.allocPrint(arena, "/Length1 {d}", .{file.len}), file);
+        const file_id = try out.stream(try arena.print("/Length1 {d}", .{file.len}), file);
 
         const descriptor = try out.alloc();
         try out.begin(descriptor);
@@ -988,7 +988,7 @@ const Out = struct {
     }
 
     fn print(self: *Out, comptime fmt: []const u8, args: anytype) !void {
-        try self.write(try std.fmt.allocPrint(self.arena, fmt, args));
+        try self.write(try self.arena.print(fmt, args));
     }
 
     fn alloc(self: *Out) !usize {

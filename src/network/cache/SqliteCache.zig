@@ -108,8 +108,7 @@ pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u3
                 return e;
             };
 
-            const full_path = try std.fmt.allocPrintSentinel(
-                allocator,
+            const full_path = try allocator.printSentinel(
                 "{s}/cache.db",
                 .{std.mem.trimEnd(u8, cache_dir, &.{'/'})},
                 0,

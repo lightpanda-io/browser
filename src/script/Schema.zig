@@ -340,7 +340,7 @@ pub fn parseSlashCommand(input: []const u8) ?Split {
 
 fn find(schemas: []const Schema, name: []const u8) ?*const Schema {
     if (std.meta.stringToEnum(BrowserTool, name)) |tool| {
-        const idx = @intFromEnum(tool);
+        const idx = @backingInt(tool);
         if (idx < schemas.len) return &schemas[idx];
     }
     for (schemas) |*s| {
@@ -353,7 +353,7 @@ pub fn findByName(name: []const u8) ?*const Schema {
     return find(all(), name);
 }
 
-/// Lazy process-wide cache, keyed by `@intFromEnum(BrowserTool)`.
+/// Lazy process-wide cache, keyed by `@backingInt(BrowserTool)`.
 /// Panics on init failure — `tool_defs` is comptime-constant, so any
 /// parse/build error is a build-time bug.
 pub fn all() []const Schema {
@@ -369,7 +369,7 @@ fn initGlobal() void {
     global_arena = .init(std.heap.page_allocator);
     const a = global_arena.allocator();
     for (browser_tools.tool_defs, 0..) |td, i| {
-        const tool: BrowserTool = @enumFromInt(i);
+        const tool: BrowserTool = @fromBackingInt(@intCast(i));
         const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, td.input_schema, .{}) catch |err| {
             std.debug.panic("failed to parse schema for tool '{s}': {s}", .{ @tagName(tool), @errorName(err) });
         };
@@ -436,7 +436,7 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
         out[idx] = .{
             .name = name,
             .required = true,
-            .fragment = try std.fmt.allocPrint(arena, "<{s}>", .{name}),
+            .fragment = try arena.print("<{s}>", .{name}),
         };
         idx += 1;
     }
@@ -445,7 +445,7 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
         out[idx] = .{
             .name = f.name,
             .required = false,
-            .fragment = try std.fmt.allocPrint(arena, "[{s}=…]", .{f.name}),
+            .fragment = try arena.print("[{s}=…]", .{f.name}),
         };
         idx += 1;
     }

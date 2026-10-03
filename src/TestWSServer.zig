@@ -145,7 +145,7 @@ fn handleClient(client: posix.socket_t) void {
 
     // Send upgrade response
     var resp_buf: [256]u8 = undefined;
-    const resp = std.fmt.bufPrint(&resp_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
+    const resp = std.mem.print(&resp_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
         "Upgrade: websocket\r\n" ++
         "Connection: Upgrade\r\n" ++
         "Sec-WebSocket-Accept: {s}\r\n\r\n", .{accept_key}) catch return;

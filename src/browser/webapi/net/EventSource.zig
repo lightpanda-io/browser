@@ -331,7 +331,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     self._exec.js.localScope(&ls);
     defer ls.deinit();
 
-    const final_url = try self._arena.dupeZ(u8, transfer.req.url);
+    const final_url = try self._arena.dupeSentinel(u8, transfer.req.url, 0);
     self._event_origin = (URL.getOrigin(self._arena.allocator(), final_url) catch null) orelse "";
 
     // https://html.spec.whatwg.org/multipage/server-sent-events.html#announce-the-connection
@@ -570,7 +570,7 @@ pub fn getUrl(self: *const EventSource) []const u8 {
 }
 
 fn getReadyState(self: *const EventSource) u16 {
-    return @intFromEnum(self._ready_state);
+    return @backingInt(self._ready_state);
 }
 
 fn getWithCredentials(self: *const EventSource) bool {
@@ -621,9 +621,9 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(EventSource.init, .{});
 
-    pub const CONNECTING = bridge.property(@intFromEnum(ReadyState.connecting), .{ .template = true });
-    pub const OPEN = bridge.property(@intFromEnum(ReadyState.open), .{ .template = true });
-    pub const CLOSED = bridge.property(@intFromEnum(ReadyState.closed), .{ .template = true });
+    pub const CONNECTING = bridge.property(@backingInt(ReadyState.connecting), .{ .template = true });
+    pub const OPEN = bridge.property(@backingInt(ReadyState.open), .{ .template = true });
+    pub const CLOSED = bridge.property(@backingInt(ReadyState.closed), .{ .template = true });
 
     pub const url = bridge.accessor(EventSource.getUrl, null, .{});
     pub const readyState = bridge.accessor(EventSource.getReadyState, null, .{});

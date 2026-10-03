@@ -48,7 +48,7 @@ pub const Scope = enum {
     cors,
 };
 
-const num_scopes = @typeInfo(Scope).@"enum".fields.len;
+const num_scopes = @typeInfo(Scope).@"enum".field_names.len;
 
 /// A single `--log-filter-scopes` directive. `scope == null` targets every
 /// scope (the `all` keyword). `enable` is true for `+X` (filter in), false
@@ -63,10 +63,10 @@ pub const FilterRule = struct {
 /// scope then re-enables `cdp`. Scopes untouched by any directive stay
 /// enabled.
 pub fn resolveFilters(rules: []const FilterRule) [num_scopes]bool {
-    var scope_enabled = [_]bool{true} ** num_scopes;
+    var scope_enabled: [num_scopes]bool = @splat(true);
     for (rules) |rule| {
         if (rule.scope) |scope| {
-            scope_enabled[@intFromEnum(scope)] = rule.enable;
+            scope_enabled[@backingInt(scope)] = rule.enable;
         } else {
             for (&scope_enabled) |*e| e.* = rule.enable;
         }
@@ -78,7 +78,7 @@ const Opts = struct {
     format: Format = if (lp.IS_DEBUG) .pretty else .logfmt,
     level: Level = if (lp.IS_DEBUG) .info else .warn,
     // Per-scope enabled flags; a `false` entry suppresses that scope's logs.
-    scope_enabled: [num_scopes]bool = [_]bool{true} ** num_scopes,
+    scope_enabled: [num_scopes]bool = @splat(true),
     color: ?bool = null,
 };
 
@@ -118,11 +118,11 @@ fn clearColor(writer: *std.Io.Writer) !void {
 pub var sink: ?*const fn (bytes: []const u8) void = null;
 
 pub fn enabled(scope: Scope, level: Level) bool {
-    if (@intFromEnum(level) < @intFromEnum(opts.level)) {
+    if (@backingInt(level) < @backingInt(opts.level)) {
         return false;
     }
 
-    if (opts.scope_enabled[@intFromEnum(scope)] == false) {
+    if (opts.scope_enabled[@backingInt(scope)] == false) {
         return false;
     }
 
@@ -138,7 +138,7 @@ var expected_logs: [num_scopes]u16 = @splat(0);
 pub fn expectLog(comptime scopes: []const Scope) void {
     comptime std.debug.assert(lp.IS_TEST);
     inline for (scopes) |scope| {
-        expected_logs[@intFromEnum(scope)] += 1;
+        expected_logs[@backingInt(scope)] += 1;
     }
 }
 
@@ -240,15 +240,15 @@ pub fn warnDisabledIFrame() void {
 }
 
 pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
-    var kvs: [@typeInfo(@TypeOf(data)).@"struct".fields.len]KV = undefined;
+    var kvs: [@typeInfo(@TypeOf(data)).@"struct".field_names.len]KV = undefined;
     initKVs(data, &kvs);
     logKVs(scope, level, msg, &kvs);
 }
 
 inline fn initKVs(data: anytype, kvs: []KV) void {
-    inline for (@typeInfo(@TypeOf(data)).@"struct".fields, 0..) |f, i| {
-        const value = @field(data, f.name);
-        kvs[i] = .{ .key = f.name, .value = Value.init(&value) };
+    inline for (@typeInfo(@TypeOf(data)).@"struct".field_names, 0..) |field_name, i| {
+        const value = @field(data, field_name);
+        kvs[i] = .{ .key = field_name, .value = Value.init(&value) };
     }
 }
 
@@ -258,7 +258,7 @@ pub fn logKVs(scope: Scope, level: Level, msg: []const u8, kvs: []const KV) void
     }
 
     if (comptime lp.IS_TEST) {
-        const expected = &expected_logs[@intFromEnum(scope)];
+        const expected = &expected_logs[@backingInt(scope)];
         if (expected.* > 0) {
             expected.* -= 1;
             return;
@@ -266,7 +266,7 @@ pub fn logKVs(scope: Scope, level: Level, msg: []const u8, kvs: []const KV) void
     }
 
     if (current_page) |page| {
-        if (level != .note and @intFromEnum(level) > @intFromEnum(page.max_level)) {
+        if (level != .note and @backingInt(level) > @backingInt(page.max_level)) {
             page.max_level = level;
         }
     }
@@ -294,7 +294,7 @@ pub fn logKVs(scope: Scope, level: Level, msg: []const u8, kvs: []const KV) void
 // Like `log`, but to an explicit writer and without the enabled/sink
 // gating. Only used by tests.
 fn logTo(scope: Scope, level: Level, msg: []const u8, data: anytype, out: *std.Io.Writer) !void {
-    var kvs: [@typeInfo(@TypeOf(data)).@"struct".fields.len]KV = undefined;
+    var kvs: [@typeInfo(@TypeOf(data)).@"struct".field_names.len]KV = undefined;
     initKVs(data, &kvs);
     return logToErased(scope, level, msg, &kvs, out);
 }
@@ -882,8 +882,8 @@ test "log: resolveFilters" {
     // No directives: everything enabled.
     {
         const se = resolveFilters(&.{});
-        try testing.expectEqual(true, se[@intFromEnum(Scope.cdp)]);
-        try testing.expectEqual(true, se[@intFromEnum(Scope.http)]);
+        try testing.expectEqual(true, se[@backingInt(Scope.cdp)]);
+        try testing.expectEqual(true, se[@backingInt(Scope.http)]);
     }
 
     // Backward compatible: bare/`-` scope filters that scope out, rest stay in.
@@ -892,9 +892,9 @@ test "log: resolveFilters" {
             .{ .scope = .cdp, .enable = false },
             .{ .scope = .http, .enable = false },
         });
-        try testing.expectEqual(false, se[@intFromEnum(Scope.cdp)]);
-        try testing.expectEqual(false, se[@intFromEnum(Scope.http)]);
-        try testing.expectEqual(true, se[@intFromEnum(Scope.js)]);
+        try testing.expectEqual(false, se[@backingInt(Scope.cdp)]);
+        try testing.expectEqual(false, se[@backingInt(Scope.http)]);
+        try testing.expectEqual(true, se[@backingInt(Scope.js)]);
     }
 
     // `-all,+cdp`: disable everything, then re-enable cdp.
@@ -903,9 +903,9 @@ test "log: resolveFilters" {
             .{ .scope = null, .enable = false },
             .{ .scope = .cdp, .enable = true },
         });
-        try testing.expectEqual(true, se[@intFromEnum(Scope.cdp)]);
-        try testing.expectEqual(false, se[@intFromEnum(Scope.http)]);
-        try testing.expectEqual(false, se[@intFromEnum(Scope.js)]);
+        try testing.expectEqual(true, se[@backingInt(Scope.cdp)]);
+        try testing.expectEqual(false, se[@backingInt(Scope.http)]);
+        try testing.expectEqual(false, se[@backingInt(Scope.js)]);
     }
 
     // `+all,-cdp`: enable everything, then disable cdp. Order matters.
@@ -914,7 +914,7 @@ test "log: resolveFilters" {
             .{ .scope = null, .enable = true },
             .{ .scope = .cdp, .enable = false },
         });
-        try testing.expectEqual(false, se[@intFromEnum(Scope.cdp)]);
-        try testing.expectEqual(true, se[@intFromEnum(Scope.http)]);
+        try testing.expectEqual(false, se[@backingInt(Scope.cdp)]);
+        try testing.expectEqual(true, se[@backingInt(Scope.http)]);
     }
 }

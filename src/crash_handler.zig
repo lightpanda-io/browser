@@ -28,7 +28,7 @@ var panic_level: usize = 0;
 var panic_mutex: std.Io.Mutex = .init;
 
 // overwrite's Zig default panic handler
-pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, begin_addr: ?usize) noreturn {
+pub fn panic(msg: []const u8, _: ?*std.lang.StackTrace, begin_addr: ?usize) noreturn {
     @branchHint(.cold);
     crash(msg, .{ .source = "global" }, begin_addr orelse @returnAddress());
 }
@@ -60,13 +60,13 @@ pub noinline fn crash(
                 ) catch abort();
 
                 writer.print("\nreason: {s}\n", .{reason}) catch abort();
-                writer.print("OS: {s}\n", .{@tagName(builtin.os.tag)}) catch abort();
+                writer.print("OS: {s}\n", .{@tagName(builtin.target.os.tag)}) catch abort();
                 writer.print("mode: {s}\n", .{@tagName(builtin.mode)}) catch abort();
                 writer.print("version: {s}\n", .{lp.build_config.version}) catch abort();
                 writeCurrentPage(writer);
-                inline for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
-                    writer.writeAll(f.name ++ ": ") catch break;
-                    lp.log.writeValue(.pretty, @field(args, f.name), writer) catch abort();
+                inline for (@typeInfo(@TypeOf(args)).@"struct".field_names) |field_name| {
+                    writer.writeAll(field_name ++ ": ") catch break;
+                    lp.log.writeValue(.pretty, @field(args, field_name), writer) catch abort();
                     writer.writeByte('\n') catch abort();
                 }
 
@@ -118,14 +118,14 @@ fn report(reason: []const u8, begin_addr: usize, args: anytype) !void {
     var body_buffer: [8192]u8 = undefined;
     const body = blk: {
         var writer: std.Io.Writer = .fixed(body_buffer[0..8191]); // reserve 1 space
-        inline for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
+        inline for (@typeInfo(@TypeOf(args)).@"struct".field_names) |field_name| {
             // remove url value from the crash report.
-            if (comptime std.mem.eql(u8, f.name, "url")) {
+            if (comptime std.mem.eql(u8, field_name, "url")) {
                 writer.writeAll("url: REDACTED\n") catch break;
                 continue;
             }
-            writer.writeAll(f.name ++ ": ") catch break;
-            lp.log.writeValue(.pretty, @field(args, f.name), &writer) catch {};
+            writer.writeAll(field_name ++ ": ") catch break;
+            lp.log.writeValue(.pretty, @field(args, field_name), &writer) catch {};
             writer.writeByte('\n') catch {};
         }
 
@@ -209,7 +209,7 @@ var signal_handlers_attached = false;
 // V8's WebAssembly trap handler is not enabled; enabling it would require
 // giving it first chance at SIGSEGV/SIGBUS here.
 pub fn attachSignalHandlers() void {
-    if (builtin.os.tag != .linux or signal_handlers_attached) return;
+    if (builtin.target.os.tag != .linux or signal_handlers_attached) return;
     signal_handlers_attached = true;
     signal_output_fd = openSignalOutput();
     var mask = std.posix.sigemptyset();
@@ -223,7 +223,7 @@ pub fn attachSignalHandlers() void {
 }
 
 fn openSignalOutput() std.c.fd_t {
-    if (builtin.os.tag != .linux) return -1;
+    if (builtin.target.os.tag != .linux) return -1;
     const S = std.os.linux.S;
 
     const raw_flags = std.c.fcntl(2, std.posix.F.GETFL);
@@ -290,7 +290,7 @@ fn handleFatalSignal(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_p
     }
 
     _ = std.c.raise(sig);
-    std.c._exit(@intCast(128 + @intFromEnum(sig)));
+    std.c._exit(@intCast(128 + @backingInt(sig)));
 }
 
 // The page this thread was working on. Local output only (never sent to the
@@ -315,7 +315,7 @@ fn writeRecord(record: []const u8) void {
 
 fn writeSignalContext(writer: *std.Io.Writer, sig: std.posix.SIG, info: *const std.posix.siginfo_t, context: ?*const std.debug.cpu_context.Native) !void {
     try writer.print("\nLightpanda fatal signal: {t} ({d})\nversion: {s}\nOS: {s}\nmode: {s}\ncode: {d}\n", .{
-        sig, @intFromEnum(sig), lp.build_config.version, @tagName(builtin.os.tag), @tagName(builtin.mode), info.code,
+        sig, @backingInt(sig), lp.build_config.version, @tagName(builtin.target.os.tag), @tagName(builtin.mode), info.code,
     });
     if (faultAddress(info)) |address| {
         try writer.print("address: 0x{x}\n", .{address});
@@ -327,7 +327,7 @@ fn writeSignalContext(writer: *std.Io.Writer, sig: std.posix.SIG, info: *const s
     if (context) |ctx| {
         try writer.print("pc: 0x{x}\nfp: 0x{x}\n", .{ ctx.getPc(), ctx.getFp() });
         if (stackPointer(ctx)) |sp| try writer.print("sp: 0x{x}\n", .{sp});
-        switch (builtin.cpu.arch) {
+        switch (builtin.target.cpu.arch) {
             .aarch64 => try writer.print("lr: 0x{x}\n", .{ctx.x[30]}),
             else => {},
         }
@@ -364,7 +364,7 @@ fn writeBacktrace(ctx: *const std.debug.cpu_context.Native) void {
 }
 
 fn stackPointer(ctx: *const std.debug.cpu_context.Native) ?usize {
-    return switch (builtin.cpu.arch) {
+    return switch (builtin.target.cpu.arch) {
         .aarch64 => ctx.sp,
         .x86_64 => ctx.gprs.get(.rsp),
         else => null,
@@ -380,7 +380,7 @@ fn faultAddress(info: *const std.posix.siginfo_t) ?usize {
 const testing = @import("testing.zig");
 
 test "crash_handler: fatal signals preserve termination with unavailable stderr" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     for (fatal_signals) |sig| {
         for ([_]SignalTestMode{ .normal, .pipe, .tty, .closed, .broken_pipe, .locked_panic, .regular_file, .read_only_pipe }) |mode| {
             try testSignal(sig, mode);
@@ -389,7 +389,7 @@ test "crash_handler: fatal signals preserve termination with unavailable stderr"
 }
 
 test "crash_handler: full stderr must not delay termination" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     for (fatal_signals) |sig| {
         try testSignal(sig, .full_pipe);
         try testSignal(sig, .full_socket);
@@ -397,12 +397,12 @@ test "crash_handler: full stderr must not delay termination" {
 }
 
 test "crash_handler: hardware fault reports the interrupted context" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     try testSignal(.SEGV, .hardware);
 }
 
 test "crash_handler: fatal signal after fork from a non-main thread" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     const Worker = struct {
         fn run(result: *?anyerror) void {
             testSignal(.SEGV, .hardware) catch |err| {
@@ -417,7 +417,7 @@ test "crash_handler: fatal signal after fork from a non-main thread" {
 }
 
 test "crash_handler: unknown signal addresses are not read" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     var info: std.posix.siginfo_t = undefined;
     for ([_]c_int{ 0, -1, -6, 128, 0x10001 }) |code| {
         info.code = code;
@@ -490,7 +490,7 @@ fn testSignal(sig: std.posix.SIG, mode: SignalTestMode) !void {
     }
     if (pid == 0) {
         // Keep a regression from hanging the runner or writing a core.
-        _ = std.os.linux.prctl(@intFromEnum(std.os.linux.PR.SET_DUMPABLE), 0, 0, 0, 0);
+        _ = std.os.linux.prctl(@backingInt(std.os.linux.PR.SET_DUMPABLE), 0, 0, 0, 0);
         const default: std.posix.Sigaction = .{ .handler = .{ .handler = std.posix.SIG.DFL }, .mask = std.posix.sigemptyset(), .flags = 0 };
         std.posix.sigaction(.ALRM, &default, null);
         std.posix.sigaction(.PIPE, &default, null);
@@ -514,7 +514,7 @@ fn testSignal(sig: std.posix.SIG, mode: SignalTestMode) !void {
             const flags = std.c.fcntl(2, std.posix.F.GETFL);
             const nonblock: c_int = @bitCast(@as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })));
             if (std.c.fcntl(2, std.posix.F.SETFL, flags | nonblock) < 0) std.c._exit(1);
-            const fill = [_]u8{'x'} ** 1024;
+            const fill: [1024]u8 = @splat('x');
             for ([_]usize{ fill.len, 1 }) |len| {
                 while (true) {
                     const written = std.c.write(2, &fill, len);
@@ -561,7 +561,7 @@ fn testSignal(sig: std.posix.SIG, mode: SignalTestMode) !void {
         // only ever goes pending and the handler's fallback exit is what ends
         // the process. Everything before that point is unaffected.
         try testing.expectEqual(true, std.posix.W.IFEXITED(raw));
-        try testing.expectEqual(@as(u8, @intCast(128 + @intFromEnum(sig))), std.posix.W.EXITSTATUS(raw));
+        try testing.expectEqual(@as(u8, @intCast(128 + @backingInt(sig))), std.posix.W.EXITSTATUS(raw));
     } else {
         try testing.expectEqual(true, std.posix.W.IFSIGNALED(raw));
         try testing.expectEqual(sig, std.posix.W.TERMSIG(raw));
@@ -592,7 +592,7 @@ fn testSignal(sig: std.posix.SIG, mode: SignalTestMode) !void {
         try testing.expectEqual(true, std.mem.containsAtLeast(u8, text, 1, "\nbacktrace: 0x"));
         if (mode == .hardware) {
             var address_buffer: [64]u8 = undefined;
-            const address = try std.fmt.bufPrint(&address_buffer, "address: 0x{x}\n", .{@intFromPtr(guard.?.ptr)});
+            const address = try std.mem.print(&address_buffer, "address: 0x{x}\n", .{@intFromPtr(guard.?.ptr)});
             try testing.expectEqual(true, std.mem.containsAtLeast(u8, text, 1, address));
             // The faulting pc alone is not a backtrace: the walk has to have
             // followed at least one link out of the frame that faulted.

@@ -291,7 +291,7 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     // `return <expr>` becomes that Promise's value, which we echo. (A bare
     // trailing expression no longer auto-prints — `await` and a script
     // completion value are mutually exclusive in JS.)
-    const wrapped = std.fmt.allocPrint(self.call_arena.allocator(), "(async () => {{\n{s}\n}})()", .{source}) catch
+    const wrapped = self.call_arena.allocator().print("(async () => {{\n{s}\n}})()", .{source}) catch
         return try self.dupeError("out of memory");
     const script_source = self.env.isolate.initStringHandle(wrapped);
 
@@ -717,7 +717,7 @@ fn callTool(
     const result = browser_tools.call(arena, self.session, self.registry, @tagName(tool), args, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.FrameNotLoaded => return .{ .fail = "no page loaded - run page.goto(url) first" },
-        else => return .{ .fail = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ @tagName(tool), @errorName(err) }) catch return error.OutOfMemory },
+        else => return .{ .fail = arena.print("{s} failed: {s}", .{ @tagName(tool), @errorName(err) }) catch return error.OutOfMemory },
     };
 
     if (result.is_error) return .{ .fail = result.text };
@@ -822,7 +822,7 @@ fn extractSchemaString(arena: std.mem.Allocator, value: std.json.Value) error{Ou
 fn normalizeExtractSchemaString(arena: std.mem.Allocator, schema: []const u8) error{OutOfMemory}![]const u8 {
     const trimmed = std.mem.trim(u8, schema, &std.ascii.whitespace);
     if (trimmed.len == 0 or trimmed[0] != '[') return schema;
-    return try std.fmt.allocPrint(arena, "{{\"__root\":{s}}}", .{schema});
+    return try arena.print("{{\"__root\":{s}}}", .{schema});
 }
 
 fn argJson(
@@ -925,7 +925,7 @@ fn formatCaught(
         break :blk if (n < 0) null else @as(u32, @intCast(n));
     };
     if (line) |n| {
-        return std.fmt.allocPrint(arena, "line {d}: {s}", .{ n, exception }) catch return error.OutOfMemory;
+        return arena.print("line {d}: {s}", .{ n, exception }) catch return error.OutOfMemory;
     }
     return try self.dupeError(exception);
 }
