@@ -510,6 +510,9 @@ pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, pruned: ?*const 
     }
 
     if (strip.invisible) {
+        if (el.is(Template) != null) {
+            return true;
+        }
         if (el.ownerFrame(frame)) |owner| {
             if (owner._style_manager.hasAuthorDisplayNone(el)) {
                 return true;
@@ -785,6 +788,24 @@ test "dump: strip.invisible removes author display:none elements" {
         \\<!DOCTYPE html>
         \\<html><head><style>.hidden{display:none}</style><link rel="stylesheet" href="data:text/css,"><script>var a=1;</script></head><body><h1>Title</h1><img><svg></svg><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
     );
+}
+
+test "dump: strip.invisible removes templates and their content" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<template><p>row</p></template><p>text</p>");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try deep(div.asNode(), .{}, &aw.writer, frame);
+    try testing.expectString("<div><template><p>row</p></template><p>text</p></div>", aw.written());
+
+    aw.clearRetainingCapacity();
+    try deep(div.asNode(), .{ .strip = .{ .invisible = true } }, &aw.writer, frame);
+    try testing.expectString("<div><p>text</p></div>", aw.written());
 }
 
 test "dump: strip.shell removes page chrome but keeps sectioned header/footer" {
