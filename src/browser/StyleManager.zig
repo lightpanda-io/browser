@@ -26,6 +26,7 @@ const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
 const Element = @import("webapi/Element.zig");
+const popover = @import("webapi/element/popover.zig");
 
 const Selector = @import("webapi/selector/Selector.zig");
 const SelectorParser = @import("webapi/selector/Parser.zig");
@@ -921,7 +922,7 @@ fn Group(comptime Spec: type) type {
             self.applyRules(&p, &priorities, el, frame);
 
             if (@hasDecl(Spec, "finish")) {
-                Spec.finish(&p, el, &priorities);
+                Spec.finish(&p, el, frame, &priorities);
             }
             return p;
         }
@@ -1004,7 +1005,7 @@ fn Group(comptime Spec: type) type {
 /// Centralizes UA-stylesheet display:none truth so `getComputedStyle().display`
 /// (via `hasDisplayNone`) and `el.checkVisibility()` (via `isHidden`) agree.
 /// Spec: HTML Rendering §15.3.1 "Hidden elements".
-fn matchesUaDisplayNoneRule(el: *Element) bool {
+fn matchesUaDisplayNoneRule(el: *Element, frame: *Frame) bool {
     // Tag check first: O(1) switch, exits for the ~95% of elements with
     // ordinary tags before we touch the attribute list.
     const tag = el.getTag();
@@ -1022,6 +1023,11 @@ fn matchesUaDisplayNoneRule(el: *Element) bool {
 
     // dialog:not([open]) { display: none }
     if (tag == .dialog and !el.hasAttributeSafe(comptime .wrap("open"))) return true;
+
+    // [popover]:not(:popover-open):not(dialog[open]) { display: none }
+    if (el.hasAttributeSafe(comptime .wrap("popover")) and !popover.isOpen(el, frame)) {
+        if (tag != .dialog) return true;
+    }
 
     // details:not([open]) > *:not(summary) { display: none }
     if (tag != .summary) {
@@ -1362,9 +1368,9 @@ const Visibility = struct {
     // element — per CSS Cascade §6.1 any normal-origin author rule beats UA
     // origin regardless of specificity, so `.x { display: flex }` on a
     // `<div class="x" hidden>` must report visible.
-    fn finish(p: *Cascaded, el: *Element, priorities: *const Priorities(Declared)) void {
+    fn finish(p: *Cascaded, el: *Element, frame: *Frame, priorities: *const Priorities(Declared)) void {
         p.author_display = priorities.get(.display) != 0;
-        if (!p.author_display and matchesUaDisplayNoneRule(el)) {
+        if (!p.author_display and matchesUaDisplayNoneRule(el, frame)) {
             p.display = .none;
         }
     }
