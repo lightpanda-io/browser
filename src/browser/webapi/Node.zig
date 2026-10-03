@@ -1792,7 +1792,11 @@ pub const JsApi = struct {
     }.wrap, null, .{});
     pub const nodeType = bridge.accessor(Node.getNodeType, null, .{});
 
-    pub const textContent = bridge.accessor(_textContext, Node.setTextContent, .{ .ce_reactions = true });
+    pub const textContent = bridge.accessor(_textContext, _setTextContent, .{ .ce_reactions = true });
+    // textContent is a nullable DOMString: null (and undefined) mean the empty string.
+    fn _setTextContent(self: *Node, data: ?[]const u8, frame: *Frame) !void {
+        return self.setTextContent(data orelse "", frame);
+    }
     fn _textContext(self: *Node, frame: *const Frame) !?[]const u8 {
         // cdata and attributes can return value directly, avoiding the copy
         switch (self._type) {
