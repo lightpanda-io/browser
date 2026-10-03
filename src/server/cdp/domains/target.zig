@@ -420,12 +420,38 @@ fn setDiscoverTargets(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
+// One entry of Target.setAutoAttach's `filter` (a TargetFilter in
+// the protocol): `type` selects the target type it matches (an
+// absent type matches any type) and `exclude` turns the entry
+// into an exclusion instead of an inclusion.
+const TargetFilter = struct {
+    type: ?[]const u8 = null,
+    exclude: bool = false,
+};
+
+// Does the client's auto-attach filter rule out page targets? An
+// entry with `exclude` set rules out every target matching its
+// `type`; an absent `type` rules out every type.
+fn filterExcludesPage(filter: ?[]const TargetFilter) bool {
+    for (filter orelse return false) |f| {
+        if (f.exclude) {
+            if (f.type) |target_type| {
+                if (std.mem.eql(u8, target_type, "page")) return true;
+            } else {
+                // an untyped exclude rules out every type
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 fn setAutoAttach(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         autoAttach: bool,
         waitForDebuggerOnStart: bool,
         flatten: bool = true,
-        // filter: ?[]TargetFilter = null,
+        filter: ?[]const TargetFilter = null,
     })) orelse return error.InvalidParams;
 
     // set a flag to send Target.attachedToTarget events
@@ -467,16 +493,25 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     // there.
     // This hack requires the main cdp dispatch handler to special case
     // messages from this "STARTUP" session.
-    try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
-        .sessionId = "STARTUP",
-        .targetInfo = TargetInfo{
-            .type = "page",
-            .targetId = "TID-STARTUP",
-            .title = "",
-            .url = "about:blank",
-            .browserContextId = "BID-STARTUP",
-        },
-    }, .{});
+    //
+    // A client that excluded page targets from auto-attach (puppeteer
+    // does: it only wants the targets it creates itself) must not be
+    // told about this placeholder. It would surface as a page, and
+    // navigating it lands on the STARTUP session, which has no page
+    // behind it (see dispatchStartupCommand), so the navigation would
+    // never happen. Stay quiet for those clients.
+    if (!filterExcludesPage(params.filter)) {
+        try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
+            .sessionId = "STARTUP",
+            .targetInfo = TargetInfo{
+                .type = "page",
+                .targetId = "TID-STARTUP",
+                .title = "",
+                .url = "about:blank",
+                .browserContextId = "BID-STARTUP",
+            },
+        }, .{});
+    }
 
     try cmd.sendResult(null, .{});
 }
