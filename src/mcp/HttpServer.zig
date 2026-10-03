@@ -41,6 +41,21 @@ const router = @import("router.zig");
 const log = lp.log;
 const posix = std.posix;
 
+// std.posix.setsockopt is a compileError on Windows; ws2_32's
+// setsockopt is not wrapped by std. SOCKET is an integer handle
+// (UINT_PTR), so it is passed by value.
+extern "ws2_32" fn setsockopt(
+    s: usize,
+    level: c_int,
+    optname: c_int,
+    optval: [*]const u8,
+    optlen: c_int,
+) c_int;
+
+fn winSetsockopt(sock: posix.socket_t, level: i32, optname: u32, opt: []const u8) !void {
+    if (setsockopt(@intFromPtr(sock), level, @intCast(optname), opt.ptr, @intCast(opt.len)) != 0) return error.Unexpected;
+}
+
 const HttpServer = @This();
 
 const ns_per_ms = std.time.ns_per_ms;
@@ -130,7 +145,12 @@ queue: Queue = .{},
 
 // Blocking listener owned by run(); -1 until bound. stop() unblocks the
 // accept from another thread.
-listener: posix.socket_t = -1,
+listener: posix.socket_t = if (builtin.os.tag == .windows)
+    // INVALID_SOCKET: socket_t is a HANDLE on
+    // Windows, ~0 is its invalid sentinel.
+    @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))))
+else
+    -1,
 shutting_down: std.atomic.Value(bool) = .init(false),
 
 // Registration happens in onAccept — the same (accept) thread deinit runs
@@ -191,12 +211,24 @@ pub fn deinit(self: *HttpServer) void {
 /// handler). Blocks the calling thread; each accepted connection is served
 /// by its own thread doing blocking IO.
 pub fn run(self: *HttpServer, address: sys_net.IpAddress) !void {
-    const listener = try sys_net.socket(sys_net.family(&address), posix.SOCK.STREAM | posix.SOCK.CLOEXEC, posix.IPPROTO.TCP);
+    const sock_flags = if (comptime builtin.os.tag == .windows)
+        posix.SOCK.STREAM
+    else
+        posix.SOCK.STREAM | posix.SOCK.CLOEXEC;
+    const listener = try sys_net.socket(sys_net.family(&address), sock_flags, posix.IPPROTO.TCP);
     errdefer _ = std.c.close(listener);
 
-    try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+    if (comptime builtin.os.tag == .windows) {
+        try winSetsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+    } else {
+        try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+    }
     if (@hasDecl(posix.TCP, "NODELAY")) {
-        try posix.setsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+        if (comptime builtin.os.tag == .windows) {
+            try winSetsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+        } else {
+            try posix.setsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+        }
     }
 
     const sa = sys_net.sockaddrFromAddress(&address);

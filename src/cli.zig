@@ -422,7 +422,7 @@ pub fn Builder(comptime commands: anytype) type {
 
         /// Parses executable name, command and options via single call.
         pub fn parse(allocator: Allocator, proc_args: std.process.Args) !struct { []const u8, Union } {
-            var args = std.process.Args.Iterator.init(proc_args);
+            var args = try std.process.Args.Iterator.initAllocator(proc_args, allocator);
             defer args.deinit();
 
             const exec_name = std.fs.path.basename(args.next().?);
@@ -478,7 +478,7 @@ pub fn Builder(comptime commands: anytype) type {
             // we can create a new one. Not great, but this fallback is temporary
             // as we transition to this command mode approach.
             args.deinit();
-            args = std.process.Args.Iterator.init(proc_args);
+            args = try std.process.Args.Iterator.initAllocator(proc_args, allocator);
             // Skip the `exec_name`.
             _ = args.skip();
 

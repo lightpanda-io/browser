@@ -97,21 +97,30 @@ pub fn socket(domain: u32, socket_type: u32, protocol: u32) !socket_t {
     // Darwin's socket() rejects flag bits in the type argument (its
     // SOCK.NONBLOCK/CLOEXEC are Zig-invented shim values); strip them and
     // apply via fcntl instead. Linux/FreeBSD accept them natively.
-    const flag_bits = posix.SOCK.NONBLOCK | posix.SOCK.CLOEXEC;
+    const flag_bits: u32 = if (comptime builtin.os.tag.isDarwin())
+        posix.SOCK.NONBLOCK | posix.SOCK.CLOEXEC
+    else
+        0;
     const extra: u32 = if (comptime builtin.os.tag.isDarwin()) socket_type & flag_bits else 0;
     const rc = c.socket(domain, socket_type & ~extra, protocol);
     if (rc < 0) {
         return errnoError(c.errno(rc));
     }
-    errdefer _ = c.close(rc);
-    if (extra & posix.SOCK.NONBLOCK != 0) {
-        const fl = try fcntl(rc, posix.F.GETFL, 0);
-        _ = try fcntl(rc, posix.F.SETFL, fl | @as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
+    if (comptime builtin.os.tag == .windows) {
+        // ws2_32's socket() returns an integer-indexed SOCKET
+        // handle; socket_t on Windows is a HANDLE.
+        return @ptrFromInt(@as(usize, @intCast(rc)));
+    } else {
+        errdefer _ = c.close(rc);
+        if (extra & posix.SOCK.NONBLOCK != 0) {
+            const fl = try fcntl(rc, posix.F.GETFL, 0);
+            _ = try fcntl(rc, posix.F.SETFL, fl | @as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
+        }
+        if (extra & posix.SOCK.CLOEXEC != 0) {
+            _ = try fcntl(rc, posix.F.SETFD, posix.FD_CLOEXEC);
+        }
+        return rc;
     }
-    if (extra & posix.SOCK.CLOEXEC != 0) {
-        _ = try fcntl(rc, posix.F.SETFD, posix.FD_CLOEXEC);
-    }
-    return rc;
 }
 
 pub fn bind(sock: socket_t, addr: *const posix.sockaddr, len: posix.socklen_t) !void {
@@ -131,32 +140,51 @@ pub fn listen(sock: socket_t, backlog: u31) !void {
 pub fn accept(sock: socket_t, addr: ?*posix.sockaddr, addr_size: ?*posix.socklen_t, flags: u32) !socket_t {
     const have_accept4 = !(builtin.target.os.tag.isDarwin() or native_os == .windows or native_os == .haiku);
 
-    const accepted_sock: socket_t = while (true) {
-        const rc = if (have_accept4)
-            c.accept4(sock, addr, addr_size, flags)
-        else
-            c.accept(sock, addr, addr_size);
+    if (comptime native_os == .windows) {
+        // ws2_32's accept() returns an integer-indexed SOCKET
+        // handle; socket_t is a HANDLE on Windows. There is no
+        // accept4, so the flags argument is unused. Errors come
+        // through WSAGetLastError, not the CRT errno that
+        // c.errno() reads: the WSAEWOULDBLOCK of a drained
+        // backlog must surface as error.WouldBlock or the
+        // caller's accept-drain loop never exits.
+        while (true) {
+            const rc = c.accept(sock, addr, addr_size);
+            if (rc < 0) {
+                const code = WSAGetLastError();
+                if (code == WSAEINTR) continue;
+                return wsaError(code);
+            }
+            return @ptrFromInt(@as(usize, @intCast(rc)));
+        }
+    } else {
+        const accepted_sock: socket_t = while (true) {
+            const rc = if (have_accept4)
+                c.accept4(sock, addr, addr_size, flags)
+            else
+                c.accept(sock, addr, addr_size);
 
-        if (rc < 0) {
-            switch (c.errno(rc)) {
-                .INTR => continue,
-                else => |e| return errnoError(e),
+            if (rc < 0) {
+                switch (c.errno(rc)) {
+                    .INTR => continue,
+                    else => |e| return errnoError(e),
+                }
+            }
+            break rc;
+        };
+
+        if (have_accept4 == false) {
+            errdefer _ = c.close(accepted_sock);
+            if (flags & posix.SOCK.NONBLOCK != 0) {
+                const fl = try fcntl(accepted_sock, posix.F.GETFL, 0);
+                _ = try fcntl(accepted_sock, posix.F.SETFL, fl | @as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
+            }
+            if (flags & posix.SOCK.CLOEXEC != 0) {
+                _ = try fcntl(accepted_sock, posix.F.SETFD, posix.FD_CLOEXEC);
             }
         }
-        break rc;
-    };
-
-    if (have_accept4 == false) {
-        errdefer _ = c.close(accepted_sock);
-        if (flags & posix.SOCK.NONBLOCK != 0) {
-            const fl = try fcntl(accepted_sock, posix.F.GETFL, 0);
-            _ = try fcntl(accepted_sock, posix.F.SETFL, fl | @as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
-        }
-        if (flags & posix.SOCK.CLOEXEC != 0) {
-            _ = try fcntl(accepted_sock, posix.F.SETFD, posix.FD_CLOEXEC);
-        }
+        return accepted_sock;
     }
-    return accepted_sock;
 }
 
 const ShutdownHow = enum { recv, send, both };
@@ -191,6 +219,44 @@ pub fn connect(addr: *const IpAddress) !socket_t {
     return sock;
 }
 
+// ws2_32 socket I/O for Windows, declared directly (the same
+// pattern as Server.zig's WindowsIO): zig's std.c declares
+// send/recv with an isize return, so the int SOCKET_ERROR (-1)
+// result of the real ws2_32 functions would be zero-extended
+// past the rc < 0 checks below. The WSA error codes live in
+// winerror.h and are not defined by zig's ws2_32 bindings.
+extern "ws2_32" fn send(s: usize, buf: [*]const u8, len: c_int, flags: c_int) c_int;
+extern "ws2_32" fn recv(s: usize, buf: [*]u8, len: c_int, flags: c_int) c_int;
+extern "ws2_32" fn closesocket(s: usize) c_int;
+extern "ws2_32" fn WSAGetLastError() c_int;
+
+const WSAEINTR: c_int = 10004;
+const WSAEACCES: c_int = 10013;
+const WSAEINVAL: c_int = 10022;
+const WSAEMFILE: c_int = 10024;
+const WSAEWOULDBLOCK: c_int = 10035;
+const WSAENOTSOCK: c_int = 10038;
+const WSAECONNABORTED: c_int = 10053;
+const WSAECONNRESET: c_int = 10054;
+const WSAENOBUFS: c_int = 10055;
+const WSAENOTCONN: c_int = 10057;
+const WSAESHUTDOWN: c_int = 10058;
+
+pub fn readSocket(sock: socket_t, buf: []u8) !usize {
+    if (comptime native_os == .windows) {
+        // ws2_32 recv is the read path for a SOCKET handle:
+        // kernel32 ReadFile does not operate on sockets. Both
+        // callers pass sockets (Link's connection socket and
+        // Server.drain's wake channels), so no non-socket
+        // branch is needed. A return of 0 is a graceful peer
+        // close; callers map it to error.Closed.
+        const rc = recv(@intFromPtr(sock), buf.ptr, @intCast(buf.len), 0);
+        if (rc == -1) return wsaError(WSAGetLastError());
+        return @intCast(rc);
+    }
+    return posix.read(sock, buf);
+}
+
 pub fn writeAll(sock: socket_t, bytes: []const u8) !void {
     var pos: usize = 0;
     while (pos < bytes.len) {
@@ -199,6 +265,14 @@ pub fn writeAll(sock: socket_t, bytes: []const u8) !void {
 }
 
 pub fn write(sock: socket_t, bytes: []const u8) !usize {
+    if (comptime native_os == .windows) {
+        // ws2_32 send: SOCKET_ERROR (-1) on failure, else the
+        // byte count. The CRT write() operates on the fd table
+        // and fails on a SOCKET handle.
+        const rc = send(@intFromPtr(sock), bytes.ptr, @intCast(bytes.len), 0);
+        if (rc == -1) return wsaError(WSAGetLastError());
+        return @intCast(rc);
+    }
     const rc = c.write(sock, bytes.ptr, bytes.len);
     if (rc < 0) {
         return switch (c.errno(rc)) {
@@ -221,6 +295,14 @@ pub fn fcntl(fd: posix.fd_t, cmd: i32, arg: usize) !usize {
 }
 
 pub fn close(fd: posix.fd_t) void {
+    if (comptime native_os == .windows) {
+        // fd is a SOCKET handle: closesocket it. The CRT
+        // close() operates on the fd table and returns EBADF
+        // for a SOCKET handle, which would trip the
+        // unreachable below.
+        _ = closesocket(@intFromPtr(fd));
+        return;
+    }
     switch (c.errno(c.close(fd))) {
         .BADF => unreachable, // Always a race condition.
         .INTR => {}, // This is still a success. See https://github.com/ziglang/zig/issues/2425
@@ -327,5 +409,23 @@ fn errnoError(e: posix.E) anyerror {
         .CONNABORTED => error.ConnectionAborted,
         .INTR => error.Interrupted,
         else => posix.unexpectedErrno(e),
+    };
+}
+
+// The Windows (WSAGetLastError) counterpart of errnoError.
+fn wsaError(code: c_int) anyerror {
+    return switch (code) {
+        WSAEINTR => error.Interrupted,
+        WSAEACCES => error.AccessDenied,
+        WSAEINVAL => error.InvalidArgument,
+        WSAEMFILE => error.ProcessFdQuotaExceeded,
+        WSAENOBUFS => error.SystemResources,
+        WSAEWOULDBLOCK => error.WouldBlock,
+        WSAENOTSOCK => error.NotASocket,
+        WSAENOTCONN => error.SocketNotConnected,
+        WSAECONNABORTED => error.ConnectionAborted,
+        WSAECONNRESET => error.ConnectionResetByPeer,
+        WSAESHUTDOWN => error.BrokenPipe,
+        else => error.Unexpected,
     };
 }

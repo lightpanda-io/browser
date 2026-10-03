@@ -52,6 +52,21 @@ const Server = @This();
 // fds the process needs beyond client connections and the HTTP client's
 const FD_HEADROOM = 128;
 
+// std.posix.setsockopt is a compileError on Windows; ws2_32's
+// setsockopt is not wrapped by std. SOCKET is an integer handle
+// (UINT_PTR), so it is passed by value.
+extern "ws2_32" fn setsockopt(
+    s: usize,
+    level: c_int,
+    optname: c_int,
+    optval: [*]const u8,
+    optlen: c_int,
+) c_int;
+
+fn winSetsockopt(sock: posix.socket_t, level: i32, optname: u32, opt: []const u8) !void {
+    if (setsockopt(@intFromPtr(sock), level, @intCast(optname), opt.ptr, @intCast(opt.len)) != 0) return error.Unexpected;
+}
+
 // How much one readable websocket may pull in per loop iteration; sized so a
 // large driver message (Playwright sends ~400KB) takes a couple of turns
 // rather than dozens, without starving the other connections.
@@ -135,13 +150,24 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
     const max_connections = fdBudget(config);
 
     const listener = blk: {
-        const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
+        const flags = if (comptime builtin.os.tag == .windows)
+            posix.SOCK.STREAM
+        else
+            posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
         const l = try sys_net.socket(sys_net.family(&address), flags, posix.IPPROTO.TCP);
         errdefer sys_net.close(l);
 
-        try posix.setsockopt(l, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+        if (comptime builtin.os.tag == .windows) {
+            try winSetsockopt(l, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+        } else {
+            try posix.setsockopt(l, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+        }
         if (@hasDecl(posix.TCP, "NODELAY")) {
-            try posix.setsockopt(l, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+            if (comptime builtin.os.tag == .windows) {
+                try winSetsockopt(l, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+            } else {
+                try posix.setsockopt(l, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+            }
         }
 
         const sa = sys_net.sockaddrFromAddress(&address);
@@ -326,7 +352,7 @@ fn accept(self: *Server, now: u64) !void {
     while (true) {
         var address: posix.sockaddr.storage = undefined;
         var address_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
-        const socket = sys_net.accept(self.listener, @ptrCast(&address), &address_len, posix.SOCK.NONBLOCK) catch |err| {
+        const socket = sys_net.accept(self.listener, @ptrCast(&address), &address_len, if (comptime builtin.os.tag == .windows) 0 else posix.SOCK.NONBLOCK) catch |err| {
             switch (err) {
                 error.WouldBlock => break,
                 error.ConnectionAborted => {
@@ -374,6 +400,12 @@ fn accept(self: *Server, now: u64) !void {
 fn configureSocket(socket: posix.socket_t) void {
     setSocketOption(socket, posix.SOL.SOCKET, posix.SO.KEEPALIVE, @as(c_int, 1), "SO_KEEPALIVE");
 
+    if (comptime builtin.os.tag == .windows) {
+        // Windows has no TCP_KEEPIDLE/KEEPINTVL/KEEPCNT
+        // options; SO_KEEPALIVE above uses the OS
+        // defaults.
+        return;
+    }
     const idle_opt = switch (builtin.os.tag) {
         .macos, .ios => posix.TCP.KEEPALIVE,
         else => posix.TCP.KEEPIDLE,
@@ -388,9 +420,15 @@ fn configureSocket(socket: posix.socket_t) void {
 }
 
 fn setSocketOption(socket: posix.socket_t, level: i32, option: u32, value: anytype, comptime name: []const u8) void {
-    posix.setsockopt(socket, level, option, &std.mem.toBytes(value)) catch |err| {
-        log.warn(.serve, "setsockopt", .{ .err = err, .option = name });
-    };
+    if (comptime builtin.os.tag == .windows) {
+        winSetsockopt(socket, level, option, &std.mem.toBytes(value)) catch |err| {
+            log.warn(.serve, "setsockopt", .{ .err = err, .option = name });
+        };
+    } else {
+        posix.setsockopt(socket, level, option, &std.mem.toBytes(value)) catch |err| {
+            log.warn(.serve, "setsockopt", .{ .err = err, .option = name });
+        };
+    }
 }
 
 fn liveConnections(self: *const Server) usize {
@@ -838,6 +876,7 @@ fn nextDeadline(self: *const Server) ?u64 {
 fn fdBudget(config: *const Config) usize {
     const reserve: usize = @as(usize, config.httpMaxConcurrent()) + config.wsMaxConcurrent() + FD_HEADROOM;
     const soft: u64 = blk: {
+        if (comptime builtin.os.tag == .windows) break :blk 1024;
         const limit = posix.getrlimit(.NOFILE) catch |err| {
             log.warn(.serve, "getrlimit", .{ .err = err });
             break :blk 1024;
@@ -854,7 +893,384 @@ fn fdBudget(config: *const Config) usize {
 const IOEngine = switch (builtin.os.tag) {
     .linux => EPoll,
     .macos, .ios, .tvos, .watchos, .freebsd, .netbsd, .dragonfly, .openbsd => KQueue,
+    .windows => WindowsIO,
     else => unreachable,
+};
+
+/// A select()-based event loop for Windows, mirroring the epoll
+/// engine's semantics: level-triggered, one registration per
+/// socket, the listener and the two wake channels carrying
+/// sentinel owners, and a connection or a Worker link carrying
+/// its pointer as the owner (a Worker's with the low bit set,
+/// see WS_TAG).
+///
+/// Windows has no epoll/kqueue/eventfd, and Zig's std wraps
+/// neither select() nor fd_set, so the winsock2 pieces are
+/// declared here the same way setsockopt is above. select() is
+/// level-triggered, which matches how the epoll engine is
+/// driven: readers drain their socket and rely on an unread
+/// remainder waking the loop again.
+///
+/// Sockets are blocking on Windows (there is no SOCK_NONBLOCK
+/// and no fcntl), which the readers already expect: reading a
+/// readable socket returns at once, and a write never yields
+/// WouldBlock, so the pending-write path stays unused. A
+/// half-closed peer is a readable socket whose read returns
+/// zero -- the same combination epoll delivers as
+/// EPOLLIN|EPOLLRDHUP -- so hangup is never reported here.
+const WindowsIO = struct {
+    const ws2_32 = std.os.windows.ws2_32;
+
+    // select() is not wrapped by Zig's std; the winsock2
+    // signature is declared directly. nfds is ignored on
+    // Windows.
+    extern "ws2_32" fn select(
+        nfds: c_int,
+        readfds: ?*fd_set,
+        writefds: ?*fd_set,
+        exceptfds: ?*fd_set,
+        timeout: ?*const ws2_32.timeval,
+    ) c_int;
+
+    // winsock2 reports failures through WSAGetLastError
+    // rather than errno.
+    extern "ws2_32" fn WSAGetLastError() c_int;
+
+    // Windows has no SOCK_NONBLOCK and no fcntl; flipping a
+    // socket non-blocking is an ioctlsocket(FIONBIO) call.
+    extern "ws2_32" fn ioctlsocket(s: usize, cmd: c_long, arg: *c_ulong) c_int;
+
+    const WSAEINTR = 10004;
+    const FIONBIO: c_long = @bitCast(@as(u32, 0x8004667E));
+
+    // The winsock2 fd_set: a count and a flat array of SOCKET
+    // handles. FD_SETSIZE is a compile-time constant in the
+    // header, but select() reads fd_count entries, so the array
+    // is sized to hold the whole registration set: fdBudget's
+    // Windows soft limit of 1024, plus the listener and the two
+    // wake channels.
+    const MAX_SOCKETS = 1024 + 64;
+    const fd_set = extern struct {
+        fd_count: u32,
+        fd_array: [MAX_SOCKETS]usize,
+    };
+
+    // The wake channels: select() has no eventfd equivalent, so
+    // each is a loopback socketpair. The local end sits in the
+    // read set under a sentinel owner; the remote end is written
+    // to raise the event. Both ends are non-blocking, so a full
+    // buffer fails the write (and the wakeup is logged, like the
+    // eventfd writes on the epoll engine) instead of blocking
+    // the caller, and draining a local end always returns at
+    // once.
+    shutdown_pair: [2]posix.socket_t,
+    signal_pair: [2]posix.socket_t,
+
+    // The registrations, the equivalent of the epoll_ctl set:
+    // which sockets are watched, for what, and who owns them.
+    // Slots are never reordered, so wait() reports events in
+    // registration order; the loop only relies on the deferred
+    // events (accept, signal, shutdown) landing after the batch,
+    // which holds for any order.
+    entries: [MAX_SOCKETS]?Entry,
+    event_list: [MAX_SOCKETS]IOEvent,
+
+    const Entry = struct {
+        socket: posix.socket_t,
+        // 0 is the listener, 1 the shutdown channel, 2 the
+        // signal channel; anything else is a Connection as-is
+        // or a Worker with the low bit set -- the same owner
+        // encoding the epoll and kqueue engines carry in their
+        // event data.
+        owner: usize,
+        read: bool,
+        write: bool,
+    };
+
+    // The owner sentinels, mirroring the epoll engine's event
+    // data.
+    const LISTENER: usize = 0;
+    const SHUTDOWN: usize = 1;
+    const SIGNAL: usize = 2;
+
+    // Poll data carries the owner: an http Connection as-is, a
+    // Worker with the low bit set (both are word-aligned, so
+    // the bit is free).
+    const WS_TAG: usize = 1;
+
+    fn init() !WindowsIO {
+        var self = WindowsIO{
+            .shutdown_pair = undefined,
+            .signal_pair = undefined,
+            .entries = [_]?Entry{null} ** MAX_SOCKETS,
+            .event_list = undefined,
+        };
+
+        self.shutdown_pair = try wakePair();
+        self.signal_pair = wakePair() catch |err| {
+            closePair(&self.shutdown_pair);
+            return err;
+        };
+        errdefer closePair(&self.signal_pair);
+        errdefer closePair(&self.shutdown_pair);
+
+        // Both wake channels stay registered for the engine's
+        // lifetime; every write is its own wakeup, and one
+        // delivery services everything that arrived.
+        try self.add(self.shutdown_pair[0], SHUTDOWN, true, false);
+        try self.add(self.signal_pair[0], SIGNAL, true, false);
+
+        return self;
+    }
+
+    fn deinit(self: *const WindowsIO) void {
+        sys_net.close(self.shutdown_pair[0]);
+        sys_net.close(self.shutdown_pair[1]);
+        sys_net.close(self.signal_pair[0]);
+        sys_net.close(self.signal_pair[1]);
+    }
+
+    fn stop(self: *const WindowsIO) void {
+        _ = sys_net.write(self.shutdown_pair[1], &[_]u8{1}) catch |err| {
+            log.fatal(.serve, "network close", .{ .err = err, .type = "windows" });
+        };
+    }
+
+    fn signal(self: *const WindowsIO) void {
+        _ = sys_net.write(self.signal_pair[1], &[_]u8{1}) catch |err| {
+            log.err(.serve, "network signal", .{ .err = err, .type = "windows" });
+        };
+    }
+
+    fn monitorListener(self: *WindowsIO, fd: posix.fd_t) !void {
+        // The epoll engine gets its non-blocking listener from
+        // SOCK_NONBLOCK at creation; Windows sockets have no
+        // such flag, so it is applied here. accept() drains the
+        // backlog in a loop until it yields WouldBlock, which a
+        // blocking listener never does.
+        try setNonBlocking(fd);
+        return self.add(fd, LISTENER, true, false);
+    }
+
+    fn pauseListener(self: *WindowsIO, fd: posix.fd_t) !void {
+        // mirrors EPOLL_CTL_DEL: the listener leaves the set
+        // until monitorListener re-adds it
+        if (!self.unregister(fd)) return error.FileDescriptorNotRegistered;
+    }
+
+    // No RDHUP to watch: a half-closed peer is a readable
+    // socket whose read returns zero, and the readers deal with
+    // the two together.
+    pub fn monitorHTTP(self: *WindowsIO, conn: *Connection) !void {
+        return self.add(conn.socket, @intFromPtr(conn), true, false);
+    }
+
+    fn monitorWebSocket(self: *WindowsIO, worker: *Worker) !void {
+        return self.add(worker.link.?.socket, @intFromPtr(worker) | WS_TAG, true, false);
+    }
+
+    pub fn waitWritable(self: *WindowsIO, conn: *Connection) !void {
+        // No hangup to watch while writing either: a gone peer
+        // surfaces as a write error instead.
+        return self.modify(conn.socket, @intFromPtr(conn), false, true);
+    }
+
+    pub fn waitReadable(self: *WindowsIO, conn: *Connection) !void {
+        return self.modify(conn.socket, @intFromPtr(conn), true, false);
+    }
+
+    pub fn remove(self: *WindowsIO, socket: posix.socket_t) void {
+        _ = self.unregister(socket);
+    }
+
+    // null blocks until an event arrives
+    fn wait(self: *WindowsIO, timeout_ms: ?u64) Iterator {
+        var read_set: fd_set = .{ .fd_count = 0, .fd_array = undefined };
+        var write_set: fd_set = .{ .fd_count = 0, .fd_array = undefined };
+        for (self.entries) |maybe| {
+            const entry = maybe orelse continue;
+            if (entry.read) fdSet(&read_set, entry.socket);
+            if (entry.write) fdSet(&write_set, entry.socket);
+        }
+
+        var tv: ws2_32.timeval = undefined;
+        const timeout: ?*const ws2_32.timeval = if (timeout_ms) |ms| blk: {
+            // capped at what a 32-bit timeval can hold
+            const total: i64 = @intCast(@min(ms, @as(u64, @intCast(std.math.maxInt(i32)))));
+            tv = .{
+                .sec = @intCast(@divTrunc(total, 1000)),
+                .usec = @intCast(@mod(total, 1000) * 1000),
+            };
+            break :blk &tv;
+        } else null;
+
+        var ready: c_int = undefined;
+        while (true) {
+            ready = select(0, &read_set, &write_set, null, timeout);
+            if (ready >= 0) break;
+            // interrupted: the wait has to be run again
+            if (WSAGetLastError() == WSAEINTR) continue;
+            // A registered socket vanished mid-call; like the
+            // epoll engine, this is a programming error -- every
+            // close path unregisters the socket first.
+            unreachable;
+        }
+
+        // select() rewrote the sets to hold only the ready
+        // sockets. The wake channels are level-triggered: consume
+        // what arrived so they go quiet until the next signal.
+        if (fdIsSet(&read_set, self.shutdown_pair[0])) drain(self.shutdown_pair[0]);
+        if (fdIsSet(&read_set, self.signal_pair[0])) drain(self.signal_pair[0]);
+
+        // One event per ready registration; a socket ready in
+        // both directions gets a single combined event, as an
+        // epoll event would.
+        var count: usize = 0;
+        for (self.entries) |maybe| {
+            const entry = maybe orelse continue;
+            const readable = entry.read and fdIsSet(&read_set, entry.socket);
+            const writable = entry.write and fdIsSet(&write_set, entry.socket);
+            if (!readable and !writable) continue;
+            self.event_list[count] = switch (entry.owner) {
+                LISTENER => .{ .accept = {} },
+                SHUTDOWN => .{ .shutdown = {} },
+                SIGNAL => .{ .signal = {} },
+                else => |owner| .{ .read_write = .{
+                    .target = if (owner & WS_TAG == 0)
+                        .{ .http = @ptrFromInt(owner) }
+                    else
+                        .{ .worker = @ptrFromInt(owner & ~WS_TAG) },
+                    .readable = readable,
+                    .writable = writable,
+                    .hangup = false,
+                } },
+            };
+            count += 1;
+        }
+        return .{ .index = 0, .events = self.event_list[0..count] };
+    }
+
+    const Iterator = struct {
+        index: usize,
+        events: []IOEvent,
+
+        fn next(self: *Iterator) ?IOEvent {
+            const index = self.index;
+            const events = self.events;
+            if (index == events.len) {
+                return null;
+            }
+            self.index = index + 1;
+            return events[index];
+        }
+    };
+
+    fn add(self: *WindowsIO, socket: posix.socket_t, owner: usize, read: bool, write: bool) !void {
+        if (self.find(socket) != null) return error.FileDescriptorAlreadyPresentInSet;
+        const slot = self.freeSlot() orelse {
+            // The registration set is sized to fdBudget's
+            // Windows ceiling, so this needs a config past it.
+            return error.SystemResources;
+        };
+        self.entries[slot] = .{ .socket = socket, .owner = owner, .read = read, .write = write };
+    }
+
+    fn modify(self: *WindowsIO, socket: posix.socket_t, owner: usize, read: bool, write: bool) !void {
+        const slot = self.find(socket) orelse return error.FileDescriptorNotRegistered;
+        self.entries[slot] = .{ .socket = socket, .owner = owner, .read = read, .write = write };
+    }
+
+    // Returns whether the socket was registered.
+    fn unregister(self: *WindowsIO, socket: posix.socket_t) bool {
+        const slot = self.find(socket) orelse return false;
+        self.entries[slot] = null;
+        return true;
+    }
+
+    fn find(self: *const WindowsIO, socket: posix.socket_t) ?usize {
+        for (self.entries, 0..) |maybe, slot| {
+            if (maybe) |entry| {
+                if (entry.socket == socket) return slot;
+            }
+        }
+        return null;
+    }
+
+    fn freeSlot(self: *const WindowsIO) ?usize {
+        for (self.entries, 0..) |maybe, slot| {
+            if (maybe == null) return slot;
+        }
+        return null;
+    }
+
+    fn fdSet(set: *fd_set, socket: posix.socket_t) void {
+        set.fd_array[set.fd_count] = @intFromPtr(socket);
+        set.fd_count += 1;
+    }
+
+    fn fdIsSet(set: *const fd_set, socket: posix.socket_t) bool {
+        const handle: usize = @intFromPtr(socket);
+        for (set.fd_array[0..set.fd_count]) |registered| {
+            if (registered == handle) return true;
+        }
+        return false;
+    }
+
+    // Windows has no socketpair(2); the standard emulation is a
+    // loopback TCP connection: the accepted end is what gets
+    // monitored, the connected end is what gets written to.
+    fn wakePair() ![2]posix.socket_t {
+        const loopback: sys_net.IpAddress = .{ .ip4 = .loopback(0) };
+        const listener = try sys_net.socket(sys_net.family(&loopback), posix.SOCK.STREAM, posix.IPPROTO.TCP);
+        errdefer sys_net.close(listener);
+
+        const sa = sys_net.sockaddrFromAddress(&loopback);
+        try sys_net.bind(listener, sa.ptr(), sa.len);
+        try sys_net.listen(listener, 1);
+
+        // bind(2) on port 0 picked an ephemeral port; look it up
+        // so the connected end can reach it
+        var bound: posix.sockaddr.storage = undefined;
+        var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
+        try sys_net.getsockname(listener, @ptrCast(&bound), &bound_len);
+        const address = sys_net.addressFromSockaddr(@ptrCast(&bound));
+
+        const remote = try sys_net.connect(&address);
+        errdefer sys_net.close(remote);
+        const local = try sys_net.accept(listener, null, null, 0);
+        sys_net.close(listener);
+
+        // both ends non-blocking: the writes in stop() and
+        // signal() fail (and are logged) rather than block on a
+        // full buffer, and drain() always returns at once
+        try setNonBlocking(local);
+        try setNonBlocking(remote);
+        return .{ local, remote };
+    }
+
+    fn closePair(pair: *const [2]posix.socket_t) void {
+        sys_net.close(pair[0]);
+        sys_net.close(pair[1]);
+    }
+
+    // Windows has no SOCK_NONBLOCK and no fcntl; a socket is
+    // flipped non-blocking with ioctlsocket(FIONBIO).
+    fn setNonBlocking(socket: posix.socket_t) !void {
+        var on: c_ulong = 1;
+        if (ioctlsocket(@intFromPtr(socket), FIONBIO, &on) != 0) return error.Unexpected;
+    }
+
+    // Consume a delivered wakeup so the level-triggered read set
+    // goes quiet until the next signal. The local end is
+    // readable, so every read here returns at once.
+    fn drain(socket: posix.socket_t) void {
+        var buf: [64]u8 = undefined;
+        while (true) {
+            const n = sys_net.readSocket(socket, &buf) catch return;
+            // drained: nothing was buffered behind what came back
+            if (n < buf.len) return;
+        }
+    }
 };
 
 // Abstraction over an EPoll or KQueue event

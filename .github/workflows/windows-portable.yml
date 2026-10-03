@@ -1,0 +1,63 @@
+name: windows-portable
+
+# 手动触发或打 portable-v* 标签时构建 Windows 原生便携包。
+# Windows 没有上游预编译 V8，此工作流完整跑 depot_tools -> gclient sync ->
+# gn+ninja 全流程（约 1-1.5 小时），产物为 zip（含 VC 运行库 DLL）。
+on:
+  workflow_dispatch:
+  push:
+    tags: ["portable-v*"]
+
+jobs:
+  portable:
+    runs-on: windows-latest
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Install Zig 0.16.0
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip -OutFile $env:RUNNER_TEMP\zig.zip
+          Expand-Archive $env:RUNNER_TEMP\zig.zip -DestinationPath $env:RUNNER_TEMP\zig
+          $zigbin = (Get-ChildItem $env:RUNNER_TEMP\zig -Directory).FullName
+          Write-Output $zigbin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Build lightpanda native windows (V8 from source, ~1-1.5h)
+        shell: cmd
+        run: |
+          set DEPOT_TOOLS_UPDATE=0
+          set DEPOT_TOOLS_WIN_TOOLCHAIN=0
+          set GYP_MSVS_VERSION=2022
+          set PATH=C:\Program Files\Git\usr\bin;%PATH%
+          zig build -Doptimize=ReleaseFast > build.log 2>&1 || (type build.log & exit /b 1)
+
+      - name: Package portable
+        shell: pwsh
+        run: |
+          $pkg = 'lightpanda-portable-windows-x64'
+          New-Item $pkg -ItemType Directory -Force | Out-Null
+          Copy-Item zig-out\bin\lightpanda.exe $pkg
+          Copy-Item "$env:SystemRoot\System32\VCRUNTIME140.dll" $pkg -ErrorAction SilentlyContinue
+          Copy-Item "$env:SystemRoot\System32\VCRUNTIME140_1.dll" $pkg -ErrorAction SilentlyContinue
+          Copy-Item README-WINDOWS.txt, LICENSE $pkg
+          Compress-Archive -Path $pkg -DestinationPath lightpanda-portable-windows-x64.zip
+
+      - name: upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a1 # v7.0.1
+        with:
+          name: lightpanda-portable-windows-x64
+          path: lightpanda-portable-windows-x64.zip
+          retention-days: 14
+
+      - name: attach to release (tag builds only, via gh CLI)
+        if: startsWith(github.ref, 'refs/tags/portable-v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag=${GITHUB_REF#refs/tags/}
+          gh release create "$tag" lightpanda-portable-windows-x64.zip \            --title "lightpanda-portable-windows-x64 $tag" \            --generate-notes

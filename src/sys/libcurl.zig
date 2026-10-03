@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const lp = @import("lightpanda");
 
 const crypto = @import("libcrypto.zig");
@@ -29,7 +30,7 @@ pub const CurlCode = c.CURLcode;
 pub const CurlSList = c.curl_slist;
 pub const CurlHeader = c.curl_header;
 pub const CurlSocket = c.curl_socket_t;
-const CurlOffT = c.curl_off_t;
+pub const CurlOffT = c.curl_off_t;
 
 pub const CURLE = struct {
     pub const OK = c.CURLE_OK;
@@ -83,6 +84,19 @@ const CurlGlobalFlags = packed struct(u8) {
     fn to_c(self: @This()) c_long {
         var flags: c_long = 0;
         if (self.ssl) flags |= c.CURL_GLOBAL_SSL;
+        if (comptime builtin.os.tag == .windows) {
+            // curl only runs WSAStartup() when CURL_GLOBAL_WIN32 is set
+            // (lib/system_win32.c). Without it every socket() and
+            // getaddrinfo() fails with WSAENOTINITIALISED (10093),
+            // which surfaces as CURLE_COULDNT_CONNECT /
+            // CURLE_COULDNT_RESOLVE_HOST. Callers here pass only
+            // CURL_GLOBAL_SSL, which also bumps curl's global-init
+            // counter and thereby suppresses the lazy CURL_GLOBAL_DEFAULT
+            // (== ALL) init that curl_easy_init() would otherwise run.
+            // Mirror CURL_GLOBAL_DEFAULT's Windows behavior here;
+            // non-Windows builds are unchanged.
+            flags |= c.CURL_GLOBAL_WIN32;
+        }
         return flags;
     }
 };
