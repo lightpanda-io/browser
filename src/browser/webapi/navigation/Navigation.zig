@@ -196,6 +196,14 @@ pub fn commitNavigation(self: *Navigation, frame: *Frame) !void {
 
     try self.updateEntries(url, kind, frame, false);
 
+    // A traversal or reload recreates the document of the entry it lands on:
+    // the new frame takes over that document's id, so the other entries of
+    // that document stay same-document with it.
+    switch (kind) {
+        .traverse, .reload => frame._history_document_id = self.getCurrentEntry()._document_id,
+        .push, .replace => {},
+    }
+
     self._activation = NavigationActivation{
         // If we are navigating away from the initial about:blank, we have no from.
         ._from = if (was_initial_entry) null else from_entry,
@@ -252,6 +260,7 @@ pub fn pushEntry(
             ._key = id_str,
             ._url = url,
             ._state = state,
+            ._document_id = frame._history_document_id,
         },
     });
 
@@ -293,6 +302,7 @@ pub fn replaceEntry(
             ._key = previous._key,
             ._url = url,
             ._state = state,
+            ._document_id = frame._history_document_id,
         },
     });
 
@@ -397,7 +407,14 @@ pub fn navigateInner(
     const finished = local.createPromiseResolver();
 
     var new_url = try URL.resolve(arena.allocator(), frame.url, url, .{});
-    const is_same_document = URL.eqlDocument(new_url, frame.url);
+    const is_same_url = URL.eqlDocument(new_url, frame.url);
+    // navigate() stays in the document only for a fragment change, but a
+    // traversal stays in it whenever the entry belongs to it, whatever URL
+    // pushState gave the entry.
+    const is_same_document = switch (kind) {
+        .traverse => |index| self._entries.items[index].sameDocument(frame),
+        else => is_same_url,
+    };
 
     // In case of navigation to the same document, we force an url duplication.
     // Keeping the same url generates a crash during WPT test navigate-history-push-same-url.html.
@@ -459,7 +476,7 @@ pub fn navigateInner(
         },
     }
 
-    if (is_same_document and !std.mem.eql(u8, old_url, new_url)) {
+    if (is_same_document and is_same_url and !std.mem.eql(u8, old_url, new_url)) {
         try frame.queueHashChange(old_url, new_url);
     }
 
