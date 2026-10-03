@@ -850,7 +850,7 @@ const negative = [_][]const u8{ "-ad-", "hidden", "banner", "combx", "comment", 
 
 fn containsAny(haystack: []const u8, needles: []const []const u8) bool {
     for (needles) |needle| {
-        if (std.mem.indexOf(u8, haystack, needle) != null) return true;
+        if (std.mem.find(u8, haystack, needle) != null) return true;
     }
     return false;
 }
@@ -866,7 +866,7 @@ fn isShareElement(names: []const u8) bool {
 
 fn hasWord(haystack: []const u8, word: []const u8) bool {
     var start: usize = 0;
-    while (std.mem.indexOfPos(u8, haystack, start, word)) |i| : (start = i + 1) {
+    while (std.mem.findPos(u8, haystack, start, word)) |i| : (start = i + 1) {
         const before = i == 0 or !std.ascii.isAlphanumeric(haystack[i - 1]);
         const end = i + word.len;
         const after = end == haystack.len or !std.ascii.isAlphanumeric(haystack[end]);
@@ -898,28 +898,28 @@ test "clutter: keeps the article, drops the teaser list and share bar" {
         "<div class=\"article\"><h1>Sourdough</h1><div class=\"share\"><a href=\"/s\">Share on X</a> <a href=\"/f\">Share on Facebook</a></div>" ++
         "<p>" ++ prose ++ "</p><p>" ++ prose ++ "</p><p>" ++ prose ++ "</p></div>";
     const out = try extract(html);
-    try testing.expectEqual(true, std.mem.indexOf(u8, out, "wild lactobacillaceae") != null);
-    try testing.expectEqual(true, std.mem.indexOf(u8, out, "# Sourdough") != null);
-    try testing.expectEqual(null, std.mem.indexOf(u8, out, "Trending now"));
-    try testing.expectEqual(null, std.mem.indexOf(u8, out, "Share on"));
+    try testing.expectEqual(true, std.mem.find(u8, out, "wild lactobacillaceae") != null);
+    try testing.expectEqual(true, std.mem.find(u8, out, "# Sourdough") != null);
+    try testing.expectEqual(null, std.mem.find(u8, out, "Trending now"));
+    try testing.expectEqual(null, std.mem.find(u8, out, "Share on"));
 }
 
 test "clutter: too little text falls back" {
     const out = try extract("<div><p>A short note.</p></div><div><a href=\"/1\">one</a> <a href=\"/2\">two</a></div>");
-    try testing.expectEqual(true, std.mem.indexOf(u8, out, "A short note.") != null);
-    try testing.expectEqual(true, std.mem.indexOf(u8, out, "two") != null);
+    try testing.expectEqual(true, std.mem.find(u8, out, "A short note.") != null);
+    try testing.expectEqual(true, std.mem.find(u8, out, "two") != null);
 }
 
 test "clutter: retry ladder rescues content in an unlikely class" {
     const out = try extract("<div class=\"sidebar\"><p>" ++ prose ++ "</p><p>" ++ prose ++ "</p><p>" ++ prose ++ "</p></div><div><a href=\"/x\">elsewhere</a></div>");
-    try testing.expectEqual(true, std.mem.indexOf(u8, out, "wild lactobacillaceae") != null);
-    try testing.expectEqual(null, std.mem.indexOf(u8, out, "elsewhere"));
+    try testing.expectEqual(true, std.mem.find(u8, out, "wild lactobacillaceae") != null);
+    try testing.expectEqual(null, std.mem.find(u8, out, "elsewhere"));
 }
 
 test "clutter: qualifying sibling paragraphs come along" {
     const out = try extract("<div id=\"wrap\"><div class=\"body\"><p>" ++ prose ++ "</p><p>" ++ prose ++ "</p></div><p>" ++ prose ++ "</p><div class=\"nav\"><a href=\"/a\">a</a> <a href=\"/b\">b</a> <a href=\"/c\">c</a></div></div>");
     try testing.expectEqual(3, std.mem.count(u8, out, "wild lactobacillaceae"));
-    try testing.expectEqual(null, std.mem.indexOf(u8, out, "[a]"));
+    try testing.expectEqual(null, std.mem.find(u8, out, "[a]"));
 }
 
 test "clutter: anchors without href are not link text" {
@@ -928,7 +928,7 @@ test "clutter: anchors without href are not link text" {
     const tagged = "<div class=\"quote\"><span>I have not failed. I've just found ten thousand ways that won't work.</span><span>by Thomas A. Edison</span>" ++
         "<div class=\"tags\">Tags: <a class=\"tag\">edison</a> <a class=\"tag\">failure</a> <a class=\"tag\">inspirational</a> <a class=\"tag\">paraphrased</a></div></div>";
     const out = try extract("<div class=\"quotes\">" ++ quote ++ quote ++ tagged ++ quote ++ "</div>");
-    try testing.expectEqual(true, std.mem.indexOf(u8, out, "ten thousand ways") != null);
+    try testing.expectEqual(true, std.mem.find(u8, out, "ten thousand ways") != null);
 }
 
 test "clutter: the prune set lives in the caller's allocator" {
@@ -948,7 +948,7 @@ test "clutter: the prune set lives in the caller's allocator" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try markdown.dump(.{ .root = div.asNode() }, .{}, &aw.writer, frame);
-    try testing.expectEqual(true, std.mem.indexOf(u8, aw.written(), "Share") != null);
+    try testing.expectEqual(true, std.mem.find(u8, aw.written(), "Share") != null);
 
     // Too little text: no set, no clutter.
     const second = try RenderTree.resolve(arena.allocator(), div.lastElementChild().?.asNode(), .{ .clutter = true }, frame);
@@ -972,12 +972,12 @@ test "clutter: the HTML dump leaves out what the markdown dump does" {
     try dump.render(state, .{}, &aw.writer, frame);
     const out = aw.written();
 
-    try testing.expectEqual(true, std.mem.indexOf(u8, out, "wild lactobacillaceae") != null);
+    try testing.expectEqual(true, std.mem.find(u8, out, "wild lactobacillaceae") != null);
     // Neither node renders, so RenderTree never yields either one; the set
     // still has to hold them, because the HTML dump walks the DOM itself.
-    try testing.expectEqual(null, std.mem.indexOf(u8, out, "__DATA__"));
-    try testing.expectEqual(null, std.mem.indexOf(u8, out, "Accept our cookies"));
-    try testing.expectEqual(null, std.mem.indexOf(u8, out, "Trending now"));
+    try testing.expectEqual(null, std.mem.find(u8, out, "__DATA__"));
+    try testing.expectEqual(null, std.mem.find(u8, out, "Accept our cookies"));
+    try testing.expectEqual(null, std.mem.find(u8, out, "Trending now"));
 }
 
 fn extract(html: []const u8) ![]const u8 {

@@ -69,7 +69,7 @@ fn hasFrameAncestors(csp: []const u8) bool {
                 continue;
             }
         }
-        if (pos == csp.len or std.mem.indexOfScalar(u8, HTTP_WHITESPACE ++ ";,", csp[pos]) != null) {
+        if (pos == csp.len or std.mem.findScalar(u8, HTTP_WHITESPACE ++ ";,", csp[pos]) != null) {
             return true;
         }
     }

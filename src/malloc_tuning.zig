@@ -57,7 +57,7 @@ fn userConfigured() bool {
         return true;
     }
     const tunables = std.c.getenv("GLIBC_TUNABLES") orelse return false;
-    return std.mem.indexOf(u8, std.mem.span(tunables), "glibc.malloc.mmap_threshold") != null;
+    return std.mem.find(u8, std.mem.span(tunables), "glibc.malloc.mmap_threshold") != null;
 }
 
 const testing = @import("testing.zig");

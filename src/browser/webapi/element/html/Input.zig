@@ -552,12 +552,12 @@ fn sameFormOwner(self_form: ?*Form, other: *Input, frame: *Frame) bool {
 /// the WHATWG "valid e-mail address" production loosely — sufficient for most
 /// constraint-validation tests; HTML browsers themselves are permissive here.
 fn isValidEmail(value: []const u8) bool {
-    const at = std.mem.indexOfScalar(u8, value, '@') orelse return false;
+    const at = std.mem.findScalar(u8, value, '@') orelse return false;
     if (at == 0 or at == value.len - 1) return false;
     const local = value[0..at];
     const host = value[at + 1 ..];
     for (local) |c| if (!isEmailLocalChar(c)) return false;
-    if (std.mem.indexOfScalar(u8, host, '.') == null) return false;
+    if (std.mem.findScalar(u8, host, '.') == null) return false;
     for (host) |c| if (!isEmailHostChar(c)) return false;
     if (host[0] == '.' or host[host.len - 1] == '.') return false;
     return true;
@@ -578,7 +578,7 @@ fn isEmailHostChar(c: u8) bool {
 /// Absolute URL check per the WHATWG URL parser: must include a scheme followed
 /// by "://" and a non-empty authority. Relative URLs are typeMismatches per spec.
 fn isValidAbsoluteURL(value: []const u8) bool {
-    const scheme_end = std.mem.indexOfScalar(u8, value, ':') orelse return false;
+    const scheme_end = std.mem.findScalar(u8, value, ':') orelse return false;
     if (scheme_end == 0) return false;
     if (!std.ascii.isAlphabetic(value[0])) return false;
     for (value[1..scheme_end]) |c| {
@@ -756,7 +756,7 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
     switch (self._input_type) {
         .text, .search, .tel, .password, .url, .email => {
             const sanitized = blk: {
-                const first = std.mem.indexOfAny(u8, value, "\r\n") orelse {
+                const first = std.mem.findAny(u8, value, "\r\n") orelse {
                     break :blk if (comptime dupe) try frame.dupeString(value) else value;
                 };
 
@@ -953,7 +953,7 @@ fn valueToNumber(typ: Type, value: []const u8) ?f64 {
             return timeToMs(value);
         },
         .@"datetime-local" => {
-            const sep = std.mem.indexOfAny(u8, value, "T ") orelse return null;
+            const sep = std.mem.findAny(u8, value, "T ") orelse return null;
             const date = value[0..sep];
             const time = value[sep + 1 ..];
             if (!isValidDate(date) or !isValidTime(time)) return null;

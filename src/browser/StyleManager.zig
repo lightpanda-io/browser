@@ -191,7 +191,7 @@ fn applyLayerAtRule(self: *StyleManager, build_arena: Allocator, text: []const u
         // invalidates the whole statement. Validate everything before
         // registering anything.
         var names = text["@layer".len..];
-        if (std.mem.indexOfScalar(u8, names, ';')) |semi| {
+        if (std.mem.findScalar(u8, names, ';')) |semi| {
             names = names[0..semi];
         }
 
@@ -265,7 +265,7 @@ fn atRuleBlock(text: []const u8, keyword: []const u8) ?struct { prelude: []const
 
     // Search only past the opening brace — the matching `}` lives there, and
     // any returned position is naturally `> open` (since `rest[open] == '{'`).
-    const close = open + (std.mem.lastIndexOfScalar(u8, rest[open..], '}') orelse return null);
+    const close = open + (std.mem.findScalarLast(u8, rest[open..], '}') orelse return null);
     return .{ .prelude = rest[0..open], .body = rest[open + 1 .. close] };
 }
 
@@ -275,7 +275,7 @@ fn indexOfOpenBraceSkippingComments(s: []const u8) ?usize {
     var i: usize = 0;
     while (i < s.len) {
         if (i + 1 < s.len and s[i] == '/' and s[i + 1] == '*') {
-            const close = std.mem.indexOf(u8, s[i + 2 ..], "*/") orelse return null;
+            const close = std.mem.find(u8, s[i + 2 ..], "*/") orelse return null;
             i = i + 2 + close + 2;
             continue;
         }

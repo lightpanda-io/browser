@@ -453,7 +453,7 @@ pub fn closest(name: []const u8, candidates: []const []const u8) ?[]const u8 {
     if (candidates.len == 0) return null;
     var shared = candidates[0];
     for (candidates[1..]) |cand| {
-        shared = shared[0 .. std.mem.indexOfDiff(u8, shared, cand) orelse shared.len];
+        shared = shared[0 .. std.mem.findDiff(u8, shared, cand) orelse shared.len];
     }
     const typed = if (std.mem.startsWith(u8, name, shared)) name.len - shared.len else name.len;
     const max_dist = @max(typed, 3) / 3;

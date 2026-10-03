@@ -138,7 +138,7 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
 
     var it = std.mem.splitScalar(u8, rest, ';');
     while (it.next()) |attribute| {
-        const sep = std.mem.indexOfScalarPos(u8, attribute, 0, '=') orelse attribute.len;
+        const sep = std.mem.findScalarPos(u8, attribute, 0, '=') orelse attribute.len;
         const key_string = trim(attribute[0..sep]);
 
         if (key_string.len > scrap.len) {
@@ -317,7 +317,7 @@ pub fn parsePath(arena: Allocator, url_: ?[:0]const u8, explicit_path: ?[]const 
     }
 
     var owned_path: []const u8 = try percentEncode(arena, url_path, isPathChar);
-    const last = std.mem.lastIndexOfScalar(u8, owned_path[1..], '/') orelse {
+    const last = std.mem.findScalarLast(u8, owned_path[1..], '/') orelse {
         return "/";
     };
     return try arena.dupe(u8, owned_path[0 .. last + 1]);
@@ -348,7 +348,7 @@ pub fn parseDomain(arena: Allocator, url_: ?[:0]const u8, explicit_domain: ?[]co
                 return error.InvalidDomain;
             }
 
-            if (std.mem.indexOfScalarPos(u8, owned_domain, 1, '.') == null and std.mem.eql(u8, "localhost", owned_domain[1..]) == false) {
+            if (std.mem.findScalarPos(u8, owned_domain, 1, '.') == null and std.mem.eql(u8, "localhost", owned_domain[1..]) == false) {
                 // can't set a cookie for a TLD
                 return error.InvalidDomain;
             }
@@ -420,10 +420,10 @@ fn isPathChar(c: u8) bool {
 }
 
 fn parseNameValue(str: []const u8) !struct { []const u8, []const u8, []const u8 } {
-    const key_value_end = std.mem.indexOfScalarPos(u8, str, 0, ';') orelse str.len;
+    const key_value_end = std.mem.findScalarPos(u8, str, 0, ';') orelse str.len;
     const rest = if (key_value_end == str.len) "" else str[key_value_end + 1 ..];
 
-    const sep = std.mem.indexOfScalarPos(u8, str[0..key_value_end], 0, '=') orelse {
+    const sep = std.mem.findScalarPos(u8, str[0..key_value_end], 0, '=') orelse {
         const value = trim(str[0..key_value_end]);
         if (value.len == 0) {
             return error.Empty;
@@ -752,9 +752,9 @@ pub fn areHostsSameSite(target_host: []const u8, origin_host: []const u8) bool {
 }
 
 fn findSecondLevelDomain(host: []const u8) []const u8 {
-    var i = std.mem.lastIndexOfScalar(u8, host, '.') orelse return host;
+    var i = std.mem.findScalarLast(u8, host, '.') orelse return host;
     while (true) {
-        i = std.mem.lastIndexOfScalar(u8, host[0..i], '.') orelse return host;
+        i = std.mem.findScalarLast(u8, host[0..i], '.') orelse return host;
         const strip = i + 1;
         if (public_suffix_list(host[strip..]) == false) {
             return host[strip..];

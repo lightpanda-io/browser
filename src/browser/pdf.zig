@@ -75,8 +75,8 @@ pub fn parsePageRanges(arena: Allocator, text: []const u8) error{ InvalidPageRan
         const part = std.mem.trim(u8, raw, &std.ascii.whitespace);
         if (part.len == 0) continue;
         var range: PageRange = undefined;
-        if (std.mem.indexOfScalar(u8, part, '-')) |dash| {
-            if (std.mem.indexOfScalarPos(u8, part, dash + 1, '-') != null) return error.InvalidPageRangeSyntax;
+        if (std.mem.findScalar(u8, part, '-')) |dash| {
+            if (std.mem.findScalarPos(u8, part, dash + 1, '-') != null) return error.InvalidPageRangeSyntax;
             const a = std.mem.trim(u8, part[0..dash], &std.ascii.whitespace);
             const b = std.mem.trim(u8, part[dash + 1 ..], &std.ascii.whitespace);
             range.from = if (a.len == 0) 1 else parsePageNumber(a) orelse return error.InvalidPageRangeSyntax;
@@ -189,7 +189,7 @@ pub const Prepared = struct {
         if (measure_only) {
             return page_count;
         }
-        if (std.mem.indexOfScalar(bool, doc.selected, true) == null) {
+        if (std.mem.findScalar(bool, doc.selected, true) == null) {
             return error.NoPagesSelected;
         }
         try doc.draw();
@@ -1044,17 +1044,17 @@ test "browser.pdf: structure, pagination and links" {
     try testing.expectEqual("%%EOF\n", out[out.len - 6 ..]);
     try testing.expectEqual(1, std.mem.count(u8, out, "/Type /Page "));
     // Letter in points, and the three faces the text used, each embedded once.
-    try testing.expectEqual(true, std.mem.indexOf(u8, out, "/MediaBox [0 0 612.000 792.000]") != null);
+    try testing.expectEqual(true, std.mem.find(u8, out, "/MediaBox [0 0 612.000 792.000]") != null);
     try testing.expectEqual(3, std.mem.count(u8, out, "/Subtype /Type0"));
     try testing.expectEqual(3, std.mem.count(u8, out, "/FontFile2"));
-    try testing.expectEqual(true, std.mem.indexOf(u8, out, "/Encoding /Identity-H") != null);
+    try testing.expectEqual(true, std.mem.find(u8, out, "/Encoding /Identity-H") != null);
     // Well under the 2MB of bundled fonts: they were subset.
     try testing.expectEqual(true, out.len < 120_000);
     // The one link is a URI annotation on the page, resolved to absolute.
     try testing.expectEqual(1, std.mem.count(u8, out, "/Subtype /Link"));
     try testing.expectEqual(1, std.mem.count(u8, out, "/Annots ["));
     const uri = "/URI <" ++ std.fmt.bytesToHex("http://localhost/x", .upper) ++ ">";
-    try testing.expectEqual(true, std.mem.indexOf(u8, out, uri) != null);
+    try testing.expectEqual(true, std.mem.find(u8, out, uri) != null);
 
     // 200 paragraphs don't fit one Letter page; a range then picks pages.
     const long = try doc.createElement("div", null, frame);
@@ -1085,7 +1085,7 @@ test "browser.pdf: structure, pagination and links" {
 
     aw.clearRetainingCapacity();
     try print(testing.arena_allocator, .{ .root = long.asNode() }, .{ .paper_width = 1056, .paper_height = 816, .margin_top = 300, .margin_bottom = 300 }, &aw.writer, frame);
-    try testing.expectEqual(true, std.mem.indexOf(u8, aw.written(), "/MediaBox [0 0 792.000 612.000]") != null);
+    try testing.expectEqual(true, std.mem.find(u8, aw.written(), "/MediaBox [0 0 792.000 612.000]") != null);
     try testing.expectEqual(true, std.mem.count(u8, aw.written(), "/Type /Page ") > pages);
 }
 

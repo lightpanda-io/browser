@@ -102,7 +102,7 @@ fn setSearch(_: *const Location, search: []const u8, frame: *Frame) !void {
 
 fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
     const old_url = frame.url;
-    const base_end = std.mem.indexOfScalar(u8, old_url, '#') orelse old_url.len;
+    const base_end = std.mem.findScalar(u8, old_url, '#') orelse old_url.len;
     // Includes the leading '#'; empty when the URL has no fragment.
     const old_fragment = old_url[base_end..];
 

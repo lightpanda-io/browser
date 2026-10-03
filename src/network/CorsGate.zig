@@ -113,7 +113,7 @@ fn hasNoCorsUnsafeBytes(value: []const u8) bool {
 }
 
 fn isSafelistedContentType(value: []const u8) bool {
-    const semi = std.mem.indexOfScalar(u8, value, ';') orelse value.len;
+    const semi = std.mem.findScalar(u8, value, ';') orelse value.len;
     const mime = std.mem.trim(u8, value[0..semi], &std.ascii.whitespace);
     return std.ascii.eqlIgnoreCase(mime, "application/x-www-form-urlencoded") or
         std.ascii.eqlIgnoreCase(mime, "multipart/form-data") or

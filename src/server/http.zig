@@ -139,7 +139,7 @@ pub const Connection = struct {
         };
 
         fn parseHeader(self: *State, arena: Allocator, data: []u8) !Parsed {
-            const header_index = std.mem.indexOf(u8, data, "\r\n\r\n") orelse {
+            const header_index = std.mem.find(u8, data, "\r\n\r\n") orelse {
                 return .{ .need = 0 };
             };
 
@@ -179,13 +179,13 @@ pub const Connection = struct {
             const key = "\r\ncontent-length:";
             const at = std.ascii.findIgnoreCase(header, key) orelse return 0;
             const start = at + key.len;
-            const end = std.mem.indexOfPos(u8, header, start, "\r\n") orelse return error.InvalidHeader;
+            const end = std.mem.findPos(u8, header, start, "\r\n") orelse return error.InvalidHeader;
             const value = std.mem.trim(u8, header[start..end], " \t");
             return std.fmt.parseInt(usize, value, 10) catch error.InvalidHeader;
         }
 
         fn parseRequestLine(header: []const u8) !struct { Method, []const u8, bool, usize } {
-            const l1 = std.mem.indexOfScalar(u8, header, '\r') orelse return error.InvalidHeader;
+            const l1 = std.mem.findScalar(u8, header, '\r') orelse return error.InvalidHeader;
             if (l1 == header.len) {
                 return error.InvalidHeader;
             }
@@ -202,10 +202,10 @@ pub const Connection = struct {
             if (target[0] != '/') {
                 return error.InvalidHeader;
             }
-            const path = target[0 .. std.mem.indexOfScalar(u8, target, '?') orelse target.len];
+            const path = target[0 .. std.mem.findScalar(u8, target, '?') orelse target.len];
 
             const protocol = it.next() orelse return error.InvalidHeader;
-            const keepalive = std.mem.indexOf(u8, protocol, "1.0") == null;
+            const keepalive = std.mem.find(u8, protocol, "1.0") == null;
 
             return .{ method, path, keepalive, l1 };
         }

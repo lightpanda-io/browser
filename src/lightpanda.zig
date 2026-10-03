@@ -667,7 +667,7 @@ test "writeJsonEnvelope: null frame" {
         .dump = "",
         .content = "",
     }, aw.written());
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "\"error\":null") != null);
+    try testing.expect(std.mem.find(u8, aw.written(), "\"error\":null") != null);
 }
 
 test "writeJsonEnvelope: page error" {

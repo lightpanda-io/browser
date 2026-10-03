@@ -1001,7 +1001,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     if (!opts.force and
         opts.kind != .reload and
         std.mem.eql(u8, target.url, resolved_url) and
-        std.mem.indexOfScalar(u8, resolved_url, '#') != null)
+        std.mem.findScalar(u8, resolved_url, '#') != null)
     {
         arena.release();
         return;
@@ -1216,7 +1216,7 @@ fn loadEventsAborted(self: *const Frame) bool {
 pub fn cancelQueuedNavigation(self: *Frame) void {
     const qn = self._queued_navigation orelse return;
     const queued = self.page.queued_navigation;
-    if (std.mem.indexOfScalar(*Frame, queued.items, self)) |idx| {
+    if (std.mem.findScalar(*Frame, queued.items, self)) |idx| {
         _ = queued.swapRemove(idx);
     }
     qn.arena.release();
@@ -1652,8 +1652,8 @@ fn dispositionFilename(disposition: HttpClient.Header) ?[]const u8 {
     // Prefer the extended filename*= form when present, per RFC 6266.
     if (disposition.param("filename*")) |ext| {
         // charset'lang'value — take everything after the second quote.
-        if (std.mem.indexOfScalar(u8, ext, '\'')) |first| {
-            if (std.mem.indexOfScalarPos(u8, ext, first + 1, '\'')) |second| {
+        if (std.mem.findScalar(u8, ext, '\'')) |first| {
+            if (std.mem.findScalarPos(u8, ext, first + 1, '\'')) |second| {
                 return sanitizeFilename(ext[second + 1 ..]);
             }
         }
@@ -1670,7 +1670,7 @@ fn dispositionFilename(disposition: HttpClient.Header) ?[]const u8 {
 // regardless of the host platform.
 fn sanitizeFilename(name: []const u8) ?[]const u8 {
     var out = std.fs.path.basename(name);
-    if (std.mem.lastIndexOfScalar(u8, out, '\\')) |i| {
+    if (std.mem.findScalarLast(u8, out, '\\')) |i| {
         out = out[i + 1 ..];
     }
     if (out.len == 0 or std.mem.eql(u8, out, ".") or std.mem.eql(u8, out, "..")) {
@@ -1746,7 +1746,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
         self._pending_content_type = null;
         if (mime.content_type != .text_html) {
             if (transfer.contentType()) |ct| {
-                const end = std.mem.indexOfScalarPos(u8, ct, 0, ';') orelse ct.len;
+                const end = std.mem.findScalarPos(u8, ct, 0, ';') orelse ct.len;
                 const essence = std.mem.trim(u8, ct[0..end], " \t");
                 if (essence.len > 0) {
                     self._pending_content_type = try std.ascii.allocLowerString(self.arena, essence);
@@ -1787,7 +1787,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
             // the parser turns a literal "&#9733;" in the body into a star.
             var v = data;
             while (v.len > 0) {
-                const index = std.mem.indexOfAnyPos(u8, v, 0, &.{ '<', '>', '&' }) orelse {
+                const index = std.mem.findAnyPos(u8, v, 0, &.{ '<', '>', '&' }) orelse {
                     return buf.appendSlice(self.arena, v);
                 };
                 try buf.appendSlice(self.arena, v[0..index]);
@@ -2131,7 +2131,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         // extra defensive..maybe navigate added a new frame, and the index it
         // was added at was removed. Or maybe this frame was removed somehow
         // (which I don't think is possible)
-        if (std.mem.indexOfScalar(*Frame, self.child_frames.items, new_frame)) |idx| {
+        if (std.mem.findScalar(*Frame, self.child_frames.items, new_frame)) |idx| {
             _ = self.child_frames.swapRemove(idx);
         }
         log.debug(.frame, "iframe navigate failure", .{ .url = url, .err = err });

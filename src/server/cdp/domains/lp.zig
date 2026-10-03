@@ -575,8 +575,8 @@ test "cdp.lp: dump formats, strip and scoping" {
     // markdown, no strip: chrome and content both present.
     try ctx.processMessage(.{ .id = 1, .method = "LP.dump", .params = .{ .format = "markdown" } });
     var content = try dumpContent(&ctx, 1, "markdown");
-    try testing.expect(std.mem.indexOf(u8, content, "Site menu") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "Article body") != null);
+    try testing.expect(std.mem.find(u8, content, "Site menu") != null);
+    try testing.expect(std.mem.find(u8, content, "Article body") != null);
 
     // markdown + shell: chrome gone, the article's own header kept.
     try ctx.processMessage(.{ .id = 2, .method = "LP.dump", .params = .{ .format = "markdown", .strip = .{ .shell = true } } });
@@ -631,10 +631,10 @@ test "cdp.lp: semantic tree and node details read the node's own frame" {
 
     try ctx.processMessage(.{ .id = 1, .method = "LP.getSemanticTree", .params = .{ .backendNodeId = html_id, .format = "text", .prune = false } });
     const tree = (try dumpReply(&ctx, 1)).get("result").?.object.get("semanticTree").?.string;
-    try testing.expect(std.mem.indexOf(u8, tree, "child-label") != null);
-    try testing.expect(std.mem.indexOf(u8, tree, "child-option") != null);
-    try testing.expect(std.mem.indexOf(u8, tree, "child-probe") != null);
-    try testing.expect(std.mem.indexOf(u8, tree, "parent-") == null);
+    try testing.expect(std.mem.find(u8, tree, "child-label") != null);
+    try testing.expect(std.mem.find(u8, tree, "child-option") != null);
+    try testing.expect(std.mem.find(u8, tree, "child-probe") != null);
+    try testing.expect(std.mem.find(u8, tree, "parent-") == null);
 
     try ctx.processMessage(.{ .id = 2, .method = "LP.getNodeDetails", .params = .{ .backendNodeId = input_id } });
     const details = (try dumpReply(&ctx, 2)).get("result").?.object.get("nodeDetails").?.object;
@@ -645,8 +645,8 @@ test "cdp.lp: semantic tree and node details read the node's own frame" {
     try ctx.processMessage(.{ .id = 5, .method = "LP.getSemanticTree", .params = .{ .backendNodeId = html_id, .interactiveOnly = true } });
     const json = try std.json.Stringify.valueAlloc(testing.allocator, (try dumpReply(&ctx, 5)).get("result").?.object.get("semanticTree").?, .{});
     defer testing.allocator.free(json);
-    try testing.expect(std.mem.indexOf(u8, json, "child-label") != null);
-    try testing.expect(std.mem.indexOf(u8, json, "parent-") == null);
+    try testing.expect(std.mem.find(u8, json, "child-label") != null);
+    try testing.expect(std.mem.find(u8, json, "parent-") == null);
 
     // A document with no frame has no styles or layout to describe.
     const frameless = try root._factory.genericDocument(.{});

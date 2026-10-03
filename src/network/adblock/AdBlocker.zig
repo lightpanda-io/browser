@@ -262,7 +262,7 @@ fn exceptionHostname(line: []const u8, buf: []u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, line, "@@||")) return null;
     const rest = line[4..];
 
-    const end = std.mem.indexOfAny(u8, rest, "/^$*|") orelse rest.len;
+    const end = std.mem.findAny(u8, rest, "/^$*|") orelse rest.len;
     if (end == 0 or end > buf.len) return null;
 
     const hostname = std.ascii.lowerString(buf[0..end], rest[0..end]);
@@ -274,7 +274,7 @@ fn exceptionHostname(line: []const u8, buf: []u8) ?[]const u8 {
         };
         if (!ok) return null;
     }
-    if (std.mem.indexOfScalar(u8, hostname, '.') == null) return null;
+    if (std.mem.findScalar(u8, hostname, '.') == null) return null;
     return hostname;
 }
 

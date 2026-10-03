@@ -1350,7 +1350,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.startsWith(u8, path, "/src/browser/tests/")) {
-        if (std.mem.indexOf(u8, path, "delay_ms=")) |pos| {
+        if (std.mem.find(u8, path, "delay_ms=")) |pos| {
             const digits_start = pos + "delay_ms=".len;
             var end = digits_start;
             while (end < path.len and std.ascii.isDigit(path[end])) : (end += 1) {}

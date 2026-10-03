@@ -115,7 +115,7 @@ pub const ContentTypeIterator = struct {
         // Skip whitespace.
         const trimmed = std.mem.trimStart(u8, content_type, &.{ ' ', '\t' });
         // Find semicolon delimiter; or just use the end position.
-        const end = std.mem.indexOfScalar(u8, trimmed, ';') orelse trimmed.len;
+        const end = std.mem.findScalar(u8, trimmed, ';') orelse trimmed.len;
         const essence = std.mem.trimEnd(u8, trimmed[0..end], &.{ ' ', '\t' });
 
         // Rest of the parameters.
@@ -134,12 +134,12 @@ pub const ContentTypeIterator = struct {
         while (self.rest.len > 0) {
             // `rest` always sits at the `;` that introduced this parameter.
             var param = self.rest[1..];
-            const end = std.mem.indexOfScalar(u8, param, ';') orelse param.len;
+            const end = std.mem.findScalar(u8, param, ';') orelse param.len;
             self.rest = param[end..];
             param = std.mem.trim(u8, param[0..end], " \t");
 
             // Parameters without `=` are malformed; skip them.
-            const eq = std.mem.indexOfScalar(u8, param, '=') orelse continue;
+            const eq = std.mem.findScalar(u8, param, '=') orelse continue;
             const key = std.mem.trimEnd(u8, param[0..eq], " \t");
             if (key.len == 0) {
                 continue;
@@ -247,7 +247,7 @@ pub fn prescanCharset(html: []const u8) ?[]const u8 {
     var pos: usize = 0;
     while (pos < data.len) {
         // Find next '<'
-        pos = std.mem.indexOfScalarPos(u8, data, pos, '<') orelse return null;
+        pos = std.mem.findScalarPos(u8, data, pos, '<') orelse return null;
         pos += 1;
         if (pos >= data.len) return null;
 
@@ -269,7 +269,7 @@ pub fn prescanCharset(html: []const u8) ?[]const u8 {
         }
 
         // Scan attributes within this meta tag
-        const tag_end = std.mem.indexOfScalarPos(u8, data, pos, '>') orelse return null;
+        const tag_end = std.mem.findScalarPos(u8, data, pos, '>') orelse return null;
         const attrs = data[pos..tag_end];
 
         // Look for charset= attribute directly
@@ -466,7 +466,7 @@ pub fn isText(mime: *const Mime) bool {
 
 // we expect value to be lowercase
 fn parseContentType(value: []const u8) !struct { ContentType, usize } {
-    const end = std.mem.indexOfScalarPos(u8, value, 0, ';') orelse value.len;
+    const end = std.mem.findScalarPos(u8, value, 0, ';') orelse value.len;
     const type_name = trimRight(value[0..end]);
     const attribute_start = end + 1;
 
@@ -510,7 +510,7 @@ fn parseContentType(value: []const u8) !struct { ContentType, usize } {
         return .{ ct, attribute_start };
     }
 
-    const separator = std.mem.indexOfScalarPos(u8, type_name, 0, '/') orelse return error.Invalid;
+    const separator = std.mem.findScalarPos(u8, type_name, 0, '/') orelse return error.Invalid;
 
     const main_type = value[0..separator];
     const sub_type = trimRight(value[separator + 1 .. end]);
@@ -559,14 +559,14 @@ pub fn serialize(arena: Allocator, input: []const u8) ![]const u8 {
     }
 
     // type "/" subtype
-    const slash = std.mem.indexOfScalarPos(u8, trimmed, 0, '/') orelse return "";
+    const slash = std.mem.findScalarPos(u8, trimmed, 0, '/') orelse return "";
     const type_name = trimmed[0..slash];
     if (isHttpToken(type_name) == false) {
         return "";
     }
 
     var rest = trimmed[slash + 1 ..];
-    const subtype_end = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
+    const subtype_end = std.mem.findScalar(u8, rest, ';') orelse rest.len;
     const subtype = std.mem.trimEnd(u8, rest[0..subtype_end], &HTTP_WHITESPACE);
     if (isHttpToken(subtype) == false) {
         return "";

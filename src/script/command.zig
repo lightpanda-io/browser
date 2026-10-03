@@ -308,12 +308,12 @@ fn writeExtractSchema(
     schema_src: []const u8,
 ) (std.Io.Writer.Error || error{OutOfMemory})!void {
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, schema_src, .{}) catch {
-        return writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.indexOfScalar(u8, schema_src, '\n') != null });
+        return writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.findScalar(u8, schema_src, '\n') != null });
     };
     if (parsed == .object) {
         try writeJsValue(arena, writer, parsed, .{});
     } else {
-        try writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.indexOfScalar(u8, schema_src, '\n') != null });
+        try writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.findScalar(u8, schema_src, '\n') != null });
     }
 }
 
@@ -330,11 +330,11 @@ fn writeJsonString(writer: *std.Io.Writer, value: []const u8) std.Io.Writer.Erro
 }
 
 fn canUseTemplateLiteral(value: []const u8) bool {
-    if (std.mem.indexOfScalar(u8, value, '\n') == null) return false;
-    if (std.mem.indexOfScalar(u8, value, '`') != null) return false;
-    if (std.mem.indexOf(u8, value, "${") != null) return false;
-    if (std.mem.indexOfScalar(u8, value, '\\') != null) return false;
-    if (std.mem.indexOfScalar(u8, value, '\r') != null) return false;
+    if (std.mem.findScalar(u8, value, '\n') == null) return false;
+    if (std.mem.findScalar(u8, value, '`') != null) return false;
+    if (std.mem.find(u8, value, "${") != null) return false;
+    if (std.mem.findScalar(u8, value, '\\') != null) return false;
+    if (std.mem.findScalar(u8, value, '\r') != null) return false;
     return true;
 }
 

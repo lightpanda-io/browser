@@ -4444,7 +4444,7 @@ const Synthetic = struct {
             }
 
             const owner = transfer.owner orelse return error.BlobNotFound;
-            const key = url[0 .. std.mem.indexOfScalar(u8, url, '#') orelse url.len];
+            const key = url[0 .. std.mem.findScalar(u8, url, '#') orelse url.len];
             if (!Owner.Blob.urlBelongsToOrigin(key, owner.scope.origin())) {
                 return error.BlobNotFound;
             }

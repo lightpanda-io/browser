@@ -203,7 +203,7 @@ pub fn tagNames(comptime E: type) []const []const u8 {
 /// No command or choice has a `.`, `/` or `:`, so `markdown.com` is a url
 /// however close it is to `markdown`.
 pub fn isUrlLike(arg: []const u8) bool {
-    return std.mem.indexOfAny(u8, arg, ".:/") != null;
+    return std.mem.findAny(u8, arg, ".:/") != null;
 }
 
 /// `prefix` was stripped from `value` before matching, like `--log-filter`'s sign.

@@ -172,7 +172,7 @@ const CellIterator = struct {
 };
 
 fn cellIterator(row: []const u8) CellIterator {
-    const first_pipe = std.mem.indexOfScalar(u8, row, '|');
+    const first_pipe = std.mem.findScalar(u8, row, '|');
     return .{ .row = row, .pos = if (first_pipe) |p| p + 1 else 0 };
 }
 
@@ -232,7 +232,7 @@ fn renderFenceRule(w: *std.Io.Writer, opening: bool, delimiter: []const u8) !voi
     var fill: usize = rule_width - 1;
     if (opening) {
         const info = std.mem.trim(u8, std.mem.trimStart(u8, delimiter, " \t`"), " \t");
-        const lang = info[0 .. std.mem.indexOfAny(u8, info, " \t") orelse info.len];
+        const lang = info[0 .. std.mem.findAny(u8, info, " \t") orelse info.len];
         if (lang.len > 0 and lang.len + 4 <= fill) {
             try w.writeAll("─ ");
             try w.writeAll(lang);
@@ -308,7 +308,7 @@ pub const Stream = struct {
 
     pub fn feed(self: *Stream, w: *std.Io.Writer, data: []const u8) !void {
         var rest = data;
-        while (std.mem.indexOfScalar(u8, rest, '\n')) |nl| {
+        while (std.mem.findScalar(u8, rest, '\n')) |nl| {
             const head = rest[0..nl];
             rest = rest[nl + 1 ..];
             if (self.raw) {
@@ -534,7 +534,7 @@ fn renderInlineStyled(w: *std.Io.Writer, text: []const u8, active: ?*const Style
                 i += 2;
                 continue;
             },
-            '`' => if (std.mem.indexOfPos(u8, text, i + 1, "`")) |end| {
+            '`' => if (std.mem.findPos(u8, text, i + 1, "`")) |end| {
                 try styled(w, text[i + 1 .. end], ansi.teal);
                 try Style.applyOpt(active, w);
                 i = end + 1;
@@ -543,19 +543,19 @@ fn renderInlineStyled(w: *std.Io.Writer, text: []const u8, active: ?*const Style
             '*', '_' => |ch| {
                 const double = [2]u8{ ch, ch };
                 if (i + 1 < text.len and text[i + 1] == ch) {
-                    if (std.mem.indexOfPos(u8, text, i + 2, &double)) |end| {
+                    if (std.mem.findPos(u8, text, i + 2, &double)) |end| {
                         try span(w, text[i + 2 .. end], ansi.bold, active);
                         i = end + 2;
                         continue;
                     }
-                } else if (std.mem.indexOfScalarPos(u8, text, i + 1, ch)) |end| {
+                } else if (std.mem.findScalarPos(u8, text, i + 1, ch)) |end| {
                     try span(w, text[i + 1 .. end], ansi.italic, active);
                     i = end + 1;
                     continue;
                 }
             },
             '~' => if (i + 1 < text.len and text[i + 1] == '~') {
-                if (std.mem.indexOfPos(u8, text, i + 2, "~~")) |end| {
+                if (std.mem.findPos(u8, text, i + 2, "~~")) |end| {
                     try span(w, text[i + 2 .. end], ansi.strike, active);
                     i = end + 2;
                     continue;
@@ -660,8 +660,8 @@ fn isHorizontalRule(line: []const u8) bool {
 
 /// Returns the index past the `)`, or null (nothing written) if unterminated.
 fn renderLinkAt(w: *std.Io.Writer, text: []const u8, open: usize, active: ?*const Style) std.Io.Writer.Error!?usize {
-    const mid = std.mem.indexOfPos(u8, text, open + 1, "](") orelse return null;
-    const close = std.mem.indexOfScalarPos(u8, text, mid + 2, ')') orelse return null;
+    const mid = std.mem.findPos(u8, text, open + 1, "](") orelse return null;
+    const close = std.mem.findScalarPos(u8, text, mid + 2, ')') orelse return null;
     try renderLink(w, text[open + 1 .. mid], text[mid + 2 .. close], active);
     return close + 1;
 }
@@ -841,7 +841,7 @@ test "md_term: batch aligns tables beyond the stream table buffer" {
     const pipe = "\x1b[2m│\x1b[0m";
     try testing.expectEqual(0, std.mem.count(u8, out, "| a"));
     try testing.expectEqual(500, std.mem.count(u8, out, pipe ++ " " ++ repeat("a", 16) ++ " " ++ pipe));
-    try testing.expect(std.mem.indexOf(u8, out, "\x1b[2m├" ++ repeat("─", 18) ++ "┼" ++ repeat("─", 18) ++ "┤\x1b[0m\n") != null);
+    try testing.expect(std.mem.find(u8, out, "\x1b[2m├" ++ repeat("─", 18) ++ "┼" ++ repeat("─", 18) ++ "┤\x1b[0m\n") != null);
 }
 
 test "md_term: stream falls back to raw rows past its table buffer" {

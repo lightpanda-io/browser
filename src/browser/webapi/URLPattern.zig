@@ -794,7 +794,7 @@ fn processInit(arena: Allocator, in: Init, comptime typ: InitType) Error!Init {
         if (base) |b| {
             if (!urlHasOpaquePath(b) and !isAbsolutePathname(pathname, typ)) {
                 const base_path = try processBaseUrlString(arena, urlPath(b), typ);
-                if (std.mem.lastIndexOfScalar(u8, base_path, '/')) |slash| {
+                if (std.mem.findScalarLast(u8, base_path, '/')) |slash| {
                     pathname = try std.mem.concat(arena, u8, &.{ base_path[0 .. slash + 1], pathname });
                 }
             }
@@ -1898,7 +1898,7 @@ const Component = struct {
                     const raw = groups.get(part.name) orelse return error.TypeError;
                     const value = try self.encoding(env.arena, raw);
                     if (self.options.delimiter) |delimiter| {
-                        if (std.mem.indexOfScalar(u8, value, delimiter) != null) {
+                        if (std.mem.findScalar(u8, value, delimiter) != null) {
                             return error.TypeError;
                         }
                     }

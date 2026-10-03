@@ -2112,7 +2112,7 @@ test "savePrompt: save instructions followed by the rendered script skill" {
     try std.testing.expect(std.mem.endsWith(u8, prompt, lp.skill.text()));
 
     const revision = savePrompt(true);
-    try std.testing.expect(std.mem.indexOf(u8, revision, save_revision_note) != null);
+    try std.testing.expect(std.mem.find(u8, revision, save_revision_note) != null);
     try std.testing.expect(std.mem.endsWith(u8, revision, lp.skill.text()));
 }
 
@@ -2142,7 +2142,7 @@ test "capToolOutput: appends a marker when truncating" {
     defer if (out.ptr != buf.ptr) ta.free(out);
 
     try std.testing.expect(std.unicode.utf8ValidateSlice(out));
-    try std.testing.expect(std.mem.indexOf(u8, out, "truncated") != null);
+    try std.testing.expect(std.mem.find(u8, out, "truncated") != null);
 }
 
 test "capToolOutput: extract is exempt from the default cap" {

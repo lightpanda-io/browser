@@ -632,14 +632,14 @@ fn shouldEscapeText(node_: ?*Node) bool {
 }
 fn writeEscapedText(text: []const u8, writer: *std.Io.Writer) !void {
     // Fast path: if no special characters, write directly
-    const first_special = std.mem.indexOfAnyPos(u8, text, 0, &.{ '&', '<', '>', 194 }) orelse {
+    const first_special = std.mem.findAnyPos(u8, text, 0, &.{ '&', '<', '>', 194 }) orelse {
         return writer.writeAll(text);
     };
 
     try writer.writeAll(text[0..first_special]);
     var remaining = try writeEscapedByte(text, first_special, writer);
 
-    while (std.mem.indexOfAnyPos(u8, remaining, 0, &.{ '&', '<', '>', 194 })) |offset| {
+    while (std.mem.findAnyPos(u8, remaining, 0, &.{ '&', '<', '>', 194 })) |offset| {
         try writer.writeAll(remaining[0..offset]);
         remaining = try writeEscapedByte(remaining, offset, writer);
     }
@@ -924,7 +924,7 @@ test "dump: with_frames and with_base inject a <base> in every document" {
 // Each content document gets its own LimitedWriter; the cut must still happen
 // once, with a single marker and no end tags after it.
 test "dump: max_bytes cut inside a nested content document" {
-    const cut = comptime std.mem.indexOf(u8, frames_dump, "<b>deep").? + 4;
+    const cut = comptime std.mem.find(u8, frames_dump, "<b>deep").? + 4;
     try expectPageDump(
         "dump_frames.html",
         .{ .with_frames = true, .max_bytes = cut },

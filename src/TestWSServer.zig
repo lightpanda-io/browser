@@ -98,9 +98,9 @@ fn handleClient(client: posix.socket_t) void {
 
     // Find Sec-WebSocket-Key
     const key_header = "Sec-WebSocket-Key: ";
-    const key_start = std.mem.indexOf(u8, request, key_header) orelse return;
+    const key_start = std.mem.find(u8, request, key_header) orelse return;
     const key_line_start = key_start + key_header.len;
-    const key_end = std.mem.indexOfScalarPos(u8, request, key_line_start, '\r') orelse return;
+    const key_end = std.mem.findScalarPos(u8, request, key_line_start, '\r') orelse return;
     const key = request[key_line_start..key_end];
 
     // Capture the request's Cookie header value (if any) so the test
@@ -111,9 +111,9 @@ fn handleClient(client: posix.socket_t) void {
     var cookie_buf: [4096]u8 = undefined;
     var cookie_len: usize = 0;
     const cookie_header = "Cookie: ";
-    if (std.mem.indexOf(u8, request, cookie_header)) |cookie_start| {
+    if (std.mem.find(u8, request, cookie_header)) |cookie_start| {
         const value_start = cookie_start + cookie_header.len;
-        const value_end = std.mem.indexOfScalarPos(u8, request, value_start, '\r') orelse value_start;
+        const value_end = std.mem.findScalarPos(u8, request, value_start, '\r') orelse value_start;
         const value = request[value_start..value_end];
         cookie_len = @min(value.len, cookie_buf.len);
         @memcpy(cookie_buf[0..cookie_len], value[0..cookie_len]);
@@ -125,9 +125,9 @@ fn handleClient(client: posix.socket_t) void {
     var origin_buf: [1024]u8 = undefined;
     var origin_len: usize = 0;
     const origin_header = "\r\nOrigin: ";
-    if (std.mem.indexOf(u8, request, origin_header)) |origin_start| {
+    if (std.mem.find(u8, request, origin_header)) |origin_start| {
         const value_start = origin_start + origin_header.len;
-        const value_end = std.mem.indexOfScalarPos(u8, request, value_start, '\r') orelse value_start;
+        const value_end = std.mem.findScalarPos(u8, request, value_start, '\r') orelse value_start;
         const value = request[value_start..value_end];
         origin_len = @min(value.len, origin_buf.len);
         @memcpy(origin_buf[0..origin_len], value[0..origin_len]);
@@ -304,7 +304,7 @@ fn handleTextMessage(client: posix.socket_t, payload: []const u8, cookie_header:
     // Command: close:CODE:REASON - send close frame with specific code/reason
     if (std.mem.startsWith(u8, payload, "close:")) {
         const rest = payload["close:".len..];
-        if (std.mem.indexOf(u8, rest, ":")) |sep| {
+        if (std.mem.find(u8, rest, ":")) |sep| {
             const code = std.fmt.parseInt(u16, rest[0..sep], 10) catch 1000;
             const reason = rest[sep + 1 ..];
             try sendCloseFrame(client, code, reason);

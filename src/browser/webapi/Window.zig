@@ -1167,7 +1167,7 @@ fn hasFeatureToken(features: []const u8, token: []const u8) bool {
     var it = std.mem.tokenizeAny(u8, features, " \t\r\n,");
     while (it.next()) |raw| {
         // Trim a trailing =value if present — we only need the key.
-        const key = if (std.mem.indexOfScalarPos(u8, raw, 0, '=')) |eq| raw[0..eq] else raw;
+        const key = if (std.mem.findScalarPos(u8, raw, 0, '=')) |eq| raw[0..eq] else raw;
         if (std.ascii.eqlIgnoreCase(key, token)) return true;
     }
     return false;

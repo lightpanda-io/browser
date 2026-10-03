@@ -596,8 +596,8 @@ fn testSignal(sig: std.posix.SIG, mode: SignalTestMode) !void {
             try testing.expectEqual(true, std.mem.containsAtLeast(u8, text, 1, address));
             // The faulting pc alone is not a backtrace: the walk has to have
             // followed at least one link out of the frame that faulted.
-            const line = text[std.mem.indexOf(u8, text, "\nbacktrace: ").? + 1 ..];
-            try testing.expectEqual(true, std.mem.count(u8, line[0..std.mem.indexOfScalar(u8, line, '\n').?], " 0x") >= 2);
+            const line = text[std.mem.find(u8, text, "\nbacktrace: ").? + 1 ..];
+            try testing.expectEqual(true, std.mem.count(u8, line[0..std.mem.findScalar(u8, line, '\n').?], " 0x") >= 2);
         } else {
             try testing.expectEqual(true, std.mem.containsAtLeast(u8, text, 1, "address: unavailable\n"));
         }

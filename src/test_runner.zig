@@ -118,13 +118,13 @@ const Runner = struct {
             const is_unnamed_test = isUnnamed(t);
             if (!is_unnamed_test) {
                 if (self.env.filter) |f| {
-                    if (std.mem.indexOf(u8, t.name, f) == null) {
+                    if (std.mem.find(u8, t.name, f) == null) {
                         continue;
                     }
                 } else if (webapi_html_test_mode) {
                     // allow filtering by subfilter only, assumes subfilters
                     // only exists for "WebApi: " tests (which is true for now).
-                    if (std.mem.indexOf(u8, t.name, "WebApi: ") == null) {
+                    if (std.mem.find(u8, t.name, "WebApi: ") == null) {
                         continue;
                     }
                 }
@@ -278,7 +278,7 @@ pub fn hasSubfilter() bool {
 
 pub fn shouldRun(name: []const u8) bool {
     const sf = RUNNER.env.subfilter orelse return true;
-    return std.mem.indexOf(u8, name, sf) != null;
+    return std.mem.find(u8, name, sf) != null;
 }
 
 pub fn subtest(name: []const u8) !void {
@@ -433,7 +433,7 @@ const Env = struct {
         const ff = full_filter orelse return .{ null, null };
         if (ff.len == 0) return .{ null, null };
 
-        const split = std.mem.indexOfScalarPos(u8, ff, 0, '#') orelse {
+        const split = std.mem.findScalarPos(u8, ff, 0, '#') orelse {
             return .{ ff, null };
         };
 
@@ -462,7 +462,7 @@ pub const panic = std.debug.FullPanic(struct {
 fn isUnnamed(t: std.lang.TestFn) bool {
     const marker = ".test_";
     const test_name = t.name;
-    const index = std.mem.indexOf(u8, test_name, marker) orelse return false;
+    const index = std.mem.find(u8, test_name, marker) orelse return false;
     _ = std.fmt.parseInt(u32, test_name[index + marker.len ..], 10) catch return false;
     return true;
 }

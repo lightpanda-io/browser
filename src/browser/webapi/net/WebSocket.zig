@@ -138,7 +138,7 @@ const BinaryType = enum {
 
 pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*WebSocket {
     {
-        if (std.mem.indexOfScalar(u8, url, '#') != null) {
+        if (std.mem.findScalar(u8, url, '#') != null) {
             // Fragments are not allowed in WebSocket URLs.
             return error.SyntaxError;
         }
@@ -961,7 +961,7 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
     const header = buffer[0..buf_len];
 
     if (self._got_101 == false and std.mem.startsWith(u8, header, "HTTP/")) {
-        if (std.mem.indexOf(u8, header, " 101 ")) |_| {
+        if (std.mem.find(u8, header, " 101 ")) |_| {
             self._got_101 = true;
         }
         return buf_len;
@@ -980,7 +980,7 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
         return buf_len;
     }
 
-    const colon = std.mem.indexOfScalarPos(u8, header, 0, ':') orelse {
+    const colon = std.mem.findScalarPos(u8, header, 0, ':') orelse {
         // weird, continue...
         return buf_len;
     };

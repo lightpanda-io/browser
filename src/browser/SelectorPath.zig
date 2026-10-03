@@ -199,7 +199,7 @@ fn nthOfType(el: *Element) ?usize {
 }
 
 fn isPlainAttrValue(value: []const u8) bool {
-    return std.mem.indexOfAny(u8, value, "\"\\\n") == null;
+    return std.mem.findAny(u8, value, "\"\\\n") == null;
 }
 
 /// Mirrors how click/fill resolve a selector: the same `Selector.querySelector`

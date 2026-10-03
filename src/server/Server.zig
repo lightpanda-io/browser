@@ -1431,16 +1431,16 @@ test "server: buildJSONVersionResponse" {
 
     // The response includes the build version, so check structure rather than exact bytes.
     try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
-    try testing.expect(std.mem.indexOf(u8, res, "Content-Type: application/json") != null);
+    try testing.expect(std.mem.find(u8, res, "Content-Type: application/json") != null);
     // HTTP connections are kept alive now
-    try testing.expect(std.mem.indexOf(u8, res, "Connection: Close") == null);
+    try testing.expect(std.mem.find(u8, res, "Connection: Close") == null);
 
     // Verify all required JSON fields are present in the body
-    try testing.expect(std.mem.indexOf(u8, res, "\"Browser\": \"Lightpanda/") != null);
-    try testing.expect(std.mem.indexOf(u8, res, "\"Protocol-Version\": \"1.3\"") != null);
-    try testing.expect(std.mem.indexOf(u8, res, "\"User-Agent\": \"Lightpanda/") != null);
-    try testing.expect(std.mem.indexOf(u8, res, "\"Lightpanda-Version\": \"" ++ lp.build_config.version ++ "\"") != null);
-    try testing.expect(std.mem.indexOf(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
+    try testing.expect(std.mem.find(u8, res, "\"Browser\": \"Lightpanda/") != null);
+    try testing.expect(std.mem.find(u8, res, "\"Protocol-Version\": \"1.3\"") != null);
+    try testing.expect(std.mem.find(u8, res, "\"User-Agent\": \"Lightpanda/") != null);
+    try testing.expect(std.mem.find(u8, res, "\"Lightpanda-Version\": \"" ++ lp.build_config.version ++ "\"") != null);
+    try testing.expect(std.mem.find(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
 }
 
 test "Client: http header past the initial buffer" {
@@ -1907,7 +1907,7 @@ test "server: HTTP session outlives its websocket" {
     try c.bidiCommand("{\"id\":2,\"method\":\"browsingContext.getTree\"}");
     const res = try c.readWebsocketMessage() orelse return error.NoMessage;
     defer if (res.cleanup_fragment) c.reader.cleanup();
-    try testing.expect(std.mem.indexOf(u8, res.data, "\"url\":\"about:blank\"") != null);
+    try testing.expect(std.mem.find(u8, res.data, "\"url\":\"about:blank\"") != null);
 }
 
 test "server: HTTP session idle timeout" {
@@ -2018,7 +2018,7 @@ test "server: HTTP navigate" {
     try ws.bidiCommand("{\"id\":1,\"method\":\"browsingContext.getTree\"}");
     const msg = try ws.readWebsocketMessage() orelse return error.NoMessage;
     defer if (msg.cleanup_fragment) ws.reader.cleanup();
-    try testing.expect(std.mem.indexOf(u8, msg.data, "\"url\":\"" ++ url ++ "\"") != null);
+    try testing.expect(std.mem.find(u8, msg.data, "\"url\":\"" ++ url ++ "\"") != null);
 }
 
 test "server: HTTP page commands" {
@@ -2087,7 +2087,7 @@ test "server: HTTP page commands" {
     {
         const res = try sessionCommand(&c, "POST", &session_id, "/actions", "{\"actions\":[{\"type\":\"key\",\"id\":\"kb\",\"actions\":[{\"type\":\"keyDown\"}]}]}");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"invalid argument\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"invalid argument\"") != null);
     }
 
     // the reload lands on the same document
@@ -2148,13 +2148,13 @@ test "server: HTTP element commands" {
     {
         const res = try sessionCommand(&c, "GET", &session_id, "/element/99/text", "");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"no such element\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"no such element\"") != null);
     }
 
     {
         const res = try findElements(&c, &session_id, "css selector", "[");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"invalid selector\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"invalid selector\"") != null);
     }
 
     const msg = try findElement(&c, &session_id, "css selector", "#msg");
@@ -2173,8 +2173,8 @@ test "server: HTTP element commands" {
     {
         const body = try elementCommand(&c, &session_id, box, "/rect");
         try testing.expect(std.mem.startsWith(u8, body, "{\"value\":{\"x\":"));
-        try testing.expect(std.mem.indexOf(u8, body, "\"width\":40") != null);
-        try testing.expect(std.mem.indexOf(u8, body, "\"height\":20") != null);
+        try testing.expect(std.mem.find(u8, body, "\"width\":40") != null);
+        try testing.expect(std.mem.find(u8, body, "\"height\":20") != null);
     }
 
     // a boolean attribute is "true", never its value
@@ -2257,7 +2257,7 @@ test "server: HTTP element commands" {
         const path = try testing.arena_allocator.print("/element/{s}/text", .{msg});
         const res = try sessionCommand(&c, "GET", &session_id, path, "");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"stale element reference\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"stale element reference\"") != null);
     }
 }
 
@@ -2281,7 +2281,7 @@ test "server: HTTP element input" {
         const gone = try findElement(&c, &session_id, "css selector", "#gone");
         const res = try elementPost(&c, &session_id, gone, "/click", "{}");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"element not interactable\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"element not interactable\"") != null);
     }
 
     // clear: focus, the edit's input and change, blur
@@ -2298,7 +2298,7 @@ test "server: HTTP element input" {
         const element = try findElement(&c, &session_id, "css selector", selector);
         const res = try elementPost(&c, &session_id, element, "/clear", "{}");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"invalid element state\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"invalid element state\"") != null);
     }
 
     // a modifier stays down until it's typed again
@@ -2320,7 +2320,7 @@ test "server: HTTP element input" {
         const plain = try findElement(&c, &session_id, "css selector", "#plain");
         const res = try elementPost(&c, &session_id, plain, "/value", "{\"text\":\"x\"}");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"element not interactable\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"element not interactable\"") != null);
     }
 
     // an option is clicked by selecting it
@@ -2426,7 +2426,7 @@ test "server: HTTP execute script" {
     {
         const res = try executeRaw(&c, &session_id, "sync", "return 1;", "[{\"" ++ http_command.element_key ++ "\":\"99\"}]");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"no such element\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"no such element\"") != null);
     }
 
     // a node in another document is stale, connected or not
@@ -2438,32 +2438,32 @@ test "server: HTTP execute script" {
         const path = try testing.arena_allocator.print("/element/{s}/text", .{reference});
         const res = try sessionCommand(&c, "GET", &session_id, path, "");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"stale element reference\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"stale element reference\"") != null);
 
         const args = try testing.arena_allocator.print("[{{\"" ++ http_command.element_key ++ "\":\"{s}\"}}]", .{reference});
         const arg_res = try executeRaw(&c, &session_id, "sync", "return 1;", args);
-        try testing.expect(std.mem.indexOf(u8, arg_res, "\"error\":\"stale element reference\"") != null);
+        try testing.expect(std.mem.find(u8, arg_res, "\"error\":\"stale element reference\"") != null);
     }
 
     // a throw fails the command; it isn't reported inside a successful result
     {
         const res = try executeRaw(&c, &session_id, "sync", "throw new Error('nope');", "[]");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 Internal Server Error\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
-        try testing.expect(std.mem.indexOf(u8, res, "Error: nope") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.find(u8, res, "Error: nope") != null);
     }
 
     {
         const res = try executeRaw(&c, &session_id, "sync", "return (", "[]");
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
-        try testing.expect(std.mem.indexOf(u8, res, "SyntaxError") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.find(u8, res, "SyntaxError") != null);
     }
 
     // a cycle is an error, not a collapsed value like a RemoteValue's
     {
         const res = try executeRaw(&c, &session_id, "sync", "var a = {}; a.self = a; return a;", "[]");
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
-        try testing.expect(std.mem.indexOf(u8, res, "circular reference") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.find(u8, res, "circular reference") != null);
     }
 
     // a returned promise is resolved before we answer
@@ -2474,8 +2474,8 @@ test "server: HTTP execute script" {
     );
     {
         const res = try executeRaw(&c, &session_id, "sync", "return Promise.reject(new Error('late'));", "[]");
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
-        try testing.expect(std.mem.indexOf(u8, res, "Error: late") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.find(u8, res, "Error: late") != null);
     }
 
     // async: the callback is the last argument, and only its first call counts
@@ -2499,16 +2499,16 @@ test "server: HTTP execute script" {
     // not be a *second* answer on a connection we already handed back.
     {
         const res = try executeRaw(&c, &session_id, "async", "arguments[0](1); throw new Error('too late');", "[]");
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
-        try testing.expect(std.mem.indexOf(u8, res, "Error: too late") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.find(u8, res, "Error: too late") != null);
     }
     try testing.expectEqual("{\"value\":2}", try executeSync(&c, &session_id, "return 2;", "[]"));
 
     // a throw before the callback still fails the command
     {
         const res = try executeRaw(&c, &session_id, "async", "throw new Error('early');", "[]");
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
-        try testing.expect(std.mem.indexOf(u8, res, "Error: early") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.find(u8, res, "Error: early") != null);
     }
 
     // a script that never completes is answered by the script timeout
@@ -2521,11 +2521,11 @@ test "server: HTTP execute script" {
 
         const res = try executeRaw(&c, &session_id, "async", "// never calls back", "[]");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 Internal Server Error\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"script timeout\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"script timeout\"") != null);
 
         // a sync script whose promise never settles times out the same way
         const promise = try executeRaw(&c, &session_id, "sync", "return new Promise(function() {});", "[]");
-        try testing.expect(std.mem.indexOf(u8, promise, "\"error\":\"script timeout\"") != null);
+        try testing.expect(std.mem.find(u8, promise, "\"error\":\"script timeout\"") != null);
 
         // A script that resolves AFTER it timed out: answering is not the
         // promise settling, so the Pending has to outlive its own answer.
@@ -2535,7 +2535,7 @@ test "server: HTTP execute script" {
         // trap, so this covers the path rather than proving the invariant.
         // selenium/http/demo.js in ../demo is what actually catches it.
         const late = try executeRaw(&c, &session_id, "async", "var cb = arguments[0]; setTimeout(function() { window.__late = true; cb('way late'); }, 150);", "[]");
-        try testing.expect(std.mem.indexOf(u8, late, "\"error\":\"script timeout\"") != null);
+        try testing.expect(std.mem.find(u8, late, "\"error\":\"script timeout\"") != null);
         // the assertion only means anything if the stale resolve actually ran
         var ran = false;
         for (0..200) |_| {
@@ -2584,8 +2584,8 @@ test "server: HTTP execute script" {
         , .{handle}));
 
         const res = try parked.httpRequest("");
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"javascript error\"") != null);
-        try testing.expect(std.mem.indexOf(u8, res, "document was unloaded") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"javascript error\"") != null);
+        try testing.expect(std.mem.find(u8, res, "document was unloaded") != null);
     }
 }
 
@@ -2637,13 +2637,13 @@ fn elementCommand(c: *TestClient, session_id: *const [36]u8, id: []const u8, suf
 }
 
 fn responseBody(res: []const u8) []const u8 {
-    return res[std.mem.indexOf(u8, res, "\r\n\r\n").? + 4 ..];
+    return res[std.mem.find(u8, res, "\r\n\r\n").? + 4 ..];
 }
 
 fn expectWebsocketContains(ws: *TestClient, expected: []const u8) !void {
     const msg = try ws.readWebsocketMessage() orelse return error.NoMessage;
     defer if (msg.cleanup_fragment) ws.reader.cleanup();
-    if (std.mem.indexOf(u8, msg.data, expected) == null) {
+    if (std.mem.find(u8, msg.data, expected) == null) {
         std.debug.print("expected {s} in {s}\n", .{ expected, msg.data });
         return error.UnexpectedMessage;
     }
@@ -2659,7 +2659,7 @@ test "server: HTTP cookies" {
     {
         const res = try sessionCommand(&c, "POST", &session_id, "/cookie", "{\"cookie\":{\"name\":\"a\",\"value\":\"1\"}}");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"invalid cookie domain\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"invalid cookie domain\"") != null);
     }
 
     const url = "http://127.0.0.1:9582/src/browser/tests/webdriver/elements.html";
@@ -2671,12 +2671,12 @@ test "server: HTTP cookies" {
     {
         const res = try sessionCommand(&c, "POST", &session_id, "/cookie", "{\"cookie\":{\"name\":\"d\",\"value\":\"4\",\"domain\":\"example.com\"}}");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"invalid cookie domain\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"invalid cookie domain\"") != null);
     }
     {
         const res = try sessionCommand(&c, "POST", &session_id, "/cookie", "{\"cookie\":{\"name\":\"d\",\"value\":\"4\",\"sameSite\":\"None\"}}");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 Internal Server Error\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"unable to set cookie\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"unable to set cookie\"") != null);
     }
 
     // c's path doesn't cover the document, so it isn't the document's
@@ -2687,7 +2687,7 @@ test "server: HTTP cookies" {
     for ([_][]const u8{ "/cookie/c", "/cookie/nope" }) |path| {
         const res = try sessionCommand(&c, "GET", &session_id, path, "");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"no such cookie\"") != null);
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"no such cookie\"") != null);
     }
 
     // the page sees them, bar the HttpOnly one
@@ -2802,7 +2802,7 @@ fn createHTTPSession(body: []const u8, expect_ws_url: bool) ![36]u8 {
     const res = try c.httpRequest(body);
     try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
 
-    const json = res[std.mem.indexOf(u8, res, "\r\n\r\n").? + 4 ..];
+    const json = res[std.mem.find(u8, res, "\r\n\r\n").? + 4 ..];
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
     defer parsed.deinit();
 
@@ -3059,9 +3059,9 @@ test "server: get /json/version" {
 
         const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
         try testing.expect(std.mem.startsWith(u8, res1, "HTTP/1.1 200 OK\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res1, "\"Browser\": \"Lightpanda/") != null);
-        try testing.expect(std.mem.indexOf(u8, res1, "\"Protocol-Version\": \"1.3\"") != null);
-        try testing.expect(std.mem.indexOf(u8, res1, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9583/\"") != null);
+        try testing.expect(std.mem.find(u8, res1, "\"Browser\": \"Lightpanda/") != null);
+        try testing.expect(std.mem.find(u8, res1, "\"Protocol-Version\": \"1.3\"") != null);
+        try testing.expect(std.mem.find(u8, res1, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9583/\"") != null);
     }
 
     {
@@ -3071,7 +3071,7 @@ test "server: get /json/version" {
 
         const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
         try testing.expect(std.mem.startsWith(u8, res1, "HTTP/1.1 200 OK\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res1, "\"Browser\": \"Lightpanda/") != null);
+        try testing.expect(std.mem.find(u8, res1, "\"Browser\": \"Lightpanda/") != null);
     }
 }
 
@@ -3083,9 +3083,9 @@ test "server: get /json/protocol" {
     defer testing.allocator.free(res);
 
     try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
-    try testing.expect(std.mem.indexOf(u8, res, "Content-Type: application/json") != null);
+    try testing.expect(std.mem.find(u8, res, "Content-Type: application/json") != null);
 
-    const body_start = std.mem.indexOf(u8, res, "\r\n\r\n").? + 4;
+    const body_start = std.mem.find(u8, res, "\r\n\r\n").? + 4;
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, res[body_start..], .{});
     defer parsed.deinit();
 
@@ -3109,10 +3109,10 @@ test "server: get /metrics" {
 
     const res = try c.httpRequest("GET /metrics HTTP/1.1\r\n\r\n");
     try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
-    try testing.expect(std.mem.indexOf(u8, res, "Content-Type: text/plain; version=0.0.4") != null);
-    try testing.expect(std.mem.indexOf(u8, res, "build_info{version=") != null);
-    try testing.expect(std.mem.indexOf(u8, res, "# TYPE serve_http_requests_total counter") != null);
-    try testing.expect(std.mem.indexOf(u8, res, "# TYPE serve_connections_total counter") != null);
+    try testing.expect(std.mem.find(u8, res, "Content-Type: text/plain; version=0.0.4") != null);
+    try testing.expect(std.mem.find(u8, res, "build_info{version=") != null);
+    try testing.expect(std.mem.find(u8, res, "# TYPE serve_http_requests_total counter") != null);
+    try testing.expect(std.mem.find(u8, res, "# TYPE serve_connections_total counter") != null);
 }
 
 fn discardBidiMessage(c: *TestClient) !void {
@@ -3313,12 +3313,12 @@ const TestClient = struct {
     // The server keeps HTTP/1.1 connections open, so EOF never marks the end
     // of a response.
     fn responseLength(response: []const u8) !?usize {
-        const header_end = std.mem.indexOf(u8, response, "\r\n\r\n") orelse return null;
+        const header_end = std.mem.find(u8, response, "\r\n\r\n") orelse return null;
         const header = response[0 .. header_end + 4];
 
         const cl_header = "Content-Length: ";
-        const start = (std.mem.indexOf(u8, header, cl_header) orelse return header.len) + cl_header.len;
-        const end = std.mem.indexOfScalarPos(u8, header, start, '\r') orelse {
+        const start = (std.mem.find(u8, header, cl_header) orelse return header.len) + cl_header.len;
+        const end = std.mem.findScalarPos(u8, header, start, '\r') orelse {
             return error.InvalidContentLength;
         };
         const cl = std.fmt.parseInt(usize, header[start..end], 10) catch {

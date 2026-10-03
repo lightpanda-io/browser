@@ -826,7 +826,7 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
             const tag_name = try String.init(frame.arena, name, .{});
 
             // Check if this is a custom element (must have hyphen for HTML namespace)
-            const has_hyphen = std.mem.indexOfScalar(u8, name, '-') != null;
+            const has_hyphen = std.mem.findScalar(u8, name, '-') != null;
             if (has_hyphen and namespace == .html) {
                 // A document without a browsing context has no registry: its
                 // elements stay undefined until inserted into a document that
@@ -1207,7 +1207,7 @@ pub fn createComment(document: *const Node.Document, text: []const u8) !*Node {
 
 pub fn createCDATASection(document: *const Node.Document, data: []const u8) !*Node {
     // Validate that the data doesn't contain "]]>"
-    if (std.mem.indexOf(u8, data, "]]>") != null) {
+    if (std.mem.find(u8, data, "]]>") != null) {
         return error.InvalidCharacterError;
     }
 
@@ -1221,10 +1221,10 @@ pub fn createCDATASection(document: *const Node.Document, data: []const u8) !*No
 
 pub fn createProcessingInstruction(document: *const Node.Document, target: []const u8, data: []const u8) !*Node {
     // Validate neither target nor data contain "?>"
-    if (std.mem.indexOf(u8, target, "?>") != null) {
+    if (std.mem.find(u8, target, "?>") != null) {
         return error.InvalidCharacterError;
     }
-    if (std.mem.indexOf(u8, data, "?>") != null) {
+    if (std.mem.find(u8, data, "?>") != null) {
         return error.InvalidCharacterError;
     }
 

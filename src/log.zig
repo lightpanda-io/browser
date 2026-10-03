@@ -637,7 +637,7 @@ fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void 
 
     var rest = value;
     while (rest.len > 0) {
-        const pos = std.mem.indexOfAny(u8, rest, "\r\n\"") orelse {
+        const pos = std.mem.findAny(u8, rest, "\r\n\"") orelse {
             try writer.writeAll(rest);
             break;
         };
@@ -757,13 +757,13 @@ test "log: color disabled (NO_COLOR / non-tty)" {
 
     aw.clearRetainingCapacity();
     try logTo(.app, .info, "test", .{}, &aw.writer);
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b") == null);
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "INFO  app : test") != null);
+    try testing.expect(std.mem.find(u8, aw.written(), "\x1b") == null);
+    try testing.expect(std.mem.find(u8, aw.written(), "INFO  app : test") != null);
 
     aw.clearRetainingCapacity();
     try logTo(.app, .err, "test", .{}, &aw.writer);
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b") == null);
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "ERROR app : test") != null);
+    try testing.expect(std.mem.find(u8, aw.written(), "\x1b") == null);
+    try testing.expect(std.mem.find(u8, aw.written(), "ERROR app : test") != null);
 }
 
 test "log: data" {

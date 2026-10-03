@@ -2282,11 +2282,11 @@ const RegexLiteral = struct {
 /// written as `/foo/` still matches itself, the search being unanchored.
 fn regexLiteral(text: []const u8) ?RegexLiteral {
     if (text.len == 0 or text[0] != '/') return null;
-    const close = std.mem.lastIndexOfScalar(u8, text, '/') orelse return null;
+    const close = std.mem.findScalarLast(u8, text, '/') orelse return null;
     if (close < 2) return null;
     const flags = text[close + 1 ..];
     for (flags) |flag| {
-        if (std.mem.indexOfScalar(u8, "dgimsuvy", flag) == null) return null;
+        if (std.mem.findScalar(u8, "dgimsuvy", flag) == null) return null;
     }
     return .{ .body = text[1..close], .flags = flags };
 }
@@ -2338,7 +2338,7 @@ pub fn lpEnvNames(arena: std.mem.Allocator) error{OutOfMemory}![]const []const u
     var ptr = std.c.environ;
     while (ptr[0]) |entry| : (ptr += 1) {
         const line = std.mem.span(entry);
-        const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const eq_idx = std.mem.findScalar(u8, line, '=') orelse continue;
         const name = line[0..eq_idx];
         if (!std.mem.startsWith(u8, name, "LP_")) continue;
         try env_names.append(arena, try arena.dupe(u8, name));
@@ -2630,7 +2630,7 @@ fn substituteStringArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
     const needsSub = struct {
         fn f(is_fill_: bool, key: []const u8, val: std.json.Value) bool {
             if (is_fill_ and std.mem.eql(u8, key, "value")) return false;
-            return val == .string and std.mem.indexOf(u8, val.string, "$LP_") != null;
+            return val == .string and std.mem.find(u8, val.string, "$LP_") != null;
         }
     }.f;
 
@@ -2659,13 +2659,13 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutO
     // Pages routinely contain `$5.99`-style content where `$` is incidental.
     // Lowercase `$lp_…` falls through here too — `getenv` is
     // case-sensitive on Linux, so it would never resolve anyway.
-    const first_lp = std.mem.indexOf(u8, input, "$LP_") orelse return input;
+    const first_lp = std.mem.find(u8, input, "$LP_") orelse return input;
 
     var result: std.ArrayList(u8) = .empty;
     try result.ensureTotalCapacity(arena, input.len);
     var i: usize = first_lp;
     var last_copy: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, input, i, '$')) |dollar| {
+    while (std.mem.findScalarPos(u8, input, i, '$')) |dollar| {
         const var_start = dollar + 1;
         var var_end = var_start;
         while (var_end < input.len and (std.ascii.isAlphanumeric(input[var_end]) or input[var_end] == '_')) {
@@ -2716,7 +2716,7 @@ pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) err
     var current: []const u8 = input;
     var changed = false;
     for (pairs.items) |p| {
-        if (std.mem.indexOf(u8, current, p.value) == null) continue;
+        if (std.mem.find(u8, current, p.value) == null) continue;
         const placeholder = try arena.print("${s}", .{p.name});
         current = try std.mem.replaceOwned(u8, arena, current, p.value, placeholder);
         changed = true;
@@ -2751,12 +2751,12 @@ test "tree and nodeDetails read the node's own frame" {
     const aa = testing.arena_allocator;
     const tree_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{html_id}), .{});
     const tree = try call(aa, page.session, &registry, "tree", tree_args, .{});
-    try std.testing.expect(std.mem.indexOf(u8, tree.text, "child-label") != null);
-    try std.testing.expect(std.mem.indexOf(u8, tree.text, "parent-") == null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "child-label") != null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "parent-") == null);
 
     const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{input_id}), .{});
     const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{});
-    try std.testing.expect(std.mem.indexOf(u8, details.text, "child-label") != null);
+    try std.testing.expect(std.mem.find(u8, details.text, "child-label") != null);
 }
 
 test "goto: a navigation stuck waiting for a connection is an error" {
@@ -2920,7 +2920,7 @@ test "execGetEnv hides non-LP_ values even when set" {
     const arguments: std.json.Value = .{ .object = obj };
 
     const r = try execGetEnv(aa, arguments);
-    try std.testing.expect(std.mem.indexOf(u8, r, var_value) == null);
+    try std.testing.expect(std.mem.find(u8, r, var_value) == null);
     try std.testing.expectEqualStrings(
         "Environment variable '" ++ var_name ++ "' is not set",
         r,
@@ -2935,9 +2935,9 @@ test "formatLpEnvNames renders names without values" {
     const env_names = [_][]const u8{ "LP_BAR", "LP_FOO" };
     const r = try formatLpEnvNames(aa, &env_names);
 
-    try std.testing.expect(std.mem.indexOf(u8, r, "LP_FOO") != null);
-    try std.testing.expect(std.mem.indexOf(u8, r, "LP_BAR") != null);
-    try std.testing.expect(std.mem.indexOf(u8, r, "secret") == null);
+    try std.testing.expect(std.mem.find(u8, r, "LP_FOO") != null);
+    try std.testing.expect(std.mem.find(u8, r, "LP_BAR") != null);
+    try std.testing.expect(std.mem.find(u8, r, "secret") == null);
 }
 
 test "formatLpEnvNames reports empty when no names" {
@@ -2964,11 +2964,11 @@ test "tavily results render as markdown" {
     };
 
     const md = try renderResults(aa, try collectTavily(aa, resp));
-    try std.testing.expect(std.mem.indexOf(u8, md, "**Answer:** Paris") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "1. **Paris - Wikipedia**") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "Paris is the capital of France.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "2. **France**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "**Answer:** Paris") != null);
+    try std.testing.expect(std.mem.find(u8, md, "1. **Paris - Wikipedia**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
+    try std.testing.expect(std.mem.find(u8, md, "Paris is the capital of France.") != null);
+    try std.testing.expect(std.mem.find(u8, md, "2. **France**") != null);
 }
 
 test "tavily: no results render as a notice" {
@@ -2994,10 +2994,10 @@ test "brave results render as markdown" {
     };
 
     const md = try renderResults(aa, try collectBrave(aa, resp));
-    try std.testing.expect(std.mem.indexOf(u8, md, "1. **Paris - Wikipedia**") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "Paris is the capital of France.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "2. **France**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "1. **Paris - Wikipedia**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
+    try std.testing.expect(std.mem.find(u8, md, "Paris is the capital of France.") != null);
+    try std.testing.expect(std.mem.find(u8, md, "2. **France**") != null);
 }
 
 test "brave: no results render as a notice" {
@@ -3024,10 +3024,10 @@ test "keenable results render the snippet as the body" {
     };
 
     const md = try renderResults(aa, try collectKeenable(aa, resp));
-    try std.testing.expect(std.mem.indexOf(u8, md, "1. **Zig (programming language)**") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "Zig is a system programming language.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "2. **Zig guide**") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "Compile-time execution.") != null);
+    try std.testing.expect(std.mem.find(u8, md, "1. **Zig (programming language)**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "Zig is a system programming language.") != null);
+    try std.testing.expect(std.mem.find(u8, md, "2. **Zig guide**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "Compile-time execution.") != null);
 }
 
 test "writeResultItem uses the URL as title when the title is empty" {
@@ -3074,10 +3074,10 @@ test "searchFailed: a rate limit says so, a bare failure stays short" {
         .message = "Public API hourly limit reached.\nWait 2 minutes to continue.",
     });
     try std.testing.expect(limited.is_error);
-    try std.testing.expect(std.mem.indexOf(u8, limited.text, "(HTTP 429)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, limited.text, "Public API hourly limit reached.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, limited.text, "rate-limited right now") != null);
-    try std.testing.expect(std.mem.indexOf(u8, limited.text, "\n") == null);
+    try std.testing.expect(std.mem.find(u8, limited.text, "(HTTP 429)") != null);
+    try std.testing.expect(std.mem.find(u8, limited.text, "Public API hourly limit reached.") != null);
+    try std.testing.expect(std.mem.find(u8, limited.text, "rate-limited right now") != null);
+    try std.testing.expect(std.mem.find(u8, limited.text, "\n") == null);
 
     const bare = try searchFailed(aa, "web", error.ConnectionRefused, .{});
     try std.testing.expectEqualStrings("web search failed: ConnectionRefused", bare.text);

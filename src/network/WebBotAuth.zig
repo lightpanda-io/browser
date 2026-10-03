@@ -38,8 +38,8 @@ pub const Config = struct {
 fn parsePemPrivateKey(pem: []const u8) !*crypto.EVP_PKEY {
     const begin = "-----BEGIN PRIVATE KEY-----";
     const end = "-----END PRIVATE KEY-----";
-    const start_idx = std.mem.indexOf(u8, pem, begin) orelse return error.InvalidPem;
-    const end_idx = std.mem.indexOf(u8, pem, end) orelse return error.InvalidPem;
+    const start_idx = std.mem.find(u8, pem, begin) orelse return error.InvalidPem;
+    const end_idx = std.mem.find(u8, pem, end) orelse return error.InvalidPem;
 
     const b64 = std.mem.trim(u8, pem[start_idx + begin.len .. end_idx], &std.ascii.whitespace);
 

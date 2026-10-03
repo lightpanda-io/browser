@@ -1017,7 +1017,7 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
     );
 
     const frame = testing.test_session.currentFrame().?;
-    try testing.expect(std.mem.indexOf(u8, frame.url, "/src/browser/tests/mcp_actions.html") != null);
+    try testing.expect(std.mem.find(u8, frame.url, "/src/browser/tests/mcp_actions.html") != null);
 }
 
 test "agent script runtime: Page must be called with new" {
@@ -1028,7 +1028,7 @@ test "agent script runtime: Page must be called with new" {
     defer runtime.deinit();
 
     const message = (try runtime.runSource("Page();", "agent-runtime-page-no-new.js")).?;
-    try testing.expect(std.mem.indexOf(u8, message, "must be called with new") != null);
+    try testing.expect(std.mem.find(u8, message, "must be called with new") != null);
 }
 
 test "agent script runtime: a method on an un-navigated page errors" {
@@ -1042,7 +1042,7 @@ test "agent script runtime: a method on an un-navigated page errors" {
         \\const page = new Page();
         \\page.extract({ btn: "#btn" });
     , "agent-runtime-not-navigated.js")).?;
-    try testing.expect(std.mem.indexOf(u8, message, "not navigated") != null);
+    try testing.expect(std.mem.find(u8, message, "not navigated") != null);
 }
 
 test "agent script runtime: page.close stales the handle" {
@@ -1062,7 +1062,7 @@ test "agent script runtime: page.close stales the handle" {
         \\page.close();
         \\page.extract({ btn: "#btn" });
     , "agent-runtime-close.js")).?;
-    try testing.expect(std.mem.indexOf(u8, message, "closed") != null);
+    try testing.expect(std.mem.find(u8, message, "closed") != null);
 }
 
 test "agent script runtime: parallel gotos coexist and route per page" {
@@ -1433,9 +1433,9 @@ test "agent script runtime: tool errors throw and stop execution" {
         \\globalThis.marker = "after";
     , "agent-runtime-failure.js")).?;
 
-    try testing.expect(std.mem.indexOf(u8, message, "click") != null or
-        std.mem.indexOf(u8, message, "NodeNotFound") != null or
-        std.mem.indexOf(u8, message, "#does-not-exist") != null);
+    try testing.expect(std.mem.find(u8, message, "click") != null or
+        std.mem.find(u8, message, "NodeNotFound") != null or
+        std.mem.find(u8, message, "#does-not-exist") != null);
 
     try runTestScript(runtime,
         \\if (globalThis.marker !== "before") throw new Error("script continued after tool failure");
@@ -1550,7 +1550,7 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
         const message = (try runtime.runSource(
             \\await new Page().goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { url: "http://other" });
         , "agent-runtime-conflict.js")).?;
-        try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
+        try testing.expect(std.mem.find(u8, message, "invalid arguments") != null);
     }
 
     // More positionals than the tool has fields throws.
@@ -1560,7 +1560,7 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
             \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
             \\page.click("#btn", "#extra");
         , "agent-runtime-arity.js")).?;
-        try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
+        try testing.expect(std.mem.find(u8, message, "invalid arguments") != null);
     }
 }
 

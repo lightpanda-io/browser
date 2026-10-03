@@ -80,7 +80,7 @@ pub const Header = struct {
     }
 
     pub fn parse(header_str: []const u8) ?Header {
-        const colon_pos = std.mem.indexOfScalar(u8, header_str, ':') orelse return null;
+        const colon_pos = std.mem.findScalar(u8, header_str, ':') orelse return null;
 
         const name = std.mem.trim(u8, header_str[0..colon_pos], " \t");
         const value = std.mem.trim(u8, header_str[colon_pos + 1 ..], " \t");
@@ -91,13 +91,13 @@ pub const Header = struct {
     // The header value up to the first ';', trimmed (e.g. "attachment" for a
     // Content-Disposition, "text/html" for a Content-Type).
     pub fn firstValue(self: Header) []const u8 {
-        const end = std.mem.indexOfScalar(u8, self.value, ';') orelse self.value.len;
+        const end = std.mem.findScalar(u8, self.value, ';') orelse self.value.len;
         return std.mem.trim(u8, self.value[0..end], " \t");
     }
 
     // Iterates the `; key=value` parameters that follow the header's first value.
     pub fn params(self: Header) ParamIterator {
-        const start = std.mem.indexOfScalar(u8, self.value, ';') orelse self.value.len;
+        const start = std.mem.findScalar(u8, self.value, ';') orelse self.value.len;
         return .{ .rest = self.value[start..] };
     }
 
@@ -118,11 +118,11 @@ pub const Header = struct {
         pub fn next(self: *ParamIterator) ?Param {
             while (self.rest.len > 0 and self.rest[0] == ';') {
                 self.rest = self.rest[1..];
-                const end = std.mem.indexOfScalar(u8, self.rest, ';') orelse self.rest.len;
+                const end = std.mem.findScalar(u8, self.rest, ';') orelse self.rest.len;
                 const segment = self.rest[0..end];
                 self.rest = self.rest[end..];
 
-                const eq = std.mem.indexOfScalar(u8, segment, '=') orelse continue;
+                const eq = std.mem.findScalar(u8, segment, '=') orelse continue;
                 const key = std.mem.trim(u8, segment[0..eq], " \t");
                 if (key.len == 0) continue;
 
@@ -160,7 +160,7 @@ pub const AuthChallenge = struct {
         };
 
         const challenge_value = std.mem.trim(u8, value, std.ascii.whitespace[0..]);
-        const pos = std.mem.indexOfPos(u8, challenge_value, 0, " ") orelse challenge_value.len;
+        const pos = std.mem.findPos(u8, challenge_value, 0, " ") orelse challenge_value.len;
         const _scheme = challenge_value[0..pos];
         if (std.ascii.eqlIgnoreCase(_scheme, "basic")) {
             ac.scheme = .basic;
@@ -184,8 +184,8 @@ pub const StatusText = struct {
     pub fn fromStatusLine(line: []const u8) StatusText {
         const trimmed = std.mem.trimEnd(u8, line, "\r\n");
         // HTTP-version SP status-code SP [ reason-phrase ]
-        const sp1 = std.mem.indexOfScalar(u8, trimmed, ' ') orelse return .{ ._len = 0 };
-        const sp2 = std.mem.indexOfScalarPos(u8, trimmed, sp1 + 1, ' ') orelse return .{ ._len = 0 };
+        const sp1 = std.mem.findScalar(u8, trimmed, ' ') orelse return .{ ._len = 0 };
+        const sp2 = std.mem.findScalarPos(u8, trimmed, sp1 + 1, ' ') orelse return .{ ._len = 0 };
         const phrase = trimmed[sp2 + 1 ..];
         const len = @min(phrase.len, MAX_LEN);
 

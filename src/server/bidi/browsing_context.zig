@@ -526,7 +526,7 @@ pub const Locator = union(enum) {
                         const rendered = std.mem.trim(u8, text.written(), &std.ascii.whitespace);
                         break :blk switch (self) {
                             .link_text => std.mem.eql(u8, rendered, needle),
-                            else => std.mem.indexOf(u8, rendered, needle) != null,
+                            else => std.mem.find(u8, rendered, needle) != null,
                         };
                     },
                     else => unreachable, // css and xpath returned above

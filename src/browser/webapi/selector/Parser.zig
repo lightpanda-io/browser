@@ -50,7 +50,7 @@ const ParseError = error{
 // CSS Syntax preprocessing: normalize line endings (CRLF → LF, CR → LF)
 // https://drafts.csswg.org/css-syntax/#input-preprocessing
 fn preprocessInput(arena: Allocator, input: []const u8) ![]const u8 {
-    var i = std.mem.indexOfScalar(u8, input, '\r') orelse return input;
+    var i = std.mem.findScalar(u8, input, '\r') orelse return input;
 
     var result = try std.ArrayList(u8).initCapacity(arena, input.len);
     result.appendSliceAssumeCapacity(input[0..i]);

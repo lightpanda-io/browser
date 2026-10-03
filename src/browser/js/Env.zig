@@ -965,8 +965,8 @@ test "Env: stall report names the running frame and script stack" {
     try testing.expectEqual(frame.url, state.url[0..state.url_len]);
     try testing.expectEqual(true, state.page_url_matches);
     const stack = state.stack[0..state.stack_len];
-    const inner = std.mem.indexOf(u8, stack, "stallInner (https://example.com/stall.js:3:") orelse return error.MissingInnerFrame;
-    const outer = std.mem.indexOf(u8, stack, "stallOuter (https://example.com/stall.js:2:") orelse return error.MissingOuterFrame;
+    const inner = std.mem.find(u8, stack, "stallInner (https://example.com/stall.js:3:") orelse return error.MissingInnerFrame;
+    const outer = std.mem.find(u8, stack, "stallOuter (https://example.com/stall.js:2:") orelse return error.MissingOuterFrame;
     try testing.expect(inner < outer);
 }
 

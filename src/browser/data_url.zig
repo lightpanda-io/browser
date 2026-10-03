@@ -35,7 +35,7 @@ pub fn parse(arena: Allocator, url: []const u8) !Parsed {
 
     const after = url["data:".len..];
 
-    const comma = std.mem.indexOfScalarPos(u8, after, 0, ',') orelse return error.InvalidDataUrl;
+    const comma = std.mem.findScalarPos(u8, after, 0, ',') orelse return error.InvalidDataUrl;
     var meta = std.mem.trim(u8, after[0..comma], &std.ascii.whitespace);
     const encoded_body = after[comma + 1 ..];
 

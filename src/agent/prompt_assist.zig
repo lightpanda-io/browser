@@ -214,7 +214,7 @@ fn analyzeBody(schema: *const Schema, body: []const u8, ends_ws: bool) BodyAnaly
 
     const last = n - 1;
     for (tokens[0..n], 0..) |tok, i| {
-        if (std.mem.indexOfScalar(u8, tok, '=')) |eq| {
+        if (std.mem.findScalar(u8, tok, '=')) |eq| {
             a.markUsed(tok[0..eq]);
             continue;
         }
@@ -234,7 +234,7 @@ const help_arg_prefix = "/help ";
 fn parseHelpArgPrefix(input: []const u8) ?[]const u8 {
     if (!std.ascii.startsWithIgnoreCase(input, help_arg_prefix)) return null;
     const arg = std.mem.trimStart(u8, input[help_arg_prefix.len..], " ");
-    if (std.mem.indexOfScalar(u8, arg, ' ') != null) return null;
+    if (std.mem.findScalar(u8, arg, ' ') != null) return null;
     return arg;
 }
 
@@ -265,7 +265,7 @@ fn valueAt(schema: *const Schema, body: []const u8, ends_ws: bool) ?ValueAt {
     const active: []const u8 = if (ends_ws or n == 0) "" else last;
     const active_index: usize = if (ends_ws or n == 0) n else n - 1;
 
-    if (std.mem.indexOfScalar(u8, active, '=')) |eq| {
+    if (std.mem.findScalar(u8, active, '=')) |eq| {
         const field = schema.findField(active[0..eq]) orelse return null;
         return .{ .field = field, .partial = active[eq + 1 ..], .kv = true };
     }
@@ -331,7 +331,7 @@ fn addMetaValueCompletions(
     buf: *[completion_buf_len:0]u8,
 ) void {
     // Past the first positional arg — don't offer value completions anymore.
-    if (std.mem.indexOfAny(u8, body, &std.ascii.whitespace) != null) return;
+    if (std.mem.findAny(u8, body, &std.ascii.whitespace) != null) return;
     const prefix = input[0 .. input.len - body.len];
 
     if (meta.tag == .load or meta.tag == .save) {
@@ -370,7 +370,7 @@ const PathMatchIterator = struct {
     const Match = struct { name: []const u8, is_dir: bool };
 
     fn init(body: []const u8) ?PathMatchIterator {
-        const slash = std.mem.lastIndexOfScalar(u8, body, '/');
+        const slash = std.mem.findScalarLast(u8, body, '/');
         const dir_part = if (slash) |i| body[0 .. i + 1] else "";
         const open_path = if (dir_part.len == 0) "." else dir_part;
         const dir = std.Io.Dir.cwd().openDir(lp.io, open_path, .{ .iterate = true }) catch return null;
@@ -426,7 +426,7 @@ fn addEnvVarCompletions(
     buf: *[completion_buf_len:0]u8,
     input: []const u8,
 ) void {
-    const dollar = std.mem.lastIndexOfScalar(u8, input, '$') orelse return;
+    const dollar = std.mem.findScalarLast(u8, input, '$') orelse return;
     const partial = input[dollar + 1 ..];
     for (partial) |ch| {
         if (!std.ascii.isAlphanumeric(ch) and ch != '_') return;
@@ -453,7 +453,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
     }
 
     if (input.len == 0) return;
-    const has_space = std.mem.indexOfScalar(u8, input, ' ') != null;
+    const has_space = std.mem.findScalar(u8, input, ' ') != null;
     const inside_block = Schema.hasUnclosedTripleQuote(input);
 
     if (input[0] == '/') {
@@ -515,7 +515,7 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
         if (SlashCommand.findMeta(parts.name)) |meta| {
             return renderMetaHint(state, meta, parts.rest, ends_ws);
         }
-        if (std.mem.indexOfScalar(u8, input, ' ') == null) {
+        if (std.mem.findScalar(u8, input, ' ') == null) {
             return ghostFirstMatch(&SlashCommand.all_names, parts.name, "");
         }
         return null;
@@ -647,7 +647,7 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, arg: ?
         highlightJavaScript(henv, text);
         return;
     }
-    const cmd_start = std.mem.indexOfNonePos(u8, text, 0, &std.ascii.whitespace) orelse return;
+    const cmd_start = std.mem.findNonePos(u8, text, 0, &std.ascii.whitespace) orelse return;
     var i = cmd_start;
     while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
     const cmd = text[cmd_start..i];
@@ -739,7 +739,7 @@ fn highlightJavaScript(henv: ?*c.ic_highlight_env_t, text: []const u8) void {
 
 fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
     var i = start;
-    while (std.mem.indexOfNonePos(u8, text, i, &std.ascii.whitespace)) |tok_start| {
+    while (std.mem.findNonePos(u8, text, i, &std.ascii.whitespace)) |tok_start| {
         i = tok_start;
         if (text[i] == '\'' or text[i] == '"') {
             i = Schema.quotedSpanEnd(text, i);

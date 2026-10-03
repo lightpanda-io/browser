@@ -1811,7 +1811,7 @@ fn renderedTextFragment(document: *const Node.Document, value: []const u8, frame
 
     var rest = value;
     while (true) {
-        const text_end = std.mem.indexOfAny(u8, rest, "\r\n") orelse rest.len;
+        const text_end = std.mem.findAny(u8, rest, "\r\n") orelse rest.len;
         if (text_end > 0) {
             try nodes.append(arena, .{ .text = rest[0..text_end] });
         }

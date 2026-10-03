@@ -486,7 +486,7 @@ fn checkHeaders(arena: std.mem.Allocator, request: *std.http.Server.Request) !?[
 /// `application/json`, case-insensitive, ignoring parameters (`; charset=`).
 fn isJsonContentType(content_type: ?[]const u8) bool {
     const ct = content_type orelse return false;
-    const end = std.mem.indexOfScalar(u8, ct, ';') orelse ct.len;
+    const end = std.mem.findScalar(u8, ct, ';') orelse ct.len;
     const media_type = std.mem.trim(u8, ct[0..end], " \t");
     return std.ascii.eqlIgnoreCase(media_type, "application/json");
 }

@@ -1003,7 +1003,7 @@ test "SqliteCache: expired purge uses the cache_expiry index" {
     defer plan.deinit();
 
     const detail = plan.get([]const u8, 3);
-    if (std.mem.indexOf(u8, detail, "cache_expiry") == null) {
+    if (std.mem.find(u8, detail, "cache_expiry") == null) {
         std.debug.print("query plan: {s}\n", .{detail});
         return error.FullTableScan;
     }

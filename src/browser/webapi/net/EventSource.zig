@@ -423,7 +423,7 @@ fn parse(self: *EventSource, chunk: []const u8) !void {
 
     while (rest.len > 0) {
         // lines end at CR, LF or CRLF
-        const idx = std.mem.indexOfAny(u8, rest, "\r\n") orelse {
+        const idx = std.mem.findAny(u8, rest, "\r\n") orelse {
             // no terminator; hold the partial line for the next chunk
             return self.bufferLine(rest);
         };
@@ -474,7 +474,7 @@ fn processLine(self: *EventSource) !void {
 
     var field = line;
     var value: []const u8 = "";
-    if (std.mem.indexOfScalar(u8, line, ':')) |colon| {
+    if (std.mem.findScalar(u8, line, ':')) |colon| {
         field = line[0..colon];
         value = line[colon + 1 ..];
         if (value.len > 0 and value[0] == ' ') {
@@ -499,7 +499,7 @@ fn processLine(self: *EventSource) !void {
     }
 
     if (std.mem.eql(u8, field, "id")) {
-        if (std.mem.indexOfScalar(u8, value, 0) == null) {
+        if (std.mem.findScalar(u8, value, 0) == null) {
             self._id_buf.clearRetainingCapacity();
             try self._id_buf.appendSlice(arena.allocator(), value);
         }

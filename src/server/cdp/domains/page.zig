@@ -1937,7 +1937,7 @@ test "cdp.frame: printToPDF" {
         // Inline base64, landscape: Letter swapped, in points.
         try ctx.processMessage(.{ .id = 11, .method = "Page.printToPDF", .params = .{ .landscape = true } });
         const pdf = try pdfResult(&ctx, 11);
-        try testing.expectEqual(true, std.mem.indexOf(u8, pdf, "/MediaBox [0 0 792.000 612.000]") != null);
+        try testing.expectEqual(true, std.mem.find(u8, pdf, "/MediaBox [0 0 792.000 612.000]") != null);
     }
 
     {
@@ -2108,7 +2108,7 @@ test "cdp.page: stopLoading finishes a streaming document with what has arrived"
         _ = try runner.tickForFrame(frame_id, 20, .{});
         const frame = bc.mainFrame() orelse unreachable;
         if (bc.session.browser.http_client.findTransfer(frame._req_id)) |transfer| {
-            if (std.mem.indexOf(u8, transfer.res.buffer.items, "first") != null) {
+            if (std.mem.find(u8, transfer.res.buffer.items, "first") != null) {
                 break;
             }
         }

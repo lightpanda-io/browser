@@ -290,7 +290,7 @@ fn setDomain(self: *Document, value: []const u8) !void {
     // only ever match another explicitly set domain.
     // The scheme is preserved (http and https must never collide) and the
     // port is dropped, per spec.
-    const scheme_end = (std.mem.indexOf(u8, origin, "://") orelse return error.SecurityError) + 3;
+    const scheme_end = (std.mem.find(u8, origin, "://") orelse return error.SecurityError) + 3;
     const key = try std.mem.concat(arena, u8, &.{ "!", origin[0..scheme_end], requested });
     try doc_frame.js.setOrigin(key);
 }
@@ -365,7 +365,7 @@ fn isRelaxableTo(host: []const u8, requested: []const u8) bool {
     }
 
     // it can't be a bare TLD, "com"
-    if (std.mem.indexOfScalar(u8, requested, '.') == null) {
+    if (std.mem.findScalar(u8, requested, '.') == null) {
         return false;
     }
 
@@ -1267,7 +1267,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     // gone for good, as in Chrome.
     frame.cancelQueuedNavigation();
 
-    if (std.mem.indexOfScalar(*Document, frame._script_created_parser_docs.items, self) == null) {
+    if (std.mem.findScalar(*Document, frame._script_created_parser_docs.items, self) == null) {
         // have the page track this document (if it isn't already)
         // so that, on shutdown, it can close the parser if needed.
         try frame._script_created_parser_docs.append(frame.arena, self);
@@ -1564,7 +1564,7 @@ pub fn validateAndExtract(namespace_: ?[]const u8, qualified_name: []const u8, c
 
     var prefix: ?[]const u8 = null;
     var local_name = qualified_name;
-    if (std.mem.indexOfScalar(u8, qualified_name, ':')) |colon| {
+    if (std.mem.findScalar(u8, qualified_name, ':')) |colon| {
         prefix = qualified_name[0..colon];
         local_name = qualified_name[colon + 1 ..];
         if (!isValidNamespacePrefix(prefix.?)) {

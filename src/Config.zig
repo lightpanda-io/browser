@@ -1046,7 +1046,7 @@ pub const HttpHeaders = struct {
 
             var it = std.mem.splitScalar(u8, header, ',');
             while (it.next()) |item| {
-                const end = std.mem.indexOfScalar(u8, item, ';') orelse item.len;
+                const end = std.mem.findScalar(u8, item, ';') orelse item.len;
                 const tag = std.mem.trim(u8, item[0..end], " \t");
                 if (tag.len > 0) {
                     try languages.append(allocator, tag);
@@ -1104,7 +1104,7 @@ pub const HttpHeaders = struct {
     /// last resort, with descending q values. `buf` must hold the longest
     /// output for a tag that passed validateLocale (35 + 24 bytes).
     fn acceptLanguageFor(buf: *[64]u8, tag: []const u8) []const u8 {
-        const primary = tag[0 .. std.mem.indexOfScalar(u8, tag, '-') orelse tag.len];
+        const primary = tag[0 .. std.mem.findScalar(u8, tag, '-') orelse tag.len];
         var w: std.Io.Writer = .fixed(buf);
         w.writeAll(tag) catch unreachable;
         var q: u8 = 9;
