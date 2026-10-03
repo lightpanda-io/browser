@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<head>
+  <script src="../testing.js"></script>
+</head>
+
+<!--
+  text-transform: computed value (cascade + inheritance) and its effect on
+  innerText. The rendered text collection steps apply text-transform to each
+  text box, so innerText returns the transformed text.
+-->
+
+<style>
+  .upper { text-transform: uppercase; }
+  .lower { text-transform: lowercase; }
+  .cap { text-transform: capitalize; }
+  .reset { text-transform: none; }
+  .combo { text-transform: uppercase full-width; }
+  #id-wins { text-transform: lowercase; }
+  .bogus { text-transform: shout; }
+</style>
+
+<span id=inline style="text-transform: uppercase">unavailable</span>
+<span id=class class=upper>unavailable</span>
+<div class=upper><span id=inherited>unavailable</span></div>
+<div class=upper><span id=reset class=reset>Mixed Case</span></div>
+<span id=lower class=lower>UNAVAILABLE</span>
+<span id=cap class=cap>hello wORLD, it's  é-mail 1st</span>
+<span id=id-wins class=upper>Mixed</span>
+<span id=combo class=combo>wide</span>
+<div class=upper><span id=bogus class=bogus>still upper</span></div>
+<div class=upper><span id=inline-inherit style="text-transform: inherit">kept</span></div>
+<div class=upper><span id=inline-initial style="text-transform: initial">plain</span></div>
+<span id=plain>Plain Text</span>
+<div id=mixed>a <b class=upper>bold</b> <i class=cap>two words</i> z</div>
+<div id=nested class=cap><span>one</span><span class=lower>TWO</span> three</div>
+
+<script id=computed>
+  const tt = (id) => getComputedStyle($('#' + id)).textTransform;
+  testing.expectEqual('uppercase', tt('inline'));
+  testing.expectEqual('uppercase', tt('class'));
+  testing.expectEqual('uppercase', tt('inherited'));
+  testing.expectEqual('none', tt('reset'));
+  testing.expectEqual('lowercase', tt('lower'));
+  testing.expectEqual('capitalize', tt('cap'));
+  testing.expectEqual('lowercase', tt('id-wins'));
+  testing.expectEqual('uppercase', tt('combo'));
+  testing.expectEqual('uppercase', tt('bogus'));
+  testing.expectEqual('uppercase', tt('inline-inherit'));
+  testing.expectEqual('none', tt('inline-initial'));
+  testing.expectEqual('none', tt('plain'));
+  testing.expectEqual('uppercase', getComputedStyle($('#class')).getPropertyValue('text-transform'));
+</script>
+
+<script id=innerText>
+  const it = (id) => $('#' + id).innerText;
+  testing.expectEqual('UNAVAILABLE', it('inline'));
+  testing.expectEqual('UNAVAILABLE', it('class'));
+  testing.expectEqual('UNAVAILABLE', it('inherited'));
+  testing.expectEqual('Mixed Case', it('reset'));
+  testing.expectEqual('unavailable', it('lower'));
+  testing.expectEqual("Hello WORLD, It's É-Mail 1st", it('cap'));
+  testing.expectEqual('mixed', it('id-wins'));
+  testing.expectEqual('WIDE', it('combo'));
+  testing.expectEqual('STILL UPPER', it('bogus'));
+  testing.expectEqual('KEPT', it('inline-inherit'));
+  testing.expectEqual('plain', it('inline-initial'));
+  testing.expectEqual('Plain Text', it('plain'));
+  testing.expectEqual('a BOLD Two Words z', it('mixed'));
+  testing.expectEqual('Onetwo Three', it('nested'));
+  // textContent is not rendered text: untouched.
+  testing.expectEqual('unavailable', $('#class').textContent);
+</script>
+
+<script id=dynamic>
+  const el = $('#plain');
+  el.classList.add('upper');
+  testing.expectEqual('PLAIN TEXT', el.innerText);
+  testing.expectEqual('uppercase', getComputedStyle(el).textTransform);
+  el.style.textTransform = 'lowercase';
+  testing.expectEqual('plain text', el.innerText);
+</script>
