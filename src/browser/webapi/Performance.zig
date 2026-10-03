@@ -80,10 +80,12 @@ _delivering: bool = false,
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
 pub fn highResTimestamp() u64 {
-    const micros = lp.datetime.microTimestamp(.boot);
-    // Round to nearest 5 microseconds (like Firefox default)
-    const rounded = @divTrunc(micros + 2, 5) * 5;
-    return rounded;
+    return roundMicros(lp.datetime.microTimestamp(.boot));
+}
+
+// Round to nearest 5 microseconds (like Firefox default)
+fn roundMicros(micros: u64) u64 {
+    return @divTrunc(micros + 2, 5) * 5;
 }
 
 pub fn init(factory: *Factory, arena: Allocator) !*Performance {
@@ -92,7 +94,7 @@ pub fn init(factory: *Factory, arena: Allocator) !*Performance {
         ._arena = arena,
         ._factory = factory,
         ._time_origin = highResTimestamp(),
-        ._time_origin_unix = lp.datetime.microTimestamp(.real),
+        ._time_origin_unix = roundMicros(lp.datetime.microTimestamp(.real)),
     });
 }
 
