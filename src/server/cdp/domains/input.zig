@@ -56,15 +56,14 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
 
     try cmd.sendResult(null, .{});
 
-    // rawKeyDown is a Chrome-internal event type not used for JS dispatch
-    if (params.type == .rawKeyDown) return;
-
     const bc = cmd.browser_context orelse return;
     const frame = bc.mainFrame() orelse return;
 
     // Chrome types text only for an event carrying it: a keyDown with `text`
     // (Puppeteer, Playwright) or a `char` (chromedp, after a text-less keyDown).
-    const text: ?[]const u8 = if (params.text.len == 0) null else params.text;
+    // Puppeteer and Playwright send rawKeyDown, which never types text, for keys
+    // like Backspace, the arrows and Escape.
+    const text: ?[]const u8 = if (params.text.len == 0 or params.type == .rawKeyDown) null else params.text;
     const KeyboardEvent = @import("../../../browser/webapi/event/KeyboardEvent.zig");
     const opts: KeyboardEvent.Options = .{
         .key = if (params.key.len > 0) params.key else params.text,
@@ -76,8 +75,7 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
     };
 
     switch (params.type) {
-        .rawKeyDown => unreachable,
-        .keyDown => {
+        .keyDown, .rawKeyDown => {
             const event = try KeyboardEvent.initTrusted(comptime .wrap("keydown"), opts, frame);
             const prevented = try Frame.user_input.triggerKeyDown(frame, event, text);
             bc.suppress_next_char = prevented and text == null;
@@ -198,6 +196,36 @@ test "cdp.input: insertText is a user edit for tooLong" {
 
     _ = try ls.local.compileAndRun("inp.value = 'abcdefgh'", null);
     try testing.expect((try ls.local.compileAndRun("inp.validity.tooLong === false", null)).isTrue());
+}
+
+test "cdp.input: rawKeyDown dispatches keydown for keys without text" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const inp = document.getElementById('inp');
+        \\inp.value = 'abc';
+        \\inp.focus();
+        \\inp.setSelectionRange(3, 3);
+        \\window.keys = [];
+        \\inp.addEventListener('keydown', (e) => keys.push(e.key));
+    , null);
+
+    // What Puppeteer and Playwright send for keyboard.press('Backspace').
+    try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchKeyEvent", .params = .{ .type = "rawKeyDown", .key = "Backspace", .code = "Backspace" } });
+    try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyUp", .key = "Backspace", .code = "Backspace" } });
+    try testing.expect((try ls.local.compileAndRun("keys.join() === 'Backspace' && inp.value === 'ab'", null)).isTrue());
 }
 
 test "cdp.input: insertText replaces select()ed value of email and number inputs" {
