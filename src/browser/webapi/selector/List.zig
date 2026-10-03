@@ -795,8 +795,17 @@ fn isLastChild(el: *Node.Element) bool {
     return true;
 }
 
+// Custom and unknown elements share a Tag, so those compare by name.
+fn isSameType(a: *Node.Element, b: *Node.Element) bool {
+    const tag = a.getTag();
+    if (b.getTag() != tag) return false;
+    return switch (tag) {
+        .custom, .unknown => std.mem.eql(u8, a.getTagNameLower(), b.getTagNameLower()),
+        else => true,
+    };
+}
+
 fn isFirstOfType(el: *Node.Element) bool {
-    const tag = el.getTag();
     const node = el.asNode();
     var sibling = node.previousSibling();
 
@@ -807,7 +816,7 @@ fn isFirstOfType(el: *Node.Element) bool {
             continue;
         };
 
-        if (sibling_el.getTag() == tag) {
+        if (isSameType(sibling_el, el)) {
             return false;
         }
 
@@ -818,7 +827,6 @@ fn isFirstOfType(el: *Node.Element) bool {
 }
 
 fn isLastOfType(el: *Node.Element) bool {
-    const tag = el.getTag();
     const node = el.asNode();
     var sibling = node.nextSibling();
 
@@ -829,7 +837,7 @@ fn isLastOfType(el: *Node.Element) bool {
             continue;
         };
 
-        if (sibling_el.getTag() == tag) {
+        if (isSameType(sibling_el, el)) {
             return false;
         }
 
@@ -918,7 +926,6 @@ fn getTypeIndex(el: *Node.Element, nth: ?*NthCache) usize {
         return o.of_type;
     }
 
-    const tag = el.getTag();
     const node = el.asNode();
 
     var index: usize = 1;
@@ -933,7 +940,7 @@ fn getTypeIndex(el: *Node.Element, nth: ?*NthCache) usize {
             continue;
         };
 
-        if (sibling_el.getTag() == tag) {
+        if (isSameType(sibling_el, el)) {
             index += 1;
         }
 
@@ -955,7 +962,6 @@ fn getTypeIndexFromEnd(el: *Node.Element, nth: ?*NthCache) usize {
         return o.of_type_from_end;
     }
 
-    const tag = el.getTag();
     const node = el.asNode();
 
     var index: usize = 1;
@@ -970,7 +976,7 @@ fn getTypeIndexFromEnd(el: *Node.Element, nth: ?*NthCache) usize {
             continue;
         };
 
-        if (sibling_el.getTag() == tag) {
+        if (isSameType(sibling_el, el)) {
             index += 1;
         }
 
@@ -1045,7 +1051,19 @@ pub const NthCache = struct {
         of_type_from_end: u32,
     };
 
-    const TypeCounts = [@typeInfo(Node.Element.Tag).@"enum".fields.len]u32;
+    const TypeCounts = struct {
+        tags: [@typeInfo(Node.Element.Tag).@"enum".fields.len]u32 = @splat(0),
+        // Custom and unknown elements share a Tag, so those count by name.
+        names: std.StringHashMapUnmanaged(u32) = .empty,
+
+        fn get(self: *TypeCounts, allocator: std.mem.Allocator, el: *Node.Element) !*u32 {
+            const tag = el.getTag();
+            return switch (tag) {
+                .custom, .unknown => (try self.names.getOrPutValue(allocator, el.getTagNameLower(), 0)).value_ptr,
+                else => &self.tags[@intFromEnum(tag)],
+            };
+        }
+    };
 
     pub fn deinit(self: *NthCache) void {
         self.entries.deinit(self.allocator);
@@ -1064,13 +1082,14 @@ pub const NthCache = struct {
 
     fn index(self: *NthCache, parent: *Node) !void {
         var child_count: u32 = 0;
-        var type_counts: TypeCounts = @splat(0);
+        var type_counts: TypeCounts = .{};
+        defer type_counts.names.deinit(self.allocator);
 
         var it = parent.childrenIterator();
         while (it.next()) |child| {
             const el = child.is(Node.Element) orelse continue;
             child_count += 1;
-            const of_type = &type_counts[@intFromEnum(el.getTag())];
+            const of_type = try type_counts.get(self.allocator, el);
             of_type.* += 1;
             try self.entries.put(self.allocator, child, .{
                 .child = child_count,
@@ -1082,17 +1101,14 @@ pub const NthCache = struct {
 
         // The totals are only known once the forward pass is done.
         var seen_count: u32 = 0;
-        var seen_types: TypeCounts = @splat(0);
         it = parent.childrenIterator();
         while (it.next()) |child| {
             const el = child.is(Node.Element) orelse continue;
             seen_count += 1;
-            const tag = @intFromEnum(el.getTag());
-            seen_types[tag] += 1;
 
             const ordinals = self.entries.getPtr(child).?;
             ordinals.child_from_end = child_count - seen_count + 1;
-            ordinals.of_type_from_end = type_counts[tag] - seen_types[tag] + 1;
+            ordinals.of_type_from_end = (try type_counts.get(self.allocator, el)).* - ordinals.of_type + 1;
         }
     }
 };
