@@ -684,6 +684,10 @@ pub fn textTransform(self: *StyleManager, el: *Element) TextTransform {
 /// For tree walks that already know the parent's value.
 pub fn ownTextTransform(self: *StyleManager, el: *Element) TextTransform {
     self.rebuildIfDirty() catch return .inherit;
+    // Most pages declare no text-transform: skip the cascade and the memo.
+    if (!self.text.hasRules() and !el._flags.has_inline_style) {
+        return .inherit;
+    }
     return self.text.ownProps(self.arena.allocator(), el, self.frame).text_transform;
 }
 
@@ -844,6 +848,11 @@ fn Group(comptime Spec: type) type {
         // Valid while Page.style_version == memo_version.
         memo: std.AutoHashMapUnmanaged(*Element, Computed) = .empty,
         memo_version: usize = 0,
+
+        fn hasRules(self: *const Self) bool {
+            return self.id_rules.count() != 0 or self.class_rules.count() != 0 or
+                self.tag_rules.count() != 0 or self.other_rules.len != 0;
+        }
 
         fn capacities(self: *const Self) Capacities {
             return .{
@@ -1905,6 +1914,25 @@ test "StyleManager: custom properties" {
 
 test "StyleManager: text-transform" {
     try testing.htmlRunner("css/text_transform.html", .{});
+}
+
+test "StyleManager: text-transform without rules skips the memo" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<p style="text-transform: uppercase"><b><i></i></b></p>
+    );
+    const p = div.asNode().firstChild().?.as(Element);
+    const b = p.asNode().firstChild().?.as(Element);
+    const i = b.asNode().firstChild().?.as(Element);
+
+    // Inherited from the inline declaration; only <p> needs the cascade.
+    try testing.expectEqual(TextTransform.uppercase, sm.textTransform(i));
+    try testing.expectEqual(1, sm.text.memo.count());
+    try testing.expectEqual(TextTransform.none, sm.textTransform(div));
 }
 
 test "StyleManager: computeSpecificity: element selector" {
