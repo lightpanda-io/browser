@@ -10,6 +10,7 @@ activeElement, and — the focus chain running through navigable containers —
 the parent's activeElement becomes the <iframe> itself. Open in Firefox or
 Chrome to cross-check.
 -->
+<input id="pout">
 <iframe id="idf" src="support/cross_realm_focus.html"></iframe>
 
 <script id="focus_targets_own_document">
@@ -46,6 +47,49 @@ Chrome to cross-check.
     testing.expectEqual(
       'focus:fin2:true,focusin:fin2:true,blur:fin2:true,focusout:fin2:true',
       iwin.events.join(','));
+  });
+</script>
+
+<script id="focus_chain_crosses_frames">
+  testing.onload(() => {
+    const idf = document.getElementById('idf');
+    const iwin = idf.contentWindow;
+    const idoc = idf.contentDocument;
+    const inp = idoc.getElementById('fin');
+    const pout = document.getElementById('pout');
+
+    for (const t of ['focus', 'focusin', 'blur', 'focusout']) {
+      for (const el of [pout, idf]) {
+        el.addEventListener(t, (e) => {
+          iwin.events.push(`parent ${e.type}:${e.target.id}:${e.relatedTarget}`);
+        });
+      }
+    }
+
+    pout.focus();
+    iwin.events.length = 0;
+
+    // Into the iframe: the parent's element blurs first, then the inner one
+    // takes focus. relatedTarget doesn't cross documents, and the <iframe>
+    // itself gets no focus events (as in Chrome).
+    inp.focus();
+    testing.expectEqual(
+      'parent blur:pout:null,parent focusout:pout:null,focus:fin:true,focusin:fin:true',
+      iwin.events.join(','));
+    testing.expectEqual(idf, document.activeElement);
+    testing.expectEqual(inp, idoc.activeElement);
+    iwin.events.length = 0;
+
+    // Back out: the element inside the iframe blurs, and the iframe document
+    // no longer has a focused element.
+    pout.focus();
+    testing.expectEqual(
+      'blur:fin:true,focusout:fin:true,parent focus:pout:null,parent focusin:pout:null',
+      iwin.events.join(','));
+    testing.expectEqual(pout, document.activeElement);
+    testing.expectEqual(idoc.body, idoc.activeElement);
+    testing.expectEqual(null, idoc.querySelector('input:focus'));
+    pout.blur();
   });
 </script>
 
