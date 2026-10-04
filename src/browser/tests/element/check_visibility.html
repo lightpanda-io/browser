@@ -329,6 +329,14 @@
     dialog.show();
     testing.expectEqual(true, dialog.checkVisibility());
 
+    dialog.close();
+    testing.expectEqual(false, dialog.checkVisibility());
+    // dialog:popover-open { display: block } overrides dialog:not([open]).
+    dialog.showPopover();
+    testing.expectEqual(true, dialog.checkVisibility());
+    dialog.hidePopover();
+    testing.expectEqual(false, dialog.checkVisibility());
+
     dialog.remove();
     pop.remove();
   }

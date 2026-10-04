@@ -1021,12 +1021,13 @@ fn matchesUaDisplayNoneRule(el: *Element, frame: *Frame) bool {
         }
     }
 
-    // dialog:not([open]) { display: none }
-    if (tag == .dialog and !el.hasAttributeSafe(comptime .wrap("open"))) return true;
-
-    // [popover]:not(:popover-open):not(dialog[open]) { display: none }
-    if (el.hasAttributeSafe(comptime .wrap("popover")) and !popover.isOpen(el, frame)) {
-        if (tag != .dialog) return true;
+    if (tag == .dialog) {
+        // dialog:not([open]) { display: none }
+        // dialog:popover-open { display: block }
+        if (!el.hasAttributeSafe(comptime .wrap("open")) and !popover.isOpen(el, frame)) return true;
+    } else if (el.hasAttributeInterned("popover") and !popover.isOpen(el, frame)) {
+        // [popover]:not(:popover-open):not(dialog[open]) { display: none }
+        return true;
     }
 
     // details:not([open]) > *:not(summary) { display: none }
