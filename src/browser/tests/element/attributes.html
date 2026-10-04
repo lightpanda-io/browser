@@ -464,3 +464,139 @@
     testing.expectEqual('1', el.getAttribute('data-n'));
   }
 </script>
+
+<div id=live-a data-p=""></div>
+<div id=live-b data-p=""></div>
+<script id=attrValueAfterSetAttribute>
+  {
+    // An Attr is the attribute itself (DOM "change an attribute" sets its
+    // value): one handed out before a write must see the new value.
+    const a = $('#live-a');
+    a.setAttribute('data-p', 'new');
+    testing.expectEqual('new', a.attributes.getNamedItem('data-p').value);
+
+    const b = $('#live-b');
+    const held = b.attributes.getNamedItem('data-p');
+    b.setAttribute('data-p', 'new');
+    testing.expectEqual('new', b.getAttribute('data-p'));
+    testing.expectEqual('new', held.value);
+    testing.expectEqual('new', held.nodeValue);
+    testing.expectEqual('new', held.textContent);
+    // still the same object
+    testing.expectEqual(held, b.attributes.getNamedItem('data-p'));
+    testing.expectEqual(held, b.getAttributeNode('data-p'));
+
+    b.setAttributeNS(null, 'data-p', 'ns');
+    testing.expectEqual('ns', held.value);
+
+    held.value = 'via-attr';
+    testing.expectEqual('via-attr', b.getAttribute('data-p'));
+    testing.expectEqual('via-attr', held.value);
+  }
+</script>
+
+<div id=live-iter data-action="click->c#go" data-c-id-param=""></div>
+<script id=attrValueAfterSetAttributeIteration>
+  {
+    // Stimulus reads data-*-param through Array.from(element.attributes):
+    // the second read must not serve values from the first.
+    const el = $('#live-iter');
+    const params = () => Object.fromEntries(Array.from(el.attributes).map((attr) => [attr.name, attr.value]));
+    testing.expectEqual('', params()['data-c-id-param']);
+
+    el.setAttribute('data-c-id-param', '42');
+    testing.expectEqual('42', params()['data-c-id-param']);
+
+    const acc = [];
+    for (const attr of el.attributes) {
+      acc.push(attr.value);
+    }
+    testing.expectEqual(['live-iter', 'click->c#go', '42'], acc);
+    testing.expectEqual('42', el.attributes[2].value);
+    testing.expectEqual('42', el.attributes.item(2).value);
+  }
+</script>
+
+<div id=live-reflect class=a data-x=1></div>
+<script id=attrValueAfterReflection>
+  {
+    // IDL setters write the content attribute through the same path
+    const el = $('#live-reflect');
+    el.id = 'first';
+    const id = el.getAttributeNode('id');
+    const cls = el.getAttributeNode('class');
+    const data = el.getAttributeNode('data-x');
+
+    el.id = 'second';
+    testing.expectEqual('second', id.value);
+    el.className = 'b c';
+    testing.expectEqual('b c', cls.value);
+    el.dataset.x = '2';
+    testing.expectEqual('2', data.value);
+    testing.expectEqual(el, document.getElementById('second'));
+  }
+</script>
+
+<div id=live-toggle data-t=on></div>
+<script id=attrValueAfterToggleAttribute>
+  {
+    const el = $('#live-toggle');
+    const held = el.getAttributeNode('data-t');
+
+    // forcing an existing attribute on leaves its value alone
+    testing.expectEqual(true, el.toggleAttribute('data-t', true));
+    testing.expectEqual('on', held.value);
+
+    // toggling off removes it: the Attr detaches and keeps its last value
+    testing.expectEqual(false, el.toggleAttribute('data-t'));
+    testing.expectEqual(null, held.ownerElement);
+    testing.expectEqual('on', held.value);
+
+    // toggling back on creates a new attribute, the old Attr is not reused
+    testing.expectEqual(true, el.toggleAttribute('data-t'));
+    const fresh = el.getAttributeNode('data-t');
+    testing.expectEqual(false, fresh === held);
+    testing.expectEqual('', fresh.value);
+    el.setAttribute('data-t', 'again');
+    testing.expectEqual('again', fresh.value);
+    testing.expectEqual('on', held.value);
+  }
+</script>
+
+<div id=live-replace data-r=old></div>
+<script id=attrValueAfterSetAttributeNode>
+  {
+    // setAttributeNode returns the replaced Attr: it is detached first and
+    // must keep the value it had, not take the new one
+    const el = $('#live-replace');
+    const old = el.getAttributeNode('data-r');
+    const replacement = document.createAttribute('data-r');
+    replacement.value = 'new';
+
+    testing.expectEqual(old, el.setAttributeNode(replacement));
+    testing.expectEqual(null, old.ownerElement);
+    testing.expectEqual('old', old.value);
+    testing.expectEqual('new', replacement.value);
+
+    el.setAttribute('data-r', 'newer');
+    testing.expectEqual('newer', replacement.value);
+    testing.expectEqual('old', old.value);
+  }
+</script>
+
+<div id=live-xpath data-s=before></div>
+<script id=attrValueAfterSetAttributeXPath>
+  {
+    // XPath materializes Attr nodes too and reads their value: a query
+    // repeated after a write (Capybara polling) must see the new value.
+    const count = (value) => document.evaluate(
+      `count(//div[@id='live-xpath'][@data-s='${value}'])`,
+      document, null, XPathResult.NUMBER_TYPE, null,
+    ).numberValue;
+
+    testing.expectEqual(1, count('before'));
+    $('#live-xpath').setAttribute('data-s', 'after');
+    testing.expectEqual(0, count('before'));
+    testing.expectEqual(1, count('after'));
+  }
+</script>
