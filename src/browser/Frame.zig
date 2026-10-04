@@ -580,6 +580,22 @@ pub fn base(self: *const Frame) [:0]const u8 {
     return self.base_url orelse self.url;
 }
 
+// The base a relative navigation URL resolves against: this frame's base,
+// unless it's "about:blank", in which case we have to walk up the parents and
+// find a real base.
+pub fn navigationBase(self: *const Frame) [:0]const u8 {
+    var maybe_not_blank_frame = self;
+    while (true) {
+        const maybe_base = maybe_not_blank_frame.base();
+        if (std.mem.eql(u8, maybe_base, "about:blank") == false) {
+            return maybe_base;
+        }
+        // The orelse here is probably an invalid case, but there isn't
+        // anything we can do about it. It should never happen?
+        maybe_not_blank_frame = maybe_not_blank_frame.parent orelse return "";
+    }
+}
+
 pub fn referrerSource(self: *const Frame) [:0]const u8 {
     var frame = self;
     while (std.mem.startsWith(u8, frame.url, "about:")) {
@@ -973,24 +989,10 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         }
 
         // request_url isn't a "complete" URL, so it has to be resolved with the
-        // originator's base. Unless, originator's base is "about:blank", in which
-        // case we have to walk up the parents and find a real base.
-        const frame_base = base_blk: {
-            var maybe_not_blank_frame = originator;
-            while (true) {
-                const maybe_base = maybe_not_blank_frame.base();
-                if (std.mem.eql(u8, maybe_base, "about:blank") == false) {
-                    break :base_blk maybe_base;
-                }
-                // The orelse here is probably an invalid case, but there isn't
-                // anything we can do about it. It should never happen?
-                maybe_not_blank_frame = maybe_not_blank_frame.parent orelse break :base_blk "";
-            }
-        };
-
+        // originator's base.
         const u = try URL.resolve(
             arena.allocator(),
-            frame_base,
+            originator.navigationBase(),
             request_url,
             .{ .encoding = originator.charset },
         );

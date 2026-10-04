@@ -132,12 +132,27 @@ fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
     }, .{ .script = frame });
 }
 
-fn assign(_: *const Location, url: [:0]const u8, frame: *Frame) !void {
-    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
+// The href setter, assign() and replace() parse the URL relative to the entry
+// settings object: the calling script's document. It isn't this location's
+// document when a script navigates another same-origin window, as in
+// iframe.contentWindow.location.href = "page.html". V8 only exposes the
+// incumbent context, which is the entry one for a call made by a script.
+fn parseFromCaller(url: [:0]const u8, frame: *Frame) ![]const u8 {
+    const caller = frame.js.getIncumbent();
+    if (caller == frame) {
+        return url;
+    }
+    return U.resolve(frame.call_arena, caller.navigationBase(), url, .{ .encoding = caller.charset });
+}
+
+pub fn assign(_: *const Location, url: [:0]const u8, frame: *Frame) !void {
+    const target_url = try parseFromCaller(url, frame);
+    return frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
 }
 
 pub fn replace(_: *const Location, url: [:0]const u8, frame: *Frame) !void {
-    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = frame });
+    const target_url = try parseFromCaller(url, frame);
+    return frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = frame });
 }
 
 pub fn reload(_: *const Location, frame: *Frame) !void {
