@@ -53,6 +53,7 @@ const LockRequest = struct {
     client_id: []const u8,
 
     granted: bool,
+    finished: bool = false,
 
     fn deinit(self: *LockRequest) void {
         self.cb.release();
@@ -60,6 +61,9 @@ const LockRequest = struct {
     }
 
     fn finish(self: *LockRequest) void {
+        if (self.finished) return;
+        self.finished = true;
+
         if (self.granted) {
             self.manager.releaseLock(self);
         } else {
@@ -67,7 +71,27 @@ const LockRequest = struct {
         }
     }
 
-    fn onSettled(self: *LockRequest, _: ?js.Value) void {
+    fn onFulfilled(self: *LockRequest, value: ?js.Value) void {
+        if (self.finished) return;
+
+        var ls: js.Local.Scope = undefined;
+        self.exec.js.localScope(&ls);
+        defer ls.deinit();
+
+        const resolver = self.resolver.local(&ls.local);
+        resolver.resolve("Lock callback result", value.?);
+        self.finish();
+    }
+
+    fn onRejected(self: *LockRequest, value: ?js.Value) void {
+        if (self.finished) return;
+
+        var ls: js.Local.Scope = undefined;
+        self.exec.js.localScope(&ls);
+        defer ls.deinit();
+
+        const resolver = self.resolver.local(&ls.local);
+        resolver.reject("Lock callback result", value.?);
         self.finish();
     }
 
@@ -113,15 +137,15 @@ const LockRequest = struct {
             return;
         };
 
-        resolver.resolve("Lock callback result", result);
-
         if (result.isPromise() == false) {
+            resolver.resolve("Lock callback result", result);
             self.finish();
             return;
         }
 
-        const settled = local.newCallback(LockRequest.onSettled, self);
-        _ = result.toPromise().thenAndCatch(settled, settled) catch {
+        const on_fulfilled = local.newCallback(LockRequest.onFulfilled, self);
+        const on_rejected = local.newCallback(LockRequest.onRejected, self);
+        _ = result.toPromise().thenAndCatch(on_fulfilled, on_rejected) catch {
             self.finish();
         };
     }
@@ -226,6 +250,33 @@ pub fn request(
         .client_id = try std.fmt.allocPrint(exec.arena, "{d}", .{exec.frameId()}),
         .granted = false,
     };
+
+    if (options.steal) {
+        // All held locks with this name are released with AbortError.
+        var i: usize = 0;
+        while (i < self._locks.items.len) {
+            const lr = self._locks.items[i];
+            if (lr.state == .held and lr.name.eql(owned_name)) {
+                _ = self._locks.orderedRemove(i);
+
+                const lock_resolver = lr.resolver.local(lr.exec.js.local.?);
+                lock_resolver.rejectError(
+                    "steal weblock",
+                    .{ .dom_exception = .{ .err = error.AbortError } },
+                );
+
+                lr.finished = true;
+                lr.deinit();
+                continue;
+            }
+            i += 1;
+        }
+
+        lock_request.state = .held;
+        try self._locks.append(exec.arena, lock_request);
+        lock_request.fireCallback();
+        return promise;
+    }
 
     const must_queue_request = self.mustQueue(owned_name, options.mode);
 
