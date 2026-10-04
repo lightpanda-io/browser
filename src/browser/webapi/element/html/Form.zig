@@ -188,6 +188,25 @@ fn getFormOwner(element: *Element, frame: *Frame) ?*Form {
     return null;
 }
 
+fn matchesName(element: *Element, name: []const u8) bool {
+    if (element.getId()) |id| {
+        if (std.mem.eql(u8, id, name)) {
+            return true;
+        }
+    }
+    if (element.getName()) |elem_name| {
+        if (std.mem.eql(u8, elem_name, name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn namedItem(self: *Form, name: []const u8, frame: *Frame) !?collections.HTMLFormControlsCollection.NamedItemResult {
+    const elements = try self.getElements(frame);
+    return elements.namedItem(name, frame);
+}
+
 /// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-form-checkvalidity
 /// Returns true if every submittable element in the form is valid. Fires an
 /// `invalid` event on each failing element.
@@ -227,6 +246,16 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const @"[str]" = bridge.namedIndexed(Form.namedItem, null, null, null, struct {
+        fn wrap(self: *Form, field_name: []const u8, frame: *Frame) !u32 {
+            if (try hasNamed(self, field_name, frame)) {
+                // Named properties are [LegacyUnenumerableNamedProperties]
+                return js.v8.DontEnum;
+            }
+            return error.NotHandled;
+        }
+    }.wrap, .{ .null_as_undefined = true });
+
     const reflect = Element.Reflect(Form);
     pub const encoding = reflect.enumerated("enctype", &.{ "application/x-www-form-urlencoded", "multipart/form-data", "text/plain" }, .{ .missing = "application/x-www-form-urlencoded" });
     pub const autocomplete = reflect.enumerated("autocomplete", &.{ "on", "off" }, .{ .missing = "on" });
@@ -244,6 +273,21 @@ pub const JsApi = struct {
     pub const requestSubmit = bridge.function(Form.requestSubmit, .{});
     pub const checkValidity = bridge.function(Form.checkValidity, .{});
     pub const reportValidity = bridge.function(Form.reportValidity, .{});
+
+    // Presence only, `namedItem` is relativel expensive / RC'd
+    fn hasNamed(self: *Form, field_name: []const u8, frame: *Frame) !bool {
+        if (field_name.len == 0) {
+            return false;
+        }
+
+        var it = self.iterator(frame);
+        while (it.next()) |element| {
+            if (matchesName(element, field_name)) {
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 const testing = @import("../../../../testing.zig");
