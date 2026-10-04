@@ -79,6 +79,7 @@ pub fn select(allocator: Allocator, root: *Node, strip_: RenderTree.Strip, frame
             .flags = flags,
             .tree = .{ .frame = frame, .state = .{ .root = root, .strip = strip } },
         };
+        pass.tree.skipped = .{ .allocator = arena, .set = &pass.pruned };
         const selected = try pass.run() orelse continue;
         const chars = pass.selectedText(selected);
         log.debug(.browser, "strip clutter", .{ .attempt = i, .chars = chars, .total = pass.total, .root = describe(selected) });
@@ -965,7 +966,8 @@ test "clutter: the HTML dump leaves out what the markdown dump does" {
     try Frame.parse.htmlAsChildren(frame, div.asNode(), "<script>window.__DATA__ = 1;</script>" ++
         "<div hidden>Accept our cookies</div>" ++
         "<div class=\"teasers\"><div><a href=\"/1\">Ten things to know</a></div><div><a href=\"/2\">Trending now</a></div></div>" ++
-        "<div class=\"article\"><p>" ++ prose ++ "</p><p>" ++ prose ++ "</p><p>" ++ prose ++ "</p></div>");
+        "<div class=\"article\"><script>INNER_SCRIPT</script><div hidden>INNER_HIDDEN</div><span aria-hidden=\"true\">INNER_ARIA</span><template><p>INNER_TEMPLATE</p></template>" ++
+        "<p>" ++ prose ++ "</p><p>" ++ prose ++ "</p><p>" ++ prose ++ "</p></div>");
 
     const state = try RenderTree.resolve(testing.arena_allocator, div.asNode(), .{ .clutter = true }, frame);
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
@@ -978,6 +980,11 @@ test "clutter: the HTML dump leaves out what the markdown dump does" {
     try testing.expectEqual(null, std.mem.indexOf(u8, out, "__DATA__"));
     try testing.expectEqual(null, std.mem.indexOf(u8, out, "Accept our cookies"));
     try testing.expectEqual(null, std.mem.indexOf(u8, out, "Trending now"));
+    // Inside the selection too: the walk records what it skips.
+    try testing.expectEqual(null, std.mem.indexOf(u8, out, "INNER_SCRIPT"));
+    try testing.expectEqual(null, std.mem.indexOf(u8, out, "INNER_HIDDEN"));
+    try testing.expectEqual(null, std.mem.indexOf(u8, out, "INNER_ARIA"));
+    try testing.expectEqual(null, std.mem.indexOf(u8, out, "INNER_TEMPLATE"));
 }
 
 fn extract(html: []const u8) ![]const u8 {
