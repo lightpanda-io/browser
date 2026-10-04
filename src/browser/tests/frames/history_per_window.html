@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!-- Each Window has its own History object. A History shared by every
+     window ends up bound to the realm that touched it first, so another
+     frame's history.pushState() updated that first frame instead.
+     https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-history-interface -->
+
+<script>
+  function loadFrame(name) {
+    return new Promise((resolve) => {
+      const frame = document.createElement('iframe');
+      frame.name = name;
+      frame.onload = () => {
+        // Skip the load of the initial about:blank document.
+        if (frame.contentWindow.location.pathname !== '/echo_method') return;
+        frame.onload = null;
+        resolve(frame);
+      };
+      frame.src = '/echo_method';
+      document.body.appendChild(frame);
+    });
+  }
+
+  // Runs `code` from the frame's own realm, as one of its scripts would.
+  function runInFrame(frame, code) {
+    const script = frame.contentDocument.createElement('script');
+    script.textContent = code;
+    frame.contentDocument.body.appendChild(script);
+  }
+</script>
+
+<script id=history_per_window type=module>
+  {
+    const state = await testing.async();
+    const a = await loadFrame('a');
+    const b = await loadFrame('b');
+
+    const identity = [
+      a.contentWindow.history === b.contentWindow.history,
+      a.contentWindow.history === window.history,
+    ];
+
+    // Touch a's history first: with a shared History, its wrapper (and so
+    // its methods) would belong to a's realm.
+    a.contentWindow.history.pushState(null, '', '#a1');
+    b.contentWindow.history.pushState(null, '', '#b1');
+    const from_parent = [a.contentWindow.location.hash, b.contentWindow.location.hash];
+
+    runInFrame(b, "history.replaceState(null, '', '#b2')");
+    const from_frame = [a.contentWindow.location.hash, b.contentWindow.location.hash];
+
+    a.contentWindow.history.scrollRestoration = 'manual';
+    const scroll_restoration = [
+      a.contentWindow.history.scrollRestoration,
+      b.contentWindow.history.scrollRestoration,
+    ];
+
+    // This document's own history, used after the frames touched theirs:
+    // with a shared History it would push onto frame a instead.
+    history.pushState(null, '', '#top');
+    const from_top = [location.hash, a.contentWindow.location.hash];
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual([false, false], identity);
+      testing.expectEqual(['#a1', '#b1'], from_parent);
+      testing.expectEqual(['#a1', '#b2'], from_frame);
+      testing.expectEqual(['manual', 'auto'], scroll_restoration);
+      testing.expectEqual(['#top', '#a1'], from_top);
+    });
+  }
+</script>

@@ -94,6 +94,10 @@ _on_unhandled_rejection: ?js.Function.Global = null,
 _reporting_error: bool = false,
 _current_event: ?*Event = null,
 _location: *Location,
+// Per Window, not per Session: each realm needs its own History wrapper, so
+// that its methods run against this window's frame. The session history
+// entries they act on are shared (session.navigation).
+_history: History = .{},
 _timers: Timers = .{},
 _scheduler: Scheduler = .{},
 _custom_elements: CustomElementRegistry = .{},
@@ -360,8 +364,8 @@ fn setLocation(self: *Window, url: [:0]const u8, frame: *Frame) !void {
     return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._frame });
 }
 
-pub fn getHistory(_: *Window, frame: *Frame) *History {
-    return &frame._session.history;
+pub fn getHistory(self: *Window) *History {
+    return &self._history;
 }
 
 fn getNavigation(_: *Window, frame: *Frame) *Navigation {
