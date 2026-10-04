@@ -356,8 +356,9 @@ pub fn getLocation(self: *const Window) *Location {
     return self._location;
 }
 
+// [PutForwards=href]: window.location = url is location.href = url.
 fn setLocation(self: *Window, url: [:0]const u8, frame: *Frame) !void {
-    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._frame });
+    return self._location.assign(url, frame);
 }
 
 pub fn getHistory(_: *Window, frame: *Frame) *History {
