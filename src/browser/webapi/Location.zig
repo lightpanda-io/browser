@@ -124,7 +124,12 @@ fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
         return;
     }
 
-    const target_url = if (normalized_hash.len == 0) old_url[0..base_end] else normalized_hash;
+    // Clearing the hash sets an empty, not a null, fragment: /x#a -> /x#,
+    // which stays a fragment navigation. Dropping the '#' would reload.
+    const target_url = if (normalized_hash.len == 0)
+        try std.fmt.allocPrint(frame.local_arena, "{s}#", .{old_url[0..base_end]})
+    else
+        normalized_hash;
 
     return frame.scheduleNavigation(target_url, .{
         .reason = .script,
