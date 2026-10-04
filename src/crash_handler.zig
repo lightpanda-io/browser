@@ -92,6 +92,10 @@ fn report(reason: []const u8, begin_addr: usize, args: anytype) !void {
         return;
     }
 
+    if (comptime builtin.os.tag == .windows) {
+        return;
+    }
+
     if (@import("telemetry/telemetry.zig").isDisabled()) {
         return;
     }

@@ -22,6 +22,7 @@
 //! The structure does not clear the memory allocated in the arena,
 //! clear the entire arena when exiting the program.
 const std = @import("std");
+const builtin = @import("builtin");
 const lp = @import("lightpanda");
 
 const log = lp.log;
@@ -49,6 +50,12 @@ const Listener = struct {
 };
 
 pub fn install(self: *SigHandler) !void {
+    if (builtin.os.tag == .windows) {
+        // Windows has no POSIX signal mask or sigwait model; Ctrl-C is
+        // handled by the default console handler, so there is nothing to
+        // install here. Listener dispatch and deadlines are POSIX-only.
+        return;
+    }
     // Block these signals for the current thread and all created from it.
     // SIGALRM is included so arm() can wake the sighandler thread on a deadline.
     self.sigset = std.posix.sigemptyset();
@@ -72,6 +79,10 @@ extern "c" fn setitimer(which: c_int, new_value: *const itimerval, old_value: ?*
 /// Schedule a SIGALRM after `ms` milliseconds, which wakes the sighandler
 /// thread and runs the registered listeners. Used to enforce --terminate-ms.
 pub fn deadline(_: *SigHandler, ms: u32) !void {
+    if (builtin.os.tag == .windows) {
+        // No setitimer/SIGALRM on Windows; a deadline cannot be armed.
+        return error.SetItimerFailed;
+    }
     const it = itimerval{
         .interval = .{ .sec = 0, .usec = 0 },
         .value = .{
