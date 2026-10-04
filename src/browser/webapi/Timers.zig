@@ -232,7 +232,7 @@ const ScheduleCallback = struct {
             if (err == error.JsException or err == error.TryCatchRethrow) {
                 if (try_catch.exceptionValue()) |exc| {
                     // reportError also counts the error on the page.
-                    self.exec.js.global.reportError(exc) catch |report_err| {
+                    self.exec.reportError(exc) catch |report_err| {
                         log.debug(.js, context ++ " report error", .{ .name = self.name, .err = report_err });
                     };
                     return;

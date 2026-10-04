@@ -334,7 +334,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
 
             // Inline handlers (e.g. onclick property) follow the same "report,
             // don't propagate" rule as addEventListener listeners — see Listener.run.
-            const handler_return = try callInlineHandler(frame, &ls.local, inline_handler, target_et, event);
+            const handler_return = try callInlineHandler(&ls.local, inline_handler, target_et, event);
             processHandlerReturnValue(event, handler_return);
 
             if (adjusted) |a| {
@@ -387,7 +387,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
 
                 const adjusted: ?AdjustedTargets = if (event._needs_retargeting) .apply(event, current_target) else null;
 
-                const handler_return = try callInlineHandler(frame, &ls.local, inline_handler, current_target, event);
+                const handler_return = try callInlineHandler(&ls.local, inline_handler, current_target, event);
                 processHandlerReturnValue(event, handler_return);
 
                 if (adjusted) |a| {
@@ -455,30 +455,24 @@ fn legacyType(event: *const Event) ?lp.String {
 }
 
 // Calls an inline handler (onclick attribute or property). An exception it
-// doesn't catch is reported to the window — its "error" event and onerror
-// fire, as for an addEventListener listener (Listener.run) — and dispatch
-// carries on.
-fn callInlineHandler(frame: *Frame, local: *const js.Local, handler: js.Function.Global, this: *EventTarget, event: *Event) error{ExecutionTerminated}!?js.Value {
+// doesn't catch is reported to the global, as for an addEventListener
+// listener (Listener.run), and dispatch carries on.
+fn callInlineHandler(local: *const js.Local, handler: js.Function.Global, this: *EventTarget, event: *Event) error{ExecutionTerminated}!?js.Value {
     var try_catch: js.TryCatch = undefined;
     try_catch.init(local);
     defer try_catch.deinit();
 
-    return local.toLocal(handler).callWithThisRethrow(js.Value, this, .{event}) catch |err| {
-        if (err == error.ExecutionTerminated) {
-            return error.ExecutionTerminated;
-        }
-        if (err == error.JsException or err == error.TryCatchRethrow) {
-            if (try_catch.exceptionValue()) |exc| {
-                // reportError also counts the error on the page.
-                frame.window.reportError(exc, frame) catch |report_err| {
-                    log.debug(.event, "inline handler report error", .{ .err = report_err });
-                };
-                return null;
-            }
-        }
-        frame.page.recordJsError(err);
-        log.debug(.event, "inline handler", .{ .err = err });
-        return null;
+    return local.toLocal(handler).callWithThisRethrow(js.Value, this, .{event}) catch |err| switch (err) {
+        error.ExecutionTerminated => return error.ExecutionTerminated,
+        error.JsException, error.TryCatchRethrow => {
+            Listener.reportException(&try_catch, local);
+            return null;
+        },
+        else => {
+            local.ctx.page.recordJsError(err);
+            log.debug(.event, "inline handler", .{ .err = err });
+            return null;
+        },
     };
 }
 
