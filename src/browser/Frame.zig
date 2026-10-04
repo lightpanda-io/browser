@@ -1005,24 +1005,27 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
 
     const session = target._session;
 
-    // Re-navigating to the exact current URL is only a reload when the URL
-    // has no fragment. With a fragment it's a fragment navigation per the
-    // HTML "navigate" steps (url equals the document's URL excluding
-    // fragments and url's fragment is non-null): no reload, and since the
-    // fragment didn't change, no hashchange and no new history entry either.
-    if (!opts.force and
+    // Per the HTML "navigate" steps, this is a fragment navigation only when
+    // there's no document resource (no POST body), url equals the document's
+    // URL excluding fragments and url's fragment is non-null. Anything else
+    // is a real navigation: a form POST to the current URL, or dropping the
+    // fragment (/x#a -> /x), must hit the network.
+    // https://html.spec.whatwg.org/multipage/browsing-the-web.html#navigate
+    const is_fragment_navigation = !opts.force and
         opts.kind != .reload and
-        std.mem.eql(u8, target.url, resolved_url) and
-        std.mem.indexOfScalar(u8, resolved_url, '#') != null)
-    {
-        arena.release();
-        return;
-    }
+        opts.method == .GET and
+        opts.body == null and
+        std.mem.indexOfScalar(u8, resolved_url, '#') != null and
+        URL.eqlDocument(target.url, resolved_url);
 
-    // Short-circuit only true fragment-only navigations (same path/query, different
-    // fragment). Identical URLs fall through and trigger a real reload.
-    const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
-    if (!opts.force and is_fragment_navigation) {
+    if (is_fragment_navigation) {
+        // Re-navigating to the exact current URL: since the fragment didn't
+        // change, no hashchange and no new history entry either.
+        if (std.mem.eql(u8, target.url, resolved_url)) {
+            arena.release();
+            return;
+        }
+
         const old_url = target.url;
         target.url = try target.arena.dupeZ(u8, resolved_url);
 
