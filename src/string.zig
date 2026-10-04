@@ -325,6 +325,7 @@ pub const String = extern struct {
                 asUint("charset") => return "charset",
                 asUint("checked") => return "checked",
                 asUint("loading") => return "loading",
+                asUint("popover") => return "popover",
                 else => {},
             },
             8 => switch (@as(u64, @bitCast(input[0..8].*))) {
