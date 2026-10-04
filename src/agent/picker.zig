@@ -21,8 +21,23 @@
 //! before — or without — the isocline REPL.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const lp = @import("lightpanda");
 const ansi = @import("ansi.zig");
+
+// Windows console APIs used for raw key input; not wrapped by std.
+extern "kernel32" fn GetConsoleMode(
+    hConsoleHandle: std.os.windows.HANDLE,
+    lpMode: *u32,
+) std.os.windows.BOOL;
+extern "kernel32" fn SetConsoleMode(
+    hConsoleHandle: std.os.windows.HANDLE,
+    dwMode: u32,
+) std.os.windows.BOOL;
+
+const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
+const ENABLE_LINE_INPUT: u32 = 0x0002;
+const ENABLE_ECHO_INPUT: u32 = 0x0004;
 
 pub fn interactiveTty() bool {
     const stdin_tty = std.Io.File.stdin().isTty(lp.io) catch false;
@@ -100,10 +115,20 @@ const ChoiceState = struct {
 };
 
 const RawTerminal = struct {
-    original: std.posix.termios,
+    original: if (builtin.os.tag == .windows) u32 else std.posix.termios,
 
     fn enable() error{NotInteractive}!RawTerminal {
         if (!interactiveTty()) return error.NotInteractive;
+        if (builtin.os.tag == .windows) {
+            const handle = std.Io.File.stdin().handle;
+            var original_mode: u32 = undefined;
+            if (GetConsoleMode(handle, &original_mode) == .FALSE) return error.NotInteractive;
+            // Raw key mode: no line buffering, echo, or input processing.
+            const raw_mode = original_mode & ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
+            if (SetConsoleMode(handle, raw_mode) == .FALSE) return error.NotInteractive;
+            writeRaw(ansi.kitty_legacy);
+            return .{ .original = original_mode };
+        }
         // A tty that refuses raw mode is non-interactive for our purposes.
         const original = std.posix.tcgetattr(std.posix.STDIN_FILENO) catch return error.NotInteractive;
         var raw = original;
@@ -125,15 +150,30 @@ const RawTerminal = struct {
         // cursor keys arrive as CSI-u the byte reader can't parse; push the
         // legacy encoding to force plain arrows. restore() pops back to
         // whatever the REPL had pushed.
-        _ = std.c.write(std.posix.STDOUT_FILENO, ansi.kitty_legacy.ptr, ansi.kitty_legacy.len);
+        writeRaw(ansi.kitty_legacy);
         return .{ .original = original };
     }
 
     fn restore(self: *const RawTerminal) void {
-        _ = std.c.write(std.posix.STDOUT_FILENO, ansi.kitty_pop.ptr, ansi.kitty_pop.len);
+        if (builtin.os.tag == .windows) {
+            writeRaw(ansi.kitty_pop);
+            _ = SetConsoleMode(std.Io.File.stdin().handle, self.original);
+            return;
+        }
+        writeRaw(ansi.kitty_pop);
         std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original) catch {};
     }
 };
+
+/// Writes a control sequence to stdout. POSIX writes straight through
+/// libc; Windows goes through the streaming writer on `lp.io`.
+fn writeRaw(bytes: []const u8) void {
+    if (builtin.os.tag == .windows) {
+        std.Io.File.stdout().writeStreamingAll(lp.io, bytes) catch {};
+    } else {
+        _ = std.c.write(std.posix.STDOUT_FILENO, bytes.ptr, bytes.len);
+    }
+}
 
 fn promptInteractiveChoice(header: []const u8, items: []const [:0]const u8, default: ?usize) !usize {
     var raw: RawTerminal = try .enable();
@@ -236,6 +276,15 @@ fn readChoiceInput() !ChoiceInput {
 
 fn readChoiceByte() !?u8 {
     var buf: [1]u8 = undefined;
+    if (builtin.os.tag == .windows) {
+        const n = std.Io.File.stdin().readStreaming(lp.io, &.{&buf}) catch |err| switch (err) {
+            error.WouldBlock => return null,
+            error.InputOutput => return error.ReadFailed,
+            else => return err,
+        };
+        if (n == 0) return null;
+        return buf[0];
+    }
     const n = std.posix.read(std.posix.STDIN_FILENO, &buf) catch |err| switch (err) {
         error.WouldBlock => return null,
         error.InputOutput => return error.ReadFailed,
