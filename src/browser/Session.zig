@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const App = @import("../App.zig");
 const Config = @import("../Config.zig");
 
-const History = @import("webapi/History.zig");
 const storage = @import("webapi/storage/storage.zig");
 const IdbManager = @import("webapi/storage/idb/idb.zig").Manager;
 const CacheStore = @import("webapi/cache/Store.zig");
@@ -51,7 +50,6 @@ const Session = @This();
 
 browser: *Browser,
 arena: *lp.Arena,
-history: History,
 navigation: *Navigation,
 storage_shed: storage.Shed,
 idb: IdbManager, // Per-origin IndexedDB engines
@@ -167,7 +165,6 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     self.* = .{
         .arena = arena,
         .arena_pool = arena_pool,
-        .history = .{},
         .navigation = navigation,
         .storage_shed = .{},
         .idb = IdbManager.init(allocator),

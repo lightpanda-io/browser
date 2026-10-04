@@ -325,7 +325,7 @@ pub fn traverse(cmd: *BiDi.Command, ctx: *Context, frame: *Frame, delta: i32) !v
         defer ls.deinit();
         frame.js.local = &ls.local;
 
-        try frame._session.history.go(delta, frame);
+        try frame.window._history.go(delta, frame);
     }
     return answerAfterNavigation(cmd, ctx, frame);
 }
