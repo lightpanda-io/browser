@@ -18,6 +18,7 @@
 
 const js = @import("js.zig");
 const v8 = js.v8;
+const builtin = @import("builtin");
 
 const Platform = @This();
 handle: *v8.Platform,
@@ -42,7 +43,14 @@ pub fn init(opts: Options) !Platform {
     }
 
     if (opts.timezone) |id| {
-        _ = setenv("TZ", id, 1);
+        if (comptime builtin.os.tag == .windows) {
+            // The MSVC CRT has no setenv; _putenv_s is the
+            // equivalent and updates the process environment
+            // that InitializeICU and child processes read.
+            _ = _putenv_s("TZ", id);
+        } else {
+            _ = setenv("TZ", id, 1);
+        }
     }
 
     if (v8.v8__V8__InitializeICU() == false) {
@@ -66,3 +74,4 @@ pub fn deinit(self: Platform) void {
 }
 
 extern fn setenv(name: [*:0]const u8, value: [*:0]const u8, override: c_int) c_int;
+extern fn _putenv_s(name: [*:0]const u8, value: [*:0]const u8) c_int;
