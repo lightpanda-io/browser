@@ -182,7 +182,7 @@ const Request = struct {
     fn deliverPosition(self: *Request, override: Override) void {
         const exec = self.exec;
         const position = GeolocationPosition.init(exec, override) catch |err| {
-            log.err(.js, "geolocation.position", .{ .err = err });
+            log.debug(.js, "geolocation.position", .{ .err = err });
             return;
         };
 
@@ -199,7 +199,7 @@ const Request = struct {
 
         const exec = self.exec;
         const position_error = GeolocationPositionError.init(exec, code) catch |err| {
-            log.err(.js, "geolocation.error", .{ .err = err });
+            log.debug(.js, "geolocation.error", .{ .err = err });
             return;
         };
         position_error.acquireRef();
@@ -217,7 +217,7 @@ const Request = struct {
 
         ls.toLocal(callback).call(void, .{arg}) catch |err| {
             exec.page.recordJsError(err);
-            log.warn(.js, "geolocation", .{ .err = err });
+            log.debug(.js, "geolocation", .{ .err = err });
         };
         ls.local.runMicrotasks();
     }

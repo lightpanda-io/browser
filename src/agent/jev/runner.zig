@@ -394,7 +394,7 @@ test "toolCall: each operation lands on the tool that carries the guards" {
     const a = arena.allocator();
 
     const element: table.Element = .{
-        .index = @enumFromInt(1),
+        .index = @fromBackingInt(@intCast(1)),
         .node_id = 42,
         .role = "combobox",
         .label = "Party size",

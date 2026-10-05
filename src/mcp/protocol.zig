@@ -127,6 +127,9 @@ pub const Tool = struct {
     title: ?[]const u8 = null,
     description: ?[]const u8 = null,
     inputSchema: []const u8,
+    /// Declaring one obliges every call to answer with a conforming
+    /// `structuredContent`, so only the tools that always can carry it.
+    outputSchema: ?[]const u8 = null,
     annotations: ?ToolAnnotations = null,
 
     pub fn jsonStringify(self: @This(), jw: anytype) !void {
@@ -145,6 +148,12 @@ pub const Tool = struct {
         _ = try jw.beginWriteRaw();
         try jw.writer.writeAll(self.inputSchema);
         jw.endWriteRaw();
+        if (self.outputSchema) |s| {
+            try jw.objectField("outputSchema");
+            _ = try jw.beginWriteRaw();
+            try jw.writer.writeAll(s);
+            jw.endWriteRaw();
+        }
         if (self.annotations) |a| {
             try jw.objectField("annotations");
             try jw.write(a);
@@ -187,6 +196,16 @@ pub fn ImageContent(comptime T: type) type {
 pub fn CallToolResult(comptime Content: type) type {
     return struct {
         content: Content,
+        isError: bool = false,
+    };
+}
+
+/// The text block stays alongside `structuredContent`: it is what the model
+/// reads, and the spec asks for the serialized form next to it anyway.
+pub fn StructuredCallToolResult(comptime Content: type, comptime Structured: type) type {
+    return struct {
+        content: Content,
+        structuredContent: Structured,
         isError: bool = false,
     };
 }
@@ -299,7 +318,7 @@ test "MCP.protocol - error formatting" {
     const response = Response{
         .id = .{ .string = "abc" },
         .@"error" = .{
-            .code = @intFromEnum(ErrorCode.MethodNotFound),
+            .code = @backingInt(ErrorCode.MethodNotFound),
             .message = "Method not found",
         },
     };

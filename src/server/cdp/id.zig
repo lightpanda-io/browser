@@ -28,13 +28,13 @@ pub fn parseFrameId(input: []const u8) !u32 {
 
 pub fn toFrameId(id: u32) [14]u8 {
     var buf: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&buf, "FID-{d:0>10}", .{id}) catch unreachable;
+    _ = std.mem.print(&buf, "FID-{d:0>10}", .{id}) catch unreachable;
     return buf;
 }
 
 pub fn toLoaderId(id: u32) [14]u8 {
     var buf: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&buf, "LID-{d:0>10}", .{id}) catch unreachable;
+    _ = std.mem.print(&buf, "LID-{d:0>10}", .{id}) catch unreachable;
     return buf;
 }
 
@@ -47,19 +47,19 @@ pub fn toRequestId(transfer: *const Transfer) [14]u8 {
     }
 
     var buf: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&buf, "REQ-{d:0>10}", .{transfer.id}) catch unreachable;
+    _ = std.mem.print(&buf, "REQ-{d:0>10}", .{transfer.id}) catch unreachable;
     return buf;
 }
 
 pub fn toInterceptId(id: u32) [14]u8 {
     var buf: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&buf, "INT-{d:0>10}", .{id}) catch unreachable;
+    _ = std.mem.print(&buf, "INT-{d:0>10}", .{id}) catch unreachable;
     return buf;
 }
 
 pub fn toInvocationId(id: u32) [14]u8 {
     var buf: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&buf, "INV-{d:0>10}", .{id}) catch unreachable;
+    _ = std.mem.print(&buf, "INV-{d:0>10}", .{id}) catch unreachable;
     return buf;
 }
 
@@ -84,7 +84,7 @@ pub fn Incrementing(comptime T: type, comptime prefix: []const u8) type {
     };
 
     const buffer = blk: {
-        var b = [_]u8{0} ** MAX_BYTES;
+        var b: [MAX_BYTES]u8 = @splat(0);
         @memcpy(b[0..prefix.len], prefix);
         b[prefix.len] = '-';
         break :blk b;

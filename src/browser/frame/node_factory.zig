@@ -771,7 +771,7 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                     ),
                     asUint("frameset") => {
                         if (comptime from_parser) {
-                            log.warn(.not_implemented, "framset", .{ .note = "<framset>...</frameset> in html is not handled properly" });
+                            log.debug(.not_implemented, "framset", .{ .note = "<framset>...</frameset> in html is not handled properly" });
                         }
                         return createHtmlElementT(
                             document,
@@ -826,7 +826,7 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
             const tag_name = try String.init(frame.arena, name, .{});
 
             // Check if this is a custom element (must have hyphen for HTML namespace)
-            const has_hyphen = std.mem.indexOfScalar(u8, name, '-') != null;
+            const has_hyphen = std.mem.findScalar(u8, name, '-') != null;
             if (has_hyphen and namespace == .html) {
                 // A document without a browsing context has no registry: its
                 // elements stay undefined until inserted into a document that
@@ -1005,7 +1005,7 @@ fn constructForToken(frame: *Frame, definition: *CustomElementDefinition, tag_na
 
     const object = ls.toLocal(definition.constructor).newInstanceThrow() catch |err| {
         if (err != error.ExecutionTerminated) {
-            log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.js, "custom element constructor", .{ .name = name, .err = err, .type = frame._type, .url = frame.url });
             if (try_catch.exceptionValue()) |exc| {
                 // Spec: report the exception
                 frame.window.reportError(exc, frame) catch {};
@@ -1040,7 +1040,7 @@ fn constructForToken(frame: *Frame, definition: *CustomElementDefinition, tag_na
         return element;
     };
 
-    log.warn(.js, "custom element not usable", .{ .name = name, .reason = reason, .type = frame._type, .url = frame.url });
+    log.debug(.js, "custom element not usable", .{ .name = name, .reason = reason, .type = frame._type, .url = frame.url });
     frame.window.reportError(exc, frame) catch {};
     return error.CustomElementConstructionFailed;
 }
@@ -1076,7 +1076,7 @@ fn createHtmlElementT(document: *const Node.Document, comptime E: type, namespac
             return node;
         }
         @call(.auto, @field(E.Build, "created"), .{ node, frame }) catch |err| {
-            log.err(.frame, "build.created", .{ .tag = node.getNodeName(&frame.buf), .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.frame, "build.created", .{ .tag = node.getNodeName(&frame.buf), .err = err, .type = frame._type, .url = frame.url });
             return err;
         };
     }
@@ -1156,7 +1156,7 @@ fn parserAttributeName(frame: *Frame, qname: Parser.QualName) ![]const u8 {
     if (prefix.len == 0) {
         return local;
     }
-    return std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix, local });
+    return frame.local_arena.print("{s}:{s}", .{ prefix, local });
 }
 
 // Called when `new MyElement()` is invoked directly in JS (not via the
@@ -1207,7 +1207,7 @@ pub fn createComment(document: *const Node.Document, text: []const u8) !*Node {
 
 pub fn createCDATASection(document: *const Node.Document, data: []const u8) !*Node {
     // Validate that the data doesn't contain "]]>"
-    if (std.mem.indexOf(u8, data, "]]>") != null) {
+    if (std.mem.find(u8, data, "]]>") != null) {
         return error.InvalidCharacterError;
     }
 
@@ -1221,10 +1221,10 @@ pub fn createCDATASection(document: *const Node.Document, data: []const u8) !*No
 
 pub fn createProcessingInstruction(document: *const Node.Document, target: []const u8, data: []const u8) !*Node {
     // Validate neither target nor data contain "?>"
-    if (std.mem.indexOf(u8, target, "?>") != null) {
+    if (std.mem.find(u8, target, "?>") != null) {
         return error.InvalidCharacterError;
     }
-    if (std.mem.indexOf(u8, data, "?>") != null) {
+    if (std.mem.find(u8, data, "?>") != null) {
         return error.InvalidCharacterError;
     }
 
@@ -1300,7 +1300,7 @@ fn isXmlNameChar(c: u21) bool {
         (c >= 0x203F and c <= 0x2040);
 }
 
-fn asUint(comptime string: anytype) std.meta.Int(
+fn asUint(comptime string: anytype) @Int(
     .unsigned,
     @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
 ) {

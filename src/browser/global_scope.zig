@@ -100,6 +100,15 @@ pub const GlobalScope = union(enum) {
         };
     }
 
+    // HTML "report an exception": fires the global's "error" event (and its
+    // onerror handler) for an exception no script caught.
+    pub fn reportError(self: GlobalScope, err: JS.Value) !void {
+        return switch (self) {
+            .frame => |frame| frame.window.reportError(err, frame),
+            .worker => |worker| worker.reportError(err),
+        };
+    }
+
     pub fn referrerSource(self: GlobalScope) [:0]const u8 {
         return switch (self) {
             .frame => |frame| frame.referrerSource(),
@@ -186,6 +195,7 @@ pub const GlobalScope = union(enum) {
                 .frame_id = frame._frame_id,
                 .document_frame_id = frame._frame_id,
                 .loader_id = frame._loader_id,
+                .log_page = &frame.page.log_context,
             },
             .worker => |worker| .{
                 .scope = self,
@@ -194,6 +204,7 @@ pub const GlobalScope = union(enum) {
                 .frame_id = worker._frame_id,
                 .document_frame_id = worker._frame._frame_id,
                 .loader_id = worker._loader_id,
+                .log_page = &worker.page.log_context,
             },
         };
     }

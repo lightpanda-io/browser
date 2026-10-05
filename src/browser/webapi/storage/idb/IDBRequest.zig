@@ -239,7 +239,7 @@ pub fn fireUpgradeNeeded(self: *IDBRequest, exec: *Execution, old_version: u64, 
         switch (self._txn) {
             .borrowed => |txn| if (!txn.aborted()) {
                 txn.abortWith(exec, error.AbortError) catch |err| {
-                    log.warn(.storage, "idb upgradeneeded abort", .{ .err = err });
+                    log.debug(.storage, "idb upgradeneeded abort", .{ .err = err });
                 };
             },
             .owned, .none => {},
@@ -252,7 +252,7 @@ pub fn fireSuccess(self: *IDBRequest, exec: *Execution) !void {
 
     const event = try Event.initTrusted(comptime .wrap("success"), null, exec.page);
     event.acquireRef();
-    defer _ = event.releaseRef(exec.page);
+    defer event.releaseRef(exec.page);
 
     try exec.dispatch(self.asEventTarget(), event, self._on_success, .{ .context = "IDBRequest.success" });
 
@@ -265,7 +265,7 @@ pub fn fireSuccess(self: *IDBRequest, exec: *Execution) !void {
 
         if (!txn._settled and !txn._committing) {
             txn.abortWith(exec, error.AbortError) catch |err| {
-                log.warn(.storage, "idb success-event abort", .{ .err = err });
+                log.debug(.storage, "idb success-event abort", .{ .err = err });
             };
         }
     }
@@ -281,7 +281,7 @@ fn fireError(self: *IDBRequest, exec: *Execution) !void {
 
     const event = try Event.initTrusted(comptime .wrap("error"), .{ .bubbles = true, .cancelable = true }, exec.page);
     event.acquireRef();
-    defer _ = event.releaseRef(exec.page);
+    defer event.releaseRef(exec.page);
 
     const et = self.asEventTarget();
     event._target = et;
@@ -311,7 +311,7 @@ fn fireError(self: *IDBRequest, exec: *Execution) !void {
                 // can re-enter here, so keeping the error set out of deliver's
                 // recursion is both simpler and avoids an unresolvable inferred set.
                 tx.abortWith(exec, reason) catch |err| {
-                    log.warn(.storage, "idb error-event abort", .{ .err = err });
+                    log.debug(.storage, "idb error-event abort", .{ .err = err });
                 };
             }
         }

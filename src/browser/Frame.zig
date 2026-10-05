@@ -304,6 +304,7 @@ _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
 _http_status: ?u16 = null,
+_bot_challenge: ?HttpClient.BotChallenge = null,
 _http_headers: std.ArrayList(HttpHeader) = .empty,
 
 _referrer: ?[]const u8 = null,
@@ -451,6 +452,20 @@ pub fn deinit(self: *Frame) void {
         frame.deinit();
     }
 
+    // The Page outlives an iframe or popup that re-navigates: don't leave its
+    // pointer state on this document's elements.
+    const page = self.page;
+    if (page.input_hover_target) |el| {
+        if (el.ownerFrame(self) == self) {
+            page.input_hover_target = null;
+        }
+    }
+    if (page.input_pointer.down_target) |el| {
+        if (el.ownerFrame(self) == self) {
+            page.input_pointer.reset();
+        }
+    }
+
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame.deinit", .{ .url = self.url, .type = self._type });
     }
@@ -477,8 +492,6 @@ pub fn deinit(self: *Frame) void {
     if (self.window._navigator._service_worker) |container| {
         container.detach();
     }
-
-    const page = self.page;
 
     if (self._queued_navigation) |qn| {
         qn.arena.release();
@@ -657,13 +670,23 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     self._load_state = .parsing;
     self._last_navigate_error = null;
 
-    log.info(.frame, "navigate", .{
+    const page = self.page;
+    const page_scope = page.logScope();
+    defer page_scope.exit();
+
+    const is_root = self == &page.frame;
+    const log_data = .{
         .url = request_url,
         .method = opts.method,
         .reason = opts.reason,
         .body = opts.body != null,
         .type = self._type,
-    });
+    };
+    if (is_root) {
+        log.info(.frame, "navigation start", log_data);
+    } else {
+        log.info(.frame, "navigate", log_data);
+    }
 
     const http_client = &session.browser.http_client;
 
@@ -675,7 +698,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     if (is_about_blank or is_srcdoc or is_blob) {
         if (is_blob) {
             if (!Blob.urlBelongsToOrigin(request_url, opts.initiator_origin)) {
-                log.warn(.js, "invalid blob", .{ .url = request_url });
+                log.debug(.js, "invalid blob", .{ .url = request_url });
                 return error.BlobNotFound;
             }
         }
@@ -685,7 +708,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         else if (is_srcdoc)
             "about:srcdoc"
         else
-            try self.arena.dupeZ(u8, request_url);
+            try self.arena.dupeSentinel(u8, request_url, 0);
 
         // even though about:blank navigations may share the same _data_, we
         // have to do this to make sure window.location is at a unique _address_.
@@ -727,7 +750,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         if (is_blob) {
             const blob = blk: {
                 if (self.page.blob_urls.get(request_url)) |entry| break :blk entry.blob;
-                log.warn(.js, "invalid blob", .{ .url = request_url });
+                log.debug(.js, "invalid blob", .{ .url = request_url });
                 return error.BlobNotFound;
             };
             const parse_arena = try self.getArena(.medium, "Frame.parseBlob");
@@ -749,7 +772,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
                 // the parser emits nothing for an empty input; commit the
                 // same html/head/body scaffolding an empty srcdoc implies
                 self.document.injectBlank(self) catch |err| {
-                    log.err(.browser, "inject blank", .{ .err = err });
+                    log.debug(.browser, "inject blank", .{ .err = err });
                     return error.InjectBlankFailed;
                 };
             } else {
@@ -763,7 +786,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             }
         } else {
             self.document.injectBlank(self) catch |err| {
-                log.err(.browser, "inject blank", .{ .err = err });
+                log.debug(.browser, "inject blank", .{ .err = err });
                 return error.InjectBlankFailed;
             };
         }
@@ -806,6 +829,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     }
 
     self._http_status = null;
+    self._bot_challenge = null;
     self._http_headers = .empty;
 
     self._referrer = null;
@@ -813,7 +837,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     self.url = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
-            break :blk try self.arena.dupeZ(u8, request_url);
+            break :blk try self.arena.dupeSentinel(u8, request_url, 0);
         }
         break :blk try std.mem.concatWithSentinel(self.arena, u8, &.{ "http://", request_url }, 0);
     };
@@ -824,7 +848,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .reason = opts.reason,
         .method = opts.method,
         .body = if (opts.body) |b| try self.arena.dupe(u8, b) else null,
-        .header = if (opts.header) |h| try self.arena.dupeZ(u8, h) else null,
+        .header = if (opts.header) |h| try self.arena.dupeSentinel(u8, h, 0) else null,
     };
 
     const transfer = try http_client.newRequest(.{
@@ -896,7 +920,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     session.navigation._current_navigation_kind = opts.kind;
 
     transfer.submit() catch |err| {
-        log.err(.frame, "navigate request", .{ .url = self.url, .err = err, .type = self._type });
+        log.debug(.frame, "navigate request", .{ .url = self.url, .err = err, .type = self._type });
         return err;
     };
 }
@@ -935,7 +959,7 @@ pub fn scheduleNavigation(self: *Frame, request_url: []const u8, opts: NavigateO
 fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
     const resolved_url, const is_about_something = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
-            break :blk .{ try arena.dupeZ(u8, request_url), false };
+            break :blk .{ try arena.dupeSentinel(u8, request_url, 0), false };
         }
 
         if (std.mem.eql(u8, request_url, "about:blank")) {
@@ -989,7 +1013,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     if (!opts.force and
         opts.kind != .reload and
         std.mem.eql(u8, target.url, resolved_url) and
-        std.mem.indexOfScalar(u8, resolved_url, '#') != null)
+        std.mem.findScalar(u8, resolved_url, '#') != null)
     {
         arena.release();
         return;
@@ -1000,7 +1024,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
     if (!opts.force and is_fragment_navigation) {
         const old_url = target.url;
-        target.url = try target.arena.dupeZ(u8, resolved_url);
+        target.url = try target.arena.dupeSentinel(u8, resolved_url, 0);
 
         const location = try Location.init(target.url, target);
         location.acquireRef();
@@ -1049,7 +1073,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     // that from its owner. Only a top-level navigation's initiator is another
     // document.
     if (nav_opts.initiator_url == null and target.parent == null and std.mem.startsWith(u8, referrer_source, "http")) {
-        nav_opts.initiator_url = .{ .url = try arena.dupeZ(u8, referrer_source) };
+        nav_opts.initiator_url = .{ .url = try arena.dupeSentinel(u8, referrer_source, 0) };
     }
     if (nav_opts.initiator_origin == null) {
         if (originator.origin) |o| {
@@ -1204,7 +1228,7 @@ fn loadEventsAborted(self: *const Frame) bool {
 pub fn cancelQueuedNavigation(self: *Frame) void {
     const qn = self._queued_navigation orelse return;
     const queued = self.page.queued_navigation;
-    if (std.mem.indexOfScalar(*Frame, queued.items, self)) |idx| {
+    if (std.mem.findScalar(*Frame, queued.items, self)) |idx| {
         _ = queued.swapRemove(idx);
     }
     qn.arena.release();
@@ -1245,7 +1269,9 @@ pub fn documentIsLoaded(self: *Frame) void {
     self.document._ready_state = .interactive;
     self._documentIsLoaded() catch |err| switch (err) {
         error.JsException => {}, // already logged
-        else => log.err(.frame, "document is loaded2", .{ .err = err, .type = self._type, .url = self.url }),
+        // logged by whatever requested the terminate (watchdog, runaway loop)
+        error.ExecutionTerminated => log.debug(.frame, "document is loaded", .{ .err = err, .type = self._type, .url = self.url }),
+        else => log.err(.frame, "document is loaded", .{ .err = err, .type = self._type, .url = self.url }),
     };
 }
 
@@ -1309,7 +1335,7 @@ fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void
             break :blk;
         };
         self._event_manager.dispatch(iframe.asNode().asEventTarget(), event) catch |err| {
-            log.warn(.js, "iframe onload", .{ .err = err, .url = iframe._src });
+            log.debug(.js, "iframe onload", .{ .err = err, .url = iframe._src });
         };
     }
 
@@ -1349,6 +1375,8 @@ pub fn documentIsComplete(self: *Frame) void {
     self._load_state = .complete;
     self._documentIsComplete() catch |err| switch (err) {
         error.JsException => {}, // already logged
+        // logged by whatever requested the terminate (watchdog, runaway loop)
+        error.ExecutionTerminated => log.debug(.frame, "document is complete", .{ .err = err, .type = self._type, .url = self.url }),
         else => log.err(.frame, "document is complete", .{ .err = err, .type = self._type, .url = self.url }),
     };
 
@@ -1421,7 +1449,7 @@ fn metaRefreshOnLoad(self: *Frame) void {
         const meta = node.is(Element.Html.Meta) orelse continue;
         const target = meta.refreshTarget() orelse continue;
         return self.metaRefresh(target) catch |err| {
-            log.err(.frame, "meta refresh", .{ .err = err, .type = self._type, .url = self.url });
+            log.debug(.frame, "meta refresh", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -1452,12 +1480,12 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     const response_url = transfer.req.url;
     if (std.mem.eql(u8, response_url, self.url) == false) {
         // would be different than self.url in the case of a redirect
-        self.url = try self.arena.dupeZ(u8, response_url);
+        self.url = try self.arena.dupeSentinel(u8, response_url, 0);
         self.origin = try URL.getOrigin(self.arena, self.url);
     }
 
     if (self.parent != null and framing.allowed(self, transfer) == false) {
-        log.warn(.frame, "x-frame-options blocked", .{ .url = self.url });
+        log.debug(.frame, "x-frame-options blocked", .{ .url = self.url });
         // give this an opaque origin so that any request to the error page
         // is treated as being cross-origin
         self.origin = null;
@@ -1501,8 +1529,8 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     }
 
     self._http_status = transfer.responseStatus();
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
+    self._bot_challenge = transfer.botChallenge();
+    for (transfer.responseHeaders()) |hdr| {
         try self._http_headers.append(self.arena, .{
             .name = try self.arena.dupe(u8, hdr.name),
             .value = try self.arena.dupe(u8, hdr.value),
@@ -1551,8 +1579,7 @@ fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
     }
 
     const disposition: HttpClient.Header = blk: {
-        var it = transfer.responseHeaderIterator();
-        while (it.next()) |hdr| {
+        for (transfer.responseHeaders()) |hdr| {
             if (std.mem.eql(u8, hdr.name, "content-disposition")) {
                 break :blk hdr;
             }
@@ -1637,8 +1664,8 @@ fn dispositionFilename(disposition: HttpClient.Header) ?[]const u8 {
     // Prefer the extended filename*= form when present, per RFC 6266.
     if (disposition.param("filename*")) |ext| {
         // charset'lang'value — take everything after the second quote.
-        if (std.mem.indexOfScalar(u8, ext, '\'')) |first| {
-            if (std.mem.indexOfScalarPos(u8, ext, first + 1, '\'')) |second| {
+        if (std.mem.findScalar(u8, ext, '\'')) |first| {
+            if (std.mem.findScalarPos(u8, ext, first + 1, '\'')) |second| {
                 return sanitizeFilename(ext[second + 1 ..]);
             }
         }
@@ -1655,7 +1682,7 @@ fn dispositionFilename(disposition: HttpClient.Header) ?[]const u8 {
 // regardless of the host platform.
 fn sanitizeFilename(name: []const u8) ?[]const u8 {
     var out = std.fs.path.basename(name);
-    if (std.mem.lastIndexOfScalar(u8, out, '\\')) |i| {
+    if (std.mem.findScalarLast(u8, out, '\\')) |i| {
         out = out[i + 1 ..];
     }
     if (out.len == 0 or std.mem.eql(u8, out, ".") or std.mem.eql(u8, out, "..")) {
@@ -1731,7 +1758,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
         self._pending_content_type = null;
         if (mime.content_type != .text_html) {
             if (transfer.contentType()) |ct| {
-                const end = std.mem.indexOfScalarPos(u8, ct, 0, ';') orelse ct.len;
+                const end = std.mem.findScalarPos(u8, ct, 0, ';') orelse ct.len;
                 const essence = std.mem.trim(u8, ct[0..end], " \t");
                 if (essence.len > 0) {
                     self._pending_content_type = try std.ascii.allocLowerString(self.arena, essence);
@@ -1772,7 +1799,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
             // the parser turns a literal "&#9733;" in the body into a star.
             var v = data;
             while (v.len > 0) {
-                const index = std.mem.indexOfAnyPos(u8, v, 0, &.{ '<', '>', '&' }) orelse {
+                const index = std.mem.findAnyPos(u8, v, 0, &.{ '<', '>', '&' }) orelse {
                     return buf.appendSlice(self.arena, v);
                 };
                 try buf.appendSlice(self.arena, v[0..index]);
@@ -1931,8 +1958,7 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
     var self: *Frame = @ptrCast(@alignCast(ctx));
 
     self._last_navigate_error = err;
-    const level: log.Level = if (err == error.TransferCanceled) .info else .err;
-    log.log(.frame, level, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
+    log.debug(.frame, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
 
     // A navigation that fails before any response headers arrive never
     // reaches the frame_navigated dispatch in frameHeaderCallback, so the
@@ -1998,11 +2024,7 @@ pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *El
     }
 
     self._script_manager.addFromElement(from_parser, script, "parsing") catch |err| {
-        const level: log.Level = switch (err) {
-            error.UrlBlocked, error.RobotsBlocked => .warn,
-            else => .err,
-        };
-        log.log(.frame, level, "frame.scriptAddedCallback", .{
+        log.debug(.frame, "frame.scriptAddedCallback", .{
             .err = err,
             .url = self.url,
             .src = script.asElement().getAttributeInterned("src"),
@@ -2121,10 +2143,10 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         // extra defensive..maybe navigate added a new frame, and the index it
         // was added at was removed. Or maybe this frame was removed somehow
         // (which I don't think is possible)
-        if (std.mem.indexOfScalar(*Frame, self.child_frames.items, new_frame)) |idx| {
+        if (std.mem.findScalar(*Frame, self.child_frames.items, new_frame)) |idx| {
             _ = self.child_frames.swapRemove(idx);
         }
-        log.warn(.frame, "iframe navigate failure", .{ .url = url, .err = err });
+        log.debug(.frame, "iframe navigate failure", .{ .url = url, .err = err });
         if (delays_load) {
             self._pending_loads -= 1;
         }
@@ -2217,7 +2239,7 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
     errdefer _ = page.popups.swapRemove(popup_index);
 
     popup.navigate(resolved_url, .{ .reason = .script, .initiator_origin = self.origin }) catch |err| {
-        log.warn(.frame, "popup navigate failure", .{ .url = resolved_url, .err = err });
+        log.debug(.frame, "popup navigate failure", .{ .url = resolved_url, .err = err });
         return err;
     };
 
@@ -2233,10 +2255,13 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
 
 pub fn domChanged(self: *Frame) void {
     self.page.dom_version += 1;
-    self.styleChanged();
+    self.renderingChanged();
+}
 
-    // A DOM change is our "rendering opportunity": re-evaluate the layout
-    // observers. Both are no-ops unless something they track actually changed.
+/// A style change that is also our "rendering opportunity": re-evaluate the
+/// layout observers. Both are no-ops unless something they track changed.
+pub fn renderingChanged(self: *Frame) void {
+    self.styleChanged();
     observers.scheduleIntersectionChecks(self);
     observers.scheduleResizeChecks(self);
 }
@@ -2478,7 +2503,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     defer arena.release();
 
     const resolved = URL.resolve(arena.allocator(), self.base(), href, .{ .encoding = self.charset }) catch |err| {
-        log.warn(.http, "external stylesheet resolve", .{ .err = err, .href = href });
+        log.debug(.http, "external stylesheet resolve", .{ .err = err, .href = href });
         try self.fireElementEvent(element, comptime .wrap("error"));
         return;
     };
@@ -2499,7 +2524,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         .resource_type = .stylesheet,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {
-        log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
+        log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
     {
@@ -2521,7 +2546,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     defer sm.endEvaluationWindow(was_evaluating);
 
     var response = transfer.submitSync(.{}) catch |err| {
-        log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
+        log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
     defer response.deinit();
@@ -2532,7 +2557,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     }
 
     if (response.body.items.len > MAX_STYLESHEET_BYTES) {
-        log.warn(.http, "external stylesheet too large", .{
+        log.debug(.http, "external stylesheet too large", .{
             .bytes = response.body.items.len,
             .max = MAX_STYLESHEET_BYTES,
             .url = resolved,
@@ -2565,7 +2590,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     // `_href` consistent with what the sheet actually contains is the
     // minimum.
     sheet.replaceSync(response.body.items, self) catch |err| {
-        log.warn(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
+        log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
     sheet._href = try self.arena.dupe(u8, resolved);
@@ -2661,10 +2686,9 @@ pub fn notifyNetworkAlmostIdle(self: *Frame) void {
 // called from the parser. Text-node merging is the parser's responsibility
 // (see Parser.appendTextChunk in src/browser/parser/Parser.zig); this is the
 // "insert this fully-formed node as a new last child of parent" entry point.
-pub fn appendNew(self: *Frame, parent: *Node, child: *Node) !void {
+pub fn appendNew(self: *Frame, parent: *Node, child: *Node, parent_root: ?*Node) !void {
     lp.assert(child._parent == null, "Frame.appendNew", .{});
-    // opts is meaningless when from_parser (the first param) is true.
-    try self._insertNodeRelative(true, parent, child, .append, .{});
+    try self._insertNodeRelative(true, parent, child, .append, .{ .parser_root = parent_root });
 }
 
 // called from the parser when the node and all its children have been added
@@ -2984,6 +3008,8 @@ const InsertNodeOpts = struct {
     // the ready work itself once every node is in place, so an earlier
     // script observes its later siblings already inserted.
     run_ready: bool = true,
+    // The parent's root (parser only, avoids having to look it up)
+    parser_root: ?*Node = null,
 };
 pub fn insertNodeRelative(self: *Frame, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, relative, opts);
@@ -3056,14 +3082,14 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
         }
 
         if (child.is(Element)) |el| {
-            // Invoke connectedCallback for custom elements during parsing.
-            // For main document parsing we know nodes are connected (fast path);
-            // for fragment parsing (innerHTML) we check connectivity.
-            if (child.isConnected() or child.isInShadowTree()) {
+            const root = opts.parser_root orelse parent.getRootNode(.{});
+            if (idMapsForRoot(root)) |id_maps| {
                 if (el.getId()) |id| {
-                    try self.addElementId(parent, el, id);
+                    try self.addElementIdWithMaps(id_maps, el, id);
                 }
-                try Element.Html.Custom.enqueueConnectedCallbackOnElement(true, el, self);
+                if (rootIsConnected(root)) {
+                    try Element.Html.Custom.enqueueConnectedCallbackOnElement(true, el, self);
+                }
             }
         }
         return;
@@ -3353,31 +3379,31 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
 
         const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         frame.scriptAddedCallback(from_parser, script) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "script", .type = frame._type, .url = frame.url });
+            log.debug(.frame, "frame.nodeIsReady", .{ .err = err, .element = "script", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(IFrame)) |iframe| {
         const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         frame.iframeAddedCallback(iframe) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "iframe", .type = frame._type, .url = frame.url });
+            log.debug(.frame, "frame.nodeIsReady", .{ .err = err, .element = "iframe", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(Element.Html.Meta)) |meta| {
         const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         meta.processRefresh(frame) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "meta", .type = frame._type, .url = frame.url });
+            log.debug(.frame, "frame.nodeIsReady", .{ .err = err, .element = "meta", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(Element.Html.Link)) |link| {
         const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         link.linkAddedCallback(frame) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "link", .type = frame._type });
+            log.debug(.frame, "frame.nodeIsReady", .{ .err = err, .element = "link", .type = frame._type });
             return error.LinkLoadError;
         };
     } else if (node.is(Element.Html.Style)) |style| {
         const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         style.styleAddedCallback(frame) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "style", .type = frame._type });
+            log.debug(.frame, "frame.nodeIsReady", .{ .err = err, .element = "style", .type = frame._type });
             return error.StyleLoadError;
         };
     }
@@ -3527,11 +3553,11 @@ pub const NavigateOpts = struct {
     header: ?[:0]const u8 = null,
     // Set by scheduleNavigationWithArena from the originating frame's URL so
     // anchor click / form submit / location.href navigations carry a Referer.
-    // null on CDP Page.navigate (address-bar) and Page.reload — matches Chrome.
+    // null on Page.reload and on a CDP Page.navigate without `referrer` —
+    // matches Chrome.
     referer: ?[]const u8 = null,
-    // The originating frame's policy, paired with `referer` so redirect hops
-    // can recompute the header. null (e.g. a CDP-supplied referrer) leaves
-    // the Referer untouched across redirects.
+    // The policy that produced `referer`, so redirect hops can recompute the
+    // header. null leaves the Referer untouched across redirects.
     referrer_policy: ?referrer.Policy = null,
     // The "site for cookies" of the document that initiated a top-level
     // navigation, used when computing SameSite. Distinct from `referer`
@@ -3750,14 +3776,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
             break :blk s.is(HtmlElement);
         };
         const submit_event = (try SubmitEvent.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true, .submitter = submitter_html }, self)).asEvent();
-
-        // so submit_event is still valid when we check _prevent_default
-        submit_event.acquireRef();
-        defer _ = submit_event.releaseRef(self.page);
-
-        try self._event_manager.dispatch(form_element.asEventTarget(), submit_event);
-        // If the submit event was prevented, don't submit the form
-        if (submit_event._prevent_default) {
+        if (try self._event_manager.dispatchCancelable(form_element.asEventTarget(), submit_event)) {
             return;
         }
     }
@@ -3865,10 +3884,10 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         opts.body = buf.written();
         opts.header = switch (encoding) {
             .urlencode => "Content-Type: application/x-www-form-urlencoded",
-            .formdata => |b| try std.fmt.allocPrintSentinel(arena.allocator(), "Content-Type: multipart/form-data; boundary={s}", .{b}, 0),
+            .formdata => |b| try arena.allocator().printSentinel("Content-Type: multipart/form-data; boundary={s}", .{b}, 0),
             // Per WHATWG HTML §4.10.21.6, text/plain submissions include the form's
             // resolved encoding (accept-charset or document charset).
-            .plaintext => try std.fmt.allocPrintSentinel(arena.allocator(), "Content-Type: text/plain; charset={s}", .{charset}, 0),
+            .plaintext => try arena.allocator().printSentinel("Content-Type: text/plain; charset={s}", .{charset}, 0),
         };
     } else {
         action = try URL.concatQueryString(arena.allocator(), action, buf.written());
@@ -4263,8 +4282,6 @@ fn appendMetaRefresh(frame: *Frame, content: []const u8) !*Element {
 }
 
 test "Frame: httpMetadata after navigation" {
-    testing.expectLog(&.{.http});
-
     const page = try testing.pageTest("page/meta.html", .{});
     defer page.close();
 

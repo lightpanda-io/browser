@@ -452,3 +452,16 @@
   }
   testing.expectEqual(204, new Response(undefined, { status: 204 }).status);
 </script>
+
+<script id=shared_array_buffer_body>
+  const sab = new SharedArrayBuffer(4);
+  testing.expectError('TypeError', () => new Response(sab));
+  testing.expectError('TypeError', () => new Response(new Uint8Array(sab)));
+  testing.expectError('TypeError', () => new Response(new DataView(sab)));
+
+  // the same types over a regular ArrayBuffer are fine
+  const ab = new ArrayBuffer(4);
+  for (const body of [ab, new Uint8Array(ab), new DataView(ab)]) {
+    testing.expectTrue(new Response(body).body !== null);
+  }
+</script>

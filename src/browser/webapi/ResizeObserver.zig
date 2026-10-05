@@ -135,13 +135,12 @@ pub fn connectivityChanged(self: *const ResizeObserver) bool {
     return false;
 }
 
-// True if any observed element is `ancestor` or one of its descendants. Walks
-// the same parentElement chain StyleManager.isHidden resolves visibility
-// through.
-pub fn observesWithin(self: *const ResizeObserver, ancestor: *Element) bool {
+/// True if any observed element is `ancestor` or one of its descendants. Walks
+/// the same flat-tree chain StyleManager.isHidden resolves visibility through.
+pub fn observesWithin(self: *const ResizeObserver, ancestor: *Element, frame: *const Frame) bool {
     for (self._observations.items) |obs| {
         var current: ?*Element = obs.target;
-        while (current) |el| : (current = el.parentElement()) {
+        while (current) |el| : (current = el.asNode().flatTreeParentElement(frame)) {
             if (el == ancestor) {
                 return true;
             }
@@ -190,7 +189,7 @@ pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
     defer ls.deinit();
 
     ls.toLocal(self._callback).tryCall(void, .{ entries.items, self }, &caught) catch |err| {
-        log.err(.frame, "ResizeObserver.deliverEntries", .{ .err = err, .caught = caught });
+        log.debug(.frame, "ResizeObserver.deliverEntries", .{ .err = err, .caught = caught });
         return err;
     };
 }

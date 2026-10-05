@@ -23,13 +23,13 @@ const LINGER_MS = 5000;
 const LINGER_BATCH = 16;
 const URL = "https://telemetry.lightpanda.io/v2";
 
-const OS_CODE = switch (builtin.os.tag) {
+const OS_CODE = switch (builtin.target.os.tag) {
     .linux => "L",
     .macos => "M",
     .ios => "I",
     else => "O",
 };
-const ARCH_CODE = switch (builtin.cpu.arch) {
+const ARCH_CODE = switch (builtin.target.cpu.arch) {
     .x86_64 => "X",
     .aarch64 => "A",
     else => "O",
@@ -184,7 +184,7 @@ fn run(self: *LightPanda) void {
 
         var sent: usize = 0;
         self.postEvents(&conn, batch.items, dropped, &sent) catch |err| {
-            log.warn(.telemetry, "postEvents", .{ .err = err, .events = batch.items.len, .dropped = dropped });
+            log.debug(.telemetry, "postEvents", .{ .err = err, .events = batch.items.len, .dropped = dropped });
         };
         const lost: u32 = @intCast(batch.items.len - sent);
 
@@ -247,7 +247,7 @@ fn postEvents(self: *LightPanda, conn: *http.Connection, events: []const telemet
 
 fn flush(self: *LightPanda, conn: *http.Connection) !void {
     self._flush(conn) catch |err| {
-        log.warn(.telemetry, "flush", .{ .err = err, .size = self.writer.written().len });
+        log.debug(.telemetry, "flush", .{ .err = err, .size = self.writer.written().len });
         return err;
     };
 }
@@ -391,7 +391,7 @@ test "Telemetry: header wire format" {
     };
     try std.json.Stringify.value(&header, .{}, &w.writer);
 
-    const expected = try std.fmt.allocPrint(testing.allocator, "[\"the-iid\",\"H\",\"S\",1,\"{s}\",\"{s}\",\"{s}\"]", .{ OS_CODE, ARCH_CODE, build_config.version });
+    const expected = try testing.allocator.print("[\"the-iid\",\"H\",\"S\",1,\"{s}\",\"{s}\",\"{s}\"]", .{ OS_CODE, ARCH_CODE, build_config.version });
     defer testing.allocator.free(expected);
 
     try testing.expectEqual(expected, w.written());

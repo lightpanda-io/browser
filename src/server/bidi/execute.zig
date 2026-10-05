@@ -276,7 +276,7 @@ pub const Pending = struct {
 
         self.answered = true;
         bidi.replyResult(self.to, cloned) catch |err| {
-            log.err(.bidi, "execute result", .{ .err = err, .reply = self.to });
+            log.debug(.bidi, "execute result", .{ .err = err, .reply = self.to });
         };
     }
 
@@ -286,7 +286,7 @@ pub const Pending = struct {
         }
         self.answered = true;
         self.bidi.replyError(self.to, code, message) catch |err| {
-            log.err(.bidi, "execute error", .{ .err = err, .reply = self.to });
+            log.debug(.bidi, "execute error", .{ .err = err, .reply = self.to });
         };
     }
 

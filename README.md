@@ -440,11 +440,25 @@ cd wptrunner && go run . Node-childNodes.html
 `wptrunner` command accepts `--summary` and `--json` options modifying output.
 Also `--concurrency` define the concurrency limit.
 
+To check a single test case without the runner, `fetch --dump wpt` prints its
+results as JSON: the harness status, a pass/fail summary and the cases that
+did not pass. It relies on the fork's `testharnessreport.js`.
+
+```
+zig build -Dwpt_extensions run -- fetch \
+    --insecure-disable-tls-host-verification \
+    --load-resources worker \
+    --load-resources iframe \
+    --dump wpt \
+    --wait-script "window.report && report.complete" \
+    "http://web-platform.test:8000/dom/nodes/Node-childNodes.html"
+```
+
 :warning: Running the whole test suite will take a long time. In this case,
 it's useful to build in `releaseFast` mode to make tests faster.
 
 ```
-zig build -Dwpt_extensions -Doptimize=ReleaseFast run -- serve ...
+zig build -Dwpt_extensions -Doptimize=fast run -- serve ...
 ```
 
 ## Contributing

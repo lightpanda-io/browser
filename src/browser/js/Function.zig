@@ -103,7 +103,7 @@ pub fn newInstanceThrow(self: *const Function) !js.Object {
 pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
     var caught: js.TryCatch.Caught = .{};
     return self._tryCallWithThis(T, self.getThis(), args, &caught, .{}) catch |err| {
-        log.warn(.js, "call caught", .{ .err = err, .caught = caught });
+        log.debug(.js, "call caught", .{ .err = err, .caught = caught });
         return err;
     };
 }
@@ -114,7 +114,7 @@ pub fn callRethrow(self: *const Function, comptime T: type, args: anytype) !T {
         if (err != error.TryCatchRethrow) {
             // error.TryCatchRethrow is a control flow (sorry!), not an actual
             // error we want to log
-            log.warn(.js, "call caught", .{ .err = err, .caught = caught });
+            log.debug(.js, "call caught", .{ .err = err, .caught = caught });
         }
         return err;
     };
@@ -123,7 +123,7 @@ pub fn callRethrow(self: *const Function, comptime T: type, args: anytype) !T {
 pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
     var caught: js.TryCatch.Caught = .{};
     return self._tryCallWithThis(T, this, args, &caught, .{}) catch |err| {
-        log.warn(.js, "callWithThis caught", .{ .err = err, .caught = caught });
+        log.debug(.js, "callWithThis caught", .{ .err = err, .caught = caught });
         return err;
     };
 }
@@ -196,12 +196,12 @@ fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args
 
     const js_args: []const *const v8.Value = switch (@typeInfo(@TypeOf(aargs))) {
         .@"struct" => |s| blk: {
-            const fields = s.fields;
-            var js_args: [fields.len]*const v8.Value = undefined;
-            inline for (fields, 0..) |f, i| {
-                js_args[i] = (try local.zigValueToJs(@field(aargs, f.name), .{})).handle;
+            const field_names = s.field_names;
+            var js_args: [field_names.len]*const v8.Value = undefined;
+            inline for (field_names, 0..) |field_name, i| {
+                js_args[i] = (try local.zigValueToJs(@field(aargs, field_name), .{})).handle;
             }
-            const cargs: [fields.len]*const v8.Value = js_args;
+            const cargs: [field_names.len]*const v8.Value = js_args;
             break :blk &cargs;
         },
         .pointer => blk: {

@@ -171,7 +171,7 @@ pub fn forEach(self: *URLSearchParams, cb_: js.Function, js_this_: ?js.Object) !
         const entry = self._params._entries.items[i];
         cb.call(void, .{ entry.value.str(), entry.name.str(), self }) catch |err| {
             // this is a non-JS error
-            log.warn(.js, "URLSearchParams.forEach", .{ .err = err });
+            log.debug(.js, "URLSearchParams.forEach", .{ .err = err });
         };
     }
 }
@@ -301,7 +301,7 @@ fn paramsFromString(allocator: Allocator, input_: []const u8, buf: []u8) !KeyVal
         var name: String = undefined;
         var value: String = undefined;
 
-        if (std.mem.indexOfScalarPos(u8, entry, 0, '=')) |idx| {
+        if (std.mem.findScalarPos(u8, entry, 0, '=')) |idx| {
             name = try unescape(allocator, entry[0..idx], buf);
             value = try unescape(allocator, entry[idx + 1 ..], buf);
         } else {

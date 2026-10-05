@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<!-- https://html.spec.whatwg.org/multipage/input.html#dom-input-value -->
+
+<form id="parsed">
+  <input id="hidden1" type="hidden" name="h" value="a">
+  <input id="check1" type="checkbox" name="c" value="a">
+  <input id="text1" type="text" name="t" value="initial">
+  <input id="file1" type="file" name="f" value="a">
+  <input id="text2" type="text" value="a">
+</form>
+
+<script id="default_mode_setter_writes_attribute">
+  {
+    // A hidden input's value IS its value content attribute: setting it must
+    // be visible to getAttribute, serialization and attribute selectors.
+    const input = $('#hidden1');
+    testing.expectEqual('a', input.value);
+
+    input.value = 'b';
+    testing.expectEqual('b', input.value);
+    testing.expectEqual('b', input.getAttribute('value'));
+    testing.expectEqual('b', input.defaultValue);
+    testing.expectTrue(input.outerHTML.includes('value="b"'));
+    testing.expectEqual(input, document.querySelector("input[type=hidden][value='b']"));
+    testing.expectEqual(null, document.querySelector("input[type=hidden][value='a']"));
+  }
+</script>
+
+<script id="default_mode_types">
+  for (const type of ['hidden', 'submit', 'reset', 'button', 'image']) {
+    const input = document.createElement('input');
+    input.type = type;
+    document.body.appendChild(input);
+
+    // No attribute: the empty string, and the setter creates the attribute.
+    testing.expectEqual('', input.value);
+    input.value = 'x';
+    testing.expectEqual('x', input.getAttribute('value'));
+    testing.expectEqual('x', input.value);
+    testing.expectEqual(input, document.querySelector(`input[type=${type}][value=x]`));
+
+    // The getter follows the attribute, even after the setter ran.
+    input.setAttribute('value', 'y');
+    testing.expectEqual('y', input.value);
+    input.removeAttribute('value');
+    testing.expectEqual('', input.value);
+
+    input.value = null;
+    testing.expectEqual('', input.getAttribute('value'));
+    input.remove();
+  }
+</script>
+
+<script id="default_on_mode_types">
+  for (const type of ['checkbox', 'radio']) {
+    const input = document.createElement('input');
+    input.type = type;
+    document.body.appendChild(input);
+
+    // No attribute: "on".
+    testing.expectEqual('on', input.value);
+    testing.expectEqual(null, input.getAttribute('value'));
+
+    input.value = 'x';
+    testing.expectEqual('x', input.getAttribute('value'));
+    testing.expectEqual('x', input.value);
+    testing.expectEqual(input, document.querySelector(`input[type=${type}][value=x]`));
+
+    input.setAttribute('value', 'y');
+    testing.expectEqual('y', input.value);
+
+    // An empty attribute is a value, not a missing one.
+    input.value = '';
+    testing.expectEqual('', input.getAttribute('value'));
+    testing.expectEqual('', input.value);
+
+    input.removeAttribute('value');
+    testing.expectEqual('on', input.value);
+    input.remove();
+  }
+</script>
+
+<script id="default_on_mode_parsed">
+  {
+    const input = $('#check1');
+    testing.expectEqual('a', input.value);
+    input.value = 'b';
+    testing.expectEqual('b', input.getAttribute('value'));
+    testing.expectEqual(input, document.querySelector("#parsed input[type=checkbox][value='b']"));
+  }
+</script>
+
+<script id="value_mode_keeps_attribute">
+  {
+    const input = $('#text1');
+    input.value = 'changed';
+    testing.expectEqual('changed', input.value);
+    testing.expectEqual('initial', input.getAttribute('value'));
+    testing.expectEqual('initial', input.defaultValue);
+    testing.expectEqual(input, document.querySelector("#parsed input[value='initial']"));
+    testing.expectEqual(null, document.querySelector("#parsed input[value='changed']"));
+  }
+</script>
+
+<script id="filename_mode_unchanged">
+  {
+    const input = $('#file1');
+    testing.expectEqual('', input.value);
+    input.value = '';
+    testing.expectEqual('', input.value);
+    testing.expectError('InvalidStateError', () => { input.value = 'b'; });
+    testing.expectEqual('a', input.getAttribute('value'));
+  }
+</script>
+
+<script id="form_data_uses_attribute">
+  {
+    const data = new FormData($('#parsed'));
+    testing.expectEqual('b', data.get('h'));
+    testing.expectEqual('changed', data.get('t'));
+  }
+</script>
+
+<script id="type_change_value_to_default">
+  {
+    // value -> default: a non-empty current value is written to the attribute.
+    const input = document.createElement('input');
+    input.setAttribute('value', 'orig');
+    input.value = 'typed';
+    input.type = 'hidden';
+    testing.expectEqual('typed', input.getAttribute('value'));
+    testing.expectEqual('typed', input.value);
+
+    // ...but an empty one leaves the attribute alone.
+    const empty = document.createElement('input');
+    empty.setAttribute('value', 'orig');
+    empty.value = '';
+    empty.type = 'checkbox';
+    testing.expectEqual('orig', empty.getAttribute('value'));
+    testing.expectEqual('orig', empty.value);
+  }
+</script>
+
+<script id="type_change_default_to_value">
+  {
+    // default -> value: the value comes from the attribute and is no longer
+    // dirty, so later attribute edits show through.
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.value = 'a';
+    input.type = 'text';
+    testing.expectEqual('a', input.value);
+    input.setAttribute('value', 'b');
+    testing.expectEqual('b', input.value);
+
+    input.value = 'typed';
+    input.setAttribute('value', 'c');
+    testing.expectEqual('typed', input.value);
+    testing.expectEqual('c', input.getAttribute('value'));
+
+    // Same through removing the type attribute (back to text).
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.value = 'x';
+    check.removeAttribute('type');
+    testing.expectEqual('x', check.value);
+
+    // No attribute: the empty string, not a stale value.
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.type = 'text';
+    testing.expectEqual('', radio.value);
+  }
+</script>
+
+<script id="type_change_default_to_default">
+  {
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    testing.expectEqual('on', input.value);
+    input.type = 'hidden';
+    testing.expectEqual('', input.value);
+    testing.expectEqual(null, input.getAttribute('value'));
+    input.value = 'x';
+    input.type = 'radio';
+    testing.expectEqual('x', input.value);
+  }
+</script>
+
+<script id="type_change_to_filename">
+  {
+    const input = document.createElement('input');
+    input.value = 'typed';
+    input.type = 'file';
+    testing.expectEqual('', input.value);
+    testing.expectEqual(null, input.getAttribute('value'));
+    // Back to text: value restarts from the (absent) attribute.
+    input.type = 'text';
+    testing.expectEqual('', input.value);
+  }
+</script>
+
+<script id="type_change_default_to_value_sanitizes">
+  {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.value = 'abc';
+    input.type = 'number';
+    testing.expectEqual('', input.value);
+    testing.expectEqual('abc', input.getAttribute('value'));
+
+    const color = document.createElement('input');
+    color.type = 'checkbox';
+    color.value = '#ABCDEF';
+    color.type = 'color';
+    testing.expectEqual('#abcdef', color.value);
+  }
+</script>
+
+<script id="value_mode_dirty_flag">
+  {
+    // Until the value is set, it follows the value attribute.
+    const input = document.createElement('input');
+    input.setAttribute('value', 'a');
+    testing.expectEqual('a', input.value);
+    input.setAttribute('value', 'b');
+    testing.expectEqual('b', input.value);
+    input.removeAttribute('value');
+    testing.expectEqual('', input.value);
+    input.defaultValue = 'c';
+    testing.expectEqual('c', input.value);
+
+    // Setting it, even to the same value, makes it dirty.
+    input.value = 'c';
+    input.setAttribute('value', 'd');
+    testing.expectEqual('c', input.value);
+    input.removeAttribute('value');
+    testing.expectEqual('c', input.value);
+
+    // The attribute is sanitized as it is followed.
+    const number = document.createElement('input');
+    number.type = 'number';
+    number.setAttribute('value', '12');
+    testing.expectEqual('12', number.value);
+    number.setAttribute('value', 'abc');
+    testing.expectEqual('', number.value);
+
+    // Clones keep the dirty flag.
+    const clone = input.cloneNode();
+    clone.setAttribute('value', 'e');
+    testing.expectEqual('c', clone.value);
+    const clean = number.cloneNode();
+    clean.setAttribute('value', '7');
+    testing.expectEqual('7', clean.value);
+  }
+</script>
+
+<script id="value_mode_dirty_flag_parsed">
+  {
+    const input = $('#text2');
+    testing.expectEqual('a', input.value);
+    input.setAttribute('value', 'b');
+    testing.expectEqual('b', input.value);
+  }
+</script>

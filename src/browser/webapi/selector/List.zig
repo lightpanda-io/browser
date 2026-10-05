@@ -406,18 +406,32 @@ fn matchesPart(el: *Node.Element, part: Part, scope: *Node, nth: ?*NthCache, fra
         },
         .tag => |tag| {
             // Optimized: compare enum directly
-            return el.getTag() == tag;
+            const element_tag = el.getTag();
+            if (element_tag == tag) {
+                return true;
+            }
+            // Elements without a dedicated Tag (XML, other namespaces) match by name
+            return element_tag == .unknown and std.ascii.eqlIgnoreCase(el.getLocalName(), @tagName(tag));
         },
         .tag_name => |tag_name| {
-            // Fallback for custom/unknown tags
-            // Both are lowercase, so we can use fast string comparison
-            const element_tag = el.getTagNameLower();
-            return std.mem.eql(u8, element_tag, tag_name);
+            if (el._namespace == .html) {
+                return std.mem.eql(u8, el.getTagNameLower(), tag_name);
+            }
+            return std.ascii.eqlIgnoreCase(el.getLocalName(), tag_name);
         },
         .universal => return true,
         .pseudo_class => |pseudo| return matchesPseudoClass(el, pseudo, scope, nth, frame),
         .attribute => |attr| return matchesAttribute(el, attr),
     }
+}
+
+// `lower` is the lowercased selector name. Foreign element names keep their
+// case (foreignObject, pubDate), so those compare case-insensitively.
+fn matchesTagName(el: *Node.Element, lower: []const u8) bool {
+    if (el._namespace == .html) {
+        return std.mem.eql(u8, el.getTagNameLower(), lower);
+    }
+    return std.ascii.eqlIgnoreCase(el.getLocalName(), lower);
 }
 
 fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
@@ -439,9 +453,9 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
         },
         .substring => |expected| {
             return if (attr.case_insensitive)
-                std.ascii.indexOfIgnoreCase(value, expected) != null
+                std.ascii.findIgnoreCase(value, expected) != null
             else
-                std.mem.indexOf(u8, value, expected) != null;
+                std.mem.find(u8, value, expected) != null;
         },
         .starts_with => |expected| {
             return if (attr.case_insensitive)
@@ -492,7 +506,7 @@ fn attributeContainsWord(value: []const u8, word: []const u8) bool {
         const trimmed = std.mem.trimStart(u8, remaining, &std.ascii.whitespace);
         if (trimmed.len == 0) return false;
 
-        const end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
+        const end = std.mem.findAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
         const current_word = trimmed[0..end];
 
         if (std.mem.eql(u8, current_word, word)) {
@@ -503,6 +517,22 @@ fn attributeContainsWord(value: []const u8, word: []const u8) bool {
         remaining = trimmed[end..];
     }
     return false;
+}
+
+// https://html.spec.whatwg.org/multipage/semantics-other.html#selector-read-write
+fn isReadWrite(el: *Node.Element) bool {
+    if (el.is(Node.Element.Html.Input)) |input| {
+        const readonly_applies = switch (input._input_type) {
+            .text, .password, .email, .url, .tel, .search, .number => true,
+            .date, .time, .@"datetime-local", .month, .week => true,
+            else => false,
+        };
+        return readonly_applies and !el.hasAttributeInterned("readonly") and !el.isDisabled();
+    }
+    if (el.is(Node.Element.Html.TextArea) != null) {
+        return !el.hasAttributeInterned("readonly") and !el.isDisabled();
+    }
+    return el.isEditable();
 }
 
 fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
@@ -569,12 +599,8 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .in_range => return false,
         .out_of_range => return false,
         .placeholder_shown => return false,
-        .read_only => {
-            return el.hasAttributeInterned("readonly");
-        },
-        .read_write => {
-            return el.hasAttributeInterned("readonly") == false;
-        },
+        .read_only => return !isReadWrite(el),
+        .read_write => return isReadWrite(el),
         .default => return false,
 
         // User interaction
@@ -651,7 +677,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         // Custom elements
         .defined => {
             const tag_name = el.getTagNameLower();
-            if (std.mem.indexOfScalar(u8, tag_name, '-') == null) return true;
+            if (std.mem.findScalar(u8, tag_name, '-') == null) return true;
             const registry = &frame.window._custom_elements;
             return registry.get(tag_name) != null;
         },
@@ -783,8 +809,17 @@ fn isLastChild(el: *Node.Element) bool {
     return true;
 }
 
+// Custom and unknown elements share a Tag, so those compare by name.
+fn isSameType(a: *Node.Element, b: *Node.Element) bool {
+    const tag = a.getTag();
+    if (b.getTag() != tag) return false;
+    return switch (tag) {
+        .custom, .unknown => std.mem.eql(u8, a.getTagNameLower(), b.getTagNameLower()),
+        else => true,
+    };
+}
+
 fn isFirstOfType(el: *Node.Element) bool {
-    const tag = el.getTag();
     const node = el.asNode();
     var sibling = node.previousSibling();
 
@@ -795,7 +830,7 @@ fn isFirstOfType(el: *Node.Element) bool {
             continue;
         };
 
-        if (sibling_el.getTag() == tag) {
+        if (isSameType(sibling_el, el)) {
             return false;
         }
 
@@ -806,7 +841,6 @@ fn isFirstOfType(el: *Node.Element) bool {
 }
 
 fn isLastOfType(el: *Node.Element) bool {
-    const tag = el.getTag();
     const node = el.asNode();
     var sibling = node.nextSibling();
 
@@ -817,7 +851,7 @@ fn isLastOfType(el: *Node.Element) bool {
             continue;
         };
 
-        if (sibling_el.getTag() == tag) {
+        if (isSameType(sibling_el, el)) {
             return false;
         }
 
@@ -906,7 +940,6 @@ fn getTypeIndex(el: *Node.Element, nth: ?*NthCache) usize {
         return o.of_type;
     }
 
-    const tag = el.getTag();
     const node = el.asNode();
 
     var index: usize = 1;
@@ -921,7 +954,7 @@ fn getTypeIndex(el: *Node.Element, nth: ?*NthCache) usize {
             continue;
         };
 
-        if (sibling_el.getTag() == tag) {
+        if (isSameType(sibling_el, el)) {
             index += 1;
         }
 
@@ -943,7 +976,6 @@ fn getTypeIndexFromEnd(el: *Node.Element, nth: ?*NthCache) usize {
         return o.of_type_from_end;
     }
 
-    const tag = el.getTag();
     const node = el.asNode();
 
     var index: usize = 1;
@@ -958,7 +990,7 @@ fn getTypeIndexFromEnd(el: *Node.Element, nth: ?*NthCache) usize {
             continue;
         };
 
-        if (sibling_el.getTag() == tag) {
+        if (isSameType(sibling_el, el)) {
             index += 1;
         }
 
@@ -1033,7 +1065,19 @@ pub const NthCache = struct {
         of_type_from_end: u32,
     };
 
-    const TypeCounts = [@typeInfo(Node.Element.Tag).@"enum".fields.len]u32;
+    const TypeCounts = struct {
+        tags: [@typeInfo(Node.Element.Tag).@"enum".field_names.len]u32 = @splat(0),
+        // Custom and unknown elements share a Tag, so those count by name.
+        names: std.StringHashMapUnmanaged(u32) = .empty,
+
+        fn get(self: *TypeCounts, allocator: std.mem.Allocator, el: *Node.Element) !*u32 {
+            const tag = el.getTag();
+            return switch (tag) {
+                .custom, .unknown => (try self.names.getOrPutValue(allocator, el.getTagNameLower(), 0)).value_ptr,
+                else => &self.tags[@backingInt(tag)],
+            };
+        }
+    };
 
     pub fn deinit(self: *NthCache) void {
         self.entries.deinit(self.allocator);
@@ -1052,13 +1096,14 @@ pub const NthCache = struct {
 
     fn index(self: *NthCache, parent: *Node) !void {
         var child_count: u32 = 0;
-        var type_counts: TypeCounts = @splat(0);
+        var type_counts: TypeCounts = .{};
+        defer type_counts.names.deinit(self.allocator);
 
         var it = parent.childrenIterator();
         while (it.next()) |child| {
             const el = child.is(Node.Element) orelse continue;
             child_count += 1;
-            const of_type = &type_counts[@intFromEnum(el.getTag())];
+            const of_type = try type_counts.get(self.allocator, el);
             of_type.* += 1;
             try self.entries.put(self.allocator, child, .{
                 .child = child_count,
@@ -1070,17 +1115,13 @@ pub const NthCache = struct {
 
         // The totals are only known once the forward pass is done.
         var seen_count: u32 = 0;
-        var seen_types: TypeCounts = @splat(0);
         it = parent.childrenIterator();
         while (it.next()) |child| {
             const el = child.is(Node.Element) orelse continue;
             seen_count += 1;
-            const tag = @intFromEnum(el.getTag());
-            seen_types[tag] += 1;
-
             const ordinals = self.entries.getPtr(child).?;
             ordinals.child_from_end = child_count - seen_count + 1;
-            ordinals.of_type_from_end = type_counts[tag] - seen_types[tag] + 1;
+            ordinals.of_type_from_end = (try type_counts.get(self.allocator, el)).* - ordinals.of_type + 1;
         }
     }
 };

@@ -604,3 +604,8 @@
     });
   }
 </script>
+
+<script id=timeOrigin_is_unix_epoch>
+  // timeOrigin + now() is the current wall-clock time, like Date.now().
+  testing.expectEqual(true, Math.abs(performance.timeOrigin + performance.now() - Date.now()) < 1000);
+</script>

@@ -118,6 +118,7 @@ _caches: ?*CacheStorage = null,
 _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
+_reporting_error: bool = false,
 
 _location: WorkerLocation,
 
@@ -429,7 +430,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         .credentials_mode = .same_origin,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {
-        log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });
+        log.debug(.http, "importScript", .{ .url = resolved_url, .err = err });
         return error.NetworkError;
     };
     {
@@ -438,13 +439,13 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     }
 
     var response = transfer.submitSync(.{}) catch |err| {
-        log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });
+        log.debug(.http, "importScript", .{ .url = resolved_url, .err = err });
         return error.NetworkError;
     };
     defer response.deinit();
 
     if (response.status != 200) {
-        log.warn(.http, "importScript", .{ .url = resolved_url, .status = response.status });
+        log.debug(.http, "importScript", .{ .url = resolved_url, .status = response.status });
         return error.NetworkError;
     }
 
@@ -459,7 +460,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     _ = ls.local.eval(response.body.items, url) catch |err| {
         self.page.recordJsError(err);
         const caught = try_catch.caughtOrError(arena, err);
-        log.err(.browser, "importScript", .{ .url = resolved_url, .caught = caught });
+        log.debug(.browser, "importScript", .{ .url = resolved_url, .caught = caught });
         return;
     };
 
@@ -467,7 +468,15 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
 }
 
 pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
+    // See Window.reportError: an exception thrown while reporting isn't reported.
+    if (self._reporting_error) {
+        return;
+    }
+
     self.page.recordJsError(error.JsException);
+
+    self._reporting_error = true;
+    defer self._reporting_error = false;
 
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.persist(),
@@ -503,7 +512,7 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     const event = error_event.asEvent();
     // Keep the event alive past dispatch so we can read _prevent_default.
     event.acquireRef();
-    defer _ = event.releaseRef(self.page);
+    defer event.releaseRef(self.page);
 
     event._prevent_default = prevent_default;
     // Pass null as handler: onerror was already called above with 5 args.
@@ -512,7 +521,7 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
 
     if (comptime lp.IS_TEST == false) {
         if (!event._prevent_default) {
-            log.warn(.js, "worker.reportError", .{
+            log.debug(.js, "worker.reportError", .{
                 .message = error_event._message,
                 .filename = error_event._filename,
                 .line_number = error_event._line_number,
@@ -530,9 +539,9 @@ fn queueMicrotask(self: *WorkerGlobalScope, cb: JS.Function) void {
     self.js.queueMicrotaskFunc(cb);
 }
 
-pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
+pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?i32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
     const cb = try handler.resolve(exec);
-    return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
+    return self._timers.schedule(exec, cb, Timers.delayFromJs(delay_ms), .{
         .repeat = false,
         .params = params,
         .name = "worker.setTimeout",
@@ -543,9 +552,9 @@ fn clearTimeout(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
 }
 
-pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
+pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?i32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
     const cb = try handler.resolve(exec);
-    return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
+    return self._timers.schedule(exec, cb, Timers.delayFromJs(delay_ms), .{
         .repeat = true,
         .params = params,
         .name = "worker.setInterval",

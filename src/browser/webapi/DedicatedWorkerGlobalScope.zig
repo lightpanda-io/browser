@@ -172,7 +172,7 @@ fn scheduleMessage(self: *DedicatedWorkerGlobalScope, cloned_data: ?js.Value.Glo
 pub fn drainPendingMessages(self: *DedicatedWorkerGlobalScope) void {
     for (self._pending_messages.items) |cloned_data| {
         self.scheduleMessage(cloned_data) catch |err| {
-            lp.log.warn(.browser, "worker drain msg failed", .{ .err = err });
+            lp.log.debug(.browser, "worker drain msg failed", .{ .err = err });
             if (cloned_data) |d| d.release();
         };
     }

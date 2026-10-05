@@ -57,8 +57,8 @@ const UserError = error{
 };
 
 pub fn isUserError(err: anyerror) bool {
-    inline for (@typeInfo(UserError).error_set.?) |e| {
-        if (err == @field(anyerror, e.name)) return true;
+    inline for (@typeInfo(UserError).error_set.error_names.?) |name| {
+        if (err == @field(anyerror, name)) return true;
     }
     return false;
 }
@@ -198,7 +198,7 @@ api_error_buf: [512]u8 = undefined,
 api_error_detail: ?[]const u8 = null,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
-    var providers_buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Candidate = undefined;
+    var providers_buf: [@typeInfo(Config.AiProvider).@"enum".field_names.len]Candidate = undefined;
     const found_providers = settings.availableProviders(&providers_buf);
     const available_providers = try allocator.alloc([]const u8, found_providers.len);
     for (found_providers, 0..) |f, i| {
@@ -242,8 +242,9 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     // Load remembered selection up front so a saved null provider can flip the
     // REPL into basic mode before resolution. Pure script runs need nothing.
-    const remembered: ?settings.Remembered = if (will_repl or is_one_shot) settings.loadRemembered(allocator) else null;
-    defer if (remembered) |r| std.zon.parse.free(allocator, r);
+    var remembered_arena: std.heap.ArenaAllocator = .init(allocator);
+    defer remembered_arena.deinit();
+    const remembered: ?settings.Remembered = if (will_repl or is_one_shot) settings.loadRemembered(allocator, remembered_arena.allocator()) else null;
 
     // A remembered null provider means the user disabled the LLM via
     // `/provider null`; honor it for the REPL only (one-shot --task and script
@@ -821,7 +822,7 @@ fn runRepl(self: *Agent) void {
                 self.terminal.printError("{s}", .{switch (err) {
                     error.OutOfMemory => "out of memory",
                     error.FrameNotLoaded => "no page loaded — run /goto <url> first (Esc exits JS mode)",
-                    else => std.fmt.allocPrint(aa, "evaluate failed: {s}", .{@errorName(err)}) catch "evaluate failed",
+                    else => aa.print("evaluate failed: {s}", .{@errorName(err)}) catch "evaluate failed",
                 }});
                 continue :repl;
             };
@@ -875,7 +876,7 @@ fn runRepl(self: *Agent) void {
             .comment => continue :repl,
             .llm => |lc| {
                 var label_buf: [32]u8 = undefined;
-                const label = std.fmt.bufPrint(&label_buf, "/{s}", .{@tagName(lc)}) catch "/?";
+                const label = std.mem.print(&label_buf, "/{s}", .{@tagName(lc)}) catch "/?";
                 if (!self.requireLlm(label)) continue :repl;
                 _ = self.runTurn(.{ .prompt = lc.prompt(), .record_comment = line, .capture_for_save = true, .label = label });
             },
@@ -1184,7 +1185,7 @@ fn subscriptionLogin(self: *Agent, desc: *const auth.Descriptor) ?auth.Session {
 fn promptStoredSubscription(self: *Agent, desc: *const auth.Descriptor, stored: auth.Session) ?auth.Session {
     var session = stored;
     var header_buf: [128]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, "Already logged in with your {s}. Pick:", .{desc.label}) catch
+    const header = std.mem.print(&header_buf, "Already logged in with your {s}. Pick:", .{desc.label}) catch
         "Already logged in. Pick:";
     const idx = picker.promptNumberedChoice(header, &.{
         "keep — use the stored login",
@@ -1343,7 +1344,7 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
 
 fn promptSaveMode(self: *Agent, path: []const u8) ?save.Mode {
     var header_buf: [256]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, "{s} already exists. Pick save mode:", .{path}) catch
+    const header = std.mem.print(&header_buf, "{s} already exists. Pick save mode:", .{path}) catch
         "File already exists. Pick save mode:";
     const with_llm = self.ai_client != null;
     const modes: []const save.Mode = if (with_llm)
@@ -1683,7 +1684,7 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, tc: Command.ToolCall) brow
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
-            else => std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name(), browser_tools.errorMessage(err) }) catch "tool failed",
+            else => arena.print("{s} failed: {s}", .{ tc.name(), browser_tools.errorMessage(err) }) catch "tool failed",
         },
         .is_error = true,
     };
@@ -1810,7 +1811,7 @@ fn recordSlashToolCall(
 
     const tool_calls = try ma.alloc(zenai.provider.ToolCall, 1);
     tool_calls[0] = .{
-        .id = try std.fmt.allocPrint(ma, "lp-slash-{d}", .{self.synthetic_tool_call_id}),
+        .id = try ma.print("lp-slash-{d}", .{self.synthetic_tool_call_id}),
         .name = try ma.dupe(u8, tool_name),
         .arguments = if (args) |v| try zenai.json.dupeValue(ma, v) else null,
     };
@@ -1861,9 +1862,9 @@ fn formatApiError(self: *Agent, client: zenai.provider.Client, err: anyerror) []
     else
         "";
     if (e.message) |m| {
-        if (std.fmt.bufPrint(&self.api_error_buf, "HTTP {d} — {s}{s}", .{ status, m, hint })) |s| return s else |_| {}
+        if (std.mem.print(&self.api_error_buf, "HTTP {d} — {s}{s}", .{ status, m, hint })) |s| return s else |_| {}
     }
-    return std.fmt.bufPrint(&self.api_error_buf, "HTTP {d}{s}", .{ status, hint }) catch @errorName(err);
+    return std.mem.print(&self.api_error_buf, "HTTP {d}{s}", .{ status, hint }) catch @errorName(err);
 }
 
 /// Returned text lives in `conversation.arena`, valid only until the next prune.
@@ -2108,7 +2109,7 @@ fn capToolOutput(allocator: std.mem.Allocator, tool_name: []const u8, output: []
     if (output.len <= cap) return output;
     const prefix = string.truncateUtf8(output, cap);
     var suffix_buf: [128]u8 = undefined;
-    const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes — re-read scoped (selector/backendNodeId)]", .{output.len}) catch return prefix;
+    const suffix = std.mem.print(&suffix_buf, "\n...[truncated, original {d} bytes — re-read scoped (selector/backendNodeId)]", .{output.len}) catch return prefix;
     return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
 }
 
@@ -2130,7 +2131,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
 
     var selector: ?[]const u8 = null;
     const outcome = self.toolOutcome(allocator, tool_name, arguments, &selector) catch |err| zenai.provider.Client.ToolHandler.Result{
-        .content = std.fmt.allocPrint(allocator, "Error: {s}", .{browser_tools.errorMessage(err)}) catch "Error: tool execution failed",
+        .content = allocator.print("Error: {s}", .{browser_tools.errorMessage(err)}) catch "Error: tool execution failed",
         .is_error = true,
     };
     if (self.capturing_for_save) {
@@ -2287,7 +2288,7 @@ test "savePrompt: save instructions followed by the rendered script skill" {
     try std.testing.expect(std.mem.endsWith(u8, prompt, lp.skill.text()));
 
     const revision = savePrompt(true);
-    try std.testing.expect(std.mem.indexOf(u8, revision, save_revision_note) != null);
+    try std.testing.expect(std.mem.find(u8, revision, save_revision_note) != null);
     try std.testing.expect(std.mem.endsWith(u8, revision, lp.skill.text()));
 }
 
@@ -2317,7 +2318,7 @@ test "capToolOutput: appends a marker when truncating" {
     defer if (out.ptr != buf.ptr) ta.free(out);
 
     try std.testing.expect(std.unicode.utf8ValidateSlice(out));
-    try std.testing.expect(std.mem.indexOf(u8, out, "truncated") != null);
+    try std.testing.expect(std.mem.find(u8, out, "truncated") != null);
 }
 
 test "capToolOutput: extract is exempt from the default cap" {

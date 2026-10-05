@@ -112,10 +112,10 @@ pub fn release(cmd: *BiDi.Command) !void {
 
     for (state.sources.items) |*source| {
         switch (source.kind) {
-            .key => while (source.key.pressed.getLastOrNull()) |cp| {
+            .key => while (source.key.pressed.last()) |cp| {
                 dispatch(bidi, frame, source, &.{ .key_up = cp }) catch |err| return dispatchFailed(cmd, err);
             },
-            .pointer => while (source.pointer.pressed.getLastOrNull()) |button| {
+            .pointer => while (source.pointer.pressed.last()) |button| {
                 dispatch(bidi, frame, source, &.{ .pointer_up = button }) catch |err| return dispatchFailed(cmd, err);
             },
             .none, .wheel => {},
@@ -207,6 +207,7 @@ const Source = struct {
         last_click_ms: u64 = 0,
         last_click_x: f64 = 0,
         last_click_y: f64 = 0,
+        last_click_button: u8 = 0,
         click_count: i32 = 0,
     };
 
@@ -558,7 +559,7 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
             const key = &source.key;
             const info = keyInfo(cp, key.modifiers.shift);
             setModifier(&key.modifiers, info.modifier, true);
-            if (std.mem.indexOfScalar(u21, key.pressed.items, cp) == null) {
+            if (std.mem.findScalar(u21, key.pressed.items, cp) == null) {
                 try key.pressed.append(allocator, cp);
             }
             try dispatchKey(frame, "keydown", &info, &key.modifiers);
@@ -567,22 +568,25 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
             const key = &source.key;
             const info = keyInfo(cp, key.modifiers.shift);
             setModifier(&key.modifiers, info.modifier, false);
-            if (std.mem.indexOfScalar(u21, key.pressed.items, cp)) |i| {
+            if (std.mem.findScalar(u21, key.pressed.items, cp)) |i| {
                 _ = key.pressed.orderedRemove(i);
             }
             try dispatchKey(frame, "keyup", &info, &key.modifiers);
         },
         .pointer_down => |button| {
             const pointer = &source.pointer;
-            if (std.mem.indexOfScalar(u8, pointer.pressed.items, button) != null) {
+            if (std.mem.findScalar(u8, pointer.pressed.items, button) != null) {
                 return; // already down; the spec makes this a no-op
             }
             try pointer.pressed.append(allocator, button);
 
-            // A press near the last click, soon enough after it, counts up
+            // A press of the same button near the last click, soon enough
+            // after it, counts up
             const now = lp.datetime.milliTimestamp(.boot);
             const near = @abs(pointer.x - pointer.last_click_x) <= 2 and @abs(pointer.y - pointer.last_click_y) <= 2;
-            pointer.click_count = if (near and now - pointer.last_click_ms <= 500) pointer.click_count + 1 else 1;
+            const repeat = near and button == pointer.last_click_button and now - pointer.last_click_ms <= 500;
+            pointer.click_count = if (repeat) pointer.click_count + 1 else 1;
+            pointer.last_click_button = button;
             pointer.last_click_ms = now;
             pointer.last_click_x = pointer.x;
             pointer.last_click_y = pointer.y;
@@ -591,7 +595,7 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
         },
         .pointer_up => |button| {
             const pointer = &source.pointer;
-            const i = std.mem.indexOfScalar(u8, pointer.pressed.items, button) orelse return;
+            const i = std.mem.findScalar(u8, pointer.pressed.items, button) orelse return;
             _ = pointer.pressed.orderedRemove(i);
             try user_input.triggerMouseRelease(frame, pointer.x, pointer.y, button, pointer.click_count);
         },
@@ -637,7 +641,7 @@ pub fn typeText(frame: *Frame, text: []const u8) !void {
             continue;
         }
 
-        if (std.mem.indexOfScalar(u21, held.items, cp)) |i| {
+        if (std.mem.findScalar(u21, held.items, cp)) |i| {
             _ = held.orderedRemove(i);
             setModifier(&modifiers, info.modifier, false);
             try dispatchKey(frame, "keyup", &info, &modifiers);
@@ -988,6 +992,26 @@ test "bidi.input: click via element origin" {
         .type = "string",
         .value = "mousemove@btn mousedown:b2@btn mouseup:b2@btn",
     } }, .{ .id = 7 });
+
+    // A left click right after the right one starts a new count: no dblclick.
+    try ctx.processMessage(.{
+        .id = 8,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "mouse",
+            .actions = .{
+                .{ .type = "pointerDown", .button = 0 },
+                .{ .type = "pointerUp", .button = 0 },
+            },
+        }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 8 });
+    try evaluate(&ctx, 9, context_id, "window.events.slice(11).join(' ')");
+    try ctx.expectSentResult(.{ .type = "success", .result = .{
+        .type = "string",
+        .value = "mousedown@btn mouseup@btn click@btn",
+    } }, .{ .id = 9 });
 }
 
 test "bidi.input: keys and modifiers" {

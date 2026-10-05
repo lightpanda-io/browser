@@ -129,3 +129,66 @@
     outer.remove();
 }
 </script>
+
+<div id="rw">
+    <input id="rw_text">
+    <input id="rw_readonly" readonly>
+    <input id="rw_disabled" disabled>
+    <input id="rw_checkbox" type="checkbox">
+    <input id="rw_number" type="number">
+    <textarea id="rw_textarea"></textarea>
+    <textarea id="rw_textarea_ro" readonly></textarea>
+    <div id="rw_editable" contenteditable>
+        <p id="rw_editable_child"><b id="rw_editable_grandchild"></b></p>
+        <p id="rw_not_editable" contenteditable="false"><b id="rw_not_editable_child"></b></p>
+    </div>
+    <p id="rw_p"></p>
+</div>
+<script id="read_write">
+{
+    const ids = (sel) => Array.from(document.querySelectorAll('#rw ' + sel)).map((e) => e.id).join();
+    testing.expectEqual('rw_text,rw_number,rw_textarea,rw_editable,rw_editable_child,rw_editable_grandchild', ids(':read-write'));
+    testing.expectEqual('rw_readonly,rw_disabled,rw_checkbox,rw_textarea_ro,rw_not_editable,rw_not_editable_child,rw_p', ids(':read-only'));
+}
+</script>
+
+<ul id="nth_list"><li>1</li><li>2</li><li>3</li></ul>
+<script id="nth_whitespace">
+{
+    const texts = (sel) => Array.from(document.querySelectorAll(sel)).map((li) => li.textContent).join();
+    testing.expectEqual('1,3', texts('#nth_list li:nth-child(odd )'));
+    testing.expectEqual('1,3', texts('#nth_list li:nth-child( 2n+1 )'));
+    testing.expectEqual('2', texts('#nth_list li:nth-child( 2 )'));
+    testing.expectEqual('2', texts('#nth_list li:nth-last-child(even )'));
+    testing.expectEqual('3', texts('#nth_list li:nth-of-type( 3 )'));
+    testing.expectEqual('1', texts('#nth_list li:nth-last-of-type( 3 )'));
+}
+</script>
+
+<div id="of_type_custom"><x-a>a1</x-a><x-b>b1</x-b><foo>f1</foo><x-b>b2</x-b><bar>r1</bar></div>
+<div id="of_type_custom_many"></div>
+<script id="of_type_custom">
+{
+    const texts = (sel) => Array.from(document.querySelectorAll(sel)).map((e) => e.textContent).join();
+    testing.expectEqual('a1,b1,f1,r1', texts('#of_type_custom > :first-of-type'));
+    testing.expectEqual('a1,f1,b2,r1', texts('#of_type_custom > :last-of-type'));
+    testing.expectEqual('a1,f1,r1', texts('#of_type_custom > :only-of-type'));
+    testing.expectEqual('b1', texts('#of_type_custom x-b:nth-of-type(1)'));
+    testing.expectEqual('b2', texts('#of_type_custom x-b:nth-of-type(2)'));
+    testing.expectEqual('b1', texts('#of_type_custom x-b:nth-last-of-type(2)'));
+    testing.expectEqual('r1', texts('#of_type_custom bar:first-of-type'));
+
+    // enough siblings to go through the cached ordinals
+    const many = $('#of_type_custom_many');
+    for (let i = 1; i <= 40; i++) {
+        const el = document.createElement(i % 2 ? 'x-a' : 'x-b');
+        el.textContent = i;
+        many.appendChild(el);
+    }
+    testing.expectEqual('2', texts('#of_type_custom_many > x-b:nth-of-type(1)'));
+    testing.expectEqual('6', texts('#of_type_custom_many > x-b:nth-of-type(3)'));
+    testing.expectEqual('38', texts('#of_type_custom_many > x-b:nth-last-of-type(2)'));
+    testing.expectEqual('1,2', texts('#of_type_custom_many > :first-of-type'));
+    testing.expectEqual('39,40', texts('#of_type_custom_many > :last-of-type'));
+}
+</script>

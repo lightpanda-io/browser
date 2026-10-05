@@ -294,6 +294,54 @@
   }
 </script>
 
+<script id="ua_closed_popover_is_hidden">
+  {
+    // [popover]:not(:popover-open):not(dialog[open]) { display: none }
+    const pop = document.createElement('div');
+    pop.setAttribute('popover', '');
+    const child = document.createElement('p');
+    pop.appendChild(child);
+    document.body.appendChild(pop);
+
+    testing.expectEqual(false, pop.checkVisibility());
+    testing.expectEqual(false, child.checkVisibility());
+    testing.expectEqual('none', window.getComputedStyle(pop).display);
+
+    pop.showPopover();
+    testing.expectEqual(true, pop.checkVisibility());
+    testing.expectEqual(true, child.checkVisibility());
+
+    pop.hidePopover();
+    testing.expectEqual(false, pop.checkVisibility());
+
+    // Any popover value counts, and an author `display` still wins over the
+    // UA rule, as for every other UA display:none fallback.
+    pop.setAttribute('popover', 'manual');
+    testing.expectEqual(false, pop.checkVisibility());
+    pop.style.display = 'block';
+    testing.expectEqual(true, pop.checkVisibility());
+
+    // A modal/non-modal <dialog> that is also a popover is shown by [open].
+    const dialog = document.createElement('dialog');
+    dialog.setAttribute('popover', '');
+    document.body.appendChild(dialog);
+    testing.expectEqual(false, dialog.checkVisibility());
+    dialog.show();
+    testing.expectEqual(true, dialog.checkVisibility());
+
+    dialog.close();
+    testing.expectEqual(false, dialog.checkVisibility());
+    // dialog:popover-open { display: block } overrides dialog:not([open]).
+    dialog.showPopover();
+    testing.expectEqual(true, dialog.checkVisibility());
+    dialog.hidePopover();
+    testing.expectEqual(false, dialog.checkVisibility());
+
+    dialog.remove();
+    pop.remove();
+  }
+</script>
+
 <script id="hidden_attribute_propagates_through_check_visibility">
   {
     // [hidden] { display: none } applies to the element itself...
@@ -798,5 +846,60 @@
 
     wrap.remove();
     style.remove();
+  }
+</script>
+
+<script id="inherits_across_shadow_boundary">
+  {
+    const none = document.createElement("div");
+    none.style.display = "none";
+    document.body.appendChild(none);
+    const button = document.createElement("button");
+    none.attachShadow({ mode: "open" }).appendChild(button);
+    testing.expectEqual(false, button.checkVisibility());
+
+    none.style.display = "block";
+    testing.expectEqual(true, button.checkVisibility());
+
+    const hidden = document.createElement("div");
+    hidden.style.cssText = "visibility: hidden; --c: red; font-size: 30px";
+    document.body.appendChild(hidden);
+    const span = document.createElement("span");
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("x", "2em");
+    const hidden_shadow = hidden.attachShadow({ mode: "open" });
+    hidden_shadow.appendChild(span);
+    hidden_shadow.appendChild(svg);
+    testing.expectEqual(false, span.checkVisibility({ visibilityProperty: true }));
+    testing.expectEqual("hidden", getComputedStyle(span).visibility);
+    testing.expectEqual("red", getComputedStyle(span).getPropertyValue("--c"));
+    testing.expectEqual(60, svg.x.baseVal.value);
+
+    none.remove();
+    hidden.remove();
+  }
+</script>
+
+<script id="slotted_inherits_from_slot">
+  {
+    const host = document.createElement("div");
+    const child = document.createElement("span");
+    host.appendChild(child);
+    document.body.appendChild(host);
+
+    const shadow = host.attachShadow({ mode: "open", slotAssignment: "manual" });
+    shadow.innerHTML = '<slot id="shown"></slot><div style="visibility: hidden"><slot id="hidden"></slot></div>';
+    const shown = shadow.getElementById("shown");
+    const hidden = shadow.getElementById("hidden");
+
+    shown.assign(child);
+    testing.expectEqual(true, child.checkVisibility({ visibilityProperty: true }));
+
+    // Reassigning changes no style or DOM, only the slot it inherits from
+    hidden.assign(child);
+    testing.expectEqual(false, child.checkVisibility({ visibilityProperty: true }));
+    testing.expectEqual("hidden", getComputedStyle(child).visibility);
+
+    host.remove();
   }
 </script>

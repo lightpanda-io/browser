@@ -142,7 +142,7 @@ pub fn create() !Snapshot {
 
     var params: v8.CreateParams = undefined;
     v8.v8__Isolate__CreateParams__CONSTRUCT(&params);
-    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator();
+    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator(4 * 1024 * 1024 * 1024);
     defer v8.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
     params.external_references = @ptrCast(&external_references);
 
@@ -348,10 +348,10 @@ fn createSnapshotContext(
             const func_obj: *const v8.Object = @ptrCast(func);
             if (v8.v8__Object__Get(func_obj, context, prototype_key)) |proto_handle| {
                 const proto_obj: *const v8.Object = @ptrCast(proto_handle);
-                inline for (@typeInfo(JsApi).@"struct".decls) |d| {
-                    const exposed = comptime memberExposed(@field(JsApi, d.name));
+                inline for (@typeInfo(JsApi).@"struct".decl_names) |decl_name| {
+                    const exposed = comptime memberExposed(@field(JsApi, decl_name));
                     if (comptime exposed != .both and exposed != realm.asExposed()) {
-                        const name: [:0]const u8 = d.name;
+                        const name: [:0]const u8 = decl_name;
                         const name_v8 = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                         var maybe_deleted: v8.MaybeBool = undefined;
                         v8.v8__Object__Delete(proto_obj, context, name_v8, &maybe_deleted);
@@ -399,8 +399,8 @@ fn createSnapshotContext(
 
 fn hasGatedMember(comptime JsApi: type) bool {
     comptime {
-        for (@typeInfo(JsApi).@"struct".decls) |d| {
-            if (memberExposed(@field(JsApi, d.name)) != .both) {
+        for (@typeInfo(JsApi).@"struct".decl_names) |decl_name| {
+            if (memberExposed(@field(JsApi, decl_name)) != .both) {
                 return true;
             }
         }
@@ -444,9 +444,9 @@ fn countExternalReferences() comptime_int {
             count += 1;
         }
 
-        const declarations = @typeInfo(JsApi).@"struct".decls;
-        inline for (declarations) |d| {
-            const value = @field(JsApi, d.name);
+        const decl_names = @typeInfo(JsApi).@"struct".decl_names;
+        inline for (decl_names) |decl_name| {
+            const value = @field(JsApi, decl_name);
             const T = @TypeOf(value);
             if (T == bridge.Accessor) {
                 if (value.wpt_only and wpt_extensions_enabled == false) {
@@ -524,9 +524,9 @@ fn collectExternalReferences() [countExternalReferences()]isize {
             idx += 1;
         }
 
-        const declarations = @typeInfo(JsApi).@"struct".decls;
-        inline for (declarations) |d| {
-            const value = @field(JsApi, d.name);
+        const decl_names = @typeInfo(JsApi).@"struct".decl_names;
+        inline for (decl_names) |decl_name| {
+            const value = @field(JsApi, decl_name);
             const T = @TypeOf(value);
             if (T == bridge.Accessor) {
                 if (value.wpt_only and wpt_extensions_enabled == false) {
@@ -619,8 +619,8 @@ fn countInternalFields(comptime JsApi: type) u8 {
     var last_used_id = 0;
     var cache_count: u8 = 0;
 
-    inline for (@typeInfo(JsApi).@"struct".decls) |d| {
-        const name: [:0]const u8 = d.name;
+    inline for (@typeInfo(JsApi).@"struct".decl_names) |decl_name| {
+        const name: [:0]const u8 = decl_name;
         const value = @field(JsApi, name);
         const definition = @TypeOf(value);
 
@@ -687,9 +687,9 @@ fn illegalConstructorCallback(raw_info: ?*const v8.FunctionCallbackInfo) callcon
 
 // Helper to check if a JsApi has a NamedIndexed handler (public for reuse)
 fn hasNamedIndexedGetter(comptime JsApi: type) bool {
-    const declarations = @typeInfo(JsApi).@"struct".decls;
-    inline for (declarations) |d| {
-        const value = @field(JsApi, d.name);
+    const decl_names = @typeInfo(JsApi).@"struct".decl_names;
+    inline for (decl_names) |decl_name| {
+        const value = @field(JsApi, decl_name);
         const T = @TypeOf(value);
         if (T == bridge.NamedIndexed) {
             return true;
@@ -805,13 +805,12 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
     const own_properties = @hasDecl(JsApi.Meta, "own_properties") and JsApi.Meta.own_properties;
     const member_template = if (own_properties) instance else prototype;
 
-    const declarations = @typeInfo(JsApi).@"struct".decls;
+    const decl_names = @typeInfo(JsApi).@"struct".decl_names;
     var has_named_index_getter = false;
 
     const wpt_extensions_enabled = lp.build_config.wpt_extensions;
 
-    inline for (declarations) |d| {
-        const name: [:0]const u8 = d.name;
+    inline for (decl_names) |name| {
         const value = @field(JsApi, name);
         const definition = @TypeOf(value);
 
@@ -871,6 +870,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     .definer = if (value.definer) |definer| @ptrCast(definer) else null,
                     .descriptor = null,
                     .index_of = null,
+                    .iterable_to_list = null,
                     .data = null,
                     .flags = 0,
                 };
@@ -991,10 +991,10 @@ const unforgeables: []const Unforgeable = blk: {
     @setEvalBranchQuota(100_000);
     var list: []const Unforgeable = &.{};
     for (JsApis) |Api| {
-        for (@typeInfo(Api).@"struct".decls) |d| {
-            const value = @field(Api, d.name);
+        for (@typeInfo(Api).@"struct".decl_names) |decl_name| {
+            const value = @field(Api, decl_name);
             if (@TypeOf(value) == bridge.Accessor and value.unforgeable and !value.static) {
-                list = list ++ &[_]Unforgeable{.{ .Owner = Api, .name = d.name, .accessor = value }};
+                list = list ++ &[_]Unforgeable{.{ .Owner = Api, .name = decl_name, .accessor = value }};
             }
         }
     }

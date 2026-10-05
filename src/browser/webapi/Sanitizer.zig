@@ -127,7 +127,7 @@ const NameContext = struct {
     pub fn hash(_: NameContext, key: Name) u32 {
         var hasher = std.hash.Wyhash.init(0);
         hasher.update(key.name.str());
-        hasher.update(&.{@intFromEnum(std.meta.activeTag(key.namespace))});
+        hasher.update(&.{@backingInt(std.meta.activeTag(key.namespace))});
         if (key.namespace == .other) {
             hasher.update(key.namespace.other);
         }
@@ -1181,7 +1181,7 @@ fn sanitize(self: *const Sanitizer, root: *Node, safe: bool, frame: *Frame) !voi
 fn touch(touched: *std.ArrayList(*Node), parent: *Node, arena: Allocator) !void {
     // Siblings are removed one after another, so this catches most repeats.
     // Those it misses just get a second, no-op, merge.
-    if (touched.getLastOrNull() != parent) {
+    if (touched.last() != parent) {
         try touched.append(arena, parent);
     }
 }
@@ -1425,6 +1425,5 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Sanitizer" {
-    testing.expectLog(&.{.js});
     try testing.htmlRunner("sanitizer.html", .{});
 }

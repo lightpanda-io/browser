@@ -73,7 +73,7 @@ pub const Index = enum(u16) {
     _,
 
     pub fn slot(self: Index) usize {
-        return @intFromEnum(self) - 1;
+        return @backingInt(self) - 1;
     }
 };
 
@@ -99,7 +99,7 @@ pub const OpSet = struct {
 
 pub const Element = struct {
     /// Assigned once, after `bound` has compacted the slice.
-    index: Index = @enumFromInt(0),
+    index: Index = @fromBackingInt(@intCast(0)),
     /// Internal only — never serialized into the state.
     node_id: NodeRegistry.Id,
     role: []const u8,
@@ -184,13 +184,13 @@ pub const Table = struct {
                 for (el.options) |option| {
                     if (out.items.len >= max_offered) break;
                     try out.append(arena, .{
-                        .key = try std.fmt.allocPrint(arena, "{d}:{s}", .{ @intFromEnum(el.index), option }),
+                        .key = try std.fmt.allocPrint(arena, "{d}:{s}", .{ @backingInt(el.index), option }),
                         .value = null,
                     });
                 }
             } else {
                 try out.append(arena, .{
-                    .key = try std.fmt.allocPrint(arena, "{d}", .{@intFromEnum(el.index)}),
+                    .key = try std.fmt.allocPrint(arena, "{d}", .{@backingInt(el.index)}),
                     .value = null,
                 });
             }
@@ -210,7 +210,7 @@ pub const Table = struct {
 
         const number = std.fmt.parseInt(u16, index_text, 10) catch return error.InvalidTarget;
         if (number == 0) return error.InvalidTarget;
-        const element = self.byIndex(@enumFromInt(number)) orelse return error.InvalidTarget;
+        const element = self.byIndex(@fromBackingInt(@intCast(number))) orelse return error.InvalidTarget;
         if (!element.ops.has(op)) return error.InvalidTarget;
 
         if (option) |want| {
@@ -266,7 +266,7 @@ pub fn observe(
     // element records while it could choose among 128 of them.
     const offered = try bound(arena, elements.items);
 
-    for (offered, 1..) |*el, i| el.index = @enumFromInt(@as(u16, @intCast(i)));
+    for (offered, 1..) |*el, i| el.index = @fromBackingInt(@intCast(@as(u16, @intCast(i))));
 
     var table: Table = .{
         .url = frame.url,
@@ -514,7 +514,7 @@ fn writeState(
     for (table.elements) |el| {
         try jw.beginObject();
         try jw.objectField("i");
-        try jw.write(@intFromEnum(el.index));
+        try jw.write(@backingInt(el.index));
         try jw.objectField("role");
         try jw.write(el.role);
         if (el.label.len > 0) {
@@ -659,7 +659,7 @@ fn expectOptions(expected: []const []const u8, actual: ?zenai.typesafe.types.Que
 fn fixtureTable() Table {
     const elements = [_]Element{
         .{
-            .index = @enumFromInt(1),
+            .index = @fromBackingInt(@intCast(1)),
             .node_id = 11,
             .role = "searchbox",
             .label = "Search",
@@ -669,7 +669,7 @@ fn fixtureTable() Table {
             .options = &.{},
         },
         .{
-            .index = @enumFromInt(2),
+            .index = @fromBackingInt(@intCast(2)),
             .node_id = 12,
             .role = "button",
             .label = "Go",
@@ -679,7 +679,7 @@ fn fixtureTable() Table {
             .options = &.{},
         },
         .{
-            .index = @enumFromInt(3),
+            .index = @fromBackingInt(@intCast(3)),
             .node_id = 13,
             .role = "combobox",
             .label = "Party size",
@@ -716,7 +716,7 @@ test "observe: only what the page offers, densely indexed" {
     // input are all absent; indices are dense and in document order.
     try std.testing.expectEqual(@as(usize, 7), observed.elements.len);
     for (observed.elements, 1..) |el, i| {
-        try std.testing.expectEqual(@as(u16, @intCast(i)), @intFromEnum(el.index));
+        try std.testing.expectEqual(@as(u16, @intCast(i)), @backingInt(el.index));
         try std.testing.expect(el.node_id != 0);
     }
 
@@ -836,7 +836,7 @@ test "targets: no head can exceed what a choice question accepts" {
     const options = try a.alloc([]const u8, 400);
     for (options, 0..) |*option, i| option.* = try std.fmt.allocPrint(a, "opt{d}", .{i});
     const picker = [_]Element{.{
-        .index = @enumFromInt(1),
+        .index = @fromBackingInt(@intCast(1)),
         .node_id = 1,
         .role = "combobox",
         .label = "Country",
@@ -887,7 +887,7 @@ test "bound: one entry per distinct label, since we cannot ask what is on screen
     // A comment thread: every row carries its own identical "reply" link.
     var rows: [40]Element = undefined;
     for (&rows, 0..) |*el, i| el.* = .{
-        .index = @enumFromInt(@as(u16, @intCast(i + 1))),
+        .index = @fromBackingInt(@intCast(@as(u16, @intCast(i + 1)))),
         .node_id = @intCast(i + 1),
         .role = "link",
         .label = "reply",

@@ -207,9 +207,9 @@ pub const Function = struct {
         const Session = @import("../Session.zig");
 
         var count: usize = 0;
-        var params = @typeInfo(T).@"fn".params;
-        for (params[start..]) |p| { // start at 1, skip self
-            const PT = p.type.?;
+        const param_types = @typeInfo(T).@"fn".param_types;
+        for (param_types[start..]) |param_type| { // start at 1, skip self
+            const PT = param_type.?;
             if (PT == *Frame or PT == *const Frame) {
                 break;
             }
@@ -440,18 +440,18 @@ pub const Indexed = struct {
 
 fn hasNotHandled(comptime E: type) bool {
     // anyerror includes it
-    const errors = @typeInfo(E).error_set orelse return true;
-    for (errors) |e| {
-        if (std.mem.eql(u8, e.name, "NotHandled")) return true;
+    const error_names = @typeInfo(E).error_set.error_names orelse return true;
+    for (error_names) |name| {
+        if (std.mem.eql(u8, name, "NotHandled")) return true;
     }
     return false;
 }
 
 // Default index query if one isn't provided. Uses the getter to determine the result
 fn GetterQuery(comptime getter: anytype, comptime attrs: u32) type {
-    const params = @typeInfo(@TypeOf(getter)).@"fn".params;
-    const Self = params[0].type.?;
-    const Index = params[1].type.?;
+    const param_types = @typeInfo(@TypeOf(getter)).@"fn".param_types;
+    const Self = param_types[0].?;
+    const Index = param_types[1].?;
 
     // A getter that can return neither null nor error.NotHandled would report
     // every index as present.
@@ -465,13 +465,13 @@ fn GetterQuery(comptime getter: anytype, comptime attrs: u32) type {
     }
 
     return struct {
-        const query = if (params.len == 3) withGlobal else plain;
+        const query = if (param_types.len == 3) withGlobal else plain;
 
         fn plain(self: Self, idx: Index) !u32 {
             return attributes(getter(self, idx));
         }
 
-        fn withGlobal(self: Self, idx: Index, global: params[2].type.?) !u32 {
+        fn withGlobal(self: Self, idx: Index, global: param_types[2].?) !u32 {
             return attributes(getter(self, idx, global));
         }
 
@@ -804,7 +804,7 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
     //     });
     //     if (!ignored.has(property)) {
     //         var buf: [2048]u8 = undefined;
-    //         const key = std.fmt.bufPrint(&buf, "Window:{s}", .{property}) catch return js.Intercepted.no;
+    //         const key = std.mem.print(&buf, "Window:{s}", .{property}) catch return js.Intercepted.no;
     //         logUnknownProperty(local, key) catch return js.Intercepted.no;
     //     }
     // }
@@ -870,7 +870,7 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
 //             const ignored = std.StaticStringMap(void).initComptime(.{});
 //             if (!ignored.has(property)) {
 //                 var buf: [2048]u8 = undefined;
-//                 const key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return js.Intercepted.no;
+//                 const key = std.mem.print(&buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return js.Intercepted.no;
 //                 logUnknownProperty(local, key) catch return js.Intercepted.no;
 //             }
 //             return js.Intercepted.no;
@@ -1001,7 +1001,7 @@ pub const JsApiLookup = struct {
 
     /// Returns the ID for the given type.
     pub inline fn getId(t: type) BackingInt {
-        return @intFromEnum(getIndex(t));
+        return @backingInt(getIndex(t));
     }
 };
 

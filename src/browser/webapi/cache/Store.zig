@@ -178,7 +178,7 @@ pub const Bucket = struct {
 };
 
 fn withoutSearch(url: []const u8) []const u8 {
-    return url[0 .. std.mem.indexOfAny(u8, url, "?#") orelse url.len];
+    return url[0 .. std.mem.findAny(u8, url, "?#") orelse url.len];
 }
 
 // A stored request/response pair. Only the request's url is kept: entries are

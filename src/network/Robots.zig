@@ -39,7 +39,7 @@ const CompiledPattern = struct {
             };
         }
 
-        const is_wildcard = std.mem.indexOfScalar(u8, pattern, '*') != null;
+        const is_wildcard = std.mem.findScalar(u8, pattern, '*') != null;
 
         if (is_wildcard) {
             return .{
@@ -252,7 +252,7 @@ fn appendContentSignals(
     var iter = std.mem.splitScalar(u8, value, ',');
     while (iter.next()) |raw_pair| {
         const pair = std.mem.trim(u8, raw_pair, &std.ascii.whitespace);
-        const eq = std.mem.indexOfScalarPos(u8, pair, 0, '=') orelse continue;
+        const eq = std.mem.findScalarPos(u8, pair, 0, '=') orelse continue;
 
         const name_raw = std.mem.trim(u8, pair[0..eq], &std.ascii.whitespace);
         const value_raw = std.mem.trim(u8, pair[eq + 1 ..], &std.ascii.whitespace);
@@ -309,15 +309,15 @@ fn parseRulesWithUserAgent(
         if (std.mem.startsWith(u8, trimmed, "#")) continue;
 
         // Remove end of line comment.
-        const true_line = if (std.mem.indexOfScalar(u8, trimmed, '#')) |pos|
+        const true_line = if (std.mem.findScalar(u8, trimmed, '#')) |pos|
             std.mem.trimEnd(u8, trimmed[0..pos], &std.ascii.whitespace)
         else
             trimmed;
 
         if (true_line.len == 0) continue;
 
-        const colon_idx = std.mem.indexOfScalar(u8, true_line, ':') orelse {
-            log.warn(.browser, "robots line missing colon", .{ .line = line });
+        const colon_idx = std.mem.findScalar(u8, true_line, ':') orelse {
+            log.debug(.browser, "robots line missing colon", .{ .line = line });
             continue;
         };
         const key_str = try std.ascii.allocLowerString(allocator, true_line[0..colon_idx]);
@@ -375,7 +375,7 @@ fn parseRulesWithUserAgent(
                         try wildcard_rules.append(allocator, Rule.allowRule(duped_value));
                     },
                     .not_in_entry => {
-                        log.warn(.browser, "robots unexpected rule", .{ .rule = "allow" });
+                        log.debug(.browser, "robots unexpected rule", .{ .rule = "allow" });
                         continue;
                     },
                 }
@@ -400,7 +400,7 @@ fn parseRulesWithUserAgent(
                         try wildcard_rules.append(allocator, Rule.disallowRule(duped_value));
                     },
                     .not_in_entry => {
-                        log.warn(.browser, "robots unexpected rule", .{ .rule = "disallow" });
+                        log.debug(.browser, "robots unexpected rule", .{ .rule = "disallow" });
                         continue;
                     },
                 }

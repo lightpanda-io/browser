@@ -101,7 +101,7 @@ pub fn stateChanged(self: *ServiceWorker) void {
     }
 
     self.scheduleStateChange() catch |err| {
-        log.warn(.browser, "SW statechange", .{ .err = err });
+        log.debug(.browser, "SW statechange", .{ .err = err });
     };
 }
 

@@ -138,9 +138,9 @@ pub fn parse(
 
 fn registrable(host: []const u8) []const u8 {
     if (isIpLiteral(host)) return host;
-    var i = std.mem.lastIndexOfScalar(u8, host, '.') orelse return host;
+    var i = std.mem.findScalarLast(u8, host, '.') orelse return host;
     while (true) {
-        i = std.mem.lastIndexOfScalar(u8, host[0..i], '.') orelse return host;
+        i = std.mem.findScalarLast(u8, host[0..i], '.') orelse return host;
         const start = i + 1;
         if (public_suffix_list.lookup(host[start..]) == false) {
             return host[start..];
@@ -151,7 +151,7 @@ fn registrable(host: []const u8) []const u8 {
 fn entity(host: []const u8) []const u8 {
     if (isIpLiteral(host)) return "";
     const reg = registrable(host);
-    const dot = std.mem.indexOfScalar(u8, reg, '.') orelse return "";
+    const dot = std.mem.findScalar(u8, reg, '.') orelse return "";
     return reg[0..dot];
 }
 

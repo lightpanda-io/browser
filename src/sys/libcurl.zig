@@ -651,7 +651,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
 
         .ssl_ctx_data => @as(*crypto.X509_STORE, value),
 
-        .http_version => @as(c_long, @intFromEnum(@as(CurlHttpVersion, value))),
+        .http_version => @as(c_long, @backingInt(@as(CurlHttpVersion, value))),
 
         .debug_function => @as(CurlDebugFunction, value),
         .opensocket_function => @as(CurlOpenSocketFunction, value),
@@ -660,7 +660,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .write_function => @as(CurlWriteFunction, value),
         .ssl_ctx_function => @as(CurlSslCtxFunction, value),
     };
-    const code = c.curl_easy_setopt(easy, @intFromEnum(option), v);
+    const code = c.curl_easy_setopt(easy, @backingInt(option), v);
     return errorCheck(code);
 }
 
@@ -669,7 +669,7 @@ pub fn curl_easy_getinfo(easy: *Curl, comptime info: CurlInfo, out: anytype) Err
         @compileError("curl_easy_getinfo out must be a pointer, got " ++ @typeName(@TypeOf(out)));
     }
 
-    const inf: c.CURLINFO = @intFromEnum(info);
+    const inf: c.CURLINFO = @backingInt(info);
     const code = switch (info) {
         .effective_url => blk: {
             const p: *[*c]u8 = out;
@@ -718,7 +718,7 @@ pub fn curl_easy_header(
     hout: *?*CurlHeader,
 ) ErrorHeader!void {
     var c_hout: [*c]CurlHeader = null;
-    const code = c.curl_easy_header(easy, name, index, @intFromEnum(origin), request, &c_hout);
+    const code = c.curl_easy_header(easy, name, index, @backingInt(origin), request, &c_hout);
     switch (code) {
         c.CURLHE_OK => {
             hout.* = @ptrCast(c_hout);
@@ -745,7 +745,7 @@ pub fn curl_easy_nextheader(
     request: c_int,
     prev: ?*CurlHeader,
 ) ?*CurlHeader {
-    const ptr = c.curl_easy_nextheader(easy, @intFromEnum(origin), request, prev);
+    const ptr = c.curl_easy_nextheader(easy, @backingInt(origin), request, prev);
     if (ptr == null) return null;
     return @ptrCast(ptr);
 }
@@ -759,7 +759,7 @@ pub fn curl_multi_cleanup(multi: *CurlM) ErrorMulti!void {
 }
 
 pub fn curl_multi_setopt(multi: *CurlM, comptime option: CurlMOption, value: anytype) ErrorMulti!void {
-    const opt: c.CURLMoption = @intFromEnum(option);
+    const opt: c.CURLMoption = @backingInt(option);
     const code = switch (option) {
         .max_host_connections, .max_connects => blk: {
             const n: c_long = switch (@typeInfo(@TypeOf(value))) {

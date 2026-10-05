@@ -3,8 +3,8 @@ FROM debian:stable-slim
 
 ARG MINISIG=0.12
 ARG ZIG_MINISIG=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
-ARG V8=14.9.207.35
-ARG ZIG_V8=v0.5.7
+ARG V8=15.5.35.13
+ARG ZIG_V8=v0.5.9
 ARG TARGETPLATFORM
 
 RUN apt-get update -yq && \
@@ -52,12 +52,12 @@ RUN case $TARGETPLATFORM in \
     mv libc_v8.a v8/libc_v8.a
 
 # build v8 snapshot
-RUN zig build -Doptimize=ReleaseFast \
+RUN zig build -Doptimize=fast \
     -Dprebuilt_v8_path=v8/libc_v8.a \
     snapshot_creator -- src/snapshot.bin
 
 # build release
-RUN zig build -Doptimize=ReleaseFast \
+RUN zig build -Doptimize=fast \
     -Dsnapshot_path=../../snapshot.bin \
     -Dprebuilt_v8_path=v8/libc_v8.a \
     -Dorderfile=orderfile/lightpanda.ld

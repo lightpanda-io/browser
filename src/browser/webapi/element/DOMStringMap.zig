@@ -162,7 +162,7 @@ pub const JsApi = struct {
     }
     fn indexName(idx: u32, frame: *Frame) !String {
         var buf: [15]u8 = undefined;
-        const name = std.fmt.bufPrint(&buf, "data-{d}", .{idx}) catch unreachable;
+        const name = std.mem.print(&buf, "data-{d}", .{idx}) catch unreachable;
         return String.init(frame.local_arena, name, .{});
     }
 

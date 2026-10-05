@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
+const repeat = @import("../string.zig").repeat;
 
 const Allocator = std.mem.Allocator;
 
@@ -61,7 +62,7 @@ const OpCode = enum(u8) {
 // the used prefix.
 pub fn frameHeader(buf: *[10]u8, op_code: OpCode, payload_len: usize) []const u8 {
     const len = payload_len;
-    buf[0] = @intFromEnum(op_code);
+    buf[0] = @backingInt(op_code);
 
     if (len <= 125) {
         buf[1] = @intCast(len);
@@ -491,7 +492,7 @@ fn simpleMask(m: []const u8, payload: []u8) void {
 const testing = std.testing;
 test "mask" {
     var buf: [4000]u8 = undefined;
-    const messages = [_][]const u8{ "1234", "1234" ** 99, "1234" ** 999 };
+    const messages = [_][]const u8{ "1234", repeat("1234", 99), repeat("1234", 999) };
     for (messages) |message| {
         // we need the message to be mutable since mask operates in-place
         const payload = buf[0..message.len];
@@ -507,7 +508,7 @@ test "mask" {
 
 // Builds an unmasked (server->client) text frame.
 fn writeFrame(list: *std.ArrayList(u8), allocator: Allocator, payload: []const u8) !void {
-    try list.append(allocator, @intFromEnum(OpCode.text)); // FIN + text opcode
+    try list.append(allocator, @backingInt(OpCode.text)); // FIN + text opcode
     if (payload.len <= 125) {
         try list.append(allocator, @intCast(payload.len));
     } else if (payload.len <= 65535) {

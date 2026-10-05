@@ -26,6 +26,12 @@ const log = lp.log;
 // How often the checker thread scans the entries.
 const CHECK_INTERVAL_NS = 1 * std.time.ns_per_s;
 
+// The "watchdog stall script" line is logged by the termination interrupt,
+// which only runs once the worker is back in JavaScript. If it's still pending
+// this long after the stall was detected, the worker is stuck in native code:
+// say so from here, or the stall leaves no trace above debug.
+const NATIVE_STALL_REPORT_MS = 5_000;
+
 const Watchdog = @This();
 
 // null == disabled: no thread, register/unregister no-op.
@@ -41,6 +47,9 @@ pub const Entry = struct {
     env: *Env,
     heartbeat: *Heartbeat,
     fired: bool = false,
+    // Set once the current stall has been reported as native (see
+    // NATIVE_STALL_REPORT_MS). Reset when a new stall fires.
+    native_reported: bool = false,
     registered: bool = false,
     node: std.DoublyLinkedList.Node = .{},
 };
@@ -95,8 +104,6 @@ pub fn unregister(self: *Watchdog, entry: *Entry) void {
 }
 
 fn run(self: *Watchdog) void {
-    const timeout_ms: u64 = self.timeout_ms.?;
-
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
 
@@ -105,36 +112,58 @@ fn run(self: *Watchdog) void {
         if (self.shutdown) {
             return;
         }
+        self.scan(lp.datetime.milliTimestamp(.boot));
+    }
+}
 
-        const now = lp.datetime.milliTimestamp(.boot);
-        var node = self.entries.first;
-        while (node) |n| : (node = n.next) {
-            const entry: *Entry = @fieldParentPtr("node", n);
-            const heartbeat = entry.heartbeat;
+// Called with the mutex held.
+fn scan(self: *Watchdog, now: u64) void {
+    const timeout_ms: u64 = self.timeout_ms.?;
 
-            if (heartbeat.wait_depth.load(.acquire) > 0) {
-                // The entry is in a controlled (e.g. non-JS) wait
-                entry.fired = false;
-                continue;
-            }
+    var node = self.entries.first;
+    while (node) |n| : (node = n.next) {
+        const entry: *Entry = @fieldParentPtr("node", n);
+        const heartbeat = entry.heartbeat;
 
-            const last = heartbeat.last_activity.load(.acquire);
-            if (last == 0) {
-                // disarmed: no page work can be running
-                continue;
-            }
+        if (heartbeat.wait_depth.load(.acquire) > 0) {
+            // The entry is in a controlled (e.g. non-JS) wait
+            entry.fired = false;
+            continue;
+        }
 
-            const stalled_ms = now -| last;
-            if (stalled_ms < timeout_ms) {
-                entry.fired = false;
-                continue;
-            }
+        const last = heartbeat.last_activity.load(.acquire);
+        if (last == 0) {
+            // disarmed: no page work can be running
+            continue;
+        }
 
-            if (entry.fired == false) {
-                entry.fired = true;
-                log.err(.app, "watchdog stall", .{ .stalled_ms = stalled_ms });
-                entry.env.requestTerminate();
-            }
+        const stalled_ms = now -| last;
+        if (stalled_ms < timeout_ms) {
+            entry.fired = false;
+            continue;
+        }
+
+        if (entry.fired == false) {
+            entry.fired = true;
+            entry.native_reported = false;
+            log.debug(.watchdog, "watchdog stall", .{ .stalled_ms = stalled_ms });
+            // The worker logs "watchdog stall script" (URL and JS stack) when
+            // the termination interrupt lands.
+            entry.env.requestTerminateForStall(stalled_ms);
+            continue;
+        }
+
+        if (entry.native_reported) {
+            continue;
+        }
+        const requested_at = entry.env.pendingStallReport() orelse continue;
+        const pending_ms = now -| requested_at;
+        if (pending_ms >= NATIVE_STALL_REPORT_MS) {
+            entry.native_reported = true;
+            log.warn(.watchdog, "watchdog stall native", .{
+                .stalled_ms = stalled_ms,
+                .pending_ms = pending_ms,
+            });
         }
     }
 }
@@ -175,3 +204,73 @@ pub const Heartbeat = struct {
         _ = self.wait_depth.fetchSub(1, .release);
     }
 };
+
+const testing = @import("testing.zig");
+test "Watchdog: a stall that never returns to JavaScript is reported once" {
+    // Only the native warn: the first line is debug, and the termination
+    // interrupt never lands because no JavaScript runs.
+    testing.expectLog(&.{.watchdog});
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const env = frame.js.env;
+    defer env.cancelTerminate();
+
+    var watchdog = Watchdog.init(30_000);
+    var heartbeat: Heartbeat = .{};
+    var entry: Entry = .{ .env = env, .heartbeat = &heartbeat };
+    watchdog.register(&entry);
+    defer watchdog.unregister(&entry);
+
+    // The report's request time comes from the real clock, so the stall is
+    // placed in the past and scans run at (or just after) the real now.
+    const now = lp.datetime.milliTimestamp(.boot);
+    heartbeat.last_activity.store(now - 31_000, .release);
+
+    watchdog.scan(now - 2_000);
+    try testing.expectEqual(false, entry.fired);
+
+    watchdog.scan(now);
+    try testing.expectEqual(true, entry.fired);
+    try testing.expect(env.pendingStallReport() != null);
+
+    // Still pending, but not for long enough to call it native.
+    watchdog.scan(now + 2_000);
+    try testing.expectEqual(false, entry.native_reported);
+
+    watchdog.scan(now + 6_000);
+    try testing.expectEqual(true, entry.native_reported);
+
+    // Reported once per stall.
+    watchdog.scan(now + 7_000);
+
+    // Activity ends the stall.
+    heartbeat.last_activity.store(now + 7_000, .release);
+    watchdog.scan(now + 8_000);
+    try testing.expectEqual(false, entry.fired);
+}
+
+test "Watchdog: no native report once the script report has been logged" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const env = frame.js.env;
+    defer env.cancelTerminate();
+
+    var watchdog = Watchdog.init(30_000);
+    var heartbeat: Heartbeat = .{};
+    var entry: Entry = .{ .env = env, .heartbeat = &heartbeat };
+    watchdog.register(&entry);
+    defer watchdog.unregister(&entry);
+
+    const now = lp.datetime.milliTimestamp(.boot);
+    heartbeat.last_activity.store(now - 31_000, .release);
+    watchdog.scan(now);
+
+    // Stands in for the interrupt landing: the worker consumed the report.
+    _ = env.stall_report_requested_at.swap(0, .acq_rel);
+
+    watchdog.scan(now + 9_000);
+    try testing.expectEqual(false, entry.native_reported);
+}

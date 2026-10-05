@@ -213,11 +213,11 @@ fn walkInteractive(
             else => {},
         }
 
-        if (el.ownerFrame(frame)) |owner| {
-            if (owner._style_manager.hasDisplayNone(el)) {
-                tw.skipChildren();
-                continue;
-            }
+        // Not just the element's own display: a slotted element inherits
+        // from its slot, which this light-tree walk never visits.
+        if (!el.isVisible(frame)) {
+            tw.skipChildren();
+            continue;
         }
 
         const html_el = el.is(Element.Html) orelse continue;
@@ -238,7 +238,7 @@ fn walkInteractive(
         if (filter.name) |nf| {
             const n = name orelse continue;
             const hit = switch (nf) {
-                .substring => |s| std.ascii.indexOfIgnoreCase(n, s) != null,
+                .substring => |s| std.ascii.findIgnoreCase(n, s) != null,
                 .regex => |re| re.matches(n),
             };
             if (!hit) continue;
@@ -333,8 +333,8 @@ pub fn classifyInteractivity(
         if (isInteractiveRole(role)) return .aria;
     }
 
-    // 3. contenteditable (15 bytes, exceeds SSO limit for comptime)
-    if (el.getAttributeSafe(.wrap("contenteditable"))) |ce| {
+    // 3. contenteditable
+    if (el.getAttributeInterned("contenteditable")) |ce| {
         if (ce.len == 0 or std.ascii.eqlIgnoreCase(ce, "true")) return .contenteditable;
     }
 
@@ -689,6 +689,16 @@ test "browser.interactive: disabled by fieldset" {
     try testing.expect(elements[0].disabled);
     // Button inside first legend is NOT disabled
     try testing.expect(!elements[1].disabled);
+}
+
+test "browser.interactive: a slotted element inherits its slot's display" {
+    var page = try testing.pageTest("cdp/slotted_hidden.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const elements = try collectInteractiveElements(frame.window._document.asNode(), frame.call_arena, frame);
+    try testing.expectEqual(1, elements.len);
+    try testing.expectEqual("slotted-shown", elements[0].name.?);
 }
 
 test "browser.interactive: pointer-events none" {

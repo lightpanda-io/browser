@@ -195,14 +195,14 @@ fn containsFn(arena: Allocator, args: []const result.Result) Error!bool {
     if (args.len < 2) return false;
     const s1 = try result.toString(arena, args[0]);
     const s2 = try result.toString(arena, args[1]);
-    return std.mem.indexOf(u8, s1, s2) != null;
+    return std.mem.find(u8, s1, s2) != null;
 }
 
 fn substringBeforeFn(arena: Allocator, args: []const result.Result) Error![]const u8 {
     if (args.len < 2) return "";
     const s1 = try result.toString(arena, args[0]);
     const s2 = try result.toString(arena, args[1]);
-    if (std.mem.indexOf(u8, s1, s2)) |idx| {
+    if (std.mem.find(u8, s1, s2)) |idx| {
         return s1[0..idx];
     }
     return "";
@@ -212,7 +212,7 @@ fn substringAfterFn(arena: Allocator, args: []const result.Result) Error![]const
     if (args.len < 2) return "";
     const s1 = try result.toString(arena, args[0]);
     const s2 = try result.toString(arena, args[1]);
-    if (std.mem.indexOf(u8, s1, s2)) |idx| {
+    if (std.mem.find(u8, s1, s2)) |idx| {
         return s1[idx + s2.len ..];
     }
     return "";
@@ -289,7 +289,7 @@ fn translateFn(arena: Allocator, args: []const result.Result) Error![]const u8 {
 
     var buf = std.Io.Writer.Allocating.init(arena);
     for (s) |c| {
-        if (std.mem.indexOfScalar(u8, from, c)) |idx| {
+        if (std.mem.findScalar(u8, from, c)) |idx| {
             // Chars in `from` past `to.len` are deleted (no copy).
             if (idx < to.len) try buf.writer.writeByte(to[idx]);
         } else {

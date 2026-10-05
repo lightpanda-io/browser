@@ -141,7 +141,7 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
     const arena = try frame.getArena(.small, "SM.preloadScript");
     errdefer arena.release();
 
-    const owned_url = try arena.dupeZ(u8, url);
+    const owned_url = try arena.dupeSentinel(u8, url, 0);
 
     const script = try arena.create(Script);
     script.* = .{
@@ -581,7 +581,7 @@ const PreloadedScript = struct {
         if (script.status == 404) {
             log.info(.http, "script 404", .{ .req = script.url, .extra = "preload" });
         } else {
-            log.warn(.http, "script fetch error", .{ .err = err, .req = script.url, .extra = "preload", .status = script.status });
+            log.debug(.http, "script fetch error", .{ .err = err, .req = script.url, .extra = "preload", .status = script.status });
         }
 
         script.status = 0; // status == 0 is correctly treated as an error throughout
@@ -695,9 +695,6 @@ test "ScriptManager: async script whose submit fails synchronously releases its 
     client.test_fail_submit = error.TestSubmitFailure;
     defer client.test_fail_submit = null;
 
-    // Script.errorCallback logs the fetch error.
-    testing.expectLog(&.{.http});
-
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -723,9 +720,6 @@ test "ScriptManager: preload whose submit fails synchronously releases its arena
     client.test_fail_submit = error.TestSubmitFailure;
     defer client.test_fail_submit = null;
 
-    // PreloadedScript.errorCallback logs the fetch error.
-    testing.expectLog(&.{.http});
-
     const url = "http://127.0.0.1:9582/fails-at-submit.js";
     // A fetch was started (and failed), so the hint's error event fires.
     try testing.expectEqual(true, try sm.preloadScript(null, url));
@@ -741,9 +735,6 @@ test "ScriptManager: a failed preload is consumed, not refetched" {
     const client = &testing.test_session.browser.http_client;
     try client.setBlockedUrls(&.{ "*/preload_failed.js", "*/preload_failed_module.js" });
     defer client.setBlockedUrls(&.{}) catch unreachable;
-
-    // Both hints' fetch errors, and nothing else.
-    testing.expectLog(&.{ .http, .http });
 
     const page = try testing.pageTest("fixtures/preload_failed.html", .{});
     defer page.close();

@@ -284,3 +284,13 @@
   testing.expectEqual('b', d.innerHTML);
 }
 </script>
+
+<div id="tpl_parent"><template><b>x</b></template></div>
+<script id="serialize_from_ancestor">
+{
+    const parent = $('#tpl_parent');
+    testing.expectEqual('<template><b>x</b></template>', parent.innerHTML);
+    testing.expectEqual('<div id="tpl_parent"><template><b>x</b></template></div>', parent.outerHTML);
+    testing.expectEqual('<template><b>x</b></template>', parent.firstChild.outerHTML);
+}
+</script>

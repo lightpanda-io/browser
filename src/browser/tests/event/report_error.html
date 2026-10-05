@@ -36,3 +36,50 @@
   testing.expectEqual(true, listenerCalled);
   window.onerror = null;
 </script>
+
+<!--
+  An exception a callback doesn't catch is reported to the global — window's
+  "error" event fires with the thrown value — whatever kind of callback threw:
+  timers, animation frames, inline on* handlers (attribute or property), and
+  property handlers dispatched directly (window.onmessage).
+  https://html.spec.whatwg.org/multipage/webappapis.html#report-the-exception
+-->
+<button id=inlineAttrThrower onclick="throw new Error('cb-inline-attribute')"></button>
+<button id=inlinePropThrower></button>
+<script id=reportsCallbackExceptions>
+  testing.async().then((state) => {
+    const seen = [];
+    const thrown = {};
+    const onError = (e) => {
+      const msg = e.error && e.error.message;
+      if (typeof msg === 'string' && msg.startsWith('cb-')) {
+        seen.push(msg);
+        thrown[msg] = e.error instanceof Error;
+      }
+    };
+    window.addEventListener('error', onError);
+
+    setTimeout(() => { throw new Error('cb-setTimeout'); }, 0);
+    const iv = setInterval(() => { clearInterval(iv); throw new Error('cb-setInterval'); }, 0);
+    requestAnimationFrame(() => { throw new Error('cb-requestAnimationFrame'); });
+    document.getElementById('inlinePropThrower').onclick = () => { throw new Error('cb-inline-property'); };
+    window.onmessage = () => { throw new Error('cb-onmessage'); };
+    setTimeout(() => {
+      document.getElementById('inlineAttrThrower').click();
+      document.getElementById('inlinePropThrower').click();
+      window.postMessage('x', '*');
+    }, 0);
+
+    setTimeout(() => state.resolve(), 100);
+
+    state.done(() => {
+      window.removeEventListener('error', onError);
+      window.onmessage = null;
+      testing.expectEqual(
+        'cb-inline-attribute,cb-inline-property,cb-onmessage,cb-requestAnimationFrame,cb-setInterval,cb-setTimeout',
+        seen.slice().sort().join(','),
+      );
+      for (const msg of seen) testing.expectEqual(true, thrown[msg]);
+    });
+  });
+</script>

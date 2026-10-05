@@ -1,12 +1,12 @@
 .{
     .name = .browser,
-    .version = "1.0.0-dev",
+    .version = "1.1.0-dev",
     .fingerprint = 0xda130f3af836cea0, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/ebd2fabfb001294ed43ef65286c7db17245416e9.tar.gz",
-            .hash = "v8-0.0.0-xddH66lEAwB-5Ec92QAp19-aZ6-oB8UnnUm-w3fBUEaX",
+            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/b73e4fa2d0afe5036745ae7d332cc5cb7e7adb53.tar.gz",
+            .hash = "v8-0.0.0-xddH64tVAwDZKW4zyy2h9cKXeWfWSjupsZIwTbYxSL9T",
         },
         // .v8 = .{ .path = "../zig-v8-fork" },
         .brotli = .{
@@ -32,20 +32,24 @@
             .hash = "N-V-__8AALJXUwHr71AwttzhEqqYTvFb_jz0EQ5Ou3OWpHBM",
         },
         .sqlite3 = .{
-            .url = "https://github.com/allyourcodebase/sqlite3/archive/7a615f5af79009cd733e3480658586d9b0d28b35.tar.gz",
-            .hash = "sqlite3-3.53.2-DMxLWuAOAAA_Px0arJOIOaP4AKEu5prbsQgPMA35W1zz",
+            .url = "https://sqlite.org/2026/sqlite-amalgamation-3530200.zip",
+            .hash = "N-V-__8AALc_rgC04POe18O0LKFRm4ouQpLtL3riscEmWp-Q",
         },
         .zenai = .{
-            .url = "git+https://github.com/lightpanda-io/zenai.git#4b457545f7461273ec786448cd88680d19a953cf",
-            .hash = "zenai-0.0.0-iOY_VFo8BwAyZKWxq7xuGofMtfuHTfls9toLjj2jJBtE",
+            .url = "git+https://github.com/lightpanda-io/zenai.git#63df800afc438c0e90603270a4696689eb339ccc",
+            .hash = "zenai-0.0.0-iOY_VEuBBwAanO_h2hbjC9Up37-a4pjYlViKeOYJLQjS",
         },
         .isocline = .{
             .url = "git+https://github.com/arrufat/isocline#4a99434bee4a5ed04c1639514224d48cd55e1405",
             .hash = "N-V-__8AAHxtEwB16xj2Xz-zx_uklGdTP5C2-GHXDoSzah-8",
         },
         .pcre2 = .{
-            .url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.48/pcre2-10.48.tar.gz",
-            .hash = "pcre2-10.48.0-IZ6r69wnegD6fc08FgRTKVcmyp4Ux2aVefaVvsRndgEl",
+            .url = "git+https://github.com/PCRE2Project/pcre2#9ad4a2e956876747a5022bf04614c7e39e71d4ec",
+            .hash = "pcre2-10.50.0-DEV-IZ6r6yDTrgCmI3jcBntPIdZLWLhNORGZZSi8hxQkc11x",
+        },
+        .translate_c = .{
+            .url = "git+https://codeberg.org/ziglang/translate-c?ref=2.0.0#0da7a16c3235b935b82421646076e0657cda21f6",
+            .hash = "translate_c-2.0.0-Q_BUWltOBwA0229IE8wwSxxGzOxyRso3hvcb1nN8oJX_",
         },
     },
     .paths = .{""},
