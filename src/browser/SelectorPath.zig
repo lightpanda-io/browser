@@ -260,3 +260,8 @@ test "SelectorPath: shared attribute, first match vs :has() disambiguation" {
         "form:has(input[type=\"submit\"][value=\"create account\"]) input[name=\"acct\"]",
     );
 }
+
+test "SelectorPath: nth-of-type among custom elements" {
+    // <x-head> is a different type, so the 2nd <x-card> is nth-of-type(2).
+    try expectSelector("x-card:last-child", "x-card:nth-of-type(2)");
+}
