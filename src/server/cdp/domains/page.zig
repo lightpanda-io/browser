@@ -26,6 +26,7 @@ const CDP = @import("../CDP.zig");
 const js = @import("../../../browser/js/js.zig");
 const URL = @import("../../../browser/URL.zig");
 const Frame = @import("../../../browser/Frame.zig");
+const referrer = @import("../../../browser/referrer.zig");
 const Notification = @import("../../../Notification.zig");
 
 const log = lp.log;
@@ -210,7 +211,7 @@ fn addScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
     }
 
     var id_buf: [16]u8 = undefined;
-    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{script_id}) catch "1";
+    const id_str = std.mem.print(&id_buf, "{d}", .{script_id}) catch "1";
     return cmd.sendResult(.{
         .identifier = id_str,
     }, .{});
@@ -307,9 +308,9 @@ fn createIsolatedWorldContext(arena: Allocator, bc: *CDP.BrowserContext, world: 
 fn registerIsolatedWorldContext(arena: Allocator, bc: *CDP.BrowserContext, world: *CDP.IsolatedWorld, js_context: *js.Context, frame: *const Frame, loader_id: ?[]const u8) !void {
     const frame_id = &id.toFrameId(frame._frame_id);
     const aux_data = if (loader_id) |lid|
-        try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, lid })
+        try arena.print("{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, lid })
     else
-        try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{frame_id});
+        try arena.print("{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{frame_id});
 
     var ls: js.Local.Scope = undefined;
     js_context.localScope(&ls);
@@ -327,11 +328,17 @@ fn registerIsolatedWorldContext(arena: Allocator, bc: *CDP.BrowserContext, world
 fn navigate(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         url: [:0]const u8,
-        // referrer: ?[]const u8 = null,
+        referrer: ?[:0]const u8 = null,
         // transitionType: ?[]const u8 = null, // TODO: enum
         // frameId: ?[]const u8 = null,
-        // referrerPolicy: ?[]const u8 = null, // TODO: enum
+        referrerPolicy: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
+
+    // Chrome applies the default policy, not unsafe-url, when none is given.
+    const policy: referrer.Policy = if (params.referrerPolicy) |name|
+        cdp_referrer_policies.get(name) orelse return cmd.sendError(-32602, "Invalid referrerPolicy", .{})
+    else
+        .default;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
@@ -352,6 +359,8 @@ fn navigate(cmd: *CDP.Command) !void {
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
         .kind = .{ .push = null },
+        .referer = if (params.referrer) |source| try referrer.compute(frame.call_arena, policy, source, encoded_url) else null,
+        .referrer_policy = policy,
     };
 
     if (canNavigateInPlace(bc, frame)) {
@@ -359,6 +368,17 @@ fn navigate(cmd: *CDP.Command) !void {
     }
     try session.initiateRootNavigation(frame._frame_id, encoded_url, opts);
 }
+
+const cdp_referrer_policies = std.StaticStringMap(referrer.Policy).initComptime(.{
+    .{ "noReferrer", .no_referrer },
+    .{ "noReferrerWhenDowngrade", .no_referrer_when_downgrade },
+    .{ "origin", .origin },
+    .{ "originWhenCrossOrigin", .origin_when_cross_origin },
+    .{ "sameOrigin", .same_origin },
+    .{ "strictOrigin", .strict_origin },
+    .{ "strictOriginWhenCrossOrigin", .strict_origin_when_cross_origin },
+    .{ "unsafeUrl", .unsafe_url },
+});
 
 fn stopLoading(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
@@ -393,13 +413,13 @@ fn doReload(cmd: *CDP.Command) !void {
     // we free the old frame's arena. Replaying the same HTTP
     // method on reload matches Chrome's F5 behavior — POST navigations
     // re-submit, GET navigations re-fetch.
-    const reload_url = try cmd.arena.dupeZ(u8, frame.url);
+    const reload_url = try cmd.arena.dupeSentinel(u8, frame.url, 0);
     const prev_nav = frame._navigated_options;
     const prev_body: ?[]const u8, const prev_header: ?[:0]const u8 = blk: {
         const p = prev_nav orelse break :blk .{ null, null };
         break :blk .{
             if (p.body) |b| try cmd.arena.dupe(u8, b) else null,
-            if (p.header) |h| try cmd.arena.dupeZ(u8, h) else null,
+            if (p.header) |h| try cmd.arena.dupeSentinel(u8, h, 0) else null,
         };
     };
 
@@ -737,7 +757,7 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     }, .{ .session_id = session_id });
 
     {
-        const aux_data = try std.fmt.allocPrint(arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
+        const aux_data = try arena.print("{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
 
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
@@ -1139,7 +1159,7 @@ fn printToPDF(cmd: *CDP.Command) !void {
     const handle = try cmd.cdp.streams.add(try aw.toOwnedSlice());
     return cmd.sendResult(.{
         .data = "",
-        .stream = try std.fmt.allocPrint(cmd.arena, "{d}", .{handle}),
+        .stream = try cmd.arena.print("{d}", .{handle}),
     }, .{});
 }
 
@@ -1937,7 +1957,7 @@ test "cdp.frame: printToPDF" {
         // Inline base64, landscape: Letter swapped, in points.
         try ctx.processMessage(.{ .id = 11, .method = "Page.printToPDF", .params = .{ .landscape = true } });
         const pdf = try pdfResult(&ctx, 11);
-        try testing.expectEqual(true, std.mem.indexOf(u8, pdf, "/MediaBox [0 0 792.000 612.000]") != null);
+        try testing.expectEqual(true, std.mem.find(u8, pdf, "/MediaBox [0 0 792.000 612.000]") != null);
     }
 
     {
@@ -2108,7 +2128,7 @@ test "cdp.page: stopLoading finishes a streaming document with what has arrived"
         _ = try runner.tickForFrame(frame_id, 20, .{});
         const frame = bc.mainFrame() orelse unreachable;
         if (bc.session.browser.http_client.findTransfer(frame._req_id)) |transfer| {
-            if (std.mem.indexOf(u8, transfer.res.buffer.items, "first") != null) {
+            if (std.mem.find(u8, transfer.res.buffer.items, "first") != null) {
                 break;
             }
         }
@@ -2582,6 +2602,52 @@ test "cdp.frame: address-bar Page.navigate sends no Referer" {
         const v = try ls.local.exec("document.body.innerText.includes('referer=NONE')", null);
         try testing.expect(v.toBool());
     }
+}
+
+test "cdp.frame: Page.navigate referrer goes through the referrer policy" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-NREF", .url = "hi.html", .target_id = "FID-000000NREF".* });
+
+    const cases = [_]struct { referrer: [:0]const u8, policy: ?[]const u8, expected: []const u8 }{
+        .{ .referrer = "http://ref.example/path?q=1", .policy = null, .expected = "referer=http://ref.example/" },
+        .{ .referrer = "http://ref.example/path?q=1", .policy = "unsafeUrl", .expected = "referer=http://ref.example/path?q=1" },
+        .{ .referrer = "http://127.0.0.1:9582/from?q=1", .policy = null, .expected = "referer=http://127.0.0.1:9582/from?q=1" },
+        .{ .referrer = "http://ref.example/path", .policy = "noReferrer", .expected = "referer=NONE" },
+        .{ .referrer = "https://ref.example/path", .policy = null, .expected = "referer=NONE" },
+        .{ .referrer = "data:text/plain,hi", .policy = "unsafeUrl", .expected = "referer=NONE" },
+    };
+
+    for (cases, 0..) |case, i| {
+        try ctx.processMessage(.{
+            .id = 60 + i,
+            .method = "Page.navigate",
+            .params = .{ .url = "http://127.0.0.1:9582/echo_referer", .referrer = case.referrer, .referrerPolicy = case.policy },
+        });
+        try testing.waitForPage(bc);
+
+        const f = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("document.body.innerText", null);
+        try testing.expectEqualSlices(u8, case.expected, try v.toStringSlice());
+    }
+}
+
+test "cdp.frame: Page.navigate rejects an unknown referrerPolicy" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-NRP", .url = "hi.html", .target_id = "FID-0000000NRP".* });
+
+    try ctx.processMessage(.{
+        .id = 70,
+        .method = "Page.navigate",
+        .params = .{ .url = "http://127.0.0.1:9582/echo_referer", .referrerPolicy = "nope" },
+    });
+    try ctx.expectSentError(-32602, "Invalid referrerPolicy", .{ .id = 70 });
 }
 
 test "cdp.frame: addScriptToEvaluateOnNewDocument runImmediately evaluates in the current document" {

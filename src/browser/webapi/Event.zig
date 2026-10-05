@@ -295,7 +295,7 @@ fn setCancelBubble(self: *Event) void {
 }
 
 fn getEventPhase(self: *const Event) u8 {
-    return @intFromEnum(self._event_phase);
+    return @backingInt(self._event_phase);
 }
 
 fn getTimeStamp(self: *const Event, exec: *js.Execution) f64 {
@@ -399,42 +399,30 @@ pub fn inheritOptions(comptime T: type, comptime additions: anytype) type {
     // this per-level check produce.
     js.Local.assertDictionaryFieldOrder(additions);
 
-    var all_fields: []const std.builtin.Type.StructField = &.{};
+    var names: []const [:0]const u8 = &.{};
+    var types: []const type = &.{};
+    var attrs: []const std.lang.Type.Struct.FieldAttributes = &.{};
 
     if (@hasField(T, "_proto")) {
-        const t_fields = @typeInfo(T).@"struct".fields;
-
-        inline for (t_fields) |field| {
-            if (std.mem.eql(u8, field.name, "_proto")) {
-                const ProtoType = @typeInfo(field.type).pointer.child;
-                if (@hasDecl(ProtoType, "Options")) {
-                    const parent_options = @typeInfo(ProtoType.Options);
-                    for (parent_options.@"struct".fields) |f| {
-                        if (!std.mem.eql(u8, f.name, js.Local.dictionary_group_marker)) {
-                            all_fields = all_fields ++ &[_]std.builtin.Type.StructField{f};
-                        }
-                    }
+        const ProtoType = @typeInfo(@FieldType(T, "_proto")).pointer.child;
+        if (@hasDecl(ProtoType, "Options")) {
+            const parent_options = @typeInfo(ProtoType.Options).@"struct";
+            for (parent_options.field_names, parent_options.field_types, parent_options.field_attrs) |field_name, field_type, field_attrs| {
+                if (!std.mem.eql(u8, field_name, js.Local.dictionary_group_marker)) {
+                    names = names ++ .{field_name};
+                    types = types ++ .{field_type};
+                    attrs = attrs ++ .{field_attrs};
                 }
             }
         }
     }
 
-    const additions_info = @typeInfo(additions);
-    all_fields = all_fields ++ additions_info.@"struct".fields;
-
+    const additions_info = @typeInfo(additions).@"struct";
     const marker_default: void = {};
-    var names: [all_fields.len + 1][:0]const u8 = undefined;
-    var types: [all_fields.len + 1]type = undefined;
-    var attrs: [all_fields.len + 1]std.builtin.Type.StructField.Attributes = undefined;
-    for (all_fields, 0..) |f, i| {
-        names[i] = f.name;
-        types[i] = f.type;
-        attrs[i] = .{ .@"comptime" = f.is_comptime, .@"align" = f.alignment, .default_value_ptr = f.default_value_ptr };
-    }
-    names[all_fields.len] = js.Local.dictionary_group_marker;
-    types[all_fields.len] = void;
-    attrs[all_fields.len] = .{ .default_value_ptr = @ptrCast(&marker_default) };
-    return @Struct(.auto, null, &names, &types, &attrs);
+    names = names ++ additions_info.field_names ++ .{js.Local.dictionary_group_marker};
+    types = types ++ additions_info.field_types ++ .{void};
+    attrs = attrs ++ additions_info.field_attrs ++ .{std.lang.Type.Struct.FieldAttributes{ .default_value_ptr = @ptrCast(&marker_default) }};
+    return @Struct(.auto, null, names, types, attrs);
 }
 
 pub fn populatePrototypes(self: anytype, opts: anytype, trusted: bool) void {
@@ -494,10 +482,10 @@ pub const JsApi = struct {
     pub const cancelBubble = bridge.accessor(Event.getCancelBubble, Event.setCancelBubble, .{});
 
     // Event phase constants
-    pub const NONE = bridge.property(@intFromEnum(EventPhase.none), .{ .template = true });
-    pub const CAPTURING_PHASE = bridge.property(@intFromEnum(EventPhase.capturing_phase), .{ .template = true });
-    pub const AT_TARGET = bridge.property(@intFromEnum(EventPhase.at_target), .{ .template = true });
-    pub const BUBBLING_PHASE = bridge.property(@intFromEnum(EventPhase.bubbling_phase), .{ .template = true });
+    pub const NONE = bridge.property(@backingInt(EventPhase.none), .{ .template = true });
+    pub const CAPTURING_PHASE = bridge.property(@backingInt(EventPhase.capturing_phase), .{ .template = true });
+    pub const AT_TARGET = bridge.property(@backingInt(EventPhase.at_target), .{ .template = true });
+    pub const BUBBLING_PHASE = bridge.property(@backingInt(EventPhase.bubbling_phase), .{ .template = true });
 };
 
 // tested in event_target

@@ -39,8 +39,6 @@ pub type AppendDoctypeToDocumentCallback = unsafe extern "C" fn(
 pub type CreateProcessingInstruction =
     unsafe extern "C" fn(ctx: Ref, target: StringSlice, data: StringSlice) -> Ref;
 
-pub type GetDataCallback = unsafe extern "C" fn(ctx: Ref) -> *mut c_void;
-
 pub type AppendCallback =
     unsafe extern "C" fn(ctx: Ref, parent: Ref, node_or_text: CNodeOrText) -> ();
 

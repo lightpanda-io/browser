@@ -106,7 +106,7 @@ fn isValidPart(part: []const u8, comptime separators: []const u8) bool {
         if ((c < 32 and c != '\t') or c > 126) {
             return false;
         }
-        if (std.mem.indexOfScalar(u8, separators, c) != null) {
+        if (std.mem.findScalar(u8, separators, c) != null) {
             return false;
         }
     }

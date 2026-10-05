@@ -29,6 +29,7 @@ const Slot = @import("webapi/element/html/Slot.zig");
 
 const LimitedWriter = @import("../LimitedWriter.zig");
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
+const repeat = @import("../string.zig").repeat;
 
 pub const Opts = struct {
     max_bytes: ?u32 = null,
@@ -63,6 +64,29 @@ fn shouldAddSpacing(tag: Element.Tag) bool {
 
 fn getAnchorLabel(el: *Element) ?[]const u8 {
     return el.getAttributeInterned("aria-label") orelse el.getAttributeInterned("title");
+}
+
+/// The fence info string for a `<pre>`: the `language-*` (or `lang-*`) class
+/// on the `<pre>` itself or on a `<code>` that is its first element child.
+fn codeLanguage(pre: *Element) ?[]const u8 {
+    if (classLanguage(pre)) |lang| return lang;
+    const child = pre.firstElementChild() orelse return null;
+    if (child.getTag() != .code) return null;
+    return classLanguage(child);
+}
+
+fn classLanguage(el: *Element) ?[]const u8 {
+    const class = el.getClassName() orelse return null;
+    var it = std.mem.tokenizeAny(u8, class, &std.ascii.whitespace);
+    while (it.next()) |token| {
+        for ([_][]const u8{ "language-", "lang-" }) |prefix| {
+            if (!std.mem.startsWith(u8, token, prefix)) continue;
+            const lang = token[prefix.len..];
+            // A backtick would end the fence's info string early.
+            if (lang.len > 0 and std.mem.findScalar(u8, lang, '`') == null) return lang;
+        }
+    }
+    return null;
 }
 
 // Iterative else large trees will stackoverflow
@@ -208,7 +232,9 @@ const Context = struct {
                 self.state.last_char_was_newline = false;
             },
             .pre => {
-                try self.writer.writeAll("```\n");
+                try self.writer.writeAll("```");
+                if (codeLanguage(el)) |lang| try self.writer.writeAll(lang);
+                try self.writer.writeByte('\n');
                 self.state.pre_node = el.asNode();
                 self.state.last_char_was_newline = true;
             },
@@ -628,6 +654,30 @@ test "browser.markdown: code" {
     );
 }
 
+test "browser.markdown: code fence keeps the language" {
+    try testMarkdownHTML("<pre><code class=\"hljs language-zig\">const x = 1;</code></pre>",
+        \\
+        \\```zig
+        \\const x = 1;
+        \\```
+        \\
+    );
+    try testMarkdownHTML("<pre class=\"lang-sh\">ls</pre>",
+        \\
+        \\```sh
+        \\ls
+        \\```
+        \\
+    );
+    try testMarkdownHTML("<pre class=\"language-\">x</pre>",
+        \\
+        \\```
+        \\x
+        \\```
+        \\
+    );
+}
+
 test "browser.markdown: block link" {
     try testMarkdownHTML(
         \\<a href="https://example.com">
@@ -895,7 +945,7 @@ test "browser.markdown: max_bytes truncates with marker" {
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>" ++ ("AAAA " ** 100) ++ "</p>");
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>" ++ (repeat("AAAA ", 100)) ++ "</p>");
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();

@@ -41,12 +41,6 @@ pub fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
 pub fn click(node: *DOMNode, frame: *Frame) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
 
-    if (el.isDisabled()) {
-        return;
-    }
-
-    Frame.user_input.updateHoverTarget(frame, el, .{ .with_pointer = true });
-
     Frame.user_input.triggerClick(frame, el, .{}) catch |err| {
         lp.log.debug(.app, "click failed", .{ .err = err });
         return error.ActionFailed;

@@ -77,14 +77,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test bench data end2end clean zig-cache-tmp
-
-# Zig 0.16.0 doesn't create <global cache>/tmp before fetching .zip deps.
-# https://codeberg.org/ziglang/zig/issues/31964
-zig-cache-tmp:
-	@dir=$$($(ZIG) env | sed -n 's/^ *\.global_cache_dir = "\(.*\)",$$/\1/p'); \
-	test -n "$$dir" || { printf "\033[33mCould not read global_cache_dir from '$(ZIG) env'\033[0m\n"; exit 1; }; \
-	mkdir -p "$$dir/tmp"
+.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test bench data end2end clean
 
 ## Download the prebuilt V8 libraries (skips the 10+ min source build)
 download-v8:
@@ -93,46 +86,46 @@ download-v8:
 		printf "\033[36mDownloading prebuilt V8 $(V8_VERSION) ($(ZIG_V8_TAG))...\033[0m\n"; \
 		curl -fL --progress-bar -o $(V8_CACHE) \
 			https://github.com/lightpanda-io/zig-v8-fork/releases/download/$(ZIG_V8_TAG)/$(V8_ARCHIVE) \
-		|| (rm -f $(V8_CACHE); printf "\033[33mDownload ERROR\033[0m\n"; exit 1) )
-	@printf "\033[33mV8 ready: %s\033[0m\n" "$(V8_CACHE)"
+		|| (rm -f $(V8_CACHE); printf "\033[31mDownload ERROR\033[0m\n"; exit 1) )
+	@printf "\033[32mV8 ready: %s\033[0m\n" "$(V8_CACHE)"
 ifeq ($(OS)_$(ARCH),linux_x86_64)
 	@test -f $(V8_SO_CACHE) || ( \
 		printf "\033[36mDownloading prebuilt shared V8 $(V8_VERSION) ($(ZIG_V8_TAG))...\033[0m\n"; \
 		curl -fL --progress-bar -o $(V8_SO_CACHE) \
 			https://github.com/lightpanda-io/zig-v8-fork/releases/download/$(ZIG_V8_TAG)/$(V8_SO_ASSET) \
-		|| (rm -f $(V8_SO_CACHE); printf "\033[33mDownload ERROR\033[0m\n"; exit 1) )
-	@printf "\033[33mShared V8 ready: %s\033[0m\n" "$(V8_SO_CACHE)"
+		|| (rm -f $(V8_SO_CACHE); printf "\033[31mDownload ERROR\033[0m\n"; exit 1) )
+	@printf "\033[32mShared V8 ready: %s\033[0m\n" "$(V8_SO_CACHE)"
 endif
 
 ## Build v8 snapshot
-build-v8-snapshot: zig-cache-tmp
+build-v8-snapshot:
 	@printf "\033[36mBuilding v8 snapshot (release safe)...\033[0m\n"
-	@$(ZIG) build $(ZIGFLAGS) -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
-	@printf "\033[33mBuild OK\033[0m\n"
+	@$(ZIG) build $(ZIGFLAGS) -Doptimize=fast snapshot_creator -- src/snapshot.bin || (printf "\033[31mBuild ERROR\033[0m\n"; exit 1;)
+	@printf "\033[32mBuild OK\033[0m\n"
 
 ## Build in release-fast mode
 build: build-v8-snapshot
 	@printf "\033[36mBuilding (release fast)...\033[0m\n"
-	@$(ZIG) build $(ZIGFLAGS) -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
-	@printf "\033[33mBuild OK\033[0m\n"
+	@$(ZIG) build $(ZIGFLAGS) -Doptimize=fast -Dsnapshot_path=../../snapshot.bin || (printf "\033[31mBuild ERROR\033[0m\n"; exit 1;)
+	@printf "\033[32mBuild OK\033[0m\n"
 
 ## Build in debug mode
-build-dev: zig-cache-tmp
+build-dev:
 	@printf "\033[36mBuilding (debug)...\033[0m\n"
-	@$(ZIG) build $(ZIGFLAGS) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
-	@printf "\033[33mBuild OK\033[0m\n"
+	@$(ZIG) build $(ZIGFLAGS) || (printf "\033[31mBuild ERROR\033[0m\n"; exit 1;)
+	@printf "\033[32mBuild OK\033[0m\n"
 
 ## Run the server in release mode
 run: build
 	@printf "\033[36mRunning...\033[0m\n"
-	@./zig-out/bin/lightpanda || (printf "\033[33mRun ERROR\033[0m\n"; exit 1;)
+	@./zig-out/bin/lightpanda || (printf "\033[31mRun ERROR\033[0m\n"; exit 1;)
 
 ## Run the server in debug mode
 run-debug: build-dev
 	@printf "\033[36mRunning...\033[0m\n"
-	@./zig-out/bin/lightpanda || (printf "\033[33mRun ERROR\033[0m\n"; exit 1;)
+	@./zig-out/bin/lightpanda || (printf "\033[31mRun ERROR\033[0m\n"; exit 1;)
 
-test: zig-cache-tmp
+test:
 	TEST_FILTER="$(or $(F),$(TEST_FILTER))" $(ZIG) build $(ZIGFLAGS) test -freference-trace
 
 ## Run demo/runner end to end tests

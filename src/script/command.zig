@@ -100,7 +100,7 @@ pub const Command = union(enum) {
         }
 
         fn schema(self: ToolCall) *const Schema {
-            return &Schema.all()[@intFromEnum(self.tool)];
+            return &Schema.all()[@backingInt(self.tool)];
         }
 
         /// Skip the line when the recorded form would not round-trip:
@@ -160,10 +160,10 @@ pub const Command = union(enum) {
 
         const split = Schema.splitNameRest(trimmed[1..]) orelse return error.MissingName;
 
-        inline for (std.meta.fields(LlmCommand)) |f| {
-            if (std.ascii.eqlIgnoreCase(split.name, f.name)) {
+        inline for (@typeInfo(LlmCommand).@"enum".field_names) |field_name| {
+            if (std.ascii.eqlIgnoreCase(split.name, field_name)) {
                 if (split.rest.len > 0) return error.MalformedKv;
-                return .{ .llm = @field(LlmCommand, f.name) };
+                return .{ .llm = @field(LlmCommand, field_name) };
             }
         }
 
@@ -316,7 +316,7 @@ fn writeJsonSource(
         .object, .array => return writeJsValue(arena, writer, value, .{}),
         else => {},
     };
-    try writeJsValue(arena, writer, .{ .string = source }, .{ .prefer_template = std.mem.indexOfScalar(u8, source, '\n') != null });
+    try writeJsValue(arena, writer, .{ .string = source }, .{ .prefer_template = std.mem.findScalar(u8, source, '\n') != null });
 }
 
 fn writeJsObjectKey(writer: *std.Io.Writer, key: []const u8) std.Io.Writer.Error!void {
@@ -332,11 +332,11 @@ fn writeJsonString(writer: *std.Io.Writer, value: []const u8) std.Io.Writer.Erro
 }
 
 fn canUseTemplateLiteral(value: []const u8) bool {
-    if (std.mem.indexOfScalar(u8, value, '\n') == null) return false;
-    if (std.mem.indexOfScalar(u8, value, '`') != null) return false;
-    if (std.mem.indexOf(u8, value, "${") != null) return false;
-    if (std.mem.indexOfScalar(u8, value, '\\') != null) return false;
-    if (std.mem.indexOfScalar(u8, value, '\r') != null) return false;
+    if (std.mem.findScalar(u8, value, '\n') == null) return false;
+    if (std.mem.findScalar(u8, value, '`') != null) return false;
+    if (std.mem.find(u8, value, "${") != null) return false;
+    if (std.mem.findScalar(u8, value, '\\') != null) return false;
+    if (std.mem.findScalar(u8, value, '\r') != null) return false;
     return true;
 }
 

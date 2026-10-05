@@ -214,7 +214,7 @@ pub fn classAttributeContains(class_attr: []const u8, class_name: []const u8) bo
     // single compare, and a token whose first byte differs is rejected without
     // any boundary or length work.
     //
-    // Deliberately not std.mem.indexOfScalarPos: its vector setup costs more
+    // Deliberately not std.mem.findScalarPos: its vector setup costs more
     // than it saves at class-attribute lengths. Measured against it on both the
     // benchmark shape (~12 bytes) and tailwind-style values (~105 bytes), this
     // loop wins on every case but one.

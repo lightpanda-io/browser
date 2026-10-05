@@ -19,6 +19,7 @@
 const std = @import("std");
 const ansi = @import("ansi.zig");
 const js_highlight = @import("js_highlight.zig");
+const repeat = @import("../string.zig").repeat;
 
 /// Render markdown `src` as ANSI-styled terminal output to `w`. Tables are
 /// aligned straight from `src`, so unlike `Stream` there is no size limit.
@@ -171,7 +172,7 @@ const CellIterator = struct {
 };
 
 fn cellIterator(row: []const u8) CellIterator {
-    const first_pipe = std.mem.indexOfScalar(u8, row, '|');
+    const first_pipe = std.mem.findScalar(u8, row, '|');
     return .{ .row = row, .pos = if (first_pipe) |p| p + 1 else 0 };
 }
 
@@ -231,7 +232,7 @@ fn renderFenceRule(w: *std.Io.Writer, opening: bool, delimiter: []const u8) !voi
     var fill: usize = rule_width - 1;
     if (opening) {
         const info = std.mem.trim(u8, std.mem.trimStart(u8, delimiter, " \t`"), " \t");
-        const lang = info[0 .. std.mem.indexOfAny(u8, info, " \t") orelse info.len];
+        const lang = info[0 .. std.mem.findAny(u8, info, " \t") orelse info.len];
         if (lang.len > 0 and lang.len + 4 <= fill) {
             try w.writeAll("─ ");
             try w.writeAll(lang);
@@ -307,7 +308,7 @@ pub const Stream = struct {
 
     pub fn feed(self: *Stream, w: *std.Io.Writer, data: []const u8) !void {
         var rest = data;
-        while (std.mem.indexOfScalar(u8, rest, '\n')) |nl| {
+        while (std.mem.findScalar(u8, rest, '\n')) |nl| {
             const head = rest[0..nl];
             rest = rest[nl + 1 ..];
             if (self.raw) {
@@ -470,7 +471,7 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, js: ?*js_highlight.State) !vo
 
     // Dashed, unlike the solid fence rules, so adjacent ones read differently.
     if (isHorizontalRule(trimmed)) {
-        try styled(w, "┄" ** rule_width, ansi.dim);
+        try styled(w, repeat("┄", rule_width), ansi.dim);
         return;
     }
 
@@ -533,7 +534,7 @@ fn renderInlineStyled(w: *std.Io.Writer, text: []const u8, active: ?*const Style
                 i += 2;
                 continue;
             },
-            '`' => if (std.mem.indexOfPos(u8, text, i + 1, "`")) |end| {
+            '`' => if (std.mem.findPos(u8, text, i + 1, "`")) |end| {
                 try styled(w, text[i + 1 .. end], ansi.teal);
                 try Style.applyOpt(active, w);
                 i = end + 1;
@@ -542,19 +543,19 @@ fn renderInlineStyled(w: *std.Io.Writer, text: []const u8, active: ?*const Style
             '*', '_' => |ch| {
                 const double = [2]u8{ ch, ch };
                 if (i + 1 < text.len and text[i + 1] == ch) {
-                    if (std.mem.indexOfPos(u8, text, i + 2, &double)) |end| {
+                    if (std.mem.findPos(u8, text, i + 2, &double)) |end| {
                         try span(w, text[i + 2 .. end], ansi.bold, active);
                         i = end + 2;
                         continue;
                     }
-                } else if (std.mem.indexOfScalarPos(u8, text, i + 1, ch)) |end| {
+                } else if (std.mem.findScalarPos(u8, text, i + 1, ch)) |end| {
                     try span(w, text[i + 1 .. end], ansi.italic, active);
                     i = end + 1;
                     continue;
                 }
             },
             '~' => if (i + 1 < text.len and text[i + 1] == '~') {
-                if (std.mem.indexOfPos(u8, text, i + 2, "~~")) |end| {
+                if (std.mem.findPos(u8, text, i + 2, "~~")) |end| {
                     try span(w, text[i + 2 .. end], ansi.strike, active);
                     i = end + 2;
                     continue;
@@ -659,8 +660,8 @@ fn isHorizontalRule(line: []const u8) bool {
 
 /// Returns the index past the `)`, or null (nothing written) if unterminated.
 fn renderLinkAt(w: *std.Io.Writer, text: []const u8, open: usize, active: ?*const Style) std.Io.Writer.Error!?usize {
-    const mid = std.mem.indexOfPos(u8, text, open + 1, "](") orelse return null;
-    const close = std.mem.indexOfScalarPos(u8, text, mid + 2, ')') orelse return null;
+    const mid = std.mem.findPos(u8, text, open + 1, "](") orelse return null;
+    const close = std.mem.findScalarPos(u8, text, mid + 2, ')') orelse return null;
     try renderLink(w, text[open + 1 .. mid], text[mid + 2 .. close], active);
     return close + 1;
 }
@@ -729,8 +730,8 @@ test "md_term: nested inline styles" {
     );
 }
 
-const open_rule = "\x1b[2m╭" ++ "─" ** 23 ++ "\x1b[0m";
-const close_rule = "\x1b[2m╰" ++ "─" ** 23 ++ "\x1b[0m";
+const open_rule = "\x1b[2m╭" ++ repeat("─", 23) ++ "\x1b[0m";
+const close_rule = "\x1b[2m╰" ++ repeat("─", 23) ++ "\x1b[0m";
 
 test "md_term: fenced code block is highlighted as JavaScript" {
     try expectRender(
@@ -743,13 +744,13 @@ test "md_term: fenced code block is highlighted as JavaScript" {
 
 test "md_term: fence rules carry the language tag" {
     try expectRender(
-        "\x1b[2m╭─ js " ++ "─" ** 18 ++ "\x1b[0m\n\nx\n\n" ++ close_rule,
+        "\x1b[2m╭─ js " ++ repeat("─", 18) ++ "\x1b[0m\n\nx\n\n" ++ close_rule,
         "```js\nx\n```",
     );
     // An overlong info string doesn't fit the rule and is dropped.
     try expectRender(
         open_rule ++ "\n\nx\n\n" ++ close_rule,
-        "```" ++ "x" ** 20 ++ "\nx\n```",
+        "```" ++ repeat("x", 20) ++ "\nx\n```",
     );
 }
 
@@ -791,8 +792,8 @@ test "md_term: blockquote" {
 }
 
 test "md_term: horizontal rule" {
-    try expectRender("\x1b[2m" ++ "┄" ** 24 ++ "\x1b[0m", "---");
-    try expectRender("\x1b[2m" ++ "┄" ** 24 ++ "\x1b[0m", "***");
+    try expectRender("\x1b[2m" ++ repeat("┄", 24) ++ "\x1b[0m", "---");
+    try expectRender("\x1b[2m" ++ repeat("┄", 24) ++ "\x1b[0m", "***");
     try expectRender("---x", "---x");
 }
 
@@ -828,7 +829,7 @@ test "md_term: pipe rows without a separator pass through" {
     try expectRender("| a |\n", "| a |\n");
 }
 
-const big_table = "| A | B |\n|-|-|\n" ++ ("| " ++ "a" ** 16 ++ " | " ++ "b" ** 16 ++ " |\n") ** 500;
+const big_table = "| A | B |\n|-|-|\n" ++ repeat("| " ++ repeat("a", 16) ++ " | " ++ repeat("b", 16) ++ " |\n", 500);
 
 test "md_term: batch aligns tables beyond the stream table buffer" {
     try testing.expect(big_table.len > table_buf_len);
@@ -839,8 +840,8 @@ test "md_term: batch aligns tables beyond the stream table buffer" {
 
     const pipe = "\x1b[2m│\x1b[0m";
     try testing.expectEqual(0, std.mem.count(u8, out, "| a"));
-    try testing.expectEqual(500, std.mem.count(u8, out, pipe ++ " " ++ "a" ** 16 ++ " " ++ pipe));
-    try testing.expect(std.mem.indexOf(u8, out, "\x1b[2m├" ++ "─" ** 18 ++ "┼" ++ "─" ** 18 ++ "┤\x1b[0m\n") != null);
+    try testing.expectEqual(500, std.mem.count(u8, out, pipe ++ " " ++ repeat("a", 16) ++ " " ++ pipe));
+    try testing.expect(std.mem.find(u8, out, "\x1b[2m├" ++ repeat("─", 18) ++ "┼" ++ repeat("─", 18) ++ "┤\x1b[0m\n") != null);
 }
 
 test "md_term: stream falls back to raw rows past its table buffer" {
@@ -853,8 +854,8 @@ test "md_term: stream falls back to raw rows past its table buffer" {
 }
 
 test "md_term: overwide table falls back to verbatim rows" {
-    const header = "|a" ** 17 ++ "|";
-    const sep = "|-" ** 17 ++ "|";
+    const header = repeat("|a", 17) ++ "|";
+    const sep = repeat("|-", 17) ++ "|";
     try expectRender(
         "\x1b[1m" ++ header ++ "\x1b[0m\n\x1b[2m" ++ sep ++ "\x1b[0m\n",
         header ++ "\n" ++ sep,

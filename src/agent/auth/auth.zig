@@ -50,7 +50,7 @@ pub const TokenSet = struct {
     account_id: ?[]const u8 = null,
 
     pub fn dup(allocator: std.mem.Allocator, access: []const u8, refresh: []const u8, expires_at_ms: i64, account_id: ?[]const u8) !TokenSet {
-        const a = try allocator.dupeZ(u8, access);
+        const a = try allocator.dupeSentinel(u8, access, 0);
         errdefer allocator.free(a);
         const r = try allocator.dupe(u8, refresh);
         errdefer allocator.free(r);

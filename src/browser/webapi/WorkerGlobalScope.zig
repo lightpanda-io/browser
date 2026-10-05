@@ -118,6 +118,7 @@ _caches: ?*CacheStorage = null,
 _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
+_reporting_error: bool = false,
 
 _location: WorkerLocation,
 
@@ -467,7 +468,15 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
 }
 
 pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
+    // See Window.reportError: an exception thrown while reporting isn't reported.
+    if (self._reporting_error) {
+        return;
+    }
+
     self.page.recordJsError(error.JsException);
+
+    self._reporting_error = true;
+    defer self._reporting_error = false;
 
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.persist(),
@@ -530,9 +539,9 @@ fn queueMicrotask(self: *WorkerGlobalScope, cb: JS.Function) void {
     self.js.queueMicrotaskFunc(cb);
 }
 
-pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
+pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?i32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
     const cb = try handler.resolve(exec);
-    return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
+    return self._timers.schedule(exec, cb, Timers.delayFromJs(delay_ms), .{
         .repeat = false,
         .params = params,
         .name = "worker.setTimeout",
@@ -543,9 +552,9 @@ fn clearTimeout(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
 }
 
-pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
+pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?i32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
     const cb = try handler.resolve(exec);
-    return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
+    return self._timers.schedule(exec, cb, Timers.delayFromJs(delay_ms), .{
         .repeat = true,
         .params = params,
         .name = "worker.setInterval",

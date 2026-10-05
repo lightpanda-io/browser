@@ -365,5 +365,9 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        // The template only applies to wrappers created outside construction:
+        // undefined elements, or a defined one first seen by an isolated world.
+        // Both get HTMLElement.prototype.
+        pub const wrap_as = HtmlElement.JsApi;
     };
 };

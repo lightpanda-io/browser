@@ -85,7 +85,7 @@ pub const Search = struct {
                 7 => "7",
                 8 => "8",
                 9 => "9",
-                else => try std.fmt.allocPrint(arena, "{d}", .{search_id}),
+                else => try arena.print("{d}", .{search_id}),
             };
 
             var registry = self.registry;

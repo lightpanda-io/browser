@@ -124,7 +124,7 @@ fn immediateRefreshTarget(content: []const u8) ?[]const u8 {
 
     // The delay ends at the first separator. Without one, there's no URL.
     const separators = std.ascii.whitespace ++ [_]u8{ ';', ',' };
-    const separator = std.mem.indexOfAny(u8, trimmed, &separators) orelse return null;
+    const separator = std.mem.findAny(u8, trimmed, &separators) orelse return null;
     const seconds = std.fmt.parseFloat(f64, trimmed[0..separator]) catch return null;
     if (seconds != 0) {
         // For now, we skip any meta refresh where the delay isn't 0. It isn't
@@ -151,7 +151,7 @@ fn immediateRefreshTarget(content: []const u8) ?[]const u8 {
     if (rest.len > 0 and (rest[0] == '"' or rest[0] == '\'')) {
         const quote = rest[0];
         const quoted = rest[1..];
-        rest = quoted[0 .. std.mem.indexOfScalar(u8, quoted, quote) orelse quoted.len];
+        rest = quoted[0 .. std.mem.findScalar(u8, quoted, quote) orelse quoted.len];
     }
 
     const target = std.mem.trim(u8, rest, &std.ascii.whitespace);

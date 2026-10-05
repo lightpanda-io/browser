@@ -153,7 +153,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     v8.v8__Isolate__CreateParams__CONSTRUCT(params);
     params.snapshot_blob = @ptrCast(&snapshot.startup_data);
 
-    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator().?;
+    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator(js.ArrayBuffer.MAX_LENGTH).?;
     errdefer v8.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
 
     params.external_references = &snapshot.external_references;
@@ -853,8 +853,9 @@ fn fatalCallback(c_location: [*c]const u8, c_message: [*c]const u8) callconv(.c)
 
 fn oomCallback(c_location: [*c]const u8, details: ?*const v8.OOMDetails) callconv(.c) void {
     const location = std.mem.span(c_location);
-    const detail = if (details) |d| std.mem.span(d.detail) else "";
-    log.fatal(.app, "V8 OOM", .{ .location = location, .detail = detail });
+    const d = details orelse &v8.OOMDetails{};
+    const detail: []const u8 = if (d.detail == null) "" else std.mem.span(d.detail);
+    log.fatal(.app, "V8 OOM", .{ .location = location, .detail = detail, .is_heap_oom = d.is_heap_oom });
     @import("../../crash_handler.zig").crash("V8 OOM", .{ .location = location, .detail = detail }, @returnAddress());
 }
 
@@ -965,8 +966,8 @@ test "Env: stall report names the running frame and script stack" {
     try testing.expectEqual(frame.url, state.url[0..state.url_len]);
     try testing.expectEqual(true, state.page_url_matches);
     const stack = state.stack[0..state.stack_len];
-    const inner = std.mem.indexOf(u8, stack, "stallInner (https://example.com/stall.js:3:") orelse return error.MissingInnerFrame;
-    const outer = std.mem.indexOf(u8, stack, "stallOuter (https://example.com/stall.js:2:") orelse return error.MissingOuterFrame;
+    const inner = std.mem.find(u8, stack, "stallInner (https://example.com/stall.js:3:") orelse return error.MissingInnerFrame;
+    const outer = std.mem.find(u8, stack, "stallOuter (https://example.com/stall.js:2:") orelse return error.MissingOuterFrame;
     try testing.expect(inner < outer);
 }
 

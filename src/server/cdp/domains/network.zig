@@ -1207,7 +1207,7 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
     error_context.err = null;
 
     var redirect_request_id: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&redirect_request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+    _ = std.mem.print(&redirect_request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
 
     try client.request(.{
         .frame_id = page.frame_id,
@@ -1244,7 +1244,7 @@ test "cdp.Network: POST body exposed as postData" {
     try ctx.expectSentResult(null, .{ .id = 1 });
 
     var request_id: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+    _ = std.mem.print(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
 
     // \xE9 exercises the Latin-1 -> UTF-8 transcode in postData;
     // postDataEntries carry the raw bytes in base64.
@@ -1310,7 +1310,7 @@ const EchoDriver = struct {
     fn run(bc: *CDP.BrowserContext, frame_id: u32, body: []const u8, partial: ?u32) ![14]u8 {
         const client = &bc.cdp.browser.http_client;
         var request_id: [14]u8 = undefined;
-        _ = std.fmt.bufPrint(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+        _ = std.mem.print(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
 
         var driver: EchoDriver = .{};
         try client.request(.{
@@ -1556,7 +1556,7 @@ test "cdp.Network: redirect hop precedes Fetch pause and carries redirectRespons
     const start_url = "http://127.0.0.1:9582/redirect-cross-origin-x-hop";
     const target_url = "http://localhost:9582/echo-x-hop";
     var request_id: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+    _ = std.mem.print(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
 
     try client.request(.{
         .frame_id = page.frame_id,

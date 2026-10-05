@@ -215,7 +215,16 @@ fn createAny(signals_value: js.Value, exec: *const Execution) !*AbortSignal {
     return result;
 }
 
-fn createTimeout(delay: u32, exec: *const Execution) !*AbortSignal {
+fn createTimeout(milliseconds: f64, exec: *const Execution) !*AbortSignal {
+    if (std.math.isFinite(milliseconds) == false) {
+        return error.TypeError;
+    }
+    const truncated = @trunc(milliseconds);
+    if (truncated < 0 or truncated > std.math.maxInt(u53)) {
+        return error.TypeError;
+    }
+    const delay: u32 = @intFromFloat(@min(truncated, std.math.maxInt(u32)));
+
     const callback = try exec.arena.create(TimeoutCallback);
     callback.* = .{
         .exec = exec,

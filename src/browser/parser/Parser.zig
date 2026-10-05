@@ -34,18 +34,22 @@ const Allocator = std.mem.Allocator;
 const CHECKPOINT_INTERVAL = 1024;
 const TERMINATE_CHECK_INTERVAL = 1024;
 
-pub const ParsedNode = struct {
+// Mirrored in src/rust/html5ever/sink
+pub const ParsedNode = extern struct {
     node: *Node,
 
     // Data associated with this element to be passed back to html5ever as needed
     // We only have this for Elements. For other types, like comments, it's null.
-    // html5ever should never ask us for this data on a non-element, and we'll
-    // assert that, with this optional, to make sure our assumption is correct.
+    // html5ever should never ask us for this data on a non-element.
     data: ?*anyopaque,
 
     // Set once html5ever has put the node in the tree or given it children.
     // Until then the node is unobservable and its document is only a guess.
     placed: bool = false,
+
+    // Memo of the node's root, valid while page.dom_version == root_version.
+    root: ?*Node = null,
+    root_version: usize = 0,
 };
 
 // Attributes of an element the parser rebuilds (see settleDocument): the ones
@@ -183,7 +187,7 @@ fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
     // Fresh text run: the first chunk lives on _data only. buf stays empty
     // until (and unless) a second chunk arrives.
     const new_text = try Frame.node_factory.createTextNode(parent.getDocument(self.frame), txt);
-    try self.frame.appendNew(parent, new_text);
+    try self.frame.appendNew(parent, new_text, null);
     self.inserted_since_checkpoint +|= 1;
     self.pending_text = .{
         .parent = parent,
@@ -229,7 +233,6 @@ pub fn parse(self: *Parser, html: []const u8) void {
         &self.container,
         self,
         createElementCallback,
-        getDataCallback,
         appendCallback,
         parseErrorCallback,
         popCallback,
@@ -260,7 +263,6 @@ pub fn parseWithEncoding(self: *Parser, html: []const u8, charset: []const u8) v
         &self.container,
         self,
         createElementCallback,
-        getDataCallback,
         appendCallback,
         parseErrorCallback,
         popCallback,
@@ -288,7 +290,6 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
         &self.container,
         self,
         createXMLElementCallback,
-        getDataCallback,
         appendCallback,
         xmlParseErrorCallback,
         popCallback,
@@ -324,7 +325,6 @@ pub fn parseFragment(self: *Parser, html: []const u8) void {
         self,
         createElementCallback,
         createContextElementCallback,
-        getDataCallback,
         appendCallback,
         parseErrorCallback,
         popCallback,
@@ -380,7 +380,6 @@ pub const Streaming = struct {
             &self.parser.container,
             &self.parser,
             createElementCallback,
-            getDataCallback,
             appendCallback,
             parseErrorCallback,
             popCallback,
@@ -547,7 +546,7 @@ fn _createElementCallback(self: *Parser, data: *anyopaque, qname: h5e.QualName, 
     // like createElementNS. html5ever never sets a prefix; xml5ever does.
     const name = if (qname.prefix.unwrap()) |prefix| blk: {
         if (prefix.len == 0) break :blk local;
-        break :blk try std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix.slice(), local });
+        break :blk try frame.local_arena.print("{s}:{s}", .{ prefix.slice(), local });
     } else local;
     const namespace_string = qname.ns.slice();
     const namespace = if (namespace_string.len == 0) default_namespace else Element.Namespace.parse(namespace_string);
@@ -629,7 +628,7 @@ fn _appendDoctypeToDocument(self: *Parser, name: []const u8, public_id: []const 
     });
 
     // Append it to the document
-    try frame.appendNew(self.container.node, doctype.asNode());
+    try frame.appendNew(self.container.node, doctype.asNode(), null);
 }
 
 fn addAttrsIfMissingCallback(ctx: *anyopaque, target_ref: *anyopaque, attributes: h5e.AttributeIterator) callconv(.c) void {
@@ -717,14 +716,6 @@ fn _attachDeclarativeShadowCallback(self: *Parser, host_node: *Node, template_no
     return 1;
 }
 
-fn getDataCallback(ctx: *anyopaque) callconv(.c) *anyopaque {
-    const pn: *ParsedNode = @ptrCast(@alignCast(ctx));
-    // For non-elements, data is null. But, we expect this to only ever
-    // be called for elements.
-    lp.assert(pn.data != null, "Parser.getDataCallback null data", .{});
-    return pn.data.?;
-}
-
 fn appendCallback(ctx: *anyopaque, parent_ref: *anyopaque, node_or_text: h5e.NodeOrText) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
     if (self.pollTerminate()) {
@@ -757,7 +748,10 @@ fn _appendCallback(self: *Parser, parent_pn: *ParsedNode, node_or_text: h5e.Node
                 return;
             }
             const child = try self.settleDocument(parent_pn, child_pn);
-            try self.frame.appendNew(parent, child);
+            const root = self.rootOf(parent_pn);
+            try self.frame.appendNew(parent, child, root);
+            child_pn.root = root;
+            child_pn.root_version = parent_pn.root_version;
         },
         .text => |txt| {
             const parent = parent_pn.node;
@@ -766,6 +760,22 @@ fn _appendCallback(self: *Parser, parent_pn: *ParsedNode, node_or_text: h5e.Node
         },
         .failed => {},
     }
+}
+
+// Avoids walking to the root for every parsed element. When the parser inserts
+// new node, the root node of existing nodes doesn't change and we don't bump
+// dom_version, so we can cache this.
+fn rootOf(self: *Parser, pn: *ParsedNode) *Node {
+    const version = self.frame.page.dom_version;
+    if (pn.root) |root| {
+        if (pn.root_version == version) {
+            return root;
+        }
+    }
+    const root = pn.node.getRootNode(.{});
+    pn.root = root;
+    pn.root_version = version;
+    return root;
 }
 
 fn settleDocument(self: *Parser, parent_pn: *ParsedNode, child_pn: *ParsedNode) !*Node {
@@ -966,7 +976,7 @@ fn getNode(ref: *anyopaque) *Node {
     return getParsed(ref).node;
 }
 
-fn asUint(comptime string: anytype) std.meta.Int(
+fn asUint(comptime string: anytype) @Int(
     .unsigned,
     @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
 ) {

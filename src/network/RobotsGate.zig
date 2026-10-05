@@ -86,7 +86,7 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
     const arena = try client.arena_pool.acquire(.small, "RobotsGate.RobotsContext");
     errdefer arena.release();
 
-    const owned_url = try arena.dupeZ(u8, robots_url);
+    const owned_url = try arena.dupeSentinel(u8, robots_url, 0);
     const robots_ctx = try arena.create(RobotsContext);
     robots_ctx.* = .{
         .gate = self,

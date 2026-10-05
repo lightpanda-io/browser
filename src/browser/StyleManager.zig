@@ -26,6 +26,7 @@ const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
 const Element = @import("webapi/Element.zig");
+const popover = @import("webapi/element/popover.zig");
 
 const Selector = @import("webapi/selector/Selector.zig");
 const SelectorParser = @import("webapi/selector/Parser.zig");
@@ -191,7 +192,7 @@ fn applyLayerAtRule(self: *StyleManager, build_arena: Allocator, text: []const u
         // invalidates the whole statement. Validate everything before
         // registering anything.
         var names = text["@layer".len..];
-        if (std.mem.indexOfScalar(u8, names, ';')) |semi| {
+        if (std.mem.findScalar(u8, names, ';')) |semi| {
             names = names[0..semi];
         }
 
@@ -265,7 +266,7 @@ fn atRuleBlock(text: []const u8, keyword: []const u8) ?struct { prelude: []const
 
     // Search only past the opening brace — the matching `}` lives there, and
     // any returned position is naturally `> open` (since `rest[open] == '{'`).
-    const close = open + (std.mem.lastIndexOfScalar(u8, rest[open..], '}') orelse return null);
+    const close = open + (std.mem.findScalarLast(u8, rest[open..], '}') orelse return null);
     return .{ .prelude = rest[0..open], .body = rest[open + 1 .. close] };
 }
 
@@ -275,7 +276,7 @@ fn indexOfOpenBraceSkippingComments(s: []const u8) ?usize {
     var i: usize = 0;
     while (i < s.len) {
         if (i + 1 < s.len and s[i] == '/' and s[i + 1] == '*') {
-            const close = std.mem.indexOf(u8, s[i + 2 ..], "*/") orelse return null;
+            const close = std.mem.find(u8, s[i + 2 ..], "*/") orelse return null;
             i = i + 2 + close + 2;
             continue;
         }
@@ -312,7 +313,7 @@ fn registerLayerPath(self: *StyleManager, build_arena: Allocator, parent: u16, d
 fn internAnonymousLayer(self: *StyleManager, build_arena: Allocator, parent: u16) Allocator.Error!u16 {
     const id = self.next_anon_layer;
     // \x00{d} isn't a valid layer name, so this can't conflict
-    const name = try std.fmt.allocPrint(build_arena, "\x00{d}", .{id});
+    const name = try build_arena.print("\x00{d}", .{id});
     self.next_anon_layer = id + 1;
     return self.internLayer(build_arena, parent, name);
 }
@@ -321,7 +322,7 @@ fn internLayer(self: *StyleManager, build_arena: Allocator, parent: u16, name: [
     const path = if (parent == NO_LAYER)
         try build_arena.dupe(u8, name)
     else
-        try std.fmt.allocPrint(build_arena, "{s}.{s}", .{ self.layers.items[parent].path, name });
+        try build_arena.print("{s}.{s}", .{ self.layers.items[parent].path, name });
 
     const gop = try self.layer_ids.getOrPut(build_arena, path);
     if (gop.found_existing) {
@@ -622,19 +623,16 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 pub fn isHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
-    if (!options.ancestors) {
-        return self.visibilityProps(el).probe(.hidden, options);
-    }
-    return self.anyInChain(el, .hidden, options);
+    return self.visibilityProps(el).isHidden(options);
 }
 
-/// Computed display:none for a single element (own property, no ancestor walk).
+/// The element's own display:none. Use `isHidden` to see if it's hidden by an ancestor
 /// Honors the UA stylesheet rules per HTML Rendering §15.3.1 "Hidden elements".
 pub fn hasDisplayNone(self: *StyleManager, el: *Element) bool {
     return self.display(el) == .none;
 }
 
-/// Own property, no ancestor walk; honors the UA hidden-element rules.
+/// Own property, not inherited; honors the UA hidden-element rules.
 pub fn display(self: *StyleManager, el: *Element) Display {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return .other;
@@ -652,20 +650,19 @@ pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element) bool {
     return p.author_display and p.display == .none;
 }
 
-/// Computed visibility:hidden for an element, considering only the `visibility`
-/// chain (walks ancestors since `visibility` inherits by default). Ignores
+/// Computed visibility:hidden, which inherits from the ancestors. Ignores
 /// display:none: an ancestor with display:none means the element isn't
 /// rendered, but its computed `visibility` still reflects inherited visibility.
 pub fn hasVisibilityHiddenInherited(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
-    return self.anyInChain(el, .visibility, .{});
+    return self.visibilityProps(el).visibility_hidden;
 }
 
 pub fn hasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
-    return self.anyInChain(el, .pointer_events, .{});
+    return self.visibilityProps(el).pointer_events_none;
 }
 
 /// The axes along which `el` is a scroll container: its own computed overflow
@@ -701,19 +698,9 @@ pub fn inlineSize(self: *StyleManager, el: *Element, comptime axis: Element.Axis
     return length.resolve(self.frame.page.getViewport());
 }
 
-fn anyInChain(self: *StyleManager, el: *Element, comptime what: Visibility.Probe, options: CheckVisibilityOptions) bool {
-    var current: ?*Element = el;
-    while (current) |elem| : (current = elem.parentElement()) {
-        if (self.visibilityProps(elem).probe(what, options)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /// Callers must have run rebuildIfDirty, which resets the memo.
 fn visibilityProps(self: *StyleManager, el: *Element) Visibility.Computed {
-    return self.visibility.ownProps(self.arena.allocator(), el, self.frame);
+    return self.visibility.inheritedProps(self.arena.allocator(), el, self.frame);
 }
 
 /// Callers must have run rebuildIfDirty, which resets the memo.
@@ -736,14 +723,17 @@ fn Group(comptime Spec: type) type {
     return struct {
         const Self = @This();
         const Declared = Spec.Declared;
+        // What we store in our memo
         const Computed = Spec.Computed;
+        // The element's own value, only used while resolving, never stored
+        const Cascaded = if (@hasDecl(Spec, "Cascaded")) Spec.Cascaded else Computed;
         const Field = std.meta.FieldEnum(Declared);
-        const fields = std.meta.fieldNames(Declared);
+        const fields = @typeInfo(Declared).@"struct".field_names;
 
         comptime {
-            // compute copies each declared value into its Computed namesake
+            // compute copies each declared value into its Cascaded namesake
             for (fields) |field| {
-                std.debug.assert(@FieldType(Computed, field) == @typeInfo(@FieldType(Declared, field)).optional.child);
+                std.debug.assert(@FieldType(Cascaded, field) == @typeInfo(@FieldType(Declared, field)).optional.child);
             }
         }
 
@@ -770,9 +760,12 @@ fn Group(comptime Spec: type) type {
         // skip the cascade on the many pages without one.
         has_important: bool = false,
 
-        // Own-element results, valid while Page.style_version == memo_version.
+        // Valid while Page.style_version == memo_version.
         memo: std.AutoHashMapUnmanaged(*Element, Computed) = .empty,
         memo_version: usize = 0,
+
+        // inheritedProps' scratch, kept so each walk doesn't reallocate
+        path: std.ArrayList(struct { el: *Element, own: Cascaded }) = .empty,
 
         fn capacities(self: *const Self) Capacities {
             return .{
@@ -786,6 +779,7 @@ fn Group(comptime Spec: type) type {
 
         fn reset(self: *Self, allocator: Allocator, caps: Capacities) !void {
             self.memo = .empty;
+            self.path = .empty;
             try self.memo.ensureTotalCapacity(allocator, caps.memo);
 
             self.id_rules = .empty;
@@ -832,25 +826,57 @@ fn Group(comptime Spec: type) type {
         }
 
         fn ownProps(self: *Self, allocator: Allocator, el: *Element, frame: *Frame) Computed {
+            comptime std.debug.assert(Cascaded == Computed);
+            const gop = self.freshMemo(frame).getOrPut(allocator, el) catch |err| {
+                log.warn(.browser, "StyleManager memo", .{ .err = err });
+                return self.compute(el, frame);
+            };
+            if (gop.found_existing == false) {
+                gop.value_ptr.* = self.compute(el, frame);
+            }
+            return gop.value_ptr.*;
+        }
+
+        /// Resolves the path up to the first memoized ancestor, so each
+        /// element is cascaded once per memo version however deep the tree.
+        fn inheritedProps(self: *Self, allocator: Allocator, el: *Element, frame: *Frame) Computed {
+            const memo = self.freshMemo(frame);
+            self.path.clearRetainingCapacity();
+            var above: Computed = .{};
+            var current: ?*Element = el;
+            while (current) |elem| : (current = elem.asNode().flatTreeParentElement(frame)) {
+                if (memo.get(elem)) |cached| {
+                    above = cached;
+                    break;
+                }
+                self.path.append(allocator, .{ .el = elem, .own = self.compute(elem, frame) }) catch |err| {
+                    log.warn(.browser, "StyleManager path", .{ .err = err });
+                    // Degrades to the element's own values, without its ancestors
+                    return .resolve(self.compute(el, frame), .{});
+                };
+            }
+
+            var it = std.mem.reverseIterator(self.path.items);
+            while (it.next()) |step| {
+                above = .resolve(step.own, above);
+                memo.put(allocator, step.el, above) catch |err| {
+                    log.warn(.browser, "StyleManager memo", .{ .err = err });
+                };
+            }
+            return above;
+        }
+
+        fn freshMemo(self: *Self, frame: *Frame) *std.AutoHashMapUnmanaged(*Element, Computed) {
             const version = frame.page.style_version;
             if (self.memo_version != version) {
                 self.memo.clearRetainingCapacity();
                 self.memo_version = version;
             }
-
-            const gop = self.memo.getOrPut(allocator, el) catch |err| {
-                log.warn(.browser, "StyleManager memo", .{ .err = err });
-                return self.compute(el, frame);
-            };
-            if (gop.found_existing) {
-                return gop.value_ptr.*;
-            }
-            gop.value_ptr.* = self.compute(el, frame);
-            return gop.value_ptr.*;
+            return &self.memo;
         }
 
-        fn compute(self: *const Self, el: *Element, frame: *Frame) Computed {
-            var p: Computed = .{};
+        fn compute(self: *const Self, el: *Element, frame: *Frame) Cascaded {
+            var p: Cascaded = .{};
             var priorities: Priorities(Declared) = .initFill(0);
 
             const inline_style = inlineDeclared(Declared, el, frame);
@@ -867,7 +893,7 @@ fn Group(comptime Spec: type) type {
             self.applyRules(&p, &priorities, el, frame);
 
             if (@hasDecl(Spec, "finish")) {
-                Spec.finish(&p, el, &priorities);
+                Spec.finish(&p, el, frame, &priorities);
             }
             return p;
         }
@@ -879,7 +905,7 @@ fn Group(comptime Spec: type) type {
             if (self.has_important == false or declaresAny(declared) == false) {
                 return false;
             }
-            var p: Computed = .{};
+            var p: Cascaded = .{};
             var priorities: Priorities(Declared) = .initFill(INLINE_IMPORTANT_PRIORITY);
             inline for (fields) |field| {
                 if (@field(declared, field) != null) {
@@ -897,7 +923,7 @@ fn Group(comptime Spec: type) type {
             return false;
         }
 
-        fn applyRules(self: *const Self, p: *Computed, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
+        fn applyRules(self: *const Self, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
             if (el.getId()) |id| {
                 if (self.id_rules.get(id)) |rules| {
                     checkRules(&rules, p, priorities, el, frame);
@@ -920,7 +946,7 @@ fn Group(comptime Spec: type) type {
             checkRules(&self.other_rules, p, priorities, el, frame);
         }
 
-        fn checkRules(rules: *const RuleList, p: *Computed, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
+        fn checkRules(rules: *const RuleList, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
             for (rules.items(.priority), rules.items(.props), rules.items(.selector)) |priority, rule, selector| {
                 // Only rules that set a property nothing stronger has set yet are
                 // worth matching.
@@ -950,7 +976,7 @@ fn Group(comptime Spec: type) type {
 /// Centralizes UA-stylesheet display:none truth so `getComputedStyle().display`
 /// (via `hasDisplayNone`) and `el.checkVisibility()` (via `isHidden`) agree.
 /// Spec: HTML Rendering §15.3.1 "Hidden elements".
-fn matchesUaDisplayNoneRule(el: *Element) bool {
+fn matchesUaDisplayNoneRule(el: *Element, frame: *Frame) bool {
     // Tag check first: O(1) switch, exits for the ~95% of elements with
     // ordinary tags before we touch the attribute list.
     const tag = el.getTag();
@@ -966,8 +992,14 @@ fn matchesUaDisplayNoneRule(el: *Element) bool {
         }
     }
 
-    // dialog:not([open]) { display: none }
-    if (tag == .dialog and !el.hasAttributeSafe(comptime .wrap("open"))) return true;
+    if (tag == .dialog) {
+        // dialog:not([open]) { display: none }
+        // dialog:popover-open { display: block }
+        if (!el.hasAttributeSafe(comptime .wrap("open")) and !popover.isOpen(el, frame)) return true;
+    } else if (el.hasAttributeInterned("popover") and !popover.isOpen(el, frame)) {
+        // [popover]:not(:popover-open):not(dialog[open]) { display: none }
+        return true;
+    }
 
     // details:not([open]) > *:not(summary) { display: none }
     if (tag != .summary) {
@@ -1026,7 +1058,7 @@ pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
 
 fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) bool {
     const rules = sheet._css_rules orelse return false;
-    if (rules._rules.getLastOrNull() != rule) {
+    if (rules._rules.last() != rule) {
         return false;
     }
     const sheets = self.frame.document._style_sheets orelse return false;
@@ -1238,53 +1270,74 @@ const Visibility = struct {
         const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events" };
 
         display: ?Display = null,
-        visibility_hidden: ?bool = null,
+        // Inner null: an explicit inherit, which still wins the cascade
+        visibility_hidden: ??bool = null,
         opacity_zero: ?bool = null,
-        pointer_events_none: ?bool = null,
+        pointer_events_none: ??bool = null,
 
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "display")) {
                 self.display = Display.parse(value);
             } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
-                self.visibility_hidden = std.ascii.eqlIgnoreCase(value, "hidden") or std.ascii.eqlIgnoreCase(value, "collapse");
+                self.visibility_hidden = parseInheritedFlag(value, &.{ "hidden", "collapse" }, &.{ "visible", "initial" });
             } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
                 self.opacity_zero = std.ascii.eqlIgnoreCase(value, "0");
             } else if (std.ascii.eqlIgnoreCase(name, "pointer-events")) {
-                self.pointer_events_none = std.ascii.eqlIgnoreCase(value, "none");
+                self.pointer_events_none = parseInheritedFlag(value, &.{"none"}, &.{
+                    "auto",         "initial", "visiblePainted", "visibleFill", "visibleStroke",
+                    "visible",      "painted", "fill",           "stroke",      "all",
+                    "bounding-box",
+                });
             }
         }
     };
 
-    const Computed = packed struct(u6) {
+    // The element's own values, from the cascade.
+    pub const Cascaded = struct {
         // Author value (inline or sheet). Without `author_display` it's the UA
         // fallback: .none when matchesUaDisplayNoneRule, else .other.
         display: Display = .other,
         author_display: bool = false,
-        visibility_hidden: bool = false,
+        // Null takes the parent's value
+        visibility_hidden: ?bool = null,
         opacity_zero: bool = false,
-        pointer_events_none: bool = false,
-
-        fn probe(self: Computed, comptime what: Probe, options: CheckVisibilityOptions) bool {
-            return switch (what) {
-                .hidden => self.display == .none or
-                    (options.check_visibility and self.visibility_hidden) or
-                    (options.check_opacity and self.opacity_zero),
-                .visibility => self.visibility_hidden,
-                .pointer_events => self.pointer_events_none,
-            };
-        }
+        pointer_events_none: ?bool = null,
     };
 
-    const Probe = enum { hidden, visibility, pointer_events };
+    const Computed = packed struct(u7) {
+        display: Display = .other,
+        author_display: bool = false,
+        visibility_hidden: bool = false, // inherited
+        pointer_events_none: bool = false, // inherited
+        in_display_none: bool = false, // This element or an ancestor
+        in_opacity_zero: bool = false, // This element or an ancestor
+
+        fn resolve(own: Cascaded, parent: Computed) Computed {
+            return .{
+                .display = own.display,
+                .author_display = own.author_display,
+                .visibility_hidden = own.visibility_hidden orelse parent.visibility_hidden,
+                .pointer_events_none = own.pointer_events_none orelse parent.pointer_events_none,
+                .in_display_none = own.display == .none or parent.in_display_none,
+                .in_opacity_zero = own.opacity_zero or parent.in_opacity_zero,
+            };
+        }
+
+        fn isHidden(self: Computed, options: CheckVisibilityOptions) bool {
+            return self.in_display_none or
+                (options.check_visibility and self.visibility_hidden) or
+                (options.check_opacity and self.in_opacity_zero);
+        }
+    };
 
     // UA stylesheet display:none fallback (HTML Rendering §15.3.1 "Hidden
     // elements"). Applied only when no author rule for `display` matched the
     // element — per CSS Cascade §6.1 any normal-origin author rule beats UA
     // origin regardless of specificity, so `.x { display: flex }` on a
     // `<div class="x" hidden>` must report visible.
-    fn finish(p: *Computed, el: *Element, priorities: *const Priorities(Declared)) void {
+    pub fn finish(p: *Cascaded, el: *Element, frame: *Frame, priorities: *const Priorities(Declared)) void {
         p.author_display = priorities.get(.display) != 0;
-        if (!p.author_display and matchesUaDisplayNoneRule(el)) {
+        if (!p.author_display and matchesUaDisplayNoneRule(el, frame)) {
             p.display = .none;
         }
     }
@@ -1367,10 +1420,10 @@ const Declarations = struct {
     }
 };
 
-const group_fields = std.meta.fieldNames(Declarations);
+const group_fields = @typeInfo(Declarations).@"struct".field_names;
 
 fn declaresAny(declared: anytype) bool {
-    inline for (comptime std.meta.fieldNames(@TypeOf(declared))) |field| {
+    inline for (@typeInfo(@TypeOf(declared)).@"struct".field_names) |field| {
         if (@field(declared, field) != null) {
             return true;
         }
@@ -1451,8 +1504,6 @@ const MAX_DOC_ORDER: u32 = std.math.maxInt(u22) - 1;
 const CheckVisibilityOptions = struct {
     check_visibility: bool = false,
     check_opacity: bool = false,
-    // false is only sound when every ancestor is already known visible.
-    ancestors: bool = true,
 };
 
 // Inline styles win over the stylesheets of the same importance, and the
@@ -1613,7 +1664,7 @@ pub fn customPropertyValue(self: *StyleManager, el: *Element, property_name: Str
     };
 
     var current: ?*Element = el;
-    while (current) |elem| : (current = elem.parentElement()) {
+    while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
         if (self.inlineStyleValue(elem, property_name)) |value| {
             return value;
         }
@@ -1692,7 +1743,7 @@ fn computedFontSizeAt(self: *StyleManager, element: ?*Element, depth: u8) f64 {
         return DEFAULT_FONT_SIZE;
     }
     const current = element orelse return DEFAULT_FONT_SIZE;
-    const parent = current.parentElement();
+    const parent = current.asNode().flatTreeParentElement(self.frame);
 
     if (self.inlineStyleValue(current, comptime .wrap("font-size"))) |raw| {
         if (self.parseFontSize(raw, parent, depth + 1)) |size| {
@@ -1707,9 +1758,27 @@ fn computedFontSizeAt(self: *StyleManager, element: ?*Element, depth: u8) f64 {
     return self.computedFontSizeAt(parent, depth + 1);
 }
 
+/// `inherit`, or `unset` on an inherited property.
+fn inheritsKeyword(value: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset");
+}
+
+/// An inherited boolean property's declared value: inner null for an explicit
+/// inherit, outer null for an invalid value, which the cascade drops.
+fn parseInheritedFlag(value: []const u8, comptime on: []const []const u8, comptime off: []const []const u8) ??bool {
+    if (inheritsKeyword(value)) return @as(?bool, null);
+    inline for (on) |keyword| {
+        if (std.ascii.eqlIgnoreCase(value, keyword)) return true;
+    }
+    inline for (off) |keyword| {
+        if (std.ascii.eqlIgnoreCase(value, keyword)) return false;
+    }
+    return null;
+}
+
 fn parseFontSize(self: *StyleManager, raw: []const u8, parent: ?*Element, depth: u8) ?f64 {
     const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
-    if (std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset")) {
+    if (inheritsKeyword(value)) {
         return self.computedFontSizeAt(parent, depth);
     }
     if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "medium")) {
@@ -2045,6 +2114,149 @@ test "StyleManager: memo: reuse and invalidation" {
     sm.sheetModified();
     try testing.expectEqual(false, sm.isHidden(p, .{}));
     try testing.expectEqual(2, sm.visibility.memo.count());
+}
+
+test "StyleManager: memo: inherited values, any query order" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<p><b style="pointer-events: none"><i style="visibility: hidden"><s style="opacity: 0"><u></u></s></i></b></p>
+    );
+    const p = div.asNode().firstChild().?.as(Element);
+    const b = p.asNode().firstChild().?.as(Element);
+    const i = b.asNode().firstChild().?.as(Element);
+    const s = i.asNode().firstChild().?.as(Element);
+    const u = s.asNode().firstChild().?.as(Element);
+
+    // The deepest first stores every ancestor, each resolved against its parent
+    try testing.expectEqual(true, sm.hasPointerEventsNone(u));
+    try testing.expectEqual(6, sm.visibility.memo.count());
+    try testing.expectEqual(Visibility.Computed{ .visibility_hidden = true, .pointer_events_none = true, .in_opacity_zero = true }, sm.visibility.memo.get(u).?);
+    try testing.expectEqual(Visibility.Computed{ .visibility_hidden = true, .pointer_events_none = true }, sm.visibility.memo.get(i).?);
+    try testing.expectEqual(Visibility.Computed{}, sm.visibility.memo.get(p).?);
+
+    try testing.expectEqual(false, sm.isHidden(u, .{}));
+    try testing.expectEqual(true, sm.isHidden(u, .{ .check_visibility = true }));
+    try testing.expectEqual(true, sm.isHidden(u, .{ .check_opacity = true }));
+    try testing.expectEqual(true, sm.isHidden(s, .{ .check_opacity = true }));
+    try testing.expectEqual(false, sm.isHidden(i, .{ .check_opacity = true }));
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(i));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(b));
+    try testing.expectEqual(true, sm.hasPointerEventsNone(b));
+    try testing.expectEqual(false, sm.hasPointerEventsNone(p));
+
+    // A DOM change drops the memo; a middle element first, then below and above it
+    try p.setStyle("display: none", frame);
+    try testing.expectEqual(true, sm.isHidden(i, .{}));
+    try testing.expectEqual(true, sm.isHidden(u, .{}));
+    // display itself isn't inherited
+    try testing.expectEqual(false, sm.hasDisplayNone(u));
+    try testing.expectEqual(true, sm.hasDisplayNone(p));
+    try testing.expectEqual(true, sm.hasPointerEventsNone(u));
+    try testing.expectEqual(false, sm.hasPointerEventsNone(p));
+    try testing.expectEqual(true, sm.isHidden(p, .{}));
+    try testing.expectEqual(false, sm.isHidden(div, .{}));
+
+    try p.setStyle("", frame);
+    try testing.expectEqual(false, sm.isHidden(u, .{}));
+    try testing.expectEqual(true, sm.hasPointerEventsNone(s));
+}
+
+test "StyleManager: memo: a descendant overrides inherited visibility and pointer-events" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<b style="visibility: hidden; pointer-events: none"><i style="visibility: visible; pointer-events: auto"><s><u style="visibility: inherit; pointer-events: unset"></u></s></i></b>
+    );
+    const b = div.asNode().firstChild().?.as(Element);
+    const i = b.asNode().firstChild().?.as(Element);
+    const s = i.asNode().firstChild().?.as(Element);
+    const u = s.asNode().firstChild().?.as(Element);
+
+    // Deepest first resolves the whole path in one walk; top-down hits the
+    // memo one level up each time
+    for ([_][4]*Element{ .{ u, s, i, b }, .{ b, i, s, u } }) |order| {
+        frame.styleChanged();
+        for (order) |el| {
+            try testing.expectEqual(el == b, sm.isHidden(el, .{ .check_visibility = true }));
+            try testing.expectEqual(el == b, sm.hasPointerEventsNone(el));
+        }
+    }
+
+    try i.setStyle("", frame);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(u));
+    try testing.expectEqual(true, sm.hasPointerEventsNone(u));
+
+    // inherit wins the cascade like any value, over a weaker declaration
+    try b.setStyle("visibility: inherit !important; visibility: hidden; pointer-events: inherit !important; pointer-events: none", frame);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(u));
+    try testing.expectEqual(false, sm.hasPointerEventsNone(b));
+
+    // An invalid value is dropped, so the parent's value still inherits
+    try b.setStyle("visibility: hidden; pointer-events: none", frame);
+    try u.setStyle("visibility: bogus; pointer-events: bogus", frame);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(u));
+    try testing.expectEqual(true, sm.hasPointerEventsNone(u));
+}
+
+// Every element of a deep chain probed in document order, the shape of an
+// interactivity pass. Walking all ancestors per probe is quadratic, which only
+// the growth between two depths a factor of TIMES apart tells apart. The
+// fastest of ROUNDS so a scheduler stall on the small chain can't skew it.
+test "StyleManager: memo: probing a deep tree stays linear" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const SMALL = 1000;
+    const TIMES = 10;
+    // well above TIMES, well below TIMES squared
+    const LIMIT = TIMES * 3;
+    const ROUNDS = 3;
+
+    const small = try buildDivChain(frame, SMALL);
+    const large = try buildDivChain(frame, SMALL * TIMES);
+
+    var small_us: u64 = std.math.maxInt(u64);
+    var large_us: u64 = std.math.maxInt(u64);
+    for (0..ROUNDS) |_| {
+        small_us = @min(small_us, probeChain(frame, small));
+        large_us = @min(large_us, probeChain(frame, large));
+    }
+    const ratio = @as(f64, @floatFromInt(large_us)) / @as(f64, @floatFromInt(@max(small_us, 1)));
+    try testing.expect(ratio < LIMIT);
+}
+
+fn buildDivChain(frame: *Frame, depth: usize) !*Element {
+    const doc = frame.window._document;
+    // Bottom-up: appending under a deep parent walks its ancestors
+    var top = try doc.createElement("div", null, frame);
+    try top.setStyle("pointer-events: none", frame);
+    for (1..depth) |_| {
+        const div = try doc.createElement("div", null, frame);
+        _ = try div.asNode().appendChild(top.asNode(), frame);
+        top = div;
+    }
+    return top;
+}
+
+fn probeChain(frame: *Frame, top: *Element) u64 {
+    const sm = &frame._style_manager;
+    frame.styleChanged();
+    const start = lp.datetime.microTimestamp(.awake);
+    var current: ?*Element = top;
+    while (current) |el| {
+        const child = if (el.asNode().firstChild()) |c| c.as(Element) else null;
+        // only the deepest one declares it
+        std.debug.assert(sm.hasPointerEventsNone(el) == (child == null));
+        current = child;
+    }
+    return @intCast(lp.datetime.microTimestamp(.awake) - start);
 }
 
 test "StyleManager: ruleInserted: append joins the buckets without a rebuild" {

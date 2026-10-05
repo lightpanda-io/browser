@@ -69,7 +69,7 @@ fn getUnitType(self: *Angle) u16 {
     self.syncFromAttribute();
     return switch (self._unit) {
         .turn => 0,
-        else => @intFromEnum(self._unit),
+        else => @backingInt(self._unit),
     };
 }
 
@@ -173,7 +173,7 @@ fn writeBack(self: *Angle, frame: *Frame) !void {
 }
 
 fn serialize(self: *const Angle, frame: *Frame) ![]const u8 {
-    return std.fmt.allocPrint(frame.local_arena, "{d}{s}", .{ self._value, unitSuffix(self._unit) });
+    return frame.local_arena.print("{d}{s}", .{ self._value, unitSuffix(self._unit) });
 }
 
 const Parsed = struct {

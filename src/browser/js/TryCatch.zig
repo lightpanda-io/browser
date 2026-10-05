@@ -136,10 +136,10 @@ pub const Caught = struct {
 
     pub fn logFmt(self: Caught, prefix: []const u8, writer: anytype) !void {
         var buf: [64]u8 = undefined;
-        try writer.write(try std.fmt.bufPrint(&buf, "{s}.exception", .{prefix}), self.exception orelse "???");
-        try writer.write(try std.fmt.bufPrint(&buf, "{s}.stack", .{prefix}), self.stack orelse "na");
-        try writer.write(try std.fmt.bufPrint(&buf, "{s}.line", .{prefix}), self.line);
-        try writer.write(try std.fmt.bufPrint(&buf, "{s}.caught", .{prefix}), self.caught);
+        try writer.write(try std.mem.print(&buf, "{s}.exception", .{prefix}), self.exception orelse "???");
+        try writer.write(try std.mem.print(&buf, "{s}.stack", .{prefix}), self.stack orelse "na");
+        try writer.write(try std.mem.print(&buf, "{s}.line", .{prefix}), self.line);
+        try writer.write(try std.mem.print(&buf, "{s}.caught", .{prefix}), self.caught);
     }
 
     pub fn jsonStringify(self: Caught, jw: anytype) !void {

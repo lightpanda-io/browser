@@ -61,10 +61,10 @@ pub const JsApi = struct {
 
     pub const kind = reflect.enumerated("kind", &.{ "subtitles", "captions", "descriptions", "chapters", "metadata" }, .{ .missing = "subtitles", .invalid = "metadata" });
 
-    pub const NONE = bridge.property(@as(u16, @intFromEnum(ReadyState.none)), .{ .template = true });
-    pub const LOADING = bridge.property(@as(u16, @intFromEnum(ReadyState.loading)), .{ .template = true });
-    pub const LOADED = bridge.property(@as(u16, @intFromEnum(ReadyState.loaded)), .{ .template = true });
-    pub const ERROR = bridge.property(@as(u16, @intFromEnum(ReadyState.@"error")), .{ .template = true });
+    pub const NONE = bridge.property(@as(u16, @backingInt(ReadyState.none)), .{ .template = true });
+    pub const LOADING = bridge.property(@as(u16, @backingInt(ReadyState.loading)), .{ .template = true });
+    pub const LOADED = bridge.property(@as(u16, @backingInt(ReadyState.loaded)), .{ .template = true });
+    pub const ERROR = bridge.property(@as(u16, @backingInt(ReadyState.@"error")), .{ .template = true });
 };
 
 const testing = @import("../../../../testing.zig");

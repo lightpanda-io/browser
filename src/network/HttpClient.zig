@@ -38,6 +38,7 @@ const Cache = @import("cache/Cache.zig");
 const RobotsGate = @import("RobotsGate.zig");
 const CorsGate = @import("CorsGate.zig");
 const UrlBlocklist = @import("UrlBlocklist.zig");
+const repeat = @import("../string.zig").repeat;
 
 pub const BlockPattern = UrlBlocklist.Pattern;
 
@@ -307,7 +308,7 @@ pub fn incrReqId(self: *Client) u32 {
 // Set a user agent override, allocated from self.allocator.
 pub fn setUserAgentOverride(self: *Client, ua: []const u8) !void {
     self.clearUserAgentOverride();
-    self.user_agent_override = try self.allocator.dupeZ(u8, ua);
+    self.user_agent_override = try self.allocator.dupeSentinel(u8, ua, 0);
 }
 
 // Clear any user agent override, restoring the default from config.
@@ -381,12 +382,12 @@ pub fn changeProxy(self: *Client, proxy: ?[:0]const u8) !void {
         self.http_proxy_owned = null;
     }
 
-    // Reset to the config default; if dupeZ below fails, http_proxy is
+    // Reset to the config default; if dupeSentinel below fails, http_proxy is
     // left pointing at this rather than at the freed dup.
     self.http_proxy = self.network.config.httpProxy();
 
     if (proxy) |p| {
-        const owned = try self.allocator.dupeZ(u8, p);
+        const owned = try self.allocator.dupeSentinel(u8, p, 0);
         self.http_proxy_owned = owned;
         self.http_proxy = owned;
     }
@@ -688,7 +689,7 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         //
         // These are all small, so duping them into the transfer's arena is
         // cheap and can solve some nasty UAF.
-        owned.url = try arena.dupeZ(u8, req.url);
+        owned.url = try arena.dupeSentinel(u8, req.url, 0);
 
         var cookie_jar: ?*CookieJar = null;
         if (owner) |o| {
@@ -702,12 +703,12 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         // nothing reads the caller's (possibly short-lived) url through it.
         const cookie_origin: Cookie.SiteForCookies = switch (req.cookie_origin orelse if (owner) |o| o.siteForCookies() else .none) {
             .none => .none,
-            .url => |url| .{ .url = try arena.dupeZ(u8, url) },
+            .url => |url| .{ .url = try arena.dupeSentinel(u8, url, 0) },
         };
         owned.cookie_origin = null;
 
         if (req.basic_auth_credentials) |c| {
-            owned.basic_auth_credentials = try arena.dupeZ(u8, c);
+            owned.basic_auth_credentials = try arena.dupeSentinel(u8, c, 0);
         }
 
         const raw_origin: ?[]const u8 = req.origin orelse if (owner) |o| o.scope.origin() else null;
@@ -1296,7 +1297,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     // URL this lookup ran against, not the final hop. req.url is arena-owned,
     // so the captured slice outlives any redirect rewrite.
     const key: [:0]const u8 = if (req.partial != null)
-        try std.fmt.allocPrintSentinel(arena.allocator(), "partial:{s}", .{req.url}, 0)
+        try arena.allocator().printSentinel("partial:{s}", .{req.url}, 0)
     else
         req.url;
     transfer._cache_key = key;
@@ -1900,9 +1901,20 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // callbacks run later, from dispatch(), never from here.
 
     if (effective_err != null and !is_conn_close_recv) {
+        const err = transfer.res.callback_error orelse effective_err.?;
+        if (try transfer.deliversHeaderBeforeError(msg.conn)) {
+            try transfer.materializeResponse(msg.conn, .{ .check_content_length = false });
+            if (self.enforceCorsResponse(msg, transfer)) {
+                return true;
+            }
+            self.removeConn(msg.conn);
+            transfer._conn = null;
+            try transfer.bufferHeaderThenError(err);
+            return true;
+        }
         self.removeConn(msg.conn);
         transfer._conn = null;
-        transfer.failAsync(transfer.res.callback_error orelse effective_err.?);
+        transfer.failAsync(err);
         return true;
     }
 
@@ -2098,6 +2110,12 @@ pub const Request = struct {
     // transfer, and thus we'll need to dupe it.
     body_outlives_request: bool = false,
 
+    // Should an error after the header arives still call the header_callback.
+    // Most cases just want the error. But fetch() is considered resolved once
+    // we get the header, so where the error happens (before or after headers
+    // is important)
+    header_before_body_error: bool = false,
+
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
 
@@ -2228,8 +2246,19 @@ fn fulfillRedirect(
     headers: []const http.Header,
     location: []const u8,
 ) !void {
-    errdefer |err| transfer.abortPipelineError(err);
+    self.fulfillRedirectInner(transfer, status, headers, location) catch |err| {
+        transfer.abortPipelineError(err);
+        return err;
+    };
+}
 
+fn fulfillRedirectInner(
+    self: *Client,
+    transfer: *Transfer,
+    status: u16,
+    headers: []const http.Header,
+    location: []const u8,
+) !void {
     // retrieve cookies from the fulfilled response's headers.
     if (transfer.req.credentialsAllowed()) {
         if (transfer.cookie_jar) |jar| {
@@ -2503,7 +2532,7 @@ pub const Transfer = struct {
                 return .none;
             }
             // it can only get further, so redirect a -> b -> a doesn't appear as a -> a
-            return @enumFromInt(@max(@intFromEnum(self), @intFromEnum(forRequest(req))));
+            return @fromBackingInt(@max(@backingInt(self), @backingInt(forRequest(req))));
         }
     };
 
@@ -3265,6 +3294,33 @@ pub const Transfer = struct {
         };
     }
 
+    fn deliversHeaderBeforeError(self: *const Transfer, conn: *const http.Connection) !bool {
+        if (self.req.header_before_body_error == false or self.res.headers_complete == false) {
+            return false;
+        }
+        if (self.res.stream.started) {
+            // The header was already delivered.
+            return false;
+        }
+        const status = try conn.getResponseCode();
+        if (isRedirectStatus(status) and self.req.redirect != .manual and conn.getResponseHeader("location", 0) != null) {
+            // this isn't the final response.
+            return false;
+        }
+        return true;
+    }
+
+    // The header made it, the body didn't. Some cases (header_before_body_error = true)
+    // want the header delivered first. (By default though, we just deliver the
+    // error)
+    fn bufferHeaderThenError(self: *Transfer, err: anyerror) !void {
+        try self._events.ensureUnusedCapacity(self.arena.allocator(), 3);
+        self._events.appendAssumeCapacity(.start);
+        self._events.appendAssumeCapacity(.header);
+        self._events.appendAssumeCapacity(.{ .err = err });
+        self.scheduleDispatch();
+    }
+
     // Buffer the standard success event sequence. `body` is either owned by
     // transfer.arena OR, through some other mechanism, outlives the transfer.
     fn bufferEvents(self: *Transfer, body: []const u8) !void {
@@ -3392,7 +3448,7 @@ pub const Transfer = struct {
         }
         // buildResponseHeader stores a curl-owned url pointer; re-anchor it
         // in the arena so it survives the conn release.
-        self.res.header.?.url = (try arena.dupeZ(u8, std.mem.span(self.res.header.?.url))).ptr;
+        self.res.header.?.url = (try arena.dupeSentinel(u8, std.mem.span(self.res.header.?.url), 0)).ptr;
 
         self.setResponseHeaders(try conn.collectResponseHeaders(arena.allocator()));
 
@@ -3667,7 +3723,7 @@ pub const Transfer = struct {
             // value we have now as the base
             if (transfer.findRequestHeader("referer")) |current| {
                 const alloc = arena.allocator();
-                if (try referrer.compute(alloc, policy, try alloc.dupeZ(u8, current), req.url)) |value| {
+                if (try referrer.compute(alloc, policy, try alloc.dupeSentinel(u8, current, 0), req.url)) |value| {
                     try transfer.setHeader("Referer", value, .{});
                 } else {
                     transfer.removeHeader("Referer");
@@ -3786,7 +3842,7 @@ pub const Transfer = struct {
             }
             found = true;
 
-            if (@intFromEnum(hdr.source) > @intFromEnum(source)) {
+            if (@backingInt(hdr.source) > @backingInt(source)) {
                 if (hdr.source == .fixed) {
                     log.debug(.http, "ignore overriding fixed header", .{ .header = hdr.name });
                 }
@@ -3794,7 +3850,7 @@ pub const Transfer = struct {
             }
             if (mode == .append and hdr.source == source) {
                 const sep = if (std.ascii.eqlIgnoreCase(name, "cookie")) "; " else ", ";
-                hdr.value = try std.fmt.allocPrint(self.arena.allocator(), "{s}{s}{s}", .{ hdr.value, sep, value });
+                hdr.value = try self.arena.allocator().print("{s}{s}{s}", .{ hdr.value, sep, value });
                 return;
             }
             hdr.value = try self.arena.allocator().dupe(u8, value);
@@ -3878,6 +3934,16 @@ pub const Transfer = struct {
         if (std.mem.startsWith(u8, line, "HTTP/")) {
             const conn: *http.Connection = @ptrCast(@alignCast(data));
             conn.transport.http.res.status_text = .fromStatusLine(line);
+            return chunk_len;
+        }
+
+        if (std.mem.trim(u8, line, "\r\n").len == 0) {
+            // End of a header block. A 1xx is followed by another one.
+            const conn: *http.Connection = @ptrCast(@alignCast(data));
+            const status = conn.getResponseCode() catch return chunk_len;
+            if (status >= 200) {
+                conn.transport.http.res.headers_complete = true;
+            }
             return chunk_len;
         }
 
@@ -4350,6 +4416,9 @@ const Response = struct {
     skip_body: bool = false,
     first_data_received: bool = false,
 
+    // The final (non-1xx) response's header block has been fully received.
+    headers_complete: bool = false,
+
     // Set when dataCallback deliberately killed the transfer to satisfy
     // `Request.partial`. processOneMessage uses it to tell our own abort
     // apart from a real CURLE_WRITE_ERROR and deliver the response (headers,
@@ -4432,7 +4501,7 @@ const Synthetic = struct {
             }
 
             const owner = transfer.owner orelse return error.BlobNotFound;
-            const key = url[0 .. std.mem.indexOfScalar(u8, url, '#') orelse url.len];
+            const key = url[0 .. std.mem.findScalar(u8, url, '#') orelse url.len];
             if (!Owner.Blob.urlBelongsToOrigin(key, owner.scope.origin())) {
                 return error.BlobNotFound;
             }
@@ -4859,12 +4928,12 @@ test "HttpClient: adblock verdicts apply per request" {
     }));
     try testing.expect(!testIsUrlBlocked(&client, .{
         .url = "https://ads.example.com/pixel.gif",
-        .document = "https://" ++ "a" ** 254 ++ ".com/",
+        .document = "https://" ++ repeat("a", 254) ++ ".com/",
         .resource_type = .image,
     }));
     // Same for a URL too long to normalize (uppercase forces the copy).
     try testing.expect(!testIsUrlBlocked(&client, .{
-        .url = "https://ads.example.com/" ++ "A" ** (8 * 1024),
+        .url = "https://ads.example.com/" ++ repeat("A", 8 * 1024),
         .document = "https://news.com/",
         .resource_type = .image,
     }));
@@ -5047,7 +5116,7 @@ test "HttpClient: Fetch header overrides restore after one hop" {
     };
 
     var transfer: Transfer = undefined;
-    transfer.req_headers = .{ .items = &overridden, .capacity = overridden.len };
+    transfer.req_headers = .fromOwnedSlice(&overridden);
     transfer._intercept_original_headers = &original;
     transfer.restoreInterceptHeaders();
 

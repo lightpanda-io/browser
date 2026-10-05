@@ -348,7 +348,7 @@ fn resolveImportsMatch(
 }
 
 fn isSpecialUrl(url: []const u8) bool {
-    const colon = std.mem.indexOfScalarPos(u8, url, 0, ':') orelse return false;
+    const colon = std.mem.findScalarPos(u8, url, 0, ':') orelse return false;
     const scheme = url[0..colon];
     inline for (.{ "https", "http", "ws", "wss", "file", "ftp" }) |s| {
         if (std.ascii.eqlIgnoreCase(scheme, s)) {

@@ -77,7 +77,7 @@ pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, mess
     try self.sendResponse(protocol.Response{
         .id = id,
         .@"error" = protocol.Error{
-            .code = @intFromEnum(code),
+            .code = @backingInt(code),
             .message = message,
         },
     });

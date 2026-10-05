@@ -452,6 +452,20 @@ pub fn deinit(self: *Frame) void {
         frame.deinit();
     }
 
+    // The Page outlives an iframe or popup that re-navigates: don't leave its
+    // pointer state on this document's elements.
+    const page = self.page;
+    if (page.input_hover_target) |el| {
+        if (el.ownerFrame(self) == self) {
+            page.input_hover_target = null;
+        }
+    }
+    if (page.input_pointer.down_target) |el| {
+        if (el.ownerFrame(self) == self) {
+            page.input_pointer.reset();
+        }
+    }
+
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame.deinit", .{ .url = self.url, .type = self._type });
     }
@@ -478,8 +492,6 @@ pub fn deinit(self: *Frame) void {
     if (self.window._navigator._service_worker) |container| {
         container.detach();
     }
-
-    const page = self.page;
 
     if (self._queued_navigation) |qn| {
         qn.arena.release();
@@ -696,7 +708,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         else if (is_srcdoc)
             "about:srcdoc"
         else
-            try self.arena.dupeZ(u8, request_url);
+            try self.arena.dupeSentinel(u8, request_url, 0);
 
         // even though about:blank navigations may share the same _data_, we
         // have to do this to make sure window.location is at a unique _address_.
@@ -825,7 +837,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     self.url = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
-            break :blk try self.arena.dupeZ(u8, request_url);
+            break :blk try self.arena.dupeSentinel(u8, request_url, 0);
         }
         break :blk try std.mem.concatWithSentinel(self.arena, u8, &.{ "http://", request_url }, 0);
     };
@@ -836,7 +848,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .reason = opts.reason,
         .method = opts.method,
         .body = if (opts.body) |b| try self.arena.dupe(u8, b) else null,
-        .header = if (opts.header) |h| try self.arena.dupeZ(u8, h) else null,
+        .header = if (opts.header) |h| try self.arena.dupeSentinel(u8, h, 0) else null,
     };
 
     const transfer = try http_client.newRequest(.{
@@ -947,7 +959,7 @@ pub fn scheduleNavigation(self: *Frame, request_url: []const u8, opts: NavigateO
 fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
     const resolved_url, const is_about_something = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
-            break :blk .{ try arena.dupeZ(u8, request_url), false };
+            break :blk .{ try arena.dupeSentinel(u8, request_url, 0), false };
         }
 
         if (std.mem.eql(u8, request_url, "about:blank")) {
@@ -1001,7 +1013,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     if (!opts.force and
         opts.kind != .reload and
         std.mem.eql(u8, target.url, resolved_url) and
-        std.mem.indexOfScalar(u8, resolved_url, '#') != null)
+        std.mem.findScalar(u8, resolved_url, '#') != null)
     {
         arena.release();
         return;
@@ -1012,7 +1024,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
     if (!opts.force and is_fragment_navigation) {
         const old_url = target.url;
-        target.url = try target.arena.dupeZ(u8, resolved_url);
+        target.url = try target.arena.dupeSentinel(u8, resolved_url, 0);
 
         const location = try Location.init(target.url, target);
         location.acquireRef();
@@ -1061,7 +1073,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     // that from its owner. Only a top-level navigation's initiator is another
     // document.
     if (nav_opts.initiator_url == null and target.parent == null and std.mem.startsWith(u8, referrer_source, "http")) {
-        nav_opts.initiator_url = .{ .url = try arena.dupeZ(u8, referrer_source) };
+        nav_opts.initiator_url = .{ .url = try arena.dupeSentinel(u8, referrer_source, 0) };
     }
     if (nav_opts.initiator_origin == null) {
         if (originator.origin) |o| {
@@ -1216,7 +1228,7 @@ fn loadEventsAborted(self: *const Frame) bool {
 pub fn cancelQueuedNavigation(self: *Frame) void {
     const qn = self._queued_navigation orelse return;
     const queued = self.page.queued_navigation;
-    if (std.mem.indexOfScalar(*Frame, queued.items, self)) |idx| {
+    if (std.mem.findScalar(*Frame, queued.items, self)) |idx| {
         _ = queued.swapRemove(idx);
     }
     qn.arena.release();
@@ -1468,7 +1480,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     const response_url = transfer.req.url;
     if (std.mem.eql(u8, response_url, self.url) == false) {
         // would be different than self.url in the case of a redirect
-        self.url = try self.arena.dupeZ(u8, response_url);
+        self.url = try self.arena.dupeSentinel(u8, response_url, 0);
         self.origin = try URL.getOrigin(self.arena, self.url);
     }
 
@@ -1652,8 +1664,8 @@ fn dispositionFilename(disposition: HttpClient.Header) ?[]const u8 {
     // Prefer the extended filename*= form when present, per RFC 6266.
     if (disposition.param("filename*")) |ext| {
         // charset'lang'value — take everything after the second quote.
-        if (std.mem.indexOfScalar(u8, ext, '\'')) |first| {
-            if (std.mem.indexOfScalarPos(u8, ext, first + 1, '\'')) |second| {
+        if (std.mem.findScalar(u8, ext, '\'')) |first| {
+            if (std.mem.findScalarPos(u8, ext, first + 1, '\'')) |second| {
                 return sanitizeFilename(ext[second + 1 ..]);
             }
         }
@@ -1670,7 +1682,7 @@ fn dispositionFilename(disposition: HttpClient.Header) ?[]const u8 {
 // regardless of the host platform.
 fn sanitizeFilename(name: []const u8) ?[]const u8 {
     var out = std.fs.path.basename(name);
-    if (std.mem.lastIndexOfScalar(u8, out, '\\')) |i| {
+    if (std.mem.findScalarLast(u8, out, '\\')) |i| {
         out = out[i + 1 ..];
     }
     if (out.len == 0 or std.mem.eql(u8, out, ".") or std.mem.eql(u8, out, "..")) {
@@ -1746,7 +1758,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
         self._pending_content_type = null;
         if (mime.content_type != .text_html) {
             if (transfer.contentType()) |ct| {
-                const end = std.mem.indexOfScalarPos(u8, ct, 0, ';') orelse ct.len;
+                const end = std.mem.findScalarPos(u8, ct, 0, ';') orelse ct.len;
                 const essence = std.mem.trim(u8, ct[0..end], " \t");
                 if (essence.len > 0) {
                     self._pending_content_type = try std.ascii.allocLowerString(self.arena, essence);
@@ -1787,7 +1799,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
             // the parser turns a literal "&#9733;" in the body into a star.
             var v = data;
             while (v.len > 0) {
-                const index = std.mem.indexOfAnyPos(u8, v, 0, &.{ '<', '>', '&' }) orelse {
+                const index = std.mem.findAnyPos(u8, v, 0, &.{ '<', '>', '&' }) orelse {
                     return buf.appendSlice(self.arena, v);
                 };
                 try buf.appendSlice(self.arena, v[0..index]);
@@ -2131,7 +2143,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         // extra defensive..maybe navigate added a new frame, and the index it
         // was added at was removed. Or maybe this frame was removed somehow
         // (which I don't think is possible)
-        if (std.mem.indexOfScalar(*Frame, self.child_frames.items, new_frame)) |idx| {
+        if (std.mem.findScalar(*Frame, self.child_frames.items, new_frame)) |idx| {
             _ = self.child_frames.swapRemove(idx);
         }
         log.debug(.frame, "iframe navigate failure", .{ .url = url, .err = err });
@@ -2243,10 +2255,13 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
 
 pub fn domChanged(self: *Frame) void {
     self.page.dom_version += 1;
-    self.styleChanged();
+    self.renderingChanged();
+}
 
-    // A DOM change is our "rendering opportunity": re-evaluate the layout
-    // observers. Both are no-ops unless something they track actually changed.
+/// A style change that is also our "rendering opportunity": re-evaluate the
+/// layout observers. Both are no-ops unless something they track changed.
+pub fn renderingChanged(self: *Frame) void {
+    self.styleChanged();
     observers.scheduleIntersectionChecks(self);
     observers.scheduleResizeChecks(self);
 }
@@ -2671,10 +2686,9 @@ pub fn notifyNetworkAlmostIdle(self: *Frame) void {
 // called from the parser. Text-node merging is the parser's responsibility
 // (see Parser.appendTextChunk in src/browser/parser/Parser.zig); this is the
 // "insert this fully-formed node as a new last child of parent" entry point.
-pub fn appendNew(self: *Frame, parent: *Node, child: *Node) !void {
+pub fn appendNew(self: *Frame, parent: *Node, child: *Node, parent_root: ?*Node) !void {
     lp.assert(child._parent == null, "Frame.appendNew", .{});
-    // opts is meaningless when from_parser (the first param) is true.
-    try self._insertNodeRelative(true, parent, child, .append, .{});
+    try self._insertNodeRelative(true, parent, child, .append, .{ .parser_root = parent_root });
 }
 
 // called from the parser when the node and all its children have been added
@@ -2994,6 +3008,8 @@ const InsertNodeOpts = struct {
     // the ready work itself once every node is in place, so an earlier
     // script observes its later siblings already inserted.
     run_ready: bool = true,
+    // The parent's root (parser only, avoids having to look it up)
+    parser_root: ?*Node = null,
 };
 pub fn insertNodeRelative(self: *Frame, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, relative, opts);
@@ -3066,14 +3082,14 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
         }
 
         if (child.is(Element)) |el| {
-            // Invoke connectedCallback for custom elements during parsing.
-            // For main document parsing we know nodes are connected (fast path);
-            // for fragment parsing (innerHTML) we check connectivity.
-            if (child.isConnected() or child.isInShadowTree()) {
+            const root = opts.parser_root orelse parent.getRootNode(.{});
+            if (idMapsForRoot(root)) |id_maps| {
                 if (el.getId()) |id| {
-                    try self.addElementId(parent, el, id);
+                    try self.addElementIdWithMaps(id_maps, el, id);
                 }
-                try Element.Html.Custom.enqueueConnectedCallbackOnElement(true, el, self);
+                if (rootIsConnected(root)) {
+                    try Element.Html.Custom.enqueueConnectedCallbackOnElement(true, el, self);
+                }
             }
         }
         return;
@@ -3537,11 +3553,11 @@ pub const NavigateOpts = struct {
     header: ?[:0]const u8 = null,
     // Set by scheduleNavigationWithArena from the originating frame's URL so
     // anchor click / form submit / location.href navigations carry a Referer.
-    // null on CDP Page.navigate (address-bar) and Page.reload — matches Chrome.
+    // null on Page.reload and on a CDP Page.navigate without `referrer` —
+    // matches Chrome.
     referer: ?[]const u8 = null,
-    // The originating frame's policy, paired with `referer` so redirect hops
-    // can recompute the header. null (e.g. a CDP-supplied referrer) leaves
-    // the Referer untouched across redirects.
+    // The policy that produced `referer`, so redirect hops can recompute the
+    // header. null leaves the Referer untouched across redirects.
     referrer_policy: ?referrer.Policy = null,
     // The "site for cookies" of the document that initiated a top-level
     // navigation, used when computing SameSite. Distinct from `referer`
@@ -3868,10 +3884,10 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         opts.body = buf.written();
         opts.header = switch (encoding) {
             .urlencode => "Content-Type: application/x-www-form-urlencoded",
-            .formdata => |b| try std.fmt.allocPrintSentinel(arena.allocator(), "Content-Type: multipart/form-data; boundary={s}", .{b}, 0),
+            .formdata => |b| try arena.allocator().printSentinel("Content-Type: multipart/form-data; boundary={s}", .{b}, 0),
             // Per WHATWG HTML §4.10.21.6, text/plain submissions include the form's
             // resolved encoding (accept-charset or document charset).
-            .plaintext => try std.fmt.allocPrintSentinel(arena.allocator(), "Content-Type: text/plain; charset={s}", .{charset}, 0),
+            .plaintext => try arena.allocator().printSentinel("Content-Type: text/plain; charset={s}", .{charset}, 0),
         };
     } else {
         action = try URL.concatQueryString(arena.allocator(), action, buf.written());
