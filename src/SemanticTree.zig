@@ -250,7 +250,7 @@ fn visitNode(
     const xpath = ctx.xpath_buffer.items;
 
     const has_explicit_label = if (node.is(Element)) |el|
-        el.getAttributeInterned("aria-label") != null or el.getAttributeInterned("title") != null
+        !isAllWhitespace(el.getAttributeInterned("aria-label") orelse "") or el.getAttributeInterned("title") != null
     else
         false;
 
