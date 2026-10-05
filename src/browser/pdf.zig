@@ -203,6 +203,9 @@ const PT: f32 = 0.75;
 /// Prefix marking an embedded font as a subset.
 const SUBSET_TAG = "LPSUBS";
 
+/// The layout's first font is always the bundled DejaVu Sans.
+const TOFU_FONT = 0;
+
 const Document = struct {
     arena: Allocator,
     layout: *const screenshot.Layout,
@@ -216,8 +219,11 @@ const Document = struct {
     /// Per page: content stream body and link annotation dictionaries.
     pages: []std.Io.Writer.Allocating,
     annots: []std.ArrayList([]const u8),
-    /// One per layout font, filled in as glyphs are drawn.
-    fonts: []FontUse,
+    /// One per layout font, filled in as glyphs are drawn. Null for a
+    /// --render-font face we can't embed (CFF, collections): its runs are
+    /// drawn as TOFU_FONT's missing-glyph box, the real text kept as
+    /// ActualText.
+    fonts: []?FontUse,
     /// Per block: its span texts concatenated (what the clusters index).
     texts: [][]const u8,
 
@@ -247,9 +253,14 @@ const Document = struct {
             a.* = .empty;
         }
 
-        const fonts = try arena.alloc(FontUse, layout.fonts().len);
-        for (fonts, layout.fonts()) |*f, info| {
-            f.* = try .init(info);
+        const fonts = try arena.alloc(?FontUse, layout.fonts().len);
+        for (fonts, layout.fonts(), 0..) |*f, info, i| {
+            f.* = FontUse.init(info) catch |err| blk: {
+                // The bundled face (always at TOFU_FONT) must parse.
+                if (i == TOFU_FONT) return err;
+                log.warn(.browser, "pdf font not embeddable", .{ .font = info.name[0..info.name_len], .err = err });
+                break :blk null;
+            };
         }
 
         const texts = try arena.alloc([]const u8, blocks.len);
@@ -330,9 +341,10 @@ const Document = struct {
                 const shift = self.breaks[pg];
                 const w = &self.pages[pg].writer;
                 if (li == 0 and b.marker_line != screenshot.LAYOUT_NONE) {
-                    try self.drawLine(w, lines[b.marker_line], shift);
+                    const block = self.blocks[bi];
+                    try self.drawLine(w, lines[b.marker_line], block.marker[0..block.marker_len], shift);
                 }
-                try self.drawLine(w, line, shift);
+                try self.drawLine(w, line, self.texts[bi], shift);
                 if (links.len > 0) {
                     try self.linkAnnotations(pg, line, shift, links);
                 }
@@ -383,9 +395,10 @@ const Document = struct {
         return links.items;
     }
 
-    fn drawLine(self: *Document, w: *std.Io.Writer, line: screenshot.LpLine, shift: f32) !void {
+    /// `text` is what the line's clusters index.
+    fn drawLine(self: *Document, w: *std.Io.Writer, line: screenshot.LpLine, text: []const u8, shift: f32) !void {
         for (self.layout.runs()[line.runs..][0..line.runs_len]) |run| {
-            try self.drawRun(w, run, line.x, shift);
+            try self.drawRun(w, run, line, text, shift);
         }
     }
 
@@ -393,11 +406,19 @@ const Document = struct {
     /// synthetic italic skew) in the text matrix, glyph ids as 2-byte CIDs,
     /// and an adjustment wherever the layout's pen differs from the font's
     /// advance (kerning, marks, visual order). Same transform as the raster.
-    fn drawRun(self: *Document, w: *std.Io.Writer, run: screenshot.LpRun, line_x: f32, shift: f32) !void {
-        const font = &self.fonts[run.font];
+    fn drawRun(self: *Document, w: *std.Io.Writer, run: screenshot.LpRun, line: screenshot.LpLine, text: []const u8, shift: f32) !void {
+        const line_x = line.x;
         const size = run.size;
         const baseline = run.baseline - shift;
-        try w.print("BT /F{d} 1 Tf ", .{run.font});
+        const tofu = self.fonts[run.font] == null;
+        const font_id = if (tofu) TOFU_FONT else run.font;
+        const font = &self.fonts[font_id].?;
+        if (tofu) {
+            try w.writeAll("/Span << /ActualText <FEFF");
+            try utf16Hex(w, try self.runText(run, line, text));
+            try w.writeAll("> >> BDC\n");
+        }
+        try w.print("BT /F{d} 1 Tf ", .{font_id});
         try rgb(w, run.color);
         try w.writeAll(" rg\n");
         var pen = line_x + run.offset;
@@ -417,19 +438,42 @@ const Document = struct {
                 const adj = (expected - gx) * 1000 / size;
                 if (@abs(adj) >= 0.5) try w.print("> {d:.1} <", .{adj});
             }
-            const gid: u16 = @intCast(g.id);
+            const gid: u16 = if (tofu) 0 else @intCast(g.id);
             const width = try font.use(self.arena, gid);
             try w.print("{X:0>4}", .{gid});
             expected = gx + width * size / 1000;
         }
         if (cur_y != null) try w.writeAll(">] TJ\n");
         try w.writeAll("ET\n");
+        if (tofu) try w.writeAll("EMC\n");
 
         const x0 = line_x + run.offset;
         for ([_]screenshot.LpDecoration{ run.underline, run.strike }) |d| {
             if (d.enabled == 0) continue;
             try rect(w, d.color, x0, baseline - d.offset, run.advance, d.size);
         }
+    }
+
+    /// The text a run was shaped from, in logical order: the line's clusters
+    /// in that face within the run's span.
+    fn runText(self: *Document, run: screenshot.LpRun, line: screenshot.LpLine, text: []const u8) ![]const u8 {
+        var picked: std.ArrayList(screenshot.LpCluster) = .empty;
+        for (self.layout.clusters()[line.clusters..][0..line.clusters_len]) |c| {
+            if (c.font != run.font) continue;
+            if (c.x < run.offset - 0.01 or c.x >= run.offset + run.advance - 0.01) continue;
+            try picked.append(self.arena, c);
+        }
+        std.mem.sort(screenshot.LpCluster, picked.items, {}, struct {
+            fn lt(_: void, a: screenshot.LpCluster, b: screenshot.LpCluster) bool {
+                return a.text_start < b.text_start;
+            }
+        }.lt);
+        var out: std.ArrayList(u8) = .empty;
+        for (picked.items) |c| {
+            if (c.text_start + c.text_len > text.len) continue;
+            try out.appendSlice(self.arena, text[c.text_start..][0..c.text_len]);
+        }
+        return out.items;
     }
 
     /// One URI annotation per line per link: clusters in visual order,
@@ -484,7 +528,7 @@ const Document = struct {
                 continue;
             }
             if (ligature) |l| {
-                try self.fonts[l.font].mapText(self.arena, l.gid, l.text.items);
+                if (self.fonts[l.font]) |*f| try f.mapText(self.arena, l.gid, l.text.items);
                 ligature = null;
             }
             if (c.glyph == screenshot.LAYOUT_NONE or t.len == 0) continue;
@@ -494,10 +538,12 @@ const Document = struct {
                 try buf.appendSlice(self.arena, t);
                 ligature = .{ .font = c.font, .gid = gid, .text = buf };
             } else {
-                try self.fonts[c.font].mapText(self.arena, gid, t);
+                if (self.fonts[c.font]) |*f| try f.mapText(self.arena, gid, t);
             }
         }
-        if (ligature) |l| try self.fonts[l.font].mapText(self.arena, l.gid, l.text.items);
+        if (ligature) |l| {
+            if (self.fonts[l.font]) |*f| try f.mapText(self.arena, l.gid, l.text.items);
+        }
     }
 
     // File structure: header, catalog, then each page's annotations,
@@ -554,7 +600,8 @@ const Document = struct {
         }
 
         var font_refs: std.Io.Writer.Allocating = .init(self.arena);
-        for (self.fonts, 0..) |*font, i| {
+        for (self.fonts, 0..) |*slot, i| {
+            const font = if (slot.*) |*f| f else continue;
             if (font.used.count() == 0) continue;
             const id = try font.writeObjects(self.arena, &out);
             try font_refs.writer.print("/F{d} {d} 0 R ", .{ i, id });
@@ -616,6 +663,19 @@ fn rect(w: *std.Io.Writer, color: u32, x: f32, y: f32, width: f32, height: f32) 
 }
 
 /// "r g b" in 0..1 for a 0xRRGGBB.
+/// UTF-8 as UTF-16BE hex digits, the body of a PDF hex string.
+fn utf16Hex(w: *std.Io.Writer, utf8: []const u8) !void {
+    var it = std.unicode.Utf8View.initUnchecked(utf8).iterator();
+    while (it.nextCodepoint()) |cp| {
+        if (cp < 0x10000) {
+            try w.print("{X:0>4}", .{@as(u16, @intCast(cp))});
+        } else {
+            const c = cp - 0x10000;
+            try w.print("{X:0>4}{X:0>4}", .{ @as(u16, @intCast(0xD800 + (c >> 10))), @as(u16, @intCast(0xDC00 + (c & 0x3FF))) });
+        }
+    }
+}
+
 fn rgb(w: *std.Io.Writer, color: u32) !void {
     try w.print("{d:.3} {d:.3} {d:.3}", .{
         @as(f32, @floatFromInt((color >> 16) & 0xff)) / 255,
@@ -744,16 +804,7 @@ const FontUse = struct {
             try w.print("{d} beginbfchar\n", .{chunk.len});
             for (chunk) |gid| {
                 try w.print("<{X:0>4}> <", .{gid});
-                // UTF-16BE.
-                var it = std.unicode.Utf8View.initUnchecked(self.unicode.get(gid).?).iterator();
-                while (it.nextCodepoint()) |cp| {
-                    if (cp < 0x10000) {
-                        try w.print("{X:0>4}", .{@as(u16, @intCast(cp))});
-                    } else {
-                        const c = cp - 0x10000;
-                        try w.print("{X:0>4}{X:0>4}", .{ @as(u16, @intCast(0xD800 + (c >> 10))), @as(u16, @intCast(0xDC00 + (c & 0x3FF))) });
-                    }
-                }
+                try utf16Hex(w, self.unicode.get(gid).?);
                 try w.writeAll(">\n");
             }
             try w.writeAll("endbfchar\n");
@@ -1112,6 +1163,63 @@ test "browser.pdf: rejects bad options" {
     var buf: [64]u8 = undefined;
     var fixed = std.Io.Writer.fixed(&buf);
     try testing.expectError(error.WriteFailed, print(a, .{ .root = div.asNode() }, .{}, &fixed, frame));
+}
+
+test "browser.pdf: --render-font faces" {
+    defer testing.test_session.closeAllPages();
+    testing.silenceLog(&.{.browser});
+    const frame = try testing.createFrame();
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>A日</p>");
+
+    const browser = frame._session.browser;
+    const saved = browser.renderer;
+    defer browser.renderer = saved;
+
+    const font = try screenshot.testFallbackFont(testing.arena_allocator);
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    {
+        // TrueType: embedded and subset next to DejaVu, under its own name.
+        const r = try screenshot.Renderer.init(&.{.{ .data = font.ptr, .data_len = font.len }});
+        defer r.deinit();
+        browser.renderer = r;
+        try print(testing.arena_allocator, .{ .root = div.asNode() }, .{}, &aw.writer, frame);
+        try testing.expectEqual(2, std.mem.count(u8, aw.written(), "/FontFile2"));
+        try testing.expectEqual(true, std.mem.find(u8, aw.written(), "/BaseFont /" ++ SUBSET_TAG ++ "+LPTest-Regular") != null);
+    }
+    {
+        // Labelled CFF: parley still draws it, but it can't be embedded, so
+        // its run is DejaVu's missing-glyph box carrying the real text.
+        const cff = try testing.arena_allocator.dupe(u8, font);
+        @memcpy(cff[0..4], "OTTO");
+        const r = try screenshot.Renderer.init(&.{.{ .data = cff.ptr, .data_len = cff.len }});
+        defer r.deinit();
+        browser.renderer = r;
+        aw.clearRetainingCapacity();
+        try print(testing.arena_allocator, .{ .root = div.asNode() }, .{}, &aw.writer, frame);
+        try testing.expectEqual(1, std.mem.count(u8, aw.written(), "/FontFile2"));
+        try testing.expectEqual(null, std.mem.find(u8, aw.written(), "LPTest"));
+        const content = try testContent(aw.written());
+        try testing.expectEqual(1, std.mem.count(u8, content, "/Span << /ActualText <FEFF65E5> >> BDC\nBT /F0 1 Tf"));
+        try testing.expectEqual(true, std.mem.find(u8, content, "[<0000>] TJ\nET\nEMC\n") != null);
+    }
+}
+
+/// Every deflated stream in `pdf`, inflated and concatenated.
+fn testContent(pdf: []const u8) ![]const u8 {
+    const arena = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var rest = pdf;
+    while (std.mem.find(u8, rest, "stream\n")) |start| {
+        const body = rest[start + 7 ..];
+        const end = std.mem.find(u8, body, "endstream") orelse break;
+        rest = body[end..];
+        var in: std.Io.Reader = .fixed(body[0..end]);
+        var d: flate.Decompress = .init(&in, .zlib, &.{});
+        _ = d.reader.streamRemaining(&out.writer) catch continue;
+    }
+    return out.written();
 }
 
 test "browser.pdf: parsePageRanges follows the CDP grammar" {
