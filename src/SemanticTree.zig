@@ -293,7 +293,7 @@ fn visitNode(
         }
 
         if (std.mem.eql(u8, role, "StaticText") and node._parent != null) {
-            if (parent_name != null and name != null and std.mem.indexOf(u8, parent_name.?, name.?) != null) {
+            if (parent_name != null and name != null and std.mem.find(u8, parent_name.?, name.?) != null) {
                 should_visit = false;
             }
         }
@@ -385,7 +385,7 @@ const JsonVisitor = struct {
         try self.jw.beginObject();
 
         try self.jw.objectField("nodeId");
-        try self.jw.write(try std.fmt.allocPrint(self.tree.arena, "{d}", .{data.id}));
+        try self.jw.write(try self.tree.arena.print("{d}", .{data.id}));
 
         try self.jw.objectField("backendDOMNodeId");
         try self.jw.write(data.id);
@@ -784,7 +784,7 @@ test "SemanticTree backendDOMNodeId" {
     const json_str = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
     defer testing.allocator.free(json_str);
 
-    try testing.expect(std.mem.indexOf(u8, json_str, "\"backendDOMNodeId\":") != null);
+    try testing.expect(std.mem.find(u8, json_str, "\"backendDOMNodeId\":") != null);
 }
 
 test "SemanticTree max_depth" {
@@ -803,7 +803,7 @@ test "SemanticTree max_depth" {
     try st.textStringify(&aw.writer);
     const text_str = aw.written();
 
-    try testing.expect(std.mem.indexOf(u8, text_str, "other") == null);
+    try testing.expect(std.mem.find(u8, text_str, "other") == null);
 }
 
 test "SemanticTree: deep nesting doesn't overflow the native stack" {
@@ -832,7 +832,7 @@ test "SemanticTree: deep nesting doesn't overflow the native stack" {
     const json_str = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
     defer testing.allocator.free(json_str);
 
-    try testing.expect(std.mem.indexOf(u8, json_str, "\"role\":\"link\",\"name\":\"deep\"") != null);
+    try testing.expect(std.mem.find(u8, json_str, "\"role\":\"link\",\"name\":\"deep\"") != null);
     try testing.expectEqual(depth, std.mem.count(u8, json_str, "/g[1]"));
     try testing.expect(std.mem.endsWith(u8, json_str, "/text()[1]\",\"nodeType\":3,\"nodeValue\":\"deep\",\"children\":[]}]}"));
 }

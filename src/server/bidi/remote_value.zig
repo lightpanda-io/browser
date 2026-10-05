@@ -343,7 +343,7 @@ pub const Serializer = struct {
         const handle: ?[]const u8 = if (own and (value.isObject() or value.isSymbol())) blk: {
             const id = try self.handles.add(value);
             handle_id = id;
-            break :blk try std.fmt.allocPrint(self.arena, "{d}", .{id});
+            break :blk try self.arena.print("{d}", .{id});
         } else null;
 
         return .{ .handle = handle, .body = try self.body(value, depth) };
@@ -500,7 +500,7 @@ pub const Serializer = struct {
         const registered = try self.registry.register(dom_node);
 
         var value: NodeValue = .{
-            .shared_id = try std.fmt.allocPrint(arena, "{d}", .{registered.id}),
+            .shared_id = try arena.print("{d}", .{registered.id}),
             .node_type = dom_node.getNodeType(),
             .child_node_count = dom_node.getChildrenCount(),
         };

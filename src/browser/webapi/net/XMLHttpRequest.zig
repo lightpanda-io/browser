@@ -417,7 +417,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
             break;
         }
     }
-    try self.applyResponseHeaders(.{ .list = .{ .list = resp.headers } });
+    try self.applyResponseHeaders(resp.headers);
 
     try self._response_data.appendSlice(self._arena.allocator(), resp.body.items);
 
@@ -454,7 +454,7 @@ fn getUpload(self: *XMLHttpRequest) !*XMLHttpRequestUpload {
 }
 
 fn getReadyState(self: *const XMLHttpRequest) u32 {
-    return @intFromEnum(self._ready_state);
+    return @backingInt(self._ready_state);
 }
 
 pub fn getResponseHeader(self: *const XMLHttpRequest, name: []const u8) ?[]const u8 {
@@ -532,7 +532,7 @@ fn getStatusText(self: *const XMLHttpRequest) []const u8 {
     if (self._response_status_text) |st| {
         return st;
     }
-    return std.http.Status.phrase(@enumFromInt(self._response_status)) orelse "";
+    return std.http.Status.phrase(@fromBackingInt(@intCast(self._response_status))) orelse "";
 }
 
 fn getResponseURL(self: *XMLHttpRequest) []const u8 {
@@ -654,13 +654,12 @@ fn applyContentType(self: *XMLHttpRequest, content_type: []const u8) !void {
     self._response_mime_raw = try self._arena.dupe(u8, std.mem.trim(u8, content_type, &std.ascii.whitespace));
 }
 
-fn applyResponseHeaders(self: *XMLHttpRequest, headers: http.HeaderIterator) !void {
-    var it = headers;
-    while (it.next()) |hdr| {
+fn applyResponseHeaders(self: *XMLHttpRequest, headers: []const http.Header) !void {
+    for (headers) |hdr| {
         if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
             continue;
         }
-        const joined = try std.fmt.allocPrint(self._arena.allocator(), "{s}: {s}", .{ hdr.name, hdr.value });
+        const joined = try self._arena.allocator().print("{s}: {s}", .{ hdr.name, hdr.value });
         try self._response_headers.append(self._arena.allocator(), joined);
     }
 }
@@ -687,7 +686,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         };
     }
 
-    try self.applyResponseHeaders(transfer.responseHeaderIterator());
+    try self.applyResponseHeaders(transfer.responseHeaders());
 
     self._response_status = transfer.responseStatus().?;
     if (transfer.statusText()) |st| {
@@ -697,7 +696,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         self._response_len = cl;
     }
     try self._response_data.ensureTotalCapacityPrecise(self._arena.allocator(), transfer.bodyLen());
-    self._response_url = try self._arena.dupeZ(u8, transfer.req.url);
+    self._response_url = try self._arena.dupeSentinel(u8, transfer.req.url, 0);
 
     const exec = self._exec;
 
@@ -847,11 +846,11 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(XMLHttpRequest.init, .{});
-    pub const UNSENT = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.unsent), .{ .template = true });
-    pub const OPENED = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.opened), .{ .template = true });
-    pub const HEADERS_RECEIVED = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.headers_received), .{ .template = true });
-    pub const LOADING = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.loading), .{ .template = true });
-    pub const DONE = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.done), .{ .template = true });
+    pub const UNSENT = bridge.property(@backingInt(XMLHttpRequest.ReadyState.unsent), .{ .template = true });
+    pub const OPENED = bridge.property(@backingInt(XMLHttpRequest.ReadyState.opened), .{ .template = true });
+    pub const HEADERS_RECEIVED = bridge.property(@backingInt(XMLHttpRequest.ReadyState.headers_received), .{ .template = true });
+    pub const LOADING = bridge.property(@backingInt(XMLHttpRequest.ReadyState.loading), .{ .template = true });
+    pub const DONE = bridge.property(@backingInt(XMLHttpRequest.ReadyState.done), .{ .template = true });
 
     pub const onreadystatechange = bridge.accessor(XMLHttpRequest.getOnReadyStateChange, XMLHttpRequest.setOnReadyStateChange, .{});
     pub const upload = bridge.accessor(XMLHttpRequest.getUpload, null, .{});

@@ -481,13 +481,13 @@ pub fn clearIndexRecordsForStore(self: *Engine, object_store_id: i64) !void {
 pub fn deleteIndexRecordsForRange(self: *Engine, object_store_id: i64, b: Bounds) !void {
     const ops = rangeOps(b);
     var buf: [400]u8 = undefined;
-    const sql = try std.fmt.bufPrintZ(&buf,
+    const sql = try std.mem.printSentinel(&buf,
         \\ delete from idb_index_records where index_id in (
         \\   select id from idb_indexes where object_store_id = ?1
         \\ ) and primary_key in (
         \\   select key from idb_records where object_store_id = ?1 and key {s} ?2 and key {s} ?3
         \\)
-    , .{ ops.lo, ops.hi });
+    , .{ ops.lo, ops.hi }, 0);
 
     return self.conn.exec(sql, .{ object_store_id, b.lower, b.upper });
 }
@@ -514,7 +514,7 @@ pub fn indexGetRange(self: *const Engine, arena: Allocator, object_store_id: i64
     const ops = rangeOps(b);
 
     var buf: [512]u8 = undefined;
-    const sql = try std.fmt.bufPrint(&buf,
+    const sql = try std.mem.print(&buf,
         \\ select r.value
         \\ from idb_index_records ir
         \\ join idb_records r on r.object_store_id = ?1 and r.key = ir.primary_key
@@ -532,7 +532,7 @@ pub fn indexGetRange(self: *const Engine, arena: Allocator, object_store_id: i64
 pub fn indexGetKeyRange(self: *const Engine, arena: Allocator, index_id: i64, b: Bounds) !?[]u8 {
     const ops = rangeOps(b);
     var buf: [320]u8 = undefined;
-    const sql = try std.fmt.bufPrint(&buf,
+    const sql = try std.mem.print(&buf,
         \\ select primary_key
         \\ from idb_index_records
         \\ where index_id = ?1 and key {s} ?2 and key {s} ?3
@@ -548,7 +548,7 @@ pub fn indexGetKeyRange(self: *const Engine, arena: Allocator, index_id: i64, b:
 pub fn indexCountRange(self: *const Engine, index_id: i64, b: Bounds) !i64 {
     const ops = rangeOps(b);
     var buf: [320]u8 = undefined;
-    const sql = try std.fmt.bufPrint(&buf,
+    const sql = try std.mem.print(&buf,
         \\ select count(*)
         \\ from idb_index_records
         \\ where index_id = ?1 and key {s} ?2 and key {s} ?3
@@ -569,7 +569,7 @@ pub fn indexGetAllRows(self: *const Engine, object_store_id: i64, index_id: i64,
     const order = if (reverse) "desc" else "asc";
 
     var buf: [640]u8 = undefined;
-    const sql = try std.fmt.bufPrint(&buf,
+    const sql = try std.mem.print(&buf,
         \\ select ir.key, {s}, r.value
         \\ from idb_index_records ir
         \\ join idb_records r on r.object_store_id = ?1 and r.key = ir.primary_key
@@ -619,7 +619,7 @@ pub fn indexCursorSeek(
     const pk_op = if (reverse) (if (pk_inclusive) "<= " else "< ") else (if (pk_inclusive) ">= " else "> ");
 
     var buf: [768]u8 = undefined;
-    const sql = try std.fmt.bufPrint(
+    const sql = try std.mem.print(
         &buf,
         \\ select ir.key, {s}{s} from idb_index_records ir {s}
         \\ where ir.index_id = ?2 and ir.key {s} ?3 and ir.key {s} ?4 and (ir.key {s}?5 or (ir.key = ?5 and ir.primary_key {s}?6))
@@ -710,17 +710,19 @@ fn rangeSql(buf: []u8, head: []const u8, b: Bounds, tail: []const u8) ![:0]u8 {
     if (b.is_point) {
         // optimized query for [common] point query. (key = ?2 or key = ?3)
         // to keep the param list the side for the caller.
-        return std.fmt.bufPrintZ(
+        return std.mem.printSentinel(
             buf,
             "{s} from idb_records where object_store_id = ?1 and (key = ?2 or key = ?3) {s}",
             .{ head, tail },
+            0,
         );
     }
 
-    return std.fmt.bufPrintZ(
+    return std.mem.printSentinel(
         buf,
         "{s} from idb_records where object_store_id = ?1 and key {s} ?2 and key {s} ?3{s}",
         .{ head, b.lower_op, b.upper_op, tail },
+        0,
     );
 }
 
@@ -800,7 +802,7 @@ pub fn cursorSeek(
     const order = if (reverse) "desc" else "asc";
 
     var buf: [320]u8 = undefined;
-    const sql = try std.fmt.bufPrint(
+    const sql = try std.mem.print(
         &buf,
         "{s} from idb_records where object_store_id = ?1 and key {s} ?2 and key {s} ?3 and key {s} ?4 order by key {s} limit 1 offset ?5",
         .{ if (with_value) "select key, value" else "select key", lower_op, upper_op, from_op, order },
@@ -1022,7 +1024,7 @@ fn seedNumbers(engine: *Engine, store_id: i64, arena: Allocator, ns: []const u8)
     for (ns) |n| {
         const enc = try Key.number(@floatFromInt(n)).encode(arena);
         var buf: [8]u8 = undefined;
-        try engine.add(store_id, enc, try std.fmt.bufPrint(&buf, "v{d}", .{n}));
+        try engine.add(store_id, enc, try std.mem.print(&buf, "v{d}", .{n}));
     }
 }
 

@@ -294,6 +294,54 @@
   }
 </script>
 
+<script id="ua_closed_popover_is_hidden">
+  {
+    // [popover]:not(:popover-open):not(dialog[open]) { display: none }
+    const pop = document.createElement('div');
+    pop.setAttribute('popover', '');
+    const child = document.createElement('p');
+    pop.appendChild(child);
+    document.body.appendChild(pop);
+
+    testing.expectEqual(false, pop.checkVisibility());
+    testing.expectEqual(false, child.checkVisibility());
+    testing.expectEqual('none', window.getComputedStyle(pop).display);
+
+    pop.showPopover();
+    testing.expectEqual(true, pop.checkVisibility());
+    testing.expectEqual(true, child.checkVisibility());
+
+    pop.hidePopover();
+    testing.expectEqual(false, pop.checkVisibility());
+
+    // Any popover value counts, and an author `display` still wins over the
+    // UA rule, as for every other UA display:none fallback.
+    pop.setAttribute('popover', 'manual');
+    testing.expectEqual(false, pop.checkVisibility());
+    pop.style.display = 'block';
+    testing.expectEqual(true, pop.checkVisibility());
+
+    // A modal/non-modal <dialog> that is also a popover is shown by [open].
+    const dialog = document.createElement('dialog');
+    dialog.setAttribute('popover', '');
+    document.body.appendChild(dialog);
+    testing.expectEqual(false, dialog.checkVisibility());
+    dialog.show();
+    testing.expectEqual(true, dialog.checkVisibility());
+
+    dialog.close();
+    testing.expectEqual(false, dialog.checkVisibility());
+    // dialog:popover-open { display: block } overrides dialog:not([open]).
+    dialog.showPopover();
+    testing.expectEqual(true, dialog.checkVisibility());
+    dialog.hidePopover();
+    testing.expectEqual(false, dialog.checkVisibility());
+
+    dialog.remove();
+    pop.remove();
+  }
+</script>
+
 <script id="hidden_attribute_propagates_through_check_visibility">
   {
     // [hidden] { display: none } applies to the element itself...

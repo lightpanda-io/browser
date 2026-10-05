@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const EventTarget = @import("EventTarget.zig");
@@ -79,6 +81,7 @@ pub const Orientation = struct {
     pub const Proto = EventTarget;
 
     _proto: *EventTarget,
+    _on_change: ?js.Function.Global = null,
 
     pub fn init(frame: *Frame) !*Orientation {
         return frame._factory.eventTarget(Orientation{
@@ -90,6 +93,57 @@ pub const Orientation = struct {
         return self._proto;
     }
 
+    pub fn inlineHandler(self: *const Orientation, typ: lp.String) ?js.Function.Global {
+        if (typ.eql(comptime .wrap("change"))) {
+            return self._on_change;
+        }
+        return null;
+    }
+
+    const LockType = enum {
+        any,
+        natural,
+        landscape,
+        portrait,
+        @"portrait-primary",
+        @"portrait-secondary",
+        @"landscape-primary",
+        @"landscape-secondary",
+        pub const js_enum_from_string = true;
+    };
+
+    fn getAngle(_: *const Orientation, frame: *Frame) u16 {
+        const orientation = frame.page.getViewport().orientation orelse return 0;
+        return orientation.angle;
+    }
+
+    // Without an emulated orientation, the screen never rotates, so its
+    // orientation follows its dimensions.
+    fn getType(_: *const Orientation, frame: *Frame) []const u8 {
+        const viewport = frame.page.getViewport();
+        if (viewport.orientation) |orientation| {
+            return @tagName(orientation.type);
+        }
+        const width = viewport.screen_width orelse viewport.width;
+        const height = viewport.screen_height orelse viewport.height;
+        return if (height > width) "portrait-primary" else "landscape-primary";
+    }
+
+    fn lock(_: *Orientation, _: LockType) !js.Promise {
+        return error.NotSupported;
+    }
+
+    // Nothing is ever locked.
+    fn unlock(_: *Orientation) void {}
+
+    fn getOnChange(self: *const Orientation) ?js.Function.Global {
+        return self._on_change;
+    }
+
+    fn setOnChange(self: *Orientation, cb: ?js.Function.Global) void {
+        self._on_change = cb;
+    }
+
     pub const JsApi = struct {
         pub const bridge = js.Bridge(Orientation);
 
@@ -99,7 +153,10 @@ pub const Orientation = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const angle = bridge.property(0, .{ .template = false });
-        pub const @"type" = bridge.property("landscape-primary", .{ .template = false });
+        pub const angle = bridge.accessor(Orientation.getAngle, null, .{});
+        pub const @"type" = bridge.accessor(Orientation.getType, null, .{});
+        pub const lock = bridge.function(Orientation.lock, .{});
+        pub const unlock = bridge.function(Orientation.unlock, .{});
+        pub const onchange = bridge.accessor(Orientation.getOnChange, Orientation.setOnChange, .{});
     };
 };

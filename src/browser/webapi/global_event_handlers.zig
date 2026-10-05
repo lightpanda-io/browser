@@ -42,7 +42,7 @@ const Key = struct {
         if (comptime lp.IS_DEBUG) {
             lp.assert(ptr < (1 << 57), "Key.fuse: pointer overflow", .{ .ptr = ptr });
         }
-        return ptr | (@as(u64, @intFromEnum(self.handler)) << 57);
+        return ptr | (@as(u64, @backingInt(self.handler)) << 57);
     }
 };
 
@@ -168,10 +168,10 @@ pub const Handler = enum(u7) {
 };
 
 const typeToHandler = std.StaticStringMap(Handler).initComptime(blk: {
-    const fields = std.meta.fields(Handler);
-    var entries: [fields.len]struct { []const u8, Handler } = undefined;
-    for (fields, 0..) |field, i| {
-        entries[i] = .{ field.name[2..], @enumFromInt(field.value) };
+    const info = @typeInfo(Handler).@"enum";
+    var entries: [info.field_names.len]struct { []const u8, Handler } = undefined;
+    for (info.field_names, info.field_values, 0..) |field_name, field_value, i| {
+        entries[i] = .{ field_name[2..], @fromBackingInt(field_value) };
     }
     break :blk entries;
 });

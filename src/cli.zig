@@ -192,9 +192,9 @@ const string = @import("string.zig");
 /// ```
 pub fn tagNames(comptime E: type) []const []const u8 {
     return comptime blk: {
-        const fields = @typeInfo(E).@"enum".fields;
-        var names: [fields.len][]const u8 = undefined;
-        for (fields, &names) |f, *n| n.* = f.name;
+        const field_names = @typeInfo(E).@"enum".field_names;
+        var names: [field_names.len][]const u8 = undefined;
+        for (field_names, &names) |field_name, *n| n.* = field_name;
         const frozen = names;
         break :blk &frozen;
     };
@@ -203,16 +203,16 @@ pub fn tagNames(comptime E: type) []const []const u8 {
 /// No command or choice has a `.`, `/` or `:`, so `markdown.com` is a url
 /// however close it is to `markdown`.
 pub fn isUrlLike(arg: []const u8) bool {
-    return std.mem.indexOfAny(u8, arg, ".:/") != null;
+    return std.mem.findAny(u8, arg, ".:/") != null;
 }
 
 /// `prefix` was stripped from `value` before matching, like `--log-filter`'s sign.
 pub fn invalidChoice(arg: []const u8, prefix: []const u8, value: []const u8, choices: []const []const u8) error{InvalidArgument} {
     var value_buf: [128]u8 = undefined;
-    const typed = std.fmt.bufPrint(&value_buf, "{s}{s}", .{ prefix, value }) catch value;
+    const typed = std.mem.print(&value_buf, "{s}{s}", .{ prefix, value }) catch value;
     if (string.closest(value, choices)) |near| {
         var near_buf: [128]u8 = undefined;
-        const suggestion = std.fmt.bufPrint(&near_buf, "{s}{s}", .{ prefix, near }) catch near;
+        const suggestion = std.mem.print(&near_buf, "{s}{s}", .{ prefix, near }) catch near;
         log.fatal(.app, "invalid option choice", .{ .arg = arg, .value = log.red(typed), .did_you_mean = log.green(suggestion) });
     } else {
         log.fatal(.app, "invalid option choice", .{ .arg = arg, .value = log.red(typed) });
@@ -243,9 +243,15 @@ pub fn Builder(comptime commands: anytype) type {
 
         const command_names = tagNames(Enum);
 
-        /// Creates an array of `StructField` out of given options.
-        fn optionsToStructFields(comptime options: anytype) [options.len]std.builtin.Type.StructField {
-            var fields: [options.len]std.builtin.Type.StructField = undefined;
+        const Field = struct {
+            name: [:0]const u8,
+            type: type,
+            attrs: std.lang.Type.Struct.FieldAttributes,
+        };
+
+        /// Creates an array of `Field` out of given options.
+        fn optionsToFields(comptime options: anytype) [options.len]Field {
+            var fields: [options.len]Field = undefined;
 
             inline for (options, 0..) |option, j| {
                 // Whether prefer `ArrayList` for the option.
@@ -310,9 +316,7 @@ pub fn Builder(comptime commands: anytype) type {
                 fields[j] = .{
                     .name = name,
                     .type = T,
-                    .default_value_ptr = default,
-                    .is_comptime = false,
-                    .alignment = @alignOf(T),
+                    .attrs = .{ .default_value_ptr = default },
                 };
             }
 
@@ -322,11 +326,11 @@ pub fn Builder(comptime commands: anytype) type {
         /// Drops duplicate fields, keeping the first occurrence. Only an exact
         /// duplicate (same name and type) is deduplicated; a name that
         /// reappears with a different type is a conflict.
-        fn dedupeStructFields(comptime fields: []const std.builtin.Type.StructField) []const std.builtin.Type.StructField {
+        fn dedupeFields(comptime fields: []const Field) []const Field {
             // The pairwise name comparisons blow the default 1000-branch quota.
             @setEvalBranchQuota(1000 + fields.len * fields.len * 100);
 
-            var out: [fields.len]std.builtin.Type.StructField = undefined;
+            var out: [fields.len]Field = undefined;
             var len: usize = 0;
 
             outer: for (fields) |field| {
@@ -350,7 +354,8 @@ pub fn Builder(comptime commands: anytype) type {
         /// Union type for provided commands.
         pub const Union = blk: {
             const len = commands.len + 1;
-            var union_fields: [len]std.builtin.Type.UnionField = undefined;
+            var names: [len][:0]const u8 = undefined;
+            var types: [len]type = undefined;
 
             var i: usize = 0;
             while (i < commands.len) : (i += 1) {
@@ -358,53 +363,44 @@ pub fn Builder(comptime commands: anytype) type {
                 const Command = @TypeOf(command);
                 const options = command.options;
 
-                const all_fields = optionsToStructFields(options) ++
+                const all_fields = optionsToFields(options) ++
                     (if (@hasField(Command, "shared_options"))
-                        optionsToStructFields(command.shared_options)
+                        optionsToFields(command.shared_options)
                     else
                         .{}) ++
                     (if (@hasField(Command, "positional"))
-                        [1]std.builtin.Type.StructField{positionalField(command.positional)}
+                        [1]Field{positionalField(command.positional)}
                     else
                         .{});
 
-                const T = StructFromFields(dedupeStructFields(&all_fields));
-
-                union_fields[i] = .{ .name = command.name, .type = T, .alignment = @alignOf(T) };
+                names[i] = command.name;
+                types[i] = StructFromFields(dedupeFields(&all_fields));
             }
 
             // Entry for help; just takes `Enum` itself.
-            const Help = Enum;
-            union_fields[i] = .{ .name = "help", .type = Help, .alignment = @alignOf(Help) };
+            names[i] = "help";
+            types[i] = Enum;
 
-            var names: [len][:0]const u8 = undefined;
-            var types: [len]type = undefined;
-            var attrs: [len]std.builtin.Type.UnionField.Attributes = undefined;
-            for (union_fields, 0..) |f, j| {
-                names[j] = f.name;
-                types[j] = f.type;
-                attrs[j] = .{ .@"align" = f.alignment };
-            }
-            break :blk @Union(.auto, Enum, &names, &types, &attrs);
+            break :blk @Union(.auto, Enum, &names, &types, &@splat(.{}));
         };
 
-        fn StructFromFields(comptime fields: []const std.builtin.Type.StructField) type {
+        fn StructFromFields(comptime fields: []const Field) type {
             var names: [fields.len][:0]const u8 = undefined;
             var types: [fields.len]type = undefined;
-            var attrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
+            var attrs: [fields.len]std.lang.Type.Struct.FieldAttributes = undefined;
             for (fields, 0..) |f, i| {
                 names[i] = f.name;
                 types[i] = f.type;
-                attrs[i] = .{ .@"comptime" = f.is_comptime, .@"align" = f.alignment, .default_value_ptr = f.default_value_ptr };
+                attrs[i] = f.attrs;
             }
             return @Struct(.auto, null, &names, &types, &attrs);
         }
 
-        /// Builds the `StructField` for a command's positional argument. A plain
+        /// Builds the `Field` for a command's positional argument. A plain
         /// positional is an optional that defaults to `null`; a `multiple`
         /// positional collects every occurrence into an `ArrayList` that
         /// defaults to empty.
-        fn positionalField(comptime positional: anytype) std.builtin.Type.StructField {
+        fn positionalField(comptime positional: anytype) Field {
             const is_multiple = @hasField(@TypeOf(positional), "multiple") and positional.multiple;
             const T = if (is_multiple) std.ArrayList(positional.type) else positional.type;
             const default: *const anyopaque = if (is_multiple)
@@ -414,9 +410,7 @@ pub fn Builder(comptime commands: anytype) type {
             return .{
                 .name = positional.name,
                 .type = T,
-                .default_value_ptr = default,
-                .is_comptime = false,
-                .alignment = @alignOf(T),
+                .attrs = .{ .default_value_ptr = default },
             };
         }
 
@@ -620,7 +614,7 @@ pub fn Builder(comptime commands: anytype) type {
             // Parse by type.
             return switch (option_info) {
                 .int => |int| {
-                    const Int = std.meta.Int(int.signedness, int.bits);
+                    const Int = @Int(int.signedness, int.bits);
 
                     const str = args.next() orelse return error.MissingArgument;
                     const v = std.fmt.parseInt(Int, str, 10) catch |err| {
@@ -649,14 +643,14 @@ pub fn Builder(comptime commands: anytype) type {
 
                         // DupeZ branch.
                         if (comptime pointer.sentinel()) |sentinel| {
-                            const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.alignment orelse @alignOf(u8)), str.len + 1);
+                            const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.attrs.@"align" orelse @alignOf(u8)), str.len + 1);
                             @memcpy(buf[0..str.len], str);
                             buf[str.len] = sentinel;
                             break :blk buf[0..str.len :sentinel];
                         }
 
                         // Dupe branch.
-                        const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.alignment orelse @alignOf(u8)), str.len);
+                        const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.attrs.@"align" orelse @alignOf(u8)), str.len);
                         @memcpy(buf, str);
                         break :blk buf;
                     };
@@ -684,14 +678,14 @@ pub fn Builder(comptime commands: anytype) type {
                     outer: while (it.next()) |part| {
                         const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
 
-                        inline for (_struct.fields) |f| {
-                            lp.assert(f.type == bool, "all fields of packed struct must be boolean", .{
+                        inline for (_struct.field_names, _struct.field_types) |field_name, field_type| {
+                            lp.assert(field_type == bool, "all fields of packed struct must be boolean", .{
                                 .option = option.name,
-                                .field = f.name,
+                                .field = field_name,
                             });
 
-                            if (std.mem.eql(u8, trimmed, @as([]const u8, f.name))) {
-                                @field(target, f.name) = true;
+                            if (std.mem.eql(u8, trimmed, @as([]const u8, field_name))) {
+                                @field(target, field_name) = true;
                                 continue :outer;
                             }
                         }
@@ -871,14 +865,14 @@ pub fn Builder(comptime commands: anytype) type {
                             const v = blk: {
                                 // DupeZ branch.
                                 if (comptime pointer.sentinel()) |sentinel| {
-                                    const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.alignment orelse @alignOf(u8)), str.len + 1);
+                                    const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.attrs.@"align" orelse @alignOf(u8)), str.len + 1);
                                     @memcpy(buf[0..str.len], str);
                                     buf[str.len] = sentinel;
                                     break :blk buf[0..str.len :sentinel];
                                 }
 
                                 // Dupe branch.
-                                const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.alignment orelse @alignOf(u8)), str.len);
+                                const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.attrs.@"align" orelse @alignOf(u8)), str.len);
                                 @memcpy(buf, str);
                                 break :blk buf;
                             };

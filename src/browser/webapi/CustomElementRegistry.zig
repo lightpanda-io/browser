@@ -287,7 +287,7 @@ fn validateName(name: []const u8) !void {
         return error.SyntaxError;
     }
 
-    if (std.mem.indexOf(u8, name, "-") == null) {
+    if (std.mem.find(u8, name, "-") == null) {
         return error.SyntaxError;
     }
 

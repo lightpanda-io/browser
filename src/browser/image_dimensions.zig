@@ -113,7 +113,7 @@ fn exifOrientation(segment: []const u8) u16 {
     }
 
     const tiff = segment[6..];
-    const endian: std.builtin.Endian = if (std.mem.eql(u8, tiff[0..2], "II"))
+    const endian: std.lang.Endian = if (std.mem.eql(u8, tiff[0..2], "II"))
         .little
     else if (std.mem.eql(u8, tiff[0..2], "MM"))
         .big

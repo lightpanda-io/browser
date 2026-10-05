@@ -43,7 +43,7 @@ free_lists: std.array_hash_map.Custom(Class, ?[*]u8, Class.Context, false) = .em
 // class, e.g. a 34-byte string and a 40-byte node recycle each other.
 const Class = packed struct(u64) {
     alignment: Alignment,
-    size: std.meta.Int(.unsigned, 64 - @bitSizeOf(Alignment)),
+    size: @Int(.unsigned, 64 - @bitSizeOf(Alignment)),
 
     fn of(len: usize, alignment: Alignment) Class {
         const class_alignment = Alignment.max(alignment, .of(usize));

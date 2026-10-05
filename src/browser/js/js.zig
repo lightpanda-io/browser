@@ -167,6 +167,10 @@ pub fn TypedArray(comptime T: type) type {
 pub const ArrayBuffer = struct {
     values: []const u8,
 
+    // Larger lengths throw a RangeError. Nothing real needs more, and an
+    // overcommitted buffer that size can take the whole process down.
+    pub const MAX_LENGTH = 4 * 1024 * 1024 * 1024;
+
     pub fn dupe(self: ArrayBuffer, allocator: Allocator) !ArrayBuffer {
         return .{ .values = try allocator.dupe(u8, self.values) };
     }
@@ -604,12 +608,26 @@ pub fn writeStackTrace(isolate: *v8.Isolate, stack_handle: *const v8.StackTrace,
 
     for (0..@intCast(frame_count)) |i| {
         const frame_handle = v8.v8__StackTrace__GetFrame(stack_handle, isolate, @intCast(i)).?;
-        if (v8.v8__StackFrame__GetFunctionName(frame_handle)) |name| {
-            var buf: [1024]u8 = undefined;
-            const n = v8.v8__String__WriteUtf8(name, isolate, &buf, buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
-            try writer.print("{s}{s}:{d}", .{ separator, buf[0..n], v8.v8__StackFrame__GetLineNumber(frame_handle) });
-        } else {
-            try writer.print("{s}<anonymous>:{d}", .{ separator, v8.v8__StackFrame__GetLineNumber(frame_handle) });
+
+        var name_buf: [512]u8 = undefined;
+        var name: []const u8 = "";
+        if (v8.v8__StackFrame__GetFunctionName(frame_handle)) |str| {
+            const n = v8.v8__String__WriteUtf8(str, isolate, &name_buf, name_buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
+            name = name_buf[0..n];
         }
+        var script_buf: [512]u8 = undefined;
+        var script: []const u8 = "";
+        if (v8.v8__StackFrame__GetScriptNameOrSourceURL(frame_handle)) |str| {
+            const n = v8.v8__String__WriteUtf8(str, isolate, &script_buf, script_buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
+            script = script_buf[0..n];
+        }
+
+        try writer.print("{s}{s} ({s}:{d}:{d})", .{
+            separator,
+            if (name.len == 0) "<anonymous>" else name,
+            if (script.len == 0) "<unknown>" else script,
+            v8.v8__StackFrame__GetLineNumber(frame_handle),
+            v8.v8__StackFrame__GetColumn(frame_handle),
+        });
     }
 }

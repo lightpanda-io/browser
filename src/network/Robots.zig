@@ -39,7 +39,7 @@ const CompiledPattern = struct {
             };
         }
 
-        const is_wildcard = std.mem.indexOfScalar(u8, pattern, '*') != null;
+        const is_wildcard = std.mem.findScalar(u8, pattern, '*') != null;
 
         if (is_wildcard) {
             return .{
@@ -252,7 +252,7 @@ fn appendContentSignals(
     var iter = std.mem.splitScalar(u8, value, ',');
     while (iter.next()) |raw_pair| {
         const pair = std.mem.trim(u8, raw_pair, &std.ascii.whitespace);
-        const eq = std.mem.indexOfScalarPos(u8, pair, 0, '=') orelse continue;
+        const eq = std.mem.findScalarPos(u8, pair, 0, '=') orelse continue;
 
         const name_raw = std.mem.trim(u8, pair[0..eq], &std.ascii.whitespace);
         const value_raw = std.mem.trim(u8, pair[eq + 1 ..], &std.ascii.whitespace);
@@ -309,14 +309,14 @@ fn parseRulesWithUserAgent(
         if (std.mem.startsWith(u8, trimmed, "#")) continue;
 
         // Remove end of line comment.
-        const true_line = if (std.mem.indexOfScalar(u8, trimmed, '#')) |pos|
+        const true_line = if (std.mem.findScalar(u8, trimmed, '#')) |pos|
             std.mem.trimEnd(u8, trimmed[0..pos], &std.ascii.whitespace)
         else
             trimmed;
 
         if (true_line.len == 0) continue;
 
-        const colon_idx = std.mem.indexOfScalar(u8, true_line, ':') orelse {
+        const colon_idx = std.mem.findScalar(u8, true_line, ':') orelse {
             log.debug(.browser, "robots line missing colon", .{ .line = line });
             continue;
         };

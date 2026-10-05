@@ -333,7 +333,7 @@ fn retire(self: *Session, page: *Page) void {
 }
 
 fn removePageFromList(self: *Session, page: *Page) void {
-    if (std.mem.indexOfScalar(*Page, self.pages.items, page)) |i| {
+    if (std.mem.findScalar(*Page, self.pages.items, page)) |i| {
         _ = self.pages.swapRemove(i);
     }
 }

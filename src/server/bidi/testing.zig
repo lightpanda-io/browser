@@ -112,7 +112,7 @@ pub const TestContext = struct {
                 .method = "browsingContext.navigate",
                 .params = .{
                     .context = context_id,
-                    .url = try std.fmt.allocPrint(base.arena_allocator, test_server ++ "{s}", .{url}),
+                    .url = try base.arena_allocator.print(test_server ++ "{s}", .{url}),
                     .wait = "none",
                 },
             });

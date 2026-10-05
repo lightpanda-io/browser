@@ -77,7 +77,7 @@ const Filters = union(Mode) {
 
     fn TypeOf(comptime mode: Mode) type {
         @setEvalBranchQuota(10_000);
-        return std.meta.fieldInfo(Filters, mode).type;
+        return @FieldType(Filters, @tagName(mode));
     }
 };
 

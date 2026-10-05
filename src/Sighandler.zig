@@ -129,7 +129,7 @@ fn sighandle(self: *SigHandler) noreturn {
             std.process.exit(1);
         }
 
-        switch (@as(std.posix.SIG, @enumFromInt(sig))) {
+        switch (@as(std.posix.SIG, @fromBackingInt(@intCast(sig)))) {
             .INT, .TERM => {
                 self.mutex.lockUncancelable(lp.io);
                 if (self.attempt > 1 and !self.no_hard_exit) {

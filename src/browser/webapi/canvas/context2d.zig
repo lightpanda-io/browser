@@ -66,7 +66,7 @@ pub const State = struct {
     stroke_style: Style = .{ .color = color.RGBA.Named.black },
 
     font_size: f64 = 10,
-    font_buf: [font_capacity]u8 = default_font.* ++ [_]u8{0} ** (font_capacity - default_font.len),
+    font_buf: [font_capacity]u8 = default_font.* ++ @as([font_capacity - default_font.len]u8, @splat(0)),
     font_len: u16 = default_font.len,
     font_overflow: ?[]const u8 = null,
 
@@ -156,7 +156,7 @@ fn parseFontSize(font: []const u8) ?f64 {
     var it = std.mem.tokenizeAny(u8, font, " \t\n\r");
     while (it.next()) |raw| {
         // "16px/1.5" carries a line-height.
-        const token = raw[0 .. std.mem.indexOfScalar(u8, raw, '/') orelse raw.len];
+        const token = raw[0 .. std.mem.findScalar(u8, raw, '/') orelse raw.len];
         const units = [_]struct { suffix: []const u8, px: f64 }{
             .{ .suffix = "px", .px = 1 },
             .{ .suffix = "pt", .px = 4.0 / 3.0 },

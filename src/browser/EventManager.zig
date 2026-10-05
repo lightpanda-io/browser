@@ -29,6 +29,7 @@ const Window = @import("webapi/Window.zig");
 const Element = @import("webapi/Element.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
+const Screen = @import("webapi/Screen.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const MediaQueryList = @import("webapi/css/MediaQueryList.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
@@ -91,6 +92,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
         .xhr => try self.dispatchDirect(target, event, target.subtype(XMLHttpRequestEventTarget).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .media_query_list => try self.dispatchDirect(target, event, target.subtype(MediaQueryList).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .performance => try self.dispatchDirect(target, event, target.subtype(Performance).inlineHandler(event._type_string), .{ .context = "dispatch" }),
+        .screen_orientation => try self.dispatchDirect(target, event, target.subtype(Screen.Orientation).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .window => try self.dispatchDirect(target, event, windowInlineHandler(target.subtype(Window), event._type_string), .{ .context = "dispatch" }),
         else => try self.dispatchDirect(target, event, null, .{ .context = "dispatch" }),
     }
@@ -332,15 +334,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
 
             // Inline handlers (e.g. onclick property) follow the same "report,
             // don't propagate" rule as addEventListener listeners — see Listener.run.
-            var caught: js.TryCatch.Caught = .{};
-            const handler_return: ?js.Value = ls.toLocal(inline_handler).tryCallWithThis(js.Value, target_et, .{event}, &caught) catch |err| ret: {
-                if (err == error.ExecutionTerminated) {
-                    return error.ExecutionTerminated;
-                }
-                frame.page.recordJsError(err);
-                log.debug(.event, "inline handler", .{ .err = err, .caught = caught });
-                break :ret null;
-            };
+            const handler_return = try callInlineHandler(&ls.local, inline_handler, target_et, event);
             processHandlerReturnValue(event, handler_return);
 
             if (adjusted) |a| {
@@ -393,15 +387,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
 
                 const adjusted: ?AdjustedTargets = if (event._needs_retargeting) .apply(event, current_target) else null;
 
-                var caught: js.TryCatch.Caught = .{};
-                const handler_return: ?js.Value = ls.toLocal(inline_handler).tryCallWithThis(js.Value, current_target, .{event}, &caught) catch |err| ret: {
-                    if (err == error.ExecutionTerminated) {
-                        return error.ExecutionTerminated;
-                    }
-                    frame.page.recordJsError(err);
-                    log.debug(.event, "inline handler", .{ .err = err, .caught = caught });
-                    break :ret null;
-                };
+                const handler_return = try callInlineHandler(&ls.local, inline_handler, current_target, event);
                 processHandlerReturnValue(event, handler_return);
 
                 if (adjusted) |a| {
@@ -466,6 +452,28 @@ fn legacyType(event: *const Event) ?lp.String {
         return comptime .wrap("mousewheel");
     }
     return null;
+}
+
+// Calls an inline handler (onclick attribute or property). An exception it
+// doesn't catch is reported to the global, as for an addEventListener
+// listener (Listener.run), and dispatch carries on.
+fn callInlineHandler(local: *const js.Local, handler: js.Function.Global, this: *EventTarget, event: *Event) error{ExecutionTerminated}!?js.Value {
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(local);
+    defer try_catch.deinit();
+
+    return local.toLocal(handler).callWithThisRethrow(js.Value, this, .{event}) catch |err| switch (err) {
+        error.ExecutionTerminated => return error.ExecutionTerminated,
+        error.JsException, error.TryCatchRethrow => {
+            Listener.reportException(&try_catch, local);
+            return null;
+        },
+        else => {
+            local.ctx.page.recordJsError(err);
+            log.debug(.event, "inline handler", .{ .err = err });
+            return null;
+        },
+    };
 }
 
 fn processHandlerReturnValue(event: *Event, handler_return: ?js.Value) void {

@@ -61,7 +61,7 @@
 
         window.disabledEvents = [];
         const btnDisabled = document.getElementById('btnDisabled');
-        for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+        for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'contextmenu', 'auxclick']) {
             btnDisabled.addEventListener(t, function(e) { window.disabledEvents.push(e.type); });
         }
 

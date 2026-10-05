@@ -53,11 +53,11 @@ pub fn constructor(w_: ?u32, h_: ?u32, frame: *Frame) !*Image {
     const el = node.as(Element);
 
     if (w_) |w| blk: {
-        const w_string = std.fmt.bufPrint(&frame.buf, "{d}", .{w}) catch break :blk;
+        const w_string = std.mem.print(&frame.buf, "{d}", .{w}) catch break :blk;
         try el.setAttributeSafe(comptime .wrap("width"), .wrap(w_string), frame);
     }
     if (h_) |h| blk: {
-        const h_string = std.fmt.bufPrint(&frame.buf, "{d}", .{h}) catch break :blk;
+        const h_string = std.mem.print(&frame.buf, "{d}", .{h}) catch break :blk;
         try el.setAttributeSafe(comptime .wrap("height"), .wrap(h_string), frame);
     }
     return el.as(Image);

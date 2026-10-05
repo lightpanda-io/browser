@@ -484,12 +484,7 @@ pub fn dispatch(self: *Notification, comptime event: EventType, data: ArgType(ev
 
 // Given an event type enum, returns the type of arg the event emits
 pub fn ArgType(comptime event: Notification.EventType) type {
-    inline for (std.meta.fields(Notification.Events)) |f| {
-        if (std.mem.eql(u8, f.name, @tagName(event))) {
-            return f.type;
-        }
-    }
-    unreachable;
+    return @FieldType(Notification.Events, @tagName(event));
 }
 
 // Given an event type enum, returns the listening function type
