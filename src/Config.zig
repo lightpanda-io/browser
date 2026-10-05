@@ -272,6 +272,7 @@ const CommonOptions = .{
     .{ .name = "user_agent_suffix", .type = ?[]const u8 },
     .{ .name = "http_cache_dir", .type = ?[]const u8 },
     .{ .name = "http_cache_entry_limit", .type = ?u32, .default = 1000 },
+    .{ .name = "render_font", .type = []const u8, .multiple = true },
     .{ .name = "web_bot_auth_key_file", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_keyid", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_domain", .type = ?[]const u8 },
@@ -771,6 +772,13 @@ pub fn httpCacheDir(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_dir,
         else => null,
+    };
+}
+
+pub fn renderFonts(self: *const Config) []const []const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.render_font.items,
+        else => &.{},
     };
 }
 

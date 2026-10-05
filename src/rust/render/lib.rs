@@ -20,8 +20,7 @@
 //! `--dump png`. Lightpanda has no layout engine, so a "screenshot" is the
 //! page's text content flowed into blocks — the same content the markdown
 //! dump produces — set with parley (line breaking, shaping, bidi), outlined
-//! with skrifa and filled by tiny-skia. Fonts are bundled so output doesn't
-//! depend on the host.
+//! with skrifa and filled by tiny-skia.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -35,6 +34,8 @@ use parley::{
 };
 use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
+use skrifa::raw::TableProvider;
+use skrifa::string::StringId;
 use skrifa::{GlyphId, MetadataProvider};
 use tiny_skia::{Color, FillRule, IntRect, Paint, PathBuilder, Pixmap, Rect, Transform};
 
@@ -88,6 +89,14 @@ pub struct LpBlock {
     pub flags: u8,
 }
 
+/// The bytes belong to the caller and must outlive the renderer and every
+/// layout it hands out.
+#[repr(C)]
+pub struct LpFontFile {
+    pub data: *const u8,
+    pub data_len: usize,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct LpRenderOpts {
@@ -129,6 +138,8 @@ pub struct LpLayout {
     pub glyphs_len: usize,
     pub clusters: *const LpCluster,
     pub clusters_len: usize,
+    /// Always starts with DejaVu Sans, used or not: pdf.zig draws the
+    /// glyphs of a face it can't embed as that font's missing-glyph box.
     pub fonts: *const LpFont,
     pub fonts_len: usize,
 }
@@ -227,8 +238,8 @@ pub struct LpCluster {
 pub const CLUSTER_LIGATURE_START: u32 = 1 << 0;
 pub const CLUSTER_LIGATURE_CONT: u32 = 1 << 1;
 
-/// A face the layout used: the raw font file (static, outlives the handle)
-/// and how to name it.
+/// A face the layout used: the raw font file (outlives the handle)  and how to
+/// name it.
 #[repr(C)]
 pub struct LpFont {
     pub data: *const u8,
@@ -541,10 +552,23 @@ pub unsafe extern "C" fn lp_render_abi(out: *mut LpAbi) {
 
 /// A renderer: parsed fonts, shaping scratch and the glyph cache. Not
 /// thread-safe; the caller drives each handle from one thread at a time.
-/// Null on panic (font registration is the only thing in there that could).
+/// `fonts` are fallbacks tried in order.
 #[no_mangle]
-pub extern "C" fn lp_render_new() -> *mut Renderer {
-    match std::panic::catch_unwind(Renderer::new) {
+pub unsafe extern "C" fn lp_render_new(
+    fonts: *const LpFontFile,
+    fonts_len: usize,
+) -> *mut Renderer {
+    let fonts = if fonts_len == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(fonts, fonts_len)
+    };
+    // 'static is the caller's promise above: the bytes outlive the renderer.
+    let files: Vec<&'static [u8]> = fonts
+        .iter()
+        .map(|f| std::slice::from_raw_parts(f.data, f.data_len))
+        .collect();
+    match std::panic::catch_unwind(|| Renderer::new(&files)) {
         Ok(r) => Box::into_raw(Box::new(r)),
         Err(_) => std::ptr::null_mut(),
     }
@@ -636,7 +660,7 @@ pub unsafe extern "C" fn lp_layout_new(
             return std::ptr::null_mut();
         };
         let (placed, height) = (*r).layout(&doc, width, margin, 1.0);
-        let handle = Box::new(LayoutHandle::export(&placed, height));
+        let handle = Box::new(LayoutHandle::export(&placed, height, &(*r).fallbacks));
         *out = handle.view();
         Box::into_raw(handle)
     }));
@@ -682,7 +706,7 @@ impl LayoutHandle {
         }
     }
 
-    fn export(placed: &[Placed], height: f32) -> LayoutHandle {
+    fn export(placed: &[Placed], height: f32, fallbacks: &[FallbackFace]) -> LayoutHandle {
         let mut h = LayoutHandle {
             height,
             blocks: Vec::with_capacity(placed.len()),
@@ -692,6 +716,15 @@ impl LayoutHandle {
             clusters: Vec::new(),
             fonts: Vec::new(),
         };
+        let (data, name, mono) = FONTS[0];
+        h.fonts.push(LpFont {
+            data: data.as_ptr(),
+            data_len: data.len(),
+            index: 0,
+            name: name.as_ptr(),
+            name_len: name.len(),
+            mono: mono as u8,
+        });
         for p in placed {
             let lines = h.lines.len() as u32;
             if p.kind != BLOCK_RULE {
@@ -716,6 +749,17 @@ impl LayoutHandle {
                 kind: p.kind,
                 quote_bars: p.quote_bars,
             });
+        }
+        // font_index only knows the bundled faces by name.
+        for f in &mut h.fonts {
+            if let Some(fb) = fallbacks
+                .iter()
+                .find(|fb| fb.data == f.data && fb.index == f.index)
+            {
+                f.name = fb.name.as_ptr();
+                f.name_len = fb.name.len();
+                f.mono = fb.mono as u8;
+            }
         }
         h
     }
@@ -954,8 +998,49 @@ type GlyphKey = (usize, u32);
 
 pub struct Renderer {
     fcx: FontContext,
+    fallbacks: Vec<FallbackFace>,
     lcx: LayoutContext<Rgb>,
     glyph_cache: HashMap<GlyphKey, Option<tiny_skia::Path>>,
+}
+
+/// A face from a --render-font file
+struct FallbackFace {
+    data: *const u8,
+    index: u32,
+    name: String,
+    mono: bool,
+}
+
+impl FallbackFace {
+    fn new(data: &[u8], index: u32) -> Self {
+        let font = skrifa::FontRef::from_index(data, index).ok();
+        // PostScript names are already valid PDF names; filter anyway, the
+        // file is user input.
+        let mut name: String = font
+            .as_ref()
+            .and_then(|f| {
+                f.localized_strings(StringId::POSTSCRIPT_NAME)
+                    .english_or_first()
+            })
+            .map(|n| {
+                n.chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                    .collect()
+            })
+            .unwrap_or_default();
+        if name.is_empty() {
+            name = format!("Fallback{index}");
+        }
+        let mono = font
+            .and_then(|f| f.post().ok())
+            .is_some_and(|p| p.is_fixed_pitch() != 0);
+        Self {
+            data: data.as_ptr(),
+            index,
+            name,
+            mono,
+        }
+    }
 }
 
 /// A laid-out block. Positions are layout px from the top-left of the
@@ -1023,7 +1108,7 @@ fn block_metrics(b: &Block) -> (f32, FontWeight, f32, f32, f32) {
 }
 
 impl Renderer {
-    fn new() -> Self {
+    fn new(files: &[&'static [u8]]) -> Self {
         let mut collection = Collection::new(CollectionOptions {
             shared: false,
             system_fonts: false,
@@ -1032,6 +1117,27 @@ impl Renderer {
         Self::register(&mut collection, FONTS[1].0);
         let mono = Self::register(&mut collection, FONTS[2].0);
         Self::register(&mut collection, FONTS[3].0);
+
+        // Families in file order, faces of a collection (.ttc) in theirs.
+        // parley picks per cluster the first family in the list that maps
+        // the character, so DejaVu keeps everything it covers.
+        let mut families: Vec<fontique::FamilyId> = Vec::new();
+        let mut fallbacks = Vec::new();
+        for &data in files {
+            let blob = Blob::new(std::sync::Arc::new(data));
+            let mut registered = collection.register_fonts(blob, None);
+            // Not returned in file order; a collection's first face leads.
+            registered.sort_by_key(|(_, faces)| faces.iter().map(|f| f.index()).min());
+            for (family, faces) in registered {
+                if !families.contains(&family) {
+                    families.push(family);
+                }
+                for face in faces {
+                    fallbacks.push(FallbackFace::new(data, face.index()));
+                }
+            }
+        }
+
         for generic in [
             GenericFamily::SansSerif,
             GenericFamily::Serif,
@@ -1039,14 +1145,21 @@ impl Renderer {
             GenericFamily::Cursive,
             GenericFamily::Fantasy,
         ] {
-            collection.set_generic_families(generic, [sans].into_iter());
+            collection.set_generic_families(
+                generic,
+                std::iter::once(sans).chain(families.iter().copied()),
+            );
         }
-        collection.set_generic_families(GenericFamily::Monospace, [mono].into_iter());
+        collection.set_generic_families(
+            GenericFamily::Monospace,
+            std::iter::once(mono).chain(families.iter().copied()),
+        );
         Self {
             fcx: FontContext {
                 collection,
                 source_cache: SourceCache::default(),
             },
+            fallbacks,
             lcx: LayoutContext::new(),
             glyph_cache: HashMap::new(),
         }

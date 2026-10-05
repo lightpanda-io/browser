@@ -520,6 +520,11 @@
     \\  --proxy-bearer-token <TOKEN>
     \\          Token sent for bearer authentication with the proxy:
     \\          Proxy-Authorization: Bearer <token>.
+    \\  --render-font <PATH>
+    \\          Font file (TrueType, OpenType or collection) used by the png and pdf
+    \\          dumps, and by screenshots, for characters the bundled DejaVu fonts
+    \\          lack, e.g. CJK. Can be passed multiple times; earlier files win.
+    \\          e.g. --render-font NotoSansCJK-Regular.ttc
     \\  --robot-store-entry-limit <INT>
     \\          Maximum number of entries kept in the RobotStore. 0 means no limit.
     \\          Defaults to 1000.
