@@ -87,7 +87,7 @@ fn setCookies(cmd: *CDP.Command) !void {
     }
 
     _ = setCdpCookies(&bc.session.cookie_jar, params.cookies) catch |err| switch (err) {
-        error.InvalidCookie => return cmd.sendError(-32602, "Invalid cookie fields", .{}),
+        error.InvalidCookie, error.MissingUrlOrDomain => return cmd.sendError(-32602, "Invalid cookie fields", .{}),
         else => return err,
     };
 
@@ -174,13 +174,26 @@ fn buildCdpCookie(allocator: Allocator, param: CdpCookie) !Cookie {
     }
 
     // Chrome's MakeCookieFromProtocolValues: an https url makes the cookie
-    // Secure whatever `secure` says.
-    const secure = (param.secure orelse false) or (if (param.url) |url| URL.isSecure(url) else false);
+    // Secure whatever `secure` says, and a `domain` overrides the url's host.
+    // Only a domain with a leading dot is a Domain attribute; without one,
+    // the cookie is host-only on that host.
+    const url = param.url orelse "";
+    const domain = param.domain orelse "";
+    const secure = (param.secure orelse false) or URL.isSecure(url);
+    const dotted = std.mem.startsWith(u8, domain, ".");
+    const host = if (domain.len > 0)
+        domain[@intFromBool(dotted)..]
+    else if (url.len > 0)
+        URL.getHostname(url)
+    else
+        return error.MissingUrlOrDomain;
+    const cookie_url = try std.fmt.allocPrintSentinel(allocator, "{s}://{s}/", .{ if (secure) "https" else "http", host }, 0);
+    defer allocator.free(cookie_url);
 
-    return Cookie.fromFields(allocator, param.url, .{
+    return Cookie.fromFields(allocator, cookie_url, .{
         .name = param.name,
         .value = param.value,
-        .domain = param.domain,
+        .domain = if (dotted) domain else null,
         .path = param.path,
         .expires = param.expires,
         .secure = secure,
@@ -320,7 +333,7 @@ test "cdp.Storage: cookies" {
     });
     try ctx.expectSentResult(.{
         .cookies = &[_]ResCookie{
-            .{ .name = "test", .value = "value", .domain = ".example.com", .path = "/mango", .size = 9 },
+            .{ .name = "test", .value = "value", .domain = "example.com", .path = "/mango", .size = 9 },
             .{ .name = "test2", .value = "value2", .domain = "car.example.com", .path = "/", .size = 11, .secure = true }, // No Pancakes!
             .{ .name = "test3", .value = "value3", .domain = "gov.uk", .path = "/", .size = 11 },
         },

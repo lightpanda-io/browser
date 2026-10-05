@@ -294,6 +294,7 @@ fn setCookie(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const stored = CdpStorage.setCdpCookies(&bc.session.cookie_jar, &.{params}) catch |err| switch (err) {
         error.InvalidCookie => return cmd.sendError(-32602, "Sanitizing cookie failed", .{}),
+        error.MissingUrlOrDomain => return cmd.sendError(-32602, "At least one of the url or domain needs to be specified", .{}),
         else => return err,
     };
 
@@ -307,7 +308,7 @@ fn setCookies(cmd: *CDP.Command) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     _ = CdpStorage.setCdpCookies(&bc.session.cookie_jar, params.cookies) catch |err| switch (err) {
-        error.InvalidCookie => return cmd.sendError(-32602, "Invalid cookie fields", .{}),
+        error.InvalidCookie, error.MissingUrlOrDomain => return cmd.sendError(-32602, "Invalid cookie fields", .{}),
         else => return err,
     };
 
@@ -975,7 +976,7 @@ test "cdp.Network: cookies" {
         .params = .{ .browserContextId = "BID-S" },
     });
     // Just the untouched test4 should be in the result
-    try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{.{ .name = "test4", .value = "value4", .domain = ".example.com", .path = "/mango", .size = 11 }} }, .{ .id = 8 });
+    try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{.{ .name = "test4", .value = "value4", .domain = "example.com", .path = "/mango", .size = 11 }} }, .{ .id = 8 });
 
     // Empty after clearBrowserCookies
     try ctx.processMessage(.{
@@ -1019,7 +1020,7 @@ test "cdp.Network: invalid cookie fields are refused as Chrome does" {
     try ctx.processMessage(.{
         .id = 3,
         .method = "Storage.setCookies",
-        .params = .{ .cookies = &[_]CdpCookie{.{ .name = "a", .value = "v", .domain = "other.com", .url = "https://example.com/" }} },
+        .params = .{ .cookies = &[_]CdpCookie{.{ .name = "a", .value = "v" }} },
     });
     try ctx.expectSentError(-32602, "Invalid cookie fields", .{ .id = 3 });
 
@@ -1032,6 +1033,35 @@ test "cdp.Network: invalid cookie fields are refused as Chrome does" {
     try ctx.expectSentResult(.{ .success = true }, .{ .id = 4 });
     try ctx.processMessage(.{ .id = 5, .method = "Storage.getCookies", .params = .{ .browserContextId = "BID-INV" } });
     try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{.{ .name = "a", .value = "v", .domain = "example.com", .path = "/", .size = 2, .secure = true }} }, .{ .id = 5 });
+}
+
+test "cdp.Network: a cookie domain overrides the url's host" {
+    const CdpCookie = CdpStorage.CdpCookie;
+    const ResCookie = CdpStorage.ResCookie;
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-DOM" });
+
+    // As in Chrome, the url only makes the cookie Secure; without a leading
+    // dot the domain is host-only.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.setCookies",
+        .params = .{ .cookies = &[_]CdpCookie{
+            .{ .name = "a", .value = "v", .url = "https://example.com/", .domain = "other.com" },
+            .{ .name = "b", .value = "v", .url = "https://example.com/", .domain = ".other.com" },
+        } },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try ctx.processMessage(.{ .id = 2, .method = "Storage.getCookies", .params = .{ .browserContextId = "BID-DOM" } });
+    try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{
+        .{ .name = "a", .value = "v", .domain = "other.com", .path = "/", .size = 2, .secure = true },
+        .{ .name = "b", .value = "v", .domain = ".other.com", .path = "/", .size = 2, .secure = true },
+    } }, .{ .id = 2 });
+
+    try ctx.processMessage(.{ .id = 3, .method = "Network.setCookie", .params = CdpCookie{ .name = "c", .value = "v" } });
+    try ctx.expectSentError(-32602, "At least one of the url or domain needs to be specified", .{ .id = 3 });
 }
 
 test "cdp.Network: clearBrowserCookies accepts empty params object" {
