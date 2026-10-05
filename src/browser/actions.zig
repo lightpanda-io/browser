@@ -178,25 +178,47 @@ pub fn fill(node: *DOMNode, text: []const u8, frame: *Frame) !void {
     };
 
     if (el.is(Element.Html.Input)) |input| {
-        input.setValue(text, frame) catch |err| {
-            lp.log.debug(.app, "fill input failed", .{ .err = err });
-            return error.ActionFailed;
-        };
-    } else if (el.is(Element.Html.TextArea)) |textarea| {
-        textarea.setValue(text, frame) catch |err| {
-            lp.log.debug(.app, "fill textarea failed", .{ .err = err });
-            return error.ActionFailed;
-        };
-    } else if (el.is(Element.Html.Select)) |select| {
-        select.setValue(text, frame) catch |err| {
-            lp.log.debug(.app, "fill select failed", .{ .err = err });
-            return error.ActionFailed;
-        };
-    } else {
+        return fillControl(input, text, frame);
+    }
+    if (el.is(Element.Html.TextArea)) |textarea| {
+        return fillControl(textarea, text, frame);
+    }
+    if (el.is(Element.Html.Select) != null) {
+        return selectOption(node, text, frame);
+    }
+    return error.InvalidNodeType;
+}
+
+/// A control without a caret (date, color, range) takes the value whole, as
+/// its picker would. `change` fires right away: nothing commits it on blur.
+fn fillControl(ctl: anytype, text: []const u8, frame: *Frame) !void {
+    const el = ctl.asElement();
+    if (!ctl.acceptsTextEntry() or !Frame.user_input.acceptsEdit(el)) {
         return error.InvalidNodeType;
     }
 
-    try dispatchInputAndChangeEvents(el, frame);
+    if (!ctl.tracksSelection()) {
+        ctl.setUserValue(text, frame) catch |err| {
+            lp.log.debug(.app, "fill setValue failed", .{ .err = err });
+            return error.ActionFailed;
+        };
+        return dispatchInputAndChangeEvents(el, frame);
+    }
+
+    try ctl.select(frame);
+    const edited = Frame.user_input.insertInto(frame, ctl, text) catch |err| {
+        lp.log.debug(.app, "fill insert failed", .{ .err = err });
+        return error.ActionFailed;
+    };
+    if (!edited) {
+        lp.log.debug(.app, "fill prevented", .{});
+        return error.ActionFailed;
+    }
+
+    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame.page);
+    frame._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
+        lp.log.debug(.app, "dispatch change event failed", .{ .err = err });
+    };
 }
 
 pub const ScrollResult = struct {
