@@ -397,27 +397,50 @@ const Document = struct {
 
     /// `text` is what the line's clusters index.
     fn drawLine(self: *Document, w: *std.Io.Writer, line: screenshot.LpLine, text: []const u8, shift: f32) !void {
-        for (self.layout.runs()[line.runs..][0..line.runs_len]) |run| {
-            try self.drawRun(w, run, line, text, shift);
+        const runs = self.layout.runs()[line.runs..][0..line.runs_len];
+        var i: usize = 0;
+        while (i < runs.len) {
+            if (self.lacksGlyphs(runs[i]) == false) {
+                try self.drawRun(w, runs[i], line.x, shift);
+                i += 1;
+                continue;
+            }
+            // We can't draw this, but we can set the ActualText so that it
+            // correctly gets copied (copy+paste) and shows up in search
+            var j = i + 1;
+            while (j < runs.len and self.lacksGlyphs(runs[j])) j += 1;
+            const last = runs[j - 1];
+            try w.writeAll("/Span << /ActualText <FEFF");
+            try utf16Hex(w, try self.spanText(line, text, runs[i].offset, last.offset + last.advance));
+            try w.writeAll("> >> BDC\n");
+            for (runs[i..j]) |run| try self.drawRun(w, run, line.x, shift);
+            try w.writeAll("EMC\n");
+            i = j;
         }
+    }
+
+    fn lacksGlyphs(self: *const Document, run: screenshot.LpRun) bool {
+        if (self.fonts[run.font] == null) {
+            return true;
+        }
+        for (self.layout.glyphs()[run.glyphs..][0..run.glyphs_len]) |g| {
+            if (g.id == 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// One glyph run as a TJ array: font size 1 with the size (and any
     /// synthetic italic skew) in the text matrix, glyph ids as 2-byte CIDs,
     /// and an adjustment wherever the layout's pen differs from the font's
     /// advance (kerning, marks, visual order). Same transform as the raster.
-    fn drawRun(self: *Document, w: *std.Io.Writer, run: screenshot.LpRun, line: screenshot.LpLine, text: []const u8, shift: f32) !void {
-        const line_x = line.x;
+    fn drawRun(self: *Document, w: *std.Io.Writer, run: screenshot.LpRun, line_x: f32, shift: f32) !void {
         const size = run.size;
         const baseline = run.baseline - shift;
         const tofu = self.fonts[run.font] == null;
         const font_id = if (tofu) TOFU_FONT else run.font;
         const font = &self.fonts[font_id].?;
-        if (tofu) {
-            try w.writeAll("/Span << /ActualText <FEFF");
-            try utf16Hex(w, try self.runText(run, line, text));
-            try w.writeAll("> >> BDC\n");
-        }
         try w.print("BT /F{d} 1 Tf ", .{font_id});
         try rgb(w, run.color);
         try w.writeAll(" rg\n");
@@ -445,7 +468,6 @@ const Document = struct {
         }
         if (cur_y != null) try w.writeAll(">] TJ\n");
         try w.writeAll("ET\n");
-        if (tofu) try w.writeAll("EMC\n");
 
         const x0 = line_x + run.offset;
         for ([_]screenshot.LpDecoration{ run.underline, run.strike }) |d| {
@@ -454,13 +476,12 @@ const Document = struct {
         }
     }
 
-    /// The text a run was shaped from, in logical order: the line's clusters
-    /// in that face within the run's span.
-    fn runText(self: *Document, run: screenshot.LpRun, line: screenshot.LpLine, text: []const u8) ![]const u8 {
+    /// The text behind [x0, x1) of a line (x from the line origin), in
+    /// logical order.
+    fn spanText(self: *Document, line: screenshot.LpLine, text: []const u8, x0: f32, x1: f32) ![]const u8 {
         var picked: std.ArrayList(screenshot.LpCluster) = .empty;
         for (self.layout.clusters()[line.clusters..][0..line.clusters_len]) |c| {
-            if (c.font != run.font) continue;
-            if (c.x < run.offset - 0.01 or c.x >= run.offset + run.advance - 0.01) continue;
+            if (c.x < x0 - 0.01 or c.x >= x1 - 0.01) continue;
             try picked.append(self.arena, c);
         }
         std.mem.sort(screenshot.LpCluster, picked.items, {}, struct {
@@ -531,7 +552,8 @@ const Document = struct {
                 if (self.fonts[l.font]) |*f| try f.mapText(self.arena, l.gid, l.text.items);
                 ligature = null;
             }
-            if (c.glyph == screenshot.LAYOUT_NONE or t.len == 0) continue;
+            // Glyph 0 is the missing-glyph box; its text goes in ActualText.
+            if (c.glyph == screenshot.LAYOUT_NONE or c.glyph == 0 or t.len == 0) continue;
             const gid: u16 = @intCast(c.glyph);
             if (c.flags & screenshot.CLUSTER_LIGATURE_START != 0) {
                 var buf: std.ArrayList(u8) = .empty;
@@ -1206,15 +1228,31 @@ test "browser.pdf: --render-font faces" {
     }
 }
 
+test "browser.pdf: missing glyphs keep their text" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    // DejaVu has no CJK: both are glyph 0 and, through ToUnicode alone,
+    // would extract as whichever came first.
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>A 日本</p>");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try print(testing.arena_allocator, .{ .root = div.asNode() }, .{}, &aw.writer, frame);
+    const all = try std.mem.concat(testing.arena_allocator, u8, &.{ aw.written(), try testContent(aw.written()) });
+    try testing.expectEqual(1, std.mem.count(u8, all, "/ActualText <FEFF65E5672C>"));
+    try testing.expectEqual(null, std.mem.find(u8, all, "<0000> <65E5>"));
+}
+
 /// Every deflated stream in `pdf`, inflated and concatenated.
 fn testContent(pdf: []const u8) ![]const u8 {
     const arena = testing.arena_allocator;
     var out: std.Io.Writer.Allocating = .init(arena);
     var rest = pdf;
-    while (std.mem.find(u8, rest, "stream\n")) |start| {
-        const body = rest[start + 7 ..];
-        const end = std.mem.find(u8, body, "endstream") orelse break;
-        rest = body[end..];
+    while (std.mem.find(u8, rest, ">>\nstream\n")) |start| {
+        const body = rest[start + 10 ..];
+        const end = std.mem.find(u8, body, "\nendstream\n") orelse break;
+        rest = body[end + 11 ..];
         var in: std.Io.Reader = .fixed(body[0..end]);
         var d: flate.Decompress = .init(&in, .zlib, &.{});
         _ = d.reader.streamRemaining(&out.writer) catch continue;
