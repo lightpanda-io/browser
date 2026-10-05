@@ -71,9 +71,6 @@ pub fn setValue(self: *Attribute, data_: ?String, frame: *Frame) !void {
     };
     // this takes ownership of the data
     try el.setAttribute(self._name, data, frame);
-
-    // not the most efficient, but we don't expect this to be called often
-    self._value = (try el.getAttribute(self._name, frame)) orelse String.empty;
 }
 
 pub fn getNamespaceURI(_: *const Attribute) ?[]const u8 {
@@ -247,6 +244,16 @@ pub const List = struct {
             }
             e.setValue(try owner.dupeString(value.str()));
             entry = e;
+
+            // An Attr is the attribute itself, so one handed out earlier must
+            // see the new value. Every write to an existing entry lands here.
+            // putAttribute detaches the Attr it replaces before calling us:
+            // that one keeps its old value.
+            if (frame.page.attribute_lookup.get(.{ .list = self, .name = e._name_ptr })) |attr| {
+                if (attr._element != null) {
+                    attr._value = .wrap(e.value());
+                }
+            }
         } else {
             try self.ensureUnusedCapacity(1, owner);
             entry = &self._entries[self._len];
