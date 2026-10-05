@@ -897,6 +897,16 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/challenge/vercel")) {
+        return req.respond("<title>Vercel Security Checkpoint</title>", .{
+            .status = .too_many_requests,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                .{ .name = "x-vercel-mitigated", .value = "challenge" },
+            },
+        });
+    }
+
     if (std.mem.startsWith(u8, path, "/status/")) {
         const code = try std.fmt.parseInt(u16, path["/status/".len..], 10);
         return req.respond("", .{ .status = @fromBackingInt(@intCast(code)) });
