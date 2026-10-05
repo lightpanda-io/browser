@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=reflects_set_attribute>
+  {
+    const f = document.createElement('iframe');
+    f.setAttribute('src', 'support/page.html');
+    testing.expectEqual(new URL('support/page.html', document.baseURI).href, f.src);
+
+    f.removeAttribute('src');
+    testing.expectEqual('', f.src);
+  }
+</script>
+
+<script id=set_attribute_navigates type=module>
+  {
+    const state = await testing.async();
+
+    const f = document.createElement('iframe');
+    f.setAttribute('src', 'support/page.html');
+    let loads = 0;
+    f.onload = () => {
+      loads += 1;
+      if (loads === 1) {
+        testing.expectEqual('a-page', f.contentDocument.body.textContent.trim());
+        f.setAttribute('src', 'support/sub2.html');
+        return;
+      }
+      state.resolve(f);
+    };
+    document.body.appendChild(f);
+
+    await state.done((f) => {
+      testing.expectEqual('sub2 div1', f.contentDocument.getElementById('div-1').textContent);
+    });
+  }
+</script>
+
+<script id=remove_attribute_blanks type=module>
+  {
+    const state = await testing.async();
+
+    const f = document.createElement('iframe');
+    f.src = 'support/page.html';
+    let loads = 0;
+    f.onload = () => {
+      loads += 1;
+      if (loads === 1) {
+        f.removeAttribute('src');
+        return;
+      }
+      state.resolve(f);
+    };
+    document.body.appendChild(f);
+
+    await state.done((f) => {
+      testing.expectEqual('about:blank', f.contentWindow.location.href);
+    });
+  }
+</script>
+
+<script id=same_src_reloads type=module>
+  {
+    const state = await testing.async();
+
+    const f = document.createElement('iframe');
+    f.src = 'support/page.html';
+    let loads = 0;
+    f.onload = () => {
+      loads += 1;
+      if (loads === 1) {
+        f.src = f.src;
+        return;
+      }
+      state.resolve(loads);
+    };
+    document.body.appendChild(f);
+
+    await state.done((loads) => {
+      testing.expectEqual(2, loads);
+    });
+  }
+</script>
