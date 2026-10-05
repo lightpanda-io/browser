@@ -29,7 +29,10 @@ const TextEncoderStream = @This();
 _transform: *TransformStream,
 
 pub fn init(exec: *const Execution) !TextEncoderStream {
-    const transform = try TransformStream.initWithZigTransformer(.{ .transform = &encodeTransform }, exec);
+    const transform = try TransformStream.initWithZigTransformer(.{ .vtable = &.{
+        .transform = &encodeTransform,
+        .flush = TransformStream.ZigTransformer.noopFlush,
+    } }, exec);
     return .{
         ._transform = transform,
     };

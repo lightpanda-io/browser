@@ -28,14 +28,18 @@ const TransformStream = @This();
 
 pub const DefaultController = TransformStreamDefaultController;
 
-pub const ZigTransformFn = *const fn (ctx: ?*anyopaque, *TransformStreamDefaultController, js.Value) anyerror!void;
-pub const ZigFlushFn = *const fn (ctx: ?*anyopaque, *TransformStreamDefaultController) anyerror!void;
-
-/// A transformer implemented in Zig; `ctx` is passed back to both callbacks.
+/// A transformer implemented in Zig; `ctx` is passed back to every `vtable` callback.
 pub const ZigTransformer = struct {
     ctx: ?*anyopaque = null,
-    transform: ZigTransformFn,
-    flush: ?ZigFlushFn = null,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        transform: *const fn (ctx: ?*anyopaque, *TransformStreamDefaultController, js.Value) anyerror!void,
+        flush: *const fn (ctx: ?*anyopaque, *TransformStreamDefaultController) anyerror!void,
+    };
+
+    /// Use this when flush is not needed.
+    pub fn noopFlush(_: ?*anyopaque, _: *TransformStreamDefaultController) !void {}
 };
 
 _readable: *ReadableStream,
@@ -100,7 +104,7 @@ pub fn initWithZigTransformer(zig_transformer: ZigTransformer, exec: *const Exec
 pub fn transformWrite(self: *TransformStream, chunk: js.Value, exec: *const Execution) !void {
     if (self._controller._zig_transformer) |zig| {
         // Zig-level transform (used by TextEncoderStream etc.)
-        return zig.transform(zig.ctx, self._controller, chunk);
+        return zig.vtable.transform(zig.ctx, self._controller, chunk);
     }
 
     if (self._controller._transform_fn) |transform_fn| {
@@ -116,9 +120,7 @@ pub fn transformWrite(self: *TransformStream, chunk: js.Value, exec: *const Exec
 
 pub fn transformClose(self: *TransformStream, exec: *const Execution) !void {
     if (self._controller._zig_transformer) |zig| {
-        if (zig.flush) |flush| {
-            try flush(zig.ctx, self._controller);
-        }
+        try zig.vtable.flush(zig.ctx, self._controller);
     } else if (self._controller._flush_fn) |flush_fn| {
         var ls: js.Local.Scope = undefined;
         exec.js.localScope(&ls);

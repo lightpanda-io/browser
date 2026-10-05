@@ -48,23 +48,29 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, exec: *const Execution) !Text
     }
 
     const opts = opts_ orelse InitOpts{};
-    const decodeFn: TransformStream.ZigTransformFn = blk: {
+    const vtable: *const TransformStream.ZigTransformer.VTable = blk: {
         if (opts.ignoreBOM) {
-            break :blk struct {
-                fn decode(_: ?*anyopaque, controller: *TransformStream.DefaultController, chunk: js.Value) !void {
-                    return decodeTransform(controller, chunk, true);
-                }
-            }.decode;
+            break :blk &.{
+                .transform = struct {
+                    fn decode(_: ?*anyopaque, controller: *TransformStream.DefaultController, chunk: js.Value) !void {
+                        return decodeTransform(controller, chunk, true);
+                    }
+                }.decode,
+                .flush = TransformStream.ZigTransformer.noopFlush,
+            };
         } else {
-            break :blk struct {
-                fn decode(_: ?*anyopaque, controller: *TransformStream.DefaultController, chunk: js.Value) !void {
-                    return decodeTransform(controller, chunk, false);
-                }
-            }.decode;
+            break :blk &.{
+                .transform = struct {
+                    fn decode(_: ?*anyopaque, controller: *TransformStream.DefaultController, chunk: js.Value) !void {
+                        return decodeTransform(controller, chunk, false);
+                    }
+                }.decode,
+                .flush = TransformStream.ZigTransformer.noopFlush,
+            };
         }
     };
 
-    const transform = try TransformStream.initWithZigTransformer(.{ .transform = decodeFn }, exec);
+    const transform = try TransformStream.initWithZigTransformer(.{ .vtable = vtable }, exec);
 
     return .{
         ._transform = transform,

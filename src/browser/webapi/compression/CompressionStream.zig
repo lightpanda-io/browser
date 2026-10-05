@@ -19,22 +19,23 @@
 const js = @import("../../js/js.zig");
 const Execution = js.Execution;
 
-const zlib = @import("zlib.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
 const WritableStream = @import("../streams/WritableStream.zig");
 const TransformStream = @import("../streams/TransformStream.zig");
 
+const compress = @import("compress.zig");
+
 const CompressionStream = @This();
 
 _transform: *TransformStream,
-_zlib: zlib.Stream(.compress),
+_compressor: compress.Compressor,
 
-pub fn init(format: zlib.Format, exec: *const Execution) !*CompressionStream {
+pub fn init(format: compress.Format, exec: *const Execution) !*CompressionStream {
     const self = try exec._factory.create(CompressionStream{
         ._transform = undefined,
-        ._zlib = .init(exec, format),
+        ._compressor = .init(exec, format),
     });
-    self._transform = try TransformStream.initWithZigTransformer(self._zlib.transformer(), exec);
+    self._transform = try TransformStream.initWithZigTransformer(self._compressor.transformer(), exec);
     return self;
 }
 
@@ -62,5 +63,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../../testing.zig");
 test "WebApi: CompressionStream" {
-    try testing.htmlRunner("compression/compression_stream.html", .{});
+    // brotli_output_before_close compresses 1.3 MiB at quality 11; that's
+    // slow under TSAN.
+    try testing.htmlRunner("compression/compression_stream.html", .{ .timeout_ms = 8000 });
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026 Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -19,19 +19,15 @@
 const std = @import("std");
 
 const zlib = @import("../../../sys/zlib.zig");
+const brotli = @import("../../../sys/brotli.zig");
 
 const js = @import("../../js/js.zig");
 const TransformStream = @import("../streams/TransformStream.zig");
+const ZigTransformer = TransformStream.ZigTransformer;
 
 const Execution = js.Execution;
 
-pub const Format = enum {
-    deflate,
-    @"deflate-raw",
-    gzip,
-
-    pub const js_enum_from_string = true;
-};
+const Format = @import("compress.zig").Format;
 
 const State = enum {
     /// Stream is dormant. Nothing is allocated at this state.
@@ -42,9 +38,8 @@ const State = enum {
     ended,
 };
 
-/// The zlib transformer behind CompressionStream and DecompressionStream.
-/// https://compression.spec.whatwg.org/
-pub fn Stream(comptime mode: enum(u1) { compress, decompress }) type {
+/// Covers gzip, deflate and deflate-raw.
+pub fn Deflate(comptime mode: enum(u1) { compress, decompress }) type {
     return struct {
         exec: *const Execution,
         state: State = .idle,
@@ -52,26 +47,32 @@ pub fn Stream(comptime mode: enum(u1) { compress, decompress }) type {
         /// Internal zlib stream; lazily initialized. Valid if `state` is `active`.
         stream: zlib.z_stream = undefined,
 
-        pub fn init(exec: *const Execution, format: Format) Stream(mode) {
+        const vtable: *const ZigTransformer.VTable = &.{
+            .transform = transform,
+            .flush = flush,
+        };
+
+        pub fn init(exec: *const Execution, format: Format) Deflate(mode) {
             return .{ .format = format, .exec = exec };
         }
 
-        pub fn transformer(self: *Stream(mode)) TransformStream.ZigTransformer {
-            return .{ .ctx = self, .transform = transform, .flush = flush };
+        pub fn transformer(self: *Deflate(mode)) ZigTransformer {
+            return .{ .ctx = self, .vtable = vtable };
         }
 
         /// Initializes internal `stream`.
-        fn initStream(self: *Stream(mode)) !void {
+        fn initStream(self: *Deflate(mode)) !void {
             // This must be done before the first use of deflate(). The zalloc,
             // zfree, and opaque fields in the strm structure must be initialized
             // before calling deflateInit().
             // https://zlib.net/zlib_how.html
-            self.stream = .{ .zalloc = zlib_alloc, .zfree = zlib_free, .@"opaque" = @constCast(self.exec) };
+            self.stream = .{ .zalloc = alloc, .zfree = free, .@"opaque" = @constCast(self.exec) };
             // TODO: Match Chrome.
             const window_bits: c_int = switch (self.format) {
                 .deflate => zlib.MAX_WBITS,
                 .@"deflate-raw" => -zlib.MAX_WBITS,
                 .gzip => zlib.MAX_WBITS + 16,
+                .brotli => unreachable,
             };
             // Default compression level Chrome picks.
             // https://github.com/chromium/chromium/blob/1750d75d37b768db7fc6970edb2c4cd3eea0e1a3/third_party/blink/renderer/modules/compression/compression_stream.cc#L53-L55
@@ -90,7 +91,7 @@ pub fn Stream(comptime mode: enum(u1) { compress, decompress }) type {
             };
         }
 
-        fn end(self: *Stream(mode)) void {
+        fn end(self: *Deflate(mode)) void {
             switch (self.state) {
                 .idle, .ended => {},
                 .active => {
@@ -104,21 +105,16 @@ pub fn Stream(comptime mode: enum(u1) { compress, decompress }) type {
         }
 
         // Errors the stream, releasing internal stream.
-        fn fail(self: *Stream(mode), controller: *TransformStream.DefaultController, message: []const u8) !void {
+        fn fail(self: *Deflate(mode), controller: *TransformStream.DefaultController, message: []const u8) !void {
             self.end();
             try controller.typeError(message);
             return self.exec.js.typeError(message);
         }
 
-        const FeedError = error{
-            StreamNotReadable,
-            OutOfMemory,
-            HasJunkData,
-            InvalidData,
-        };
+        const FeedError = error{ StreamNotReadable, OutOfMemory, HasJunkData, InvalidData };
 
         fn feed(
-            self: *Stream(mode),
+            self: *Deflate(mode),
             controller: *TransformStream.DefaultController,
             input: []const u8,
             comptime output_buffer_size: u32,
@@ -189,7 +185,7 @@ pub fn Stream(comptime mode: enum(u1) { compress, decompress }) type {
         }
 
         fn process(
-            self: *Stream(mode),
+            self: *Deflate(mode),
             controller: *TransformStream.DefaultController,
             input: []const u8,
             finish: bool,
@@ -220,7 +216,7 @@ pub fn Stream(comptime mode: enum(u1) { compress, decompress }) type {
         }
 
         fn transform(ctx: ?*anyopaque, controller: *TransformStream.DefaultController, chunk: js.Value) !void {
-            const self: *Stream(mode) = @ptrCast(@alignCast(ctx.?));
+            const self: *Deflate(mode) = @ptrCast(@alignCast(ctx.?));
             const input = chunk.toZig(js.BufferSource) catch {
                 return self.fail(controller, "Chunk is not an ArrayBuffer or ArrayBufferView");
             };
@@ -241,7 +237,7 @@ pub fn Stream(comptime mode: enum(u1) { compress, decompress }) type {
         }
 
         fn flush(ctx: ?*anyopaque, controller: *TransformStream.DefaultController) !void {
-            const self: *Stream(mode) = @ptrCast(@alignCast(ctx.?));
+            const self: *Deflate(mode) = @ptrCast(@alignCast(ctx.?));
             switch (comptime mode) {
                 .compress => return self.process(controller, "", true),
                 // Each chunk is fully inflated as it's written, so by now the
@@ -260,7 +256,7 @@ pub fn Stream(comptime mode: enum(u1) { compress, decompress }) type {
 const HEADER = 16;
 const alignment: std.mem.Alignment = .fromByteUnits(HEADER);
 
-fn zlib_alloc(userdata: ?*anyopaque, items: zlib.uInt, size: zlib.uInt) callconv(.c) ?*anyopaque {
+fn alloc(userdata: ?*anyopaque, items: zlib.uInt, size: zlib.uInt) callconv(.c) ?*anyopaque {
     const exec: *const Execution = @ptrCast(@alignCast(userdata.?));
     const allocator = exec._factory.storageAllocator();
 
@@ -273,7 +269,7 @@ fn zlib_alloc(userdata: ?*anyopaque, items: zlib.uInt, size: zlib.uInt) callconv
     return block.ptr + HEADER;
 }
 
-fn zlib_free(userdata: ?*anyopaque, ptr: ?*anyopaque) callconv(.c) void {
+fn free(userdata: ?*anyopaque, ptr: ?*anyopaque) callconv(.c) void {
     const payload = ptr orelse return;
     const exec: *const Execution = @ptrCast(@alignCast(userdata.?));
     const allocator = exec._factory.storageAllocator();

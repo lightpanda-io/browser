@@ -18,6 +18,7 @@
 
 const js = @import("../../js/js.zig");
 
+const brotli = @import("brotli.zig");
 const zlib = @import("zlib.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
 const WritableStream = @import("../streams/WritableStream.zig");
@@ -25,17 +26,19 @@ const TransformStream = @import("../streams/TransformStream.zig");
 
 const Execution = js.Execution;
 
+const compress = @import("compress.zig");
+
 const DecompressionStream = @This();
 
 _transform: *TransformStream,
-_zlib: zlib.Stream(.decompress),
+_decompressor: compress.Decompressor,
 
-pub fn init(format: zlib.Format, exec: *const Execution) !*DecompressionStream {
+pub fn init(format: compress.Format, exec: *const Execution) !*DecompressionStream {
     const self = try exec._factory.create(DecompressionStream{
         ._transform = undefined,
-        ._zlib = .init(exec, format),
+        ._decompressor = .init(exec, format),
     });
-    self._transform = try TransformStream.initWithZigTransformer(self._zlib.transformer(), exec);
+    self._transform = try TransformStream.initWithZigTransformer(self._decompressor.transformer(), exec);
     return self;
 }
 
