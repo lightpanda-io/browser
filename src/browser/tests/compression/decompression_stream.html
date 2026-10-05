@@ -2,13 +2,15 @@
 <script src="../testing.js"></script>
 
 <script>
-  const FORMATS = ['gzip', 'deflate', 'deflate-raw'];
+  const FORMATS = ['gzip', 'deflate', 'deflate-raw', 'brotli'];
 
-  // 'hello', compressed by Python's zlib/gzip modules.
+  // 'hello', compressed by Python's zlib/gzip modules and the brotli CLI
+  // (v1.2.0).
   const HELLO = {
     'gzip': [31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 203, 72, 205, 201, 201, 7, 0, 134, 166, 16, 54, 5, 0, 0, 0],
     'deflate': [120, 156, 203, 72, 205, 201, 201, 7, 0, 6, 44, 2, 21],
     'deflate-raw': [203, 72, 205, 201, 201, 7, 0],
+    'brotli': [15, 2, 128, 104, 101, 108, 108, 111, 3],
   };
 
   // '', compressed.
@@ -16,6 +18,7 @@
     'gzip': [31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     'deflate': [120, 156, 3, 0, 0, 0, 0, 1],
     'deflate-raw': [3, 0],
+    'brotli': [63],
   };
 
   async function readAll(readable) {
@@ -104,7 +107,7 @@
       testing.expectTrue(ds.writable instanceof WritableStream);
     }
 
-    for (const format of ['GZIP', 'zlib', '', undefined]) {
+    for (const format of ['GZIP', 'zlib', 'BROTLI', 'br', '', undefined]) {
       testing.withError((err) => testing.expectEqual('TypeError', err.name), () => new DecompressionStream(format));
     }
     testing.withError((err) => testing.expectEqual('TypeError', err.name), () => new DecompressionStream());
@@ -188,6 +191,10 @@
   // A reserved block type
   results['deflate-raw'] = await outcome('deflate-raw', [[7, 0]]);
 
+  // A reserved window size (RFC 7932, section 9.1). brotli has no checksum, so
+  // flipped bytes often go unnoticed.
+  results['brotli'] = await outcome('brotli', [[17, 0, 0, 0]]);
+
   state.resolve();
   await state.done(() => {
     for (const result of Object.values(results)) {
@@ -223,12 +230,14 @@
   const state = await testing.async();
 
   const results = [];
-  for (const chunk of ['hello', undefined, null, 42, {}, [1, 2, 3]]) {
-    const ds = new DecompressionStream('gzip');
-    const writer = ds.writable.getWriter();
-    const reader = ds.readable.getReader();
-    const pending_read = rejection(reader.read());
-    results.push([await rejection(writer.write(chunk)), await pending_read, await rejection(reader.read())]);
+  for (const format of ['gzip', 'brotli']) {
+    for (const chunk of ['hello', undefined, null, 42, {}, [1, 2, 3]]) {
+      const ds = new DecompressionStream(format);
+      const writer = ds.writable.getWriter();
+      const reader = ds.readable.getReader();
+      const pending_read = rejection(reader.read());
+      results.push([await rejection(writer.write(chunk)), await pending_read, await rejection(reader.read())]);
+    }
   }
 
   state.resolve();
@@ -328,14 +337,45 @@
     ['gzip', 'deflate-raw'],
     ['deflate-raw', 'gzip'],
     ['deflate-raw', 'deflate'],
+    ['brotli', 'gzip'],
+    ['brotli', 'deflate'],
+    ['gzip', 'brotli'],
+    ['deflate', 'brotli'],
+    ['deflate-raw', 'brotli'],
   ]) {
     results[`${data} as ${format}`] = await outcome(format, [HELLO[data]]);
   }
+
+  // brotli has no magic number: these bytes start a valid-looking stream that
+  // never ends, so only close() notices.
+  const raw_as_brotli = await outcome('brotli', [HELLO['deflate-raw']]);
 
   state.resolve();
   await state.done(() => {
     for (const result of Object.values(results)) {
       testing.expectEqual({ writes: ['TypeError'], close: 'TypeError', read: 'TypeError' }, result);
     }
+    testing.expectEqual({ writes: ['resolved'], close: 'TypeError', read: 'TypeError' }, raw_as_brotli);
+  });
+</script>
+
+<script id=brotli_small_window type=module>
+  const state = await testing.async();
+
+  // `brotli -q 11 -w 10` (v1.2.0) of 'hello world ' x 1000: with a 1 KiB
+  // window the decoder's ring buffer fills a dozen times within one write.
+  const compressed = [
+    161, 248, 118, 193, 111, 164, 116, 243, 38, 170, 50, 180, 4, 97, 123, 171, 89, 30, 171, 5, 50, 160, 218, 142, 38, 0,
+    0,
+  ];
+  const expected = 'hello world '.repeat(1000);
+  const results = {
+    whole: (await decompress('brotli', [compressed])) === expected,
+    split: (await decompress('brotli', compressed.map((b) => [b]))) === expected,
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual({ whole: true, split: true }, results);
   });
 </script>

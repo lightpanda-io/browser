@@ -2,7 +2,7 @@
 <script src="../testing.js"></script>
 
 <script>
-  const FORMATS = ['gzip', 'deflate', 'deflate-raw'];
+  const FORMATS = ['gzip', 'deflate', 'deflate-raw', 'brotli'];
 
   async function readAll(readable) {
     return readRest(readable.getReader(), []);
@@ -52,7 +52,9 @@
     const out = new Uint8Array(len);
     let x = 12345;
     for (let i = 0; i < len; i++) {
-      x = (x * 1103515245 + 12345) >>> 0;
+      // Math.imul keeps the low 32 bits exact; a plain `*` rounds to a double
+      // and the sequence falls into a ~6 KiB cycle.
+      x = (Math.imul(x, 1103515245) + 12345) >>> 0;
       out[i] = x >>> 24;
     }
     return out;
@@ -66,6 +68,13 @@
     }
     return 'resolved';
   }
+
+  // Decodes brotli with the HTTP client: the test server echoes `compressed`
+  // back as `Content-Encoding: br`.
+  async function unbrotli(compressed) {
+    const response = await fetch('http://127.0.0.1:9582/echo_brotli', { method: 'POST', body: compressed });
+    return new Uint8Array(await response.arrayBuffer());
+  }
 </script>
 
 <script id=constructor>
@@ -76,7 +85,7 @@
       testing.expectTrue(cs.writable instanceof WritableStream);
     }
 
-    for (const format of ['GZIP', 'zlib', '', undefined]) {
+    for (const format of ['GZIP', 'zlib', 'BROTLI', 'br', '', undefined]) {
       testing.withError((err) => testing.expectEqual('TypeError', err.name), () => new CompressionStream(format));
     }
     testing.withError((err) => testing.expectEqual('TypeError', err.name), () => new CompressionStream());
@@ -145,6 +154,7 @@
     testing.expectEqual(20, results['gzip'].length);
     testing.expectEqual(8, results['deflate'].length);
     testing.expectEqual(2, results['deflate-raw'].length);
+    testing.expectEqual(1, results['brotli'].length);
     for (const format of FORMATS) {
       testing.expectEqual([], results[format].decompressed);
     }
@@ -180,17 +190,19 @@
   const state = await testing.async();
 
   const results = [];
-  for (const chunk of ['hello', undefined, null, 42, {}, [1, 2, 3]]) {
-    const cs = new CompressionStream('gzip');
-    const writer = cs.writable.getWriter();
-    const reader = cs.readable.getReader();
-    const pending_read = rejection(reader.read());
-    results.push([
-      await rejection(writer.write(chunk)),
-      await pending_read,
-      await rejection(reader.read()),
-      await rejection(writer.write(new Uint8Array([1]))),
-    ]);
+  for (const format of ['gzip', 'brotli']) {
+    for (const chunk of ['hello', undefined, null, 42, {}, [1, 2, 3]]) {
+      const cs = new CompressionStream(format);
+      const writer = cs.writable.getWriter();
+      const reader = cs.readable.getReader();
+      const pending_read = rejection(reader.read());
+      results.push([
+        await rejection(writer.write(chunk)),
+        await pending_read,
+        await rejection(reader.read()),
+        await rejection(writer.write(new Uint8Array([1]))),
+      ]);
+    }
   }
 
   state.resolve();
@@ -364,4 +376,82 @@
       });
     });
   }
+</script>
+
+<script id=brotli_matches_cli type=module>
+  const state = await testing.async();
+
+  const encode = (text) => new TextEncoder().encode(text);
+  const results = {
+    hello: Array.from(await run(new CompressionStream('brotli'), [encode('hello')])),
+    repeated: Array.from(await run(new CompressionStream('brotli'), [encode('hello brotli, '.repeat(8))])),
+    // Only empty chunks: still a complete, valid stream.
+    empty: Array.from(await run(new CompressionStream('brotli'), [new Uint8Array(0), new ArrayBuffer(0)])),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    // Byte-for-byte what `brotli -q 11 -w 22` (v1.2.0) gives, the encoder's
+    // defaults. 'hello' is too short to compress, so it's stored as is.
+    testing.expectEqual([11, 2, 128, 104, 101, 108, 108, 111, 3], results.hello);
+    testing.expectEqual([
+      27, 111, 0, 248, 29, 9, 54, 78, 116, 111, 36, 134, 215, 98, 101, 104, 114,
+      26, 132, 133, 141, 78, 178, 165, 189, 5, 130, 241, 0, 60, 51, 252, 18,
+    ], results.repeated);
+    testing.expectEqual([59], results.empty);
+  });
+</script>
+
+<script id=brotli_round_trip type=module>
+  const state = await testing.async();
+
+  const noisy = noise(200 * 1024);
+  const tiny = noise(4096);
+  const text = new TextEncoder().encode('hello world '.repeat(1000));
+  const cases = {
+    noise: [noisy, [noisy.subarray(0, 1), noisy.subarray(1, 70000), noisy.subarray(70000)]],
+    tiny_writes: [tiny, Array.from(tiny, (_, i) => tiny.subarray(i, i + 1))],
+    text: [text, [text]],
+    // Closed without a single write.
+    empty: [new Uint8Array(0), []],
+  };
+
+  const results = {};
+  for (const [name, [input, chunks]] of Object.entries(cases)) {
+    const compressed = await run(new CompressionStream('brotli'), chunks);
+    results[name] = equal(await unbrotli(compressed), input);
+  }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual({ noise: true, tiny_writes: true, text: true, empty: true }, results);
+  });
+</script>
+
+<script id=brotli_output_before_close type=module>
+  const state = await testing.async();
+
+  // The encoder holds input back until it has a whole meta-block; for this
+  // noise that's after 1.25 MiB, so the write produces output by itself. It
+  // then stops taking input until that output is taken, so the rest of the
+  // write needs another call into the encoder.
+  const input = noise(1664 * 1024);
+  const cs = new CompressionStream('brotli');
+  const writer = cs.writable.getWriter();
+  const reader = cs.readable.getReader();
+
+  let first = null;
+  reader.read().then(({ value }) => {
+    first = value;
+  });
+  await writer.write(input);
+  const before_close = first !== null;
+  writer.close();
+  const compressed = await readRest(reader, before_close ? [first] : []);
+  const same = equal(await unbrotli(compressed), input);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual({ before_close: true, same: true }, { before_close, same });
+  });
 </script>
