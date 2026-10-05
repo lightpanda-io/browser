@@ -292,10 +292,8 @@ fn setCookie(cmd: *CDP.Command) !void {
     )) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const stored = CdpStorage.setCdpCookies(&bc.session.cookie_jar, &.{params}) catch |err| switch (err) {
-        error.InvalidCookie => return cmd.sendError(-32602, "Sanitizing cookie failed", .{}),
-        error.MissingUrlOrDomain => return cmd.sendError(-32602, "At least one of the url or domain needs to be specified", .{}),
-        else => return err,
+    const stored = CdpStorage.setCdpCookies(&bc.session.cookie_jar, &.{params}) catch |err| {
+        return cmd.sendError(-32602, CdpStorage.refusal(err) orelse return err, .{});
     };
 
     try cmd.sendResult(.{ .success = stored == 1 }, .{});
@@ -307,9 +305,9 @@ fn setCookies(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    _ = CdpStorage.setCdpCookies(&bc.session.cookie_jar, params.cookies) catch |err| switch (err) {
-        error.InvalidCookie, error.MissingUrlOrDomain => return cmd.sendError(-32602, "Invalid cookie fields", .{}),
-        else => return err,
+    _ = CdpStorage.setCdpCookies(&bc.session.cookie_jar, params.cookies) catch |err| {
+        _ = CdpStorage.refusal(err) orelse return err;
+        return cmd.sendError(-32602, "Invalid cookie fields", .{});
     };
 
     try cmd.sendResult(null, .{});

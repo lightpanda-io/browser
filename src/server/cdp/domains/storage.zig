@@ -86,19 +86,14 @@ fn setCookies(cmd: *CDP.Command) !void {
         }
     }
 
-    _ = setCdpCookies(&bc.session.cookie_jar, params.cookies) catch |err| switch (err) {
-        error.InvalidCookie, error.MissingUrlOrDomain => return cmd.sendError(-32602, "Invalid cookie fields", .{}),
-        else => return err,
+    _ = setCdpCookies(&bc.session.cookie_jar, params.cookies) catch |err| {
+        _ = refusal(err) orelse return err;
+        return cmd.sendError(-32602, "Invalid cookie fields", .{});
     };
 
     try cmd.sendResult(null, .{});
 }
 
-const CookiePriority = enum {
-    Low,
-    Medium,
-    High,
-};
 const CookieSourceScheme = enum {
     Unset,
     NonSecure,
@@ -120,12 +115,25 @@ pub const CdpCookie = struct {
     httpOnly: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
     sameSite: ?[]const u8 = null, // Strict, Lax or None; anything else is unspecified, see parseSameSite
     expires: ?f64 = null, // -1? says google
-    priority: CookiePriority = .Medium, // default: https://datatracker.ietf.org/doc/html/draft-west-cookie-priority-00
-    sameParty: ?bool = null,
+    // Accepted and ignored, like Chrome's sameParty: the jar keeps no
+    // priority, source scheme or port.
+    priority: ?[]const u8 = null,
     sourceScheme: ?CookieSourceScheme = null,
-    // sourcePort: Temporary ability and it will be removed from CDP
+    sourcePort: ?i32 = null,
     partitionKey: ?CookiePartitionKey = null,
 };
+
+/// The message of Chrome's -32602 for a cookie Network.setCookie refuses;
+/// Network.setCookies and Storage.setCookies only say "Invalid cookie fields".
+pub fn refusal(err: anyerror) ?[]const u8 {
+    return switch (err) {
+        error.InvalidCookie => "Sanitizing cookie failed",
+        error.MissingUrlOrDomain => "At least one of the url or domain needs to be specified",
+        error.InsecureSourceScheme => "Secure attribute cannot be set for a cookie with an insecure source scheme",
+        error.InvalidSourcePort => "Invalid source port",
+        else => null,
+    };
+}
 
 /// Network.setCookie, Network.setCookies and Storage.setCookies. Every
 /// cookie is built before any is added: an entry `buildCdpCookie` refuses
@@ -168,11 +176,6 @@ fn buildCdpCookie(allocator: Allocator, param: CdpCookie) !Cookie {
     if (param.partitionKey != null) {
         log.debug(.not_implemented, "partition key", .{ .src = "buildCdpCookie" });
     }
-    // Still reject unsupported features
-    if (param.priority != .Medium or param.sameParty != null or param.sourceScheme != null) {
-        return error.NotImplemented;
-    }
-
     // Chrome's MakeCookieFromProtocolValues: an https url makes the cookie
     // Secure whatever `secure` says, and a `domain` overrides the url's host.
     // Only a domain with a leading dot is a Domain attribute; without one,
@@ -187,6 +190,15 @@ fn buildCdpCookie(allocator: Allocator, param: CdpCookie) !Cookie {
         URL.getHostname(url)
     else
         return error.MissingUrlOrDomain;
+    if (secure and param.sourceScheme == .NonSecure) {
+        return error.InsecureSourceScheme;
+    }
+    if (param.sourcePort) |port| {
+        if (port != -1 and (port < 1 or port > 65535)) {
+            return error.InvalidSourcePort;
+        }
+    }
+
     const cookie_url = try std.fmt.allocPrintSentinel(allocator, "{s}://{s}/", .{ if (secure) "https" else "http", host }, 0);
     defer allocator.free(cookie_url);
 
@@ -298,6 +310,36 @@ fn writeCookie(cookie: *const Cookie, w: anytype) !void {
 }
 
 const testing = @import("../testing.zig");
+
+test "cdp.Storage: setCookies takes back the cookies getCookies gave" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-DEL" });
+
+    // Puppeteer's deleteCookie re-sends a cookie from getCookies with
+    // expires: 1, sameParty: false and, from Chrome, priority, sourceScheme
+    // and sourcePort.
+    const cookie: CdpCookie = .{ .name = "a", .value = "v", .domain = "example.com", .secure = true, .priority = "High", .sourceScheme = .Secure, .sourcePort = 443 };
+    try ctx.processMessage(.{ .id = 1, .method = "Storage.setCookies", .params = .{ .cookies = &[_]CdpCookie{cookie} } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expectEqual(1, ctx.cdp().browser_context.?.session.cookie_jar.cookies.items.len);
+
+    var expired = cookie;
+    expired.expires = 1;
+    try ctx.processMessage(.{ .id = 2, .method = "Storage.setCookies", .params = .{ .cookies = &[_]CdpCookie{expired} } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual(0, ctx.cdp().browser_context.?.session.cookie_jar.cookies.items.len);
+
+    // What Chrome refuses among those fields.
+    var bad_port = cookie;
+    bad_port.sourcePort = 0;
+    try ctx.processMessage(.{ .id = 3, .method = "Network.setCookie", .params = bad_port });
+    try ctx.expectSentError(-32602, "Invalid source port", .{ .id = 3 });
+    var insecure_scheme = cookie;
+    insecure_scheme.sourceScheme = .NonSecure;
+    try ctx.processMessage(.{ .id = 4, .method = "Network.setCookie", .params = insecure_scheme });
+    try ctx.expectSentError(-32602, "Secure attribute cannot be set for a cookie with an insecure source scheme", .{ .id = 4 });
+}
 
 test "cdp.Storage: cookies" {
     var ctx = try testing.context();
