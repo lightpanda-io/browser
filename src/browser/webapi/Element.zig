@@ -517,7 +517,7 @@ pub fn lookupPrefixForElement(self: *Element, namespace: []const u8, frame: *Fra
 
 fn _prefix(self: *const Element) ?[]const u8 {
     const name = self.getTagNameLower();
-    if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
+    if (std.mem.findPos(u8, name, 0, ":")) |pos| {
         return name[0..pos];
     }
     return null;
@@ -525,7 +525,7 @@ fn _prefix(self: *const Element) ?[]const u8 {
 
 pub fn getLocalName(self: *Element) []const u8 {
     const name = self.getTagNameLower();
-    if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
+    if (std.mem.findPos(u8, name, 0, ":")) |pos| {
         return name[pos + 1 ..];
     }
 
@@ -551,6 +551,10 @@ pub fn insertAdjacentHTML(
 ) !void {
     const he = self.is(Html) orelse return error.NotHtmlElement;
     return he.insertAdjacentHTML(position, html_or_xml, frame);
+}
+
+pub fn requestFullscreen(_: *const Element, frame: *Frame) js.Promise {
+    return frame.js.local.?.rejectPromise(.{ .type_error = "Fullscreen is not supported" });
 }
 
 pub fn getOuterHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void {
@@ -704,16 +708,21 @@ pub fn getAttributeNS(
     local_name: String,
     frame: *Frame,
 ) !?String {
+    return self.getAttribute(try self.attributeNameNS(namespace_, local_name, frame), frame);
+}
+
+// The stored name a namespaced lookup resolves to. We don't really support
+// namespaces, but if the namespace has a fixed prefix and the prefixed
+// attribute exists, that's the one.
+pub fn attributeNameNS(self: *const Element, namespace_: ?[]const u8, local_name: String, frame: *Frame) !String {
     if (namespace_) |namespace| {
-        // we don't really support namespaces, but if the namespace has a fixed
-        // prefix, we can try to fetch the attribute with it
         if (try prefixedAttributeName(namespace, local_name.str(), frame)) |prefixed| {
-            if (try self.getAttribute(.wrap(prefixed), frame)) |value| {
-                return value;
+            if (try self.hasAttribute(.wrap(prefixed), frame)) {
+                return .wrap(prefixed);
             }
         }
     }
-    return self.getAttribute(local_name, frame);
+    return local_name;
 }
 
 fn prefixedAttributeName(namespace: []const u8, local_name: []const u8, frame: *Frame) !?[]const u8 {
@@ -729,7 +738,7 @@ fn prefixedAttributeName(namespace: []const u8, local_name: []const u8, frame: *
         }
         return null;
     };
-    return try std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix, local_name });
+    return try frame.local_arena.print("{s}:{s}", .{ prefix, local_name });
 }
 
 pub fn getAttributeSafe(self: *const Element, name: String) ?[]const u8 {
@@ -829,6 +838,10 @@ pub fn getAttributeNode(self: *Element, name: String, frame: *Frame) !?*Attribut
     return self._attributes.getAttribute(name, self, frame);
 }
 
+pub fn getAttributeNodeNS(self: *Element, namespace_: ?[]const u8, local_name: String, frame: *Frame) !?*Attribute {
+    return self.getAttributeNode(try self.attributeNameNS(namespace_, local_name, frame), frame);
+}
+
 pub fn setAttribute(self: *Element, name: String, value: String, frame: *Frame) !void {
     try Attribute.validateAttributeName(name);
     _ = try self._attributes.put(name, value, self, frame);
@@ -841,12 +854,12 @@ pub fn setAttributeNS(
     value: String,
     frame: *Frame,
 ) !void {
-    const local_start = if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx| blk: {
+    const local_start = if (std.mem.findScalarPos(u8, qualified_name, 0, ':')) |idx| blk: {
         if (idx == 0 or idx == qualified_name.len - 1) {
             // cannot be at the start or end of the qname
             return error.InvalidCharacterError;
         }
-        if (std.mem.indexOfScalarPos(u8, qualified_name, idx + 1, ':') != null) {
+        if (std.mem.findScalarPos(u8, qualified_name, idx + 1, ':') != null) {
             // and can only have one
             return error.InvalidCharacterError;
         }
@@ -971,6 +984,10 @@ pub fn setAttributeNode(self: *Element, attr: *Attribute, frame: *Frame) !?*Attr
 
 pub fn removeAttribute(self: *Element, name: String, frame: *Frame) !void {
     return self._attributes.delete(name, self, frame);
+}
+
+pub fn removeAttributeNS(self: *Element, namespace_: ?[]const u8, local_name: String, frame: *Frame) !void {
+    return self.removeAttribute(try self.attributeNameNS(namespace_, local_name, frame), frame);
 }
 
 pub fn removeAttributeSafe(self: *Element, name: String, frame: *Frame) void {
@@ -1205,8 +1222,20 @@ pub fn isSvgLink(self: *Element) bool {
 
 // An editing host takes focus like a form control does.
 pub fn isEditingHost(self: *Element) bool {
-    const value = self.getAttributeSafe(.wrap("contenteditable")) orelse return false;
+    const value = self.getAttributeInterned("contenteditable") orelse return false;
     return std.ascii.eqlIgnoreCase(value, "false") == false;
+}
+
+// An editing host or a descendant of one: the nearest contenteditable
+// attribute decides.
+pub fn isEditable(self: *Element) bool {
+    var current: ?*Element = self;
+    while (current) |el| : (current = el.parentElement()) {
+        if (el.getAttributeInterned("contenteditable") != null) {
+            return el.isEditingHost();
+        }
+    }
+    return false;
 }
 
 /// Focusable without a tabindex attribute.
@@ -1269,34 +1298,43 @@ pub fn focus(self: *Element, frame: *Frame) !void {
     }
 
     const owner = self.ownerFrame(frame) orelse return;
+    const already_active = owner.document._active_element == self;
+    if (already_active == false and self.isFocusable(owner) == false) {
+        return;
+    }
+
+    // The focus chain runs through navigable containers: each <iframe> holding
+    // the focused document is the focused area of its parent document, so the
+    // parent's activeElement is that <iframe>. Like Chrome, ancestors blur
+    // their previous element first, and the <iframe> itself gets no focus events.
+    // https://html.spec.whatwg.org/multipage/interaction.html#focus-chain
+    var child = owner;
+    while (child.iframe) |container| {
+        const parent = child.parent orelse break;
+        const parent_doc = parent.document;
+        const old = parent_doc._active_element;
+        if (old == container.asElement()) {
+            break;
+        }
+        parent_doc.setActiveElement(container.asElement(), parent);
+        if (old) |o| {
+            _ = try blurFocusedArea(o, null, parent);
+        }
+        child = parent;
+    }
+
+    if (already_active) {
+        return;
+    }
+
     const doc = owner.document;
     const old_active = doc._active_element;
-    if (old_active == self) {
-        return;
-    }
-
-    if (self.isFocusable(owner) == false) {
-        return;
-    }
-
-    const FocusEvent = @import("event/FocusEvent.zig");
-
     const new_target = self.asEventTarget();
     doc.setActiveElement(self, owner);
 
-    if (old_active) |old| {
-        const old_target = old.asEventTarget();
+    const old_related: ?*EventTarget = if (old_active) |old| try blurFocusedArea(old, new_target, owner) else null;
 
-        // Dispatch blur on old element (no bubble, composed)
-        const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = new_target }, owner);
-        try owner._event_manager.dispatch(old_target, blur_event.asEvent());
-
-        // Dispatch focusout on old element (bubbles, composed)
-        const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = new_target }, owner);
-        try owner._event_manager.dispatch(old_target, focusout_event.asEvent());
-    }
-
-    const old_related: ?*EventTarget = if (old_active) |old| old.asEventTarget() else null;
+    const FocusEvent = @import("event/FocusEvent.zig");
 
     // Dispatch focus on new element (no bubble, composed)
     const focus_event = try FocusEvent.initTrusted(comptime .wrap("focus"), .{ .composed = true, .relatedTarget = old_related }, owner);
@@ -1307,6 +1345,41 @@ pub fn focus(self: *Element, frame: *Frame) !void {
     try owner._event_manager.dispatch(new_target, focusin_event.asEvent());
 }
 
+// `old` just lost focus in `frame`'s document. When it's an <iframe> holding
+// the focus chain, the element focused inside it is what blurs (and its
+// document's activeElement is cleared); the <iframe> itself gets no events.
+// Returns the relatedTarget for the element taking focus: the blurred element,
+// unless it was in another document.
+fn blurFocusedArea(old: *Element, related: ?*EventTarget, frame: *Frame) !?*EventTarget {
+    var el = old;
+    var el_frame = frame;
+    var el_related = related;
+    while (el.is(Html.IFrame)) |iframe| {
+        const window = iframe._window orelse break;
+        const child = window._frame;
+        const inner = child.document._active_element orelse return null;
+        child.document.setActiveElement(null, child);
+        el = inner;
+        el_frame = child;
+        // relatedTarget doesn't cross documents
+        el_related = null;
+    }
+    try dispatchBlur(el, el_related, el_frame);
+    return if (el_frame == frame) el.asEventTarget() else null;
+}
+
+// Dispatches blur (no bubble) then focusout (bubbles) on `old`, which just lost focus.
+fn dispatchBlur(old: *Element, related: ?*EventTarget, frame: *Frame) !void {
+    const FocusEvent = @import("event/FocusEvent.zig");
+    const old_target = old.asEventTarget();
+
+    const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = related }, frame);
+    try frame._event_manager.dispatch(old_target, blur_event.asEvent());
+
+    const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = related }, frame);
+    try frame._event_manager.dispatch(old_target, focusout_event.asEvent());
+}
+
 pub fn blur(self: *Element, frame: *Frame) !void {
     // A frameless document never has a focused element.
     const owner = self.ownerFrame(frame) orelse return;
@@ -1314,17 +1387,7 @@ pub fn blur(self: *Element, frame: *Frame) !void {
     if (doc._active_element != self) return;
 
     doc.setActiveElement(null, owner);
-
-    const FocusEvent = @import("event/FocusEvent.zig");
-    const old_target = self.asEventTarget();
-
-    // Dispatch blur (no bubble, composed)
-    const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true }, owner);
-    try owner._event_manager.dispatch(old_target, blur_event.asEvent());
-
-    // Dispatch focusout (bubbles, composed)
-    const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true }, owner);
-    try owner._event_manager.dispatch(old_target, focusout_event.asEvent());
+    _ = try blurFocusedArea(self, null, owner);
 }
 
 pub fn getChildren(self: *Element, frame: *Frame) !collections.NodeLive(.child_elements) {
@@ -1478,6 +1541,7 @@ const CheckVisibilityOpts = struct {
     opacityProperty: bool = false,
     visibilityProperty: bool = false,
 };
+
 pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Frame) bool {
     const opts = opts_ orelse CheckVisibilityOpts{};
     const owner = self.ownerFrame(frame) orelse return false;
@@ -1500,7 +1564,7 @@ pub const Axis = enum {
 
 pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.State {
     const tag = self.getTag();
-    const root = tag == .html or tag == .body;
+    const root = self.isRootContainer();
 
     if (self.ownerFrame(frame)) |owner| {
         const style_manager = &owner._style_manager;
@@ -1532,6 +1596,21 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
     return .{ .value = 5.0 };
 }
 
+// The document's <html>, or a <body> under it. These span the document and
+// scroll the viewport. A script can insert these tags anywhere, and a nested
+// one gets treated as a normal element.
+pub fn isRootContainer(self: *const Element) bool {
+    const parent = self.asConstNode().parentNode() orelse return false;
+    return switch (self.getTag()) {
+        .html => parent._type == .document,
+        .body => {
+            const html = parent.is(Element) orelse return false;
+            return html.getTag() == .html and html.isRootContainer();
+        },
+        else => false,
+    };
+}
+
 // We can't do this correctly without full styles and more rendering. We also
 // can't just ignore the children since some sites append nodes until a certain
 // width / height treshold is reached. If the size isn't explicit, we fallback
@@ -1559,10 +1638,10 @@ fn rootScrollSize(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
 }
 
 fn viewportAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
-    const tag = self.getTag();
-    if (tag != .html and tag != .body) {
+    if (!self.isRootContainer()) {
         return null;
     }
+    const tag = self.getTag();
     const doc = self.asNode().ownerDocument(frame) orelse frame.document;
     if ((tag == .body) != doc.isQuirksMode()) {
         return null;
@@ -1583,8 +1662,7 @@ pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
         return own.value;
     }
 
-    const tag = self.getTag();
-    if (tag == .html or tag == .body) {
+    if (self.isRootContainer()) {
         // html/body return their set value regardless of children.
         return own.value;
     }
@@ -1666,7 +1744,7 @@ pub fn scrollContainer(self: *Element, axes: ScrollAxes, frame: *Frame) ScrollTa
     const style_manager = &owner._style_manager;
     var current: ?*Element = self;
     while (current) |el| : (current = el.parentElement()) {
-        if (el.scrollsViewport()) break;
+        if (el.isRootContainer()) break;
         const scrolls = style_manager.overflowAxes(el);
         if ((axes.x and scrolls.x) or (axes.y and scrolls.y)) {
             return .{ .container = el };
@@ -1683,13 +1761,6 @@ pub fn containsOverscroll(self: *Element, axes: ScrollAxes, frame: *Frame) bool 
     return (axes.x and contains.x) or (axes.y and contains.y);
 }
 
-fn scrollsViewport(self: *const Element) bool {
-    return switch (self.getTag()) {
-        .html, .body => true,
-        else => false,
-    };
-}
-
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
@@ -1697,9 +1768,8 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
 
     const height = self.getElementAxis(frame, .height).value;
 
-    const tag = self.getTag();
     // The root scroller reports what the viewport scrolls over.
-    if (tag == .html or tag == .body) {
+    if (self.isRootContainer()) {
         return self.rootScrollSize(frame, .height) orelse height;
     }
 
@@ -1713,10 +1783,9 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 
     const width = self.getElementAxis(frame, .width).value;
 
-    const tag = self.getTag();
     // Roots don't sum their children side by side. The root scroller
     // reports what the viewport scrolls over.
-    if (tag == .html or tag == .body) {
+    if (self.isRootContainer()) {
         return self.rootScrollSize(frame, .width) orelse width;
     }
 
@@ -1727,7 +1796,7 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 /// without an explicit size the client and content measurements collapse onto
 /// the same sum. html and body scroll the viewport, clamped by Window.
 fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
-    if (self.scrollsViewport() or !self.getElementAxis(frame, axis).explicit) {
+    if (self.isRootContainer() or !self.getElementAxis(frame, axis).explicit) {
         return null;
     }
     const client = self.clientAxis(frame, axis);
@@ -2684,8 +2753,12 @@ pub const JsApi = struct {
     pub const getAttribute = bridge.function(Element.getAttribute, .{});
     pub const getAttributeNS = bridge.function(Element.getAttributeNS, .{});
     pub const getAttributeNode = bridge.function(Element.getAttributeNode, .{});
+    pub const getAttributeNodeNS = bridge.function(Element.getAttributeNodeNS, .{});
     pub const setAttributeNode = bridge.function(Element.setAttributeNode, .{ .ce_reactions = true });
+    // Attributes don't carry a namespace, so this is setAttributeNode.
+    pub const setAttributeNodeNS = bridge.function(Element.setAttributeNode, .{ .ce_reactions = true });
     pub const removeAttribute = bridge.function(Element.removeAttribute, .{ .ce_reactions = true });
+    pub const removeAttributeNS = bridge.function(Element.removeAttributeNS, .{ .ce_reactions = true });
     pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{ .ce_reactions = true });
     pub const getAttributeNames = bridge.function(Element.getAttributeNames, .{});
     pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .ce_reactions = true });
@@ -2746,6 +2819,7 @@ pub const JsApi = struct {
     pub const getAnimations = bridge.function(Element.getAnimations, .{});
     pub const animate = bridge.function(Element.animate, .{});
     pub const checkVisibility = bridge.function(Element.checkVisibility, .{});
+    pub const requestFullscreen = bridge.function(Element.requestFullscreen, .{});
     pub const clientWidth = bridge.accessor(Element.getClientWidth, null, .{});
     pub const clientHeight = bridge.accessor(Element.getClientHeight, null, .{});
     pub const clientTop = bridge.accessor(Element.getClientTop, null, .{});

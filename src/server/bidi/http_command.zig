@@ -26,12 +26,14 @@ const lp = @import("lightpanda");
 const js = @import("../../browser/js/js.zig");
 const Frame = @import("../../browser/Frame.zig");
 const Node = @import("../../browser/webapi/Node.zig");
+const Viewport = @import("../../browser/Viewport.zig");
 const NodeRegistry = @import("../../NodeRegistry.zig");
 
 const Method = @import("../http.zig").Connection.Method;
 
 const BiDi = @import("BiDi.zig");
 const input = @import("input.zig");
+const storage = @import("storage.zig");
 const execute = @import("execute.zig");
 const remote_value = @import("remote_value.zig");
 const browsing_context = @import("browsing_context.zig");
@@ -45,10 +47,17 @@ pub const element_key = "element-6066-11e4-a52e-4f735466cecf";
 pub const Command = union(enum) {
     navigate_to: NavigateTo,
     get_current_url,
+    back,
+    forward,
     refresh,
     get_title,
     get_window_handle,
     get_window_handles,
+    get_window_rect,
+    set_window_rect: SetWindowRect,
+    maximize_window,
+    minimize_window,
+    fullscreen_window,
     get_page_source,
     take_screenshot,
     perform_actions: PerformActions,
@@ -73,6 +82,11 @@ pub const Command = union(enum) {
     execute_async_script: execute.Script,
     get_timeouts,
     set_timeouts: SetTimeouts,
+    get_all_cookies,
+    get_named_cookie: CookieName,
+    add_cookie: AddCookie,
+    delete_cookie: CookieName,
+    delete_all_cookies,
 };
 
 // A command's path parameters are its leading fields (see `parse`); the rest
@@ -133,6 +147,7 @@ const Route = struct {
     };
 
     fn init(comptime method: Method, comptime path: []const u8, comptime command: std.meta.Tag(Command)) Route {
+        @setEvalBranchQuota(10_000);
         comptime var segments: []const Segment = &.{};
         comptime var parameters: []const []const u8 = &.{};
         var it = std.mem.splitScalar(u8, path, '/');
@@ -195,11 +210,11 @@ const Route = struct {
         var value: T = undefined;
         inline for (self.parameters, 0..) |parameter, i| {
             // path is the connection's read buffer, reused once the request is parked
-            @field(value, parameter) = try arena.dupe(u8, captured[i]);
+            @field(value, parameter) = std.Uri.percentDecodeInPlace(try arena.dupe(u8, captured[i]));
         }
         const parsed = try parseBody(Body(T, self.parameters), arena, body);
-        inline for (@typeInfo(@TypeOf(parsed)).@"struct".fields) |field| {
-            @field(value, field.name) = @field(parsed, field.name);
+        inline for (@typeInfo(@TypeOf(parsed)).@"struct".field_names) |field_name| {
+            @field(value, field_name) = @field(parsed, field_name);
         }
         return @unionInit(Command, name, value);
     }
@@ -209,10 +224,17 @@ const Route = struct {
 const routes = [_]Route{
     .init(.POST, "/url", .navigate_to),
     .init(.GET, "/url", .get_current_url),
+    .init(.POST, "/back", .back),
+    .init(.POST, "/forward", .forward),
     .init(.POST, "/refresh", .refresh),
     .init(.GET, "/title", .get_title),
     .init(.GET, "/window", .get_window_handle),
     .init(.GET, "/window/handles", .get_window_handles),
+    .init(.GET, "/window/rect", .get_window_rect),
+    .init(.POST, "/window/rect", .set_window_rect),
+    .init(.POST, "/window/maximize", .maximize_window),
+    .init(.POST, "/window/minimize", .minimize_window),
+    .init(.POST, "/window/fullscreen", .fullscreen_window),
     .init(.GET, "/source", .get_page_source),
     .init(.GET, "/screenshot", .take_screenshot),
     .init(.POST, "/actions", .perform_actions),
@@ -237,6 +259,11 @@ const routes = [_]Route{
     .init(.POST, "/execute/async", .execute_async_script),
     .init(.GET, "/timeouts", .get_timeouts),
     .init(.POST, "/timeouts", .set_timeouts),
+    .init(.GET, "/cookie", .get_all_cookies),
+    .init(.POST, "/cookie", .add_cookie),
+    .init(.DELETE, "/cookie", .delete_all_cookies),
+    .init(.GET, "/cookie/{name}", .get_named_cookie),
+    .init(.DELETE, "/cookie/{name}", .delete_cookie),
 };
 
 pub const ParseError = error{
@@ -265,23 +292,15 @@ pub fn parse(arena: Allocator, method: Method, path: []const u8, body: []const u
 // What's left of a command once its path parameters, which are its leading
 // fields, are taken out: the part that comes from the body.
 fn Body(comptime T: type, comptime parameters: []const []const u8) type {
-    const fields = @typeInfo(T).@"struct".fields;
-    for (parameters, fields[0..parameters.len]) |parameter, field| {
-        if (!std.mem.eql(u8, parameter, field.name)) {
-            @compileError(@typeName(T) ++ ": field '" ++ field.name ++ "' should be the path parameter '" ++ parameter ++ "'");
+    const info = @typeInfo(T).@"struct";
+    for (parameters, info.field_names[0..parameters.len]) |parameter, field_name| {
+        if (!std.mem.eql(u8, parameter, field_name)) {
+            @compileError(@typeName(T) ++ ": field '" ++ field_name ++ "' should be the path parameter '" ++ parameter ++ "'");
         }
     }
 
-    const rest = fields[parameters.len..];
-    var field_names: [rest.len][:0]const u8 = undefined;
-    var types: [rest.len]type = undefined;
-    var attrs: [rest.len]std.builtin.Type.StructField.Attributes = undefined;
-    for (rest, 0..) |field, i| {
-        field_names[i] = field.name;
-        types[i] = field.type;
-        attrs[i] = .{ .@"align" = field.alignment, .default_value_ptr = field.default_value_ptr };
-    }
-    return @Struct(.auto, null, &field_names, &types, &attrs);
+    const n = parameters.len;
+    return @Struct(.auto, null, info.field_names[n..], info.field_types[n..], info.field_attrs[n..]);
 }
 
 // Both are split on '/', so a leading empty segment lines up on either side.
@@ -291,7 +310,7 @@ fn parseBody(comptime T: type, arena: Allocator, body: []const u8) ParseError!T 
         // POSTs without parameters still send a body ("{}"); nothing to read
         return {};
     }
-    if (@typeInfo(T).@"struct".fields.len == 0) {
+    if (@typeInfo(T).@"struct".field_names.len == 0) {
         // everything the command takes came from the path
         return .{};
     }
@@ -311,10 +330,14 @@ pub fn process(cmd: *BiDi.Command) !void {
     switch (cmd.input.http) {
         .navigate_to => |p| return navigateTo(cmd, p),
         .get_current_url => return getCurrentUrl(cmd),
+        .back => return traverse(cmd, -1),
+        .forward => return traverse(cmd, 1),
         .refresh => return refresh(cmd),
         .get_title => return getTitle(cmd),
         .get_window_handle => return getWindowHandle(cmd),
         .get_window_handles => return getWindowHandles(cmd),
+        .get_window_rect, .maximize_window, .minimize_window, .fullscreen_window => return getWindowRect(cmd),
+        .set_window_rect => |p| return setWindowRect(cmd, p),
         .get_page_source => return getPageSource(cmd),
         .take_screenshot => return takeScreenshot(cmd),
         .perform_actions => |p| return performActions(cmd, p),
@@ -339,6 +362,11 @@ pub fn process(cmd: *BiDi.Command) !void {
         .execute_async_script => |p| return executeScript(cmd, p, .async),
         .get_timeouts => return getTimeouts(cmd),
         .set_timeouts => |p| return setTimeouts(cmd, p),
+        .get_all_cookies => return getAllCookies(cmd),
+        .get_named_cookie => |p| return getNamedCookie(cmd, p),
+        .add_cookie => |p| return addCookie(cmd, p),
+        .delete_cookie => |p| return deleteCookies(cmd, p.name),
+        .delete_all_cookies => return deleteCookies(cmd, null),
     }
 }
 
@@ -355,6 +383,17 @@ fn navigateTo(cmd: *BiDi.Command, p: NavigateTo) !void {
 fn getCurrentUrl(cmd: *BiDi.Command) !void {
     const frame = (try currentFrame(cmd)) orelse return;
     return cmd.sendResult(frame.url);
+}
+
+// POST /session/{id}/back and /forward. With no entry to go to, there's
+// nothing to do.
+fn traverse(cmd: *BiDi.Command, delta: i32) !void {
+    const ctx = (try currentContext(cmd)) orelse return;
+    const frame = (try currentFrame(cmd)) orelse return;
+    if (browsing_context.canTraverse(frame, delta) == false) {
+        return cmd.sendDone();
+    }
+    return browsing_context.traverse(cmd, ctx, frame, delta);
 }
 
 // POST /session/{id}/refresh.
@@ -379,6 +418,37 @@ fn getWindowHandle(cmd: *BiDi.Command) !void {
 fn getWindowHandles(cmd: *BiDi.Command) !void {
     const ctx = (try currentContext(cmd)) orelse return;
     return cmd.sendResult(&[_][]const u8{&ctx.id});
+}
+
+// GET /session/{id}/window/rect
+fn getWindowRect(cmd: *BiDi.Command) !void {
+    _ = (try currentContext(cmd)) orelse return;
+    return cmd.sendResult(windowRect(cmd.bidi.browser.getViewport()));
+}
+
+fn windowRect(viewport: Viewport) struct { x: i32, y: i32, width: u32, height: u32 } {
+    return .{ .x = 0, .y = 0, .width = viewport.width, .height = viewport.height };
+}
+
+// POST /session/{id}/window/rect.
+pub const SetWindowRect = struct {
+    x: ?i32 = null,
+    y: ?i32 = null,
+    width: ?u31 = null,
+    height: ?u31 = null,
+};
+fn setWindowRect(cmd: *BiDi.Command, p: SetWindowRect) !void {
+    _ = (try currentContext(cmd)) orelse return;
+    const browser = &cmd.bidi.browser;
+    var viewport = browser.getViewport();
+    if (p.width) |width| {
+        viewport.width = @max(width, 1);
+    }
+    if (p.height) |height| {
+        viewport.height = @max(height, 1);
+    }
+    browser.setViewportOverride(viewport);
+    return cmd.sendResult(windowRect(viewport));
 }
 
 // GET /session/{id}/source
@@ -599,7 +669,6 @@ fn elementClick(cmd: *BiDi.Command, p: ElementId) !void {
             break :blk;
         }
 
-        Frame.user_input.updateHoverTarget(frame, element, .{ .with_pointer = true });
         try Frame.user_input.triggerClick(frame, element, .{});
 
         // a multiple <select> toggles the option, any other selects it
@@ -609,8 +678,7 @@ fn elementClick(cmd: *BiDi.Command, p: ElementId) !void {
         }
         try option.setSelected(selected, frame);
         try lp.actions.dispatchInputAndChangeEvents(select_element, frame);
-    } else if (element.isDisabled() == false) {
-        Frame.user_input.updateHoverTarget(frame, element, .{ .with_pointer = true });
+    } else {
         try Frame.user_input.triggerClick(frame, element, .{});
     }
     return browsing_context.answerAfterNavigation(cmd, ctx, frame);
@@ -756,6 +824,90 @@ fn setTimeouts(cmd: *BiDi.Command, p: SetTimeouts) !void {
     return cmd.sendDone();
 }
 
+// GET /session/{id}/cookie
+fn getAllCookies(cmd: *BiDi.Command) !void {
+    const frame = (try currentFrame(cmd)) orelse return;
+    const jar = &cmd.bidi.user_context.session.cookie_jar;
+    jar.removeExpired(null);
+
+    const associated: storage.Associated = .init(frame.url, null);
+    var cookies: std.ArrayList(storage.HttpCookie) = .empty;
+    for (jar.cookies.items) |*cookie| {
+        if (associated.has(cookie)) {
+            try cookies.append(cmd.arena, .{ .cookie = cookie });
+        }
+    }
+    return cmd.sendResult(cookies.items);
+}
+
+// GET /session/{id}/cookie/{name}
+pub const CookieName = struct {
+    name: []const u8,
+};
+fn getNamedCookie(cmd: *BiDi.Command, p: CookieName) !void {
+    const frame = (try currentFrame(cmd)) orelse return;
+    const jar = &cmd.bidi.user_context.session.cookie_jar;
+    jar.removeExpired(null);
+
+    const associated: storage.Associated = .init(frame.url, p.name);
+    for (jar.cookies.items) |*cookie| {
+        if (associated.has(cookie)) {
+            return cmd.sendResult(storage.HttpCookie{ .cookie = cookie });
+        }
+    }
+    return cmd.sendError("no such cookie", "no cookie with that name");
+}
+
+// POST /session/{id}/cookie
+pub const AddCookie = struct {
+    cookie: struct {
+        name: []const u8,
+        value: []const u8,
+        path: ?[]const u8 = null,
+        domain: ?[]const u8 = null,
+        secure: bool = false,
+        httpOnly: bool = false,
+        expiry: ?u64 = null,
+        sameSite: ?enum { Strict, Lax, None } = null,
+    },
+};
+fn addCookie(cmd: *BiDi.Command, p: AddCookie) !void {
+    const frame = (try currentFrame(cmd)) orelse return;
+    if (std.mem.startsWith(u8, frame.url, "http:") == false and std.mem.startsWith(u8, frame.url, "https:") == false) {
+        return cmd.sendError("invalid cookie domain", "the current document can't have cookies");
+    }
+
+    const c = p.cookie;
+    const spec: storage.Spec = .{
+        .name = c.name,
+        .value = c.value,
+        .domain = c.domain,
+        .path = c.path,
+        .secure = c.secure,
+        .http_only = c.httpOnly,
+        .expiry = c.expiry,
+        .same_site = if (c.sameSite) |same_site| switch (same_site) {
+            .Strict => .strict,
+            .Lax => .lax,
+            .None => .none,
+        } else null,
+    };
+    storage.add(&cmd.bidi.user_context.session.cookie_jar, spec, frame.url) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.InvalidDomain => return cmd.sendError("invalid cookie domain", "the domain doesn't match the current document"),
+        error.UnableToSetCookie => return cmd.sendError("unable to set cookie", "the cookie was rejected"),
+    };
+    return cmd.sendDone();
+}
+
+// DELETE /session/{id}/cookie/{name}, DELETE /session/{id}/cookie
+fn deleteCookies(cmd: *BiDi.Command, name: ?[]const u8) !void {
+    const frame = (try currentFrame(cmd)) orelse return;
+    const associated: storage.Associated = .init(frame.url, name);
+    storage.remove(&cmd.bidi.user_context.session.cookie_jar, &associated, storage.Associated.has);
+    return cmd.sendDone();
+}
+
 // {"element-6066-…": "<sharedId>"}: a WebDriver element reference is the
 // node registry's id, the same one BiDi hands out.
 pub const Reference = struct {
@@ -763,7 +915,7 @@ pub const Reference = struct {
 
     pub fn init(arena: Allocator, registry: *NodeRegistry, node: *Node) !Reference {
         const registered = try registry.register(node);
-        return .{ .shared_id = try std.fmt.allocPrint(arena, "{d}", .{registered.id}) };
+        return .{ .shared_id = try arena.print("{d}", .{registered.id}) };
     }
 
     fn initFromCommand(cmd: *BiDi.Command, node: *Node) !Reference {
@@ -928,6 +1080,29 @@ test "bidi.http_command: parse" {
     try testing.expectEqual("7", (try parse(arena, .POST, "/element/7/clear", "{}")).element_clear.id);
     try testing.expectError(error.InvalidArgument, parse(arena, .POST, "/element/7/value", "{}"));
 
+    {
+        const command = try parse(arena, .POST, "/cookie", "{\"cookie\":{\"name\":\"a\",\"value\":\"1\",\"secure\":false,\"sameSite\":\"Lax\"}}");
+        try testing.expectEqual("a", command.add_cookie.cookie.name);
+        try testing.expectEqual(.Lax, command.add_cookie.cookie.sameSite.?);
+        try testing.expectEqual(null, command.add_cookie.cookie.expiry);
+    }
+    try testing.expectError(error.InvalidArgument, parse(arena, .POST, "/cookie", "{\"cookie\":{\"name\":\"a\",\"value\":\"1\",\"sameSite\":\"lax\"}}"));
+    try testing.expectError(error.InvalidArgument, parse(arena, .POST, "/cookie", "{\"name\":\"a\",\"value\":\"1\"}"));
+    try testing.expect(try parse(arena, .GET, "/cookie", "") == .get_all_cookies);
+    try testing.expect(try parse(arena, .DELETE, "/cookie", "") == .delete_all_cookies);
+    // path parameters are percent-decoded
+    try testing.expectEqual("a b", (try parse(arena, .GET, "/cookie/a%20b", "")).get_named_cookie.name);
+    try testing.expectEqual("a", (try parse(arena, .DELETE, "/cookie/a", "")).delete_cookie.name);
+
+    try testing.expect(try parse(arena, .GET, "/window/rect", "") == .get_window_rect);
+    try testing.expect(try parse(arena, .POST, "/window/maximize", "{}") == .maximize_window);
+    {
+        const command = try parse(arena, .POST, "/window/rect", "{\"width\":375,\"height\":812,\"x\":null}");
+        try testing.expectEqual(375, command.set_window_rect.width.?);
+        try testing.expectEqual(null, command.set_window_rect.x);
+    }
+    try testing.expectError(error.InvalidArgument, parse(arena, .POST, "/window/rect", "{\"width\":-1}"));
+
     try testing.expect(try parse(arena, .GET, "/timeouts", "") == .get_timeouts);
     try testing.expectError(error.InvalidArgument, parse(arena, .POST, "/execute/sync", "{}"));
 
@@ -936,6 +1111,8 @@ test "bidi.http_command: parse" {
     try testing.expect(try parse(arena, .GET, "/element/7/text", "") == .get_element_text);
 
     try testing.expect(try parse(arena, .GET, "/url", "") == .get_current_url);
+    try testing.expect(try parse(arena, .POST, "/back", "{}") == .back);
+    try testing.expect(try parse(arena, .POST, "/forward", "{}") == .forward);
     try testing.expect(try parse(arena, .GET, "/window/handles", "") == .get_window_handles);
     try testing.expect(try parse(arena, .DELETE, "/actions", "") == .release_actions);
 

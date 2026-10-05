@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // Shared bookkeeping for setTimeout / setInterval (and Window-only
-// setImmediate / requestAnimationFrame / requestIdleCallback). Both Window
+// requestAnimationFrame / requestIdleCallback). Both Window
 // and WorkerGlobalScope embed a Timers and forward their JS-bridged
 // methods through `schedule` / `clear`.
 
@@ -36,7 +36,7 @@ const CLAMP_NESTING = 5;
 // from considering the page "done" forever (more commonly seen with requestAnimationFrame)
 const BLOCKING_NESTING = 10;
 
-// Every pending timeout, interval, animation frame and setImmediate. Past
+// Every pending timeout, interval, animation frame and idle callback. Past
 // the cap setTimeout throws, which no browser does; keep it a backstop for
 // runaway pages, not a budget (a paginated storefront listing holds ~2.7k).
 const MAX_CALLBACKS = 8192;
@@ -87,6 +87,11 @@ const ScheduleOpts = struct {
     blocks_done: bool = true,
     mode: Mode = .normal,
 };
+
+// setTimeout/setInterval take the delay as a WebIDL long: wrapped to 32 bits, negatives clamped to 0.
+pub fn delayFromJs(delay_ms: ?i32) u32 {
+    return @intCast(@max(delay_ms orelse 0, 0));
+}
 
 pub fn schedule(
     self: *Timers,
@@ -214,6 +219,30 @@ const ScheduleCallback = struct {
         self.arena.release();
     }
 
+    // An exception the callback doesn't catch is reported to the global, so
+    // window's "error" event and onerror see it — the "report an exception"
+    // step of the timer initialization steps and of running animation frame
+    // and idle callbacks.
+    fn invoke(self: *ScheduleCallback, local: *const js.Local, args: anytype, comptime context: []const u8) void {
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(local);
+        defer try_catch.deinit();
+
+        local.toLocal(self.cb).callRethrow(void, args) catch |err| {
+            if (err == error.JsException or err == error.TryCatchRethrow) {
+                if (try_catch.exceptionValue()) |exc| {
+                    // reportError also counts the error on the page.
+                    self.exec.reportError(exc) catch |report_err| {
+                        log.debug(.js, context ++ " report error", .{ .name = self.name, .err = report_err });
+                    };
+                    return;
+                }
+            }
+            self.exec.page.recordJsError(err);
+            log.debug(.js, context, .{ .name = self.name, .err = err });
+        };
+    }
+
     fn run(ptr: *anyopaque) !?u32 {
         const self: *ScheduleCallback = @ptrCast(@alignCast(ptr));
         if (self.removed) {
@@ -233,27 +262,16 @@ const ScheduleCallback = struct {
         switch (self.mode) {
             .idle => {
                 const IdleDeadline = @import("IdleDeadline.zig");
-                ls.toLocal(self.cb).call(void, .{IdleDeadline{}}) catch |err| {
-                    self.exec.page.recordJsError(err);
-                    log.debug(.js, "idleCallback", .{ .name = self.name, .err = err });
-                };
+                self.invoke(&ls.local, .{IdleDeadline{}}, "idleCallback");
             },
             .animation_frame => {
                 const now = switch (self.exec.js.global) {
                     .frame => |frame| frame.window._performance.now(),
                     .worker => |worker| worker._performance.now(),
                 };
-                ls.toLocal(self.cb).call(void, .{now}) catch |err| {
-                    self.exec.page.recordJsError(err);
-                    log.debug(.js, "RAF", .{ .name = self.name, .err = err });
-                };
+                self.invoke(&ls.local, .{now}, "RAF");
             },
-            .normal => {
-                ls.toLocal(self.cb).call(void, self.params) catch |err| {
-                    self.exec.page.recordJsError(err);
-                    log.debug(.js, "timer", .{ .name = self.name, .err = err });
-                };
-            },
+            .normal => self.invoke(&ls.local, self.params, "timer"),
         }
         ls.local.runMicrotasks();
 

@@ -141,7 +141,7 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
     const arena = try frame.getArena(.small, "SM.preloadScript");
     errdefer arena.release();
 
-    const owned_url = try arena.dupeZ(u8, url);
+    const owned_url = try arena.dupeSentinel(u8, url, 0);
 
     const script = try arena.create(Script);
     script.* = .{

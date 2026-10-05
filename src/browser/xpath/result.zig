@@ -115,9 +115,9 @@ pub fn numberToString(arena: Allocator, n: f64) error{OutOfMemory}![]const u8 {
     if (std.math.isNegativeInf(n)) return "-Infinity";
     if (n == 0) return "0"; // covers +0 and -0
     if (@trunc(n) == n and n >= -9.007199254740992e15 and n <= 9.007199254740992e15) {
-        return std.fmt.allocPrint(arena, "{d}", .{@as(i64, @trunc(n))});
+        return arena.print("{d}", .{@as(i64, @trunc(n))});
     }
-    return std.fmt.allocPrint(arena, "{d}", .{n});
+    return arena.print("{d}", .{n});
 }
 
 const testing = std.testing;

@@ -62,7 +62,7 @@ fn getNamed(self: *CSSStyleProperties, name: []const u8, frame: *Frame) ![]const
 
     // Only apply vendor prefix filtering for camelCase access (no dashes in input)
     // Bracket notation with dash-case (e.g., div.style['-moz-user-select']) should return the actual value
-    const is_camelcase_access = std.mem.indexOfScalar(u8, name, '-') == null;
+    const is_camelcase_access = std.mem.findScalar(u8, name, '-') == null;
     if (is_camelcase_access and std.mem.startsWith(u8, dash_case, "-")) {
         // We only support -webkit-, other vendor prefixes return undefined for camelCase access
         const is_webkit = std.mem.startsWith(u8, dash_case, "-webkit-");
@@ -334,7 +334,7 @@ fn camelCaseToDashCase(name: []const u8, buf: []u8) []const u8 {
     }
 
     // If already contains dashes, just return lowercased
-    if (std.mem.indexOfScalar(u8, name, '-')) |_| {
+    if (std.mem.findScalar(u8, name, '-')) |_| {
         return lower_name;
     }
 
@@ -405,5 +405,5 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const @"[]" = bridge.namedIndexed(CSSStyleProperties.getNamed, CSSStyleProperties.setNamed, null, null, null, .{});
+    pub const @"[]" = bridge.namedIndexed(CSSStyleProperties.getNamed, CSSStyleProperties.setNamed, null, null, null, .{ .ce_reactions = true });
 };

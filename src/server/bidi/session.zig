@@ -87,15 +87,16 @@ pub const Capabilities = struct {
     // when it's null.
     pub fn jsonStringify(self: *const Capabilities, jws: anytype) !void {
         try jws.beginObject();
-        inline for (std.meta.fields(Capabilities)) |field| {
-            const value = @field(self, field.name);
-            if (@typeInfo(field.type) == .optional) {
+        const info = @typeInfo(Capabilities).@"struct";
+        inline for (info.field_names, info.field_types) |field_name, field_type| {
+            const value = @field(self, field_name);
+            if (@typeInfo(field_type) == .optional) {
                 if (value) |v| {
-                    try jws.objectField(field.name);
+                    try jws.objectField(field_name);
                     try jws.write(v);
                 }
             } else {
-                try jws.objectField(field.name);
+                try jws.objectField(field_name);
                 try jws.write(value);
             }
         }
@@ -163,9 +164,9 @@ fn matchesAny(haystack: []const []const u8, needle: []const u8) bool {
     return false;
 }
 
-const platform_name = switch (builtin.os.tag) {
+const platform_name = switch (builtin.target.os.tag) {
     .macos, .ios => "mac",
     .windows => "windows",
     .linux => "linux",
-    else => @tagName(builtin.os.tag),
+    else => @tagName(builtin.target.os.tag),
 };

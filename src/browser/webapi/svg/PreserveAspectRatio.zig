@@ -85,7 +85,7 @@ fn current(self: *const PreserveAspectRatio) Value {
 fn write(self: *PreserveAspectRatio, value: Value, frame: *Frame) !void {
     const alignment = alignName(value.alignment) orelse return error.TypeError;
     const meet_or_slice = meetOrSliceName(value.meet_or_slice) orelse return error.TypeError;
-    const serialized = try std.fmt.allocPrint(frame.local_arena, "{s} {s}", .{ alignment, meet_or_slice });
+    const serialized = try frame.local_arena.print("{s} {s}", .{ alignment, meet_or_slice });
     try self._element.setAttributeSafe(String.wrap("preserveAspectRatio"), .wrap(serialized), frame);
 }
 

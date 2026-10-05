@@ -24,8 +24,7 @@ const HttpClient = @import("../../network/HttpClient.zig");
 // https://html.spec.whatwg.org/multipage/document-lifecycle.html#the-x-frame-options-header
 pub fn allowed(frame: *const Frame, transfer: *HttpClient.Transfer) bool {
     var options: XFrameOptions = .{};
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
+    for (transfer.responseHeaders()) |hdr| {
         if (std.mem.eql(u8, hdr.name, "content-security-policy")) {
             if (hasFrameAncestors(hdr.value)) {
                 // has priority over any x-frame-options
@@ -58,7 +57,7 @@ pub fn allowed(frame: *const Frame, transfer: *HttpClient.Transfer) bool {
 fn hasFrameAncestors(csp: []const u8) bool {
     const name = "frame-ancestors";
     var pos: usize = 0;
-    while (std.ascii.indexOfIgnoreCasePos(csp, pos, name)) |start| {
+    while (std.ascii.findIgnoreCasePos(csp, pos, name)) |start| {
         pos = start + name.len;
 
         // A directive name starts a policy (',') or a directive (';'), so
@@ -70,7 +69,7 @@ fn hasFrameAncestors(csp: []const u8) bool {
                 continue;
             }
         }
-        if (pos == csp.len or std.mem.indexOfScalar(u8, HTTP_WHITESPACE ++ ";,", csp[pos]) != null) {
+        if (pos == csp.len or std.mem.findScalar(u8, HTTP_WHITESPACE ++ ";,", csp[pos]) != null) {
             return true;
         }
     }

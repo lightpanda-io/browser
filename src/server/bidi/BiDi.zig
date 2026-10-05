@@ -322,7 +322,7 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
     lp.metrics.serve_commands.incr(.bidi);
 
     // A BiDi method is always "<module>.<command>".
-    const i = std.mem.indexOfScalar(u8, method, '.') orelse {
+    const i = std.mem.findScalar(u8, method, '.') orelse {
         return unknownCommand(&cmd, method);
     };
     const module = std.meta.stringToEnum(enum {
@@ -331,6 +331,8 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
         browser,
         browsingContext,
         input,
+        storage,
+        emulation,
     }, method[0..i]) orelse return unknownCommand(&cmd, method);
 
     // Only the session module is reachable without a session (it's what
@@ -346,6 +348,8 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
         .browser => @import("browser.zig").processMessage(&cmd, action),
         .browsingContext => @import("browsing_context.zig").processMessage(&cmd, action),
         .input => @import("input.zig").processMessage(&cmd, action),
+        .storage => @import("storage.zig").processMessage(&cmd, action),
+        .emulation => @import("emulation.zig").processMessage(&cmd, action),
     };
     result catch |err| {
         if (err == error.UnknownCommand and cmd.answered == false) {

@@ -4,6 +4,7 @@
   <input id="input1" type="text">
   <input id="input2" type="text">
   <button id="btn1">Button</button>
+  <label id="lbl1" for="input1">Label 1</label>
 </body>
 
 <script id="activeElement_default">
@@ -255,37 +256,25 @@
 }
 </script>
 
-<script id="click_focuses_element">
+<script id="click_does_not_focus_element">
 {
   const input1 = $('#input1');
-  const input2 = $('#input2');
 
   if (document.activeElement) {
     document.activeElement.blur();
   }
 
   let focusCount = 0;
-  let blurCount = 0;
-
   input1.addEventListener('focus', () => focusCount++);
-  input1.addEventListener('blur', () => blurCount++);
-  input2.addEventListener('focus', () => focusCount++);
 
-  // Click input1 — should focus it and fire focus event
+  // el.click() does not move focus per HTML spec / Chrome parity
   input1.click();
-  testing.expectEqual(input1, document.activeElement);
-  testing.expectEqual(1, focusCount);
-  testing.expectEqual(0, blurCount);
-
-  // Click input2 — should move focus, fire blur on input1 and focus on input2
-  input2.click();
-  testing.expectEqual(input2, document.activeElement);
-  testing.expectEqual(2, focusCount);
-  testing.expectEqual(1, blurCount);
+  testing.expectEqual('BODY', document.activeElement.tagName);
+  testing.expectEqual(0, focusCount);
 }
 </script>
 
-<script id="click_focuses_button">
+<script id="click_does_not_focus_button">
 {
   const btn = $('#btn1');
 
@@ -294,7 +283,26 @@
   }
 
   btn.click();
-  testing.expectEqual(btn, document.activeElement);
+  testing.expectEqual('BODY', document.activeElement.tagName);
+}
+</script>
+
+<script id="label_click_focuses_control">
+{
+  const input1 = $('#input1');
+  const lbl = $('#lbl1');
+
+  if (document.activeElement) {
+    document.activeElement.blur();
+  }
+
+  let focusCount = 0;
+  input1.addEventListener('focus', () => focusCount++);
+
+  // Unlike other elements, label.click() explicitly focuses its control
+  lbl.click();
+  testing.expectEqual(input1, document.activeElement);
+  testing.expectEqual(1, focusCount);
 }
 </script>
 

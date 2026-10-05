@@ -46,6 +46,7 @@ _signal: ?*AbortSignal,
 _manual_redirect: bool,
 _no_cors: bool,
 _null_body: bool,
+_headers_done: bool = false,
 _sink: Sink,
 
 pub const Input = Request.Input;
@@ -160,6 +161,7 @@ fn submit(request: *Request, body: ?[]const u8, sink: Sink, exec: *const Executi
             .manual => .manual,
             .@"error" => .@"error",
         },
+        .header_before_body_error = true,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
@@ -237,8 +239,8 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     res._status_text = if (transfer.statusText()) |st|
         try arena.allocator().dupe(u8, st)
     else
-        std.http.Status.phrase(@enumFromInt(status)) orelse "";
-    res._url = try arena.dupeZ(u8, transfer.req.url);
+        std.http.Status.phrase(@fromBackingInt(@intCast(status))) orelse "";
+    res._url = try arena.dupeSentinel(u8, transfer.req.url, 0);
     res._is_redirected = transfer.redirectCount().? > 0;
 
     // no-cors mode: regardless of what the server returned, JS only ever sees
@@ -249,6 +251,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         res._url = "";
         res._type = .@"opaque";
         res._is_redirected = false;
+        self._headers_done = true;
         return .proceed;
     }
 
@@ -260,6 +263,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         res._url = "";
         res._type = .opaqueredirect;
         res._is_redirected = false;
+        self._headers_done = true;
         return .proceed;
     }
 
@@ -282,11 +286,11 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         res._type = .basic;
     }
 
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
+    for (transfer.responseHeaders()) |hdr| {
         try res._headers.append(hdr.name, hdr.value, exec);
     }
 
+    self._headers_done = true;
     return .proceed;
 }
 
@@ -355,7 +359,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // Capture this before we reject. Rejection could trigger httpShutdownCallback
     // (via a microtask callback). But if we're here, then we'll take care of
     // cleaning up when we're done.
-    const owns_response = self._owns_response;
+    var owns_response = self._owns_response;
     self._owns_response = false;
 
     // the response is only passed on v8 on success, if we're here, it's safe to
@@ -374,8 +378,27 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._exec.js.localScope(&ls);
     defer ls.deinit();
 
+    if (owns_response and self._headers_done and self.isAborted() == false) {
+        // Once we have the headers, the promise should resolve. A later error,
+        // like libcurl returning a BadContentEncoding errors at the body, not
+        // the fetch.
+        if (self._null_body == false) {
+            response._body = .errored;
+        }
+        if (ls.local.zigValueToJs(response, .{})) |js_val| {
+            owns_response = false;
+            response._arena.report();
+            return ls.toLocal(resolver).resolve("fetch done", js_val);
+        } else |_| {}
+    }
+
     // fetch() must reject with a TypeError on network errors per spec
     ls.toLocal(resolver).rejectError("fetch error", .{ .type_error = "fetch error" });
+}
+
+fn isAborted(self: *const Fetch) bool {
+    const signal = self._signal orelse return false;
+    return signal._aborted;
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {

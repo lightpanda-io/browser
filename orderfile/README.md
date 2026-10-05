@@ -59,7 +59,7 @@ below), with no change in run duration.
 ```bash
 # root for /sys/kernel/debug/fault_around_bytes; ../demo checked out with
 # `npm install` done; node, go, python3 and binutils on the PATH.
-orderfile/tools/regen.sh -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin -Dcpu=x86_64
+orderfile/tools/regen.sh -Doptimize=fast -Dsnapshot_path=../../snapshot.bin -Dcpu=x86_64
 ```
 
 The script

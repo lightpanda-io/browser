@@ -106,7 +106,7 @@ pub fn reflectedConfigured(
 
 fn getUnitType(self: *Length) u16 {
     self.syncFromAttribute();
-    return @intFromEnum(self._unit);
+    return @backingInt(self._unit);
 }
 
 // An attribute SVG could not parse reports the unknown unit type. Callers that
@@ -218,7 +218,7 @@ fn writeBack(self: *Length, frame: *Frame) !void {
 }
 
 fn serialize(self: *const Length, frame: *Frame) ![]const u8 {
-    return std.fmt.allocPrint(frame.local_arena, "{d}{s}", .{ self._value, units.suffix(toShared(self._unit)) });
+    return frame.local_arena.print("{d}{s}", .{ self._value, units.suffix(toShared(self._unit)) });
 }
 
 fn unitToUserUnits(self: *const Length, unit: Unit, frame: *Frame) f64 {

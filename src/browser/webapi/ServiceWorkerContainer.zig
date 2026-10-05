@@ -128,7 +128,7 @@ pub fn register(self: *ServiceWorkerContainer, url: []const u8, options: ?Regist
     const scope_url = blk: {
         const raw = opts.scope orelse blk2: {
             // A registration's default scope is the script's own directory.
-            const end = std.mem.lastIndexOfScalar(u8, script_url, '/') orelse break :blk2 script_url;
+            const end = std.mem.findScalarLast(u8, script_url, '/') orelse break :blk2 script_url;
             break :blk2 script_url[0 .. end + 1];
         };
 

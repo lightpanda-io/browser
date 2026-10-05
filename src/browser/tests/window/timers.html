@@ -48,8 +48,17 @@
   // Surprisingly, these don't fail but silently ignored.
   clearTimeout(-1);
   clearInterval(-2);
-  clearImmediate(-3);
   testing.expectEqual(true, true);
+</script>
+
+<script id=no-setImmediate>
+  // setImmediate is non-standard (legacy IE/Edge only); no current browser
+  // exposes it. Libraries feature-detect it ahead of MessageChannel (React's
+  // scheduler does), and it would route them onto the clamped timer path.
+  testing.expectEqual('undefined', typeof setImmediate);
+  testing.expectEqual('undefined', typeof clearImmediate);
+  testing.expectEqual(false, 'setImmediate' in window);
+  testing.expectEqual(false, 'clearImmediate' in window);
 </script>
 
 <script id=setTimeout-string-handler>
@@ -81,3 +90,17 @@
   testing.expectEqual(true, threw);
 </script>
 
+
+<script id=negative_and_overflowing_delay type=module>
+  {
+    const state = await testing.async();
+    const fired = [];
+    window.setTimeout(() => fired.push('negative'), -10);
+    window.setTimeout(() => fired.push('overflow'), 2 ** 31);
+    window.setTimeout(() => state.resolve(), 20);
+
+    await state.done(() => {
+      testing.expectEqual('negative,overflow', fired.join());
+    });
+  }
+</script>

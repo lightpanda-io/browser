@@ -25,6 +25,7 @@ const js = @import("../../browser/js/js.zig");
 const URL = @import("../../browser/URL.zig");
 const Node = @import("../../browser/webapi/Node.zig");
 const Frame = @import("../../browser/Frame.zig");
+const Viewport = @import("../../browser/Viewport.zig");
 const Selector = @import("../../browser/webapi/selector/Selector.zig");
 const xpath = @import("../../browser/xpath/Evaluator.zig");
 const XPathParser = @import("../../browser/xpath/Parser.zig");
@@ -71,16 +72,22 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
         getTree,
         create,
         navigate,
+        reload,
+        traverseHistory,
         close,
         locateNodes,
+        setViewport,
     }, action) orelse return error.UnknownCommand;
 
     switch (command) {
         .getTree => return getTree(cmd),
         .create => return create(cmd),
         .navigate => return bidiNavigate(cmd),
+        .reload => return bidiReload(cmd),
+        .traverseHistory => return bidiTraverseHistory(cmd),
         .close => return close(cmd),
         .locateNodes => return locateNodes(cmd),
+        .setViewport => return setViewport(cmd),
     }
 }
 
@@ -193,6 +200,36 @@ fn bidiNavigate(cmd: *BiDi.Command) !void {
     return navigate(cmd, ctx, .{ .url = p.url, .wait = p.wait });
 }
 
+fn bidiReload(cmd: *BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        context: []const u8,
+        wait: NavigateOpts.Wait = .none,
+    });
+
+    const ctx = (try requireContext(cmd, p.context)) orelse return;
+    return reload(cmd, ctx, p.wait);
+}
+
+fn bidiTraverseHistory(cmd: *BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        context: []const u8,
+        delta: i32,
+    });
+
+    const ctx = (try requireContext(cmd, p.context)) orelse return;
+    const frame = cmd.bidi.user_context.session.currentFrame() orelse {
+        return cmd.sendError("unknown error", "no frame");
+    };
+    if (canTraverse(frame, p.delta) == false) {
+        return cmd.sendError("no such history entry", "no history entry at that delta");
+    }
+    if (p.delta == 0) {
+        // the current entry, history.go(0) would reload it
+        return cmd.sendDone();
+    }
+    return traverse(cmd, ctx, frame, p.delta);
+}
+
 pub const NavigateOpts = struct {
     url: [:0]const u8,
     wait: Wait,
@@ -219,12 +256,12 @@ pub fn reload(cmd: *BiDi.Command, ctx: *Context, wait: NavigateOpts.Wait) !void 
 
     // the frame's arena, which these live in, is gone once the reload commits
     const arena = cmd.arena;
-    const url = try arena.dupeZ(u8, frame.url);
+    const url = try arena.dupeSentinel(u8, frame.url, 0);
     var nav_opts: Frame.NavigateOpts = .{ .reason = .address_bar, .kind = .reload };
     if (frame._navigated_options) |prev| {
         nav_opts.method = prev.method;
         nav_opts.body = if (prev.body) |b| try arena.dupe(u8, b) else null;
-        nav_opts.header = if (prev.header) |h| try arena.dupeZ(u8, h) else null;
+        nav_opts.header = if (prev.header) |h| try arena.dupeSentinel(u8, h, 0) else null;
     }
     return startNavigation(cmd, ctx, frame, url, nav_opts, wait);
 }
@@ -266,6 +303,31 @@ fn startNavigation(cmd: *BiDi.Command, ctx: *Context, frame: *Frame, url: [:0]co
     if (wait == .none) {
         return cmd.sendResult(.{ .navigation = &ctx.navigation_id, .url = url });
     }
+}
+
+// Whether the session history has an entry `delta` steps from the current one.
+pub fn canTraverse(frame: *const Frame, delta: i32) bool {
+    const navigation = frame._session.navigation;
+    const target = @as(i64, @intCast(navigation._index)) + delta;
+    return target >= 0 and target < navigation._entries.items.len;
+}
+
+// Traverses the session history like history.go(delta), popstate and
+// hashchange included. A same-document entry answers right away, any other
+// once the new document loads.
+pub fn traverse(cmd: *BiDi.Command, ctx: *Context, frame: *Frame, delta: i32) !void {
+    {
+        // History expects to be called from JS, with an active local.
+        const prev_local = frame.js.local;
+        defer frame.js.local = prev_local;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        frame.js.local = &ls.local;
+
+        try frame._session.history.go(delta, frame);
+    }
+    return answerAfterNavigation(cmd, ctx, frame);
 }
 
 // For commands that start a navigation, e.g. clicking a link.
@@ -464,7 +526,7 @@ pub const Locator = union(enum) {
                         const rendered = std.mem.trim(u8, text.written(), &std.ascii.whitespace);
                         break :blk switch (self) {
                             .link_text => std.mem.eql(u8, rendered, needle),
-                            else => std.mem.indexOf(u8, rendered, needle) != null,
+                            else => std.mem.find(u8, rendered, needle) != null,
                         };
                     },
                     else => unreachable, // css and xpath returned above
@@ -494,6 +556,72 @@ fn appendNodes(remotes: *std.ArrayList(remote_value.Remote), arena: std.mem.Allo
     for (nodes[0..take]) |node| {
         remotes.appendAssumeCapacity(try serializer.domNode(node));
     }
+}
+
+fn setViewport(cmd: *BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        context: ?[]const u8 = null,
+        userContexts: ?[]const []const u8 = null,
+        viewport: Setting(struct { width: u32, height: u32 }) = .keep,
+        devicePixelRatio: Setting(f32) = .keep,
+    });
+
+    const bidi = cmd.bidi;
+    if ((p.context == null) == (p.userContexts == null)) {
+        return cmd.sendError("invalid argument", "exactly one of context and userContexts is required");
+    }
+    if (p.context) |context| {
+        _ = (try requireContext(cmd, context)) orelse return;
+    }
+    if (p.userContexts) |user_contexts| {
+        for (user_contexts) |user_context| {
+            if (std.mem.eql(u8, user_context, bidi.user_context.id()) == false) {
+                return cmd.sendError("no such user context", "unknown user context");
+            }
+        }
+    }
+
+    var viewport = bidi.browser.getViewport();
+    switch (p.viewport) {
+        .keep => {},
+        .reset => {
+            viewport.width = Viewport.default.width;
+            viewport.height = Viewport.default.height;
+        },
+        .set => |size| {
+            if (size.width == 0 or size.height == 0) {
+                return cmd.sendError("invalid argument", "viewport dimensions must be positive");
+            }
+            viewport.width = size.width;
+            viewport.height = size.height;
+        },
+    }
+    switch (p.devicePixelRatio) {
+        .keep => {},
+        .reset => viewport.scale = Viewport.default.scale,
+        .set => |scale| {
+            if (scale <= 0) {
+                return cmd.sendError("invalid argument", "devicePixelRatio must be positive");
+            }
+            viewport.scale = scale;
+        },
+    }
+    bidi.browser.setViewportOverride(viewport);
+    return cmd.sendDone();
+}
+
+// A parameter that's left alone when absent, and reset to its default by null.
+fn Setting(comptime T: type) type {
+    return union(enum) {
+        keep,
+        reset,
+        set: T,
+
+        pub fn jsonParse(arena: std.mem.Allocator, source: anytype, opts: std.json.ParseOptions) !@This() {
+            const value = try std.json.innerParse(?T, arena, source, opts);
+            return if (value) |v| .{ .set = v } else .reset;
+        }
+    };
 }
 
 pub fn requireContext(cmd: *BiDi.Command, context: []const u8) !?*Context {
@@ -841,4 +969,90 @@ test "bidi.browsing_context: window realm lifecycle" {
     try ctx.expectSentEvent("script.realmDestroyed", .{ .realm = realm1 });
     try ctx.expectSentEvent("script.realmCreated", .{ .realm = realm2, .type = "window", .context = context_id, .origin = "http://127.0.0.1:9582" });
     try ctx.expectSentResult(.{ .navigation = &bc.navigation_id }, .{ .id = 3 });
+}
+
+test "bidi.browsing_context: setViewport" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const context_id = try ctx.createContext(.{ .url = "bidi/values.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "browsingContext.setViewport",
+        .params = .{ .context = context_id, .viewport = .{ .width = 375, .height = 812 }, .devicePixelRatio = 3 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "script.evaluate",
+        .params = .{ .expression = "`${innerWidth}x${innerHeight}@${devicePixelRatio}`", .awaitPromise = false, .target = .{ .context = context_id } },
+    });
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "string", .value = "375x812@3" } }, .{ .id = 2 });
+
+    // an absent field is kept, a null one is reset
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "browsingContext.setViewport",
+        .params = .{ .userContexts = .{"default"}, .viewport = null },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    const viewport = ctx.bidi().browser.getViewport();
+    try testing.expectEqual(Viewport.default.width, viewport.width);
+    try testing.expectEqual(Viewport.default.height, viewport.height);
+    try testing.expectEqual(3, viewport.scale);
+
+    try ctx.processMessage(.{ .id = 4, .method = "browsingContext.setViewport", .params = .{ .viewport = null } });
+    try ctx.expectSentError("invalid argument", null, .{ .id = 4 });
+    try ctx.processMessage(.{ .id = 5, .method = "browsingContext.setViewport", .params = .{ .context = "nope" } });
+    try ctx.expectSentError("no such frame", null, .{ .id = 5 });
+    try ctx.processMessage(.{ .id = 6, .method = "browsingContext.setViewport", .params = .{ .userContexts = .{"nope"} } });
+    try ctx.expectSentError("no such user context", null, .{ .id = 6 });
+    try ctx.processMessage(.{
+        .id = 7,
+        .method = "browsingContext.setViewport",
+        .params = .{ .context = context_id, .viewport = .{ .width = 0, .height = 10 } },
+    });
+    try ctx.expectSentError("invalid argument", null, .{ .id = 7 });
+}
+
+test "bidi.browsing_context: traverseHistory and reload" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const context_id = try ctx.createContext(.{ .url = "bidi/values.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "browsingContext.navigate",
+        .params = .{ .context = context_id, .url = testing.test_server ++ "bidi/locate.html", .wait = "complete" },
+    });
+    try ctx.wait();
+    try ctx.expectSentResult(.{ .url = testing.test_server ++ "bidi/locate.html" }, .{ .id = 1 });
+
+    // about:blank, values.html, locate.html
+    try ctx.processMessage(.{ .id = 2, .method = "browsingContext.traverseHistory", .params = .{ .context = context_id, .delta = 1 } });
+    try ctx.expectSentError("no such history entry", null, .{ .id = 2 });
+    try ctx.processMessage(.{ .id = 3, .method = "browsingContext.traverseHistory", .params = .{ .context = context_id, .delta = -3 } });
+    try ctx.expectSentError("no such history entry", null, .{ .id = 3 });
+    try ctx.processMessage(.{ .id = 4, .method = "browsingContext.traverseHistory", .params = .{ .context = "nope", .delta = -1 } });
+    try ctx.expectSentError("no such frame", null, .{ .id = 4 });
+
+    try ctx.processMessage(.{ .id = 5, .method = "browsingContext.traverseHistory", .params = .{ .context = context_id, .delta = -1 } });
+    try ctx.wait();
+    try ctx.expectSentResult(.{ .url = testing.test_server ++ "bidi/values.html" }, .{ .id = 5 });
+    try testing.expectEqual(testing.test_server ++ "bidi/values.html", (try ctx.frame()).url);
+
+    // a same-document entry answers without a load
+    try ctx.processMessage(.{
+        .id = 6,
+        .method = "script.evaluate",
+        .params = .{ .expression = "history.pushState(null, '', '#pushed')", .awaitPromise = false, .target = .{ .context = context_id } },
+    });
+    try ctx.processMessage(.{ .id = 7, .method = "browsingContext.traverseHistory", .params = .{ .context = context_id, .delta = -1 } });
+    try ctx.expectSentResult(null, .{ .id = 7 });
+    try testing.expectEqual(testing.test_server ++ "bidi/values.html", (try ctx.frame()).url);
+
+    try ctx.processMessage(.{ .id = 8, .method = "browsingContext.reload", .params = .{ .context = context_id, .wait = "complete" } });
+    try ctx.wait();
+    try ctx.expectSentResult(.{ .url = testing.test_server ++ "bidi/values.html" }, .{ .id = 8 });
 }

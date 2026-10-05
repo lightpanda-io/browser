@@ -37,7 +37,7 @@ jobs:
           arch: ${{env.ARCH}}
 
       - name: zig build release
-        run: zig build -Dwpt_extensions -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=generic
+        run: zig build -Dwpt_extensions -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast -Dcpu=generic
 
       - name: upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

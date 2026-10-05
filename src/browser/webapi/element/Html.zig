@@ -420,14 +420,7 @@ pub fn click(self: *HtmlElement, frame: *Frame) !void {
         .pointerId = -1,
     }, frame)).asEvent();
 
-    // Keep the event alive past dispatch (which runs handlers/microtasks) so we
-    // can read _prevent_default afterwards.
-    event.acquireRef();
-    defer _ = event.releaseRef(frame.page);
-
-    try frame._event_manager.dispatch(self.asEventTarget(), event);
-
-    if (event._prevent_default == false) {
+    if (!try frame._event_manager.dispatchCancelable(self.asEventTarget(), event)) {
         // toggle the popover_target
         const explicit: ?*Element = switch (self._type) {
             .button => self.subtype(Button)._popover_target,
@@ -518,7 +511,7 @@ pub fn getAccessKeyLabel(self: *HtmlElement, frame: *Frame) ![]const u8 {
     if (codepoints != 1) {
         return "";
     }
-    return std.fmt.allocPrint(frame.local_arena, "Alt+{s}", .{value});
+    return frame.local_arena.print("Alt+{s}", .{value});
 }
 
 pub fn getPopover(self: *HtmlElement) ?[]const u8 {
@@ -562,7 +555,7 @@ pub fn getTabIndex(self: *HtmlElement) i32 {
 
 pub fn setTabIndex(self: *HtmlElement, value: i32, frame: *Frame) !void {
     var buf: [12]u8 = undefined;
-    const str = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    const str = std.mem.print(&buf, "{d}", .{value}) catch unreachable;
     try self.asElement().setAttributeSafe(comptime .wrap("tabindex"), .wrap(str), frame);
 }
 
@@ -624,12 +617,9 @@ pub fn setTitle(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
 // unsupported value. Spec walk per HTML §7.7.5.2 still applies — the nearest
 // ancestor with `contenteditable` wins; "false" disables. See PR #2310 for
 // the routing-vs-fail-loud discussion.
-//
-// "contenteditable" is 15 bytes — past the comptime SSO limit — so the
-// String wrap runs at runtime, mirroring the pattern in interactive.zig.
 /// Reflects the attribute only; `isContentEditable` stays false regardless.
 pub fn getContentEditable(self: *HtmlElement) []const u8 {
-    const raw = self.asElement().getAttributeSafe(.wrap("contenteditable")) orelse return "inherit";
+    const raw = self.asElement().getAttributeInterned("contenteditable") orelse return "inherit";
     if (raw.len == 0 or std.ascii.eqlIgnoreCase(raw, "true")) return "true";
     if (std.ascii.eqlIgnoreCase(raw, "false")) return "false";
     if (std.ascii.eqlIgnoreCase(raw, "plaintext-only")) return "plaintext-only";
@@ -650,13 +640,8 @@ pub fn setContentEditable(self: *HtmlElement, value: []const u8, frame: *Frame) 
 }
 
 pub fn getIsContentEditable(self: *HtmlElement) bool {
-    var current: ?*Element = self.asElement();
-    while (current) |el| : (current = el.parentElement()) {
-        const raw = el.getAttributeSafe(.wrap("contenteditable")) orelse continue;
-        if (!std.ascii.eqlIgnoreCase(raw, "false")) {
-            log.info(.not_implemented, "IsContentEditable", .{});
-        }
-        break;
+    if (self.asElement().isEditable()) {
+        log.info(.not_implemented, "IsContentEditable", .{});
     }
     return false;
 }
@@ -1818,7 +1803,7 @@ fn renderedTextFragment(document: *const Node.Document, value: []const u8, frame
 
     var rest = value;
     while (true) {
-        const text_end = std.mem.indexOfAny(u8, rest, "\r\n") orelse rest.len;
+        const text_end = std.mem.findAny(u8, rest, "\r\n") orelse rest.len;
         if (text_end > 0) {
             try nodes.append(arena, .{ .text = rest[0..text_end] });
         }

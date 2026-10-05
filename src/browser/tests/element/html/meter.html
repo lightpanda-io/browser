@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<meter id="m1"></meter>
+<meter id="m2" min="10" max="5" value="20" low="1" high="3" optimum="-4"></meter>
+
+<script id="defaults">
+  {
+    const m = document.getElementById('m1');
+    testing.expectEqual(0, m.min);
+    testing.expectEqual(1, m.max);
+    testing.expectEqual(0, m.value);
+    testing.expectEqual(0, m.low);
+    testing.expectEqual(1, m.high);
+    testing.expectEqual(0.5, m.optimum);
+  }
+</script>
+
+<script id="clamping">
+  {
+    // max below min becomes min; everything else is clamped into [min, max]
+    const m = document.getElementById('m2');
+    testing.expectEqual(10, m.min);
+    testing.expectEqual(10, m.max);
+    testing.expectEqual(10, m.value);
+    testing.expectEqual(10, m.low);
+    testing.expectEqual(10, m.high);
+    testing.expectEqual(10, m.optimum);
+  }
+</script>
+
+<script id="high_below_low">
+  {
+    const m = document.createElement('meter');
+    m.setAttribute('max', '10');
+    m.setAttribute('low', '6');
+    m.setAttribute('high', '4');
+    testing.expectEqual(6, m.low);
+    testing.expectEqual(6, m.high);
+  }
+</script>
+
+<script id="setters">
+  {
+    const m = document.createElement('meter');
+    m.max = 100;
+    m.value = 42.5;
+    m.low = 25;
+    testing.expectEqual('100', m.getAttribute('max'));
+    testing.expectEqual('42.5', m.getAttribute('value'));
+    testing.expectEqual('25', m.getAttribute('low'));
+    testing.expectEqual(42.5, m.value);
+
+    // the attribute keeps what was set; only the getter clamps
+    m.value = 500;
+    testing.expectEqual('500', m.getAttribute('value'));
+    testing.expectEqual(100, m.value);
+
+    m.setAttribute('value', 'nope');
+    testing.expectEqual(0, m.value);
+
+    testing.expectError('TypeError', () => { m.value = NaN; });
+  }
+</script>

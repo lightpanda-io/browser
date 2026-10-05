@@ -411,7 +411,7 @@ pub fn createBlobUrl(self: *Page, blob: *Blob, origin: ?[]const u8, creator_fram
     var uuid: [36]u8 = undefined;
     @import("../id.zig").uuidv4(&uuid);
 
-    const url = try std.fmt.allocPrint(self.frame_arena, "blob:{s}/{s}", .{ origin orelse "null", uuid });
+    const url = try self.frame_arena.print("blob:{s}/{s}", .{ origin orelse "null", uuid });
     try self.blob_urls.put(self.frame_arena, url, .{ .blob = blob, .creator = creator_frame_id });
     blob.acquireRef();
     return url;

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<body>
+<script src="../testing.js"></script>
+
+<!-- attributeChangedCallback runs after the parser creates the element but
+     before it inserts it. If the callback gives the element a parent, the
+     parser leaves it there (whatwg/html#12494), and the content that follows
+     still goes into the element. -->
+<div id=stash></div>
+<script>
+  class MoveToStash extends HTMLElement {
+    static get observedAttributes() { return ['x']; }
+    attributeChangedCallback() {
+      document.getElementById('stash').appendChild(this);
+    }
+  }
+  customElements.define('move-to-stash', MoveToStash);
+</script>
+
+<div id=append_target><move-to-stash id=appended x=1><p>y</p></move-to-stash></div>
+<script id=append_leaves_reparented_element>
+  {
+    const el = document.getElementById('appended');
+    testing.expectEqual(document.getElementById('stash'), el.parentNode);
+    testing.expectEqual(0, document.getElementById('append_target').childNodes.length);
+    testing.expectEqual('<p>y</p>', el.innerHTML);
+  }
+</script>
+
+<!-- The foster-parenting path (insert before the table) -->
+<div id=foster_target><table><move-to-stash id=fostered x=1></move-to-stash><tr><td>c</td></tr></table></div>
+<script id=foster_leaves_reparented_element>
+  {
+    const el = document.getElementById('fostered');
+    testing.expectEqual(document.getElementById('stash'), el.parentNode);
+    const target = document.getElementById('foster_target');
+    testing.expectEqual(1, target.childNodes.length);
+    testing.expectEqual('TABLE', target.firstChild.tagName);
+  }
+</script>
+</body>

@@ -257,7 +257,7 @@ fn resizeAttributeChanged(frame: *Frame, element: *Element, name: String) void {
     }
 
     for (frame._resize.observers.items) |observer| {
-        if (observer.observesWithin(element)) {
+        if (observer.observesWithin(element, frame)) {
             scheduleResizeDelivery(frame);
             return;
         }
