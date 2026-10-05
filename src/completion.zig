@@ -538,7 +538,7 @@ test "completion: zsh value descriptions" {
         ":dump:((html\\:\"Serialized HTML of the DOM\" ",
         " wpt\\:\"\" semantic_tree\\:",
         ":load-resources:_values -s , load-resources \"image[<img> sources, so that load/error reflects the real HTTP status]\" ",
-        "\"invisible[Best-effort (e.g. display\\:none) hidden elements]\"",
+        "\"invisible[Best-effort hidden elements (e.g. display\\:none, <template>)]\"",
     };
     for (expected) |part| {
         if (std.mem.indexOf(u8, script, part) == null) {
