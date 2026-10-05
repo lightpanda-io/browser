@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // Shared bookkeeping for setTimeout / setInterval (and Window-only
-// setImmediate / requestAnimationFrame / requestIdleCallback). Both Window
+// requestAnimationFrame / requestIdleCallback). Both Window
 // and WorkerGlobalScope embed a Timers and forward their JS-bridged
 // methods through `schedule` / `clear`.
 
@@ -36,7 +36,7 @@ const CLAMP_NESTING = 5;
 // from considering the page "done" forever (more commonly seen with requestAnimationFrame)
 const BLOCKING_NESTING = 10;
 
-// Every pending timeout, interval, animation frame and setImmediate. Past
+// Every pending timeout, interval, animation frame and idle callback. Past
 // the cap setTimeout throws, which no browser does; keep it a backstop for
 // runaway pages, not a budget (a paginated storefront listing holds ~2.7k).
 const MAX_CALLBACKS = 8192;

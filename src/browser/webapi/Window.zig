@@ -539,14 +539,6 @@ pub fn setInterval(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?i32,
     });
 }
 
-pub fn setImmediate(self: *Window, cb: js.Function.Global, params: []js.Value.Global, exec: *js.Execution) !u32 {
-    return self._timers.schedule(exec, cb, 0, .{
-        .repeat = false,
-        .params = params,
-        .name = "window.setImmediate",
-    });
-}
-
 pub fn requestAnimationFrame(self: *Window, cb: js.Function.Global, exec: *js.Execution) !u32 {
     return self._timers.schedule(exec, cb, 5, .{
         .repeat = false,
@@ -565,10 +557,6 @@ fn clearTimeout(self: *Window, id: u32) void {
 }
 
 fn clearInterval(self: *Window, id: u32) void {
-    self._timers.clear(id);
-}
-
-fn clearImmediate(self: *Window, id: u32) void {
     self._timers.clear(id);
 }
 
@@ -1226,8 +1214,6 @@ pub const JsApi = struct {
     pub const clearTimeout = bridge.function(Window.clearTimeout, .{});
     pub const setInterval = bridge.function(Window.setInterval, .{});
     pub const clearInterval = bridge.function(Window.clearInterval, .{});
-    pub const setImmediate = bridge.function(Window.setImmediate, .{});
-    pub const clearImmediate = bridge.function(Window.clearImmediate, .{});
     pub const requestAnimationFrame = bridge.function(Window.requestAnimationFrame, .{});
     pub const cancelAnimationFrame = bridge.function(Window.cancelAnimationFrame, .{});
     pub const requestIdleCallback = bridge.function(Window.requestIdleCallback, .{});

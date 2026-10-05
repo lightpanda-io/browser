@@ -48,8 +48,17 @@
   // Surprisingly, these don't fail but silently ignored.
   clearTimeout(-1);
   clearInterval(-2);
-  clearImmediate(-3);
   testing.expectEqual(true, true);
+</script>
+
+<script id=no-setImmediate>
+  // setImmediate is non-standard (legacy IE/Edge only); no current browser
+  // exposes it. Libraries feature-detect it ahead of MessageChannel (React's
+  // scheduler does), and it would route them onto the clamped timer path.
+  testing.expectEqual('undefined', typeof setImmediate);
+  testing.expectEqual('undefined', typeof clearImmediate);
+  testing.expectEqual(false, 'setImmediate' in window);
+  testing.expectEqual(false, 'clearImmediate' in window);
 </script>
 
 <script id=setTimeout-string-handler>
