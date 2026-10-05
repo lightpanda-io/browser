@@ -22,7 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
-const Modifiers = @import("../frame/user_input.zig").Modifiers;
+const keyboard = @import("../frame/keyboard.zig");
 
 const Event = @import("Event.zig");
 const Element = @import("Element.zig");
@@ -30,7 +30,6 @@ const EventTarget = @import("EventTarget.zig");
 
 const Cookie = @import("storage/Cookie.zig");
 const TouchEvent = @import("event/TouchEvent.zig");
-const KeyboardEvent = @import("event/KeyboardEvent.zig");
 const Label = @import("element/html/Label.zig");
 
 const log = lp.log;
@@ -353,122 +352,16 @@ fn performKeySource(source: js.Object, frame: *Frame) !void {
             continue;
         }
 
-        const key = webdriverKey((try action.get("value")).toStringSlice() catch "");
-
-        // A modifier's own keydown already carries its flag; its keyup no
-        // longer does.
-        setModifier(&frame.page.input_modifiers, key, is_down);
-
-        dispatchKey(is_down, key, frame);
-    }
-}
-
-// WebDriver's normalized-key PUA codepoints to KeyboardEvent.key values
-// (https://w3c.github.io/webdriver/#keyboard-actions). Any other value is the
-// key itself. The U+E050-U+E053 right-hand variants map to the same key name,
-// only the (untracked) location differs.
-fn webdriverKey(value: []const u8) []const u8 {
-    // The U+E000-U+E05D PUA range always encodes as three UTF-8 bytes.
-    if (value.len != 3) {
-        return value;
-    }
-    const cp = std.unicode.utf8Decode(value) catch return value;
-    return switch (cp) {
-        0xE000 => "Unidentified",
-        0xE001 => "Cancel",
-        0xE002 => "Help",
-        0xE003 => "Backspace",
-        0xE004 => "Tab",
-        0xE005 => "Clear",
-        0xE006, 0xE007 => "Enter",
-        0xE008, 0xE050 => "Shift",
-        0xE009, 0xE051 => "Control",
-        0xE00A, 0xE052 => "Alt",
-        0xE00B => "Pause",
-        0xE00C => "Escape",
-        0xE00D => " ",
-        0xE00E => "PageUp",
-        0xE00F => "PageDown",
-        0xE010 => "End",
-        0xE011 => "Home",
-        0xE012 => "ArrowLeft",
-        0xE013 => "ArrowUp",
-        0xE014 => "ArrowRight",
-        0xE015 => "ArrowDown",
-        0xE016 => "Insert",
-        0xE017 => "Delete",
-        0xE018 => ";",
-        0xE019 => "=",
-        0xE01A => "0",
-        0xE01B => "1",
-        0xE01C => "2",
-        0xE01D => "3",
-        0xE01E => "4",
-        0xE01F => "5",
-        0xE020 => "6",
-        0xE021 => "7",
-        0xE022 => "8",
-        0xE023 => "9",
-        0xE024 => "*",
-        0xE025 => "+",
-        0xE026 => ",",
-        0xE027 => "-",
-        0xE028 => ".",
-        0xE029 => "/",
-        0xE031 => "F1",
-        0xE032 => "F2",
-        0xE033 => "F3",
-        0xE034 => "F4",
-        0xE035 => "F5",
-        0xE036 => "F6",
-        0xE037 => "F7",
-        0xE038 => "F8",
-        0xE039 => "F9",
-        0xE03A => "F10",
-        0xE03B => "F11",
-        0xE03C => "F12",
-        0xE03D, 0xE053 => "Meta",
-        else => value,
-    };
-}
-
-fn setModifier(modifiers: *Modifiers, key: []const u8, pressed: bool) void {
-    if (std.mem.eql(u8, key, "Shift")) {
-        modifiers.shift = pressed;
-    } else if (std.mem.eql(u8, key, "Control")) {
-        modifiers.ctrl = pressed;
-    } else if (std.mem.eql(u8, key, "Alt")) {
-        modifiers.alt = pressed;
-    } else if (std.mem.eql(u8, key, "Meta")) {
-        modifiers.meta = pressed;
-    }
-}
-
-// Key actions have no explicit target; they go to the focused element,
-// resolved per action since a key's default action can move focus.
-fn dispatchKey(is_down: bool, key: []const u8, frame: *Frame) void {
-    const typ: lp.String = if (is_down) comptime .wrap("keydown") else comptime .wrap("keyup");
-    const modifiers = frame.page.input_modifiers;
-    const event = KeyboardEvent.initTrusted(typ, .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .key = key,
-        .ctrlKey = modifiers.ctrl,
-        .shiftKey = modifiers.shift,
-        .altKey = modifiers.alt,
-        .metaKey = modifiers.meta,
-    }, frame) catch |err| {
-        log.debug(.app, "webdriver key event", .{ .err = err });
-        return;
-    };
-    if (is_down) {
-        _ = Frame.user_input.triggerKeyDown(frame, event, Frame.user_input.textForKey(event)) catch |err| {
-            log.debug(.app, "webdriver dispatch", .{ .err = err, .type = typ.str() });
-        };
-    } else {
-        Frame.user_input.triggerKeyUp(frame, event) catch |err| {
-            log.debug(.app, "webdriver dispatch", .{ .err = err, .type = typ.str() });
+        const value = (try action.get("value")).toStringSlice() catch "";
+        const direction: keyboard.Direction = if (is_down) .down else .up;
+        const modifiers = &frame.page.input_modifiers;
+        // A grapheme cluster of several code points is its own key name.
+        const dispatched = if (keyboard.singleCodepoint(value)) |cp|
+            keyboard.keyAction(frame, cp, direction, modifiers)
+        else
+            keyboard.dispatch(frame, null, direction, &.{ .key = .{ .name = value }, .code = "" }, modifiers);
+        dispatched catch |err| {
+            log.debug(.app, "webdriver key", .{ .err = err });
         };
     }
 }

@@ -1426,7 +1426,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         \\ document.getElementById('plain').scrollTop === 7 &&
         \\ window.scrollX === 5 && window.scrollY === 20 &&
         \\ window.hovered === true &&
-        \\ window.keyPressed === 'Enter' && window.keyReleased === 'Enter' &&
+        \\ window.keyPressed === 'Enter' && window.keyCode === 'Enter' && window.keyReleased === 'Enter' &&
         \\ window.sel2Changed === 'b' &&
         \\ window.chkClicked === true && window.chkChanged === true &&
         \\ window.radClicked === true && window.radChanged === true

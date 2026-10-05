@@ -933,6 +933,8 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
 fn keypressFor(frame: *Frame, keydown: *const KeyboardEvent) !*KeyboardEvent {
     return KeyboardEvent.initTrusted(comptime .wrap("keypress"), .{
         .key = keydown.getKey().asString(),
+        .code = keydown._code,
+        .location = keydown._location,
         .ctrlKey = keydown.getCtrlKey(),
         .shiftKey = keydown.getShiftKey(),
         .altKey = keydown.getAltKey(),
