@@ -249,6 +249,9 @@
   const rejects = [
     await captureReject('', ''),
     await captureReject('', 'a=b'),
+    // A nameless value that would read as a prefixed name.
+    await captureReject('', '__Host-x'),
+    await captureReject('', ' __http-x'),
     // Forbidden chars in name.
     await captureReject('a=b', 'v'),
     await captureReject('a;b', 'v'),

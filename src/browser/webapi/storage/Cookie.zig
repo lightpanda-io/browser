@@ -119,10 +119,7 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         return error.InvalidNameValue;
     };
 
-    if (cookie_name.len == 0 and (std.ascii.startsWithIgnoreCase(cookie_value, "__Host-") or std.ascii.startsWithIgnoreCase(cookie_value, "__Secure-"))) {
-        // A nameless cookie whose value begins with __Host- or __Secure-
-        // (case-insensitive) would otherwise impersonate a cookie with that
-        // prefix. Reject per the cookie-name-prefix rules.
+    if (cookie_name.len == 0 and hasHiddenPrefix(cookie_value)) {
         return error.InvalidNameValue;
     }
 
@@ -172,30 +169,9 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         return error.InsecureSameSite;
     }
 
-    // Enforce cookie-name-prefix rules. Match is case-insensitive to
-    // cover impersonation attempts (e.g. "__HoSt-").
-    // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-cookie-name-prefixes
-    if (std.ascii.startsWithIgnoreCase(cookie_name, "__Host-")) {
-        if (secure == null) {
-            return error.InvalidPrefixedCookie;
-        }
-
-        if (!URL.isPotentiallyTrustworthy(url)) {
-            return error.InvalidPrefixedCookie;
-        }
-
-        if (domain != null and domain.?.len > 0) {
-            return error.InvalidPrefixedCookie;
-        }
-
-        if (path == null or !std.mem.eql(u8, path.?, "/")) {
-            return error.InvalidPrefixedCookie;
-        }
-    } else if (std.ascii.startsWithIgnoreCase(cookie_name, "__Secure-")) {
-        if (secure == null) {
-            return error.InvalidPrefixedCookie;
-        }
-        if (!URL.isPotentiallyTrustworthy(url)) {
+    if (prefixOf(cookie_name)) |prefix| {
+        const secure_origin = secure != null and URL.isPotentiallyTrustworthy(url);
+        if (!prefix.allows(secure_origin, http_only orelse false, if (domain) |d| d.len > 0 else false, path orelse "")) {
             return error.InvalidPrefixedCookie;
         }
     }
@@ -269,7 +245,7 @@ pub const Fields = struct {
 /// CanonicalCookie::CreateSanitizedCookie, which both its CDP and its BiDi go
 /// through.
 pub fn fromFields(allocator: Allocator, url: ?[:0]const u8, fields: Fields) error{ OutOfMemory, InvalidCookie, InvalidDomain }!Cookie {
-    if ((fields.name.len == 0 and fields.value.len == 0) or
+    if ((fields.name.len == 0 and (fields.value.len == 0 or hasHiddenPrefix(fields.value))) or
         fields.name.len + fields.value.len > max_cookie_size or
         !isValidField(fields.name, ";=") or
         !isValidField(fields.value, ";"))
@@ -297,6 +273,12 @@ pub fn fromFields(allocator: Allocator, url: ?[:0]const u8, fields: Fields) erro
     // Without a url there's nothing to encode: only the dupe can fail.
     const path = parsePath(a, null, fields.path) catch return error.OutOfMemory;
 
+    if (prefixOf(fields.name)) |prefix| {
+        if (!prefix.allows(fields.secure, fields.http_only, fields.domain != null, path)) {
+            return error.InvalidCookie;
+        }
+    }
+
     return .{
         .arena = arena,
         .name = name,
@@ -309,6 +291,45 @@ pub fn fromFields(allocator: Allocator, url: ?[:0]const u8, fields: Fields) erro
         .same_site = fields.same_site orelse .lax,
         .same_site_default = fields.same_site == null,
     };
+}
+
+pub const Prefix = struct {
+    text: []const u8,
+    http: bool = false,
+    host: bool = false,
+
+    /// Chrome's IsCookiePrefixValid. `secure` only when a Secure cookie could
+    /// be set from where this one comes from.
+    pub fn allows(self: Prefix, secure: bool, http_only: bool, has_domain: bool, path: []const u8) bool {
+        return secure and
+            (!self.http or http_only) and
+            (!self.host or (!has_domain and std.mem.eql(u8, path, "/")));
+    }
+};
+
+// Chrome's kPrefixes, matched in this order and case-insensitively, so that
+// "__HoSt-" can't sidestep the rules.
+// https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-cookie-name-prefixes
+const prefixes = [_]Prefix{
+    .{ .text = "__Secure-" },
+    .{ .text = "__Host-Http-", .http = true, .host = true },
+    .{ .text = "__Http-", .http = true },
+    .{ .text = "__Host-", .host = true },
+};
+
+pub fn prefixOf(name: []const u8) ?Prefix {
+    for (prefixes) |prefix| {
+        if (std.ascii.startsWithIgnoreCase(name, prefix.text)) {
+            return prefix;
+        }
+    }
+    return null;
+}
+
+/// Chrome's HasHiddenPrefixName: a nameless cookie's value would read as a
+/// prefixed name in the Cookie header.
+pub fn hasHiddenPrefix(value: []const u8) bool {
+    return prefixOf(std.mem.trimStart(u8, value, " \t")) != null;
 }
 
 // Chrome's IsValidCookieName/Value: no control character (tab included) and
@@ -897,6 +918,24 @@ test "cookie: fromFields refuses what Chrome's CreateSanitizedCookie does" {
     }
     try testing.expectError(error.InvalidDomain, fromFields(testing.allocator, url, .{ .name = "a", .value = "v", .domain = "other.com" }));
 
+    // Chrome's cookie-name prefixes, beyond what the parse tests cover.
+    const prefix_refused = [_]Fields{
+        .{ .name = "", .value = " __host-x" },
+        .{ .name = "__host-a", .value = "v", .secure = true, .domain = ".example.com" },
+        .{ .name = "__Host-Http-a", .value = "v", .secure = true },
+    };
+    for (prefix_refused) |fields| {
+        try testing.expectError(error.InvalidCookie, fromFields(testing.allocator, url, fields));
+    }
+    const prefix_accepted = [_]Fields{
+        .{ .name = "__Host-a", .value = "v", .secure = true },
+        .{ .name = "__Host-Http-a", .value = "v", .secure = true, .http_only = true },
+    };
+    for (prefix_accepted) |fields| {
+        const cookie = try fromFields(testing.allocator, url, fields);
+        cookie.deinit();
+    }
+
     // Wider than RFC 6265bis's grammar, as in Chrome.
     const accepted = [_]Fields{
         .{ .name = "a b", .value = "caf\xc3\xa9" },
@@ -1382,9 +1421,12 @@ test "Cookie: parse key=value" {
     try expectError(error.InvalidByteSequence, null, "a\rb=c");
     try expectError(error.InvalidByteSequence, null, &.{ 'a', '=', 'b', 0 });
 
-    // Nameless cookies whose value begins with __Host- or __Secure-
-    // (case-insensitive) are rejected so they can't impersonate prefixed cookies.
+    // Nameless cookies whose value begins with a prefix (case-insensitive,
+    // after leading whitespace) are rejected so they can't impersonate
+    // prefixed cookies.
     try expectError(error.InvalidNameValue, null, "=__Host-abc=1");
+    try expectError(error.InvalidNameValue, null, "=__Http-abc");
+    try expectError(error.InvalidNameValue, null, "= __Secure-abc");
     try expectError(error.InvalidNameValue, null, "=__Secure-abc=1");
     try expectError(error.InvalidNameValue, null, "=__HoSt-abc");
     try expectError(error.InvalidNameValue, null, "__Secure-abc");
@@ -1407,6 +1449,12 @@ test "Cookie: parse key=value" {
     try expectAttribute(.{ .name = "__Secure-abc", .value = "1" }, "https://lightpanda.io/", "__Secure-abc=1; Secure");
     try expectAttribute(.{ .name = "__SeCuRe-abc", .value = "1" }, "https://lightpanda.io/", "__SeCuRe-abc=1; Secure; Domain=lightpanda.io");
     try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Secure-abc=1");
+
+    // __Http- and __Host-Http- also need HttpOnly.
+    try expectAttribute(.{ .name = "__Http-abc", .http_only = true }, "https://lightpanda.io/", "__Http-abc=1; Secure; HttpOnly");
+    try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Http-abc=1; Secure");
+    try expectAttribute(.{ .name = "__Host-Http-abc", .http_only = true }, "https://lightpanda.io/", "__Host-Http-abc=1; Secure; HttpOnly; Path=/");
+    try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Host-Http-abc=1; Secure; HttpOnly");
 
     // plain-http loopback
     try expectAttribute(.{ .name = "__Host-abc" }, "http://127.0.0.1:3000/", "__Host-abc=1; Secure; Path=/");
