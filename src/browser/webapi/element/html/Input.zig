@@ -106,6 +106,7 @@ _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _default_value: ?[]const u8 = null,
 _default_checked: bool = false,
 _value: ?[]const u8 = null,
+_value_dirty: bool = false, // Once set _value no longer follows the value attribute
 _checked: bool = false,
 _checked_dirty: bool = false,
 // Only user edits count for tooLong/tooShort; script and attribute values don't.
@@ -156,7 +157,7 @@ fn setType(self: *Input, typ: []const u8, frame: *Frame) !void {
 
 pub fn getValue(self: *const Input) []const u8 {
     return switch (self._input_type.valueMode()) {
-        .value => self._value orelse self._default_value orelse "",
+        .value => self._value orelse "",
         .default => self._default_value orelse "",
         .default_on => self._default_value orelse "on",
         .filename => "",
@@ -189,6 +190,7 @@ pub fn setValue(self: *Input, value: []const u8, frame: *Frame) !void {
     // In value mode, this should _not_ call setAttribute. It updates the current state only
     const sanitized = try self.sanitizeValue(false, value, frame);
     const changed = std.mem.eql(u8, self.getValue(), sanitized) == false;
+    self._value_dirty = true;
     if (changed == false and self._value != null) {
         // _value itself isn't changing (not to be mixed up with setValue
         // being called with the same as the default value, which would need
@@ -789,21 +791,33 @@ fn changeType(self: *Input, new_type: Type, frame: *Frame) !void {
     const old_value = self.getValue();
     self._input_type = new_type;
 
-    if (old_mode == .value and new_mode == .value) {
-        // Sanitize the current value according to the new type
-        if (self._value) |current_value| {
-            self._value = try self.sanitizeValue(false, current_value, frame);
-        }
+    switch (new_mode) {
+        .value => if (old_mode == .value) {
+            // Sanitize the current value according to the new type
+            if (self._value) |current_value| {
+                self._value = try self.sanitizeValue(false, current_value, frame);
+            }
+        } else {
+            self._value_dirty = false;
+            try self.syncValueFromAttribute(frame);
+        },
+        .default, .default_on => {
+            self._value = null;
+            if (old_mode == .value and old_value.len > 0) {
+                try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(old_value), frame);
+            }
+        },
+        .filename => self._value = null,
+    }
+}
+
+// The value of a non-dirty control in value mode is its sanitized value attribute
+fn syncValueFromAttribute(self: *Input, frame: *Frame) !void {
+    const default_value = self._default_value orelse {
+        self._value = null;
         return;
-    }
-
-    // Outside the value mode the value is the content attribute, and coming
-    // back to it the value restarts from that attribute (no longer dirty).
-    self._value = null;
-
-    if (old_mode == .value and (new_mode == .default or new_mode == .default_on) and old_value.len > 0) {
-        try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(old_value), frame);
-    }
+    };
+    self._value = try self.sanitizeValue(false, default_value, frame);
 }
 
 /// Sanitize the value according to the current input type
@@ -1597,10 +1611,8 @@ pub const Build = struct {
 
         // Sanitize initial value per input type (e.g. date rejects "invalid-date").
         // Outside the value mode, the value is read from the attribute.
-        if (self._input_type.valueMode() != .value) {
-            self._value = null;
-        } else if (self._default_value) |dv| {
-            self._value = try self.sanitizeValue(false, dv, frame);
+        if (self._input_type.valueMode() == .value) {
+            try self.syncValueFromAttribute(frame);
         } else {
             self._value = null;
         }
@@ -1616,7 +1628,12 @@ pub const Build = struct {
         const self = element.as(Input);
         switch (attribute) {
             .type => try self.changeType(Type.fromString(value.str()), frame),
-            .value => self._default_value = try frame.arena.dupe(u8, value.str()),
+            .value => {
+                self._default_value = try frame.arena.dupe(u8, value.str());
+                if (self._value_dirty == false and self._input_type.valueMode() == .value) {
+                    try self.syncValueFromAttribute(frame);
+                }
+            },
             .checked => {
                 self._default_checked = true;
                 // Only update checked state if it hasn't been manually modified
@@ -1636,7 +1653,12 @@ pub const Build = struct {
         const self = element.as(Input);
         switch (attribute) {
             .type => try self.changeType(.text, frame),
-            .value => self._default_value = null,
+            .value => {
+                self._default_value = null;
+                if (self._value_dirty == false and self._input_type.valueMode() == .value) {
+                    self._value = null;
+                }
+            },
             .checked => {
                 self._default_checked = false;
                 // Only update checked state if it hasn't been manually modified
@@ -1654,6 +1676,7 @@ pub const Build = struct {
 
         // Copy runtime state from source to clone
         clone._value = source._value;
+        clone._value_dirty = source._value_dirty;
         clone._checked = source._checked;
         clone._checked_dirty = source._checked_dirty;
         clone._user_edited = source._user_edited;
