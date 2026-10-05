@@ -18,8 +18,6 @@
 
 //! zlib utilities.
 
-const build_config = @import("build_config");
-
 const Byte = u8;
 pub const uInt = c_uint;
 const uLong = c_ulong;
@@ -66,8 +64,6 @@ pub const z_stream = extern struct {
     reserved: uLong = 0,
 };
 
-pub extern fn deflateInit_(strm: *z_stream, level: c_int, version: [*c]const u8, stream_size: c_int) c_int;
-pub extern fn inflateInit_(strm: *z_stream, version: [*c]const u8, stream_size: c_int) c_int;
 pub extern fn deflateInit2_(strm: *z_stream, level: c_int, method: c_int, windowBits: c_int, memLevel: c_int, strategy: c_int, version: [*c]const u8, stream_size: c_int) c_int;
 pub extern fn inflateInit2_(strm: *z_stream, windowBits: c_int, version: [*c]const u8, stream_size: c_int) c_int;
 pub extern fn deflate(strm: *z_stream, flush: c_int) c_int;
