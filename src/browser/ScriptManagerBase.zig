@@ -967,12 +967,12 @@ pub const Script = struct {
             return;
         }
 
-        defer {
+        defer if (frame.js.call_depth == 0) {
             local.runMacrotasks(); // also runs microtasks
             _ = frame.js.scheduler.run() catch |err| {
                 log.err(.frame, "scheduler", .{ .err = err });
             };
-        }
+        };
 
         if (success) {
             self.executeCallback(comptime .wrap("load"));

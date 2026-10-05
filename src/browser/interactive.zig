@@ -333,8 +333,8 @@ pub fn classifyInteractivity(
         if (isInteractiveRole(role)) return .aria;
     }
 
-    // 3. contenteditable (15 bytes, exceeds SSO limit for comptime)
-    if (el.getAttributeSafe(.wrap("contenteditable"))) |ce| {
+    // 3. contenteditable
+    if (el.getAttributeInterned("contenteditable")) |ce| {
         if (ce.len == 0 or std.ascii.eqlIgnoreCase(ce, "true")) return .contenteditable;
     }
 

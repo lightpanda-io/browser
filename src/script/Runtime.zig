@@ -1475,6 +1475,9 @@ test "agent script runtime: mousedown focus follows mouse-focusability rules" {
         \\  add('label', 'dynLabel', { for: 'dynLabInp' }).textContent = 'lab';
         \\  add('span', 'dynHostSpan', {}, add('div', 'dynHost', { contenteditable: 'true' })).textContent = 'hs';
         \\  add('span', 'dynInnerSpan', {}, add('div', 'dynInner', { contenteditable: 'true' }, add('div', 'dynOuter', { contenteditable: 'true' }))).textContent = 'is';
+        \\  add('span', 'dynGapSpan', {}, add('p', 'dynGapInner', { contenteditable: 'true' }, add('section', 'dynGapMid', {}, add('div', 'dynGapOuter', { contenteditable: 'true' })))).textContent = 'gs';
+        \\  add('span', 'dynIslandSpan', {}, add('p', 'dynIsland', { contenteditable: 'false', tabindex: '0' }, add('div', 'dynIslandHost', { contenteditable: 'true' }))).textContent = 'ls';
+        \\  add('span', 'dynReentrySpan', {}, add('b', 'dynReentry', { contenteditable: 'true' }, add('p', 'dynReentryOff', { contenteditable: 'false' }, add('div', 'dynReentryHost', { contenteditable: 'true' })))).textContent = 'rs';
         \\  const SVG = 'http://www.w3.org/2000/svg';
         \\  add('rect', 'dynSvgRect', { tabindex: '0', width: '100', height: '40' }, add('svg', 'dynSvg', {}, document.body, SVG), SVG);
         \\`);
@@ -1499,6 +1502,12 @@ test "agent script runtime: mousedown focus follows mouse-focusability rules" {
         \\expectActive("dynHost", "span inside contenteditable did not focus host");
         \\page.click("#dynInnerSpan");
         \\expectActive("dynOuter", "nested contenteditable did not focus the outer host");
+        \\page.click("#dynGapSpan");
+        \\expectActive("dynGapOuter", "an ancestor without contenteditable split the editable region");
+        \\page.click("#dynIslandSpan");
+        \\expectActive("dynIsland", "contenteditable=false island did not take its own focus");
+        \\page.click("#dynReentrySpan");
+        \\expectActive("dynReentry", "contenteditable inside a false island did not focus its own host");
         \\// An explicit tabindex is focusable on a non-HTML element too.
         \\page.click("#inp");
         \\page.click("#dynSvgRect");

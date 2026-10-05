@@ -55,7 +55,7 @@ pub fn getAtIndex(self: *HTMLFormControlsCollection, index: usize, frame: *Frame
     return self._proto.getAtIndex(index, frame);
 }
 
-const NamedItemResult = union(enum) {
+pub const NamedItemResult = union(enum) {
     element: *Element,
     radio_node_list: *RadioNodeList,
 };
@@ -81,21 +81,7 @@ fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Frame)
             count += 1;
 
             if (count == 2) {
-                const radio_node_list = try frame._factory.chained(.{
-                    NodeList{ ._data = undefined },
-                    RadioNodeList{
-                        ._proto = undefined,
-                        ._form_collection = self,
-                        ._name = try frame.dupeString(name),
-                    },
-                });
-                radio_node_list._proto._data = .{ .radio_node_list = radio_node_list };
-
-                // The RadioNodeList outlives this call; its NodeList releases
-                // the ref in deinit.
-                self.acquireRef();
-
-                return .{ .radio_node_list = radio_node_list };
+                return .{ .radio_node_list = try self.radioNodeList(name, frame) };
             }
         }
     }
@@ -112,7 +98,26 @@ fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Frame)
     return .{ .element = first_element.? };
 }
 
-fn matchesName(element: *Element, name: []const u8) bool {
+// The live list of every control named "name".
+pub fn radioNodeList(self: *HTMLFormControlsCollection, name: []const u8, frame: *Frame) !*RadioNodeList {
+    const radio_node_list = try frame._factory.chained(.{
+        NodeList{ ._data = undefined },
+        RadioNodeList{
+            ._proto = undefined,
+            ._form_collection = self,
+            ._name = try frame.dupeString(name),
+        },
+    });
+    radio_node_list._proto._data = .{ .radio_node_list = radio_node_list };
+
+    // The RadioNodeList outlives this call; its NodeList releases
+    // the ref in deinit.
+    self.acquireRef();
+
+    return radio_node_list;
+}
+
+pub fn matchesName(element: *Element, name: []const u8) bool {
     if (element.getId()) |id| {
         if (std.mem.eql(u8, id, name)) {
             return true;

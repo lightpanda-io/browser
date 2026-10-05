@@ -617,12 +617,9 @@ pub fn setTitle(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
 // unsupported value. Spec walk per HTML §7.7.5.2 still applies — the nearest
 // ancestor with `contenteditable` wins; "false" disables. See PR #2310 for
 // the routing-vs-fail-loud discussion.
-//
-// "contenteditable" is 15 bytes — past the comptime SSO limit — so the
-// String wrap runs at runtime, mirroring the pattern in interactive.zig.
 /// Reflects the attribute only; `isContentEditable` stays false regardless.
 pub fn getContentEditable(self: *HtmlElement) []const u8 {
-    const raw = self.asElement().getAttributeSafe(.wrap("contenteditable")) orelse return "inherit";
+    const raw = self.asElement().getAttributeInterned("contenteditable") orelse return "inherit";
     if (raw.len == 0 or std.ascii.eqlIgnoreCase(raw, "true")) return "true";
     if (std.ascii.eqlIgnoreCase(raw, "false")) return "false";
     if (std.ascii.eqlIgnoreCase(raw, "plaintext-only")) return "plaintext-only";

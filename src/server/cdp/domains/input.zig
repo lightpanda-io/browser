@@ -57,7 +57,8 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
     try cmd.sendResult(null, .{});
 
     const bc = cmd.browser_context orelse return;
-    const frame = bc.mainFrame() orelse return;
+    // Keys go to the focused frame, which is an iframe's when one has focus.
+    const frame = Frame.user_input.focusedFrame(bc.mainFrame() orelse return);
 
     // Chrome types text only for an event carrying it: a keyDown with `text`
     // (Puppeteer, Playwright) or a `char` (chromedp, after a text-less keyDown).
@@ -158,7 +159,7 @@ fn insertText(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return;
-    const frame = bc.mainFrame() orelse return;
+    const frame = Frame.user_input.focusedFrame(bc.mainFrame() orelse return);
 
     try Frame.user_input.insertText(frame, params.text);
 
@@ -262,6 +263,50 @@ test "cdp.input: insertText replaces select()ed value of email and number inputs
     _ = try ls.local.compileAndRun("inp.type = 'text'; inp.value = 'ab'; inp.select();", null);
     try ctx.processMessage(.{ .id = 3, .method = "Input.insertText", .params = .{ .text = "c\nd" } });
     try testing.expect((try ls.local.compileAndRun("inp.value === 'cd' && inp.selectionStart === 2", null)).isTrue());
+}
+
+test "cdp.input: keyboard input goes to the focused element inside an iframe" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/input_focused_frame.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun("document.getElementById('f').contentDocument.getElementById('inner').focus()", null);
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.insertText",
+        .params = .{ .text = "ab" },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "c", .text = "c" },
+    });
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyUp", .key = "c" },
+    });
+
+    const inner = try ls.local.compileAndRun("document.getElementById('f').contentDocument.getElementById('inner').value", null);
+    try testing.expectEqual("abc", try inner.toStringSlice());
+    const outer = try ls.local.compileAndRun("document.getElementById('outer').value", null);
+    try testing.expectEqual("", try outer.toStringSlice());
 }
 
 test "cdp.input: dispatchMouseEvent mouseMoved fires hover events" {

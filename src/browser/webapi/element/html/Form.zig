@@ -33,6 +33,9 @@ pub const Button = @import("Button.zig");
 pub const Select = @import("Select.zig");
 pub const TextArea = @import("TextArea.zig");
 
+const NodeLive = collections.NodeLive;
+const HTMLFormControlsCollection = collections.HTMLFormControlsCollection;
+
 const Form = @This();
 
 pub const Proto = HtmlElement;
@@ -88,24 +91,24 @@ pub fn setMethod(self: *Form, method: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("method"), .wrap(method), frame);
 }
 
-pub fn getElements(self: *Form, frame: *Frame) !*collections.HTMLFormControlsCollection {
+pub fn getElements(self: *Form, frame: *Frame) !*HTMLFormControlsCollection {
     const node_live = self.iterator(frame);
     const elements = try frame._factory.chained(.{
         node_live.htmlCollectionValue(),
-        collections.HTMLFormControlsCollection{ ._proto = undefined },
+        HTMLFormControlsCollection{ ._proto = undefined },
     });
     elements._proto._chained = .form_controls;
     return elements;
 }
 
-pub fn iterator(self: *Form, frame: *Frame) collections.NodeLive(.form) {
+pub fn iterator(self: *Form, frame: *Frame) NodeLive(.form) {
     const form_id = self.asElement().getId();
     const root = if (form_id != null)
         self.asNode().getRootNode(.{}) // Has ID: walk entire document to find form=ID controls
     else
         self.asNode(); // No ID: walk only form subtree (no external controls possible)
 
-    return collections.NodeLive(.form).init(root, .{ .form = self, .form_id = form_id }, frame);
+    return NodeLive(.form).init(root, .{ .form = self, .form_id = form_id }, frame);
 }
 
 fn getAction(self: *Form, frame: *Frame) ![]const u8 {
@@ -188,6 +191,32 @@ fn getFormOwner(element: *Element, frame: *Frame) ?*Form {
     return null;
 }
 
+// https://html.spec.whatwg.org/multipage/forms.html#dom-form-nameditem
+// One matching control is returned as is; more than one as a live RadioNodeList.
+fn namedItem(self: *Form, name: []const u8, frame: *Frame) !?HTMLFormControlsCollection.NamedItemResult {
+    if (name.len == 0) {
+        return null;
+    }
+
+    var first: ?*Element = null;
+    var it = self.iterator(frame);
+    while (it.next()) |element| {
+        if (HTMLFormControlsCollection.matchesName(element, name) == false) {
+            continue;
+        }
+        if (first == null) {
+            first = element;
+            continue;
+        }
+        // Only the RadioNodeList needs a collection; it holds a ref to it.
+        const elements = try self.getElements(frame);
+        return .{ .radio_node_list = try elements.radioNodeList(name, frame) };
+    }
+
+    const element = first orelse return null;
+    return .{ .element = element };
+}
+
 /// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-form-checkvalidity
 /// Returns true if every submittable element in the form is valid. Fires an
 /// `invalid` event on each failing element.
@@ -226,6 +255,22 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const @"[str]" = bridge.namedIndexed(Form.namedItem, null, null, null, struct {
+        fn wrap(self: *Form, field_name: []const u8, frame: *Frame) !u32 {
+            if (field_name.len == 0) {
+                return error.NotHandled;
+            }
+
+            var it = self.iterator(frame);
+            while (it.next()) |element| {
+                if (HTMLFormControlsCollection.matchesName(element, field_name)) {
+                    return js.v8.DontEnum;
+                }
+            }
+            return error.NotHandled;
+        }
+    }.wrap, .{ .null_as_undefined = true });
 
     const reflect = Element.Reflect(Form);
     pub const encoding = reflect.enumerated("enctype", &.{ "application/x-www-form-urlencoded", "multipart/form-data", "text/plain" }, .{ .missing = "application/x-www-form-urlencoded" });

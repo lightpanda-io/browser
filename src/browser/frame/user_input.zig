@@ -593,22 +593,18 @@ fn isEditingHost(node: *Node) bool {
 }
 
 fn outermostEditingHost(target: *Element) ?*Element {
-    var node: ?*Node = target.asNode();
-    var editable: ?*Node = null;
-    while (node) |n| : (node = n._parent) {
-        if (isEditingHost(n)) {
-            editable = n;
+    var host: ?*Element = null;
+    var current: ?*Element = target;
+    while (current) |el| : (current = el.parentElement()) {
+        if (el.getAttributeInterned("contenteditable") == null) {
+            continue;
+        }
+        if (el.isEditingHost() == false) {
             break;
         }
+        host = el;
     }
-    var host = editable orelse return null;
-    while (host._parent) |p| {
-        if (!isEditingHost(p)) {
-            break;
-        }
-        host = p;
-    }
-    return host.is(Element);
+    return host;
 }
 
 /// Mousedown default action. A mousedown outside any focusable element moves
@@ -846,6 +842,19 @@ pub fn triggerKeyUp(frame: *Frame, keyup: *KeyboardEvent) !void {
 /// a key still fires on <body> and Tab's focus navigation can run.
 pub fn focusedElement(frame: *Frame) ?*Element {
     return frame.window._document.getActiveElement();
+}
+
+/// The frame keyboard input goes to. Starting from `frame`, descend while the
+/// focused element is an <iframe> with a loaded document: that iframe holds
+/// the focus chain, so its document's focused element is where keys land.
+pub fn focusedFrame(frame: *Frame) *Frame {
+    var current = frame;
+    while (current.document._active_element) |active| {
+        const iframe = active.is(Element.Html.IFrame) orelse break;
+        const window = iframe._window orelse break;
+        current = window._frame;
+    }
+    return current;
 }
 
 /// Dispatches a trusted keydown on `target` then, unless cancelled, types

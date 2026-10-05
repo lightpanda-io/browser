@@ -853,8 +853,9 @@ fn fatalCallback(c_location: [*c]const u8, c_message: [*c]const u8) callconv(.c)
 
 fn oomCallback(c_location: [*c]const u8, details: ?*const v8.OOMDetails) callconv(.c) void {
     const location = std.mem.span(c_location);
-    const detail = if (details) |d| std.mem.span(d.detail) else "";
-    log.fatal(.app, "V8 OOM", .{ .location = location, .detail = detail });
+    const d = details orelse &v8.OOMDetails{};
+    const detail: []const u8 = if (d.detail == null) "" else std.mem.span(d.detail);
+    log.fatal(.app, "V8 OOM", .{ .location = location, .detail = detail, .is_heap_oom = d.is_heap_oom });
     @import("../../crash_handler.zig").crash("V8 OOM", .{ .location = location, .detail = detail }, @returnAddress());
 }
 

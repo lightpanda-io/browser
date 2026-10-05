@@ -325,6 +325,7 @@ pub const String = extern struct {
                 asUint("charset") => return "charset",
                 asUint("checked") => return "checked",
                 asUint("loading") => return "loading",
+                asUint("popover") => return "popover",
                 else => {},
             },
             8 => switch (@as(u64, @bitCast(input[0..8].*))) {
@@ -389,6 +390,7 @@ pub const String = extern struct {
             },
             15 => switch (@as(u120, @bitCast(input[0..15].*))) {
                 asUint("text-decoration") => return "text-decoration",
+                asUint("contenteditable") => return "contenteditable",
                 asUint("justify-content") => return "justify-content",
                 asUint("aria-labelledby") => return "aria-labelledby",
                 else => {},
