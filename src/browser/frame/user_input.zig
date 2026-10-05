@@ -996,7 +996,15 @@ pub const EditResult = enum { done, refused, cancelled };
 /// control, cancellable through beforeinput.
 pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit, opts: struct { beforeinput: bool = true }) !EditResult {
     const el = ctl.asElement();
-    if (!ctl.acceptsTextEntry() or !acceptsEdit(el)) {
+    if (!ctl.acceptsTextEntry()) {
+        return .refused;
+    }
+    // Chrome lets text typed into any text control reach beforeinput and
+    // textInput, and only then finds it can't edit a readonly one. Its
+    // editing commands (delete, line break) are disabled there and fire
+    // nothing.
+    const editable = acceptsEdit(el);
+    if (!editable and edit != .insert) {
         return .refused;
     }
     if (edit == .replace) {
@@ -1011,6 +1019,9 @@ pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit, opts: struct { beforei
         if (!allowed) {
             return .cancelled;
         }
+    }
+    if (!editable) {
+        return .refused;
     }
     switch (edit) {
         .insert, .replace => |text| try ctl.innerInsert(text, .text, frame),

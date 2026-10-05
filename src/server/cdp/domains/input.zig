@@ -1642,12 +1642,16 @@ test "cdp.input: dispatchKeyEvent text-less keyDown then char types once" {
     try ctx.expectSentResult(null, .{ .id = 8 });
     try testing.expect((try ls.local.compileAndRun("ta.value === 'one\\n' && window.taInput === 'insertLineBreak:null'", null)).isTrue());
 
-    // A readonly control keeps its value; the keys themselves still fire.
-    _ = try ls.local.compileAndRun("ta.readOnly = true; window.taInput = null;", null);
+    // A readonly control keeps its value. Typed text still reaches
+    // beforeinput, as in Chrome; Backspace doesn't.
+    _ = try ls.local.compileAndRun(
+        \\ta.readOnly = true; window.taInput = null; window.taBefore = [];
+        \\ta.addEventListener('beforeinput', (e) => window.taBefore.push(e.inputType));
+    , null);
     try ctx.processMessage(.{ .id = 9, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "x", .text = "x" } });
     try ctx.processMessage(.{ .id = 10, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Backspace", .code = "Backspace" } });
     try ctx.processMessage(.{ .id = 11, .method = "Input.insertText", .params = .{ .text = "y" } });
-    try testing.expect((try ls.local.compileAndRun("ta.value === 'one\\n' && window.taInput === null", null)).isTrue());
+    try testing.expect((try ls.local.compileAndRun("ta.value === 'one\\n' && window.taInput === null && window.taBefore.join() === 'insertText,insertText'", null)).isTrue());
 }
 
 test "cdp.input: dispatchKeyEvent char honors keypress and beforeinput vetoes" {
