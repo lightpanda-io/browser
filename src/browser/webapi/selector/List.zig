@@ -407,11 +407,18 @@ fn matchesPart(el: *Node.Element, part: Part, scope: *Node, nth: ?*NthCache, fra
         .tag => |tag| {
             // Optimized: compare enum directly
             const element_tag = el.getTag();
-            if (element_tag == tag) return true;
+            if (element_tag == tag) {
+                return true;
+            }
             // Elements without a dedicated Tag (XML, other namespaces) match by name
-            return element_tag == .unknown and matchesTagName(el, @tagName(tag));
+            return element_tag == .unknown and std.ascii.eqlIgnoreCase(el.getLocalName(), @tagName(tag));
         },
-        .tag_name => |tag_name| return matchesTagName(el, tag_name),
+        .tag_name => |tag_name| {
+              if (el._namespace == .html) {
+                  return std.mem.eql(u8, el.getTagNameLower(), tag_name);
+              }
+              return std.ascii.eqlIgnoreCase(el.getLocalName(), tag_name);
+        },
         .universal => return true,
         .pseudo_class => |pseudo| return matchesPseudoClass(el, pseudo, scope, nth, frame),
         .attribute => |attr| return matchesAttribute(el, attr),
