@@ -21,7 +21,6 @@ const lp = @import("../lightpanda.zig");
 const DOMNode = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const Event = @import("webapi/Event.zig");
-const MouseEvent = @import("webapi/event/MouseEvent.zig");
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
@@ -50,23 +49,8 @@ pub fn click(node: *DOMNode, frame: *Frame) !void {
 pub fn hover(node: *DOMNode, frame: *Frame) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
 
-    const mouseover_event: *MouseEvent = try .initTrusted(comptime .wrap("mouseover"), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-    }, frame);
-
-    frame._event_manager.dispatch(el.asEventTarget(), mouseover_event.asEvent()) catch |err| {
-        lp.log.debug(.app, "hover mouseover failed", .{ .err = err });
-        return error.ActionFailed;
-    };
-
-    const mouseenter_event: *MouseEvent = try .initTrusted(comptime .wrap("mouseenter"), .{
-        .composed = true,
-    }, frame);
-
-    frame._event_manager.dispatch(el.asEventTarget(), mouseenter_event.asEvent()) catch |err| {
-        lp.log.debug(.app, "hover mouseenter failed", .{ .err = err });
+    Frame.user_input.moveSequence(frame, el, .{}) catch |err| {
+        lp.log.debug(.app, "hover failed", .{ .err = err });
         return error.ActionFailed;
     };
 }

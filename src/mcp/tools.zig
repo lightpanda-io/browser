@@ -1540,6 +1540,51 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     try testing.expect(result.isTrue());
 }
 
+test "MCP - hover moves the pointer between elements" {
+    const aa = testing.arena_allocator;
+
+    var out: std.Io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+    server.active_session.enterIsolate();
+    defer server.active_session.exitIsolate();
+
+    const page = server.active_session.session.pages.items[0];
+
+    var ls: js.Local.Scope = undefined;
+    page.frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.exec(
+        \\ window.hoverLog = [];
+        \\ for (const t of ['mouseover', 'mouseenter', 'mouseout', 'mouseleave', 'mousemove']) {
+        \\   document.addEventListener(t, (e) => window.hoverLog.push(t + ':' + (e.target.id || e.target.localName)), true);
+        \\ }
+    , null);
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hover","arguments":{"selector":"#hoverTarget"}}}
+    );
+    _ = try ls.local.exec("window.hoverLog.push('|')", null);
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"hover","arguments":{"selector":"#keyTarget"}}}
+    );
+
+    // The second hover leaves the first target, and <body>, their common
+    // ancestor, is neither left nor re-entered.
+    const result = try ls.local.exec(
+        \\ window.hoverLog.join(' ') === [
+        \\   'mouseover:hoverTarget', 'mouseenter:html', 'mouseenter:body', 'mouseenter:hoverTarget', 'mousemove:hoverTarget', '|',
+        \\   'mouseout:hoverTarget', 'mouseleave:hoverTarget', 'mouseover:keyTarget', 'mouseenter:keyTarget', 'mousemove:keyTarget',
+        \\ ].join(' ')
+    , null);
+    try testing.expect(result.isTrue());
+}
+
 test "MCP - findElement" {
     const aa = testing.arena_allocator;
 
