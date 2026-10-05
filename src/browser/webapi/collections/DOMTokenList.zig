@@ -160,10 +160,10 @@ pub fn replace(self: *DOMTokenList, old_token: []const u8, new_token: []const u8
     if (old_token.len == 0 or new_token.len == 0) {
         return error.SyntaxError;
     }
-    if (std.mem.indexOfAny(u8, old_token, WHITESPACE) != null) {
+    if (std.mem.findAny(u8, old_token, WHITESPACE) != null) {
         return error.InvalidCharacterError;
     }
-    if (std.mem.indexOfAny(u8, new_token, WHITESPACE) != null) {
+    if (std.mem.findAny(u8, new_token, WHITESPACE) != null) {
         return error.InvalidCharacterError;
     }
 
@@ -276,7 +276,7 @@ fn validateToken(token: []const u8) !void {
     if (token.len == 0) {
         return error.SyntaxError;
     }
-    if (std.mem.indexOfAny(u8, token, &std.ascii.whitespace) != null) {
+    if (std.mem.findAny(u8, token, &std.ascii.whitespace) != null) {
         return error.InvalidCharacterError;
     }
 }

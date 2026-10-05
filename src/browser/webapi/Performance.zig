@@ -47,6 +47,8 @@ pub const Proto = EventTarget;
 
 _proto: *EventTarget,
 _time_origin: u64,
+// Wall-clock (Unix epoch) microseconds at the same moment, exposed as timeOrigin.
+_time_origin_unix: u64,
 _arena: Allocator,
 _factory: *Factory,
 // Marks and measures. Kept in startTime order (see insertOrdered), as the
@@ -79,10 +81,12 @@ _delivering: bool = false,
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
 pub fn highResTimestamp() u64 {
-    const micros = VirtualTime.micro();
-    // Round to nearest 5 microseconds (like Firefox default)
-    const rounded = @divTrunc(micros + 2, 5) * 5;
-    return rounded;
+    return roundMicros(VirtualTime.micro());
+}
+
+// Round to nearest 5 microseconds (like Firefox default)
+fn roundMicros(micros: u64) u64 {
+    return @divTrunc(micros + 2, 5) * 5;
 }
 
 pub fn init(factory: *Factory, arena: Allocator) !*Performance {
@@ -91,6 +95,7 @@ pub fn init(factory: *Factory, arena: Allocator) !*Performance {
         ._arena = arena,
         ._factory = factory,
         ._time_origin = highResTimestamp(),
+        ._time_origin_unix = roundMicros(lp.datetime.microTimestamp(.real)),
     });
 }
 
@@ -116,7 +121,7 @@ pub fn now(self: *const Performance) f64 {
 
 fn getTimeOrigin(self: *const Performance) f64 {
     // Return as milliseconds
-    return @as(f64, @floatFromInt(self._time_origin)) / 1000.0;
+    return @as(f64, @floatFromInt(self._time_origin_unix)) / 1000.0;
 }
 
 fn getNavigation(self: *Performance) *PerformanceNavigation {
@@ -346,7 +351,7 @@ fn gated(self: *const Performance, allow: bool, micros: u64) f64 {
 // https://mimesniff.spec.whatwg.org/#minimize-a-supported-mime-type
 fn minimizeMimeType(header: []const u8) []const u8 {
     var buf: [255]u8 = undefined;
-    const raw = std.mem.trim(u8, header[0 .. std.mem.indexOfScalar(u8, header, ';') orelse header.len], " \t");
+    const raw = std.mem.trim(u8, header[0 .. std.mem.findScalar(u8, header, ';') orelse header.len], " \t");
     if (raw.len > buf.len) {
         return "";
     }
@@ -431,7 +436,7 @@ fn contentEncoding(header: []const u8) []const u8 {
     if (header.len == 0) {
         return "";
     }
-    if (std.mem.indexOfScalar(u8, header, ',') != null) {
+    if (std.mem.findScalar(u8, header, ',') != null) {
         return "multiple";
     }
     var buf: [8]u8 = undefined;
@@ -577,7 +582,7 @@ fn notifyObservers(self: *Performance, entry: *Entry) !void {
     for (self._observers.items) |observer| {
         if (observer.interested(entry)) {
             observer._entries.append(observer._arena, entry) catch |err| {
-                lp.log.err(.frame, "Performance.notifyObservers", .{ .err = err });
+                lp.log.debug(.frame, "Performance.notifyObservers", .{ .err = err });
             };
         }
     }

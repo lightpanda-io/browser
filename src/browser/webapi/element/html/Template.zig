@@ -161,6 +161,7 @@ pub const Build = struct {
         // owner document, not to the template's own document.
         const owner = try node.getDocument(frame).templateContentsOwner(frame);
         self._content = try DocumentFragment.init(owner, frame);
+        self._content._template = self;
     }
 
     // Per the HTML spec's cloning steps for <template>, a deep clone must

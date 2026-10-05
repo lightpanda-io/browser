@@ -94,17 +94,17 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
         screenHeight: ?u32 = null,
     })) orelse return error.InvalidParams;
 
-    // Not-yet-emulated parameters: accept them but warn so the caller knows
+    // Not-yet-emulated parameters: accept them but log so the caller knows
     // they are ignored.
     if (params.mobile) |v| {
-        if (v) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
+        if (v) log.debug(.not_implemented, "setDeviceMetricsOverride", .{
             .cdp_cmd = "Emulation.setDeviceMetricsOverride",
             .param = "mobile",
             .value = v,
         });
     }
     if (params.scale) |v| {
-        if (v != 0) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
+        if (v != 0) log.debug(.not_implemented, "setDeviceMetricsOverride", .{
             .cdp_cmd = "Emulation.setDeviceMetricsOverride",
             .param = "scale",
             .value = v,
@@ -150,7 +150,7 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     if (params.platform) |v| {
-        log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "platform", .value = v });
+        log.debug(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "platform", .value = v });
     }
 
     const ua = params.userAgent;
@@ -172,7 +172,7 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     }
 
     if (reserved) {
-        log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla" });
+        log.debug(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla" });
         return cmd.sendResult(null, .{});
     }
 
@@ -220,7 +220,7 @@ fn setLocaleOverride(cmd: *CDP.Command) !void {
     const Params = struct { locale: ?[]const u8 = null };
     const params = (try cmd.params(Params)) orelse Params{};
     if (params.locale) |v| {
-        log.warn(.not_implemented, "Emulation.setLocaleOverride", .{ .locale = v });
+        log.debug(.not_implemented, "Emulation.setLocaleOverride", .{ .locale = v });
     }
     return cmd.sendResult(null, .{});
 }
@@ -230,7 +230,7 @@ fn setTimezoneOverride(cmd: *CDP.Command) !void {
         timezoneId: []const u8,
     })) orelse return error.InvalidParams;
     if (params.timezoneId.len > 0) {
-        log.warn(.not_implemented, "Emulation.setTimezoneOverride", .{ .timezoneId = params.timezoneId });
+        log.debug(.not_implemented, "Emulation.setTimezoneOverride", .{ .timezoneId = params.timezoneId });
     }
     return cmd.sendResult(null, .{});
 }

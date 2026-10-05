@@ -26,6 +26,7 @@ const crypto = @import("../sys/libcrypto.zig");
 
 const IpFilter = @import("IpFilter.zig");
 const Certificates = @import("Certificates.zig");
+const repeat = @import("../string.zig").repeat;
 
 const log = lp.log;
 const posix = std.posix;
@@ -79,7 +80,7 @@ pub const Header = struct {
     }
 
     pub fn parse(header_str: []const u8) ?Header {
-        const colon_pos = std.mem.indexOfScalar(u8, header_str, ':') orelse return null;
+        const colon_pos = std.mem.findScalar(u8, header_str, ':') orelse return null;
 
         const name = std.mem.trim(u8, header_str[0..colon_pos], " \t");
         const value = std.mem.trim(u8, header_str[colon_pos + 1 ..], " \t");
@@ -90,13 +91,13 @@ pub const Header = struct {
     // The header value up to the first ';', trimmed (e.g. "attachment" for a
     // Content-Disposition, "text/html" for a Content-Type).
     pub fn firstValue(self: Header) []const u8 {
-        const end = std.mem.indexOfScalar(u8, self.value, ';') orelse self.value.len;
+        const end = std.mem.findScalar(u8, self.value, ';') orelse self.value.len;
         return std.mem.trim(u8, self.value[0..end], " \t");
     }
 
     // Iterates the `; key=value` parameters that follow the header's first value.
     pub fn params(self: Header) ParamIterator {
-        const start = std.mem.indexOfScalar(u8, self.value, ';') orelse self.value.len;
+        const start = std.mem.findScalar(u8, self.value, ';') orelse self.value.len;
         return .{ .rest = self.value[start..] };
     }
 
@@ -117,11 +118,11 @@ pub const Header = struct {
         pub fn next(self: *ParamIterator) ?Param {
             while (self.rest.len > 0 and self.rest[0] == ';') {
                 self.rest = self.rest[1..];
-                const end = std.mem.indexOfScalar(u8, self.rest, ';') orelse self.rest.len;
+                const end = std.mem.findScalar(u8, self.rest, ';') orelse self.rest.len;
                 const segment = self.rest[0..end];
                 self.rest = self.rest[end..];
 
-                const eq = std.mem.indexOfScalar(u8, segment, '=') orelse continue;
+                const eq = std.mem.findScalar(u8, segment, '=') orelse continue;
                 const key = std.mem.trim(u8, segment[0..eq], " \t");
                 if (key.len == 0) continue;
 
@@ -132,61 +133,6 @@ pub const Header = struct {
                 return .{ .key = key, .value = value };
             }
             return null;
-        }
-    };
-};
-
-// In normal cases, the header iterator comes from the curl connection.
-// But it's also possible to inject a response, via `transfer.fulfill`. In that
-// case, the response headers are a list, []const Http.Header.
-// This union, is an iterator that exposes the same API for either case.
-pub const HeaderIterator = union(enum) {
-    curl: CurlHeaderIterator,
-    list: ListHeaderIterator,
-
-    pub fn next(self: *HeaderIterator) ?Header {
-        switch (self.*) {
-            inline else => |*it| return it.next(),
-        }
-    }
-
-    pub fn collect(self: *HeaderIterator, allocator: std.mem.Allocator) !std.ArrayList(Header) {
-        var list: std.ArrayList(Header) = .empty;
-
-        while (self.next()) |hdr| {
-            try list.append(allocator, try hdr.normalize(allocator));
-        }
-
-        return list;
-    }
-
-    const CurlHeaderIterator = struct {
-        conn: *const Connection,
-        prev: ?*libcurl.CurlHeader = null,
-
-        pub fn next(self: *CurlHeaderIterator) ?Header {
-            const h = libcurl.curl_easy_nextheader(self.conn._easy, .header, -1, self.prev) orelse return null;
-            self.prev = h;
-
-            const header = h.*;
-            return .{
-                .name = std.mem.span(header.name),
-                .value = std.mem.span(header.value),
-            };
-        }
-    };
-
-    const ListHeaderIterator = struct {
-        index: usize = 0,
-        list: []const Header,
-
-        pub fn next(self: *ListHeaderIterator) ?Header {
-            const idx = self.index;
-            if (idx == self.list.len) {
-                return null;
-            }
-            self.index = idx + 1;
-            return self.list[idx];
         }
     };
 };
@@ -214,7 +160,7 @@ pub const AuthChallenge = struct {
         };
 
         const challenge_value = std.mem.trim(u8, value, std.ascii.whitespace[0..]);
-        const pos = std.mem.indexOfPos(u8, challenge_value, 0, " ") orelse challenge_value.len;
+        const pos = std.mem.findPos(u8, challenge_value, 0, " ") orelse challenge_value.len;
         const _scheme = challenge_value[0..pos];
         if (std.ascii.eqlIgnoreCase(_scheme, "basic")) {
             ac.scheme = .basic;
@@ -238,8 +184,8 @@ pub const StatusText = struct {
     pub fn fromStatusLine(line: []const u8) StatusText {
         const trimmed = std.mem.trimEnd(u8, line, "\r\n");
         // HTTP-version SP status-code SP [ reason-phrase ]
-        const sp1 = std.mem.indexOfScalar(u8, trimmed, ' ') orelse return .{ ._len = 0 };
-        const sp2 = std.mem.indexOfScalarPos(u8, trimmed, sp1 + 1, ' ') orelse return .{ ._len = 0 };
+        const sp1 = std.mem.findScalar(u8, trimmed, ' ') orelse return .{ ._len = 0 };
+        const sp2 = std.mem.findScalarPos(u8, trimmed, sp1 + 1, ' ') orelse return .{ ._len = 0 };
         const phrase = trimmed[sp2 + 1 ..];
         const len = @min(phrase.len, MAX_LEN);
 
@@ -288,9 +234,9 @@ fn opensocketCallback(
     if (filter.isBlockedSockaddr(address)) {
         if (address.family == posix.AF.INET or address.family == posix.AF.INET6) {
             const ip = sys_net.addressFromSockaddr(@ptrCast(@alignCast(&address.addr)));
-            log.warn(.http, "blocked by IP filter", .{ .ip = ip });
+            log.debug(.http, "blocked by IP filter", .{ .ip = ip });
         } else {
-            log.warn(.http, "blocked by IP filter", .{ .family = address.family });
+            log.debug(.http, "blocked by IP filter", .{ .family = address.family });
         }
         return libcurl.CURL_SOCKET_BAD;
     }
@@ -402,9 +348,9 @@ pub const Connection = struct {
     // copies the string, so `allocator` only backs the transient join.
     pub fn addHeader(self: *Connection, allocator: std.mem.Allocator, name: []const u8, value: []const u8) !void {
         const joined = if (value.len == 0)
-            try std.fmt.allocPrintSentinel(allocator, "{s};", .{name}, 0)
+            try allocator.printSentinel("{s};", .{name}, 0)
         else
-            try std.fmt.allocPrintSentinel(allocator, "{s}: {s}", .{ name, value }, 0);
+            try allocator.printSentinel("{s}: {s}", .{ name, value }, 0);
         return self.addRawHeader(joined);
     }
 
@@ -613,18 +559,19 @@ pub const Connection = struct {
     pub fn getConnectCode(self: *const Connection) !u16 {
         var status: c_long = undefined;
         try libcurl.curl_easy_getinfo(self._easy, .connect_code, &status);
-        if (status < 0 or status > std.math.maxInt(u16)) {
-            return 0;
-        }
-        return @intCast(status);
+        return inHttpRange(status);
     }
 
     pub fn getResponseCode(self: *const Connection) !u16 {
         var status: c_long = undefined;
         try libcurl.curl_easy_getinfo(self._easy, .response_code, &status);
-        if (status < 0 or status > std.math.maxInt(u16)) {
-            return 0;
-        }
+        return inHttpRange(status);
+    }
+
+    /// 0 outside 100..599, which is curl's own value for having no status.
+    /// Consumers cast this into `std.http.Status`, an enum(u10).
+    fn inHttpRange(status: c_long) u16 {
+        if (status < 100 or status > 599) return 0;
         return @intCast(status);
     }
 
@@ -687,7 +634,7 @@ pub const Connection = struct {
     pub fn getHttpVersion(self: *const Connection) !libcurl.CurlHttpVersion {
         var version: c_long = undefined;
         try libcurl.curl_easy_getinfo(self._easy, .http_version, &version);
-        return @enumFromInt(version);
+        return @fromBackingInt(@intCast(version));
     }
 
     pub fn getConnectHeader(self: *const Connection, name: [:0]const u8, index: usize) ?HeaderValue {
@@ -706,6 +653,21 @@ pub const Connection = struct {
             .amount = h.amount,
             .value = std.mem.span(h.value),
         };
+    }
+
+    // Copies the response headers, names lowercased, into `allocator`.
+    pub fn collectResponseHeaders(self: *const Connection, allocator: std.mem.Allocator) ![]const Header {
+        var list: std.ArrayList(Header) = .empty;
+        var prev: ?*libcurl.CurlHeader = null;
+        while (libcurl.curl_easy_nextheader(self._easy, .header, -1, prev)) |h| {
+            prev = h;
+            const hdr: Header = .{
+                .name = std.mem.span(h.name),
+                .value = std.mem.span(h.value),
+            };
+            try list.append(allocator, try hdr.normalize(allocator));
+        }
+        return list.items;
     }
 
     pub fn getResponseHeader(self: *const Connection, name: [:0]const u8, index: usize) ?HeaderValue {
@@ -930,6 +892,7 @@ pub const ErrorReason = enum {
     too_large,
     aborted,
     robots_blocked,
+    bot_challenge,
     other,
 };
 
@@ -958,6 +921,7 @@ pub fn errorReason(err: anyerror) ErrorReason {
         error.SyncWaitInterrupted,
         => .aborted,
         error.RobotsBlocked => .robots_blocked,
+        error.BotChallenge => .bot_challenge,
         else => .other,
     };
 }
@@ -1075,7 +1039,7 @@ test "StatusText.fromStatusLine" {
     // curl's synthesized HTTP/2 status line has no phrase
     try testing.expectEqualSlices(u8, "", StatusText.fromStatusLine("HTTP/2 200 \r\n").get().?);
     try testing.expectEqualSlices(u8, "", StatusText.fromStatusLine("HTTP/1.1 200\r\n").get().?);
-    try testing.expectEqual(StatusText.MAX_LEN, StatusText.fromStatusLine("HTTP/1.1 200 " ++ "x" ** 200).get().?.len);
+    try testing.expectEqual(StatusText.MAX_LEN, StatusText.fromStatusLine("HTTP/1.1 200 " ++ repeat("x", 200)).get().?.len);
 }
 
 test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {
@@ -1083,7 +1047,7 @@ test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {
 
     const filter = IpFilter.init(true, null);
     var sa = makeSockAddrV4(.{ 127, 0, 0, 1 });
-    const result = opensocketCallback(@ptrCast(@constCast(&filter)), @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
+    const result = opensocketCallback(@ptrCast(@constCast(&filter)), @backingInt(libcurl.CurlSockType.ipcxn), &sa);
     try testing.expectEqual(libcurl.CURL_SOCKET_BAD, result);
 }
 
@@ -1092,7 +1056,7 @@ test "opensocketCallback: public IPv4 opens a real socket" {
     const filter = IpFilter.init(true, null);
     var sa = makeSockAddrV4(.{ 8, 8, 8, 8 });
 
-    const fd = opensocketCallback(@ptrCast(@constCast(&filter)), @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
+    const fd = opensocketCallback(@ptrCast(@constCast(&filter)), @backingInt(libcurl.CurlSockType.ipcxn), &sa);
     defer _ = std.c.close(fd);
 
     // A real fd is always >= 0
@@ -1101,7 +1065,7 @@ test "opensocketCallback: public IPv4 opens a real socket" {
 
 test "opensocketCallback: null clientp returns CURL_SOCKET_BAD (fail-closed)" {
     var sa = makeSockAddrV4(.{ 8, 8, 8, 8 });
-    const result = opensocketCallback(null, @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
+    const result = opensocketCallback(null, @backingInt(libcurl.CurlSockType.ipcxn), &sa);
     try testing.expectEqual(libcurl.CURL_SOCKET_BAD, result);
 }
 
@@ -1109,8 +1073,20 @@ test "opensocketCallback: block_private=false allows private IP" {
     // When block_private is false the filter blocks nothing
     const filter = IpFilter.init(false, null);
     var sa = makeSockAddrV4(.{ 127, 0, 0, 1 });
-    const fd = opensocketCallback(@ptrCast(@constCast(&filter)), @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
+    const fd = opensocketCallback(@ptrCast(@constCast(&filter)), @backingInt(libcurl.CurlSockType.ipcxn), &sa);
     defer _ = std.c.close(fd);
 
     try testing.expect(fd >= 0);
+}
+
+test "Connection.inHttpRange: only a real status survives" {
+    const kept = [_]c_long{ 100, 200, 404, 503, 599 };
+    for (kept) |status| {
+        try std.testing.expectEqual(@as(u16, @intCast(status)), Connection.inHttpRange(status));
+    }
+    // 9999 used to survive and then panic in every std.http.Status cast.
+    const dropped = [_]c_long{ -1, 0, 99, 600, 1024, 9999, 65536 };
+    for (dropped) |status| {
+        try std.testing.expectEqual(0, Connection.inHttpRange(status));
+    }
 }

@@ -29,6 +29,7 @@ const Parser = @import("Parser.zig");
 const Engine = @import("Engine.zig");
 const HostnameTrie = @import("HostnameTrie.zig");
 const NetworkFilter = @import("NetworkFilter.zig");
+const repeat = @import("../../string.zig").repeat;
 const Regex = lp.Regex;
 
 const log = lp.log;
@@ -261,7 +262,7 @@ fn exceptionHostname(line: []const u8, buf: []u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, line, "@@||")) return null;
     const rest = line[4..];
 
-    const end = std.mem.indexOfAny(u8, rest, "/^$*|") orelse rest.len;
+    const end = std.mem.findAny(u8, rest, "/^$*|") orelse rest.len;
     if (end == 0 or end > buf.len) return null;
 
     const hostname = std.ascii.lowerString(buf[0..end], rest[0..end]);
@@ -273,7 +274,7 @@ fn exceptionHostname(line: []const u8, buf: []u8) ?[]const u8 {
         };
         if (!ok) return null;
     }
-    if (std.mem.indexOfScalar(u8, hostname, '.') == null) return null;
+    if (std.mem.findScalar(u8, hostname, '.') == null) return null;
     return hostname;
 }
 
@@ -443,7 +444,7 @@ fn identity(filter: *const NetworkFilter) u64 {
     }
     hasher.update(&std.mem.toBytes(filter.types.bits()));
     hasher.update(&.{
-        @intFromEnum(filter.kind),
+        @backingInt(filter.kind),
         @intFromBool(filter.exception),
         @intFromBool(filter.important),
         @intFromBool(filter.first_party),
@@ -608,7 +609,7 @@ test "adblock.AdBlocker: tokens past the request buffer still match" {
 
     // 140 tokens of query noise push the filter's token ("utm", its rarest)
     // past what the request holds; the engine walks the rest of the URL.
-    const noise = "https://example.com/?" ++ "a=1&" ** 70;
+    const noise = "https://example.com/?" ++ repeat("a=1&", 70);
     var buf: [512]u8 = undefined;
     const overflowing: Request = Request.init(noise ++ "utm_tracker=1", &buf, "a.com", script).?;
     try testing.expect(overflowing.tail.len != 0);

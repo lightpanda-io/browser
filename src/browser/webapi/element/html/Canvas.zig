@@ -170,7 +170,7 @@ const ToBlobCallback = struct {
 
         ls.toLocal(self.callback).call(void, .{blob}) catch |err| {
             exec.page.recordJsError(err);
-            log.warn(.js, "canvas.toBlob", .{ .err = err });
+            log.debug(.js, "canvas.toBlob", .{ .err = err });
         };
         ls.local.runMicrotasks();
         return null;

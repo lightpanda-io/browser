@@ -93,3 +93,23 @@
   testing.expectEqual(detached, ood.parentNode);
   testing.expectEqual(detached, parentSeenAtDisconnect);
 </script>
+
+<script id=appendChild_host_including_cycle>
+  {
+    // Inserting a node under its own shadow root or template contents is a
+    // cycle through the host, not just a same-tree containment.
+    const outer = document.createElement('div');
+    const host = document.createElement('span');
+    outer.appendChild(host);
+    const root = host.attachShadow({mode: 'open'});
+    testing.expectError('HierarchyRequestError', () => root.appendChild(outer));
+    testing.expectError('HierarchyRequestError', () => root.appendChild(host));
+    testing.expectEqual(null, outer.parentNode);
+
+    const tmpl = document.createElement('template');
+    outer.appendChild(tmpl);
+    testing.expectError('HierarchyRequestError', () => tmpl.content.appendChild(outer));
+    testing.expectError('HierarchyRequestError', () => tmpl.content.insertBefore(tmpl, null));
+    testing.expectEqual(0, tmpl.content.childNodes.length);
+  }
+</script>

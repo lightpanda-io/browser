@@ -249,7 +249,7 @@ fn validateNodeInsertion(parent: *Node, node: *Node) !void {
     }
 
     // Check if node contains parent (would create a cycle)
-    if (node.contains(parent)) {
+    if (node.isHostIncludingInclusiveAncestorOf(parent)) {
         return error.HierarchyError;
     }
 
@@ -274,7 +274,7 @@ fn ensurePreInsertValidity(parent: *Node, node: *Node, child: ?*Node, comptime m
         else => return error.HierarchyError,
     }
 
-    if (node.contains(parent)) {
+    if (node.isHostIncludingInclusiveAncestorOf(parent)) {
         return error.HierarchyError;
     }
 
@@ -700,6 +700,20 @@ pub fn contains(self: *const Node, child_: ?*const Node) bool {
     return false;
 }
 
+// Like contains(), but also climbs from a shadow root or template contents.
+pub fn isHostIncludingInclusiveAncestorOf(self: *const Node, other: *Node) bool {
+    var node = other;
+    while (node != self) {
+        if (node._parent) |parent| {
+            node = parent;
+        } else {
+            const fragment = node.is(DocumentFragment) orelse return false;
+            node = (fragment.getHost() orelse return false).asNode();
+        }
+    }
+    return true;
+}
+
 pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
     // A document node does not have an owner.
     if (self._type == .document) {
@@ -967,7 +981,7 @@ pub fn moveBefore(self: *Node, node_val: js.Value, child_val: js.Value, frame: *
         else => return error.HierarchyError,
     }
 
-    if (node.contains(self)) {
+    if (node.isHostIncludingInclusiveAncestorOf(self)) {
         return error.HierarchyError;
     }
 
@@ -1721,25 +1735,40 @@ pub fn assignedSlot(self: *Node, frame: *const Frame) ?*Element.Html.Slot {
     return frame.page._assigned_slots.get(self);
 }
 
-// An inert element applies to all its chidren, so walk up to see if we have
-// an inert parent
+/// Inert applies to the whole subtree, so any inert flat-tree ancestor counts.
 pub fn isInert(self: *Node, frame: *const Frame) bool {
     var current: ?*Node = self;
-    while (current) |node| {
+    while (current) |node| : (current = node.flatTreeParent(frame)) {
         if (node.is(Element)) |el| {
             if (el._namespace == .html and el.hasAttributeSafe(comptime .wrap("inert"))) {
                 return true;
             }
         }
-        if (node.assignedSlot(frame)) |slot| {
-            current = slot.asNode();
-        } else if (node.is(ShadowRoot)) |shadow| {
-            current = shadow._host.asNode();
-        } else {
-            current = node._parent;
-        }
     }
     return false;
+}
+
+/// The parent in the flat tree: an assigned slottable's slot, a shadow root's
+/// host, else the DOM parent.
+pub fn flatTreeParent(self: *Node, frame: *const Frame) ?*Node {
+    if (self.assignedSlot(frame)) |slot| {
+        return slot.asNode();
+    }
+    if (self.is(ShadowRoot)) |shadow| {
+        return shadow._host.asNode();
+    }
+    return self._parent;
+}
+
+/// The flat-tree parent element: shadow content inherits from its host, a
+/// slotted node from its slot.
+pub fn flatTreeParentElement(self: *Node, frame: *const Frame) ?*Element {
+    const parent = self.flatTreeParent(frame) orelse return null;
+    if (parent.is(Element)) |el| {
+        return el;
+    }
+    // A shadow root's flat-tree parent is its host
+    return (parent.flatTreeParent(frame) orelse return null).is(Element);
 }
 
 pub const JsApi = struct {
@@ -1778,7 +1807,11 @@ pub const JsApi = struct {
     }.wrap, null, .{});
     pub const nodeType = bridge.accessor(Node.getNodeType, null, .{});
 
-    pub const textContent = bridge.accessor(_textContext, Node.setTextContent, .{ .ce_reactions = true });
+    pub const textContent = bridge.accessor(_textContext, _setTextContent, .{ .ce_reactions = true });
+    // textContent is a nullable DOMString: null (and undefined) mean the empty string.
+    fn _setTextContent(self: *Node, data: ?[]const u8, frame: *Frame) !void {
+        return self.setTextContent(data orelse "", frame);
+    }
     fn _textContext(self: *Node, frame: *const Frame) !?[]const u8 {
         // cdata and attributes can return value directly, avoiding the copy
         switch (self._type) {

@@ -154,7 +154,7 @@ fn setHost(self: *URL, value: []const u8) void {
 
 pub fn getPort(self: *URL) []const u8 {
     const port = U.urlGetPort(self._url) orelse return "";
-    return std.fmt.bufPrint(&self._port, "{d}", .{port}) catch unreachable;
+    return std.mem.print(&self._port, "{d}", .{port}) catch unreachable;
 }
 
 /// Spec requires us to silently ignore errors of this setter.

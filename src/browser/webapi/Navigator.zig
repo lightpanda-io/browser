@@ -122,7 +122,7 @@ pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
 }
 
 pub fn getPlatform(_: *const Navigator) []const u8 {
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .macos => "MacIntel",
         .windows => "Win32",
         .linux => "Linux x86_64",
@@ -244,7 +244,7 @@ fn validateProtocolHandlerScheme(scheme: []const u8) !void {
 }
 
 fn validateProtocolHandlerURL(url: [:0]const u8, frame: *const Frame) !void {
-    if (std.mem.indexOf(u8, url, "%s") == null) {
+    if (std.mem.find(u8, url, "%s") == null) {
         return error.SyntaxError;
     }
     if (frame.isSameOrigin(url) == false) {

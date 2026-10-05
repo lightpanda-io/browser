@@ -151,7 +151,7 @@ test "expireImages keeps the newest images and annotates the rest" {
     const image = [_]zenai.provider.ContentPart{.{ .image = .{ .data = "AAAA", .mime_type = "image/png" } }};
     for (0..4) |n| {
         const results = try a.alloc(zenai.provider.ToolResult, 1);
-        results[0] = .{ .id = "c", .name = "screenshot", .content = try std.fmt.allocPrint(a, "shot {d}", .{n}), .parts = &image };
+        results[0] = .{ .id = "c", .name = "screenshot", .content = try a.print("shot {d}", .{n}), .parts = &image };
         try conv.messages.append(std.testing.allocator, .{ .role = .tool, .tool_results = results });
     }
 

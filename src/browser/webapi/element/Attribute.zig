@@ -71,9 +71,6 @@ pub fn setValue(self: *Attribute, data_: ?String, frame: *Frame) !void {
     };
     // this takes ownership of the data
     try el.setAttribute(self._name, data, frame);
-
-    // not the most efficient, but we don't expect this to be called often
-    self._value = (try el.getAttribute(self._name, frame)) orelse String.empty;
 }
 
 pub fn getNamespaceURI(_: *const Attribute) ?[]const u8 {
@@ -247,6 +244,16 @@ pub const List = struct {
             }
             e.setValue(try owner.dupeString(value.str()));
             entry = e;
+
+            // An Attr is the attribute itself, so one handed out earlier must
+            // see the new value. Every write to an existing entry lands here.
+            // putAttribute detaches the Attr it replaces before calling us:
+            // that one keeps its old value.
+            if (frame.page.attribute_lookup.get(.{ .list = self, .name = e._name_ptr })) |attr| {
+                if (attr._element != null) {
+                    attr._value = .wrap(e.value());
+                }
+            }
         } else {
             try self.ensureUnusedCapacity(1, owner);
             entry = &self._entries[self._len];
@@ -531,7 +538,7 @@ pub fn validateAttributeName(name: String) !void {
         return error.InvalidCharacterError;
     }
 
-    if (std.mem.indexOfAny(u8, name_str, invalid_name_chars) != null) {
+    if (std.mem.findAny(u8, name_str, invalid_name_chars) != null) {
         return error.InvalidCharacterError;
     }
 }
@@ -614,6 +621,10 @@ pub const NamedNodeMap = struct {
         return self.list().getAttribute(name, self._element, frame);
     }
 
+    fn getByNameNS(self: *const NamedNodeMap, namespace: ?[]const u8, local_name: String, frame: *Frame) !?*Attribute {
+        return self._element.getAttributeNodeNS(namespace, local_name, frame);
+    }
+
     pub fn set(self: *const NamedNodeMap, attribute: *Attribute, frame: *Frame) !?*Attribute {
         return self._element.setAttributeNode(attribute, frame);
     }
@@ -624,6 +635,10 @@ pub const NamedNodeMap = struct {
         const attr = (try self.getByName(name, frame)) orelse return null;
         try self.list().delete(name, self._element, frame);
         return attr;
+    }
+
+    fn removeByNameNS(self: *const NamedNodeMap, namespace: ?[]const u8, local_name: String, frame: *Frame) !?*Attribute {
+        return self.removeByName(try self._element.attributeNameNS(namespace, local_name, frame), frame);
     }
 
     pub fn iterator(self: *const NamedNodeMap, frame: *Frame) !*Iterator {
@@ -682,8 +697,12 @@ pub const NamedNodeMap = struct {
         }.wrap, .{ .null_as_undefined = true });
 
         pub const getNamedItem = bridge.function(NamedNodeMap.getByName, .{});
+        pub const getNamedItemNS = bridge.function(NamedNodeMap.getByNameNS, .{});
         pub const setNamedItem = bridge.function(NamedNodeMap.set, .{ .ce_reactions = true });
+        // Attributes don't carry a namespace, so this is setNamedItem.
+        pub const setNamedItemNS = bridge.function(NamedNodeMap.set, .{ .ce_reactions = true });
         pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{ .ce_reactions = true });
+        pub const removeNamedItemNS = bridge.function(NamedNodeMap.removeByNameNS, .{ .ce_reactions = true });
         pub const item = bridge.function(_item, .{});
         fn _item(self: *const NamedNodeMap, index: i32, frame: *Frame) !?*Attribute {
             // the bridge.indexed handles this, so if we want
@@ -714,7 +733,7 @@ fn formatAttribute(name: []const u8, value: []const u8, writer: *std.Io.Writer) 
     }
 
     try writer.writeByte('"');
-    const offset = std.mem.indexOfAny(u8, value, "`' &\"<>=") orelse {
+    const offset = std.mem.findAny(u8, value, "`' &\"<>=") orelse {
         try writer.writeAll(value);
         return writer.writeByte('"');
     };
@@ -770,7 +789,7 @@ fn writeEscapedAttributeValue(value: []const u8, first_offset: usize, writer: *s
     });
 
     var remaining = value[first_offset + 1 ..];
-    while (std.mem.indexOfAny(u8, remaining, "&\"<>")) |offset| {
+    while (std.mem.findAny(u8, remaining, "&\"<>")) |offset| {
         try writer.writeAll(remaining[0..offset]);
         try writer.writeAll(switch (remaining[offset]) {
             '&' => "&amp;",

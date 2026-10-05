@@ -32,13 +32,13 @@ pub const std_options: std.Options = .{
 
 pub fn main(init: std.process.Init) !void {
     // allocator
-    // - in Debug mode we use the General Purpose Allocator to detect memory leaks
+    // - in Debug mode we use the SafeAllocator to detect memory leaks
     // - in Release mode we use the c allocator
-    var gpa_instance: std.heap.DebugAllocator(.{ .stack_trace_frames = 10 }) = .init;
+    var gpa_instance: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{ .stack_trace_frames = 10 });
     const gpa = if (lp.IS_DEBUG) gpa_instance.allocator() else std.heap.c_allocator;
 
     defer if (lp.IS_DEBUG) {
-        if (gpa_instance.detectLeaks() != 0) std.process.exit(1);
+        if (gpa_instance.deinit() != 0) std.process.exit(1);
     };
 
     // arena for main-specific allocations

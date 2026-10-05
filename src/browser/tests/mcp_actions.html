@@ -61,7 +61,7 @@
 
         window.disabledEvents = [];
         const btnDisabled = document.getElementById('btnDisabled');
-        for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+        for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'contextmenu', 'auxclick']) {
             btnDisabled.addEventListener(t, function(e) { window.disabledEvents.push(e.type); });
         }
 
@@ -70,5 +70,7 @@
         document.getElementById('rad').addEventListener('click', function() { window.radClicked = true; });
         document.getElementById('rad').addEventListener('change', function() { window.radChanged = true; });
     </script>
+    <!-- Room to scroll the window -->
+    <div style="height: 10000px; width: 10000px"></div>
 </body>
 </html>

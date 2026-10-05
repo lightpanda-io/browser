@@ -107,7 +107,7 @@ pub fn onMessage(self: *const Driver, msg: *Inbox.Message) anyerror!void {
 pub fn onPing(self: *const Driver, body: []const u8) void {
     const l = self.link() orelse return;
     l.sendPong(body) catch |err| {
-        log.warn(self.scope, "pong", .{ .err = err });
+        log.debug(self.scope, "pong", .{ .err = err });
     };
 }
 
@@ -141,7 +141,7 @@ pub fn onHttp(self: *const Driver, command: http_command.Command) void {
 pub fn onClose(self: *const Driver) bool {
     if (self.link()) |l| {
         l.send(&WS.CLOSE_NORMAL) catch |err| {
-            log.warn(self.scope, "close reply", .{ .err = err });
+            log.debug(self.scope, "close reply", .{ .err = err });
         };
     }
     return self.onDisconnect(null);
@@ -152,7 +152,7 @@ pub fn onClose(self: *const Driver) bool {
 pub fn onQuit(self: *const Driver) void {
     if (self.link()) |l| {
         l.send(&WS.CLOSE_NORMAL) catch |err| {
-            log.warn(self.scope, "quit close", .{ .err = err });
+            log.debug(self.scope, "quit close", .{ .err = err });
         };
     }
     log.info(self.scope, "session ended", .{});
@@ -217,7 +217,7 @@ fn tick(self: *const Driver) !bool {
         // the close frame here can't interleave with another write.
         if (self.link()) |l| {
             l.send(&WS.CLOSE_GOING_AWAY) catch |err| {
-                log.warn(self.scope, "terminate close", .{ .err = err });
+                log.debug(self.scope, "terminate close", .{ .err = err });
             };
         }
         return false;

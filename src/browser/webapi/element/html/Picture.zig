@@ -68,7 +68,7 @@ pub fn childRemoved(parent: *Node, child: *Node, next_sibling: ?*Node, frame: *F
         return;
 
     result catch |err| {
-        log.warn(.frame, "picture child removed", .{ .err = err });
+        log.debug(.frame, "picture child removed", .{ .err = err });
     };
 }
 

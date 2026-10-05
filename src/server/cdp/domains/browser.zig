@@ -184,10 +184,10 @@ fn grantPermissions(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     if (params.origin) |v| {
-        log.warn(.not_implemented, "Browser.grantPermissions", .{ .param = "origin", .value = v });
+        log.debug(.not_implemented, "Browser.grantPermissions", .{ .param = "origin", .value = v });
     }
     if (params.browserContextId) |v| {
-        log.warn(.not_implemented, "Browser.grantPermissions", .{ .param = "browserContextId", .value = v });
+        log.debug(.not_implemented, "Browser.grantPermissions", .{ .param = "browserContextId", .value = v });
     }
 
     const browser = &cmd.cdp.browser;
@@ -209,10 +209,10 @@ fn setPermission(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     if (params.origin) |v| {
-        log.warn(.not_implemented, "Browser.setPermission", .{ .param = "origin", .value = v });
+        log.debug(.not_implemented, "Browser.setPermission", .{ .param = "origin", .value = v });
     }
     if (params.browserContextId) |v| {
-        log.warn(.not_implemented, "Browser.setPermission", .{ .param = "browserContextId", .value = v });
+        log.debug(.not_implemented, "Browser.setPermission", .{ .param = "browserContextId", .value = v });
     }
 
     const state = std.meta.stringToEnum(PermissionState, params.setting) orelse {

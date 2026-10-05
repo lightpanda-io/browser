@@ -197,7 +197,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
     const request = &transfer.req;
     // Update the request with the new parameters
     if (params.url) |url| {
-        request.url = try arena.dupeZ(u8, url);
+        request.url = try arena.dupeSentinel(u8, url, 0);
     }
     if (params.method) |method| {
         request.method = std.meta.stringToEnum(http.Method, method) orelse return error.InvalidParams;
@@ -262,8 +262,7 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
         // fails, release it. Scoped so the errdefer does NOT cover
         // continueTransfer (which owns its failures).
         errdefer transfer.abortAuthChallenge();
-        transfer.updateCredentials(try std.fmt.allocPrintSentinel(
-            transfer.arena.allocator(),
+        transfer.updateCredentials(try transfer.arena.allocator().printSentinel(
             "{s}:{s}",
             .{
                 params.authChallengeResponse.username,
@@ -290,7 +289,7 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     if (params.binaryResponseHeaders != null) {
-        log.warn(.not_implemented, "Fetch.fulfillRequest", .{ .param = "binaryResponseHeaders" });
+        log.debug(.not_implemented, "Fetch.fulfillRequest", .{ .param = "binaryResponseHeaders" });
         return error.NotImplemented;
     }
 
@@ -467,7 +466,7 @@ pub const InterceptState = struct {
         }
 
         if (has_response_stage) {
-            log.warn(.not_implemented, "Fetch.enable", .{ .params = "requestStage=Response" });
+            log.debug(.not_implemented, "Fetch.enable", .{ .params = "requestStage=Response" });
         }
 
         const owned = try self.allocator.alloc(Pattern, count);
@@ -668,8 +667,6 @@ test "cdp.Fetch: wildcardMatch" {
 }
 
 test "cdp.Fetch: InterceptState patterns" {
-    testing.expectLog(&.{.not_implemented});
-
     var state = try InterceptState.init(testing.allocator);
     defer state.deinit();
 

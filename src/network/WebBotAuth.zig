@@ -38,8 +38,8 @@ pub const Config = struct {
 fn parsePemPrivateKey(pem: []const u8) !*crypto.EVP_PKEY {
     const begin = "-----BEGIN PRIVATE KEY-----";
     const end = "-----END PRIVATE KEY-----";
-    const start_idx = std.mem.indexOf(u8, pem, begin) orelse return error.InvalidPem;
-    const end_idx = std.mem.indexOf(u8, pem, end) orelse return error.InvalidPem;
+    const start_idx = std.mem.find(u8, pem, begin) orelse return error.InvalidPem;
+    const end_idx = std.mem.find(u8, pem, end) orelse return error.InvalidPem;
 
     const b64 = std.mem.trim(u8, pem[start_idx + begin.len .. end_idx], &std.ascii.whitespace);
 
@@ -73,8 +73,7 @@ pub fn fromConfig(allocator: std.mem.Allocator, config: *const Config) !WebBotAu
     const pkey = try parsePemPrivateKey(pem);
     errdefer crypto.EVP_PKEY_free(pkey);
 
-    const directory_url = try std.fmt.allocPrintSentinel(
-        allocator,
+    const directory_url = try allocator.printSentinel(
         "https://{s}/.well-known/http-message-signatures-directory",
         .{config.domain},
         0,
@@ -99,15 +98,13 @@ pub fn signRequest(
     const expires = now + 60;
 
     // build the signature-input value (without the sig1= label)
-    const sig_input_value = try std.fmt.allocPrint(
-        arena,
+    const sig_input_value = try arena.print(
         "(\"@authority\" \"signature-agent\");created={d};expires={d};keyid=\"{s}\";alg=\"ed25519\";tag=\"web-bot-auth\"",
         .{ now, expires, self.keyid },
     );
 
     // build the canonical string to sign
-    const canonical = try std.fmt.allocPrint(
-        arena,
+    const canonical = try arena.print(
         "\"@authority\": {s}\n\"signature-agent\": \"{s}\"\n\"@signature-params\": {s}",
         .{ authority, self.directory_url, sig_input_value },
     );
@@ -121,9 +118,9 @@ pub fn signRequest(
     const encoded = try arena.alloc(u8, encoded_len);
     _ = std.base64.standard.Encoder.encode(encoded, &sig);
 
-    try transfer.setHeader("Signature-Agent", try std.fmt.allocPrint(arena, "\"{s}\"", .{self.directory_url}), .{});
-    try transfer.setHeader("Signature-Input", try std.fmt.allocPrint(arena, "sig1={s}", .{sig_input_value}), .{});
-    try transfer.setHeader("Signature", try std.fmt.allocPrint(arena, "sig1=:{s}:", .{encoded}), .{});
+    try transfer.setHeader("Signature-Agent", try arena.print("\"{s}\"", .{self.directory_url}), .{});
+    try transfer.setHeader("Signature-Input", try arena.print("sig1={s}", .{sig_input_value}), .{});
+    try transfer.setHeader("Signature", try arena.print("sig1=:{s}:", .{encoded}), .{});
 }
 
 pub fn deinit(self: WebBotAuth, allocator: std.mem.Allocator) void {
@@ -221,9 +218,10 @@ test "signRequest: adds headers with correct names" {
     ;
     const pkey = try parsePemPrivateKey(pem);
 
-    const directory_url = try allocator.dupeZ(
+    const directory_url = try allocator.dupeSentinel(
         u8,
         "https://example.com/.well-known/http-message-signatures-directory",
+        0,
     );
 
     var auth = WebBotAuth{

@@ -52,6 +52,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const lp = @import("lightpanda");
+const repeat = @import("../../string.zig").repeat;
 
 const HostnameTrie = @This();
 
@@ -365,7 +366,7 @@ test "adblock.HostnameTrie: hostnames longer than one segment" {
     const root = try trie.createTrie(testing.allocator);
 
     // 191 bytes: the leaf spans two chained segments (127 + 64).
-    const long = "a" ** 63 ++ "." ++ "b" ** 63 ++ "." ++ "c" ** 63;
+    const long = repeat("a", 63) ++ "." ++ repeat("b", 63) ++ "." ++ repeat("c", 63);
     try trie.add(testing.allocator, root, long);
     const cells_len = trie.cells.items.len;
     try trie.add(testing.allocator, root, long); // duplicate multi-segment entry: no-op
@@ -373,7 +374,7 @@ test "adblock.HostnameTrie: hostnames longer than one segment" {
     try testing.expectEqual(0, trie.matches(root, long).?);
     try testing.expectEqual(2, trie.matches(root, "x." ++ long).?);
     // A suffix of the stored hostname is not an entry.
-    try testing.expectEqual(null, trie.matches(root, "b" ** 63 ++ "." ++ "c" ** 63));
+    try testing.expectEqual(null, trie.matches(root, repeat("b", 63) ++ "." ++ repeat("c", 63)));
 }
 
 test "adblock.HostnameTrie: stored deeper than query" {

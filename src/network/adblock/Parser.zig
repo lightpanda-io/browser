@@ -145,7 +145,7 @@ const LineClass = enum {
         }
 
         if (line[0] == '|' or std.mem.startsWith(u8, line, "@@|")) return .network;
-        if (std.mem.indexOf(u8, line, "$$") != null) return .unsupported;
+        if (std.mem.find(u8, line, "$$") != null) return .unsupported;
         return .network;
     }
 };

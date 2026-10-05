@@ -274,7 +274,7 @@ pub fn parse(arena: std.mem.Allocator, line: []const u8) ParseError!NetworkFilte
         try filter.parseOptions(arena, options, &explicit_types);
     }
 
-    if (std.mem.indexOfAny(u8, split.pattern, &std.ascii.whitespace) != null) {
+    if (std.mem.findAny(u8, split.pattern, &std.ascii.whitespace) != null) {
         // Whitespace only occurs in hosts-file style lines; anywhere else it
         // is malformed.
         if (filter.exception or split.options != null) return error.InvalidPattern;
@@ -306,9 +306,9 @@ inline fn isRegexLiteral(text: []const u8) bool {
 /// "##", "#@#", "#?#", "#$#", "#%#" and their combinations, like "#@$?#".
 fn hasCosmeticSeparator(text: []const u8) bool {
     var start: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, text, start, '#')) |pos| {
+    while (std.mem.findScalarPos(u8, text, start, '#')) |pos| {
         var i = pos + 1;
-        while (i < text.len and std.mem.indexOfScalar(u8, "@$?%", text[i]) != null) i += 1;
+        while (i < text.len and std.mem.findScalar(u8, "@$?%", text[i]) != null) i += 1;
         if (i < text.len and text[i] == '#') return true;
         start = pos + 1;
     }
@@ -318,7 +318,7 @@ fn hasCosmeticSeparator(text: []const u8) bool {
 /// uBO allows a trailing "  # comment" on lines containing whitespace.
 fn stripInlineComment(line: []const u8) []const u8 {
     var start: usize = 1;
-    while (std.mem.indexOfScalarPos(u8, line, start, '#')) |pos| {
+    while (std.mem.findScalarPos(u8, line, start, '#')) |pos| {
         if (std.ascii.isWhitespace(line[pos - 1])) {
             return std.mem.trimEnd(u8, line[0..pos], &std.ascii.whitespace);
         }
@@ -334,7 +334,7 @@ const OptionsSplit = struct {
 
 fn splitOptions(line: []const u8) OptionsSplit {
     var search = line;
-    while (std.mem.lastIndexOfScalar(u8, search, '$')) |pos| {
+    while (std.mem.findScalarLast(u8, search, '$')) |pos| {
         const suffix = line[pos + 1 ..];
         if (isOptionListStart(suffix)) {
             return .{ .pattern = line[0..pos], .options = suffix };
@@ -387,7 +387,7 @@ fn parseOptions(
         }
 
         var value: ?[]const u8 = null;
-        if (std.mem.indexOfScalar(u8, body, '=')) |eq| {
+        if (std.mem.findScalar(u8, body, '=')) |eq| {
             value = body[eq + 1 ..];
             body = body[0..eq];
         }
@@ -595,7 +595,7 @@ fn parsePattern(
         return;
     }
 
-    if (std.mem.indexOfScalar(u8, raw, '#') != null) return error.UnsupportedPattern;
+    if (std.mem.findScalar(u8, raw, '#') != null) return error.UnsupportedPattern;
 
     var pattern = raw;
     if (std.mem.startsWith(u8, pattern, "||")) {
@@ -615,7 +615,7 @@ fn parsePattern(
 
     // Trim pointless wildcards touching the (now removed) ends. A wildcard bordering
     // a short word stays; which is what keeps the word a substring rather than a hostname.
-    const stars = std.mem.indexOfNone(u8, pattern, "*") orelse pattern.len;
+    const stars = std.mem.findNone(u8, pattern, "*") orelse pattern.len;
     if (stars > 0 and (stars == pattern.len or !isPatternWordChar(pattern[stars]))) {
         pattern = pattern[stars..];
         self.left_anchor = false;
@@ -637,8 +637,8 @@ fn parsePattern(
     pattern = try domain.lowered(arena, pattern);
 
     if (self.hostname_anchor) {
-        const host_end = std.mem.indexOfAny(u8, pattern, "/^") orelse pattern.len;
-        if (std.mem.indexOfScalar(u8, pattern[0..host_end], '*') != null) {
+        const host_end = std.mem.findAny(u8, pattern, "/^") orelse pattern.len;
+        if (std.mem.findScalar(u8, pattern[0..host_end], '*') != null) {
             // Wildcard inside the hostname region (`||example.*/ads`):
             // no hostname split, the whole thing is a generic pattern.
             self.kind = .wildcard;
@@ -658,7 +658,7 @@ fn parsePattern(
             self.kind = .hostname;
             self.require_separator = true;
         } else {
-            self.kind = if (std.mem.indexOfAny(u8, remainder, "*^") != null) .wildcard else .plain;
+            self.kind = if (std.mem.findAny(u8, remainder, "*^") != null) .wildcard else .plain;
             self.pattern = remainder;
         }
         return;
@@ -679,7 +679,7 @@ fn parsePattern(
         return error.InvalidPattern;
     }
 
-    self.kind = if (std.mem.indexOfAny(u8, pattern, "*^") != null) .wildcard else .plain;
+    self.kind = if (std.mem.findAny(u8, pattern, "*^") != null) .wildcard else .plain;
     self.pattern = pattern;
 }
 
@@ -713,7 +713,7 @@ fn isHostnameShaped(s: []const u8) bool {
     }
     if (last.len < 2) return false;
     if (!std.ascii.isAlphanumeric(last[last.len - 1])) return false;
-    if (std.mem.indexOfScalar(u8, last, '_') != null) return false;
+    if (std.mem.findScalar(u8, last, '_') != null) return false;
     return true;
 }
 

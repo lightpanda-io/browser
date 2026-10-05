@@ -496,9 +496,9 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
 
             if (s.is_tuple) {
                 // return the tuple struct as an array
-                var js_arr = self.newArray(@intCast(s.fields.len));
-                inline for (s.fields, 0..) |f, i| {
-                    if (try js_arr.set(@intCast(i), @field(value, f.name), opts) == false) {
+                var js_arr = self.newArray(@intCast(s.field_names.len));
+                inline for (s.field_names, 0..) |field_name, i| {
+                    if (try js_arr.set(@intCast(i), @field(value, field_name), opts) == false) {
                         return error.FailedToCreateArray;
                     }
                 }
@@ -506,8 +506,8 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
             }
 
             const js_obj = self.newObject();
-            inline for (s.fields) |f| {
-                if (try js_obj.set(f.name, @field(value, f.name), opts) == false) {
+            inline for (s.field_names) |field_name| {
+                if (try js_obj.set(field_name, @field(value, field_name), opts) == false) {
                     return error.CreateObjectFailure;
                 }
             }
@@ -518,9 +518,9 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                 return self.zigJsonToJs(value);
             }
             if (un.tag_type) |UnionTagType| {
-                inline for (un.fields) |field| {
-                    if (value == @field(UnionTagType, field.name)) {
-                        return self.zigValueToJs(@field(value, field.name), opts);
+                inline for (un.field_names) |field_name| {
+                    if (value == @field(UnionTagType, field_name)) {
+                        return self.zigValueToJs(@field(value, field_name), opts);
                     }
                 }
                 unreachable;
@@ -695,13 +695,13 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
             // compatible with. A compatible field has higher precedence
             // than a coercible, but still isn't a perfect match.
             var compatible_index: ?usize = null;
-            inline for (u.fields, 0..) |field, i| {
-                switch (try self.probeJsValueToZig(field.type, js_val)) {
-                    .value => |v| return @unionInit(T, field.name, v),
+            inline for (u.field_names, u.field_types, 0..) |field_name, field_type, i| {
+                switch (try self.probeJsValueToZig(field_type, js_val)) {
+                    .value => |v| return @unionInit(T, field_name, v),
                     .ok => {
                         // a perfect match like above case, except the probing
                         // didn't get the value for us.
-                        return @unionInit(T, field.name, try self.jsValueToZig(field.type, js_val));
+                        return @unionInit(T, field_name, try self.jsValueToZig(field_type, js_val));
                     },
                     .coerce => if (coerce_index == null) {
                         coerce_index = i;
@@ -715,9 +715,9 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
 
             // We didn't find a perfect match.
             const closest = compatible_index orelse coerce_index orelse return error.InvalidArgument;
-            inline for (u.fields, 0..) |field, i| {
+            inline for (u.field_names, u.field_types, 0..) |field_name, field_type, i| {
                 if (i == closest) {
-                    return @unionInit(T, field.name, try self.jsValueToZig(field.type, js_val));
+                    return @unionInit(T, field_name, try self.jsValueToZig(field_type, js_val));
                 }
             }
             unreachable;
@@ -767,11 +767,20 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
         js.TypedArray(f32), js.TypedArray(f64),
         // zig fmt: on
         => {
-            const ValueType = @typeInfo(std.meta.fieldInfo(T, .values).type).pointer.child;
+            const ValueType = @typeInfo(@FieldType(T, "values")).pointer.child;
             const arr = (try jsValueToTypedArray(ValueType, js_val)) orelse return null;
             return .{ .values = arr };
         },
         js.BufferSource => {
+            if (v8.v8__Value__IsSharedArrayBuffer(js_val.handle)) {
+                return error.TypeError;
+            }
+            if (js_val.isArrayBufferView()) {
+                const view: *const v8.ArrayBufferView = @ptrCast(js_val.handle);
+                if (js.arrayBufferIsShared(v8.v8__ArrayBufferView__Buffer(view).?)) {
+                    return error.TypeError;
+                }
+            }
             const bytes = (try jsValueToArrayBufferSlice(u8, true, js_val)) orelse return null;
             return .{ .bytes = bytes };
         },
@@ -837,27 +846,27 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             const js_obj = js_val.toObject();
 
             var value: T = undefined;
-            inline for (@typeInfo(T).@"struct".fields) |field| {
-                if (comptime std.mem.eql(u8, field.name, dictionary_group_marker)) {
+            const info = @typeInfo(T).@"struct";
+            inline for (info.field_names, info.field_types, info.field_attrs) |name, FieldType, attrs| {
+                if (comptime std.mem.eql(u8, name, dictionary_group_marker)) {
                     continue;
                 }
-                const name = field.name;
                 const key = isolate.initStringHandle(name);
                 if (js_obj.has(key)) {
                     const member = try js_obj.get(key);
-                    const default_for_undefined = comptime field.defaultValue();
+                    const default_for_undefined = comptime attrs.defaultValue(FieldType);
                     @field(value, name) = blk: {
                         if (comptime default_for_undefined) |dflt| {
                             if (member.isUndefined()) {
                                 break :blk dflt;
                             }
                         }
-                        break :blk try self.jsValueToZig(field.type, member);
+                        break :blk try self.jsValueToZig(FieldType, member);
                     };
-                } else if (@typeInfo(field.type) == .optional) {
+                } else if (@typeInfo(FieldType) == .optional) {
                     @field(value, name) = null;
                 } else {
-                    const dflt = field.defaultValue() orelse return null;
+                    const dflt = attrs.defaultValue(FieldType) orelse return null;
                     @field(value, name) = dflt;
                 }
             }
@@ -874,10 +883,10 @@ pub const dictionary_group_marker = "js_grouped_dictionary";
 // fire in a predictable order. Could probably comptime this to work
 // automatically, but it's a lot easier just to check it and ask for a manual fix.
 pub fn assertDictionaryFieldOrder(comptime T: type) void {
-    const fields = @typeInfo(T).@"struct".fields;
+    const field_names = @typeInfo(T).@"struct".field_names;
     var i: usize = 1;
-    while (i < fields.len) : (i += 1) {
-        if (std.mem.order(u8, fields[i - 1].name, fields[i].name) == .gt) {
+    while (i < field_names.len) : (i += 1) {
+        if (std.mem.order(u8, field_names[i - 1], field_names[i]) == .gt) {
             @compileError("dictionary fields must be declared in lexicographic order: " ++ @typeName(T));
         }
     }
@@ -1341,17 +1350,17 @@ fn resolveValue(value: anytype) Resolved {
     }
 
     const U = @typeInfo(@TypeOf(value._type)).@"union";
-    inline for (U.fields) |field| {
-        if (value._type == @field(U.tag_type.?, field.name)) {
-            const child = switch (@typeInfo(field.type)) {
-                .pointer => @field(value._type, field.name),
-                .@"struct" => &@field(value._type, field.name),
+    inline for (U.field_names, U.field_types) |field_name, field_type| {
+        if (value._type == @field(U.tag_type.?, field_name)) {
+            const child = switch (@typeInfo(field_type)) {
+                .pointer => @field(value._type, field_name),
+                .@"struct" => &@field(value._type, field_name),
                 .void => {
                     // Unusual case, but the Event (and maybe others) can be
                     // returned as-is. In that case, it has a dummy void type.
                     return resolveT(T, value);
                 },
-                else => @compileError(@typeName(field.type) ++ " has an unsupported _type field"),
+                else => @compileError(@typeName(field_type) ++ " has an unsupported _type field"),
             };
             return resolveValue(child);
         }
@@ -1366,7 +1375,7 @@ fn resolveT(comptime T: type, value: *T) Resolved {
     const Meta = T.JsApi.Meta;
     return .{
         .ptr = value,
-        .class_id = Meta.class_id,
+        .class_id = if (@hasDecl(Meta, "wrap_as")) Meta.wrap_as.Meta.class_id else Meta.class_id,
         .prototype_chain = &Meta.prototype_chain,
         .finalizer = blk: {
             const FT = (comptime findFinalizerType(T)) orelse break :blk null;
@@ -1497,15 +1506,7 @@ fn finalizerPtrGetter(comptime T: type, comptime FT: type) *const fn (*T) *FT {
 pub fn stackTrace(self: *const Local) !?[]const u8 {
     const isolate = self.isolate.handle;
     const stack_handle = v8.v8__StackTrace__CurrentStackTrace__STATIC(isolate, 30) orelse return null;
-
-    const separator = log.separator();
-
     var buf = std.Io.Writer.Allocating.init(self.call_arena);
-    if (v8.v8__StackTrace__CurrentScriptNameOrSourceURL__STATIC(isolate)) |script| {
-        const stack = js.String{ .local = self, .handle = script };
-        try buf.writer.print("{s}<{f}>", .{ separator, stack });
-    }
-
     try js.writeStackTrace(isolate, stack_handle, &buf.writer);
     return buf.written();
 }
@@ -1572,8 +1573,8 @@ pub fn ToLocalReturnType(comptime T: type) type {
     if (@typeInfo(T) == .optional) {
         const GlobalType = @typeInfo(T).optional.child;
         const struct_info = @typeInfo(GlobalType).@"struct";
-        inline for (struct_info.decls) |decl| {
-            if (std.mem.eql(u8, decl.name, "local")) {
+        inline for (struct_info.decl_names) |decl_name| {
+            if (std.mem.eql(u8, decl_name, "local")) {
                 const Fn = @TypeOf(@field(GlobalType, "local"));
                 const fn_info = @typeInfo(Fn).@"fn";
                 return ?fn_info.return_type.?;
@@ -1582,8 +1583,8 @@ pub fn ToLocalReturnType(comptime T: type) type {
         @compileError("Type does not have local method");
     } else {
         const struct_info = @typeInfo(T).@"struct";
-        inline for (struct_info.decls) |decl| {
-            if (std.mem.eql(u8, decl.name, "local")) {
+        inline for (struct_info.decl_names) |decl_name| {
+            if (std.mem.eql(u8, decl_name, "local")) {
                 const Fn = @TypeOf(@field(T, "local"));
                 const fn_info = @typeInfo(Fn).@"fn";
                 return fn_info.return_type.?;
@@ -1642,8 +1643,10 @@ fn createFinalizerCallback(
 pub const Scope = struct {
     local: Local,
     handle_scope: js.HandleScope,
+    page_scope: log.PageScope,
 
     pub fn deinit(self: *Scope) void {
+        self.page_scope.exit();
         v8.v8__Context__Exit(self.local.handle);
         self.handle_scope.deinit();
     }

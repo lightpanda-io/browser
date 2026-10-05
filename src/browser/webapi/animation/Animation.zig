@@ -125,13 +125,13 @@ pub fn finish(self: *Animation, frame: *Frame) void {
     // call onfinish
     if (self._onFinish) |func| {
         frame.js.local.?.toLocal(func).call(void, .{}) catch |err| {
-            log.warn(.js, "Animation._onFinish", .{ .err = err });
+            log.debug(.js, "Animation._onFinish", .{ .err = err });
         };
     }
 }
 
 pub fn reverse(_: *Animation) void {
-    log.warn(.not_implemented, "Animation.reverse", .{});
+    log.debug(.not_implemented, "Animation.reverse", .{});
 }
 
 pub fn getFinished(self: *Animation, frame: *Frame) !js.Promise {
@@ -209,7 +209,7 @@ fn update(ctx: *anyopaque) !?u32 {
             // call onfinish
             if (self._onFinish) |func| {
                 ls.toLocal(func).call(void, .{}) catch |err| {
-                    log.warn(.js, "Animation._onFinish", .{ .err = err });
+                    log.debug(.js, "Animation._onFinish", .{ .err = err });
                 };
             }
         },

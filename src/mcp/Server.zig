@@ -147,7 +147,7 @@ pub fn useSession(self: *Self, id: ?[]const u8) !*lp.ToolSession {
 pub fn nextSessionId(self: *Self, arena: std.mem.Allocator) ![]const u8 {
     while (true) {
         self.session_seq += 1;
-        const candidate = try std.fmt.allocPrint(arena, "s{d}", .{self.session_seq});
+        const candidate = try arena.print("s{d}", .{self.session_seq});
         if (!self.sessions.contains(candidate)) return candidate;
     }
 }

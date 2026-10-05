@@ -202,7 +202,7 @@ const OpenContext = struct {
         }) catch |err| {
             // We were handed the gate; if we can't reschedule, hand it off so the
             // waiters behind us aren't stranded.
-            log.warn(.storage, "idb resume open", .{ .err = err });
+            log.debug(.storage, "idb resume open", .{ .err = err });
             if (self.resolveEngine()) |engine| _ = engine.releaseGate(&self._gate_waiter) else |_| {}
             self.exec._factory.destroy(self);
         };
@@ -377,7 +377,7 @@ const DeleteContext = struct {
         }) catch |err| {
             // We were handed the gate; if we can't reschedule, hand it off so the
             // waiters behind us aren't stranded.
-            log.warn(.storage, "idb resume delete", .{ .err = err });
+            log.debug(.storage, "idb resume delete", .{ .err = err });
             if (self.resolveEngine()) |engine| _ = engine.releaseGate(&self._gate_waiter) else |_| {}
             self.exec._factory.destroy(self);
         };

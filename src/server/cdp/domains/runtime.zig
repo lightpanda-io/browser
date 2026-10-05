@@ -21,6 +21,7 @@ const std = @import("std");
 const CDP = @import("../CDP.zig");
 const js = @import("../../../browser/js/js.zig");
 const Notification = @import("../../../Notification.zig");
+const repeat = @import("../../../string.zig").repeat;
 
 const Allocator = std.mem.Allocator;
 
@@ -114,7 +115,7 @@ const RemoteObject = struct {
                 self.value = .{ .float = n };
             }
         } else if (value.isBigInt()) {
-            self.unserializableValue = try std.fmt.allocPrint(arena, "{s}n", .{try value.toStringSliceWithAlloc(arena)});
+            self.unserializableValue = try arena.print("{s}n", .{try value.toStringSliceWithAlloc(arena)});
         }
     }
 };
@@ -344,7 +345,7 @@ test "cdp.runtime: console notifications run no page JS" {
         \\console.log('head-marker', probe, 'tail-marker-'.repeat(20));
     , null);
 
-    const tail = "tail-marker-" ** 20;
+    const tail = repeat("tail-marker-", 20);
     try ctx.expectSentEvent("Console.messageAdded", .{ .level = "log", .text = "head-marker [object Object] " ++ tail }, .{});
     try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "log", .args = .{ .{ .type = "string", .value = "head-marker" }, .{ .type = "object", .className = "Object" }, .{ .type = "string", .value = tail } } }, .{});
     const probed = try ls.local.exec("globalThis.probed", null);

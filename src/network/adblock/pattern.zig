@@ -45,7 +45,7 @@ pub const Url = struct {
     /// resume the pattern right where the hostname stops.
     pub fn init(url: []const u8, raw: []const u8) Url {
         var start: usize = 0;
-        if (std.mem.indexOf(u8, url, "://")) |scheme| start = scheme + 3;
+        if (std.mem.find(u8, url, "://")) |scheme| start = scheme + 3;
 
         var end = url.len;
         for (url[start..], start..) |c, i| {
@@ -59,7 +59,7 @@ pub const Url = struct {
         }
 
         // "user:password@host"
-        if (std.mem.lastIndexOfScalar(u8, url[start..end], '@')) |at| {
+        if (std.mem.findScalarLast(u8, url[start..end], '@')) |at| {
             start += at + 1;
         }
 
@@ -68,10 +68,10 @@ pub const Url = struct {
         const host = url[start..end];
         var host_end = end;
         if (host.len > 0 and host[0] == '[') {
-            if (std.mem.indexOfScalar(u8, host, ']')) |close| {
+            if (std.mem.findScalar(u8, host, ']')) |close| {
                 host_end = start + close + 1;
             }
-        } else if (std.mem.indexOfScalar(u8, host, ':')) |colon| {
+        } else if (std.mem.findScalar(u8, host, ':')) |colon| {
             host_end = start + colon;
         }
 
@@ -124,7 +124,7 @@ pub fn matches(filter: *const NetworkFilter, url: Url) bool {
         var i: usize = url.host_start;
         while (true) {
             if (matchFrom(filter, url.text, i, filter.right_anchor)) return true;
-            const dot = std.mem.indexOfScalarPos(u8, url.text[0..url.host_end], i, '.') orelse
+            const dot = std.mem.findScalarPos(u8, url.text[0..url.host_end], i, '.') orelse
                 return false;
             i = dot + 1;
         }
@@ -135,7 +135,7 @@ pub fn matches(filter: *const NetworkFilter, url: Url) bool {
     }
     if (filter.kind == .plain) {
         if (filter.right_anchor) return std.mem.endsWith(u8, url.text, filter.pattern);
-        return std.mem.indexOf(u8, url.text, filter.pattern) != null;
+        return std.mem.find(u8, url.text, filter.pattern) != null;
     }
 
     var i: usize = 0;
@@ -157,7 +157,7 @@ fn hostAnchor(url: Url, needle: []const u8, from: usize) ?usize {
                 return url.host_start + p + needle.len;
             }
         }
-        const dot = std.mem.indexOfScalarPos(u8, host, p, '.') orelse return null;
+        const dot = std.mem.findScalarPos(u8, host, p, '.') orelse return null;
         p = dot + 1;
     }
     return null;

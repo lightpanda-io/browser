@@ -368,6 +368,12 @@
   }
 </script>
 
+<script id=array_buffer_max_length>
+  // Past the cap; at 32GB+, V8 used to abort the process on a CHECK.
+  testing.expectError('RangeError', () => new ArrayBuffer(4 * 1024 ** 3 + 1));
+  testing.expectError('RangeError', () => new ArrayBuffer(8, { maxByteLength: 4 * 1024 ** 3 + 1 }));
+</script>
+
 <script id=cached_getter_wrong_this>
   // Test that extracting a cached property getter and calling it with wrong `this`
   // doesn't crash (V8 internal field out of bounds). V8's Signature validation

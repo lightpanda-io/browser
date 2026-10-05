@@ -4,7 +4,7 @@
 #
 # usage: orderfile/tools/regen.sh [zig build args...]
 #   The build args are those of the release build minus -Dorderfile, e.g.
-#   -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin -Dcpu=x86_64
+#   -Doptimize=fast -Dsnapshot_path=../../snapshot.bin -Dcpu=x86_64
 #
 # Needs root (sudo) for /sys/kernel/debug/fault_around_bytes, a checkout of
 # lightpanda-io/demo (DEMO_DIR, npm install done), node, go, python3 and
