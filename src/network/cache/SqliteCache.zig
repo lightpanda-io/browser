@@ -108,8 +108,7 @@ pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u3
                 return e;
             };
 
-            const full_path = try std.fmt.allocPrintSentinel(
-                allocator,
+            const full_path = try allocator.printSentinel(
                 "{s}/cache.db",
                 .{std.mem.trimEnd(u8, cache_dir, &.{'/'})},
                 0,
@@ -1004,7 +1003,7 @@ test "SqliteCache: expired purge uses the cache_expiry index" {
     defer plan.deinit();
 
     const detail = plan.get([]const u8, 3);
-    if (std.mem.indexOf(u8, detail, "cache_expiry") == null) {
+    if (std.mem.find(u8, detail, "cache_expiry") == null) {
         std.debug.print("query plan: {s}\n", .{detail});
         return error.FullTableScan;
     }

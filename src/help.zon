@@ -135,7 +135,8 @@
     \\                        (which may itself fall back to a full dump).
     \\              css       Includes style and link[rel=stylesheet].
     \\              js        Script and link[as=script, rel=preload].
-    \\              invisible Best-effort (e.g. display:none) hidden elements
+    \\              invisible Best-effort hidden elements (e.g. display:none,
+    \\                        <template>).
     \\              shell     Page chrome by markup: nav, aside, dialog,
     \\                        page-level header and footer. Full dump when
     \\                        `shell` would remove most of the text.
@@ -422,14 +423,15 @@
     \\  --cors-store-entry-limit <INT>
     \\          Maximum number of entries kept in the CorsStore. 0 means no limit.
     \\          Defaults to 1000.
+    \\  --disable-features <FEATURE>
+    \\          Disable a feature that is on by default. Can be passed multiple times.
+    \\          Defaults to none disabled.
+    \\          Allowed values:
+    \\             cors        Skip CORS checks on fetch/XHR requests.
     \\  --experimental-features <FEATURE>
     \\          Enable an experimental, unstable feature. Can be passed multiple times.
     \\          Behavior may change or be removed without notice.
     \\          Defaults to none enabled.
-    \\          Allowed values:
-    \\              cors      Obey CORS (cross-origin resource sharing) checks
-    \\                        on fetch/XHR requests instead of allowing them
-    \\                        unconditionally.
     \\  --load-resources <RESOURCE>
     \\          Sub-resource to actually request. Can be passed multiple times.
     \\          Defaults to requesting none of them.

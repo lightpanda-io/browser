@@ -128,7 +128,7 @@ fn abortZigError(self: *WasmStreaming, local: *const js.Local, err: anyerror) vo
             env.error_message = null;
         },
         else => {
-            log.err(.js, "wasm streaming", .{ .err = err });
+            log.debug(.js, "wasm streaming", .{ .err = err });
             self.abort(local.isolate.createError(@errorName(err)));
         },
     }
@@ -144,7 +144,7 @@ pub fn abort(self: *WasmStreaming, exception: ?*const v8.Value) void {
 fn release(self: *WasmStreaming) void {
     v8.std__shared_ptr__v8__WasmStreaming__reset(&self.handle);
     const streams = &self.ctx.wasm_streams;
-    if (std.mem.indexOfScalar(*WasmStreaming, streams.items, self)) |i| {
+    if (std.mem.findScalar(*WasmStreaming, streams.items, self)) |i| {
         _ = streams.swapRemove(i);
     }
 }

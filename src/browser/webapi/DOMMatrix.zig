@@ -206,7 +206,7 @@ fn invertSelf(self: *DOMMatrix) !*DOMMatrix {
     if (RO.invertMatrix(state.matrix)) |v| {
         state.matrix = v;
     } else {
-        state.matrix = .{std.math.nan(f64)} ** 16;
+        state.matrix = @splat(std.math.nan(f64));
         state.is_2d = false;
     }
     return self.applyState(state);

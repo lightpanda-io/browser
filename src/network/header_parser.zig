@@ -477,8 +477,8 @@ pub fn parseDisposition(value: []const u8) !Disposition {
 
         // An unquoted value cannot contain a `;`, so the next one (or the end
         // of the header) bounds this parameter when it has to be skipped.
-        const semi = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
-        const eq = std.mem.indexOfScalar(u8, rest, '=') orelse rest.len;
+        const semi = std.mem.findScalar(u8, rest, ';') orelse rest.len;
+        const eq = std.mem.findScalar(u8, rest, '=') orelse rest.len;
         if (eq >= semi) {
             // No `=` in this parameter; skip it.
             rest = rest[semi..];
@@ -492,7 +492,7 @@ pub fn parseDisposition(value: []const u8) !Disposition {
             rest = rest[semi..];
             continue;
         }
-        const end = std.mem.indexOfScalarPos(u8, after_eq, 1, '"') orelse {
+        const end = std.mem.findScalarPos(u8, after_eq, 1, '"') orelse {
             // Unterminated quoted value; ignore the rest of the header.
             return disposition;
         };

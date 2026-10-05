@@ -576,6 +576,21 @@
   }
 </script>
 
+<script id="worker_reports_callback_exceptions" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./report-error-worker.js');
+    worker.onmessage = (e) => state.resolve(e.data);
+    worker.postMessage('throw');
+
+    await state.done((data) => {
+      testing.expectEqual('listener,onmessage,reentrant,setTimeout', data.seen.join(','));
+      testing.expectEqual(1, data.reentrant);
+      worker.terminate();
+    });
+  }
+</script>
+
 <script id="worker_missing_script_fires_error" type=module>
   // A non-2xx script response is a load failure, and must keep firing the
   // error event: it travels the same error callback as a cancellation.

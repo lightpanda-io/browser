@@ -116,7 +116,7 @@ pub fn start(self: *MessagePort) void {
 
     for (self._pending.items) |message| {
         self.scheduleDelivery(message) catch |err| {
-            log.warn(.dom, "MessagePort.start drain", .{ .err = err });
+            log.debug(.dom, "MessagePort.start drain", .{ .err = err });
             message.release();
         };
     }
@@ -219,12 +219,12 @@ const DeliverCallback = struct {
             .source = null,
         }, exec.page) catch |err| {
             self.message.release();
-            log.err(.dom, "MessagePort.postMessage", .{ .err = err });
+            log.debug(.dom, "MessagePort.postMessage", .{ .err = err });
             return null;
         }).asEvent();
 
         exec.dispatch(target, event, port._on_message, .{ .context = "MessagePort message" }) catch |err| {
-            log.err(.dom, "MessagePort.postMessage", .{ .err = err });
+            log.debug(.dom, "MessagePort.postMessage", .{ .err = err });
         };
 
         return null;

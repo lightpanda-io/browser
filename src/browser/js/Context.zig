@@ -158,13 +158,14 @@ fn fromC(c_context: *const v8.Context) ?*Context {
 /// falls back to the incumbent context (the calling context).
 /// Returns null if neither context has a valid Context struct (both were destroyed).
 pub fn fromIsolate(isolate: js.Isolate) ?struct { *Context, *const v8.Context } {
-    const v8_context = v8.v8__Isolate__GetCurrentContext(isolate.handle).?;
+    const v8_context = v8.v8__Isolate__GetCurrentContext(isolate.handle) orelse return null;
     if (fromC(v8_context)) |ctx| {
         return .{ ctx, v8_context };
     }
+
     // The current context's Context struct has been freed (e.g., iframe navigated away).
     // Fall back to the incumbent context (the calling context).
-    const v8_incumbent = v8.v8__Isolate__GetIncumbentContext(isolate.handle).?;
+    const v8_incumbent = v8.v8__Isolate__GetIncumbentContext(isolate.handle) orelse return null;
     const ctx = fromC(v8_incumbent) orelse return null;
     return .{ ctx, v8_incumbent };
 }
@@ -288,6 +289,7 @@ pub fn localScope(self: *Context, ls: *js.Local.Scope) void {
         .handle = local_v8_context,
         .call_arena = self.call_arena,
     };
+    ls.page_scope = self.page.logScope();
 }
 
 pub fn toLocal(self: *Context, global: anytype) js.Local.ToLocalReturnType(@TypeOf(global)) {
@@ -365,7 +367,7 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
             }
         }
 
-        const owned_url = try arena.dupeZ(u8, url);
+        const owned_url = try arena.dupeSentinel(u8, url, 0);
         if (cacheable and !gop.found_existing) {
             gop.key_ptr.* = owned_url;
         }
@@ -422,7 +424,7 @@ fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, ur
             break :blk buf.written();
         };
 
-        log.warn(.js, "evaluate module", .{
+        log.debug(.js, "evaluate module", .{
             .stack = stack,
             .specifier = url,
             .message = message,
@@ -527,7 +529,7 @@ fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *
         };
         const nested_gop = try self.module_cache.getOrPut(self.arena.allocator(), normalized_specifier);
         if (!nested_gop.found_existing) {
-            const owned_specifier = try self.arena.dupeZ(u8, normalized_specifier);
+            const owned_specifier = try self.arena.dupeSentinel(u8, normalized_specifier, 0);
             nested_gop.key_ptr.* = owned_specifier;
             nested_gop.value_ptr.* = .{};
             try script_manager.preloadImport(owned_specifier, url, .{});
@@ -535,7 +537,7 @@ fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *
             // Entry exists but module failed to compile previously.
             // The imported_modules entry may have been consumed, so
             // re-preload to ensure waitForImport can find it.
-            // Key was stored via dupeZ so it has a sentinel in memory.
+            // Key was stored via dupeSentinel so it has a sentinel in memory.
             const key = nested_gop.key_ptr.*;
             const key_z: [:0]const u8 = key.ptr[0..key.len :0];
             try script_manager.preloadImport(key_z, url, .{});
@@ -581,7 +583,7 @@ fn resolveModuleCallback(
         if (err == error.SpecifierResolutionFailed) {
             _ = self.isolate.throwException(self.isolate.createTypeError("Failed to resolve module specifier"));
         }
-        log.err(.js, "resolve module", .{
+        log.debug(.js, "resolve module", .{
             .err = err,
             .specifier = specifier,
         });
@@ -637,7 +639,7 @@ pub fn dynamicModuleCallback(
     };
 
     const promise = self._dynamicModuleCallback(normalized_specifier, resource, &local) catch |err| blk: {
-        log.err(.js, "dynamic module callback", .{
+        log.debug(.js, "dynamic module callback", .{
             .err = err,
         });
         break :blk local.rejectPromise(.{ .generic_error = "Out of memory" });
@@ -940,7 +942,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
 
         break :blk self.module(true, local, ms.src(), state.specifier, true) catch |err| {
             const caught = try_catch.caughtOrError(self.local_arena, err);
-            log.err(.js, "module compilation failed", .{
+            log.debug(.js, "module compilation failed", .{
                 .caught = caught,
                 .specifier = state.specifier,
             });
@@ -1075,7 +1077,13 @@ pub fn enter(self: *Context, hs: *js.HandleScope) Entered {
 
     const handle: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.handle, isolate.handle));
     v8.v8__Context__Enter(handle);
-    return .{ .original = original, .handle = handle, .handle_scope = hs, .global = self.global };
+    return .{
+        .original = original,
+        .handle = handle,
+        .handle_scope = hs,
+        .global = self.global,
+        .page_scope = self.page.logScope(),
+    };
 }
 
 const Entered = struct {
@@ -1089,7 +1097,10 @@ const Entered = struct {
 
     global: lp.GlobalScope,
 
+    page_scope: log.PageScope,
+
     pub fn exit(self: Entered) void {
+        self.page_scope.exit();
         self.global.setJs(self.original);
         v8.v8__Context__Exit(self.handle);
         self.handle_scope.deinit();

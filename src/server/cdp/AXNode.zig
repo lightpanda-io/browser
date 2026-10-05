@@ -89,7 +89,7 @@ pub const Writer = struct {
             try self.walkQuery(self.root.dom, &ignore_cache, w);
         } else {
             const root = AXNode.fromNode(self.root.dom);
-            const root_hidden = if (self.root.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame, .{}) else false;
+            const root_hidden = if (self.root.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame) else false;
             try self.writeTree(root, root_hidden, &ignore_cache, w);
         }
         return w.endArray();
@@ -116,7 +116,7 @@ pub const Writer = struct {
     // be serialized as JSON strings even though we track them internally as u32.
     fn writeIdString(id: u32, w: anytype) !void {
         var buf: [10]u8 = undefined;
-        const s = try std.fmt.bufPrint(&buf, "{d}", .{id});
+        const s = try std.mem.print(&buf, "{d}", .{id});
         try w.write(s);
     }
 
@@ -139,7 +139,7 @@ pub const Writer = struct {
                     // visibility:hidden, aria-hidden, hidden, inert). Matches
                     // Chromium: these elements aren't exposed to the AX tree.
                     const el = dom_node.as(DOMNode.Element);
-                    if (walker.inAriaHidden() or isHidden(el, self.frame, .{ .ancestors = false })) {
+                    if (walker.inAriaHidden() or isHidden(el, self.frame)) {
                         continue;
                     }
                 },
@@ -206,7 +206,7 @@ pub const Writer = struct {
 
                 // Use a small stack buffer to format the number (max "9999. " = 6 chars)
                 var buf: [6]u8 = undefined;
-                const marker_text = try std.fmt.bufPrint(&buf, "{d}. ", .{count});
+                const marker_text = try std.mem.print(&buf, "{d}. ", .{count});
                 try w.write(marker_text);
             },
             else => unreachable,
@@ -299,7 +299,7 @@ pub const Writer = struct {
                 // CDP spec requires integer values to be serialized as strings.
                 // 20 bytes is enough for the decimal representation of a 64-bit integer.
                 var buf: [20]u8 = undefined;
-                const s = try std.fmt.bufPrint(&buf, "{d}", .{v});
+                const s = try std.mem.print(&buf, "{d}", .{v});
                 try w.write(s);
             },
             inline else => |v| try w.write(v),
@@ -580,7 +580,7 @@ pub const Writer = struct {
                 // Skip hidden element children so childIds matches the
                 // subtree-pruning done in writeTree.
                 if (child.is(DOMNode.Element)) |child_el| {
-                    if (child_in_aria_hidden or isHidden(child_el, self.frame, .{ .ancestors = false })) {
+                    if (child_in_aria_hidden or isHidden(child_el, self.frame)) {
                         continue;
                     }
                 }
@@ -679,7 +679,7 @@ pub const Writer = struct {
         }
 
         const node = try self.registry.register(axn.dom);
-        const hidden = if (axn.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame, .{}) else false;
+        const hidden = if (axn.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame) else false;
         const ignored = try axn.isIgnore(self.frame, in_aria_hidden, hidden, ignore_cache);
 
         try w.beginObject();
@@ -1167,7 +1167,7 @@ const Walker = struct {
 
 fn hasAriaHiddenTrue(elt: *DOMNode.Element) bool {
     if (elt.getAttributeInterned("aria-hidden")) |value| {
-        return std.mem.eql(u8, value, "true");
+        return std.ascii.eqlIgnoreCase(value, "true");
     }
     return false;
 }
@@ -1235,7 +1235,7 @@ fn labelPromotionTarget(
 
     // Only promote when the control is hidden; otherwise it appears
     // normally and the label stays as-is.
-    if (!isHidden(control, frame, .{})) return null;
+    if (!isHidden(control, frame)) return null;
 
     if (control.getTag() != .input) return null;
     const input = control.as(DOMNode.Element.Html.Input);
@@ -1291,25 +1291,18 @@ fn scratchAllocator(temp_arena: ?*lp.Arena, frame: *Frame) std.mem.Allocator {
     return if (temp_arena) |a| a.allocator() else frame.call_arena;
 }
 
-const HiddenOptions = struct { ancestors: bool = true };
-
 /// Chromium's AX tree prunes display:none and visibility:hidden alike.
-fn isHidden(elt: *DOMNode.Element, frame: *Frame, options: HiddenOptions) bool {
+fn isHidden(elt: *DOMNode.Element, frame: *Frame) bool {
     if (hasHidingAttribute(elt)) {
         return true;
     }
     const owner = elt.ownerFrame(frame) orelse return false;
-    return owner._style_manager.isHidden(elt, .{
-        .check_visibility = true,
-        .ancestors = options.ancestors,
-    });
+    return owner._style_manager.isHidden(elt, .{ .check_visibility = true });
 }
 
 fn hasHidingAttribute(elt: *DOMNode.Element) bool {
-    if (elt.getAttributeInterned("aria-hidden")) |value| {
-        if (std.mem.eql(u8, value, "true")) {
-            return true;
-        }
+    if (hasAriaHiddenTrue(elt)) {
+        return true;
     }
     return elt.hasAttributeInterned("hidden") or elt.hasAttributeSafe(comptime .wrap("inert"));
 }
@@ -1369,7 +1362,7 @@ const IgnoreCache = struct {
 
         var tw = TreeWalker.FullExcludeSelf.init(root, .{});
         const exposed = while (tw.next()) |node| {
-            const node_hidden = if (node.is(DOMNode.Element)) |el| isHidden(el, frame, .{ .ancestors = false }) else false;
+            const node_hidden = if (node.is(DOMNode.Element)) |el| isHidden(el, frame) else false;
             switch (AXNode.fromNode(node).ignoreSelf(false, node_hidden)) {
                 .ignored => tw.skipChildren(),
                 .exposed => break node,
@@ -1691,7 +1684,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
         const value = name_obj.object.get("value") orelse continue;
         if (value != .string) continue;
         for (hidden_texts) |bad| {
-            try testing.expect(std.mem.indexOf(u8, value.string, bad) == null);
+            try testing.expect(std.mem.find(u8, value.string, bad) == null);
         }
     }
 
@@ -1701,7 +1694,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
         const obj = node_val.object;
         const name_obj = obj.get("name") orelse continue;
         const value = name_obj.object.get("value") orelse continue;
-        if (value == .string and std.mem.indexOf(u8, value.string, "visible-para") != null) {
+        if (value == .string and std.mem.find(u8, value.string, "visible-para") != null) {
             found_visible = true;
             break;
         }
@@ -1716,7 +1709,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
         const role_val = role_obj.object.get("value") orelse continue;
         if (!std.mem.eql(u8, role_val.string, "searchbox")) continue;
         const name_val = obj.get("name").?.object.get("value").?;
-        if (name_val == .string and std.mem.indexOf(u8, name_val.string, "Search") != null) {
+        if (name_val == .string and std.mem.find(u8, name_val.string, "Search") != null) {
             search_named = true;
         }
     }
@@ -1730,7 +1723,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
         const role_val = role_obj.object.get("value") orelse continue;
         if (!std.mem.eql(u8, role_val.string, "textbox")) continue;
         const name_val = obj.get("name").?.object.get("value").?;
-        if (name_val == .string and std.mem.indexOf(u8, name_val.string, "Wrap") != null) {
+        if (name_val == .string and std.mem.find(u8, name_val.string, "Wrap") != null) {
             wrapped_named = true;
         }
     }
@@ -1764,7 +1757,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
             const name_obj = obj.get("name") orelse continue;
             const name_value = name_obj.object.get("value") orelse continue;
             if (name_value != .string) continue;
-            if (std.mem.indexOf(u8, name_value.string, exp.name_needle) == null) continue;
+            if (std.mem.find(u8, name_value.string, exp.name_needle) == null) continue;
 
             // Verify the `checked` property was emitted with the right value.
             const props = obj.get("properties").?.array.items;
@@ -2103,8 +2096,8 @@ test "AXNode: writer prunes children when root is hidden" {
     }, .{});
     defer testing.allocator.free(json);
 
-    try testing.expect(std.mem.indexOf(u8, json, "under-display-none") == null);
-    try testing.expect(std.mem.indexOf(u8, json, "\"childIds\":[]") != null);
+    try testing.expect(std.mem.find(u8, json, "under-display-none") == null);
+    try testing.expect(std.mem.find(u8, json, "\"childIds\":[]") != null);
 }
 
 test "AXNode: generic containers share memoized ignore answers" {
@@ -2131,4 +2124,48 @@ test "AXNode: generic containers share memoized ignore answers" {
         const el = (try root.querySelector(e[0], frame)).?;
         try testing.expectEqual(e[1], try AXNode.fromNode(el.asNode()).isIgnore(frame, false, false, &fresh));
     }
+}
+
+test "AXNode: aria-hidden is case-insensitive" {
+    const frame = try testing.base.createFrame();
+    defer testing.base.test_session.closeAllPages();
+
+    const root = try frame.window._document.createElement("div", null, frame);
+    try root.setInnerHTML(
+        \\<div id="hidden-upper" aria-hidden="TRUE"><p>hidden-upper</p></div>
+        \\<div id="hidden-mixed" aria-hidden="True"><p>hidden-mixed</p></div>
+        \\<div id="visible-false" aria-hidden="false"><p>visible-false</p></div>
+    , frame);
+
+    const hidden_upper = (try root.querySelector("#hidden-upper", frame)).?;
+    const hidden_mixed = (try root.querySelector("#hidden-mixed", frame)).?;
+    const visible_false = (try root.querySelector("#visible-false", frame)).?;
+
+    try testing.expect(hasAriaHiddenTrue(hidden_upper));
+    try testing.expect(hasHidingAttribute(hidden_upper));
+    try testing.expect(hasAriaHiddenTrue(hidden_mixed));
+    try testing.expect(hasHidingAttribute(hidden_mixed));
+    try testing.expect(!hasAriaHiddenTrue(visible_false));
+    try testing.expect(!hasHidingAttribute(visible_false));
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const node = try registry.register(root.asNode());
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer temp_arena.release();
+
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = node,
+        .registry = &registry,
+        .frame = frame,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+    }, .{});
+    defer testing.allocator.free(json);
+
+    try testing.expect(std.mem.find(u8, json, "hidden-upper") == null);
+    try testing.expect(std.mem.find(u8, json, "hidden-mixed") == null);
+    try testing.expect(std.mem.find(u8, json, "visible-false") != null);
 }

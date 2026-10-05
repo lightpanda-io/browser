@@ -83,6 +83,13 @@ _script_created_parser: ?Parser.Streaming = null,
 _close_requested: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
+// extent() cache, keyed on style version and viewport.
+_extent: ?struct {
+    version: usize,
+    viewport_width: u32,
+    viewport_height: u32,
+    extent: Extent,
+} = null,
 // Ordered stack of currently-showing popovers
 _open_popovers: std.ArrayList(*Element) = .empty,
 
@@ -211,7 +218,7 @@ fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
     };
 
     const tm = try dt.localTime(timestamp);
-    return std.fmt.allocPrint(frame.local_arena, "{d:0>2}/{d:0>2}/{d} {d:0>2}:{d:0>2}:{d:0>2}", .{
+    return frame.local_arena.print("{d:0>2}/{d:0>2}/{d} {d:0>2}:{d:0>2}:{d:0>2}", .{
         @as(u32, @intCast(tm.tm_mon + 1)),
         @as(u32, @intCast(tm.tm_mday)),
         tm.tm_year + 1900,
@@ -283,7 +290,7 @@ fn setDomain(self: *Document, value: []const u8) !void {
     // only ever match another explicitly set domain.
     // The scheme is preserved (http and https must never collide) and the
     // port is dropped, per spec.
-    const scheme_end = (std.mem.indexOf(u8, origin, "://") orelse return error.SecurityError) + 3;
+    const scheme_end = (std.mem.find(u8, origin, "://") orelse return error.SecurityError) + 3;
     const key = try std.mem.concat(arena, u8, &.{ "!", origin[0..scheme_end], requested });
     try doc_frame.js.setOrigin(key);
 }
@@ -358,7 +365,7 @@ fn isRelaxableTo(host: []const u8, requested: []const u8) bool {
     }
 
     // it can't be a bare TLD, "com"
-    if (std.mem.indexOfScalar(u8, requested, '.') == null) {
+    if (std.mem.findScalar(u8, requested, '.') == null) {
         return false;
     }
 
@@ -424,7 +431,7 @@ fn createAttribute(self: *const Document, name: String.Global, frame: *Frame) !?
 
 pub fn createAttributeNS(self: *const Document, namespace: []const u8, name: String.Global, frame: *Frame) !?*Element.Attribute {
     if (std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml") == false) {
-        log.warn(.not_implemented, "document.createAttributeNS", .{ .namespace = namespace });
+        log.debug(.not_implemented, "document.createAttributeNS", .{ .namespace = namespace });
     }
 
     try Element.Attribute.validateAttributeName(name.str);
@@ -494,6 +501,81 @@ pub fn getDocumentElement(self: *Document) ?*Element {
         child = node.nextSibling();
     }
     return null;
+}
+
+pub const Extent = struct { width: f64, height: f64 };
+
+/// The document's size. Height: enough for every synthetic position (5px per
+/// node), the bottom of every element with an inline height, and body's
+/// stacked children. Width: body's widest child. An inline size on body
+/// stretches both. A document without a frame isn't rendered, so it has no
+/// size.
+pub fn extent(self: *Document) Extent {
+    const frame = self._frame orelse return .{ .width = 0, .height = 0 };
+    const version = frame.page.style_version;
+    const viewport = frame.page.getViewport();
+    if (self._extent) |cached| {
+        if (cached.version == version and cached.viewport_width == viewport.width and cached.viewport_height == viewport.height) {
+            return cached.extent;
+        }
+    }
+
+    const style_manager = &frame._style_manager;
+    var size: Extent = .{ .width = 0, .height = 0 };
+
+    // A nested spacer (virtualized lists) must extend the document even when
+    // its auto-height ancestors count as 5px each. Body's own children are
+    // stacked below instead. Only inline heights: virtualizers set theirs
+    // inline, and the cascade per element is too slow on every mutation.
+    var index: f64 = 0;
+    var tw = @import("TreeWalker.zig").Full.init(self.asNode(), .{});
+    while (tw.next()) |node| : (index += 1) {
+        const el = node.is(Element) orelse continue;
+        const parent = el.parentElement() orelse continue;
+        if (parent.isRootContainer()) {
+            continue;
+        }
+        if (style_manager.inlineSize(el, .height)) |height| {
+            size.height = @max(size.height, index * 5.0 + height);
+        }
+    }
+    size.height = @max(size.height, index * 5.0);
+
+    if (self.is(HTMLDocument)) |html_doc| {
+        if (html_doc.getBody()) |html_body| {
+            const body = html_body.asElement();
+            size.height = @max(size.height, body.contentAxis(frame, .height), style_manager.inlineSize(body, .height) orelse 0);
+            size.width = style_manager.inlineSize(body, .width) orelse 0;
+            var child = body.asNode().firstChild();
+            while (child) |node| : (child = node.nextSibling()) {
+                const el = node.is(Element) orelse continue;
+                if (!style_manager.hasDisplayNone(el)) {
+                    size.width = @max(size.width, el.getElementAxis(frame, .width).value);
+                }
+            }
+        }
+    }
+
+    // Whole pixels, like scroll offsets
+    size = .{ .width = @ceil(size.width), .height = @ceil(size.height) };
+    self._extent = .{
+        .version = version,
+        .viewport_width = viewport.width,
+        .viewport_height = viewport.height,
+        .extent = size,
+    };
+    return size;
+}
+
+/// What the viewport scrolls over: the document, at least viewport-sized.
+pub fn scrollSize(self: *Document) Extent {
+    const frame = self._frame orelse return .{ .width = 0, .height = 0 };
+    const size = self.extent();
+    const viewport = frame.page.getViewport();
+    return .{
+        .width = @max(size.width, @as(f64, @floatFromInt(viewport.width))),
+        .height = @max(size.height, @as(f64, @floatFromInt(viewport.height))),
+    };
 }
 
 fn getSelection(self: *Document) *Selection {
@@ -1141,7 +1223,7 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
     }
 
     frame.domChanged();
-    self._write_insertion_point = children_to_insert.getLast();
+    self._write_insertion_point = children_to_insert.last().?;
 }
 
 pub fn open(self: *Document, call_frame: *Frame) !*Document {
@@ -1185,7 +1267,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     // gone for good, as in Chrome.
     frame.cancelQueuedNavigation();
 
-    if (std.mem.indexOfScalar(*Document, frame._script_created_parser_docs.items, self) == null) {
+    if (std.mem.findScalar(*Document, frame._script_created_parser_docs.items, self) == null) {
         // have the page track this document (if it isn't already)
         // so that, on shutdown, it can close the parser if needed.
         try frame._script_created_parser_docs.append(frame.arena, self);
@@ -1284,6 +1366,15 @@ fn getAdoptedStyleSheets(self: *Document, frame: *Frame) !js.Object.Global {
     const js_obj = js_arr.toObject();
     self._adopted_style_sheets = try js_obj.persist();
     return self._adopted_style_sheets.?;
+}
+
+fn getFullscreenElement(_: *const Document) ?*Element {
+    // see Element.requestFullscreen, nothing is ever fullscreen
+    return null;
+}
+
+fn exitFullscreen(_: *Document, frame: *Frame) js.Promise {
+    return frame.js.local.?.rejectPromise(.{ .type_error = "Document not in fullscreen" });
 }
 
 pub fn hasFocus(_: *Document) bool {
@@ -1473,7 +1564,7 @@ pub fn validateAndExtract(namespace_: ?[]const u8, qualified_name: []const u8, c
 
     var prefix: ?[]const u8 = null;
     var local_name = qualified_name;
-    if (std.mem.indexOfScalar(u8, qualified_name, ':')) |colon| {
+    if (std.mem.findScalar(u8, qualified_name, ':')) |colon| {
         prefix = qualified_name[0..colon];
         local_name = qualified_name[colon + 1 ..];
         if (!isValidNamespacePrefix(prefix.?)) {
@@ -1642,6 +1733,10 @@ pub const JsApi = struct {
         }
     }.defaultView, null, .{});
     pub const hasFocus = bridge.function(Document.hasFocus, .{});
+    pub const fullscreenEnabled = bridge.property(false, .{ .template = false, .readonly = true });
+    pub const fullscreen = bridge.property(false, .{ .template = false, .readonly = true });
+    pub const fullscreenElement = bridge.accessor(Document.getFullscreenElement, null, .{});
+    pub const exitFullscreen = bridge.function(Document.exitFullscreen, .{});
 
     pub const prerendering = bridge.property(false, .{ .template = false });
     pub const characterSet = bridge.accessor(Document.getCharset, null, .{});

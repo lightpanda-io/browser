@@ -135,6 +135,7 @@
     testing.expectEqual(false, e.composed);
     testing.expectEqual(true, e.isTrusted);
     testing.expectEqual(img, e.target);
+    testing.expectEqual(0, img.naturalWidth); // Images are not fetched by default.
   });
 </script>
 

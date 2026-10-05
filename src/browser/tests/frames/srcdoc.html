@@ -181,3 +181,30 @@
     });
   }
 </script>
+
+<script id=adoption_agency_cycle type=module>
+  {
+    // Script moves the adoption agency's common ancestor (#ca) inside its
+    // furthest block (#fb), directly, across a shadow root, or into template
+    // contents. Moving #fb into #ca would be a cycle; the parser drops it.
+    const moves = [
+      "fb.appendChild(ca)",
+      "var h=document.createElement('span');var r=h.attachShadow({mode:'open'});fb.appendChild(h);r.appendChild(ca)",
+      "var t=document.createElement('template');fb.appendChild(t);t.content.appendChild(ca)",
+    ];
+    for (const move of moves) {
+      const state = await testing.async();
+      const f = document.createElement('iframe');
+      f.srcdoc = `<div id=ca><b><p id=fb><script>var fb=document.getElementById('fb');var ca=document.getElementById('ca');document.body.appendChild(fb);${move}<\/script></b></div>`;
+      f.onload = () => state.resolve(f);
+      document.body.appendChild(f);
+
+      await state.done((f) => {
+        const w = f.contentWindow;
+        testing.expectEqual(0, f.contentDocument.body.childNodes.length);
+        testing.expectEqual(null, w.fb.parentNode);
+        testing.expectEqual(false, w.ca.contains(w.fb));
+      });
+    }
+  }
+</script>

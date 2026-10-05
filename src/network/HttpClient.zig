@@ -38,6 +38,7 @@ const Cache = @import("cache/Cache.zig");
 const RobotsGate = @import("RobotsGate.zig");
 const CorsGate = @import("CorsGate.zig");
 const UrlBlocklist = @import("UrlBlocklist.zig");
+const repeat = @import("../string.zig").repeat;
 
 pub const BlockPattern = UrlBlocklist.Pattern;
 
@@ -47,7 +48,6 @@ const Allocator = std.mem.Allocator;
 
 pub const Method = http.Method;
 pub const Header = http.Header;
-const HeaderIterator = http.HeaderIterator;
 
 // This is loosely tied to a browser Frame. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -244,7 +244,7 @@ pub fn init(self: *Client, app: *lp.App) !void {
         .serve_mode = config.mode == .serve,
         .obey_robots = config.obeyRobots(),
         .http_version = config.httpVersion(),
-        .obey_cors = config.experimentalFeatures().cors,
+        .obey_cors = config.obeyCors(),
         .robots = .{
             .network = network,
             .single_flight = .init(allocator),
@@ -308,7 +308,7 @@ pub fn incrReqId(self: *Client) u32 {
 // Set a user agent override, allocated from self.allocator.
 pub fn setUserAgentOverride(self: *Client, ua: []const u8) !void {
     self.clearUserAgentOverride();
-    self.user_agent_override = try self.allocator.dupeZ(u8, ua);
+    self.user_agent_override = try self.allocator.dupeSentinel(u8, ua, 0);
 }
 
 // Clear any user agent override, restoring the default from config.
@@ -382,12 +382,12 @@ pub fn changeProxy(self: *Client, proxy: ?[:0]const u8) !void {
         self.http_proxy_owned = null;
     }
 
-    // Reset to the config default; if dupeZ below fails, http_proxy is
+    // Reset to the config default; if dupeSentinel below fails, http_proxy is
     // left pointing at this rather than at the freed dup.
     self.http_proxy = self.network.config.httpProxy();
 
     if (proxy) |p| {
-        const owned = try self.allocator.dupeZ(u8, p);
+        const owned = try self.allocator.dupeSentinel(u8, p, 0);
         self.http_proxy_owned = owned;
         self.http_proxy = owned;
     }
@@ -689,7 +689,7 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         //
         // These are all small, so duping them into the transfer's arena is
         // cheap and can solve some nasty UAF.
-        owned.url = try arena.dupeZ(u8, req.url);
+        owned.url = try arena.dupeSentinel(u8, req.url, 0);
 
         var cookie_jar: ?*CookieJar = null;
         if (owner) |o| {
@@ -703,12 +703,12 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         // nothing reads the caller's (possibly short-lived) url through it.
         const cookie_origin: Cookie.SiteForCookies = switch (req.cookie_origin orelse if (owner) |o| o.siteForCookies() else .none) {
             .none => .none,
-            .url => |url| .{ .url = try arena.dupeZ(u8, url) },
+            .url => |url| .{ .url = try arena.dupeSentinel(u8, url, 0) },
         };
         owned.cookie_origin = null;
 
         if (req.basic_auth_credentials) |c| {
-            owned.basic_auth_credentials = try arena.dupeZ(u8, c);
+            owned.basic_auth_credentials = try arena.dupeSentinel(u8, c, 0);
         }
 
         const raw_origin: ?[]const u8 = req.origin orelse if (owner) |o| o.scope.origin() else null;
@@ -1112,7 +1112,7 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
 
             if (self.obey_cors and !transfer.req.internal) {
                 if (!isCrossOriginModeAllowed(transfer)) {
-                    log.warn(.http, "blocked by mode", .{
+                    log.debug(.http, "blocked by mode", .{
                         .url = transfer.req.url,
                         .mode = @tagName(transfer.req.request_mode),
                     });
@@ -1296,8 +1296,8 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     // Redirects rewrite req.url; the entry must be stored/renewed under the
     // URL this lookup ran against, not the final hop. req.url is arena-owned,
     // so the captured slice outlives any redirect rewrite.
-    const key: [:0]const u8 = if (req.headers_only)
-        try std.fmt.allocPrintSentinel(arena.allocator(), "headers-only:{s}", .{req.url}, 0)
+    const key: [:0]const u8 = if (req.partial != null)
+        try arena.allocator().printSentinel("partial:{s}", .{req.url}, 0)
     else
         req.url;
     transfer._cache_key = key;
@@ -1424,6 +1424,11 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     };
 }
 
+pub const SyncOptions = struct {
+    // Whether to copy the response headers into SyncResponse.headers.
+    copy_headers: bool = false,
+};
+
 const SyncContext = struct {
     client: *Client,
     completion: union(enum) {
@@ -1433,20 +1438,40 @@ const SyncContext = struct {
         shutdown: void,
     } = .in_progress,
 
-    status: u16 = 0,
-    body: std.ArrayList(u8),
+    options: SyncOptions = .{},
 
-    // Acquired on the first byte we have to buffer, so a bodyless response
-    // never takes one. Ownership moves to the SyncResponse.
+    status: u16 = 0,
+    status_text: http.StatusText = .{},
+    body: std.ArrayList(u8),
+    headers: std.ArrayList(http.Header) = .empty,
+
+    // Acquired on the first byte we have to buffer.
+    // Ownership moves to the SyncResponse.
     arena: ?*lp.Arena = null,
 
     fn headerCallback(transfer: *Transfer) anyerror!Transfer.HeaderResult {
         const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
         lp.assert(transfer.responseStatus() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = transfer.responseStatus() });
         self.status = transfer.responseStatus().?;
+        self.status_text = transfer.res.status_text;
+
         const body_len = transfer.bodyLen();
+        if (body_len == 0 and self.options.copy_headers == false) {
+            return .proceed;
+        }
+
+        const allocator = try self.bodyAllocator(body_len);
         if (body_len > 0) {
-            try self.body.ensureTotalCapacityPrecise(try self.bodyAllocator(body_len), body_len);
+            try self.body.ensureTotalCapacityPrecise(allocator, body_len);
+        }
+
+        if (self.options.copy_headers) {
+            for (transfer.responseHeaders()) |hdr| {
+                try self.headers.append(allocator, .{
+                    .name = try allocator.dupe(u8, hdr.name),
+                    .value = try allocator.dupe(u8, hdr.value),
+                });
+            }
         }
         return .proceed;
     }
@@ -1695,7 +1720,7 @@ fn processMessages(self: *Client) !bool {
                 // either buffered it for dispatch, parked it, or deinit'd it.
                 // Only the throw path cleans up here.
                 const done = self.processOneMessage(msg, transfer) catch |err| blk: {
-                    log.err(.http, "process_messages", .{ .err = err, .req = transfer });
+                    log.debug(.http, "process_messages", .{ .err = err, .req = transfer });
                     if (transfer._conn) |c| {
                         self.removeConn(c);
                         transfer._conn = null;
@@ -1756,9 +1781,9 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // we match that behavior: when CURLE_WRITE_ERROR arrives but our callback
     // never errored and bytes were received, treat it as success.
     const effective_err: ?anyerror = if (msg.err) |err| blk: {
-        // Our own headers_only abort, not a failure: fall through so the
-        // response is materialized and delivered with an empty body.
-        if (err == error.WriteError and transfer.res.headers_only_abort) {
+        // Our own partial abort, not a failure: fall through so the
+        // response is materialized and delivered with the kept prefix.
+        if (err == error.WriteError and transfer.res.partial_abort) {
             break :blk null;
         }
         if (err == error.WriteError and transfer.res.callback_error == null and transfer.res.bytes_received > 0) {
@@ -1876,9 +1901,20 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // callbacks run later, from dispatch(), never from here.
 
     if (effective_err != null and !is_conn_close_recv) {
+        const err = transfer.res.callback_error orelse effective_err.?;
+        if (try transfer.deliversHeaderBeforeError(msg.conn)) {
+            try transfer.materializeResponse(msg.conn, .{ .check_content_length = false });
+            if (self.enforceCorsResponse(msg, transfer)) {
+                return true;
+            }
+            self.removeConn(msg.conn);
+            transfer._conn = null;
+            try transfer.bufferHeaderThenError(err);
+            return true;
+        }
         self.removeConn(msg.conn);
         transfer._conn = null;
-        transfer.failAsync(transfer.res.callback_error orelse effective_err.?);
+        transfer.failAsync(err);
         return true;
     }
 
@@ -1991,11 +2027,11 @@ pub const Request = struct {
     // internal requests transparently following redirects.
     const RedirectMode = enum { follow, manual, @"error" };
 
-    // How much of a headers_only body we'll read rather than abort. Draining
+    // How much of a partial body we'll read rather than abort. Draining
     // costs bandwidth but keeps the connection poolable; aborting saves
     // bandwidth but forces a reconnect. 16 KiB is the rough break-even: about
     // ten segments, versus a TCP handshake plus a TLS one.
-    const HEADERS_ONLY_DRAIN_MAX: usize = 16 * 1024;
+    const PARTIAL_DRAIN_MAX: usize = 16 * 1024;
 
     pub const CredentialsMode = enum {
         // Never send credentials, even same-origin.
@@ -2025,14 +2061,15 @@ pub const Request = struct {
     timeout_ms: u32 = 0,
     skip_cache: bool = false,
 
-    // The caller wants the status and the response headers, not the body.
-    // Unlike a HEAD, the request itself is byte-for-byte a normal GET, so
-    // origins and CDNs see (and answer) exactly what a real browser sends;
-    // the body is then discarded, and torn off the wire if it doesn't fit in
-    // HEADERS_ONLY_DRAIN_MAX. The consumer still gets the usual
-    // start/header/done sequence, with an empty body; `data_callback` never
-    // fires.
-    headers_only: bool = false,
+    // The caller wants the status, the response headers and at most this
+    // many leading body bytes (0 for none), not the whole body. Unlike a
+    // HEAD, the request itself is byte-for-byte a normal GET, so origins and
+    // CDNs see (and answer) exactly what a real browser sends; the rest of
+    // the body is discarded, and torn off the wire if it doesn't fit in
+    // PARTIAL_DRAIN_MAX, which also caps the prefix. The consumer gets the
+    // usual start/header/data/done sequence with the prefix as the body. CDP
+    // never sees the prefix: it isn't the response body.
+    partial: ?u32 = null,
 
     // Should only be set when they need to differ from the owner's.
     frame_id: u32 = 0,
@@ -2073,6 +2110,12 @@ pub const Request = struct {
     // transfer, and thus we'll need to dupe it.
     body_outlives_request: bool = false,
 
+    // Should an error after the header arives still call the header_callback.
+    // Most cases just want the error. But fetch() is considered resolved once
+    // we get the header, so where the error happens (before or after headers
+    // is important)
+    header_before_body_error: bool = false,
+
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
 
@@ -2112,10 +2155,9 @@ pub const Request = struct {
 const SyncResponse = struct {
     status: u16,
     body: std.ArrayList(u8),
-
-    // Owns `body`. Null when the response had nothing to buffer. Callers that
-    // keep `body` past this call take the arena instead of releasing it.
-    arena: ?*lp.Arena,
+    status_text: http.StatusText,
+    headers: []const http.Header,
+    arena: ?*lp.Arena, // need only if there's a body, or we're copying the headers
 
     pub fn deinit(self: *SyncResponse) void {
         if (self.arena) |arena| {
@@ -2204,8 +2246,19 @@ fn fulfillRedirect(
     headers: []const http.Header,
     location: []const u8,
 ) !void {
-    errdefer |err| transfer.abortPipelineError(err);
+    self.fulfillRedirectInner(transfer, status, headers, location) catch |err| {
+        transfer.abortPipelineError(err);
+        return err;
+    };
+}
 
+fn fulfillRedirectInner(
+    self: *Client,
+    transfer: *Transfer,
+    status: u16,
+    headers: []const http.Header,
+    location: []const u8,
+) !void {
     // retrieve cookies from the fulfilled response's headers.
     if (transfer.req.credentialsAllowed()) {
         if (transfer.cookie_jar) |jar| {
@@ -2281,6 +2334,13 @@ pub const Owner = struct {
     frame_id: u32,
     document_frame_id: u32,
     loader_id: u32,
+
+    // Entered around delivery, so the consumer's callbacks log as its page.
+    log_page: ?*log.PageContext = null,
+
+    fn logScope(self: *const Owner) log.PageScope {
+        return log.enterPage(self.log_page);
+    }
 
     const Blob = @import("../browser/webapi/Blob.zig");
 
@@ -2472,7 +2532,7 @@ pub const Transfer = struct {
                 return .none;
             }
             // it can only get further, so redirect a -> b -> a doesn't appear as a -> a
-            return @enumFromInt(@max(@intFromEnum(self), @intFromEnum(forRequest(req))));
+            return @fromBackingInt(@max(@backingInt(self), @backingInt(forRequest(req))));
         }
     };
 
@@ -2615,7 +2675,7 @@ pub const Transfer = struct {
         };
     }
 
-    pub fn submitSync(self: *Transfer) !SyncResponse {
+    pub fn submitSync(self: *Transfer, opts: SyncOptions) !SyncResponse {
         const client = self.client;
 
         if (client.disconnected) {
@@ -2631,7 +2691,7 @@ pub const Transfer = struct {
             return error.SyncWaitInterrupted;
         }
 
-        var sync_ctx = SyncContext{ .client = client, .body = .empty };
+        var sync_ctx = SyncContext{ .client = client, .body = .empty, .options = opts };
         errdefer if (sync_ctx.arena) |arena| arena.release();
 
         const req = &self.req;
@@ -2671,7 +2731,9 @@ pub const Transfer = struct {
             .in_progress => @panic("Impossible to be in progress here."),
             .done, .shutdown => return .{
                 .status = sync_ctx.status,
+                .status_text = sync_ctx.status_text,
                 .body = sync_ctx.body,
+                .headers = sync_ctx.headers.items,
                 .arena = sync_ctx.arena,
             },
             .err => |e| return e,
@@ -2770,6 +2832,11 @@ pub const Transfer = struct {
         self.abort(error.TransferCanceled);
     }
 
+    fn logScope(self: *const Transfer) log.PageScope {
+        const owner = self.owner orelse return log.enterPage(null);
+        return owner.logScope();
+    }
+
     // Fail this transfer with `err`. Fires error_callback once (latched
     // via _notified_fail), then either deinits synchronously or, if
     // deliver() is running our callbacks, detaches and lets deliver()
@@ -2779,6 +2846,9 @@ pub const Transfer = struct {
     // to end a transfer. Don't reach for kill() or requestFailed() directly —
     // they're internal helpers.
     pub fn abort(self: *Transfer, err: anyerror) void {
+        const page_scope = self.logScope();
+        defer page_scope.exit();
+
         // error_callback can run JS that tears this transfer down again
         // (e.g. an XHR abort handler navigates -> abortRequests -> kill).
         // Hold the state at .delivering so the re-entrant teardown defers,
@@ -2895,6 +2965,9 @@ pub const Transfer = struct {
     // abortRequests when a Frame / WGS is being torn down. Any buffered,
     // undelivered events are dropped — the consumer is going away with us.
     fn kill(self: *Transfer) void {
+        const page_scope = self.logScope();
+        defer page_scope.exit();
+
         if (self._notify_cdp and !self._notified_fail) {
             self._notified_fail = true;
             self.notify(.http_request_fail, &.{
@@ -3000,7 +3073,7 @@ pub const Transfer = struct {
     // free. Only called from deliver().
     fn failDelivery(self: *Transfer, err: anyerror) void {
         if (err != error.TransferCanceled) {
-            log.err(.http, "delivery callback", .{ .err = err, .req = self });
+            log.debug(.http, "delivery callback", .{ .err = err, .req = self });
         }
         self.requestFailed(err);
         self.finishDelivery();
@@ -3168,12 +3241,12 @@ pub const Transfer = struct {
         }
 
         // A cached body is stored decoded; its wire size is long gone. A
-        // headers_only fetch (images) tears the body off the wire: the
+        // partial fetch (images) tears the body off the wire: the
         // Content-Length, else whatever arrived before the abort, is the
         // best size we have for both.
         var decoded_body_size = t.decoded_body_size;
         var encoded_body_size = if (t.cache == .none) t.encoded_body_size else decoded_body_size;
-        if (self.req.headers_only) {
+        if (self.req.partial != null) {
             const known = if (self._content_length > 0) self._content_length else t.encoded_body_size;
             decoded_body_size = known;
             encoded_body_size = known;
@@ -3213,12 +3286,39 @@ pub const Transfer = struct {
             .decoded_body_size = decoded_body_size,
             .status = status,
             .content_type = content_type,
-            .content_encoding = findHeader(self.res.headers, "content-encoding") orelse "",
+            .content_encoding = self.responseHeader("content-encoding") orelse "",
             .from_cache = t.cache != .none,
             .timing_allow = timing_allow,
         }) catch |err| {
             log.err(.http, "resource timing", .{ .err = err, .req = self });
         };
+    }
+
+    fn deliversHeaderBeforeError(self: *const Transfer, conn: *const http.Connection) !bool {
+        if (self.req.header_before_body_error == false or self.res.headers_complete == false) {
+            return false;
+        }
+        if (self.res.stream.started) {
+            // The header was already delivered.
+            return false;
+        }
+        const status = try conn.getResponseCode();
+        if (isRedirectStatus(status) and self.req.redirect != .manual and conn.getResponseHeader("location", 0) != null) {
+            // this isn't the final response.
+            return false;
+        }
+        return true;
+    }
+
+    // The header made it, the body didn't. Some cases (header_before_body_error = true)
+    // want the header delivered first. (By default though, we just deliver the
+    // error)
+    fn bufferHeaderThenError(self: *Transfer, err: anyerror) !void {
+        try self._events.ensureUnusedCapacity(self.arena.allocator(), 3);
+        self._events.appendAssumeCapacity(.start);
+        self._events.appendAssumeCapacity(.header);
+        self._events.appendAssumeCapacity(.{ .err = err });
+        self.scheduleDispatch();
     }
 
     // Buffer the standard success event sequence. `body` is either owned by
@@ -3348,11 +3448,9 @@ pub const Transfer = struct {
         }
         // buildResponseHeader stores a curl-owned url pointer; re-anchor it
         // in the arena so it survives the conn release.
-        self.res.header.?.url = (try arena.dupeZ(u8, std.mem.span(self.res.header.?.url))).ptr;
+        self.res.header.?.url = (try arena.dupeSentinel(u8, std.mem.span(self.res.header.?.url), 0)).ptr;
 
-        var it = HeaderIterator{ .curl = .{ .conn = conn } };
-        const headers = try it.collect(arena.allocator());
-        self.setResponseHeaders(headers.items);
+        self.setResponseHeaders(try conn.collectResponseHeaders(arena.allocator()));
 
         if (self.req.credentialsAllowed()) {
             if (self.cookie_jar) |jar| {
@@ -3367,11 +3465,11 @@ pub const Transfer = struct {
             }
         }
 
-        // headers_only is exempt: the cap exists to bound how much body we
-        // buffer, and this transfer buffers none of it. Failing a 4 MB image
+        // A partial fetch is exempt: the cap exists to bound how much body we
+        // buffer, and this transfer buffers at most PARTIAL_DRAIN_MAX of it. Failing a 4 MB image
         // we were never going to read would turn the size limit into a
         // spurious `error` event on a perfectly good response.
-        if (opts.check_content_length and !self.req.headers_only) {
+        if (opts.check_content_length and self.req.partial == null) {
             if (self.getContentLength()) |cl| {
                 if (cl > self.client.max_response_size) {
                     return error.ResponseTooLarge;
@@ -3478,10 +3576,11 @@ pub const Transfer = struct {
 
         const url = try conn.getEffectiveUrl();
 
-        const status: u16 = if (self._auth_challenge != null)
-            407
-        else
-            try conn.getResponseCode();
+        var status = try conn.getResponseCode();
+        if (status == 0 and self._auth_challenge != null) {
+            // A proxy that refuses the CONNECT gives us no status code
+            status = try conn.getConnectCode();
+        }
 
         self.res.header = .{
             .url = url,
@@ -3624,7 +3723,7 @@ pub const Transfer = struct {
             // value we have now as the base
             if (transfer.findRequestHeader("referer")) |current| {
                 const alloc = arena.allocator();
-                if (try referrer.compute(alloc, policy, try alloc.dupeZ(u8, current), req.url)) |value| {
+                if (try referrer.compute(alloc, policy, try alloc.dupeSentinel(u8, current, 0), req.url)) |value| {
                     try transfer.setHeader("Referer", value, .{});
                 } else {
                     transfer.removeHeader("Referer");
@@ -3743,15 +3842,15 @@ pub const Transfer = struct {
             }
             found = true;
 
-            if (@intFromEnum(hdr.source) > @intFromEnum(source)) {
+            if (@backingInt(hdr.source) > @backingInt(source)) {
                 if (hdr.source == .fixed) {
-                    log.warn(.http, "ignore overriding fixed header", .{ .header = hdr.name });
+                    log.debug(.http, "ignore overriding fixed header", .{ .header = hdr.name });
                 }
                 return;
             }
             if (mode == .append and hdr.source == source) {
                 const sep = if (std.ascii.eqlIgnoreCase(name, "cookie")) "; " else ", ";
-                hdr.value = try std.fmt.allocPrint(self.arena.allocator(), "{s}{s}{s}", .{ hdr.value, sep, value });
+                hdr.value = try self.arena.allocator().print("{s}{s}{s}", .{ hdr.value, sep, value });
                 return;
             }
             hdr.value = try self.arena.allocator().dupe(u8, value);
@@ -3768,7 +3867,7 @@ pub const Transfer = struct {
     fn verifyHeader(name: []const u8, value: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(name, "user-agent")) {
             lp.Config.validateUserAgent(value) catch |err| {
-                log.warn(.http, "invalid header dropped", .{ .name = name, .err = err });
+                log.debug(.http, "invalid header dropped", .{ .name = name, .err = err });
                 return false;
             };
         }
@@ -3831,7 +3930,24 @@ pub const Transfer = struct {
             std.debug.assert(chunk_count == 1);
         }
 
-        if (announcesBody(buffer[0..chunk_len]) == false) {
+        const line = buffer[0..chunk_len];
+        if (std.mem.startsWith(u8, line, "HTTP/")) {
+            const conn: *http.Connection = @ptrCast(@alignCast(data));
+            conn.transport.http.res.status_text = .fromStatusLine(line);
+            return chunk_len;
+        }
+
+        if (std.mem.trim(u8, line, "\r\n").len == 0) {
+            // End of a header block. A 1xx is followed by another one.
+            const conn: *http.Connection = @ptrCast(@alignCast(data));
+            const status = conn.getResponseCode() catch return chunk_len;
+            if (status >= 200) {
+                conn.transport.http.res.headers_complete = true;
+            }
+            return chunk_len;
+        }
+
+        if (announcesBody(line) == false) {
             return chunk_len;
         }
 
@@ -3899,8 +4015,13 @@ pub const Transfer = struct {
                 return @intCast(chunk_len);
             }
 
-            if (transfer.req.headers_only == false) {
-                if (transfer.getContentLength()) |cl| {
+            if (transfer.req.partial == null) {
+                // Headers aren't materialized yet; read them off the conn.
+                const content_length: ?usize = blk: {
+                    const hdr = conn.getResponseHeader("content-length", 0) orelse break :blk null;
+                    break :blk std.fmt.parseInt(usize, hdr.value, 10) catch null;
+                };
+                if (content_length) |cl| {
                     if (cl > transfer.client.max_response_size) {
                         res.callback_error = error.ResponseTooLarge;
                         return http.writefunc_error;
@@ -3923,18 +4044,26 @@ pub const Transfer = struct {
 
         res.bytes_received += chunk_len;
 
-        if (transfer.req.headers_only) {
+        if (transfer.req.partial) |partial| {
+            const limit = @min(partial, Request.PARTIAL_DRAIN_MAX);
+            if (res.buffer.items.len < limit) {
+                const count = @min(chunk_len, limit - res.buffer.items.len);
+                res.buffer.appendSlice(transfer.arena.allocator(), buffer[0..count]) catch |err| {
+                    res.callback_error = err;
+                    return http.writefunc_error;
+                };
+            }
             // Plenty of images have no Content-Length to decide this up front, so
             // decide it as the body arrives.
-            if (res.bytes_received <= Request.HEADERS_ONLY_DRAIN_MAX) {
+            if (res.bytes_received <= Request.PARTIAL_DRAIN_MAX) {
                 return @intCast(chunk_len);
             }
 
             // Returning writefunc_error is the only way to end a transfer
             // early from a write callback; processOneMessage recognises the
             // flag and treats the resulting CURLE_WRITE_ERROR as a completed
-            // response with an empty body.
-            res.headers_only_abort = true;
+            // response with the kept prefix as its body.
+            res.partial_abort = true;
             return http.writefunc_error;
         }
 
@@ -4010,6 +4139,10 @@ pub const Transfer = struct {
         return rh.status;
     }
 
+    pub fn statusText(self: *const Transfer) ?[]const u8 {
+        return self.res.status_text.get();
+    }
+
     pub fn contentType(self: *Transfer) ?[]const u8 {
         if (self.res.header) |*rh| {
             return rh.contentType();
@@ -4022,17 +4155,14 @@ pub const Transfer = struct {
         return rh.redirect_count;
     }
 
-    pub fn responseHeaderIterator(self: *Transfer) HeaderIterator {
-        if (self.res.headers.len > 0 or self._conn == null) {
-            return .{ .list = .{ .list = self.res.headers } };
-        }
-        // Mid-stream (pump time): headers aren't materialized yet, read
-        // them off the live conn.
-        return .{ .curl = .{ .conn = self._conn.? } };
+    // Response headers are only available once materialized (i.e. from
+    // dispatch). Before that, at pump time, read them off the conn.
+    pub fn responseHeaders(self: *const Transfer) []const http.Header {
+        return self.res.headers;
     }
 
     pub fn getContentLength(self: *const Transfer) ?usize {
-        const cl = self.getContentLengthRawValue() orelse return null;
+        const cl = self.responseHeader("content-length") orelse return null;
         return std.fmt.parseInt(usize, cl, 10) catch null;
     }
 
@@ -4044,20 +4174,35 @@ pub const Transfer = struct {
         return self._body_len;
     }
 
-    fn getContentLengthRawValue(self: *const Transfer) ?[]const u8 {
-        // Materialized headers (dispatch time, any source).
-        for (self.res.headers) |hdr| {
-            if (std.mem.eql(u8, hdr.name, "content-length")) {
-                return hdr.value;
-            }
-        }
+    // First value of a response header. `name` must be lowercase. Same
+    // materialization caveat as responseHeaders.
+    pub fn responseHeader(self: *const Transfer, name: []const u8) ?[]const u8 {
+        return findHeader(self.res.headers, name);
+    }
 
-        // Mid-stream (curl's write callback): read from the live conn.
-        if (self._conn) |c| {
-            const cl = c.getResponseHeader("content-length", 0) orelse return null;
-            return cl.value;
+    pub fn botChallenge(self: *const Transfer) ?BotChallenge {
+        const status = self.responseStatus() orelse return null;
+        switch (status) {
+            403 => {
+                const value = self.responseHeader("cf-mitigated") orelse return null;
+                if (std.ascii.eqlIgnoreCase(value, "challenge")) {
+                    return .cloudflare;
+                }
+            },
+            429 => {
+                const value = self.responseHeader("x-vercel-mitigated") orelse return null;
+                if (std.ascii.eqlIgnoreCase(value, "challenge")) {
+                    return .vercel;
+                }
+            },
+            202, 405 => {
+                const action = self.responseHeader("x-amzn-waf-action") orelse return null;
+                if (std.ascii.eqlIgnoreCase(action, "captcha") or std.ascii.eqlIgnoreCase(action, "challenge")) {
+                    return .aws_waf;
+                }
+            },
+            else => {},
         }
-
         return null;
     }
 
@@ -4067,6 +4212,9 @@ pub const Transfer = struct {
     // batch and stays inflight between batches, until a terminal event
     // (done / err) or an abort.
     fn deliver(transfer: *Transfer) void {
+        const page_scope = transfer.logScope();
+        defer page_scope.exit();
+
         // A streaming batch is delivered while the conn is still inflight;
         // that state is restored after the batch unless it turned terminal.
         const was_inflight = transfer.state == .inflight;
@@ -4119,7 +4267,8 @@ pub const Transfer = struct {
                     }
                 },
                 .data => |chunk| {
-                    if (transfer._notify_cdp) {
+                    // A partial body is a prefix, not the response body.
+                    if (transfer._notify_cdp and req.partial == null) {
                         transfer.notify(.http_response_data, &.{
                             .data = chunk,
                             .transfer = transfer,
@@ -4247,9 +4396,13 @@ const ResourceTiming = struct {
 // Reset on every retry (auth retry, redirect) via Transfer.reset — only
 // the cross-retry counters (_auth_challenge, _redirect_count) live on
 // Transfer itself. Consumers read it through the accessors above
-// (status / contentType / responseHeaderIterator / getContentLength).
+// (status / contentType / responseHeaders / getContentLength).
 const Response = struct {
     header: ?http.ResponseHead = null,
+
+    // From the most recent status line curl reported (a CONNECT, a 1xx or
+    // an auth challenge can precede the final one).
+    status_text: http.StatusText = .{},
 
     // Full response headers, materialized into the transfer arena at
     // completion (or set directly by cache / synthetic / fulfill). Names are
@@ -4263,11 +4416,14 @@ const Response = struct {
     skip_body: bool = false,
     first_data_received: bool = false,
 
+    // The final (non-1xx) response's header block has been fully received.
+    headers_complete: bool = false,
+
     // Set when dataCallback deliberately killed the transfer to satisfy
-    // `Request.headers_only`. processOneMessage uses it to tell our own
-    // abort apart from a real CURLE_WRITE_ERROR and deliver the response
-    // (headers, status, empty body) as a success.
-    headers_only_abort: bool = false,
+    // `Request.partial`. processOneMessage uses it to tell our own abort
+    // apart from a real CURLE_WRITE_ERROR and deliver the response (headers,
+    // status, kept prefix) as a success.
+    partial_abort: bool = false,
 
     // Response body. Filled by dataCallback, consumed in processMessages.
     // See Stream.spare to see how this works in streaming mode
@@ -4345,7 +4501,7 @@ const Synthetic = struct {
             }
 
             const owner = transfer.owner orelse return error.BlobNotFound;
-            const key = url[0 .. std.mem.indexOfScalar(u8, url, '#') orelse url.len];
+            const key = url[0 .. std.mem.findScalar(u8, url, '#') orelse url.len];
             if (!Owner.Blob.urlBelongsToOrigin(key, owner.scope.origin())) {
                 return error.BlobNotFound;
             }
@@ -4365,6 +4521,12 @@ const Synthetic = struct {
         transfer._content_length = body.len;
         try transfer.bufferEvents(body);
     }
+};
+
+pub const BotChallenge = enum {
+    aws_waf,
+    cloudflare,
+    vercel,
 };
 
 const testing = @import("../testing.zig");
@@ -4766,12 +4928,12 @@ test "HttpClient: adblock verdicts apply per request" {
     }));
     try testing.expect(!testIsUrlBlocked(&client, .{
         .url = "https://ads.example.com/pixel.gif",
-        .document = "https://" ++ "a" ** 254 ++ ".com/",
+        .document = "https://" ++ repeat("a", 254) ++ ".com/",
         .resource_type = .image,
     }));
     // Same for a URL too long to normalize (uppercase forces the copy).
     try testing.expect(!testIsUrlBlocked(&client, .{
-        .url = "https://ads.example.com/" ++ "A" ** (8 * 1024),
+        .url = "https://ads.example.com/" ++ repeat("A", 8 * 1024),
         .document = "https://news.com/",
         .resource_type = .image,
     }));
@@ -4848,6 +5010,41 @@ test "HttpClient: Transfer.setHeader replaces by case-insensitive name" {
     try testing.expectEqual("yes", headers[2].value);
 }
 
+test "HttpClient: Transfer.botChallenge" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    const arena = try pool.acquire(.small, "test");
+    defer arena.release();
+
+    var transfer = testTransfer(arena);
+    const Case = struct {
+        status: u16,
+        headers: []const http.Header,
+        expected: ?BotChallenge,
+    };
+    const cases = [_]Case{
+        .{ .status = 403, .headers = &.{ .{ .name = "server", .value = "cloudflare" }, .{ .name = "cf-mitigated", .value = "challenge" } }, .expected = .cloudflare },
+        // the header alone isn't enough, the status gates the lookup
+        .{ .status = 200, .headers = &.{.{ .name = "cf-mitigated", .value = "challenge" }}, .expected = null },
+        .{ .status = 403, .headers = &.{.{ .name = "server", .value = "cloudflare" }}, .expected = null },
+        .{ .status = 429, .headers = &.{.{ .name = "x-vercel-mitigated", .value = "challenge" }}, .expected = .vercel },
+        .{ .status = 405, .headers = &.{.{ .name = "x-amzn-waf-action", .value = "captcha" }}, .expected = .aws_waf },
+        .{ .status = 202, .headers = &.{.{ .name = "x-amzn-waf-action", .value = "challenge" }}, .expected = .aws_waf },
+        // a mitigation other than a challenge
+        .{ .status = 405, .headers = &.{.{ .name = "x-amzn-waf-action", .value = "block" }}, .expected = null },
+    };
+
+    // no response yet
+    try testing.expectEqual(null, transfer.botChallenge());
+
+    for (cases) |case| {
+        transfer.setResponseHead(case.status, null);
+        transfer.setResponseHeaders(case.headers);
+        try testing.expectEqual(case.expected, transfer.botChallenge());
+    }
+}
+
 test "HttpClient: Transfer.appendHeader combines same-source values" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
@@ -4895,13 +5092,11 @@ test "HttpClient: Transfer header layering" {
     try testing.expectEqual("\"author-etag\"", transfer.findRequestHeader("if-none-match").?);
 
     // nothing overrides a fixed header, whatever the layer or mode
-    testing.expectLog(&.{ .http, .http });
     try transfer.setHeader("sec-ch-ua", "\"Chromium\";v=\"140\"", .{ .source = .cdp });
     try transfer.appendHeader("SEC-CH-UA", "\"Chromium\";v=\"140\"", .{ .source = .author });
     try testing.expectEqual("\"Lightpanda\";v=\"1\"", transfer.findRequestHeader("sec-ch-ua").?);
 
     // an invalid User-Agent never enters the list
-    testing.expectLog(&.{.http});
     try transfer.setHeader("user-agent", "Mozilla/5.0", .{ .source = .author });
     try testing.expectEqual("Lightpanda/1.0", transfer.findRequestHeader("user-agent").?);
 
@@ -4921,7 +5116,7 @@ test "HttpClient: Fetch header overrides restore after one hop" {
     };
 
     var transfer: Transfer = undefined;
-    transfer.req_headers = .{ .items = &overridden, .capacity = overridden.len };
+    transfer.req_headers = .fromOwnedSlice(&overridden);
     transfer._intercept_original_headers = &original;
     transfer.restoreInterceptHeaders();
 

@@ -26,7 +26,7 @@ const bridge = js.bridge;
 //
 // In a simple/perfect world, we could use this knowledge to cast the *anyopaque
 // to the parameter type:
-//   const arg: @typeInfo(@TypeOf(function)).@"fn".params[0] = @ptrCast(v8_data);
+//   const arg: @typeInfo(@TypeOf(function)).@"fn".param_types[0].? = @ptrCast(v8_data);
 //
 // But there are 2 reasons we can't do that.
 //

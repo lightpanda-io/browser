@@ -117,7 +117,7 @@ fn getPartialAXTree(cmd: *CDP.Command) !void {
     if (params.fetchRelatives orelse true) {
         // orelse true, because that's what Chrome defaults too, and if people
         // aren't setting it, then they're expecting true.
-        log.warn(.not_implemented, "getPartialAXTree", .{
+        log.debug(.not_implemented, "getPartialAXTree", .{
             .cdp_cmd = "Accessibility.getPartialAXTree",
             .param = "fetchRelatives",
         });

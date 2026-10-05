@@ -113,7 +113,7 @@ fn keys(self: *Cache, exec: *const Execution) !js.Promise {
     };
 
     for (entries) |entry| {
-        const url = try exec.call_arena.dupeZ(u8, entry.url);
+        const url = try exec.call_arena.dupeSentinel(u8, entry.url, 0);
         const request = try Request.init(.{ .url = url }, null, exec);
         request.acquireRef();
         requests.appendAssumeCapacity(request);
@@ -152,7 +152,7 @@ fn addAll(self: *Cache, inputs: []const Request.Input, exec: *const Execution) !
     for (requests, batch.slots) |request, *slot| {
         batch.pending += 1;
         Fetch.start(request, .{ .ctx = slot, .callback = Batch.fetched }, exec) catch |err| {
-            log.warn(.http, "Cache.add fetch", .{ .err = err, .url = request._url });
+            log.debug(.http, "Cache.add fetch", .{ .err = err, .url = request._url });
             batch.pending -= 1;
             batch.outcome = .failed;
             break;
@@ -299,6 +299,9 @@ fn unstorable(response: *const Response) ?[]const u8 {
     if (response._body == .stream) {
         return "Response with a ReadableStream body is unsupported";
     }
+    if (response._body == .errored) {
+        return "Response body is errored";
+    }
     for (response._headers._list._entries.items) |*header| {
         if (std.ascii.eqlIgnoreCase(header.name.str(), "vary") == false) {
             continue;
@@ -324,7 +327,7 @@ fn toEntry(allocator: Allocator, url: []const u8, response: *const Response, bod
         kv.* = .{ try arena.dupe(u8, header.name.str()), try arena.dupe(u8, header.value.str()) };
     }
 
-    entry.response_url = try arena.dupeZ(u8, response._url);
+    entry.response_url = try arena.dupeSentinel(u8, response._url, 0);
     entry.status = response._status;
     entry.status_text = try arena.dupe(u8, response._status_text);
     entry.response_type = response._type;
@@ -343,7 +346,7 @@ fn toResponse(entry: *const Store.Entry, exec: *const Execution) !*Response {
         ._arena = arena,
         ._status = entry.status,
         ._status_text = try arena.dupe(u8, entry.status_text),
-        ._url = try arena.dupeZ(u8, entry.response_url),
+        ._url = try arena.dupeSentinel(u8, entry.response_url, 0),
         ._body = .{ .bytes = try arena.dupe(u8, entry.body) },
         ._type = entry.response_type,
         ._is_redirected = entry.is_redirected,

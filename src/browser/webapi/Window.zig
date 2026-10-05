@@ -488,7 +488,7 @@ pub fn setWindowReflectingHandlerFromAttribute(self: *Window, name: lp.String, v
     if (frame.js.stringToPersistedFunction(expr, &.{"event"}, &.{})) |func| {
         slot.* = func;
     } else |err| {
-        log.err(.js, "window reflecting handler", .{ .err = err, .str = expr });
+        log.debug(.js, "window reflecting handler", .{ .err = err, .str = expr });
         slot.* = null;
     }
 }
@@ -521,18 +521,18 @@ pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, exe
     return Fetch.init(input, options, exec);
 }
 
-pub fn setTimeout(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []js.Value.Global, exec: *js.Execution) !u32 {
+pub fn setTimeout(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?i32, params: []js.Value.Global, exec: *js.Execution) !u32 {
     const cb = try handler.resolve(exec);
-    return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
+    return self._timers.schedule(exec, cb, Timers.delayFromJs(delay_ms), .{
         .repeat = false,
         .params = params,
         .name = "window.setTimeout",
     });
 }
 
-pub fn setInterval(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []js.Value.Global, exec: *js.Execution) !u32 {
+pub fn setInterval(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?i32, params: []js.Value.Global, exec: *js.Execution) !u32 {
     const cb = try handler.resolve(exec);
-    return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
+    return self._timers.schedule(exec, cb, Timers.delayFromJs(delay_ms), .{
         .repeat = true,
         .params = params,
         .name = "window.setInterval",
@@ -607,7 +607,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     const target = self.asEventTarget();
     if (!frame._event_manager.hasDirectListeners(target, "error", self._on_error)) {
         if (comptime lp.IS_TEST == false) {
-            log.warn(.js, "window.reportError", .{
+            log.debug(.js, "window.reportError", .{
                 .message = err.toStringSlice() catch "Unknown error",
             });
         }
@@ -662,7 +662,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
 
     if (comptime lp.IS_TEST == false) {
         if (!event._prevent_default) {
-            log.warn(.js, "window.reportError", .{
+            log.debug(.js, "window.reportError", .{
                 .message = error_event._message,
                 .filename = error_event._filename,
                 .line_number = error_event._line_number,
@@ -685,7 +685,7 @@ pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]
     const gop = try page.element_computed_styles.getOrPut(page.frame_arena, .{ .element = element, .pseudo = pseudo });
     if (!gop.found_existing) {
         if (pseudo == .other) {
-            log.warn(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pseudo_element.? });
+            log.debug(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pseudo_element.? });
         }
         gop.value_ptr.* = try CSSStyleProperties.init(element, true, frame);
     }
@@ -951,8 +951,11 @@ fn getDevicePixelRatio(_: *const Window, frame: *Frame) f32 {
 
 pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts.offsets(y);
-    const new_x: u32 = if (o.left) |left| @intCast(@max(0, left)) else self._scroll_pos.x;
-    const new_y: u32 = if (o.top) |top| @intCast(@max(0, top)) else self._scroll_pos.y;
+    const size = self._frame.document.scrollSize();
+    const max_x = scrollLimit(size.width, self.getInnerWidth(self._frame));
+    const max_y = scrollLimit(size.height, self.getInnerHeight(self._frame));
+    const new_x: u32 = if (o.left) |left| @min(@as(u32, @intCast(@max(0, left))), max_x) else self._scroll_pos.x;
+    const new_y: u32 = if (o.top) |top| @min(@as(u32, @intCast(@max(0, top))), max_y) else self._scroll_pos.y;
 
     if (new_x == self._scroll_pos.x and new_y == self._scroll_pos.y) {
         return;
@@ -1012,6 +1015,11 @@ pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Fram
         20,
         .{ .blocks_done = false },
     );
+}
+
+fn scrollLimit(size: f64, visible: u32) u32 {
+    const limit = size - @as(f64, @floatFromInt(visible));
+    return @intFromFloat(std.math.clamp(limit, 0, std.math.maxInt(u32)));
 }
 
 pub fn scrollBy(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
@@ -1159,7 +1167,7 @@ fn hasFeatureToken(features: []const u8, token: []const u8) bool {
     var it = std.mem.tokenizeAny(u8, features, " \t\r\n,");
     while (it.next()) |raw| {
         // Trim a trailing =value if present — we only need the key.
-        const key = if (std.mem.indexOfScalarPos(u8, raw, 0, '=')) |eq| raw[0..eq] else raw;
+        const key = if (std.mem.findScalarPos(u8, raw, 0, '=')) |eq| raw[0..eq] else raw;
         if (std.ascii.eqlIgnoreCase(key, token)) return true;
     }
     return false;
@@ -1379,7 +1387,6 @@ const CrossOriginWindow = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Window" {
-    testing.expectLog(&.{.http}); // stop aborts
     try testing.htmlRunner("window", .{});
 }
 

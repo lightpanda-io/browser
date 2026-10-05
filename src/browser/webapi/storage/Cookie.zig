@@ -23,6 +23,7 @@ const URL = @import("../../URL.zig");
 const DateTime = @import("../../../datetime.zig").DateTime;
 const Notification = @import("../../../Notification.zig");
 const public_suffix_list = @import("../../../data/public_suffix_list.zig").lookup;
+const repeat = @import("../../../string.zig").repeat;
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -137,7 +138,7 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
 
     var it = std.mem.splitScalar(u8, rest, ';');
     while (it.next()) |attribute| {
-        const sep = std.mem.indexOfScalarPos(u8, attribute, 0, '=') orelse attribute.len;
+        const sep = std.mem.findScalarPos(u8, attribute, 0, '=') orelse attribute.len;
         const key_string = trim(attribute[0..sep]);
 
         if (key_string.len > scrap.len) {
@@ -316,7 +317,7 @@ pub fn parsePath(arena: Allocator, url_: ?[:0]const u8, explicit_path: ?[]const 
     }
 
     var owned_path: []const u8 = try percentEncode(arena, url_path, isPathChar);
-    const last = std.mem.lastIndexOfScalar(u8, owned_path[1..], '/') orelse {
+    const last = std.mem.findScalarLast(u8, owned_path[1..], '/') orelse {
         return "/";
     };
     return try arena.dupe(u8, owned_path[0 .. last + 1]);
@@ -339,7 +340,15 @@ pub fn parseDomain(arena: Allocator, url_: ?[:0]const u8, explicit_domain: ?[]co
             try std.Uri.Component.percentEncode(&aw.writer, no_leading_dot, isHostChar);
             const owned_domain = toLower(aw.written());
 
-            if (std.mem.indexOfScalarPos(u8, owned_domain, 1, '.') == null and std.mem.eql(u8, "localhost", owned_domain[1..]) == false) {
+            if (isIpLiteral(owned_domain[1..]) or (encoded_host != null and isIpLiteral(encoded_host.?))) {
+                const host = encoded_host orelse return owned_domain[1..];
+                if (std.mem.eql(u8, host, owned_domain[1..])) {
+                    return owned_domain[1..];
+                }
+                return error.InvalidDomain;
+            }
+
+            if (std.mem.findScalarPos(u8, owned_domain, 1, '.') == null and std.mem.eql(u8, "localhost", owned_domain[1..]) == false) {
                 // can't set a cookie for a TLD
                 return error.InvalidDomain;
             }
@@ -380,6 +389,11 @@ pub fn parseDomain(arena: Allocator, url_: ?[:0]const u8, explicit_domain: ?[]co
     return error.InvalidDomain;
 }
 
+fn isIpLiteral(host: []const u8) bool {
+    _ = std.Io.net.IpAddress.parseLiteral(host) catch return false;
+    return true;
+}
+
 pub fn percentEncode(arena: Allocator, part: []const u8, comptime isValidChar: fn (u8) bool) ![]u8 {
     var aw = try std.Io.Writer.Allocating.initCapacity(arena, part.len);
     try std.Uri.Component.percentEncode(&aw.writer, part, isValidChar);
@@ -406,10 +420,10 @@ fn isPathChar(c: u8) bool {
 }
 
 fn parseNameValue(str: []const u8) !struct { []const u8, []const u8, []const u8 } {
-    const key_value_end = std.mem.indexOfScalarPos(u8, str, 0, ';') orelse str.len;
+    const key_value_end = std.mem.findScalarPos(u8, str, 0, ';') orelse str.len;
     const rest = if (key_value_end == str.len) "" else str[key_value_end + 1 ..];
 
-    const sep = std.mem.indexOfScalarPos(u8, str[0..key_value_end], 0, '=') orelse {
+    const sep = std.mem.findScalarPos(u8, str[0..key_value_end], 0, '=') orelse {
         const value = trim(str[0..key_value_end]);
         if (value.len == 0) {
             return error.Empty;
@@ -685,7 +699,7 @@ pub const Jar = struct {
 
     pub fn populateFromResponse(self: *Jar, url: [:0]const u8, set_cookie: []const u8) !void {
         const c = Cookie.parse(self.allocator, url, set_cookie) catch |err| {
-            log.warn(.frame, "cookie parse failed", .{ .raw = set_cookie, .err = err });
+            log.debug(.frame, "cookie parse failed", .{ .raw = set_cookie, .err = err });
             return;
         };
 
@@ -738,9 +752,9 @@ pub fn areHostsSameSite(target_host: []const u8, origin_host: []const u8) bool {
 }
 
 fn findSecondLevelDomain(host: []const u8) []const u8 {
-    var i = std.mem.lastIndexOfScalar(u8, host, '.') orelse return host;
+    var i = std.mem.findScalarLast(u8, host, '.') orelse return host;
     while (true) {
-        i = std.mem.lastIndexOfScalar(u8, host[0..i], '.') orelse return host;
+        i = std.mem.findScalarLast(u8, host[0..i], '.') orelse return host;
         const strip = i + 1;
         if (public_suffix_list(host[strip..]) == false) {
             return host[strip..];
@@ -882,15 +896,15 @@ test "Jar: add limit" {
         .domain = "lightpanda.io",
         .path = "/",
         .expires = null,
-        .value = "v" ** 4096 ++ "v",
+        .value = repeat("v", 4096) ++ "v",
     }, now, true));
 
     // generate unique names.
     const names = comptime blk: {
-        @setEvalBranchQuota(max_jar_size);
+        @setEvalBranchQuota(max_jar_size * 10);
         var result: [max_jar_size][]const u8 = undefined;
         for (0..max_jar_size) |i| {
-            result[i] = "v" ** i;
+            result[i] = repeat("v", i);
         }
         break :blk result;
     };
@@ -1465,12 +1479,16 @@ test "Cookie: parse domain" {
     try expectAttribute(.{ .domain = ".lightpanda.io" }, "http://dev.lightpanda.io/", "b;domain=.lightpanda.io");
     try expectAttribute(.{ .domain = ".localhost" }, "http://localhost/", "b;domain=localhost");
     try expectAttribute(.{ .domain = ".localhost" }, "http://localhost/", "b;domain=.localhost");
+    try expectAttribute(.{ .domain = "127.0.0.1" }, "http://127.0.0.1/", "b;domain=127.0.0.1");
+    try expectAttribute(.{ .domain = "127.0.0.1" }, "http://127.0.0.1/", "b;domain=.127.0.0.1");
 
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=io");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=.io");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.lightpanda.io");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.lightpanda.com");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.example.com");
+    try expectError(error.InvalidDomain, "http://127.0.0.1/", "b;domain=0.0.1");
+    try expectError(error.InvalidDomain, "http://127.0.0.1/", "b;domain=127.0.0.2");
 
     try expectError(error.InvalidDomain, "http://attackerexample.com/", "b;domain=example.com");
     try expectError(error.InvalidDomain, "http://attackerexample.com/", "b;domain=.example.com");
@@ -1494,8 +1512,8 @@ test "Cookie: parse domain" {
 }
 
 test "Cookie: parse limit" {
-    try expectError(error.CookieHeaderSizeExceeded, "http://lightpanda.io/", "v" ** 8192 ++ ";domain=lightpanda.io");
-    try expectError(error.CookieSizeExceeded, "http://lightpanda.io/", "v" ** 4096 ++ "v;domain=lightpanda.io");
+    try expectError(error.CookieHeaderSizeExceeded, "http://lightpanda.io/", repeat("v", 8192) ++ ";domain=lightpanda.io");
+    try expectError(error.CookieSizeExceeded, "http://lightpanda.io/", repeat("v", 4096) ++ "v;domain=lightpanda.io");
 }
 
 const ExpectedCookie = struct {
@@ -1528,14 +1546,14 @@ fn expectAttribute(expected: anytype, url_: ?[:0]const u8, set_cookie: []const u
     var cookie = try Cookie.parse(testing.allocator, url_ orelse test_url, set_cookie);
     defer cookie.deinit();
 
-    inline for (@typeInfo(@TypeOf(expected)).@"struct".fields) |f| {
-        if (comptime std.mem.eql(u8, f.name, "expires")) {
+    inline for (@typeInfo(@TypeOf(expected)).@"struct".field_names) |field_name| {
+        if (comptime std.mem.eql(u8, field_name, "expires")) {
             switch (@typeInfo(@TypeOf(expected.expires))) {
                 .int, .comptime_int => try testing.expectDelta(@as(f64, @floatFromInt(expected.expires)), cookie.expires, 1.0),
                 else => try testing.expectDelta(expected.expires, cookie.expires, 1.0),
             }
         } else {
-            try testing.expectEqual(@field(expected, f.name), @field(cookie, f.name));
+            try testing.expectEqual(@field(expected, field_name), @field(cookie, field_name));
         }
     }
 }

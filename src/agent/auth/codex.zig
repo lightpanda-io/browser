@@ -108,13 +108,13 @@ fn parseTokenResponse(allocator: std.mem.Allocator, body: []const u8) !auth.Toke
 }
 
 fn refreshBody(arena: std.mem.Allocator, refresh_token: []const u8) ![]u8 {
-    return std.fmt.allocPrint(arena, "grant_type=refresh_token&client_id=" ++ client_id ++ "&refresh_token={s}", .{
+    return arena.print("grant_type=refresh_token&client_id=" ++ client_id ++ "&refresh_token={s}", .{
         try lp.URL.percentEncodeSegment(arena, refresh_token, .component),
     });
 }
 
 fn exchangeBody(arena: std.mem.Allocator, code: []const u8, code_verifier: []const u8) ![]u8 {
-    return std.fmt.allocPrint(arena, "grant_type=authorization_code&client_id=" ++ client_id ++
+    return arena.print("grant_type=authorization_code&client_id=" ++ client_id ++
         "&redirect_uri=" ++ device_redirect_uri ++ "&code={s}&code_verifier={s}", .{
         try lp.URL.percentEncodeSegment(arena, code, .component),
         try lp.URL.percentEncodeSegment(arena, code_verifier, .component),
@@ -155,7 +155,7 @@ fn deviceLogin(allocator: std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) 
 
     const code_res = try post(a, interrupt, device_code_url, "application/json", "{\"client_id\":\"" ++ client_id ++ "\"}");
     if (code_res.status != .ok) {
-        log.warn(.app, "codex device-code failed", .{ .status = @intFromEnum(code_res.status), .body = code_res.body });
+        log.warn(.app, "codex device-code failed", .{ .status = @backingInt(code_res.status), .body = code_res.body });
         return error.DeviceCodeRequestFailed;
     }
     const dc = try std.json.parseFromSliceLeaky(DeviceCode, a, code_res.body, .{ .ignore_unknown_fields = true });
@@ -166,7 +166,7 @@ fn deviceLogin(allocator: std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) 
         .{ verify_url, dc.user_code },
     );
 
-    const poll_body = try std.fmt.allocPrint(a, "{f}", .{std.json.fmt(
+    const poll_body = try a.print("{f}", .{std.json.fmt(
         .{ .device_auth_id = dc.device_auth_id, .user_code = dc.user_code },
         .{},
     )});
@@ -178,7 +178,7 @@ fn deviceLogin(allocator: std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) 
             // Still pending — the user hasn't finished authorizing.
             .forbidden, .not_found => continue,
             else => {
-                log.warn(.app, "codex device-auth poll failed", .{ .status = @intFromEnum(res.status), .body = res.body });
+                log.warn(.app, "codex device-auth poll failed", .{ .status = @backingInt(res.status), .body = res.body });
                 return error.DeviceAuthFailed;
             },
         }
@@ -187,7 +187,7 @@ fn deviceLogin(allocator: std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) 
     const exchange = try exchangeBody(a, dt.authorization_code, dt.code_verifier);
     const tok_res = try post(a, interrupt, token_url, "application/x-www-form-urlencoded", exchange);
     if (tok_res.status != .ok) {
-        log.warn(.app, "codex token exchange failed", .{ .status = @intFromEnum(tok_res.status), .body = tok_res.body });
+        log.warn(.app, "codex token exchange failed", .{ .status = @backingInt(tok_res.status), .body = tok_res.body });
         return error.TokenExchangeFailed;
     }
     return parseTokenResponse(allocator, tok_res.body);
@@ -200,7 +200,7 @@ fn refreshGrant(allocator: std.mem.Allocator, refresh_token: []const u8) !auth.T
     const body = try refreshBody(a, refresh_token);
     const res = try post(a, null, token_url, "application/x-www-form-urlencoded", body);
     if (res.status != .ok) {
-        log.warn(.app, "codex token refresh failed", .{ .status = @intFromEnum(res.status), .body = res.body });
+        log.warn(.app, "codex token refresh failed", .{ .status = @backingInt(res.status), .body = res.body });
         return error.RefreshFailed;
     }
     return parseTokenResponse(allocator, res.body);
@@ -233,7 +233,7 @@ fn makeJwt(arena: std.mem.Allocator, payload_json: []const u8) ![]const u8 {
     const enc = std.base64.url_safe_no_pad.Encoder;
     const p = try arena.alloc(u8, enc.calcSize(payload_json.len));
     _ = enc.encode(p, payload_json);
-    return std.fmt.allocPrint(arena, "aGVhZGVy.{s}.c2ln", .{p});
+    return arena.print("aGVhZGVy.{s}.c2ln", .{p});
 }
 
 test "accountIdFromJwt: top-level chatgpt_account_id" {
@@ -281,7 +281,7 @@ test "parseTokenResponse derives account id and absolute expiry" {
     defer arena.deinit();
     const a = arena.allocator();
     const jwt = try makeJwt(a, "{\"chatgpt_account_id\":\"acct-x\"}");
-    const body = try std.fmt.allocPrint(a, "{{\"access_token\":\"acc\",\"refresh_token\":\"ref\",\"id_token\":\"{s}\",\"expires_in\":3600}}", .{jwt});
+    const body = try a.print("{{\"access_token\":\"acc\",\"refresh_token\":\"ref\",\"id_token\":\"{s}\",\"expires_in\":3600}}", .{jwt});
     const tokens = try parseTokenResponse(std.testing.allocator, body);
     defer tokens.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("acc", tokens.access_token);

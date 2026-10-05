@@ -126,7 +126,7 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !void
     try self.dispatchAbortEvent(exec);
     for (to_dispatch.items) |dep| {
         dep.dispatchAbortEvent(exec) catch |err| {
-            log.warn(.app, "abort dependent dispatch", .{ .err = err });
+            log.debug(.app, "abort dependent dispatch", .{ .err = err });
         };
     }
 }
@@ -215,7 +215,16 @@ fn createAny(signals_value: js.Value, exec: *const Execution) !*AbortSignal {
     return result;
 }
 
-fn createTimeout(delay: u32, exec: *const Execution) !*AbortSignal {
+fn createTimeout(milliseconds: f64, exec: *const Execution) !*AbortSignal {
+    if (std.math.isFinite(milliseconds) == false) {
+        return error.TypeError;
+    }
+    const truncated = @trunc(milliseconds);
+    if (truncated < 0 or truncated > std.math.maxInt(u53)) {
+        return error.TypeError;
+    }
+    const delay: u32 = @intFromFloat(@min(truncated, std.math.maxInt(u32)));
+
     const callback = try exec.arena.create(TimeoutCallback);
     callback.* = .{
         .exec = exec,
@@ -272,7 +281,7 @@ const TimeoutCallback = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const self: *TimeoutCallback = @ptrCast(@alignCast(ctx));
         self.timeoutAbort() catch |err| {
-            log.warn(.app, "abort signal timeout", .{ .err = err });
+            log.debug(.app, "abort signal timeout", .{ .err = err });
         };
         return null;
     }

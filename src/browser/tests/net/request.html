@@ -209,7 +209,56 @@
     testing.expectEqual(req1.url, req2.url);
     testing.expectEqual(req1.method, req2.method);
     testing.expectEqual('value', req2.headers.get('X-Custom'));
+
+    // Each copy owns its headers.
+    req2.headers.set('X-Custom', 'changed');
+    req2.headers.append('X-Other', 'other');
+    testing.expectEqual('value', req1.headers.get('X-Custom'));
+    testing.expectEqual(null, req1.headers.get('X-Other'));
   }
+
+  {
+    const req1 = new Request('https://example.com/api', { mode: 'no-cors' });
+    const req2 = req1.clone();
+    testing.expectEqual('no-cors', req2.mode);
+    // The no-cors guard carries over: non-safelisted headers are dropped.
+    req2.headers.set('X-Custom', 'value');
+    testing.expectEqual(null, req2.headers.get('X-Custom'));
+  }
+</script>
+
+<script id=request_input_inherits>
+  {
+    const req1 = new Request('https://example.com/api', {
+      mode: 'same-origin',
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'manual',
+    });
+
+    for (const req2 of [new Request(req1), new Request(req1, {}), new Request(req1, { method: 'POST' })]) {
+      testing.expectEqual('same-origin', req2.mode);
+      testing.expectEqual('no-store', req2.cache);
+      testing.expectEqual('omit', req2.credentials);
+      testing.expectEqual('manual', req2.redirect);
+    }
+
+    const req3 = new Request(req1, { mode: 'cors', cache: 'reload', credentials: 'include', redirect: 'error' });
+    testing.expectEqual('cors', req3.mode);
+    testing.expectEqual('reload', req3.cache);
+    testing.expectEqual('include', req3.credentials);
+    testing.expectEqual('error', req3.redirect);
+  }
+
+  {
+    const req = new Request('https://example.com/api');
+    testing.expectEqual('cors', req.mode);
+    testing.expectEqual('default', req.cache);
+    testing.expectEqual('same-origin', req.credentials);
+    testing.expectEqual('follow', req.redirect);
+  }
+
+  testing.expectError('TypeError', () => new Request('https://example.com/api', { mode: 'navigate' }));
 </script>
 
 <script id=body_used type=module>

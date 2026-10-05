@@ -75,8 +75,8 @@ pub fn parsePageRanges(arena: Allocator, text: []const u8) error{ InvalidPageRan
         const part = std.mem.trim(u8, raw, &std.ascii.whitespace);
         if (part.len == 0) continue;
         var range: PageRange = undefined;
-        if (std.mem.indexOfScalar(u8, part, '-')) |dash| {
-            if (std.mem.indexOfScalarPos(u8, part, dash + 1, '-') != null) return error.InvalidPageRangeSyntax;
+        if (std.mem.findScalar(u8, part, '-')) |dash| {
+            if (std.mem.findScalarPos(u8, part, dash + 1, '-') != null) return error.InvalidPageRangeSyntax;
             const a = std.mem.trim(u8, part[0..dash], &std.ascii.whitespace);
             const b = std.mem.trim(u8, part[dash + 1 ..], &std.ascii.whitespace);
             range.from = if (a.len == 0) 1 else parsePageNumber(a) orelse return error.InvalidPageRangeSyntax;
@@ -189,7 +189,7 @@ pub const Prepared = struct {
         if (measure_only) {
             return page_count;
         }
-        if (std.mem.indexOfScalar(bool, doc.selected, true) == null) {
+        if (std.mem.findScalar(bool, doc.selected, true) == null) {
             return error.NoPagesSelected;
         }
         try doc.draw();
@@ -291,7 +291,7 @@ const Document = struct {
         const layout = self.layout;
         const lines = layout.lines();
         for (layout.blocks(), 0..) |b, bi| {
-            if (b.kind == @intFromEnum(screenshot.LpBlock.Kind.rule)) {
+            if (b.kind == @backingInt(screenshot.LpBlock.Kind.rule)) {
                 const pg, const py = self.pageOf(b.y);
                 if (self.selected[pg]) {
                     try rect(&self.pages[pg].writer, layout.raw.rule_color, b.x, py, self.column_w - b.x, 1);
@@ -311,7 +311,7 @@ const Document = struct {
                 const h = boxes[j].bottom - boxes[i].top;
                 if (self.selected[pg]) {
                     const w = &self.pages[pg].writer;
-                    if (b.kind == @intFromEnum(screenshot.LpBlock.Kind.pre) and self.opts.print_background) {
+                    if (b.kind == @backingInt(screenshot.LpBlock.Kind.pre) and self.opts.print_background) {
                         const x0 = b.x - layout.raw.pre_pad;
                         try rect(w, layout.raw.pre_bg, x0, top, self.column_w - x0, h);
                     }
@@ -351,7 +351,7 @@ const Document = struct {
     /// Each line's vertical extent. A <pre> grows its first and last line by
     /// the padding so the background stays with the text across a break.
     fn lineBoxes(self: *const Document, b: screenshot.LpLayoutBlock, block_lines: []const screenshot.LpLine) ![]const Box {
-        const pad: f32 = if (b.kind == @intFromEnum(screenshot.LpBlock.Kind.pre)) self.layout.raw.pre_pad else 0;
+        const pad: f32 = if (b.kind == @backingInt(screenshot.LpBlock.Kind.pre)) self.layout.raw.pre_pad else 0;
         const boxes = try self.arena.alloc(Box, block_lines.len);
         for (boxes, block_lines, 0..) |*box, line, i| {
             box.* = .{
@@ -584,11 +584,11 @@ fn paginate(arena: Allocator, layout: *const screenshot.Layout, page_h: f32) ![]
     try breaks.append(arena, 0);
     const lines = layout.lines();
     for (layout.blocks()) |b| {
-        if (b.kind == @intFromEnum(screenshot.LpBlock.Kind.rule)) {
+        if (b.kind == @backingInt(screenshot.LpBlock.Kind.rule)) {
             try fit(arena, &breaks, b.y, b.y + 1, page_h);
             continue;
         }
-        const pad: f32 = if (b.kind == @intFromEnum(screenshot.LpBlock.Kind.pre)) layout.raw.pre_pad else 0;
+        const pad: f32 = if (b.kind == @backingInt(screenshot.LpBlock.Kind.pre)) layout.raw.pre_pad else 0;
         for (lines[b.lines..][0..b.lines_len], 0..) |line, i| {
             const top = line.top - if (i == 0) pad else 0;
             const bottom = line.bottom + if (i + 1 == b.lines_len) pad else 0;
@@ -673,10 +673,10 @@ const FontUse = struct {
         const ttf = &self.ttf;
         const k = 1000 / @as(f32, @floatFromInt(ttf.upem));
         const gids = try self.sortedGids(arena);
-        const name = try std.fmt.allocPrint(arena, "{s}+{s}", .{ SUBSET_TAG, self.info.name[0..self.info.name_len] });
+        const name = try arena.print("{s}+{s}", .{ SUBSET_TAG, self.info.name[0..self.info.name_len] });
 
         const file = ttf.subset(arena, gids) catch ttf.data;
-        const file_id = try out.stream(try std.fmt.allocPrint(arena, "/Length1 {d}", .{file.len}), file);
+        const file_id = try out.stream(try arena.print("/Length1 {d}", .{file.len}), file);
 
         const descriptor = try out.alloc();
         try out.begin(descriptor);
@@ -988,7 +988,7 @@ const Out = struct {
     }
 
     fn print(self: *Out, comptime fmt: []const u8, args: anytype) !void {
-        try self.write(try std.fmt.allocPrint(self.arena, fmt, args));
+        try self.write(try self.arena.print(fmt, args));
     }
 
     fn alloc(self: *Out) !usize {
@@ -1044,17 +1044,17 @@ test "browser.pdf: structure, pagination and links" {
     try testing.expectEqual("%%EOF\n", out[out.len - 6 ..]);
     try testing.expectEqual(1, std.mem.count(u8, out, "/Type /Page "));
     // Letter in points, and the three faces the text used, each embedded once.
-    try testing.expectEqual(true, std.mem.indexOf(u8, out, "/MediaBox [0 0 612.000 792.000]") != null);
+    try testing.expectEqual(true, std.mem.find(u8, out, "/MediaBox [0 0 612.000 792.000]") != null);
     try testing.expectEqual(3, std.mem.count(u8, out, "/Subtype /Type0"));
     try testing.expectEqual(3, std.mem.count(u8, out, "/FontFile2"));
-    try testing.expectEqual(true, std.mem.indexOf(u8, out, "/Encoding /Identity-H") != null);
+    try testing.expectEqual(true, std.mem.find(u8, out, "/Encoding /Identity-H") != null);
     // Well under the 2MB of bundled fonts: they were subset.
     try testing.expectEqual(true, out.len < 120_000);
     // The one link is a URI annotation on the page, resolved to absolute.
     try testing.expectEqual(1, std.mem.count(u8, out, "/Subtype /Link"));
     try testing.expectEqual(1, std.mem.count(u8, out, "/Annots ["));
     const uri = "/URI <" ++ std.fmt.bytesToHex("http://localhost/x", .upper) ++ ">";
-    try testing.expectEqual(true, std.mem.indexOf(u8, out, uri) != null);
+    try testing.expectEqual(true, std.mem.find(u8, out, uri) != null);
 
     // 200 paragraphs don't fit one Letter page; a range then picks pages.
     const long = try doc.createElement("div", null, frame);
@@ -1085,7 +1085,7 @@ test "browser.pdf: structure, pagination and links" {
 
     aw.clearRetainingCapacity();
     try print(testing.arena_allocator, .{ .root = long.asNode() }, .{ .paper_width = 1056, .paper_height = 816, .margin_top = 300, .margin_bottom = 300 }, &aw.writer, frame);
-    try testing.expectEqual(true, std.mem.indexOf(u8, aw.written(), "/MediaBox [0 0 792.000 612.000]") != null);
+    try testing.expectEqual(true, std.mem.find(u8, aw.written(), "/MediaBox [0 0 792.000 612.000]") != null);
     try testing.expectEqual(true, std.mem.count(u8, aw.written(), "/Type /Page ") > pages);
 }
 

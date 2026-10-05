@@ -326,7 +326,7 @@ pub fn deliverEntries(self: *IntersectionObserver, frame: *Frame) !void {
     defer ls.deinit();
 
     ls.toLocal(self._callback).tryCall(void, .{ entries, self }, &caught) catch |err| {
-        log.err(.frame, "IntsctObserver.deliverEntries", .{ .err = err, .caught = caught });
+        log.debug(.frame, "IntsctObserver.deliverEntries", .{ .err = err, .caught = caught });
         return err;
     };
 }

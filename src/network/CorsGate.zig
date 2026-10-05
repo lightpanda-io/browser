@@ -65,7 +65,7 @@ fn flushPending(self: *CorsGate, key: []const u8, allowed: bool) void {
 
         if (!allowed) {
             lp.metrics.cors_preflight.incr(.blocked);
-            log.warn(.cors, "preflight blocked", .{ .url = transfer.req.url });
+            log.debug(.cors, "preflight blocked", .{ .url = transfer.req.url });
             transfer.failAsync(error.CorsBlocked);
             continue;
         }
@@ -113,7 +113,7 @@ fn hasNoCorsUnsafeBytes(value: []const u8) bool {
 }
 
 fn isSafelistedContentType(value: []const u8) bool {
-    const semi = std.mem.indexOfScalar(u8, value, ';') orelse value.len;
+    const semi = std.mem.findScalar(u8, value, ';') orelse value.len;
     const mime = std.mem.trim(u8, value[0..semi], &std.ascii.whitespace);
     return std.ascii.eqlIgnoreCase(mime, "application/x-www-form-urlencoded") or
         std.ascii.eqlIgnoreCase(mime, "multipart/form-data") or
@@ -414,7 +414,7 @@ const CorsPreflightContext = struct {
         const capped_ms = capped_s * 1000;
 
         const methods_wildcard = acam != null and std.mem.eql(u8, acam.?, "*") and !self.wants_credentials;
-        var methods = std.EnumSet(http.Method).initEmpty();
+        var methods = std.EnumSet(http.Method).empty;
         if (!methods_wildcard) {
             if (acam) |list| {
                 var it = std.mem.splitScalar(u8, list, ',');
@@ -491,8 +491,7 @@ const CorsPreflightContext = struct {
         var acac: ?[]const u8 = null;
         var acma: ?[]const u8 = null;
 
-        var iter = transfer.responseHeaderIterator();
-        while (iter.next()) |hdr| {
+        for (transfer.responseHeaders()) |hdr| {
             if (std.mem.eql(u8, hdr.name, ACCESS_CONTROL_ALLOW_ORIGIN)) {
                 acao = hdr.value;
             } else if (std.mem.eql(u8, hdr.name, ACCESS_CONTROL_ALLOW_METHODS)) {
@@ -527,7 +526,7 @@ const CorsPreflightContext = struct {
 
     fn errorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
         const self: *CorsPreflightContext = @ptrCast(@alignCast(ctx_ptr));
-        log.warn(.cors, "preflight error", .{ .url = self.url, .err = err });
+        log.debug(.cors, "preflight error", .{ .url = self.url, .err = err });
 
         self.resolve(false);
     }
@@ -576,7 +575,7 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer, authored_headers: []con
     const arena = try arena_pool.acquire(.tiny, "CorsGate.CorsPreflightContext");
     errdefer arena_pool.release(arena);
 
-    const owned_url = try arena.dupeZ(u8, transfer.req.url);
+    const owned_url = try arena.dupeSentinel(u8, transfer.req.url, 0);
     const owned_key = try arena.dupe(u8, key);
     const owned_origin = try arena.dupe(u8, origin);
 
@@ -656,7 +655,7 @@ pub fn validateResponse(transfer: *Transfer) !void {
     errdefer lp.metrics.cors_response.incr(.blocked);
 
     const allow_origin = HttpClient.findHeader(transfer.res.headers, ACCESS_CONTROL_ALLOW_ORIGIN) orelse {
-        log.warn(.cors, "blocked", .{ .url = req.url, .reason = "missing acao" });
+        log.debug(.cors, "blocked", .{ .url = req.url, .reason = "missing acao" });
         return error.CorsBlocked;
     };
 
@@ -664,14 +663,14 @@ pub fn validateResponse(transfer: *Transfer) !void {
     const is_wildcard_origin = std.mem.eql(u8, allow_origin, "*");
 
     if (is_wildcard_origin and wants_credentials) {
-        log.warn(.cors, "blocked", .{ .url = req.url, .reason = "wildcard origin with credentials" });
+        log.debug(.cors, "blocked", .{ .url = req.url, .reason = "wildcard origin with credentials" });
         return error.CorsBlocked;
     }
 
     if (!is_wildcard_origin) {
         const origin = transfer.effectiveOrigin();
         if (!std.mem.eql(u8, allow_origin, origin)) {
-            log.warn(.cors, "blocked", .{
+            log.debug(.cors, "blocked", .{
                 .url = req.url,
                 .reason = "origin mismatch",
                 .allow_origin = allow_origin,
@@ -683,12 +682,12 @@ pub fn validateResponse(transfer: *Transfer) !void {
 
     if (wants_credentials) {
         const allow_creds = HttpClient.findHeader(transfer.res.headers, ACCESS_CONTROL_ALLOW_CREDENTIALS) orelse {
-            log.warn(.cors, "blocked", .{ .url = req.url, .reason = "missing acac" });
+            log.debug(.cors, "blocked", .{ .url = req.url, .reason = "missing acac" });
             return error.CorsBlocked;
         };
 
         if (!std.mem.eql(u8, allow_creds, "true")) {
-            log.warn(.cors, "blocked", .{ .url = req.url, .reason = "credentials not allowed", .allow_credentials = allow_creds });
+            log.debug(.cors, "blocked", .{ .url = req.url, .reason = "credentials not allowed", .allow_credentials = allow_creds });
             return error.CorsBlocked;
         }
     }

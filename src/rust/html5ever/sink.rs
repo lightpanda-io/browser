@@ -43,6 +43,23 @@ impl ElementData {
     }
 }
 
+// Mirrors Parser.ParsedNode (an extern struct). Every element Ref the tree
+// builder hands back is one of these, created by create_element_callback.
+#[repr(C)]
+struct ParsedNode {
+    _node: *const c_void,
+    data: *const ElementData,
+    _placed: bool,
+    _root: *const c_void,
+    _root_version: usize,
+}
+
+fn element_data<'a>(target: Ref) -> &'a ElementData {
+    let data = unsafe { (*(target as *const ParsedNode)).data };
+    debug_assert!(!data.is_null(), "element data requested for a non-element");
+    return unsafe { &*data };
+}
+
 pub struct Sink<'arena> {
     pub ctx: Ref,
     pub document: Ref,
@@ -50,7 +67,6 @@ pub struct Sink<'arena> {
     pub quirks_mode: Cell<QuirksMode>,
     pub pop_callback: PopCallback,
     pub append_callback: AppendCallback,
-    pub get_data_callback: GetDataCallback,
     pub parse_error_callback: ParseErrorCallback,
     pub create_element_callback: CreateElementCallback,
     pub create_comment_callback: CreateCommentCallback,
@@ -103,9 +119,7 @@ impl<'arena> TreeSink for Sink<'arena> {
     }
 
     fn elem_name(&self, target: &Ref) -> Self::ElemName<'_> {
-        let opaque = unsafe { (self.get_data_callback)(*target) };
-        let data = opaque as *mut ElementData;
-        return unsafe { &(*data).qname };
+        return &element_data(*target).qname;
     }
 
     fn get_template_contents(&self, target: &Ref) -> Ref {
@@ -115,9 +129,7 @@ impl<'arena> TreeSink for Sink<'arena> {
     }
 
     fn is_mathml_annotation_xml_integration_point(&self, target: &Ref) -> bool {
-        let opaque = unsafe { (self.get_data_callback)(*target) };
-        let data = opaque as *mut ElementData;
-        return unsafe { (*data).mathml_annotation_xml_integration_point };
+        return element_data(*target).mathml_annotation_xml_integration_point;
     }
 
     fn pop(&self, node: &Ref) {

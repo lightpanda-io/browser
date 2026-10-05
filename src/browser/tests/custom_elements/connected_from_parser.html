@@ -119,4 +119,57 @@
     testing.expectEqual('value2', window.attrChangedCalls[1].newValue);
 }
 </script>
+
+<script>
+{
+    window.disconnectedParseCalls = [];
+
+    class DisconnectedParseElement extends HTMLElement {
+        constructor() {
+            super();
+            // No id yet when constructed synchronously by the parser.
+            window.disconnectedParseCalls.push('ctor');
+        }
+        connectedCallback() {
+            window.disconnectedParseCalls.push('connected ' + this.id);
+        }
+    }
+
+    customElements.define('disconnected-parse-element', DisconnectedParseElement);
+}
+</script>
+
+<div id="detached-mid-parse"><script>document.getElementById('detached-mid-parse').remove();</script><disconnected-parse-element id="after-detach"></disconnected-parse-element></div>
+
+<template id="parse-template"><disconnected-parse-element id="in-template"></disconnected-parse-element></template>
+
+<script id="verify-disconnected-parse">
+{
+    // The parser kept appending into a parent a script had detached: the
+    // element is constructed (synchronously, main-document parse) but never
+    // connected.
+    testing.expectEqual(null, document.getElementById('after-detach'));
+    testing.expectEqual('ctor', window.disconnectedParseCalls.join(','));
+
+    // Template contents are never connected (nor upgraded).
+    testing.expectEqual(null, document.getElementById('in-template'));
+
+    window.disconnectedParseCalls = [];
+
+    // A shadow root scopes ids even when its host is detached, but nothing in
+    // it is connected.
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({mode: 'open'});
+    shadow.innerHTML = '<disconnected-parse-element id="in-detached-shadow"></disconnected-parse-element>';
+    testing.expectTrue(shadow.getElementById('in-detached-shadow') !== null);
+    // (Fragment-parse constructors still run synchronously, so only check
+    // that it isn't connected.)
+    testing.expectEqual(-1, window.disconnectedParseCalls.indexOf('connected in-detached-shadow'));
+
+    // Once the host is connected, so is the element.
+    document.body.appendChild(host);
+    testing.expectEqual('connected in-detached-shadow', window.disconnectedParseCalls.at(-1));
+    host.remove();
+}
+</script>
 </body>

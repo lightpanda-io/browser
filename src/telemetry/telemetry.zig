@@ -55,7 +55,7 @@ fn TelemetryT(comptime P: type) type {
                 return;
             }
             self.provider.send(event) catch |err| {
-                log.warn(.telemetry, "record error", .{ .err = err, .type = @tagName(std.meta.activeTag(event)) });
+                log.debug(.telemetry, "record error", .{ .err = err, .type = @tagName(std.meta.activeTag(event)) });
             };
         }
 

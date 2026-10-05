@@ -66,6 +66,7 @@ _async: bool = true,
 _response: ?Response = null,
 _response_data: std.ArrayList(u8) = .empty,
 _response_status: u16 = 0,
+_response_status_text: ?[]const u8 = null,
 _response_len: ?usize = 0,
 _response_url: [:0]const u8 = "",
 _override_mime: ?Mime = null,
@@ -230,6 +231,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async
     self._response_xml = null;
     self._response_data.clearRetainingCapacity();
     self._response_status = 0;
+    self._response_status_text = null;
     self._response_len = 0;
     self._response_url = "";
     self._response_mime = null;
@@ -382,8 +384,8 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         return;
     }
 
-    var resp = transfer.submitSync() catch |err| {
-        log.err(.http, "sync request failed", .{
+    var resp = transfer.submitSync(.{ .copy_headers = true }) catch |err| {
+        log.debug(.http, "sync request failed", .{
             .source = "xhr",
             .url = self._url,
             .err = err,
@@ -397,8 +399,25 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     defer self.releaseSelfRef();
 
     self._response_status = resp.status;
+    if (resp.status_text.get()) |st| {
+        self._response_status_text = try self._arena.dupe(u8, st);
+    }
     self._response_url = self._url;
     self._response_len = resp.body.items.len;
+
+    for (resp.headers) |hdr| {
+        if (std.mem.eql(u8, hdr.name, "content-type")) {
+            self.applyContentType(hdr.value) catch |e| {
+                log.info(.http, "invalid content type", .{
+                    .content_Type = hdr.value,
+                    .err = e,
+                    .url = self._url,
+                });
+            };
+            break;
+        }
+    }
+    try self.applyResponseHeaders(resp.headers);
 
     try self._response_data.appendSlice(self._arena.allocator(), resp.body.items);
 
@@ -435,7 +454,7 @@ fn getUpload(self: *XMLHttpRequest) !*XMLHttpRequestUpload {
 }
 
 fn getReadyState(self: *const XMLHttpRequest) u32 {
-    return @intFromEnum(self._ready_state);
+    return @backingInt(self._ready_state);
 }
 
 pub fn getResponseHeader(self: *const XMLHttpRequest, name: []const u8) ?[]const u8 {
@@ -510,7 +529,10 @@ pub fn getStatus(self: *const XMLHttpRequest) u16 {
 }
 
 fn getStatusText(self: *const XMLHttpRequest) []const u8 {
-    return std.http.Status.phrase(@enumFromInt(self._response_status)) orelse "";
+    if (self._response_status_text) |st| {
+        return st;
+    }
+    return std.http.Status.phrase(@fromBackingInt(@intCast(self._response_status))) orelse "";
 }
 
 fn getResponseURL(self: *XMLHttpRequest) []const u8 {
@@ -627,6 +649,21 @@ fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Documen
     }
 }
 
+fn applyContentType(self: *XMLHttpRequest, content_type: []const u8) !void {
+    self._response_mime = try Mime.parse(content_type);
+    self._response_mime_raw = try self._arena.dupe(u8, std.mem.trim(u8, content_type, &std.ascii.whitespace));
+}
+
+fn applyResponseHeaders(self: *XMLHttpRequest, headers: []const http.Header) !void {
+    for (headers) |hdr| {
+        if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
+            continue;
+        }
+        const joined = try self._arena.allocator().print("{s}: {s}", .{ hdr.name, hdr.value });
+        try self._response_headers.append(self._arena.allocator(), joined);
+    }
+}
+
 fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.req.ctx));
 
@@ -639,7 +676,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     }
 
     if (transfer.contentType()) |ct| {
-        self._response_mime = Mime.parse(ct) catch |e| {
+        self.applyContentType(ct) catch |e| {
             log.info(.http, "invalid content type", .{
                 .content_Type = ct,
                 .err = e,
@@ -647,24 +684,19 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
             });
             return .abort;
         };
-        self._response_mime_raw = try self._arena.dupe(u8, std.mem.trim(u8, ct, &std.ascii.whitespace));
     }
 
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
-        if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
-            continue;
-        }
-        const joined = try std.fmt.allocPrint(self._arena.allocator(), "{s}: {s}", .{ hdr.name, hdr.value });
-        try self._response_headers.append(self._arena.allocator(), joined);
-    }
+    try self.applyResponseHeaders(transfer.responseHeaders());
 
     self._response_status = transfer.responseStatus().?;
+    if (transfer.statusText()) |st| {
+        self._response_status_text = try self._arena.dupe(u8, st);
+    }
     if (transfer.getContentLength()) |cl| {
         self._response_len = cl;
     }
     try self._response_data.ensureTotalCapacityPrecise(self._arena.allocator(), transfer.bodyLen());
-    self._response_url = try self._arena.dupeZ(u8, transfer.req.url);
+    self._response_url = try self._arena.dupeSentinel(u8, transfer.req.url, 0);
 
     const exec = self._exec;
 
@@ -745,7 +777,7 @@ pub fn abort(self: *XMLHttpRequest) void {
 
 fn handleError(self: *XMLHttpRequest, err: anyerror) void {
     self._handleError(err) catch |inner| {
-        log.err(.http, "handle error error", .{
+        log.debug(.http, "handle error error", .{
             .original = err,
             .err = inner,
         });
@@ -771,12 +803,7 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
         try self._proto.dispatch(.load_end, null, exec);
     }
 
-    const level: log.Level = switch (err) {
-        error.TransferCanceled => .debug,
-        error.UrlBlocked => .warn,
-        else => .err,
-    };
-    log.log(.http, level, "error", .{
+    log.debug(.http, "error", .{
         .url = self._url,
         .err = err,
         .source = "xhr.handleError",
@@ -819,11 +846,11 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(XMLHttpRequest.init, .{});
-    pub const UNSENT = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.unsent), .{ .template = true });
-    pub const OPENED = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.opened), .{ .template = true });
-    pub const HEADERS_RECEIVED = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.headers_received), .{ .template = true });
-    pub const LOADING = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.loading), .{ .template = true });
-    pub const DONE = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.done), .{ .template = true });
+    pub const UNSENT = bridge.property(@backingInt(XMLHttpRequest.ReadyState.unsent), .{ .template = true });
+    pub const OPENED = bridge.property(@backingInt(XMLHttpRequest.ReadyState.opened), .{ .template = true });
+    pub const HEADERS_RECEIVED = bridge.property(@backingInt(XMLHttpRequest.ReadyState.headers_received), .{ .template = true });
+    pub const LOADING = bridge.property(@backingInt(XMLHttpRequest.ReadyState.loading), .{ .template = true });
+    pub const DONE = bridge.property(@backingInt(XMLHttpRequest.ReadyState.done), .{ .template = true });
 
     pub const onreadystatechange = bridge.accessor(XMLHttpRequest.getOnReadyStateChange, XMLHttpRequest.setOnReadyStateChange, .{});
     pub const upload = bridge.accessor(XMLHttpRequest.getUpload, null, .{});
@@ -861,7 +888,6 @@ test "parseMethod: accepts known methods case-insensitively" {
 }
 
 test "WebApi: XHR" {
-    testing.expectLog(&.{ .http, .http });
     try testing.htmlRunner("net/xhr.html", .{});
 }
 

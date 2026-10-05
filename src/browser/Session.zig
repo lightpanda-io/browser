@@ -276,6 +276,9 @@ pub fn processDestroyQueues(self: *Session) void {
         const queue = self._page_destruction_queue.items;
         if (queue.len > 0) {
             for (queue) |page| {
+                if (comptime lp.IS_DEBUG) {
+                    std.debug.assert(log.currentPage() != &page.log_context);
+                }
                 page.deinit();
                 self.browser.page_pool.destroy(page);
             }
@@ -330,7 +333,7 @@ fn retire(self: *Session, page: *Page) void {
 }
 
 fn removePageFromList(self: *Session, page: *Page) void {
-    if (std.mem.indexOfScalar(*Page, self.pages.items, page)) |i| {
+    if (std.mem.findScalar(*Page, self.pages.items, page)) |i| {
         _ = self.pages.swapRemove(i);
     }
 }
@@ -674,7 +677,7 @@ fn processPageQueuedNavigation(self: *Session, page: *Page) !void {
             continue;
         };
         self.processFrameNavigation(frame, qn) catch |err| {
-            log.warn(.frame, "frame navigation", .{ .url = qn.url, .err = err });
+            log.debug(.frame, "frame navigation", .{ .url = qn.url, .err = err });
         };
     }
 
@@ -687,7 +690,7 @@ fn processPageQueuedNavigation(self: *Session, page: *Page) !void {
         const frame = new_navigations.items[i];
         if (frame._queued_navigation) |qn| {
             if (qn.is_about_something) {
-                log.warn(.frame, "recursive about blank", .{});
+                log.debug(.frame, "recursive about blank", .{});
                 _ = page.queued_navigation.swapRemove(i);
                 continue;
             }
@@ -710,7 +713,7 @@ fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
     }
 
     self._processFrameNavigation(frame, qn) catch |err| {
-        log.warn(.frame, "frame navigation", .{ .url = qn.url, .err = err });
+        log.debug(.frame, "frame navigation", .{ .url = qn.url, .err = err });
         return err;
     };
 }
@@ -775,7 +778,7 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
     iframe._window = frame.window;
 
     frame.navigate(qn.url, qn.opts) catch |err| {
-        log.err(.browser, "queued frame navigation error", .{ .err = err });
+        log.debug(.browser, "queued frame navigation error", .{ .err = err });
         return err;
     };
 }
@@ -813,7 +816,7 @@ fn processPopupNavigation(_: *Session, frame: *Frame, qn: *QueuedNavigation) !vo
     frame.window._opener = saved_opener;
 
     frame.navigate(qn.url, qn.opts) catch |err| {
-        log.err(.browser, "queued popup navigation error", .{ .err = err });
+        log.debug(.browser, "queued popup navigation error", .{ .err = err });
         return err;
     };
 }
@@ -858,7 +861,7 @@ fn replaceRootImmediate(self: *Session, frame_id: u32, url: [:0]const u8, opts: 
     const new_frame = try self.installNewActivePage(frame_id);
 
     new_frame.navigate(url, opts) catch |err| {
-        log.err(.browser, "synthetic navigation error", .{ .err = err, .url = url });
+        log.debug(.browser, "synthetic navigation error", .{ .err = err, .url = url });
         return err;
     };
 }
@@ -911,7 +914,7 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
     // commit, after frame_remove tears down the OLD page's context group.
 
     page.frame.navigate(url, opts) catch |err| {
-        log.err(.browser, "pending navigation start", .{ .err = err, .url = url });
+        log.debug(.browser, "pending navigation start", .{ .err = err, .url = url });
         return err;
     };
 

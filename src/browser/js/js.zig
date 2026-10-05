@@ -167,12 +167,17 @@ pub fn TypedArray(comptime T: type) type {
 pub const ArrayBuffer = struct {
     values: []const u8,
 
+    // Larger lengths throw a RangeError. Nothing real needs more, and an
+    // overcommitted buffer that size can take the whole process down.
+    pub const MAX_LENGTH = 4 * 1024 * 1024 * 1024;
+
     pub fn dupe(self: ArrayBuffer, allocator: Allocator) !ArrayBuffer {
         return .{ .values = try allocator.dupe(u8, self.values) };
     }
 };
 
-// An ArrayBuffer or any typed array kind or a, exposed as its raw bytes.
+// An ArrayBuffer or any typed array kind or a DataView, exposed as its raw bytes.
+// But not from an underying SharedBuffer
 pub const BufferSource = struct {
     bytes: []const u8,
 };
@@ -289,6 +294,13 @@ pub fn arrayBufferData(array_buffer: *const v8.ArrayBuffer) ?*anyopaque {
     defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
     const backing_store = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr) orelse return null;
     return v8.v8__BackingStore__Data(backing_store);
+}
+
+pub fn arrayBufferIsShared(array_buffer: *const v8.ArrayBuffer) bool {
+    var backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
+    defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
+    const backing_store = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr) orelse return false;
+    return v8.v8__BackingStore__IsShared(backing_store);
 }
 
 // If a WebAPI takes a []const u8, then we'll coerce any JS value to that string
@@ -596,12 +608,26 @@ pub fn writeStackTrace(isolate: *v8.Isolate, stack_handle: *const v8.StackTrace,
 
     for (0..@intCast(frame_count)) |i| {
         const frame_handle = v8.v8__StackTrace__GetFrame(stack_handle, isolate, @intCast(i)).?;
-        if (v8.v8__StackFrame__GetFunctionName(frame_handle)) |name| {
-            var buf: [1024]u8 = undefined;
-            const n = v8.v8__String__WriteUtf8(name, isolate, &buf, buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
-            try writer.print("{s}{s}:{d}", .{ separator, buf[0..n], v8.v8__StackFrame__GetLineNumber(frame_handle) });
-        } else {
-            try writer.print("{s}<anonymous>:{d}", .{ separator, v8.v8__StackFrame__GetLineNumber(frame_handle) });
+
+        var name_buf: [512]u8 = undefined;
+        var name: []const u8 = "";
+        if (v8.v8__StackFrame__GetFunctionName(frame_handle)) |str| {
+            const n = v8.v8__String__WriteUtf8(str, isolate, &name_buf, name_buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
+            name = name_buf[0..n];
         }
+        var script_buf: [512]u8 = undefined;
+        var script: []const u8 = "";
+        if (v8.v8__StackFrame__GetScriptNameOrSourceURL(frame_handle)) |str| {
+            const n = v8.v8__String__WriteUtf8(str, isolate, &script_buf, script_buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
+            script = script_buf[0..n];
+        }
+
+        try writer.print("{s}{s} ({s}:{d}:{d})", .{
+            separator,
+            if (name.len == 0) "<anonymous>" else name,
+            if (script.len == 0) "<unknown>" else script,
+            v8.v8__StackFrame__GetLineNumber(frame_handle),
+            v8.v8__StackFrame__GetColumn(frame_handle),
+        });
     }
 }

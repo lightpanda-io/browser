@@ -239,8 +239,12 @@ pub const LoadResources = packed struct(u4) {
 };
 
 pub const ExperimentalFeatures = packed struct(u2) {
-    cors: bool = false,
+    cors: bool = false, // ignored, kept only for backward compatibility.
     serviceworker: bool = false,
+};
+
+pub const DisabledFeatures = packed struct(u1) {
+    cors: bool = false,
 };
 
 /// Common CLI args.
@@ -283,6 +287,7 @@ const CommonOptions = .{
     .{ .name = "disable_subframes", .type = bool, .deprecated = "subframes are now disabled by default, use \"--load-resources iframe\" to enable" },
     .{ .name = "disable_workers", .type = bool, .deprecated = "workers are now disabled by default, use \"--load-resources worker\" to enable" },
     .{ .name = "enable_external_stylesheets", .type = bool, .deprecated = "use \"--load-resources stylesheet\" to enable" },
+    .{ .name = "disable_features", .type = DisabledFeatures, .default = DisabledFeatures{} },
     .{ .name = "experimental_features", .type = ExperimentalFeatures, .default = ExperimentalFeatures{} },
     .{ .name = "load_resources", .type = LoadResources, .default = LoadResources{} },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
@@ -355,7 +360,7 @@ pub const AgentVerbosity = enum {
     high,
 
     pub fn atLeast(self: AgentVerbosity, min: AgentVerbosity) bool {
-        return @intFromEnum(self) >= @intFromEnum(min);
+        return @backingInt(self) >= @backingInt(min);
     }
 };
 
@@ -555,6 +560,13 @@ pub fn tlsVerifyHost(self: *const Config) bool {
         inline .serve, .fetch, .mcp, .agent => |opts| !opts.insecure_disable_tls_host_verification,
         // `version --check` talks to the release endpoint; always verify.
         .version => true,
+        else => unreachable,
+    };
+}
+
+pub fn obeyCors(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_features.cors == false,
         else => unreachable,
     };
 }
@@ -1035,7 +1047,7 @@ pub const HttpHeaders = struct {
         languages: []const []const u8,
 
         pub fn init(allocator: Allocator, value: []const u8) !AcceptLanguage {
-            const header = try allocator.dupeZ(u8, value);
+            const header = try allocator.dupeSentinel(u8, value, 0);
             errdefer allocator.free(header);
 
             var languages: std.ArrayList([]const u8) = .empty;
@@ -1043,7 +1055,7 @@ pub const HttpHeaders = struct {
 
             var it = std.mem.splitScalar(u8, header, ',');
             while (it.next()) |item| {
-                const end = std.mem.indexOfScalar(u8, item, ';') orelse item.len;
+                const end = std.mem.findScalar(u8, item, ';') orelse item.len;
                 const tag = std.mem.trim(u8, item[0..end], " \t");
                 if (tag.len > 0) {
                     try languages.append(allocator, tag);
@@ -1064,15 +1076,15 @@ pub const HttpHeaders = struct {
 
     pub fn init(allocator: Allocator, config: *const Config) !HttpHeaders {
         const user_agent: [:0]const u8 = if (config.userAgent()) |ua|
-            try allocator.dupeZ(u8, ua)
+            try allocator.dupeSentinel(u8, ua, 0)
         else if (config.userAgentSuffix()) |suffix|
-            try std.fmt.allocPrintSentinel(allocator, "{s} {s}", .{ user_agent_base, suffix }, 0)
+            try allocator.printSentinel("{s} {s}", .{ user_agent_base, suffix }, 0)
         else
             user_agent_base;
         errdefer if (config.userAgent() != null or config.userAgentSuffix() != null) allocator.free(user_agent);
 
         const proxy_bearer_header: ?[:0]const u8 = if (config.proxyBearerToken()) |token|
-            try std.fmt.allocPrintSentinel(allocator, "Proxy-Authorization: Bearer {s}", .{token}, 0)
+            try allocator.printSentinel("Proxy-Authorization: Bearer {s}", .{token}, 0)
         else
             null;
         errdefer if (proxy_bearer_header) |hdr| allocator.free(hdr);
@@ -1101,7 +1113,7 @@ pub const HttpHeaders = struct {
     /// last resort, with descending q values. `buf` must hold the longest
     /// output for a tag that passed validateLocale (35 + 24 bytes).
     fn acceptLanguageFor(buf: *[64]u8, tag: []const u8) []const u8 {
-        const primary = tag[0 .. std.mem.indexOfScalar(u8, tag, '-') orelse tag.len];
+        const primary = tag[0 .. std.mem.findScalar(u8, tag, '-') orelse tag.len];
         var w: std.Io.Writer = .fixed(buf);
         w.writeAll(tag) catch unreachable;
         var q: u8 = 9;
@@ -1130,7 +1142,7 @@ pub fn printUsageAndExit(self: *const Config, allocator: Allocator, help_for: Ru
                 \\{s}
                 \\
             , .{Help.general});
-            break :text try std.fmt.allocPrint(allocator, template, .{exec_name});
+            break :text try allocator.print(template, .{exec_name});
         },
         inline .fetch, .serve, .mcp, .agent, .run => |tag| text: {
             const template = comptimePrint(
@@ -1139,11 +1151,11 @@ pub fn printUsageAndExit(self: *const Config, allocator: Allocator, help_for: Ru
                 \\{s}
                 \\
             , .{ @field(Help, @tagName(tag)), Help.common_options });
-            break :text try std.fmt.allocPrint(allocator, template, .{ exec_name, info_or_warn, pretty_or_logfmt });
+            break :text try allocator.print(template, .{ exec_name, info_or_warn, pretty_or_logfmt });
         },
         inline .version, .completion => |tag| text: {
             const template = @field(Help, @tagName(tag)) ++ "\n";
-            break :text try std.fmt.allocPrint(allocator, template, .{exec_name});
+            break :text try allocator.print(template, .{exec_name});
         },
     };
     defer allocator.free(text);
@@ -1225,8 +1237,8 @@ pub fn parseArgs(allocator: Allocator, proc_args: std.process.Args) !Config {
         }
         // run's fields are a strict subset of Agent's (compile error otherwise).
         var agent_opts: Agent = .{};
-        inline for (@typeInfo(@TypeOf(run)).@"struct".fields) |f| {
-            @field(agent_opts, f.name) = @field(run, f.name);
+        inline for (@typeInfo(@TypeOf(run)).@"struct".field_names) |field_name| {
+            @field(agent_opts, field_name) = @field(run, field_name);
         }
         command = .{ .agent = agent_opts };
     }
@@ -1425,7 +1437,7 @@ test "Config: validateLocale" {
     try std.testing.expectError(error.InvalidSubtag, validateLocale("en-U"));
     try std.testing.expectError(error.InvalidSubtag, validateLocale("en-US-x-toolongsub"));
     try std.testing.expectError(error.InvalidSubtag, validateLocale("en-U$"));
-    try std.testing.expectError(error.TooLong, validateLocale("en-" ++ "a" ** 40));
+    try std.testing.expectError(error.TooLong, validateLocale("en-" ++ string.repeat("a", 40)));
 }
 
 test "Config: validateTimezone" {
@@ -1435,7 +1447,7 @@ test "Config: validateTimezone" {
     try std.testing.expectError(error.Empty, validateTimezone(""));
     try std.testing.expectError(error.InvalidCharacter, validateTimezone("Europe/ Paris"));
     try std.testing.expectError(error.InvalidCharacter, validateTimezone("UTC\n"));
-    try std.testing.expectError(error.TooLong, validateTimezone("a" ** 65));
+    try std.testing.expectError(error.TooLong, validateTimezone(string.repeat("a", 65)));
 }
 
 test "Config: HttpHeaders.acceptLanguageFor" {
@@ -1631,7 +1643,7 @@ pub fn validateUserAgent(ua: []const u8) !void {
         }
     }
 
-    if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
+    if (std.ascii.findIgnoreCase(ua, "mozilla") != null) {
         return error.Reserved;
     }
 }
@@ -1642,7 +1654,7 @@ fn localeValidator(allocator: Allocator, args: *std.process.Args.Iterator, field
         log.fatal(.app, "invalid option value", .{ .arg = "--locale", .value = str, .err = err, .hint = "must be a BCP 47 tag such as en-US, de or zh-Hant-TW" });
         return error.InvalidArgument;
     };
-    field.* = try allocator.dupeZ(u8, str);
+    field.* = try allocator.dupeSentinel(u8, str, 0);
 }
 
 fn timezoneValidator(allocator: Allocator, args: *std.process.Args.Iterator, field: *?[:0]const u8) !void {
@@ -1651,7 +1663,7 @@ fn timezoneValidator(allocator: Allocator, args: *std.process.Args.Iterator, fie
         log.fatal(.app, "invalid option value", .{ .arg = "--timezone", .value = str, .err = err, .hint = "must be an IANA time zone such as Europe/Paris or UTC" });
         return error.InvalidArgument;
     };
-    field.* = try allocator.dupeZ(u8, str);
+    field.* = try allocator.dupeSentinel(u8, str, 0);
 }
 
 /// A BCP 47 tag restricted to what ICU and the Accept-Language derivation
@@ -1705,8 +1717,8 @@ pub const tagNames = cli.tagNames;
 /// `<a|b|c>` ghost-text hint built from the same enum's tag names.
 pub fn tagHint(comptime E: type) []const u8 {
     var s: []const u8 = "<";
-    for (@typeInfo(E).@"enum".fields, 0..) |f, i| {
-        s = s ++ (if (i == 0) f.name else "|" ++ f.name);
+    for (@typeInfo(E).@"enum".field_names, 0..) |field_name, i| {
+        s = s ++ (if (i == 0) field_name else "|" ++ field_name);
     }
     return s ++ ">";
 }
@@ -1714,8 +1726,8 @@ pub fn tagHint(comptime E: type) []const u8 {
 /// JSON array `["a","b","c"]` representation of the enum tag names.
 pub fn tagJsonArray(comptime E: type) []const u8 {
     var s: []const u8 = "[";
-    for (@typeInfo(E).@"enum".fields, 0..) |f, i| {
-        s = s ++ (if (i == 0) "\"" else ",\"") ++ f.name ++ "\"";
+    for (@typeInfo(E).@"enum".field_names, 0..) |field_name, i| {
+        s = s ++ (if (i == 0) "\"" else ",\"") ++ field_name ++ "\"";
     }
     return s ++ "]";
 }
