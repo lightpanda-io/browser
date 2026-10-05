@@ -2386,8 +2386,7 @@ pub fn trackFileList(self: *Frame, file_list: *FileList) !void {
 pub const QueuedEvent = struct {
     kind: Kind,
     element: *Element.Html,
-    // An <img> event belongs to one source: dropped if the source changed.
-    image_generation: ?u32 = null,
+    generation: u32 = 0, // used by Image now, could be used by others though
 
     pub const Kind = enum { load, @"error" };
 };
@@ -2401,7 +2400,7 @@ pub fn queueElementEvent(self: *Frame, element: *Element.Html, kind: QueuedEvent
 }
 
 pub fn queueImageEvent(self: *Frame, image: *Element.Html.Image, kind: QueuedEvent.Kind) !void {
-    try self.queueEvent(.{ .element = Factory.protoOf(image), .kind = kind, .image_generation = image._generation });
+    try self.queueEvent(.{ .element = Factory.protoOf(image), .kind = kind, .generation = image._generation });
 }
 
 fn queueEvent(self: *Frame, event: QueuedEvent) !void {
@@ -2625,13 +2624,13 @@ fn dispatchQueuedEvents(self: *Frame) !void {
 
     for (to_process.items) |queued| {
         const html_element = queued.element;
-        const element = html_element.asElement();
-        if (queued.image_generation) |generation| {
-            const image = html_element.is(Element.Html.Image) orelse unreachable;
-            if (image._generation != generation) {
+        if (html_element.is(Element.Html.Image)) |image| {
+            if (image._generation != queued.generation) {
                 continue;
             }
         }
+
+        const element = html_element.asElement();
         switch (queued.kind) {
             // hasAttributeFunction only sees handlers compiled via property
             // access; a parsed `onload="..."` attribute is compiled lazily at
