@@ -27,14 +27,14 @@ const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
 
 pub fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
-    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame.page);
-    frame._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
-        lp.log.debug(.app, "dispatch input event failed", .{ .err = err });
-    };
+    try dispatchTrusted(el, "input", frame);
+    try dispatchTrusted(el, "change", frame);
+}
 
-    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame.page);
-    frame._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
-        lp.log.debug(.app, "dispatch change event failed", .{ .err = err });
+fn dispatchTrusted(el: *Element, comptime typ: []const u8, frame: *Frame) !void {
+    const event: *Event = try .initTrusted(comptime .wrap(typ), .{ .bubbles = true }, frame.page);
+    frame._event_manager.dispatch(el.asEventTarget(), event) catch |err| {
+        lp.log.debug(.app, "dispatch " ++ typ ++ " event failed", .{ .err = err });
     };
 }
 
@@ -197,28 +197,23 @@ fn fillControl(ctl: anytype, text: []const u8, frame: *Frame) !void {
         return error.InvalidNodeType;
     }
 
-    if (!ctl.tracksSelection()) {
+    if (ctl.tracksSelection()) {
+        try ctl.select(frame);
+        const edited = Frame.user_input.insertInto(frame, ctl, text) catch |err| {
+            lp.log.debug(.app, "fill insert failed", .{ .err = err });
+            return error.ActionFailed;
+        };
+        if (!edited) {
+            return error.ActionFailed;
+        }
+    } else {
         ctl.setUserValue(text, frame) catch |err| {
             lp.log.debug(.app, "fill setValue failed", .{ .err = err });
             return error.ActionFailed;
         };
-        return dispatchInputAndChangeEvents(el, frame);
+        try dispatchTrusted(el, "input", frame);
     }
-
-    try ctl.select(frame);
-    const edited = Frame.user_input.insertInto(frame, ctl, text) catch |err| {
-        lp.log.debug(.app, "fill insert failed", .{ .err = err });
-        return error.ActionFailed;
-    };
-    if (!edited) {
-        lp.log.debug(.app, "fill prevented", .{});
-        return error.ActionFailed;
-    }
-
-    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame.page);
-    frame._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
-        lp.log.debug(.app, "dispatch change event failed", .{ .err = err });
-    };
+    try dispatchTrusted(el, "change", frame);
 }
 
 pub const ScrollResult = struct {

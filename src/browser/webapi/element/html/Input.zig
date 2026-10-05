@@ -670,6 +670,15 @@ pub const setSelectionStart = entry.setSelectionStart;
 pub const setSelectionEnd = entry.setSelectionEnd;
 pub const setSelectionRange = entry.setSelectionRange;
 
+/// https://html.spec.whatwg.org/multipage/input.html#attr-input-readonly
+pub fn readonlyApplies(self: *const Input) bool {
+    return switch (self._input_type) {
+        .text, .password, .email, .url, .tel, .search, .number => true,
+        .date, .time, .@"datetime-local", .month, .week => true,
+        else => false,
+    };
+}
+
 pub fn selectionAvailable(self: *const Input) bool {
     switch (self._input_type) {
         .text, .search, .url, .tel, .password => return true,

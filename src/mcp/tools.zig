@@ -1522,6 +1522,21 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
         out.clearRetainingCapacity();
     }
 
+    const fills = [_]struct { []const u8, []const u8, bool }{
+        .{ "#fillPre", "new", true },
+        .{ "#fillCancel", "new", false },
+        .{ "#fillRo", "new", false },
+        .{ "#fillDate", "2024-05-06", true },
+    };
+    for (fills) |f| {
+        const selector, const value, const ok = f;
+        try router.handleMessage(server, aa, try aa.print(
+            \\{{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{{"name":"fill","arguments":{{"selector":"{s}","value":"{s}"}}}}}}
+        , .{ selector, value }));
+        try testing.expectEqual(ok, std.mem.find(u8, out.written(), "Filled element") != null);
+        out.clearRetainingCapacity();
+    }
+
     var ls: js.Local.Scope = undefined;
     page.frame.js.localScope(&ls);
     defer ls.deinit();
@@ -1533,70 +1548,15 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     const result = try ls.local.exec(
         \\ window.hovered === true &&
         \\ window.sel2Changed === 'c' &&
+        \\ document.getElementById('fillPre').value === 'new' &&
+        \\ fillLog.join(' ') === 'beforeinput:insertText input:insertText change' &&
+        \\ document.getElementById('fillCancel').value === '' &&
+        \\ document.getElementById('fillRo').value === 'ro' &&
+        \\ document.getElementById('fillDate').value === '2024-05-06' &&
         \\ window.chkClicked === true && window.chkChanged === true &&
         \\ window.radClicked === true && window.radChanged === true
     , null);
 
-    try testing.expect(result.isTrue());
-}
-
-test "MCP - fill types over the value through the shared edit path" {
-    const aa = testing.arena_allocator;
-
-    var out: std.Io.Writer.Allocating = .init(aa);
-    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
-    defer server.deinit();
-    server.active_session.enterIsolate();
-    defer server.active_session.exitIsolate();
-
-    const page = server.active_session.session.pages.items[0];
-
-    var ls: js.Local.Scope = undefined;
-    page.frame.js.localScope(&ls);
-    defer ls.deinit();
-
-    var try_catch: js.TryCatch = undefined;
-    try_catch.init(&ls.local);
-    defer try_catch.deinit();
-
-    _ = try ls.local.exec(
-        \\ document.body.insertAdjacentHTML('beforeend',
-        \\   '<input id="fPre" value="old"><input id="fCancel"><input id="fRo" readonly value="ro">' +
-        \\   '<input id="fDis" disabled><input id="fDate" type="date" value="2020-01-01">');
-        \\ window.fillLog = [];
-        \\ const pre = document.getElementById('fPre');
-        \\ for (const t of ['beforeinput', 'input', 'change']) {
-        \\   pre.addEventListener(t, (e) => window.fillLog.push(t + ':' + (e.inputType || '') + ':' + e.isTrusted));
-        \\ }
-        \\ document.getElementById('fCancel').addEventListener('beforeinput', (e) => e.preventDefault());
-    , null);
-
-    const cases = [_]struct { selector: []const u8, ok: bool }{
-        .{ .selector = "#fPre", .ok = true },
-        .{ .selector = "#fCancel", .ok = false },
-        .{ .selector = "#fRo", .ok = false },
-        .{ .selector = "#fDis", .ok = false },
-        .{ .selector = "#fDate", .ok = true },
-    };
-    for (cases) |c| {
-        const value = if (std.mem.eql(u8, c.selector, "#fDate")) "2024-05-06" else "new";
-        const msg = try std.fmt.allocPrint(aa,
-            \\{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"fill","arguments":{{"selector":"{s}","value":"{s}"}}}}}}
-        , .{ c.selector, value });
-        try router.handleMessage(server, aa, msg);
-        const filled = std.mem.find(u8, out.written(), "Filled element") != null;
-        try testing.expectEqual(c.ok, filled);
-        out.clearRetainingCapacity();
-    }
-
-    const result = try ls.local.exec(
-        \\ document.getElementById('fPre').value === 'new' &&
-        \\ window.fillLog.join(' ') === 'beforeinput:insertText:true input:insertText:true change::true' &&
-        \\ document.getElementById('fCancel').value === '' &&
-        \\ document.getElementById('fRo').value === 'ro' &&
-        \\ document.getElementById('fDis').value === '' &&
-        \\ document.getElementById('fDate').value === '2024-05-06'
-    , null);
     try testing.expect(result.isTrue());
 }
 

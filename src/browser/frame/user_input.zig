@@ -1007,7 +1007,15 @@ pub fn insertInto(frame: *Frame, ctl: anytype, text: []const u8) !bool {
 }
 
 pub fn acceptsEdit(el: *Element) bool {
-    return !el.isDisabled() and !el.hasAttributeInterned("readonly");
+    if (el.isDisabled()) {
+        return false;
+    }
+    if (el.is(Element.Html.Input)) |input| {
+        if (!input.readonlyApplies()) {
+            return true;
+        }
+    }
+    return !el.hasAttributeInterned("readonly");
 }
 
 // Caret movement a key's default action performs on `ctl`, if any. On a
@@ -1204,12 +1212,8 @@ pub fn insertText(frame: *Frame, v: []const u8) !void {
 
     if (html_element.is(Element.Html.Input)) |input| {
         _ = try insertInto(frame, input, v);
-        return;
-    }
-
-    if (html_element.is(Element.Html.TextArea)) |textarea| {
+    } else if (html_element.is(Element.Html.TextArea)) |textarea| {
         _ = try insertInto(frame, textarea, v);
-        return;
     }
 }
 
