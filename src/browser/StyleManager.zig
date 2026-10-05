@@ -1279,11 +1279,15 @@ const Visibility = struct {
             if (std.ascii.eqlIgnoreCase(name, "display")) {
                 self.display = Display.parse(value);
             } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
-                self.visibility_hidden = if (inheritsKeyword(value)) @as(?bool, null) else std.ascii.eqlIgnoreCase(value, "hidden") or std.ascii.eqlIgnoreCase(value, "collapse");
+                self.visibility_hidden = parseInheritedFlag(value, &.{ "hidden", "collapse" }, &.{ "visible", "initial" });
             } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
                 self.opacity_zero = std.ascii.eqlIgnoreCase(value, "0");
             } else if (std.ascii.eqlIgnoreCase(name, "pointer-events")) {
-                self.pointer_events_none = if (inheritsKeyword(value)) @as(?bool, null) else std.ascii.eqlIgnoreCase(value, "none");
+                self.pointer_events_none = parseInheritedFlag(value, &.{"none"}, &.{
+                    "auto",         "initial", "visiblePainted", "visibleFill", "visibleStroke",
+                    "visible",      "painted", "fill",           "stroke",      "all",
+                    "bounding-box",
+                });
             }
         }
     };
@@ -1759,6 +1763,19 @@ fn inheritsKeyword(value: []const u8) bool {
     return std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset");
 }
 
+/// An inherited boolean property's declared value: inner null for an explicit
+/// inherit, outer null for an invalid value, which the cascade drops.
+fn parseInheritedFlag(value: []const u8, comptime on: []const []const u8, comptime off: []const []const u8) ??bool {
+    if (inheritsKeyword(value)) return @as(?bool, null);
+    inline for (on) |keyword| {
+        if (std.ascii.eqlIgnoreCase(value, keyword)) return true;
+    }
+    inline for (off) |keyword| {
+        if (std.ascii.eqlIgnoreCase(value, keyword)) return false;
+    }
+    return null;
+}
+
 fn parseFontSize(self: *StyleManager, raw: []const u8, parent: ?*Element, depth: u8) ?f64 {
     const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
     if (inheritsKeyword(value)) {
@@ -2180,6 +2197,12 @@ test "StyleManager: memo: a descendant overrides inherited visibility and pointe
     try b.setStyle("visibility: inherit !important; visibility: hidden; pointer-events: inherit !important; pointer-events: none", frame);
     try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(u));
     try testing.expectEqual(false, sm.hasPointerEventsNone(b));
+
+    // An invalid value is dropped, so the parent's value still inherits
+    try b.setStyle("visibility: hidden; pointer-events: none", frame);
+    try u.setStyle("visibility: bogus; pointer-events: bogus", frame);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(u));
+    try testing.expectEqual(true, sm.hasPointerEventsNone(u));
 }
 
 // Every element of a deep chain probed in document order, the shape of an
