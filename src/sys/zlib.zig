@@ -26,7 +26,6 @@ const voidpc = ?*const anyopaque;
 const voidpf = ?*anyopaque;
 const voidp = ?*anyopaque;
 
-pub const ZLIB_VERSION = "1.3.2";
 pub const MAX_WBITS = @as(c_int, 15);
 
 pub const Z_OK = @as(c_int, 0);
@@ -64,6 +63,7 @@ pub const z_stream = extern struct {
     reserved: uLong = 0,
 };
 
+pub extern fn zlibVersion() [*:0]const u8;
 pub extern fn deflateInit2_(strm: *z_stream, level: c_int, method: c_int, windowBits: c_int, memLevel: c_int, strategy: c_int, version: [*c]const u8, stream_size: c_int) c_int;
 pub extern fn inflateInit2_(strm: *z_stream, windowBits: c_int, version: [*c]const u8, stream_size: c_int) c_int;
 pub extern fn deflate(strm: *z_stream, flush: c_int) c_int;

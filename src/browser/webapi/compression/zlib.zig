@@ -79,8 +79,8 @@ pub fn Deflate(comptime mode: enum(u1) { compress, decompress }) type {
             const default_level: c_int = 6;
 
             const rc = switch (comptime mode) {
-                .compress => zlib.deflateInit2_(&self.stream, default_level, zlib.Z_DEFLATED, window_bits, 8, zlib.Z_DEFAULT_STRATEGY, zlib.ZLIB_VERSION, @sizeOf(zlib.z_stream)),
-                .decompress => zlib.inflateInit2_(&self.stream, window_bits, zlib.ZLIB_VERSION, @sizeOf(zlib.z_stream)),
+                .compress => zlib.deflateInit2_(&self.stream, default_level, zlib.Z_DEFLATED, window_bits, 8, zlib.Z_DEFAULT_STRATEGY, zlib.zlibVersion(), @sizeOf(zlib.z_stream)),
+                .decompress => zlib.inflateInit2_(&self.stream, window_bits, zlib.zlibVersion(), @sizeOf(zlib.z_stream)),
             };
             return switch (rc) {
                 zlib.Z_OK => {},
