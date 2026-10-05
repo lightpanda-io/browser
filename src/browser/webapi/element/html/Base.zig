@@ -1,11 +1,31 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const lp = @import("lightpanda");
-const Factory = @import("../../../Factory.zig");
+
 const js = @import("../../../js/js.zig");
-const URL = @import("../../../URL.zig");
 const Frame = @import("../../../Frame.zig");
+const URL = @import("../../../URL.zig");
+const Factory = @import("../../../Factory.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+
 const HtmlElement = @import("../Html.zig");
 
 const Base = @This();
@@ -24,12 +44,12 @@ pub fn asNode(self: *Base) *Node {
 
 pub fn getHref(self: *Base, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return "";
+    const href = element.getAttributeInterned("href") orelse return "";
     if (href.len == 0) {
         return "";
     }
-    const owner = element.asConstNode().ownerFrame(frame);
-    return URL.resolve(frame.local_arena, owner.url, href, .{});
+    const doc = element.asConstNode().ownerDocument(frame).?;
+    return URL.resolve(frame.local_arena, doc.getURL(frame), href, .{});
 }
 
 pub fn setHref(self: *Base, value: []const u8, frame: *Frame) !void {
@@ -45,12 +65,12 @@ pub fn setHref(self: *Base, value: []const u8, frame: *Frame) !void {
         return;
     }
 
-    const owner = node.ownerFrame(frame);
+    const owner = node.ownerFrame(frame) orelse return;
     const first = (try owner.document.querySelector(comptime .wrap("base[href]"), owner)) orelse {
         owner.base_url = null;
         return;
     };
-    const href = first.getAttributeSafe(comptime .wrap("href")) orelse {
+    const href = first.getAttributeInterned("href") orelse {
         owner.base_url = null;
         return;
     };

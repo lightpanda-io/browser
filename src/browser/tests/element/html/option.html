@@ -1,7 +1,9 @@
 <!DOCTYPE html>
 <script src="../../testing.js"></script>
 
-<select id="select1">
+<!-- autocomplete=off: Firefox otherwise restores the selection a previous
+     run left behind when the page is reloaded, failing the `selected` test. -->
+<select id="select1" autocomplete="off">
   <option id="opt1" value="val1">Text 1</option>
   <option id="opt2" value="val2" selected>Text 2</option>
   <option id="opt3">Text 3</option>
@@ -58,8 +60,11 @@
   $('#opt1').label = 'Set Label'
   testing.expectEqual('Set Label', $('#opt1').label)
   testing.expectEqual('Set Label', $('#opt1').getAttribute('label'))
-  // An empty label attribute falls back to the text, per spec.
+  // An empty label attribute is returned as-is; only a missing one falls
+  // back to the text (WPT the-option-element/option-label.html).
   $('#opt1').setAttribute('label', '')
+  testing.expectEqual('', $('#opt1').label)
+  $('#opt1').removeAttribute('label')
   testing.expectEqual('Text 1', $('#opt1').label)
 </script>
 
@@ -81,6 +86,87 @@
 
   $('#opt2').selected = false
   testing.expectEqual(false, $('#opt2').selected)
+</script>
+
+<script id="selected_unset_resets_to_default">
+  // A menu-list select always has a selected option: deselecting the last
+  // selected one falls back to the first enabled option (Blink's
+  // ResetToDefaultSelection, HTML's "ask for a reset").
+  {
+    const sel = document.createElement('select')
+    sel.innerHTML = '<option>a</option><option selected>b</option><option>c</option>'
+    const [a, b, c] = sel.options
+
+    b.selected = false
+    testing.expectEqual(false, b.selected)
+    testing.expectEqual(true, a.selected)
+    testing.expectEqual(1, sel.selectedOptions.length)
+    testing.expectEqual('a', sel.value)
+
+    // Deselecting an option that isn't selected changes nothing.
+    c.selected = false
+    testing.expectEqual(true, a.selected)
+    testing.expectEqual(1, sel.selectedOptions.length)
+
+    // Deselecting the fallback re-selects it.
+    a.selected = false
+    testing.expectEqual(true, a.selected)
+    testing.expectEqual(0, sel.selectedIndex)
+  }
+
+  // A disabled first option is skipped.
+  {
+    const sel = document.createElement('select')
+    sel.innerHTML = '<option disabled>a</option><option>b</option><option selected>c</option>'
+    const [a, b, c] = sel.options
+    c.selected = false
+    testing.expectEqual(false, a.selected)
+    testing.expectEqual(true, b.selected)
+    testing.expectEqual(1, sel.selectedIndex)
+  }
+
+  // Every option disabled: nothing to fall back to.
+  {
+    const sel = document.createElement('select')
+    sel.innerHTML = '<option disabled>a</option><option disabled selected>b</option>'
+    sel.options[1].selected = false
+    testing.expectEqual(0, sel.selectedOptions.length)
+  }
+
+  // A list box (size > 1) may have nothing selected.
+  {
+    const sel = document.createElement('select')
+    sel.size = 3
+    sel.innerHTML = '<option>a</option><option selected>b</option>'
+    sel.options[1].selected = false
+    testing.expectEqual(false, sel.options[0].selected)
+    testing.expectEqual(0, sel.selectedOptions.length)
+  }
+
+  // Multiple: plain deselect.
+  {
+    const sel = document.createElement('select')
+    sel.multiple = true
+    sel.innerHTML = '<option>a</option><option selected>b</option>'
+    sel.options[1].selected = false
+    testing.expectEqual(0, sel.selectedOptions.length)
+  }
+
+  // Options inside an optgroup are part of the list.
+  {
+    const sel = document.createElement('select')
+    sel.innerHTML = '<optgroup><option>a</option></optgroup><option selected>b</option>'
+    sel.options[1].selected = false
+    testing.expectEqual(true, sel.options[0].selected)
+  }
+
+  // No owning select: nothing to reset.
+  {
+    const opt = document.createElement('option')
+    opt.selected = true
+    opt.selected = false
+    testing.expectEqual(false, opt.selected)
+  }
 </script>
 
 <script id="defaultSelected">
@@ -106,36 +192,88 @@
   testing.expectEqual(false, $('#opt4').disabled)
 </script>
 
-<option id="named1" name="choice1">Named option</option>
-<option id="named2">Unnamed option</option>
-
-<script id="name_initial">
-  testing.expectEqual('choice1', $('#named1').name)
-  testing.expectEqual('', $('#named2').name)
-</script>
-
-<script id="name_set">
+<script id="constructor">
   {
-    const option = document.createElement('option')
-    testing.expectEqual('', option.name)
+    const opt = new Option()
+    testing.expectEqual('OPTION', opt.tagName)
+    testing.expectEqual(true, opt instanceof HTMLOptionElement)
+    testing.expectEqual(0, opt.childNodes.length)
+    testing.expectEqual(false, opt.hasAttribute('value'))
+    testing.expectEqual(false, opt.defaultSelected)
+    testing.expectEqual(false, opt.selected)
+  }
 
-    option.name = 'opt-name'
-    testing.expectEqual('opt-name', option.name)
-    testing.expectEqual('opt-name', option.getAttribute('name'))
+  {
+    const opt = new Option('Label', 'v1')
+    testing.expectEqual('Label', opt.text)
+    testing.expectEqual(1, opt.childNodes.length)
+    testing.expectEqual('v1', opt.getAttribute('value'))
+    testing.expectEqual('v1', opt.value)
+  }
 
-    option.name = 'another-name'
-    testing.expectEqual('another-name', option.name)
-    testing.expectEqual('another-name', option.getAttribute('name'))
+  {
+    // An empty text appends no Text node; null is stringified.
+    testing.expectEqual(0, new Option('').childNodes.length)
+    testing.expectEqual('null', new Option(null).text)
+    testing.expectEqual('', new Option('x', '').value)
+
+    const undef = new Option(undefined, undefined)
+    testing.expectEqual(0, undef.childNodes.length)
+    testing.expectEqual(false, undef.hasAttribute('value'))
+
+    const falsy = new Option(false, false)
+    testing.expectEqual('false', falsy.text)
+    testing.expectEqual('false', falsy.getAttribute('value'))
+  }
+
+  {
+    // WebIDL boolean conversion
+    const falsy = new Option('text', 'value', 0, '')
+    testing.expectEqual(false, falsy.hasAttribute('selected'))
+    testing.expectEqual(false, falsy.selected)
+
+    const truthy = new Option('text', 'value', {}, 1)
+    testing.expectEqual(true, truthy.hasAttribute('selected'))
+    testing.expectEqual(true, truthy.selected)
+  }
+
+  {
+    // defaultSelected sets the attribute, selectedness comes from `selected` only.
+    const opt = new Option('a', 'b', true)
+    testing.expectEqual(true, opt.defaultSelected)
+    testing.expectEqual('', opt.getAttribute('selected'))
+    testing.expectEqual(false, opt.selected)
+
+    const opt2 = new Option('a', 'b', false, true)
+    testing.expectEqual(false, opt2.defaultSelected)
+    testing.expectEqual(true, opt2.selected)
+  }
+
+  {
+    const select = document.createElement('select')
+    select.add(new Option('One', '1'))
+    select.add(new Option('Two', '2', false, true))
+    testing.expectEqual('2', select.value)
+    testing.expectEqual(1, select.selectedIndex)
   }
 </script>
 
-<script id="name_reflects_to_attribute">
-  {
-    const option = document.createElement('option')
-    testing.expectEqual(null, option.getAttribute('name'))
+<script id="legacy_factory_function">
+  // https://webidl.spec.whatwg.org/#legacy-factory-functions
+  testing.expectEqual(true, Option !== HTMLOptionElement)
+  testing.expectEqual('Option', Option.name)
+  testing.expectEqual(0, Option.length)
+  testing.expectEqual(HTMLOptionElement.prototype, Option.prototype)
+  testing.expectEqual(HTMLOptionElement, new Option().constructor)
+  testing.expectEqual('option', new Option().localName)
+  testing.expectError('TypeError', () => new HTMLOptionElement())
+  testing.expectError('TypeError', () => Option())
 
-    option.name = 'fieldname'
-    testing.expectEqual('fieldname', option.getAttribute('name'))
-    testing.expectTrue(option.outerHTML.includes('name="fieldname"'))
-  }
+  const desc = Object.getOwnPropertyDescriptor(Option, 'prototype')
+  testing.expectEqual(false, desc.writable)
+  testing.expectEqual(false, desc.enumerable)
+  testing.expectEqual(false, desc.configurable)
+
+  testing.expectEqual(false, Object.keys(window).includes('Option'))
+  testing.expectEqual(false, Object.keys(window).includes('HTMLOptionElement'))
 </script>

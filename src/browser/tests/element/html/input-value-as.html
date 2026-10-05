@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<input id=num type=number value="2.5" min="0" max="10" step="0.5">
+<input id=any type=number value="1" step="any">
+<input id=date type=date value="2024-03-10">
+<input id=month type=month value="2024-03">
+<input id=week type=week value="2024-W10">
+<input id=time type=time value="13:45:30.250">
+<input id=dtl type=datetime-local value="2024-03-10T13:45">
+<input id=text type=text value="x">
+<input id=range type=range min="0" max="10" step="2">
+
+<script id=valueAsNumber_get>
+{
+  testing.expectEqual(2.5, $('#num').valueAsNumber);
+  testing.expectEqual(Date.UTC(2024, 2, 10), $('#date').valueAsNumber);
+  testing.expectEqual(49530250, $('#time').valueAsNumber);
+  testing.expectEqual(Date.UTC(2024, 2, 10, 13, 45), $('#dtl').valueAsNumber);
+  testing.expectEqual(true, Number.isNaN($('#text').valueAsNumber));
+  // Firefox has no month/week inputs; they fall back to text there.
+  if ($('#month').type === 'month') {
+    testing.expectEqual(650, $('#month').valueAsNumber);
+    testing.expectEqual(Date.UTC(2024, 2, 4), $('#week').valueAsNumber);
+  }
+  const empty = document.createElement('input');
+  empty.type = 'date';
+  testing.expectEqual(true, Number.isNaN(empty.valueAsNumber));
+}
+</script>
+
+<script id=valueAsNumber_set>
+{
+  const date = $('#date');
+  date.valueAsNumber = Date.UTC(2020, 0, 31);
+  testing.expectEqual('2020-01-31', date.value);
+  date.valueAsNumber = NaN;
+  testing.expectEqual('', date.value);
+
+  const time = $('#time');
+  time.valueAsNumber = 3600000;
+  testing.expectEqual('01:00', time.value);
+  time.valueAsNumber = 3661500;
+  testing.expectEqual('01:01:01.500', time.value);
+
+  if ($('#month').type === 'month') {
+    const month = $('#month');
+    month.valueAsNumber = 0;
+    testing.expectEqual('1970-01', month.value);
+    month.valueAsNumber = 13;
+    testing.expectEqual('1971-02', month.value);
+
+    const week = $('#week');
+    week.valueAsNumber = Date.UTC(2021, 0, 4);
+    testing.expectEqual('2021-W01', week.value);
+    week.valueAsNumber = Date.UTC(2020, 11, 31);
+    testing.expectEqual('2020-W53', week.value);
+  }
+
+  const dtl = $('#dtl');
+  dtl.valueAsNumber = Date.UTC(2024, 2, 10, 13, 45, 5);
+  testing.expectEqual('2024-03-10T13:45:05', dtl.value);
+
+  const num = $('#num');
+  num.valueAsNumber = 7;
+  testing.expectEqual('7', num.value);
+  num.valueAsNumber = 1.5;
+  testing.expectEqual('1.5', num.value);
+
+  testing.expectError('InvalidStateError', () => { $('#text').valueAsNumber = 1; });
+  testing.expectError('TypeError', () => { num.valueAsNumber = Infinity; });
+}
+</script>
+
+<script id=valueAsDate>
+{
+  const date = $('#date');
+  date.value = '2024-03-10';
+  testing.expectEqual(true, date.valueAsDate instanceof Date);
+  testing.expectEqual(Date.UTC(2024, 2, 10), date.valueAsDate.getTime());
+  $('#time').value = '13:45:30.250';
+  testing.expectEqual(49530250, $('#time').valueAsDate.getTime());
+  testing.expectEqual(null, $('#num').valueAsDate);
+  testing.expectEqual(null, $('#text').valueAsDate);
+  date.value = '';
+  testing.expectEqual(null, date.valueAsDate);
+
+  date.valueAsDate = new Date(Date.UTC(2022, 4, 1));
+  testing.expectEqual('2022-05-01', date.value);
+  date.valueAsDate = null;
+  testing.expectEqual('', date.value);
+  testing.expectError('TypeError', () => { date.valueAsDate = 'x'; });
+  testing.expectError('InvalidStateError', () => { $('#num').valueAsDate = new Date(); });
+
+  if ($('#month').type === 'month') {
+    $('#month').value = '2024-03';
+    testing.expectEqual(Date.UTC(2024, 2, 1), $('#month').valueAsDate.getTime());
+    $('#week').value = '2024-W10';
+    testing.expectEqual(Date.UTC(2024, 2, 4), $('#week').valueAsDate.getTime());
+    $('#month').valueAsDate = new Date(Date.UTC(1999, 11, 31));
+    testing.expectEqual('1999-12', $('#month').value);
+  }
+}
+</script>
+
+<script id=stepUp_stepDown>
+{
+  const num = $('#num');
+  num.value = '2.5';
+  num.stepUp();
+  testing.expectEqual('3', num.value);
+  num.stepUp(3);
+  testing.expectEqual('4.5', num.value);
+  num.stepDown();
+  testing.expectEqual('4', num.value);
+  // Clamped to the last rung within max/min.
+  num.stepUp(100);
+  testing.expectEqual('10', num.value);
+  num.stepDown(100);
+  testing.expectEqual('0', num.value);
+  // Off the ladder: the snap to the next rung counts as the first step.
+  num.value = '2.7';
+  num.stepUp(5);
+  testing.expectEqual('5', num.value);
+  num.value = '2.7';
+  num.stepUp();
+  testing.expectEqual('3', num.value);
+  num.value = '2.7';
+  num.stepDown();
+  testing.expectEqual('2.5', num.value);
+  num.value = '2.7';
+  num.stepDown(3);
+  testing.expectEqual('1.5', num.value);
+
+  // No min: the value attribute is the step base.
+  const date = $('#date');
+  date.value = '2024-03-10';
+  date.stepUp();
+  testing.expectEqual('2024-03-11', date.value);
+  date.stepDown(11);
+  testing.expectEqual('2024-02-29', date.value);
+
+  const time = $('#time');
+  time.value = '13:45:30.250';
+  time.stepUp();
+  testing.expectEqual('13:46:30.250', time.value);
+  time.value = '13:45';
+  time.stepUp();
+  testing.expectEqual('13:45:30.250', time.value);
+
+  const range = $('#range');
+  range.stepUp();
+  testing.expectEqual('8', range.value);
+
+  testing.expectError('InvalidStateError', () => $('#any').stepUp());
+  testing.expectError('InvalidStateError', () => $('#text').stepUp());
+}
+</script>

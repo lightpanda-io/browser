@@ -63,7 +63,7 @@ pub const Unbound = struct {
 
     // Serialize the script. The returned bytes can be persisted and passed back
     // into local.compileWithCache
-    pub fn createCodeCache(self: Unbound, allocator: Allocator) ![]u8 {
+    fn createCodeCache(self: Unbound, allocator: Allocator) ![]u8 {
         const cached = v8.v8__ScriptCompiler__CreateCodeCache(self.handle) orelse return error.CodeCacheFailed;
         defer v8.v8__ScriptCompiler__CachedData__DELETE(cached);
         const len: usize = @intCast(cached.*.length);

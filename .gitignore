@@ -1,10 +1,10 @@
 /.zig-cache/
-/.lp-cache/
+/.lp-cache
 /.lp-history
 /.lp-history.js
 /.lp-agent.zon
 /zig-pkg/
 zig-out
 lightpanda.id
-/src/html5ever/target/
+/src/rust/target/
 src/snapshot.bin

@@ -1,0 +1,7 @@
+<!doctype html>
+<script>
+// Abort our own load for a navigation, then cancel the navigation. Nothing
+// will ever complete this document, so it must stop delaying the parent.
+location.assign('runner1.html');
+window.stop();
+</script>

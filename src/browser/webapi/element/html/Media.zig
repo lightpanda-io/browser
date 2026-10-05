@@ -18,23 +18,26 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
+const Factory = @import("../../../Factory.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
-const Factory = @import("../../../Factory.zig");
-const HtmlElement = @import("../Html.zig");
 const Event = @import("../../Event.zig");
+
+const HtmlElement = @import("../Html.zig");
+const MediaError = @import("../../media/MediaError.zig");
+
 pub const Audio = @import("Audio.zig");
 pub const Video = @import("Video.zig");
-const MediaError = @import("../../media/MediaError.zig");
 
 const Media = @This();
 
 pub const Proto = HtmlElement;
 
-pub const ReadyState = enum(u16) {
+const ReadyState = enum(u16) {
     HAVE_NOTHING = 0,
     HAVE_METADATA = 1,
     HAVE_CURRENT_DATA = 2,
@@ -42,7 +45,7 @@ pub const ReadyState = enum(u16) {
     HAVE_ENOUGH_DATA = 4,
 };
 
-pub const NetworkState = enum(u16) {
+const NetworkState = enum(u16) {
     NETWORK_EMPTY = 0,
     NETWORK_IDLE = 1,
     NETWORK_LOADING = 2,
@@ -114,8 +117,8 @@ pub fn as(self: *Media, comptime T: type) *T {
     return self.is(T).?;
 }
 
-pub fn canPlayType(_: *const Media, mime_type: []const u8, frame: *Frame) []const u8 {
-    const pos = std.mem.indexOfScalar(u8, mime_type, ';') orelse mime_type.len;
+fn canPlayType(_: *const Media, mime_type: []const u8, frame: *Frame) []const u8 {
+    const pos = std.mem.findScalar(u8, mime_type, ';') orelse mime_type.len;
     const base_type = std.mem.trim(u8, mime_type[0..pos], &std.ascii.whitespace);
 
     if (base_type.len > frame.buf.len) {
@@ -184,15 +187,15 @@ pub fn load(self: *Media, frame: *Frame) !void {
 }
 
 fn dispatchEvent(self: *Media, name: []const u8, frame: *Frame) !void {
-    const event = try Event.init(name, .{ .bubbles = false, .cancelable = false }, frame._page);
+    const event = try Event.init(name, .{ .bubbles = false, .cancelable = false }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
-pub fn getPaused(self: *const Media) bool {
+fn getPaused(self: *const Media) bool {
     return self._paused;
 }
 
-pub fn getCurrentTime(self: *const Media) f64 {
+fn getCurrentTime(self: *const Media) f64 {
     return self._current_time;
 }
 
@@ -200,64 +203,64 @@ pub fn getDuration(_: *const Media) f64 {
     return std.math.nan(f64);
 }
 
-pub fn getReadyState(self: *const Media) u16 {
-    return @intFromEnum(self._ready_state);
+fn getReadyState(self: *const Media) u16 {
+    return @backingInt(self._ready_state);
 }
 
-pub fn getNetworkState(self: *const Media) u16 {
-    return @intFromEnum(self._network_state);
+fn getNetworkState(self: *const Media) u16 {
+    return @backingInt(self._network_state);
 }
 
-pub fn getEnded(_: *const Media) bool {
+fn getEnded(_: *const Media) bool {
     return false;
 }
 
-pub fn getSeeking(_: *const Media) bool {
+fn getSeeking(_: *const Media) bool {
     return false;
 }
 
-pub fn getError(self: *const Media) ?*MediaError {
+fn getError(self: *const Media) ?*MediaError {
     return self._error;
 }
 
-pub fn getVolume(self: *const Media) f64 {
+fn getVolume(self: *const Media) f64 {
     return self._volume;
 }
 
-pub fn setVolume(self: *Media, value: f64) void {
+fn setVolume(self: *Media, value: f64) void {
     self._volume = @max(0.0, @min(1.0, value));
 }
 
-pub fn getMuted(self: *const Media) bool {
+fn getMuted(self: *const Media) bool {
     return self._muted;
 }
 
-pub fn setMuted(self: *Media, value: bool) void {
+fn setMuted(self: *Media, value: bool) void {
     self._muted = value;
 }
 
-pub fn getPlaybackRate(self: *const Media) f64 {
+fn getPlaybackRate(self: *const Media) f64 {
     return self._playback_rate;
 }
 
-pub fn setPlaybackRate(self: *Media, value: f64) void {
+fn setPlaybackRate(self: *Media, value: f64) void {
     self._playback_rate = value;
 }
 
-pub fn setCurrentTime(self: *Media, value: f64) void {
+fn setCurrentTime(self: *Media, value: f64) void {
     self._current_time = value;
 }
 
 pub fn getSrc(self: *const Media, frame: *Frame) ![]const u8 {
     const element = self.asConstElement();
-    const src = element.getAttributeSafe(comptime .wrap("src")) orelse return "";
+    const src = element.getAttributeInterned("src") orelse return "";
     if (src.len == 0) {
         return "";
     }
     return element.asConstNode().resolveURLReflect(src, frame, .{});
 }
 
-pub fn setSrc(self: *Media, value: []const u8, frame: *Frame) !void {
+fn setSrc(self: *Media, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), frame);
 }
 
@@ -274,16 +277,16 @@ pub const JsApi = struct {
     pub const crossOrigin = reflect.enumerated("crossorigin", &.{ "anonymous", "use-credentials" }, .{ .missing = null, .nullable = true, .invalid = "anonymous" });
     pub const defaultMuted = reflect.boolean("muted");
 
-    pub const NETWORK_EMPTY = bridge.property(@intFromEnum(NetworkState.NETWORK_EMPTY), .{ .template = true });
-    pub const NETWORK_IDLE = bridge.property(@intFromEnum(NetworkState.NETWORK_IDLE), .{ .template = true });
-    pub const NETWORK_LOADING = bridge.property(@intFromEnum(NetworkState.NETWORK_LOADING), .{ .template = true });
-    pub const NETWORK_NO_SOURCE = bridge.property(@intFromEnum(NetworkState.NETWORK_NO_SOURCE), .{ .template = true });
+    pub const NETWORK_EMPTY = bridge.property(@backingInt(NetworkState.NETWORK_EMPTY), .{ .template = true });
+    pub const NETWORK_IDLE = bridge.property(@backingInt(NetworkState.NETWORK_IDLE), .{ .template = true });
+    pub const NETWORK_LOADING = bridge.property(@backingInt(NetworkState.NETWORK_LOADING), .{ .template = true });
+    pub const NETWORK_NO_SOURCE = bridge.property(@backingInt(NetworkState.NETWORK_NO_SOURCE), .{ .template = true });
 
-    pub const HAVE_NOTHING = bridge.property(@intFromEnum(ReadyState.HAVE_NOTHING), .{ .template = true });
-    pub const HAVE_METADATA = bridge.property(@intFromEnum(ReadyState.HAVE_METADATA), .{ .template = true });
-    pub const HAVE_CURRENT_DATA = bridge.property(@intFromEnum(ReadyState.HAVE_CURRENT_DATA), .{ .template = true });
-    pub const HAVE_FUTURE_DATA = bridge.property(@intFromEnum(ReadyState.HAVE_FUTURE_DATA), .{ .template = true });
-    pub const HAVE_ENOUGH_DATA = bridge.property(@intFromEnum(ReadyState.HAVE_ENOUGH_DATA), .{ .template = true });
+    pub const HAVE_NOTHING = bridge.property(@backingInt(ReadyState.HAVE_NOTHING), .{ .template = true });
+    pub const HAVE_METADATA = bridge.property(@backingInt(ReadyState.HAVE_METADATA), .{ .template = true });
+    pub const HAVE_CURRENT_DATA = bridge.property(@backingInt(ReadyState.HAVE_CURRENT_DATA), .{ .template = true });
+    pub const HAVE_FUTURE_DATA = bridge.property(@backingInt(ReadyState.HAVE_FUTURE_DATA), .{ .template = true });
+    pub const HAVE_ENOUGH_DATA = bridge.property(@backingInt(ReadyState.HAVE_ENOUGH_DATA), .{ .template = true });
 
     pub const src = bridge.accessor(Media.getSrc, Media.setSrc, .{ .ce_reactions = true });
     pub const currentSrc = bridge.accessor(Media.getSrc, null, .{});

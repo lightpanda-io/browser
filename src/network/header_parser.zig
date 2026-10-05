@@ -477,8 +477,8 @@ pub fn parseDisposition(value: []const u8) !Disposition {
 
         // An unquoted value cannot contain a `;`, so the next one (or the end
         // of the header) bounds this parameter when it has to be skipped.
-        const semi = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
-        const eq = std.mem.indexOfScalar(u8, rest, '=') orelse rest.len;
+        const semi = std.mem.findScalar(u8, rest, ';') orelse rest.len;
+        const eq = std.mem.findScalar(u8, rest, '=') orelse rest.len;
         if (eq >= semi) {
             // No `=` in this parameter; skip it.
             rest = rest[semi..];
@@ -492,7 +492,7 @@ pub fn parseDisposition(value: []const u8) !Disposition {
             rest = rest[semi..];
             continue;
         }
-        const end = std.mem.indexOfScalarPos(u8, after_eq, 1, '"') orelse {
+        const end = std.mem.findScalarPos(u8, after_eq, 1, '"') orelse {
             // Unterminated quoted value; ignore the rest of the header.
             return disposition;
         };
@@ -546,14 +546,14 @@ pub const Cursor = struct {
 
     /// Loads a `@Vector(len, u8)` from the current position of cursor without advancing.
     /// SAFETY: This function doesn't check if out of bounds reachable.
-    pub fn asVector(cursor: *const Cursor, len: comptime_int) @Vector(len, u8) {
+    fn asVector(cursor: *const Cursor, len: comptime_int) @Vector(len, u8) {
         return cursor.idx[0..len].*;
     }
 
     /// Creates an integer from the current position of the cursor without advancing.
     /// SAFETY: This function doesn't check if out of bounds reachable.
     /// SAFETY: T must be an integer with bit size >= @bitSizeOf(u8).
-    pub fn asInteger(cursor: *const Cursor, comptime T: type) T {
+    fn asInteger(cursor: *const Cursor, comptime T: type) T {
         return @bitCast(cursor.idx[0 .. @bitSizeOf(T) / @bitSizeOf(u8)].*);
     }
 
@@ -570,13 +570,13 @@ pub const Cursor = struct {
 
     /// Peek the current and next 2 characters but don't advance.
     /// SAFETY: This function doesn't check if out of bounds reachable.
-    pub fn peek3(cursor: *const Cursor, c0: u8, c1: u8, c2: u8) bool {
+    fn peek3(cursor: *const Cursor, c0: u8, c1: u8, c2: u8) bool {
         return cursor.idx[0] == c0 and cursor.idx[1] == c1 and cursor.idx[2] == c2;
     }
 
     /// Peek the current and next 3 characters but don't advance.
     /// SAFETY: This function doesn't check if out of bounds reachable.
-    pub fn peek4(cursor: *const Cursor, c0: u8, c1: u8, c2: u8, c3: u8) bool {
+    fn peek4(cursor: *const Cursor, c0: u8, c1: u8, c2: u8, c3: u8) bool {
         return cursor.asInteger(u32) == @as(u32, @bitCast([4]u8{ c0, c1, c2, c3 }));
     }
 

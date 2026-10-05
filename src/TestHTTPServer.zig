@@ -98,7 +98,7 @@ fn handleConnection(self: *TestHTTPServer, conn: std.Io.net.Stream) !void {
 
         self.handler(&req) catch |err| {
             switch (err) {
-                error.BrokenPipe => {},
+                error.BrokenPipe, error.WriteFailed => {},
                 else => {
                     std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
                     req.respond("server error", .{ .status = .internal_server_error }) catch {};
@@ -113,7 +113,7 @@ pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
     var url_buf: [1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&url_buf);
     var unescaped_file_path = try URL.unescape(fba.allocator(), file_path);
-    if (std.mem.indexOfScalarPos(u8, unescaped_file_path, 0, '?')) |pos| {
+    if (std.mem.findScalarPos(u8, unescaped_file_path, 0, '?')) |pos| {
         unescaped_file_path = unescaped_file_path[0..pos];
     }
     const file = std.Io.Dir.cwd().openFile(lp.io, unescaped_file_path, .{}) catch |err| switch (err) {
@@ -161,6 +161,10 @@ fn getContentType(file_path: []const u8) []const u8 {
     if (std.mem.endsWith(u8, file_path, ".xml")) {
         // some wpt tests do this
         return "text/xml";
+    }
+
+    if (std.mem.endsWith(u8, file_path, ".wasm")) {
+        return "application/wasm";
     }
 
     if (std.mem.endsWith(u8, file_path, ".mjs")) {

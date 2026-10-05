@@ -40,11 +40,11 @@ pub fn getState(_: *const History, frame: *Frame) !?js.Value {
     } else return null;
 }
 
-pub fn getScrollRestoration(self: *History) []const u8 {
+fn getScrollRestoration(self: *History) []const u8 {
     return @tagName(self._scroll_restoration);
 }
 
-pub fn setScrollRestoration(self: *History, str: []const u8) void {
+fn setScrollRestoration(self: *History, str: []const u8) void {
     if (std.meta.stringToEnum(ScrollRestoration, str)) |sr| {
         self._scroll_restoration = sr;
     }
@@ -56,7 +56,7 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
     const url = if (_url) |u|
         try @import("../URL.zig").resolve(arena.allocator(), frame.url, u, .{})
     else
-        try arena.dupeZ(u8, frame.url);
+        try arena.dupeSentinel(u8, frame.url, 0);
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
     _ = try session.navigation.pushEntry(url, .{ .source = .history, .value = json }, frame, true);
@@ -64,6 +64,8 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
     frame.url = url;
     // setHref == reinitializing.
     try frame.window._location._url.setHref(url, &frame.js.execution);
+    // `:target` matches off the fragment, which the new URL can change.
+    frame.styleChanged();
 
     session.notification.dispatch(.frame_navigated_within_document, &.{
         .url = url,
@@ -72,13 +74,13 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
     });
 }
 
-pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, frame: *Frame) !void {
+fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, frame: *Frame) !void {
     const session = frame._session;
     const arena = session.arena;
     const url = if (_url) |u|
         try @import("../URL.zig").resolve(arena.allocator(), frame.url, u, .{})
     else
-        try arena.dupeZ(u8, frame.url);
+        try arena.dupeSentinel(u8, frame.url, 0);
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
     _ = try session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, frame, true);
@@ -86,6 +88,8 @@ pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
     frame.url = url;
     // setHref == reinitializing.
     try frame.window._location._url.setHref(url, &frame.js.execution);
+    // `:target` matches off the fragment, which the new URL can change.
+    frame.styleChanged();
 
     session.notification.dispatch(.frame_navigated_within_document, &.{
         .url = url,
@@ -106,18 +110,17 @@ fn goInner(delta: i32, frame: *Frame) !void {
     const index = @as(usize, @intCast(index_s));
     const entry = frame._session.navigation._entries.items[index];
 
-    if (entry._url) |url| {
-        if (frame.isSameOrigin(url)) {
-            const target = frame.window.asEventTarget();
-            if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
-                const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
-                try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
-            }
-            // hashchange is queued by navigateInner.
-        }
-    }
-
     _ = try frame._session.navigation.navigateInner(entry._url, .{ .traverse = index }, frame);
+
+    const url = entry._url orelse return;
+    if (frame.isSameOrigin(url)) {
+        const target = frame.window.asEventTarget();
+        if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
+            const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
+            try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
+        }
+        // hashchange is queued by navigateInner.
+    }
 }
 
 pub fn back(_: *History, frame: *Frame) !void {

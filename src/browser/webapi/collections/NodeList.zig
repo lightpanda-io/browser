@@ -67,7 +67,7 @@ pub fn length(self: *NodeList, frame: *Frame) !u32 {
     };
 }
 
-pub fn indexedGet(self: *NodeList, index: usize, frame: *Frame) !*Node {
+fn indexedGet(self: *NodeList, index: usize, frame: *Frame) !*Node {
     return try self.getAtIndex(index, frame) orelse return error.NotHandled;
 }
 
@@ -99,7 +99,7 @@ pub fn forEach(self: *NodeList, cb: js.Function, frame: *Frame) !void {
 
         var caught: js.TryCatch.Caught = .{};
         cb.tryCall(void, .{ node, i, self }, &caught) catch |err| {
-            frame._page.recordJsError(err);
+            frame.page.recordJsError(err);
             log.debug(.js, "forEach callback", .{ .caught = caught, .source = "nodelist" });
             return;
         };

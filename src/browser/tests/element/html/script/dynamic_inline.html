@@ -42,6 +42,34 @@
   testing.expectFalse(window.empty_ran);
 </script>
 
+<script id=inline_insert_waits_for_inserting_script>
+{
+  // A script inserted by a running script runs synchronously, but the
+  // microtask checkpoint and timers wait until the inserting script returns.
+  const order = [];
+  window.nested_order = order;
+  const parent = document.createElement('div');
+  document.head.appendChild(parent);
+  new MutationObserver(() => order.push('mutation')).observe(parent, { childList: true });
+  Promise.resolve().then(() => order.push('promise'));
+  setTimeout(() => order.push('timer'), 0);
+  const until = performance.now() + 5;
+  while (performance.now() < until) {}
+
+  for (let i = 0; i < 2; i++) {
+    const s = document.createElement('script');
+    s.textContent = `window.nested_order.push('inline-${i}');`;
+    parent.appendChild(s);
+    order.push(`after-${i}`);
+  }
+  testing.expectEqual('inline-0,after-0,inline-1,after-1', order.join(','));
+
+  testing.onload(() => {
+    testing.expectEqual('inline-0,after-0,inline-1,after-1,promise,mutation,timer', order.join(','));
+  });
+}
+</script>
+
 <script id=module_inline>
   window.module_executed = false;
   const s6 = document.createElement('script');

@@ -19,21 +19,23 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const js = @import("../../js/js.zig");
 const http = @import("../../../network/http.zig");
 
-const URL = @import("../URL.zig");
 const Page = @import("../../Page.zig");
+const js = @import("../../js/js.zig");
+const referrer = @import("../../referrer.zig");
+
+const URL = @import("../URL.zig");
 const Blob = @import("../Blob.zig");
 const AbortSignal = @import("../AbortSignal.zig");
-const ContentTypeIterator = @import("../../Mime.zig").ContentTypeIterator;
+const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const Headers = @import("Headers.zig");
 const FormData = @import("FormData.zig");
 const body_init = @import("body_init.zig");
-const BodyInit = body_init.BodyInit;
 
 const Execution = js.Execution;
+const BodyInit = body_init.BodyInit;
 
 const Request = @This();
 
@@ -42,11 +44,15 @@ _url: [:0]const u8,
 _method: http.Method,
 _headers: ?*Headers,
 _body: ?[]const u8,
+_body_stream: ?*ReadableStream = null, // drained into `_body` on first use.
 _arena: *lp.Arena,
 _cache: Cache,
 _credentials: Credentials,
 _redirect: Redirect,
+_mode: Mode,
 _signal: ?*AbortSignal,
+_referrer: ReferrerValue,
+_referrer_policy: ?referrer.Policy,
 _body_used: bool = false,
 
 pub const Input = union(enum) {
@@ -56,13 +62,22 @@ pub const Input = union(enum) {
 
 pub const InitOpts = struct {
     body: ?BodyInit = null,
-    cache: Cache = .default,
-    credentials: Credentials = .@"same-origin",
+    cache: ?Cache = null,
+    credentials: ?Credentials = null,
     headers: ?Headers.InitOpts = null,
     method: ?[]const u8 = null,
+    mode: ?Mode = null,
     priority: ?[]const u8 = null,
-    redirect: Redirect = .follow,
+    redirect: ?Redirect = null,
+    referrer: ?[]const u8 = null,
+    referrerPolicy: ?[]const u8 = null,
     signal: ?*AbortSignal = null,
+};
+
+pub const ReferrerValue = union(enum) {
+    client,
+    none,
+    url: [:0]const u8,
 };
 
 const Priority = enum { high, low, auto };
@@ -91,13 +106,21 @@ const Cache = enum {
     pub const js_enum_from_string = true;
 };
 
+const Mode = enum {
+    cors,
+    @"no-cors",
+    @"same-origin",
+    navigate,
+    pub const js_enum_from_string = true;
+};
+
 pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
     const arena = try exec.getPinnedArena(.medium, "Request");
     errdefer arena.release();
 
     const url = switch (input) {
         .url => |u| try URL.resolve(arena.allocator(), exec.base(), u, .{ .encoding = exec.charset.* }),
-        .request => |r| try arena.dupeZ(u8, r._url),
+        .request => |r| try arena.dupeSentinel(u8, r._url, 0),
     };
 
     const opts = opts_ orelse InitOpts{};
@@ -114,21 +137,50 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .request => |r| r._method,
     };
 
-    var headers = if (opts.headers) |headers_init| switch (headers_init) {
-        .obj => |h| h,
-        else => try Headers.init(headers_init, exec),
+    // Absent init members inherit from the input Request.
+    const mode: Mode = if (opts.mode) |m| blk: {
+        if (m == .navigate) {
+            return error.TypeError;
+        }
+        break :blk m;
     } else switch (input) {
-        .url => null,
-        .request => |r| r._headers,
+        .url => .cors,
+        .request => |r| if (r._mode == .navigate and opts_ != null) .@"same-origin" else r._mode,
+    };
+    const cache: Cache = opts.cache orelse switch (input) {
+        .url => .default,
+        .request => |r| r._cache,
+    };
+    const credentials: Credentials = opts.credentials orelse switch (input) {
+        .url => .@"same-origin",
+        .request => |r| r._credentials,
+    };
+    const redirect: Redirect = opts.redirect orelse switch (input) {
+        .url => .follow,
+        .request => |r| r._redirect,
     };
 
+    const guard = headerGuard(mode);
+    var headers = if (opts.headers) |headers_init|
+        try Headers.initGuarded(headers_init, guard, exec)
+    else switch (input) {
+        .url => null,
+        .request => |r| if (r._headers) |h| try Headers.initGuarded(.{ .obj = h }, guard, exec) else null,
+    };
+
+    var body_stream: ?*ReadableStream = null;
     const body = if (opts.body) |b| blk: {
+        if (b == .stream) {
+            // Drained on first use, not here: the stream may not be closed yet.
+            body_stream = b.stream;
+            break :blk null;
+        }
         const extracted = try b.extract(arena.allocator());
         // Per Fetch §6.5 step 11, the default Content-Type only applies if
         // the user has not already set one via the headers init dict.
         if (extracted.content_type) |ct| {
-            const hs = headers orelse try Headers.init(null, exec);
-            if (!hs.has("content-type", exec)) {
+            const hs = headers orelse try Headers.initGuarded(null, guard, exec);
+            if (try hs.has("content-type", exec) == false) {
                 try hs.append("content-type", ct, exec);
             }
             headers = hs;
@@ -136,9 +188,12 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         break :blk extracted.bytes;
     } else switch (input) {
         .url => null,
-        // Dupe: the source Request owns its body bytes and may be finalized
-        // before this one.
-        .request => |r| if (r._body) |b| try arena.dupe(u8, b) else null,
+        .request => |r| blk: {
+            body_stream = r._body_stream;
+            // Dupe: the source Request owns its body bytes and may be finalized
+            // before this one.
+            break :blk if (r._body) |b| try arena.dupe(u8, b) else null;
+        },
     };
 
     const signal = if (opts.signal) |s|
@@ -148,17 +203,44 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .request => |r| r._signal,
     };
 
+    const referrer_value: ReferrerValue = if (opts.referrer) |r| blk: {
+        if (r.len == 0) break :blk .none;
+        if (std.mem.eql(u8, r, "about:client")) break :blk .client;
+        const resolved = try URL.resolve(arena.allocator(), exec.base(), r, .{ .encoding = exec.charset.* });
+        if (!exec.isSameOrigin(resolved)) break :blk .client;
+        break :blk .{ .url = resolved };
+    } else if (opts_ != null) .client else switch (input) {
+        .url => .client,
+        .request => |r| switch (r._referrer) {
+            .url => |u| .{ .url = try arena.dupeSentinel(u8, u, 0) },
+            else => r._referrer,
+        },
+    };
+
+    // Per spec, an unrecognized policy string is ignored
+    // referrer.parse already returns null for that case.
+    const referrer_policy: ?referrer.Policy = if (opts.referrerPolicy) |rp|
+        referrer.parse(rp)
+    else if (opts_ != null) null else switch (input) {
+        .url => null,
+        .request => |r| r._referrer_policy,
+    };
+
     const self = try arena.create(Request);
     self.* = .{
         ._url = url,
         ._arena = arena,
         ._method = method,
         ._headers = headers,
-        ._cache = opts.cache,
-        ._credentials = opts.credentials,
-        ._redirect = opts.redirect,
+        ._cache = cache,
+        ._credentials = credentials,
+        ._redirect = redirect,
+        ._mode = mode,
         ._body = body,
+        ._body_stream = body_stream,
         ._signal = signal,
+        ._referrer = referrer_value,
+        ._referrer_policy = referrer_policy,
     };
     arena.report();
     return self;
@@ -178,7 +260,7 @@ pub fn acquireRef(self: *Request) void {
 
 fn parseMethod(method: []const u8, exec: *const Execution) !http.Method {
     if (method.len > "propfind".len) {
-        return error.InvalidMethod;
+        return error.TypeError;
     }
 
     const lower = std.ascii.lowerString(exec.buf, method);
@@ -193,7 +275,7 @@ fn parseMethod(method: []const u8, exec: *const Execution) !http.Method {
         .{ "options", .OPTIONS },
         .{ "propfind", .PROPFIND },
     });
-    return method_lookup.get(lower) orelse return error.InvalidMethod;
+    return method_lookup.get(lower) orelse return error.TypeError;
 }
 
 pub fn getUrl(self: *const Request) []const u8 {
@@ -204,59 +286,77 @@ pub fn getMethod(self: *const Request) []const u8 {
     return @tagName(self._method);
 }
 
-pub fn getCache(self: *const Request) []const u8 {
+fn getCache(self: *const Request) []const u8 {
     return @tagName(self._cache);
 }
 
-pub fn getCredentials(self: *const Request) []const u8 {
+fn getCredentials(self: *const Request) []const u8 {
     return @tagName(self._credentials);
 }
 
-pub fn getRedirect(self: *const Request) []const u8 {
+fn getRedirect(self: *const Request) []const u8 {
     return @tagName(self._redirect);
 }
 
-pub fn getSignal(self: *const Request) ?*AbortSignal {
+pub fn getMode(self: *const Request) []const u8 {
+    return @tagName(self._mode);
+}
+
+fn getSignal(self: *const Request) ?*AbortSignal {
     return self._signal;
 }
 
-pub fn getHeaders(self: *Request, exec: *const Execution) !*Headers {
+fn getHeaders(self: *Request, exec: *const Execution) !*Headers {
     if (self._headers) |headers| {
         return headers;
     }
 
-    const headers = try Headers.init(null, exec);
+    const headers = try Headers.initGuarded(null, headerGuard(self._mode), exec);
     self._headers = headers;
     return headers;
 }
 
-pub fn getBodyUsed(self: *const Request) bool {
-    if (self._body == null) {
+fn headerGuard(mode: Mode) Headers.Guard {
+    return if (mode == .@"no-cors") .request_no_cors else .request;
+}
+
+fn getBodyUsed(self: *const Request) bool {
+    if (self._body == null and self._body_stream == null) {
         return false;
     }
     return self._body_used;
 }
 
-// Marks a present body consumed; returns a rejected promise if it already was.
-fn consume(self: *Request, local: *const js.Local) ?js.Promise {
-    if (self._body == null) {
-        return null;
+pub fn bodyBytes(self: *Request) !?[]const u8 {
+    if (self._body_stream) |stream| {
+        // drain the stram on first use, TypeError if it can't.
+        self._body = try stream.collectBodyBytes(self._arena.allocator());
+        self._body_stream = null;
+    }
+    return self._body;
+}
+
+// Marks a present body consumed and returns it
+fn consume(self: *Request, local: *const js.Local) ![]const u8 {
+    if (self._body == null and self._body_stream == null) {
+        return "";
     }
 
     if (self._body_used) {
-        return local.rejectPromise(.{ .type_error = "Body has already been read" });
+        return local.typeError("Body has already been read");
     }
+    const body = self.bodyBytes() catch |err| switch (err) {
+        error.TypeError => return local.typeError("Failed to read ReadableStream body"),
+        else => return err,
+    };
     self._body_used = true;
-    return null;
+    return body orelse "";
 }
 
 pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
+    const body = try self.consume(local);
 
-    const body = self._body orelse "";
     const headers = try self.getHeaders(exec);
     const content_type = try headers.get("content-type", exec) orelse "";
 
@@ -266,19 +366,15 @@ pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
 
 pub fn text(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
-    return local.resolvePromise(body_init.stripUtf8Bom(self._body orelse ""));
+    const body = try self.consume(local);
+    return local.resolvePromise(body_init.stripUtf8Bom(body));
 }
 
 pub fn json(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
+    const body = try self.consume(local);
 
-    const value = local.parseJSON(body_init.stripUtf8Bom(self._body orelse "")) catch {
+    const value = local.parseJSON(body_init.stripUtf8Bom(body)) catch {
         return local.rejectPromise(.{ .syntax_error = "failed to parse" });
     };
     return local.resolvePromise(try value.persist());
@@ -286,81 +382,81 @@ pub fn json(self: *Request, exec: *const Execution) !js.Promise {
 
 pub fn arrayBuffer(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
-    return local.resolvePromise(js.ArrayBuffer{ .values = self._body orelse "" });
+    const body = try self.consume(local);
+    return local.resolvePromise(js.ArrayBuffer{ .values = body });
 }
 
 pub fn bytes(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
-    return local.resolvePromise(js.TypedArray(u8){ .values = self._body orelse "" });
+    const body = try self.consume(local);
+    return local.resolvePromise(js.TypedArray(u8){ .values = body });
 }
 
 pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
-
     // Per Fetch, a null body acts as an empty byte sequence.
-    const body = self._body orelse "";
+    const body = try self.consume(local);
 
     const headers = try self.getHeaders(exec);
-    const content_type = try headers.get("content-type", exec) orelse {
-        return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+    const content_type = try headers.get("content-type", exec);
+    const form_data = body_init.parseFormData(body, content_type, exec) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.TypeError => return local.typeError("Failed to parse body as FormData"),
     };
-    var it = ContentTypeIterator.init(content_type);
-    const essence = it.essence;
-
-    // [RFC7578]
-    // Parse bytes, using the value of the `boundary` parameter from mimeType,
-    // per the rules set forth in Returning Values from Forms: multipart/form-data.
-    if (std.ascii.eqlIgnoreCase(essence, "multipart/form-data")) {
-        const boundary = it.findBoundary();
-        if (boundary.len == 0) {
-            return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
-        }
-
-        const form_data = FormData.initFromMultipart(body, boundary, exec) catch |err| switch (err) {
-            error.OutOfMemory => return err,
-            else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
-        };
-        return local.resolvePromise(form_data);
-    }
-
-    if (std.ascii.eqlIgnoreCase(essence, "application/x-www-form-urlencoded")) {
-        const form_data = FormData.initFromUrlEncoded(body, exec) catch |err| switch (err) {
-            error.OutOfMemory => return err,
-            else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
-        };
-        return local.resolvePromise(form_data);
-    }
-
-    return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+    return local.resolvePromise(form_data);
 }
 
-pub fn clone(self: *const Request, exec: *const Execution) !*Request {
-    const arena = try exec.getPinnedArena(if (self._body) |b| b.len else 512, "Request.clone");
+pub fn clone(self: *Request, exec: *const Execution) !*Request {
+    // No stream tee: a stream body is drained so each copy owns its bytes.
+    const body = self.bodyBytes() catch |err| switch (err) {
+        error.TypeError => return exec.js.local.?.typeError("Failed to read ReadableStream body"),
+        else => return err,
+    };
+    const arena = try exec.getPinnedArena(if (body) |b| b.len else 512, "Request.clone");
     errdefer arena.release();
 
     const request = try arena.create(Request);
     request.* = .{
-        ._url = try arena.dupeZ(u8, self._url),
+        ._url = try arena.dupeSentinel(u8, self._url, 0),
         ._arena = arena,
         ._method = self._method,
-        ._headers = self._headers,
+        ._headers = if (self._headers) |h| try Headers.initGuarded(.{ .obj = h }, h._guard, exec) else null,
         ._cache = self._cache,
         ._credentials = self._credentials,
         ._redirect = self._redirect,
-        ._body = if (self._body) |b| try arena.dupe(u8, b) else null,
+        ._mode = self._mode,
+        ._body = if (body) |b| try arena.dupe(u8, b) else null,
         ._signal = self._signal,
+        ._referrer = switch (self._referrer) {
+            .url => |u| .{ .url = try arena.dupeSentinel(u8, u, 0) },
+            else => self._referrer,
+        },
+        ._referrer_policy = self._referrer_policy,
     };
     arena.report();
     return request;
+}
+
+pub fn getReferrer(self: *Request) []const u8 {
+    return switch (self._referrer) {
+        .client => "about:client",
+        .none => "",
+        .url => |url| url,
+    };
+}
+
+pub fn getReferrerPolicy(self: *Request) []const u8 {
+    const policy = self._referrer_policy orelse return "";
+    return switch (policy) {
+        .no_referrer => "no-referrer",
+        .no_referrer_when_downgrade => "no-referrer-when-downgrade",
+        .origin => "origin",
+        .origin_when_cross_origin => "origin-when-cross-origin",
+        .same_origin => "same-origin",
+        .strict_origin => "strict-origin",
+        .strict_origin_when_cross_origin => "strict-origin-when-cross-origin",
+        .unsafe_url => "unsafe-url",
+    };
 }
 
 pub const JsApi = struct {
@@ -379,6 +475,7 @@ pub const JsApi = struct {
     pub const cache = bridge.accessor(Request.getCache, null, .{});
     pub const credentials = bridge.accessor(Request.getCredentials, null, .{});
     pub const redirect = bridge.accessor(Request.getRedirect, null, .{});
+    pub const mode = bridge.accessor(Request.getMode, null, .{});
     pub const signal = bridge.accessor(Request.getSignal, null, .{});
     pub const bodyUsed = bridge.accessor(Request.getBodyUsed, null, .{});
     pub const blob = bridge.function(Request.blob, .{});
@@ -388,6 +485,8 @@ pub const JsApi = struct {
     pub const bytes = bridge.function(Request.bytes, .{});
     pub const formData = bridge.function(Request.formData, .{});
     pub const clone = bridge.function(Request.clone, .{});
+    pub const referrer = bridge.accessor(Request.getReferrer, null, .{});
+    pub const referrerPolicy = bridge.accessor(Request.getReferrerPolicy, null, .{});
 };
 
 const testing = @import("../../../testing.zig");

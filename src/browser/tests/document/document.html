@@ -307,10 +307,13 @@
       testing.expectEqual("InvalidCharacterError", err.name);
     }, () => document.createAttribute(''));
 
+    // a leading '.' is fine: browsers don't apply the XML Name production here
+    testing.expectEqual('.over', document.createAttribute('.over').name);
+
     testing.withError((err) => {
       testing.expectEqual(5, err.code);
       testing.expectEqual("InvalidCharacterError", err.name);
-    }, () => document.createAttribute('.over'));
+    }, () => document.createAttribute('over there'));
   }
 </script>
 

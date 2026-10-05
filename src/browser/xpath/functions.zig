@@ -195,14 +195,14 @@ fn containsFn(arena: Allocator, args: []const result.Result) Error!bool {
     if (args.len < 2) return false;
     const s1 = try result.toString(arena, args[0]);
     const s2 = try result.toString(arena, args[1]);
-    return std.mem.indexOf(u8, s1, s2) != null;
+    return std.mem.find(u8, s1, s2) != null;
 }
 
 fn substringBeforeFn(arena: Allocator, args: []const result.Result) Error![]const u8 {
     if (args.len < 2) return "";
     const s1 = try result.toString(arena, args[0]);
     const s2 = try result.toString(arena, args[1]);
-    if (std.mem.indexOf(u8, s1, s2)) |idx| {
+    if (std.mem.find(u8, s1, s2)) |idx| {
         return s1[0..idx];
     }
     return "";
@@ -212,7 +212,7 @@ fn substringAfterFn(arena: Allocator, args: []const result.Result) Error![]const
     if (args.len < 2) return "";
     const s1 = try result.toString(arena, args[0]);
     const s2 = try result.toString(arena, args[1]);
-    if (std.mem.indexOf(u8, s1, s2)) |idx| {
+    if (std.mem.find(u8, s1, s2)) |idx| {
         return s1[idx + s2.len ..];
     }
     return "";
@@ -231,19 +231,19 @@ fn substringFn(arena: Allocator, args: []const result.Result) Error![]const u8 {
         if (std.math.isNan(len_raw)) return "";
         const len = roundHalfToPosInf(len_raw);
         const sum = start - 1 + len;
-        // -inf + inf is NaN; @intFromFloat(NaN) is illegal behavior.
+        // -inf + inf is NaN, and NaN to integer is illegal behavior.
         if (std.math.isNan(sum)) return "";
         const si_f = @max(start - 1, 0);
         const ei_f = @min(sum, s_len);
         if (si_f >= ei_f) return "";
-        const si: usize = @intFromFloat(si_f);
-        const ei: usize = @intFromFloat(ei_f);
+        const si: usize = @trunc(si_f);
+        const ei: usize = @trunc(ei_f);
         return s[si..ei];
     }
 
     const si_f = @max(start - 1, 0);
     if (si_f >= s_len) return "";
-    const si: usize = @intFromFloat(si_f);
+    const si: usize = @trunc(si_f);
     return s[si..];
 }
 
@@ -289,7 +289,7 @@ fn translateFn(arena: Allocator, args: []const result.Result) Error![]const u8 {
 
     var buf = std.Io.Writer.Allocating.init(arena);
     for (s) |c| {
-        if (std.mem.indexOfScalar(u8, from, c)) |idx| {
+        if (std.mem.findScalar(u8, from, c)) |idx| {
             // Chars in `from` past `to.len` are deleted (no copy).
             if (idx < to.len) try buf.writer.writeByte(to[idx]);
         } else {

@@ -333,3 +333,13 @@
     });
   }
 </script>
+
+<script id=abortsignal_timeout_enforce_range>
+  // [EnforceRange] unsigned long long: no wrapping, out of range throws.
+  testing.expectError('TypeError', () => AbortSignal.timeout(-1));
+  testing.expectError('TypeError', () => AbortSignal.timeout(NaN));
+  testing.expectError('TypeError', () => AbortSignal.timeout(Infinity));
+  testing.expectError('TypeError', () => AbortSignal.timeout(2 ** 53));
+  testing.expectEqual(false, AbortSignal.timeout(2 ** 53 - 1).aborted);
+  testing.expectEqual(false, AbortSignal.timeout(-0.5).aborted);
+</script>

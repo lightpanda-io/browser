@@ -80,10 +80,7 @@ pub const Init = union(enum) {
         /// Always HMAC.
         name: []const u8,
     };
-    /// Alias.
-    pub const HmacImport = HmacKeyGen;
-
-    pub const EcdhKeyDeriveParams = struct {
+    const EcdhKeyDeriveParams = struct {
         /// Can be Ed25519 or X25519.
         name: []const u8,
         public: *const CryptoKey,
@@ -180,7 +177,7 @@ pub const KeyData = union(enum) {
     /// Minimal JWK fields we read on import. Symmetric ("oct") keys only need
     /// `kty` and `k`; `d` marks an asymmetric private key. The rest are accepted
     /// for forward-compatibility.
-    pub const Jwk = struct {
+    const Jwk = struct {
         alg: ?[]const u8 = null,
         d: ?[]const u8 = null,
         ext: ?bool = null,

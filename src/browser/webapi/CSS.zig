@@ -19,33 +19,12 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
-const units = @import("../css/units.zig");
 const Tokenizer = @import("../css/Tokenizer.zig");
 
 const CSS = @This();
 _pad: bool = false,
 
 pub const init: CSS = .{};
-
-pub fn parseDimension(value: []const u8) ?f64 {
-    const parsed = units.parse(value) catch return null;
-    return switch (parsed.unit) {
-        .none, .px => parsed.value,
-        else => null,
-    };
-}
-
-// parseDimension plus viewport-relative units, which the faux layout
-// resolves against the page viewport.
-pub fn parseDimensionViewport(value: []const u8, frame: *Frame) ?f64 {
-    const parsed = units.parse(value) catch return null;
-    return switch (parsed.unit) {
-        .none, .px => parsed.value,
-        .vh => parsed.value * @as(f64, @floatFromInt(frame._page.getViewport().height)) / 100.0,
-        .vw => parsed.value * @as(f64, @floatFromInt(frame._page.getViewport().width)) / 100.0,
-        else => null,
-    };
-}
 
 // Extract the X value from a transfrom. This could come from a translate,
 // translatex, translate3d or matrix function.
@@ -128,7 +107,7 @@ pub fn escape(value: []const u8, frame: *Frame) ![]const u8 {
         // Second char (i==0) is a digit and first is '-', needs hex escape
         if (i == 0 and first == '-' and c >= '0' and c <= '9') {
             result[pos] = '\\';
-            const hex_str = std.fmt.bufPrint(result[pos + 1 ..], "{x} ", .{c}) catch unreachable;
+            const hex_str = std.mem.print(result[pos + 1 ..], "{x} ", .{c}) catch unreachable;
             pos += 1 + hex_str.len;
         } else if (!needsEscape(false, c)) {
             result[pos] = c;
@@ -201,7 +180,7 @@ fn writeEscape(comptime is_first: bool, buf: []u8, c: u8) usize {
     var data = buf[1..];
 
     if (isHexEscape(c) or ((comptime is_first) and c >= '0' and c <= '9')) {
-        const hex_str = std.fmt.bufPrint(data, "{x} ", .{c}) catch unreachable;
+        const hex_str = std.mem.print(data, "{x} ", .{c}) catch unreachable;
         return 1 + hex_str.len;
     }
 
@@ -214,6 +193,7 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "Css";
+        pub const class_string = "CSS";
 
         // Per the CSSOM spec, CSS is a namespace object — members are own
         // properties so Object.entries(CSS) returns them.

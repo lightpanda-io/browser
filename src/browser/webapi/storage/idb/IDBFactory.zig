@@ -45,7 +45,7 @@ pub fn open(_: *IDBFactory, name: []const u8, version: ?u64, exec: *Execution) !
         if (v == 0) return error.TypeError;
     }
 
-    const request = try IDBRequest.init(exec);
+    const request = try IDBRequest.initOpen(exec);
 
     const ctx = try exec._factory.create(OpenContext{
         .request = request,
@@ -62,6 +62,12 @@ pub fn open(_: *IDBFactory, name: []const u8, version: ?u64, exec: *Execution) !
     return request;
 }
 
+const State = enum {
+    scheduled, // The scheduler's finalizer
+    parked, // cancelParked
+    running, // on the stack, will finalize when done
+};
+
 const OpenContext = struct {
     request: *IDBRequest,
     name: []const u8,
@@ -69,9 +75,7 @@ const OpenContext = struct {
     exec: *Execution,
     // Our node in the engine's connection gate wait-list. See Engine.acquireGate.
     _gate_waiter: Engine.GateWaiter,
-    // Whether a scheduler task currently points at us; its finalizer owns our
-    // destruction then. When parked on the gate instead, cancelParked owns it.
-    _scheduled: bool = true,
+    _state: State = .scheduled,
 
     // If an callback queued more requests, we need to process those requests
     // on the next tick, and thus need to hold onto the transaction (which pins
@@ -90,9 +94,8 @@ const OpenContext = struct {
         self.exec._factory.destroy(self);
     }
 
-    // Engine.detach cancel: our context is going away while we sit on the
-    // gate. When parked there's no scheduler task, so we own our destruction;
-    // in the wake->run window the task finalizer does.
+    // Engine.detach cancel: our context is going away. Only a parked context
+    // owns its destruction here; otherwise a task finalizer or `run` does.
     fn cancelParked(waiter: *Engine.GateWaiter) void {
         const self: *OpenContext = @fieldParentPtr("_gate_waiter", waiter);
         if (self._upgrade) |txn| {
@@ -103,14 +106,14 @@ const OpenContext = struct {
             txn._settled = true;
             return;
         }
-        if (!self._scheduled) {
+        if (self._state == .parked) {
             self.exec._factory.destroy(self);
         }
     }
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *OpenContext = @ptrCast(@alignCast(ctx));
-        self._scheduled = false;
+        self._state = .running;
 
         if (self._upgrade != null) {
             return self.drainUpgrade();
@@ -127,7 +130,8 @@ const OpenContext = struct {
         // connection, so it must serialize with other transactions/opens. Park
         // on the gate if it's held; wakeUp re-runs us when it's handed over.
         if (!engine.acquireGate(&self._gate_waiter)) {
-            return null; // parked; not destroyed
+            self._state = .parked;
+            return null; // not destroyed
         }
 
         const upgrading = self.runOpen(engine) catch |err| blk: {
@@ -137,7 +141,7 @@ const OpenContext = struct {
             break :blk false;
         };
         if (upgrading) {
-            self._scheduled = true;
+            self._state = .scheduled;
             return 1; // the versionchange drain continues next turn; keep the gate
         }
 
@@ -152,8 +156,10 @@ const OpenContext = struct {
     // deliver the open request's outcome and clean up.
     fn drainUpgrade(self: *OpenContext) !?u32 {
         const txn = self._upgrade.?;
-        if (txn.settleStep(self.exec)) {
-            self._scheduled = true;
+        if (txn.settleStep(self.exec) or txn.abortDeliveryPending()) {
+            // either settle succeeded, and we have more batches to deliver, or
+            // abortDeliveryPending succeeded and we have an abort event.
+            self._state = .scheduled;
             return 1;
         }
 
@@ -170,12 +176,16 @@ const OpenContext = struct {
     // open request's outcome.
     fn finishUpgrade(self: *OpenContext, txn: *IDBTransaction) !void {
         const exec = self.exec;
-        const aborted = txn.aborted();
+        const db = txn._db;
+        // Our pin is often the last one, so releasing it frees `txn` (its
+        // arena goes back to the pool). Read everything we need first.
+        const failed = txn.aborted() or db._closed;
         self.request._txn = .none;
-        txn._db._txn = null;
+        db._txn = null;
         txn.releaseRef(exec.page);
 
-        if (aborted) {
+        if (failed) {
+            self.request._result = .{ .none = js.Undefined{} };
             self.request.setError(error.AbortError);
             return self.request.deliver(exec);
         }
@@ -185,17 +195,17 @@ const OpenContext = struct {
     // Scheduler wake-up: the connection gate was handed to us, so re-run.
     fn wakeUp(waiter: *Engine.GateWaiter) void {
         const self: *OpenContext = @fieldParentPtr("_gate_waiter", waiter);
+        self._state = .scheduled;
         self.exec.js.scheduler.add(self, run, 0, .{
             .name = "IDBFactory.open",
             .finalizer = cancelled,
         }) catch |err| {
             // We were handed the gate; if we can't reschedule, hand it off so the
             // waiters behind us aren't stranded.
-            log.warn(.storage, "idb resume open", .{ .err = err });
+            log.debug(.storage, "idb resume open", .{ .err = err });
             if (self.resolveEngine()) |engine| _ = engine.releaseGate(&self._gate_waiter) else |_| {}
             self.exec._factory.destroy(self);
         };
-        self._scheduled = true;
     }
 
     fn resolveEngine(self: *OpenContext) !*Engine {
@@ -248,6 +258,7 @@ const OpenContext = struct {
         self.request.setDatabaseResult(db);
 
         const txn = try IDBTransaction.initVersionChange(db, exec);
+        txn._old_version = existing orelse 0;
         txn.acquireRef();
 
         {
@@ -264,7 +275,12 @@ const OpenContext = struct {
             try self.request.fireUpgradeNeeded(exec, old_version, @intCast(requested));
         }
 
-        if (!txn.aborted() and txn._queue.items.len > 0) {
+        if (!txn.aborted() and txn._queue.items.len == 0) {
+            // Nothing queued, settle synchronously
+            txn.settle(exec);
+        }
+
+        if (txn.aborted() or txn._queue.items.len > 0) {
             // The handler left requests pending (e.g. a keep-alive loop).
             // Deliver their events one batch per scheduler turn — never
             // synchronously — so timer tasks can interleave and observe the
@@ -274,13 +290,6 @@ const OpenContext = struct {
             return true;
         }
 
-        if (!txn.aborted()) {
-            // Nothing queued: settle synchronously (commit + fire `complete`).
-            txn.settle(exec);
-        }
-        // An aborted transaction — the upgradeneeded handler called abort()
-        // (what a jerk!) — already rolled back; finishUpgrade delivers its
-        // AbortError.
         closed = true;
         try self.finishUpgrade(txn);
         return false;
@@ -293,7 +302,7 @@ pub fn deleteDatabase(_: *IDBFactory, name: []const u8, exec: *Execution) !*IDBR
         return error.SecurityError;
     }
 
-    const request = try IDBRequest.init(exec);
+    const request = try IDBRequest.initOpen(exec);
 
     const ctx = try exec._factory.create(DeleteContext{
         .request = request,
@@ -314,8 +323,8 @@ const DeleteContext = struct {
     name: []const u8,
     exec: *Execution,
     _gate_waiter: Engine.GateWaiter,
-    // See OpenContext._scheduled.
-    _scheduled: bool = true,
+    // See OpenContext._state.
+    _state: State = .scheduled,
 
     fn cancelled(ctx: *anyopaque) void {
         // What if we're gated? Well, A scheduled task is only canceled on
@@ -327,14 +336,14 @@ const DeleteContext = struct {
     // See OpenContext.cancelParked.
     fn cancelParked(waiter: *Engine.GateWaiter) void {
         const self: *DeleteContext = @fieldParentPtr("_gate_waiter", waiter);
-        if (!self._scheduled) {
+        if (self._state == .parked) {
             self.exec._factory.destroy(self);
         }
     }
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *DeleteContext = @ptrCast(@alignCast(ctx));
-        self._scheduled = false;
+        self._state = .running;
 
         const engine = self.resolveEngine() catch |err| {
             self.exec._factory.destroy(self);
@@ -344,7 +353,8 @@ const DeleteContext = struct {
         };
 
         if (!engine.acquireGate(&self._gate_waiter)) {
-            return null; // parked; not destroyed
+            self._state = .parked;
+            return null; // not destroyed
         }
         defer self.exec._factory.destroy(self);
         defer _ = engine.releaseGate(&self._gate_waiter);
@@ -360,17 +370,17 @@ const DeleteContext = struct {
     // Scheduler wake-up: the connection gate was handed to us, so re-run.
     fn wakeUp(waiter: *Engine.GateWaiter) void {
         const self: *DeleteContext = @fieldParentPtr("_gate_waiter", waiter);
+        self._state = .scheduled;
         self.exec.js.scheduler.add(self, run, 0, .{
             .name = "IDBFactory.deleteDatabase",
             .finalizer = cancelled,
         }) catch |err| {
             // We were handed the gate; if we can't reschedule, hand it off so the
             // waiters behind us aren't stranded.
-            log.warn(.storage, "idb resume delete", .{ .err = err });
+            log.debug(.storage, "idb resume delete", .{ .err = err });
             if (self.resolveEngine()) |engine| _ = engine.releaseGate(&self._gate_waiter) else |_| {}
             self.exec._factory.destroy(self);
         };
-        self._scheduled = true;
     }
 
     fn resolveEngine(self: *DeleteContext) !*Engine {
@@ -383,6 +393,14 @@ const DeleteContext = struct {
         return self.request.fireSuccess(self.exec);
     }
 };
+
+fn databases(_: *IDBFactory, exec: *Execution) !js.Promise {
+    const local = exec.js.local.?;
+    // unavailable for opaque origins, e.g. about:blank
+    const origin = exec.origin() orelse return error.SecurityError;
+    const engine = try exec.session.idb.engineForOrigin(origin);
+    return local.resolvePromise(try engine.databases(exec.call_arena));
+}
 
 pub fn cmp(_: *IDBFactory, first: js.Value, second: js.Value, exec: *Execution) !i32 {
     const a = try Key.encodeValue(exec.call_arena, first);
@@ -406,5 +424,6 @@ pub const JsApi = struct {
 
     pub const open = bridge.function(IDBFactory.open, .{});
     pub const deleteDatabase = bridge.function(IDBFactory.deleteDatabase, .{});
+    pub const databases = bridge.function(IDBFactory.databases, .{});
     pub const cmp = bridge.function(IDBFactory.cmp, .{});
 };

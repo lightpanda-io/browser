@@ -5,12 +5,12 @@
 
 <!--
 focus()/blur() and the :focus selector act on the element's own document. Parent
-JS focusing an element inside an iframe must update the iframe document's
-activeElement, not the parent's. Open in Firefox to cross-check.
-
-(Firefox additionally sets the *parent* document.activeElement to the <iframe>
-element; we don't model that, so this file deliberately doesn't assert it.)
+JS focusing an element inside an iframe updates the iframe document's
+activeElement, and — the focus chain running through navigable containers —
+the parent's activeElement becomes the <iframe> itself. Open in Firefox or
+Chrome to cross-check.
 -->
+<input id="pout">
 <iframe id="idf" src="support/cross_realm_focus.html"></iframe>
 
 <script id="focus_targets_own_document">
@@ -23,11 +23,87 @@ element; we don't model that, so this file deliberately doesn't assert it.)
     // against that document — not the parent's.
     testing.expectEqual(inp, idoc.activeElement);
     testing.expectEqual(inp, idoc.querySelector('input:focus'));
+    // ...and the parent's focused area is the iframe holding it.
+    testing.expectEqual(document.getElementById('idf'), document.activeElement);
 
     inp.blur();
     // blur() clears it; activeElement falls back to the iframe body.
     testing.expectFalse(idoc.activeElement === inp);
     testing.expectEqual(idoc.body, idoc.activeElement);
+  });
+</script>
+
+<script id="events_fire_in_own_frame">
+  testing.onload(() => {
+    const idf = document.getElementById('idf');
+    const iwin = idf.contentWindow;
+    const inp = idf.contentDocument.getElementById('fin2');
+    iwin.events.length = 0;
+
+    // The parent realm's focus/blur still dispatch through the iframe's
+    // EventManager, so its listeners see FocusEvents of the iframe's realm.
+    HTMLElement.prototype.focus.call(inp);
+    HTMLElement.prototype.blur.call(inp);
+    testing.expectEqual(
+      'focus:fin2:true,focusin:fin2:true,blur:fin2:true,focusout:fin2:true',
+      iwin.events.join(','));
+  });
+</script>
+
+<script id="focus_chain_crosses_frames">
+  testing.onload(() => {
+    const idf = document.getElementById('idf');
+    const iwin = idf.contentWindow;
+    const idoc = idf.contentDocument;
+    const inp = idoc.getElementById('fin');
+    const pout = document.getElementById('pout');
+
+    for (const t of ['focus', 'focusin', 'blur', 'focusout']) {
+      for (const el of [pout, idf]) {
+        el.addEventListener(t, (e) => {
+          iwin.events.push(`parent ${e.type}:${e.target.id}:${e.relatedTarget}`);
+        });
+      }
+    }
+
+    pout.focus();
+    iwin.events.length = 0;
+
+    // Into the iframe: the parent's element blurs first, then the inner one
+    // takes focus. relatedTarget doesn't cross documents, and the <iframe>
+    // itself gets no focus events (as in Chrome).
+    inp.focus();
+    testing.expectEqual(
+      'parent blur:pout:null,parent focusout:pout:null,focus:fin:true,focusin:fin:true',
+      iwin.events.join(','));
+    testing.expectEqual(idf, document.activeElement);
+    testing.expectEqual(inp, idoc.activeElement);
+    iwin.events.length = 0;
+
+    // Back out: the element inside the iframe blurs, and the iframe document
+    // no longer has a focused element.
+    pout.focus();
+    testing.expectEqual(
+      'blur:fin:true,focusout:fin:true,parent focus:pout:null,parent focusin:pout:null',
+      iwin.events.join(','));
+    testing.expectEqual(pout, document.activeElement);
+    testing.expectEqual(idoc.body, idoc.activeElement);
+    testing.expectEqual(null, idoc.querySelector('input:focus'));
+    pout.blur();
+  });
+</script>
+
+<script id="frameless_document_is_not_focusable">
+  testing.onload(() => {
+    const doc = new DOMParser().parseFromString('<input id=x>', 'text/html');
+    const inp = doc.getElementById('x');
+    let fired = 0;
+    inp.addEventListener('focus', () => fired++);
+
+    inp.focus();
+    inp.blur();
+    testing.expectEqual(0, fired);
+    testing.expectFalse(doc.activeElement === inp);
   });
 </script>
 </body>

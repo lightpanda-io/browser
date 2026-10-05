@@ -163,3 +163,16 @@
   testing.expectEqual(true, pe.cancelable);
 }
 </script>
+
+<script id=fractionalCoordinatesPreserved>
+{
+  // Unlike MouseEvent (which floors), PointerEvent keeps fractional
+  // coordinates — matching Chrome, where high-precision coordinates shipped
+  // on PointerEvent only.
+  let evt = new PointerEvent('pointerdown', {clientX: 47.5, clientY: 312.5, screenX: -47.5});
+  testing.expectEqual(47.5, evt.clientX);
+  testing.expectEqual(312.5, evt.clientY);
+  testing.expectEqual(-47.5, evt.screenX);
+  testing.expectEqual(47.5, evt.pageX);
+}
+</script>

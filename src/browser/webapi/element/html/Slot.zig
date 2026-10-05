@@ -1,10 +1,30 @@
-const lp = @import("lightpanda");
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../../../js/js.zig");
-const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
+const Factory = @import("../../../Factory.zig");
+
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+
 const HtmlElement = @import("../Html.zig");
 const slotting = @import("../slotting.zig");
 
@@ -46,7 +66,7 @@ pub fn assignedNodes(self: *Slot, opts_: ?AssignedNodesOptions, frame: *Frame) !
     return nodes.items;
 }
 
-pub fn assignedElements(self: *Slot, opts_: ?AssignedNodesOptions, frame: *Frame) ![]const *Element {
+fn assignedElements(self: *Slot, opts_: ?AssignedNodesOptions, frame: *Frame) ![]const *Element {
     var elements: std.ArrayList(*Element) = .empty;
     const opts = opts_ orelse AssignedNodesOptions{};
     if (!opts.flatten) {
@@ -119,13 +139,14 @@ pub fn assign(self: *Slot, values: []const js.Value, frame: *Frame) !void {
         entry.* = node;
     }
 
+    const page = frame.page;
     for (self._manually_assigned.items) |node| {
-        _ = frame._manual_slot_assignments.remove(node);
+        _ = page._manual_slot_assignments.remove(node);
     }
     self._manually_assigned.clearRetainingCapacity();
 
     for (nodes) |node| {
-        const gop = try frame._manual_slot_assignments.getOrPut(frame.arena, node);
+        const gop = try page._manual_slot_assignments.getOrPut(page.frame_arena, node);
         if (gop.found_existing) {
             const other = gop.value_ptr.*;
             if (other == self) {
@@ -150,7 +171,7 @@ pub fn assign(self: *Slot, values: []const js.Value, frame: *Frame) !void {
 }
 
 pub fn getName(self: *const Slot) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
+    return self.asConstElement().getName() orelse "";
 }
 
 pub const JsApi = struct {

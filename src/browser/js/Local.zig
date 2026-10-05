@@ -65,17 +65,6 @@ pub fn newString(self: *const Local, str: []const u8) js.String {
     };
 }
 
-// Creates a JS string by mapping each input byte 0..255 directly to a JS
-// code unit, with no UTF-8 decoding. Use this when handing back binary data
-// (e.g. atob output) — passing those bytes through `newString` would treat
-// any byte 0x80..0xFF as malformed UTF-8 and replace it with U+FFFD.
-pub fn newOneByteString(self: *const Local, bytes: []const u8) js.String {
-    return .{
-        .local = self,
-        .handle = self.isolate.initOneByteStringHandle(bytes),
-    };
-}
-
 pub fn newObject(self: *const Local) js.Object {
     return .{
         .local = self,
@@ -86,6 +75,14 @@ pub fn newObject(self: *const Local) js.Object {
 pub fn newDate(self: *const Local, time_ms: f64) !js.Value {
     const handle = v8.v8__Date__New(self.handle, time_ms) orelse return error.JsException;
     return .{ .local = self, .handle = handle };
+}
+
+// StringToBigInt semantics: arbitrary precision, sign-aware, and it never
+// consults the page's globals. Fails on non-numeric digits.
+pub fn newBigInt(self: *const Local, digits: []const u8) !js.Value {
+    const str: *const v8.Value = @ptrCast(self.isolate.initStringHandle(digits));
+    const handle = v8.v8__Value__ToBigInt(str, self.handle) orelse return error.JsException;
+    return .{ .local = self, .handle = @ptrCast(handle) };
 }
 
 pub fn newNumber(self: *const Local, f: f64) !js.Value {
@@ -195,7 +192,7 @@ pub fn compile(self: *const Local, src: []const u8, name: ?[]const u8) !js.Scrip
     return result.script;
 }
 
-pub const CompileResult = struct {
+const CompileResult = struct {
     script: js.Script,
     // True only when `cached_data` was supplied AND V8 rejected it (source,
     // V8 version, or flag mismatch) and recompiled from source. Always false
@@ -499,9 +496,9 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
 
             if (s.is_tuple) {
                 // return the tuple struct as an array
-                var js_arr = self.newArray(@intCast(s.fields.len));
-                inline for (s.fields, 0..) |f, i| {
-                    if (try js_arr.set(@intCast(i), @field(value, f.name), opts) == false) {
+                var js_arr = self.newArray(@intCast(s.field_names.len));
+                inline for (s.field_names, 0..) |field_name, i| {
+                    if (try js_arr.set(@intCast(i), @field(value, field_name), opts) == false) {
                         return error.FailedToCreateArray;
                     }
                 }
@@ -509,8 +506,8 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
             }
 
             const js_obj = self.newObject();
-            inline for (s.fields) |f| {
-                if (try js_obj.set(f.name, @field(value, f.name), opts) == false) {
+            inline for (s.field_names) |field_name| {
+                if (try js_obj.set(field_name, @field(value, field_name), opts) == false) {
                     return error.CreateObjectFailure;
                 }
             }
@@ -521,9 +518,9 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                 return self.zigJsonToJs(value);
             }
             if (un.tag_type) |UnionTagType| {
-                inline for (un.fields) |field| {
-                    if (value == @field(UnionTagType, field.name)) {
-                        return self.zigValueToJs(@field(value, field.name), opts);
+                inline for (un.field_names) |field_name| {
+                    if (value == @field(UnionTagType, field_name)) {
+                        return self.zigValueToJs(@field(value, field_name), opts);
                     }
                 }
                 unreachable;
@@ -698,13 +695,13 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
             // compatible with. A compatible field has higher precedence
             // than a coercible, but still isn't a perfect match.
             var compatible_index: ?usize = null;
-            inline for (u.fields, 0..) |field, i| {
-                switch (try self.probeJsValueToZig(field.type, js_val)) {
-                    .value => |v| return @unionInit(T, field.name, v),
+            inline for (u.field_names, u.field_types, 0..) |field_name, field_type, i| {
+                switch (try self.probeJsValueToZig(field_type, js_val)) {
+                    .value => |v| return @unionInit(T, field_name, v),
                     .ok => {
                         // a perfect match like above case, except the probing
                         // didn't get the value for us.
-                        return @unionInit(T, field.name, try self.jsValueToZig(field.type, js_val));
+                        return @unionInit(T, field_name, try self.jsValueToZig(field_type, js_val));
                     },
                     .coerce => if (coerce_index == null) {
                         coerce_index = i;
@@ -718,9 +715,9 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
 
             // We didn't find a perfect match.
             const closest = compatible_index orelse coerce_index orelse return error.InvalidArgument;
-            inline for (u.fields, 0..) |field, i| {
+            inline for (u.field_names, u.field_types, 0..) |field_name, field_type, i| {
                 if (i == closest) {
-                    return @unionInit(T, field.name, try self.jsValueToZig(field.type, js_val));
+                    return @unionInit(T, field_name, try self.jsValueToZig(field_type, js_val));
                 }
             }
             unreachable;
@@ -770,9 +767,22 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
         js.TypedArray(f32), js.TypedArray(f64),
         // zig fmt: on
         => {
-            const ValueType = @typeInfo(std.meta.fieldInfo(T, .values).type).pointer.child;
+            const ValueType = @typeInfo(@FieldType(T, "values")).pointer.child;
             const arr = (try jsValueToTypedArray(ValueType, js_val)) orelse return null;
             return .{ .values = arr };
+        },
+        js.BufferSource => {
+            if (v8.v8__Value__IsSharedArrayBuffer(js_val.handle)) {
+                return error.TypeError;
+            }
+            if (js_val.isArrayBufferView()) {
+                const view: *const v8.ArrayBufferView = @ptrCast(js_val.handle);
+                if (js.arrayBufferIsShared(v8.v8__ArrayBufferView__Buffer(view).?)) {
+                    return error.TypeError;
+                }
+            }
+            const bytes = (try jsValueToArrayBufferSlice(u8, true, js_val)) orelse return null;
+            return .{ .bytes = bytes };
         },
         js.Value => js_val,
         js.Value.Global => return try js_val.persist(),
@@ -836,27 +846,27 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             const js_obj = js_val.toObject();
 
             var value: T = undefined;
-            inline for (@typeInfo(T).@"struct".fields) |field| {
-                if (comptime std.mem.eql(u8, field.name, dictionary_group_marker)) {
+            const info = @typeInfo(T).@"struct";
+            inline for (info.field_names, info.field_types, info.field_attrs) |name, FieldType, attrs| {
+                if (comptime std.mem.eql(u8, name, dictionary_group_marker)) {
                     continue;
                 }
-                const name = field.name;
                 const key = isolate.initStringHandle(name);
                 if (js_obj.has(key)) {
                     const member = try js_obj.get(key);
-                    const default_for_undefined = comptime field.defaultValue();
+                    const default_for_undefined = comptime attrs.defaultValue(FieldType);
                     @field(value, name) = blk: {
                         if (comptime default_for_undefined) |dflt| {
                             if (member.isUndefined()) {
                                 break :blk dflt;
                             }
                         }
-                        break :blk try self.jsValueToZig(field.type, member);
+                        break :blk try self.jsValueToZig(FieldType, member);
                     };
-                } else if (@typeInfo(field.type) == .optional) {
+                } else if (@typeInfo(FieldType) == .optional) {
                     @field(value, name) = null;
                 } else {
-                    const dflt = field.defaultValue() orelse return null;
+                    const dflt = attrs.defaultValue(FieldType) orelse return null;
                     @field(value, name) = dflt;
                 }
             }
@@ -873,17 +883,23 @@ pub const dictionary_group_marker = "js_grouped_dictionary";
 // fire in a predictable order. Could probably comptime this to work
 // automatically, but it's a lot easier just to check it and ask for a manual fix.
 pub fn assertDictionaryFieldOrder(comptime T: type) void {
-    const fields = @typeInfo(T).@"struct".fields;
+    const field_names = @typeInfo(T).@"struct".field_names;
     var i: usize = 1;
-    while (i < fields.len) : (i += 1) {
-        if (std.mem.order(u8, fields[i - 1].name, fields[i].name) == .gt) {
+    while (i < field_names.len) : (i += 1) {
+        if (std.mem.order(u8, field_names[i - 1], field_names[i]) == .gt) {
             @compileError("dictionary fields must be declared in lexicographic order: " ++ @typeName(T));
         }
     }
 }
 
 fn jsValueToTypedArray(comptime T: type, js_val: js.Value) !?[]T {
-    var force_u8 = false;
+    return jsValueToArrayBufferSlice(T, false, js_val);
+}
+
+// With `any_view`, every ArrayBufferView is accepted as a byte slice regardless
+// of its element type
+fn jsValueToArrayBufferSlice(comptime T: type, any_view: bool, js_val: js.Value) !?[]T {
+    var force_u8 = any_view;
     var array_buffer: ?*const v8.ArrayBuffer = null;
     var byte_len: usize = undefined;
     var byte_offset: usize = undefined;
@@ -906,13 +922,12 @@ fn jsValueToTypedArray(comptime T: type, js_val: js.Value) !?[]T {
         byte_offset = 0;
     }
 
-    const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer orelse return null);
+    const buffer = array_buffer orelse return null;
     if (byte_len == 0) {
         return &[_]T{};
     }
 
-    const backing_store_handle = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr).?;
-    const data = v8.v8__BackingStore__Data(backing_store_handle);
+    const data = js.arrayBufferData(buffer);
     const base = @as([*]u8, @ptrCast(data)) + byte_offset;
 
     // 2. Validate alignment
@@ -1227,7 +1242,7 @@ fn jsIntToZig(comptime T: type, js_value: js.Value) !T {
                     const v = js_value.toBigInt();
                     return v.getInt64();
                 }
-                return jsSignedIntToZig(i64, -2_147_483_648, 2_147_483_647, try js_value.toI32());
+                return jsInt64ToZig(i64, try js_value.toF64());
             },
             else => {},
         },
@@ -1250,7 +1265,7 @@ fn jsIntToZig(comptime T: type, js_value: js.Value) !T {
                     const v = js_value.toBigInt();
                     return v.getUint64();
                 }
-                return jsUnsignedIntToZig(u64, 4_294_967_295, try js_value.toU32());
+                return jsInt64ToZig(u64, try js_value.toF64());
             },
             else => {},
         },
@@ -1270,6 +1285,20 @@ fn jsUnsignedIntToZig(comptime T: type, max: comptime_int, maybe: u32) !T {
         return @intCast(maybe);
     }
     return error.InvalidArgument;
+}
+
+// A JS number can't carry a full 64-bit integer, it needs to be represented as
+// a f64 with fractions rounded towards zero.
+fn jsInt64ToZig(comptime T: type, number: f64) !T {
+    if (!std.math.isFinite(number)) {
+        return error.InvalidArgument;
+    }
+    const truncated = @trunc(number);
+    const min: f64 = if (@typeInfo(T).int.signedness == .signed) -std.math.maxInt(i54) else 0;
+    if (truncated < min or truncated > std.math.maxInt(i54)) {
+        return error.InvalidArgument;
+    }
+    return @intFromFloat(truncated);
 }
 
 // Every WebApi type has a class_id as T.JsApi.Meta.class_id. We use this to create
@@ -1294,7 +1323,7 @@ const Resolved = struct {
         release_ref_from_zig: *const fn (ptr_id: usize, page: *Page) void,
     };
 };
-pub fn resolveValue(value: anytype) Resolved {
+fn resolveValue(value: anytype) Resolved {
     const T = bridge.Struct(@TypeOf(value));
     if (!@hasField(T, "_type")) {
         return resolveT(T, value);
@@ -1321,17 +1350,17 @@ pub fn resolveValue(value: anytype) Resolved {
     }
 
     const U = @typeInfo(@TypeOf(value._type)).@"union";
-    inline for (U.fields) |field| {
-        if (value._type == @field(U.tag_type.?, field.name)) {
-            const child = switch (@typeInfo(field.type)) {
-                .pointer => @field(value._type, field.name),
-                .@"struct" => &@field(value._type, field.name),
+    inline for (U.field_names, U.field_types) |field_name, field_type| {
+        if (value._type == @field(U.tag_type.?, field_name)) {
+            const child = switch (@typeInfo(field_type)) {
+                .pointer => @field(value._type, field_name),
+                .@"struct" => &@field(value._type, field_name),
                 .void => {
                     // Unusual case, but the Event (and maybe others) can be
                     // returned as-is. In that case, it has a dummy void type.
                     return resolveT(T, value);
                 },
-                else => @compileError(@typeName(field.type) ++ " has an unsupported _type field"),
+                else => @compileError(@typeName(field_type) ++ " has an unsupported _type field"),
             };
             return resolveValue(child);
         }
@@ -1346,7 +1375,7 @@ fn resolveT(comptime T: type, value: *T) Resolved {
     const Meta = T.JsApi.Meta;
     return .{
         .ptr = value,
-        .class_id = Meta.class_id,
+        .class_id = if (@hasDecl(Meta, "wrap_as")) Meta.wrap_as.Meta.class_id else Meta.class_id,
         .prototype_chain = &Meta.prototype_chain,
         .finalizer = blk: {
             const FT = (comptime findFinalizerType(T)) orelse break :blk null;
@@ -1477,17 +1506,17 @@ fn finalizerPtrGetter(comptime T: type, comptime FT: type) *const fn (*T) *FT {
 pub fn stackTrace(self: *const Local) !?[]const u8 {
     const isolate = self.isolate.handle;
     const stack_handle = v8.v8__StackTrace__CurrentStackTrace__STATIC(isolate, 30) orelse return null;
-
-    const separator = log.separator();
-
     var buf = std.Io.Writer.Allocating.init(self.call_arena);
-    if (v8.v8__StackTrace__CurrentScriptNameOrSourceURL__STATIC(isolate)) |script| {
-        const stack = js.String{ .local = self, .handle = script };
-        try buf.writer.print("{s}<{f}>", .{ separator, stack });
-    }
-
     try js.writeStackTrace(isolate, stack_handle, &buf.writer);
     return buf.written();
+}
+
+// We sometimes need to reject with a specific TypeError message. We can't
+// attach an anything to `error.TypeError`, but we can use a pseudo-global.
+// When caller catches the error.TypeError, it'll look into env.error_message
+// for the message.
+pub fn typeError(self: *const Local, message: []const u8) error{TypeError} {
+    return self.ctx.typeError(message);
 }
 
 // == Promise Helpers ==
@@ -1505,102 +1534,6 @@ pub fn resolvePromise(self: *const Local, value: anytype) !js.Promise {
 
 pub fn createPromiseResolver(self: *const Local) js.PromiseResolver {
     return js.PromiseResolver.init(self);
-}
-
-pub fn debugValue(self: *const Local, js_val: js.Value, writer: *std.Io.Writer) !void {
-    var seen: std.AutoHashMapUnmanaged(u32, void) = .empty;
-    return self._debugValue(js_val, &seen, 0, writer) catch error.WriteFailed;
-}
-
-fn _debugValue(self: *const Local, js_val: js.Value, seen: *std.AutoHashMapUnmanaged(u32, void), depth: usize, writer: *std.Io.Writer) !void {
-    if (js_val.isNull()) {
-        // I think null can sometimes appear as an object, so check this and
-        // handle it first.
-        return writer.writeAll("null");
-    }
-
-    if (!js_val.isObject()) {
-        // handle these explicitly, so we don't include the type (we only want to include
-        // it when there's some ambiguity, e.g. the string "true")
-        if (js_val.isUndefined()) {
-            return writer.writeAll("undefined");
-        }
-        if (js_val.isTrue()) {
-            return writer.writeAll("true");
-        }
-        if (js_val.isFalse()) {
-            return writer.writeAll("false");
-        }
-
-        if (js_val.isSymbol()) {
-            const symbol_handle = v8.v8__Symbol__Description(@ptrCast(js_val.handle), self.isolate.handle).?;
-            if (v8.v8__Value__IsUndefined(symbol_handle)) {
-                return writer.writeAll("undefined (symbol)");
-            }
-            return writer.print("{f} (symbol)", .{js.String{ .local = self, .handle = @ptrCast(symbol_handle) }});
-        }
-        const js_val_str = try js_val.toStringSlice();
-        if (js_val_str.len > 2000) {
-            try writer.writeAll(js_val_str[0..2000]);
-            try writer.writeAll(" ... (truncated)");
-        } else {
-            try writer.writeAll(js_val_str);
-        }
-        return writer.print(" ({f})", .{js_val.typeOf()});
-    }
-
-    const js_obj = js_val.toObject();
-    {
-        // explicit scope because gop will become invalid in recursive call
-        const obj_id: u32 = @bitCast(v8.v8__Object__GetIdentityHash(js_obj.handle));
-        const gop = try seen.getOrPut(self.call_arena, obj_id);
-        if (gop.found_existing) {
-            return writer.writeAll("<circular>\n");
-        }
-        gop.value_ptr.* = {};
-    }
-
-    if (depth > 20) {
-        return writer.writeAll("...deeply nested object...");
-    }
-
-    const names_arr = js_obj.getOwnPropertyNames() catch {
-        return writer.writeAll("...invalid object...");
-    };
-    const len = names_arr.len();
-
-    const own_len = blk: {
-        const own_names = js_obj.getOwnPropertyNames() catch break :blk 0;
-        break :blk own_names.len();
-    };
-
-    if (own_len == 0) {
-        const js_val_str = try js_val.toStringSlice();
-        if (js_val_str.len > 2000) {
-            try writer.writeAll(js_val_str[0..2000]);
-            return writer.writeAll(" ... (truncated)");
-        }
-        return writer.writeAll(js_val_str);
-    }
-
-    const all_len = js_obj.getPropertyNames().len();
-    try writer.print("({d}/{d})", .{ own_len, all_len });
-    for (0..len) |i| {
-        if (i == 0) {
-            try writer.writeByte('\n');
-        }
-        const field_name = try names_arr.get(@intCast(i));
-        const name = try field_name.toStringSlice();
-        try writer.splatByteAll(' ', depth);
-        try writer.writeAll(name);
-        try writer.writeAll(": ");
-
-        const field_val = try js_obj.get(name);
-        try self._debugValue(field_val, seen, depth + 1, writer);
-        if (i != len - 1) {
-            try writer.writeByte('\n');
-        }
-    }
 }
 
 // == Misc ==
@@ -1624,13 +1557,6 @@ pub fn newException(self: *const Local, ex: anytype) js.Exception {
     };
 }
 
-pub fn getGlobal(self: *const Local) js.Object {
-    return .{
-        .local = self,
-        .handle = v8.v8__Context__Global(self.handle).?,
-    };
-}
-
 // Convert a Global (or optional Global) to a Local (or optional Local).
 // Meant to be used from either frame.js.toLocal, where the context must have an
 // non-null local (orelse panic), or from a LocalScope
@@ -1647,8 +1573,8 @@ pub fn ToLocalReturnType(comptime T: type) type {
     if (@typeInfo(T) == .optional) {
         const GlobalType = @typeInfo(T).optional.child;
         const struct_info = @typeInfo(GlobalType).@"struct";
-        inline for (struct_info.decls) |decl| {
-            if (std.mem.eql(u8, decl.name, "local")) {
+        inline for (struct_info.decl_names) |decl_name| {
+            if (std.mem.eql(u8, decl_name, "local")) {
                 const Fn = @TypeOf(@field(GlobalType, "local"));
                 const fn_info = @typeInfo(Fn).@"fn";
                 return ?fn_info.return_type.?;
@@ -1657,8 +1583,8 @@ pub fn ToLocalReturnType(comptime T: type) type {
         @compileError("Type does not have local method");
     } else {
         const struct_info = @typeInfo(T).@"struct";
-        inline for (struct_info.decls) |decl| {
-            if (std.mem.eql(u8, decl.name, "local")) {
+        inline for (struct_info.decl_names) |decl_name| {
+            if (std.mem.eql(u8, decl_name, "local")) {
                 const Fn = @TypeOf(@field(T, "local"));
                 const fn_info = @typeInfo(Fn).@"fn";
                 return fn_info.return_type.?;
@@ -1717,8 +1643,10 @@ fn createFinalizerCallback(
 pub const Scope = struct {
     local: Local,
     handle_scope: js.HandleScope,
+    page_scope: log.PageScope,
 
     pub fn deinit(self: *Scope) void {
+        self.page_scope.exit();
         v8.v8__Context__Exit(self.local.handle);
         self.handle_scope.deinit();
     }

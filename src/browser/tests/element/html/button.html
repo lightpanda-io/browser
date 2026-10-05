@@ -5,6 +5,10 @@
 <button id="button1">Click me</button>
 <button id="button2" disabled>Disabled button</button>
 
+<fieldset id="fs_disabled" disabled>
+  <button id="btn_in_disabled_fs">Inside disabled fieldset</button>
+</fieldset>
+
 <!-- Form association tests -->
 <form id="form1">
   <button id="button_in_form">In form</button>
@@ -257,5 +261,27 @@
     b.formNoValidate = false
     testing.expectEqual(false, b.formNoValidate)
     testing.expectEqual(null, b.getAttribute('formnovalidate'))
+  }
+</script>
+
+<script id="click_disabled_button_no_event">
+  {
+    let clicks = 0;
+    const b = document.createElement('button');
+    b.disabled = true;
+    b.addEventListener('click', () => clicks++);
+    b.click();
+    testing.expectEqual(0, clicks);
+
+    const b_fs = $('#btn_in_disabled_fs');
+    b_fs.addEventListener('click', () => clicks++);
+    b_fs.click();
+    testing.expectEqual(0, clicks);
+
+    // A disabled fieldset is not itself a disabled form control.
+    const fs = $('#fs_disabled');
+    fs.addEventListener('click', () => clicks++);
+    fs.click();
+    testing.expectEqual(1, clicks);
   }
 </script>

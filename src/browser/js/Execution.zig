@@ -28,15 +28,18 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const Value = @import("Value.zig");
 const Context = @import("Context.zig");
 const Scheduler = @import("Scheduler.zig");
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
 const Factory = @import("../Factory.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
+const referrer = @import("../referrer.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 
 const Console = @import("../webapi/Console.zig");
+const Cookie = @import("../webapi/storage/Cookie.zig");
 const Event = @import("../webapi/Event.zig");
 const EventTarget = @import("../webapi/EventTarget.zig");
 const Performance = @import("../webapi/Performance.zig");
@@ -65,11 +68,6 @@ url: *[:0]const u8,
 // Pointer to the charset field of the global (Page or WorkerGlobalScope).
 charset: *[]const u8,
 
-// Returns the current base URL of the global scope.
-pub fn base(self: *const Execution) [:0]const u8 {
-    return self.js.global.base();
-}
-
 pub fn dupeString(self: *const Execution, value: []const u8) ![]const u8 {
     if (String.intern(value)) |v| {
         return v;
@@ -85,61 +83,89 @@ pub fn getPinnedArena(self: *const Execution, size_or_bucket: anytype, debug: []
     return self.page.getPinnedArena(size_or_bucket, debug);
 }
 
-pub fn headersForRequest(self: *const Execution, transfer: *HttpClient.Transfer) !void {
-    return switch (self.js.global) {
-        inline else => |g| g.headersForRequest(transfer),
-    };
+// Everything below forwards to the GlobalScope (Frame or WorkerGlobalScope);
+// see global_scope.zig for what these actually do. They live on Execution too
+// because the bridge hands callers an Execution, not a scope.
+pub fn base(self: *const Execution) [:0]const u8 {
+    return self.js.global.base();
+}
+
+pub const HeadersForRequestOptions = struct {
+    // Callers that compute their own Referer (e.g. fetch()'s referrer/referrerPolicy
+    // options) set this to false so we don't set a header here just to override it.
+    referer: bool = true,
+};
+
+pub fn headersForRequest(self: *const Execution, transfer: *HttpClient.Transfer, opts: HeadersForRequestOptions) !void {
+    return self.js.global.headersForRequest(transfer, opts);
+}
+
+pub fn referrerSource(self: *const Execution) [:0]const u8 {
+    return self.js.global.referrerSource();
+}
+
+pub fn referrerPolicy(self: *const Execution) referrer.Policy {
+    return self.js.global.referrerPolicy();
 }
 
 pub fn isSameOrigin(self: *const Execution, url: [:0]const u8) bool {
-    return switch (self.js.global) {
-        inline else => |g| g.isSameOrigin(url),
-    };
+    return self.js.global.isSameOrigin(url);
 }
 
 pub fn makeRequest(self: *const Execution, req: HttpClient.Request) !void {
-    return switch (self.js.global) {
-        inline else => |g| g.makeRequest(req),
-    };
+    return self.js.global.makeRequest(req);
 }
 
-// Two-phase variant; see HttpClient.newRequest for the ownership contract.
 pub fn newRequest(self: *const Execution, req: HttpClient.Request) !*HttpClient.Transfer {
-    return switch (self.js.global) {
-        inline else => |g| g.newRequest(req),
-    };
+    return self.js.global.newRequest(req);
 }
 
 pub fn getBroadcastChannels(self: *const Execution) *std.DoublyLinkedList {
-    return switch (self.js.global) {
-        inline else => |g| &g._broadcast_channels,
-    };
+    return self.js.global.getBroadcastChannels();
 }
 
-// The owning global's (Frame or WGS) list of live MessagePorts, walked at
-// that global's teardown to sever cross-context entanglement.
 pub fn messagePorts(self: *const Execution) *std.DoublyLinkedList {
-    return switch (self.js.global) {
-        inline else => |g| &g._message_ports,
-    };
+    return self.js.global.messagePorts();
 }
 
-// The global's serialized origin (e.g. "https://example.com"), or null for an
-// opaque origin.
 pub fn origin(self: *const Execution) ?[]const u8 {
-    return switch (self.js.global) {
-        inline else => |g| g.origin,
-    };
+    return self.js.global.origin();
 }
 
-// HttpClient.Owner of the current global (Frame or WGS). Used by code
-// that needs to register an in-flight network operation against the
-// owning scope without caring whether it's a Frame or a Worker — e.g.
-// WebSocket.init appending to `.websockets`.
+pub fn isSecureContext(self: *const Execution) bool {
+    return self.js.global.isSecureContext();
+}
+
+pub fn frameId(self: *const Execution) u32 {
+    return self.js.global.frameId();
+}
+
+pub fn siteForCookies(self: *const Execution) Cookie.SiteForCookies {
+    return self.js.global.siteForCookies();
+}
+
 pub fn httpOwner(self: *const Execution) *HttpClient.Owner {
-    return switch (self.js.global) {
-        inline else => |g| &g._http_owner,
-    };
+    return self.js.global.httpOwner();
+}
+
+pub fn registerListener(
+    self: *const Execution,
+    target: *EventTarget,
+    typ: []const u8,
+    callback: EventManagerBase.Callback,
+    opts: EventManagerBase.RegisterOptions,
+) !void {
+    return self.js.global.registerListener(target, typ, callback, opts);
+}
+
+pub fn removeListener(
+    self: *const Execution,
+    target: *EventTarget,
+    typ: []const u8,
+    callback: EventManagerBase.Callback,
+    use_capture: bool,
+) void {
+    self.js.global.removeListener(target, typ, callback, use_capture);
 }
 
 pub fn dispatch(
@@ -149,38 +175,21 @@ pub fn dispatch(
     handler: anytype,
     comptime opts: EventManagerBase.DispatchDirectOptions,
 ) !void {
-    return switch (self.js.global) {
-        inline else => |g| g.dispatch(target, event, handler, opts),
-    };
+    return self.js.global.dispatch(target, event, handler, opts);
+}
+
+pub fn reportError(self: *const Execution, err: Value) !void {
+    return self.js.global.reportError(err);
 }
 
 pub fn hasDirectListeners(self: *const Execution, target: *EventTarget, typ: []const u8, handler: anytype) bool {
-    return switch (self.js.global) {
-        inline else => |g| g.hasDirectListeners(target, typ, handler),
-    };
+    return self.js.global.hasDirectListeners(target, typ, handler);
 }
 
 pub fn performance(self: *const Execution) *Performance {
-    return switch (self.js.global) {
-        inline else => |g| g.performance(),
-    };
+    return self.js.global.performance();
 }
 
 pub fn console(self: *const Execution) *Console {
-    return switch (self.js.global) {
-        .frame => |frame| frame.window.getConsole(),
-        .worker => |worker| worker.getConsole(),
-    };
-}
-
-pub fn frameId(self: *const Execution) u32 {
-    return switch (self.js.global) {
-        inline else => |g| g._frame_id,
-    };
-}
-
-pub fn loaderId(self: *const Execution) u32 {
-    return switch (self.js.global) {
-        inline else => |g| g._loader_id,
-    };
+    return self.js.global.console();
 }

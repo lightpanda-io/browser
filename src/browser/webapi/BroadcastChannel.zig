@@ -115,19 +115,19 @@ pub fn close(self: *BroadcastChannel) void {
     self._exec.getBroadcastChannels().remove(&self._node);
 }
 
-pub fn getOnMessage(self: *const BroadcastChannel) ?js.Function.Global {
+fn getOnMessage(self: *const BroadcastChannel) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *BroadcastChannel, cb: ?js.Function.Global) !void {
+fn setOnMessage(self: *BroadcastChannel, cb: ?js.Function.Global) !void {
     self._on_message = cb;
 }
 
-pub fn getOnMessageError(self: *const BroadcastChannel) ?js.Function.Global {
+fn getOnMessageError(self: *const BroadcastChannel) ?js.Function.Global {
     return self._on_message_error;
 }
 
-pub fn setOnMessageError(self: *BroadcastChannel, cb: ?js.Function.Global) !void {
+fn setOnMessageError(self: *BroadcastChannel, cb: ?js.Function.Global) !void {
     self._on_message_error = cb;
 }
 
@@ -218,12 +218,12 @@ const PostMessageCallback = struct {
                 // MessageEvent, which releases it on teardown — so each receiver
                 // frees only its own handle.
                 const cloned = snapshot.structuredCloneTo(&ls.local) catch |err| {
-                    log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                    log.debug(.dom, "BroadcastChannel.postMessage", .{ .err = err });
                     continue;
                 };
 
                 const cloned_temp = cloned.persist() catch |err| {
-                    log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                    log.debug(.dom, "BroadcastChannel.postMessage", .{ .err = err });
                     continue;
                 };
 
@@ -233,12 +233,12 @@ const PostMessageCallback = struct {
                     .source = null,
                 }, exec.page) catch |err| {
                     cloned_temp.release();
-                    log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                    log.debug(.dom, "BroadcastChannel.postMessage", .{ .err = err });
                     continue;
                 }).asEvent();
 
                 exec.dispatch(target, event, channel._on_message, .{ .context = "BroadcastChannel message" }) catch |err| {
-                    log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                    log.debug(.dom, "BroadcastChannel.postMessage", .{ .err = err });
                 };
             }
         }

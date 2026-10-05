@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<form id=f><input name=i1><select id=s><option>a</option><option>b</option></select></form>
+<div id=d class="x y" data-a=1></div>
+<iframe></iframe>
+
+<script id=supported_indices>
+  {
+    // Web IDL: a supported index is enumerable, configurable and, unless
+    // there's an indexed setter (HTMLOptionsCollection), read-only. An
+    // unsupported one isn't there at all.
+    const d = document.getElementById('d');
+    const cases = {
+      HTMLCollection: document.getElementsByTagName('div'),
+      NodeList: document.querySelectorAll('div'),
+      NamedNodeMap: d.attributes,
+      HTMLOptionsCollection: document.getElementById('s').options,
+      HTMLAllCollection: document.all,
+      HTMLFormControlsCollection: document.getElementById('f').elements,
+      DOMTokenList: d.classList,
+      Window: window,
+    };
+    for (const [name, obj] of Object.entries(cases)) {
+      const desc = Object.getOwnPropertyDescriptor(obj, 0);
+      const writable = name === 'HTMLOptionsCollection';
+      testing.expectEqual([name, true, true, writable].join(' '), [name, desc.enumerable, desc.configurable, desc.writable].join(' '));
+      testing.expectEqual(name + ' true', name + ' ' + obj.propertyIsEnumerable(0));
+      testing.expectEqual(name + ' true', name + ' ' + (0 in obj));
+      testing.expectEqual(name + ' false', name + ' ' + (9999 in obj));
+      testing.expectEqual(name + ' true', name + ' ' + (Object.getOwnPropertyDescriptor(obj, 9999) === undefined));
+    }
+  }
+</script>
+
+<script id=enumeration>
+  {
+    // the query must not filter supported indices out of enumeration
+    const list = document.querySelectorAll('div');
+    testing.expectEqual(['0'], Object.keys(list));
+    const seen = [];
+    for (const k in list) seen.push(k);
+    testing.expectEqual('0', seen[0]);
+  }
+</script>
+
+<script id=read_only>
+  (function() {
+    'use strict';
+    const list = document.querySelectorAll('div');
+    const first = list[0];
+    testing.expectError('TypeError', () => { list[0] = 'x'; });
+    testing.expectEqual(first, list[0]);
+  })();
+</script>

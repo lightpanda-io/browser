@@ -29,7 +29,7 @@ const String = lp.String;
 
 const max_long: i64 = 2147483647;
 
-pub const UnsignedLongOpts = struct {
+const UnsignedLongOpts = struct {
     default: u32 = 0,
     // limited to only non-negative numbers greater than zero: 0 is
     // IndexSizeError on setting; with `fallback`, 0 becomes the default.
@@ -39,7 +39,7 @@ pub const UnsignedLongOpts = struct {
     clamp: ?struct { min: u32, max: u32 } = null,
 };
 
-pub const EnumOpts = struct {
+const EnumOpts = struct {
     // missing value default; null means the attribute reflects as null
     missing: ?[]const u8 = "",
     // invalid value default; defaults to `missing`
@@ -217,23 +217,17 @@ pub fn Reflect(comptime T: type) type {
         pub fn double(comptime attr: []const u8, comptime default: f64, comptime positive: bool) js.bridge.Accessor {
             const R = struct {
                 fn get(self: *const T) f64 {
-                    const value = element(self).getAttributeSafe(.wrap(attr)) orelse return default;
-                    const parsed = parseFloat(value) orelse return default;
+                    const parsed = getDouble(element(self), attr) orelse return default;
                     if (positive and parsed <= 0) {
                         return default;
                     }
                     return parsed;
                 }
                 fn set(self: *T, value: f64, frame: *Frame) !void {
-                    if (!std.math.isFinite(value)) {
-                        return error.TypeError;
-                    }
-                    if (positive and value <= 0) {
+                    if (positive and std.math.isFinite(value) and value <= 0) {
                         return;
                     }
-                    // JS's Number-to-string is the "best representation"
-                    const str = try (try frame.js.local.?.newNumber(value)).toStringSlice();
-                    try element(self).setAttributeSafe(.wrap(attr), .wrap(str), frame);
+                    try setDouble(element(self), attr, value, frame);
                 }
             };
             return bridge.accessor(R.get, R.set, .{ .ce_reactions = true });
@@ -282,9 +276,22 @@ pub fn getLimitedLong(el: *const Element, attr: String) i32 {
     return @intCast(parsed);
 }
 
+pub fn getDouble(el: *const Element, comptime attr: []const u8) ?f64 {
+    return parseFloat(el.getAttributeSafe(.wrap(attr)) orelse return null);
+}
+
+pub fn setDouble(el: *Element, comptime attr: []const u8, value: f64, frame: *Frame) !void {
+    if (!std.math.isFinite(value)) {
+        return error.TypeError;
+    }
+    // JS's Number-to-string is the "best representation"
+    const str = try (try frame.js.local.?.newNumber(value)).toStringSlice();
+    try el.setAttributeSafe(.wrap(attr), .wrap(str), frame);
+}
+
 fn setInteger(el: *Element, comptime attr: []const u8, value: i64, frame: *Frame) !void {
     var buf: [24]u8 = undefined;
-    const str = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    const str = std.mem.print(&buf, "{d}", .{value}) catch unreachable;
     try el.setAttributeSafe(.wrap(attr), .wrap(str), frame);
 }
 

@@ -36,6 +36,9 @@ _type: Type,
 _arena: *lp.Arena,
 _bubbles: bool = false,
 _cancelable: bool = false,
+// Resolved at dispatch: cancelable only while a listener on the path could
+// call preventDefault. The UA's scroll-blocking events work this way.
+_cancelable_unless_passive: bool = false,
 _composed: bool = false,
 _type_string: String,
 _target: ?*EventTarget = null,
@@ -68,7 +71,7 @@ _time_origin: u64 = 0,
 // - 2: both zig and v8 have a reference
 _rc: lp.RC = .{},
 
-pub const EventPhase = enum(u8) {
+const EventPhase = enum(u8) {
     none = 0,
     capturing_phase = 1,
     at_target = 2,
@@ -85,6 +88,7 @@ pub const Type = union(enum) {
     page_transition_event: *@import("event/PageTransitionEvent.zig"),
     pop_state_event: *@import("event/PopStateEvent.zig"),
     hash_change_event: *@import("event/HashChangeEvent.zig"),
+    media_query_list_event: *@import("event/MediaQueryListEvent.zig"),
     before_unload_event: *@import("event/BeforeUnloadEvent.zig"),
     storage_event: *@import("event/StorageEvent.zig"),
     device_motion_event: *@import("event/DeviceMotionEvent.zig"),
@@ -92,6 +96,7 @@ pub const Type = union(enum) {
     device_orientation_event: *@import("event/DeviceOrientationEvent.zig"),
     ui_event: *@import("event/UIEvent.zig"),
     promise_rejection_event: *@import("event/PromiseRejectionEvent.zig"),
+    extendable_event: *@import("event/ExtendableEvent.zig"),
     submit_event: *@import("event/SubmitEvent.zig"),
     form_data_event: *@import("event/FormDataEvent.zig"),
     close_event: *@import("event/CloseEvent.zig"),
@@ -141,7 +146,7 @@ fn initWithTrusted(arena: *lp.Arena, typ: String, opts_: ?Options, comptime trus
     return event;
 }
 
-pub fn initEvent(
+fn initEvent(
     self: *Event,
     event_string: []const u8,
     bubbles: ?bool,
@@ -200,12 +205,14 @@ pub fn is(self: *Event, comptime T: type) ?*T {
         .page_transition_event => |e| return if (T == @import("event/PageTransitionEvent.zig")) e else null,
         .pop_state_event => |e| return if (T == @import("event/PopStateEvent.zig")) e else null,
         .hash_change_event => |e| return if (T == @import("event/HashChangeEvent.zig")) e else null,
+        .media_query_list_event => |e| return if (T == @import("event/MediaQueryListEvent.zig")) e else null,
         .before_unload_event => |e| return if (T == @import("event/BeforeUnloadEvent.zig")) e else null,
         .storage_event => |e| return if (T == @import("event/StorageEvent.zig")) e else null,
         .device_motion_event => |e| return if (T == @import("event/DeviceMotionEvent.zig")) e else null,
         .gamepad_event => |e| return if (T == @import("event/GamepadEvent.zig")) e else null,
         .device_orientation_event => |e| return if (T == @import("event/DeviceOrientationEvent.zig")) e else null,
         .promise_rejection_event => |e| return if (T == @import("event/PromiseRejectionEvent.zig")) e else null,
+        .extendable_event => |e| return if (T == @import("event/ExtendableEvent.zig")) e else null,
         .submit_event => |e| return if (T == @import("event/SubmitEvent.zig")) e else null,
         .form_data_event => |e| return if (T == @import("event/FormDataEvent.zig")) e else null,
         .close_event => |e| return if (T == @import("event/CloseEvent.zig")) e else null,
@@ -227,15 +234,15 @@ pub fn getType(self: *const Event) []const u8 {
     return self._type_string.str();
 }
 
-pub fn getBubbles(self: *const Event) bool {
+fn getBubbles(self: *const Event) bool {
     return self._bubbles;
 }
 
-pub fn getCancelable(self: *const Event) bool {
+fn getCancelable(self: *const Event) bool {
     return self._cancelable;
 }
 
-pub fn getComposed(self: *const Event) bool {
+fn getComposed(self: *const Event) bool {
     return self._composed;
 }
 
@@ -243,7 +250,7 @@ pub fn getTarget(self: *const Event) ?*EventTarget {
     return self._target;
 }
 
-pub fn getCurrentTarget(self: *const Event) ?*EventTarget {
+fn getCurrentTarget(self: *const Event) ?*EventTarget {
     return self._current_target;
 }
 
@@ -253,11 +260,11 @@ pub fn preventDefault(self: *Event) void {
     }
 }
 
-pub fn stopPropagation(self: *Event) void {
+fn stopPropagation(self: *Event) void {
     self._stop_propagation = true;
 }
 
-pub fn stopImmediatePropagation(self: *Event) void {
+fn stopImmediatePropagation(self: *Event) void {
     self._stop_immediate_propagation = true;
     self._stop_propagation = true;
 }
@@ -279,19 +286,19 @@ pub fn setReturnValue(self: *Event, v: bool) void {
     }
 }
 
-pub fn getCancelBubble(self: *const Event) bool {
+fn getCancelBubble(self: *const Event) bool {
     return self._stop_propagation;
 }
 
-pub fn setCancelBubble(self: *Event) void {
+fn setCancelBubble(self: *Event) void {
     self.stopPropagation();
 }
 
-pub fn getEventPhase(self: *const Event) u8 {
-    return @intFromEnum(self._event_phase);
+fn getEventPhase(self: *const Event) u8 {
+    return @backingInt(self._event_phase);
 }
 
-pub fn getTimeStamp(self: *const Event, exec: *js.Execution) f64 {
+fn getTimeStamp(self: *const Event, exec: *js.Execution) f64 {
     const origin = if (self._time_origin != 0) self._time_origin else exec.performance()._time_origin;
     if (self._time_stamp <= origin) {
         return 0.0;
@@ -299,19 +306,11 @@ pub fn getTimeStamp(self: *const Event, exec: *js.Execution) f64 {
     return @as(f64, @floatFromInt(self._time_stamp - origin)) / 1000.0;
 }
 
-pub fn setTrusted(self: *Event) void {
-    self._is_trusted = true;
-}
-
-pub fn setUntrusted(self: *Event) void {
-    self._is_trusted = false;
-}
-
 pub fn getIsTrusted(self: *const Event) bool {
     return self._is_trusted;
 }
 
-pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
+fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
     // Return empty array if event is not being dispatched
     if (self._event_phase == .none) {
         return &.{};
@@ -400,42 +399,30 @@ pub fn inheritOptions(comptime T: type, comptime additions: anytype) type {
     // this per-level check produce.
     js.Local.assertDictionaryFieldOrder(additions);
 
-    var all_fields: []const std.builtin.Type.StructField = &.{};
+    var names: []const [:0]const u8 = &.{};
+    var types: []const type = &.{};
+    var attrs: []const std.lang.Type.Struct.FieldAttributes = &.{};
 
     if (@hasField(T, "_proto")) {
-        const t_fields = @typeInfo(T).@"struct".fields;
-
-        inline for (t_fields) |field| {
-            if (std.mem.eql(u8, field.name, "_proto")) {
-                const ProtoType = @typeInfo(field.type).pointer.child;
-                if (@hasDecl(ProtoType, "Options")) {
-                    const parent_options = @typeInfo(ProtoType.Options);
-                    for (parent_options.@"struct".fields) |f| {
-                        if (!std.mem.eql(u8, f.name, js.Local.dictionary_group_marker)) {
-                            all_fields = all_fields ++ &[_]std.builtin.Type.StructField{f};
-                        }
-                    }
+        const ProtoType = @typeInfo(@FieldType(T, "_proto")).pointer.child;
+        if (@hasDecl(ProtoType, "Options")) {
+            const parent_options = @typeInfo(ProtoType.Options).@"struct";
+            for (parent_options.field_names, parent_options.field_types, parent_options.field_attrs) |field_name, field_type, field_attrs| {
+                if (!std.mem.eql(u8, field_name, js.Local.dictionary_group_marker)) {
+                    names = names ++ .{field_name};
+                    types = types ++ .{field_type};
+                    attrs = attrs ++ .{field_attrs};
                 }
             }
         }
     }
 
-    const additions_info = @typeInfo(additions);
-    all_fields = all_fields ++ additions_info.@"struct".fields;
-
+    const additions_info = @typeInfo(additions).@"struct";
     const marker_default: void = {};
-    var names: [all_fields.len + 1][:0]const u8 = undefined;
-    var types: [all_fields.len + 1]type = undefined;
-    var attrs: [all_fields.len + 1]std.builtin.Type.StructField.Attributes = undefined;
-    for (all_fields, 0..) |f, i| {
-        names[i] = f.name;
-        types[i] = f.type;
-        attrs[i] = .{ .@"comptime" = f.is_comptime, .@"align" = f.alignment, .default_value_ptr = f.default_value_ptr };
-    }
-    names[all_fields.len] = js.Local.dictionary_group_marker;
-    types[all_fields.len] = void;
-    attrs[all_fields.len] = .{ .default_value_ptr = @ptrCast(&marker_default) };
-    return @Struct(.auto, null, &names, &types, &attrs);
+    names = names ++ additions_info.field_names ++ .{js.Local.dictionary_group_marker};
+    types = types ++ additions_info.field_types ++ .{void};
+    attrs = attrs ++ additions_info.field_attrs ++ .{std.lang.Type.Struct.FieldAttributes{ .default_value_ptr = @ptrCast(&marker_default) }};
+    return @Struct(.auto, null, names, types, attrs);
 }
 
 pub fn populatePrototypes(self: anytype, opts: anytype, trusted: bool) void {
@@ -495,10 +482,10 @@ pub const JsApi = struct {
     pub const cancelBubble = bridge.accessor(Event.getCancelBubble, Event.setCancelBubble, .{});
 
     // Event phase constants
-    pub const NONE = bridge.property(@intFromEnum(EventPhase.none), .{ .template = true });
-    pub const CAPTURING_PHASE = bridge.property(@intFromEnum(EventPhase.capturing_phase), .{ .template = true });
-    pub const AT_TARGET = bridge.property(@intFromEnum(EventPhase.at_target), .{ .template = true });
-    pub const BUBBLING_PHASE = bridge.property(@intFromEnum(EventPhase.bubbling_phase), .{ .template = true });
+    pub const NONE = bridge.property(@backingInt(EventPhase.none), .{ .template = true });
+    pub const CAPTURING_PHASE = bridge.property(@backingInt(EventPhase.capturing_phase), .{ .template = true });
+    pub const AT_TARGET = bridge.property(@backingInt(EventPhase.at_target), .{ .template = true });
+    pub const BUBBLING_PHASE = bridge.property(@backingInt(EventPhase.bubbling_phase), .{ .template = true });
 };
 
 // tested in event_target

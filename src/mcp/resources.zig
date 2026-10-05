@@ -6,7 +6,7 @@ const log = lp.log;
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
 
-pub const resource_list = [_]protocol.Resource{
+const resource_list = [_]protocol.Resource{
     .{
         .uri = "mcp://page/html",
         .name = "Page HTML",
@@ -57,7 +57,7 @@ const ResourceStreamingResult = struct {
                     log.err(.mcp, "html dump failed", .{ .err = err });
                     return error.WriteFailed;
                 },
-                .markdown => lp.markdown.dump(self.frame.document.asNode(), .{}, &escaped.writer, self.frame) catch |err| {
+                .markdown => lp.markdown.dump(.{ .root = self.frame.document.asNode() }, .{}, &escaped.writer, self.frame) catch |err| {
                     log.err(.mcp, "markdown dump failed", .{ .err = err });
                     return error.WriteFailed;
                 },

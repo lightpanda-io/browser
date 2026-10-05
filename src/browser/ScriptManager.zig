@@ -35,7 +35,7 @@ const ScriptManager = @This();
 
 // Re-exports so Frame / Context callers don't need to import Base directly.
 pub const Script = ScriptManagerBase.Script;
-pub const ModuleSource = ScriptManagerBase.ModuleSource;
+const ModuleSource = ScriptManagerBase.ModuleSource;
 
 base: ScriptManagerBase,
 frame: *Frame,
@@ -82,7 +82,7 @@ fn freePreloads(self: *ScriptManager) void {
 
 // Frame wrapper uses this to fire documentIsLoaded and scriptsCompletedLoading
 // once Base has finished processing its ready / defer queues.
-pub fn tailHook(base: *ScriptManagerBase) void {
+fn tailHook(base: *ScriptManagerBase) void {
     const self: *ScriptManager = @fieldParentPtr("base", base);
     const frame = self.frame;
 
@@ -97,6 +97,38 @@ pub fn tailHook(base: *ScriptManagerBase) void {
     }
 }
 
+const CorsSettings = struct {
+    request_mode: HttpClient.Request.RequestMode,
+    credentials_mode: HttpClient.Request.CredentialsMode,
+};
+
+// Follows the "create a potential-CORS request"
+// (https://html.spec.whatwg.org/multipage/urls-and-fetching.html#create-a-potential-cors-request)
+// in order to properly set the request_mode and credentials_mode.
+fn corsSettings(element: ?*Element, is_module: bool) CorsSettings {
+    const mode: enum { no_cors, anonymous, use_credentials } = blk: {
+        const co = if (element) |e| e.getAttributeInterned("crossorigin") else null;
+
+        const value = co orelse {
+            // Missing-value default: No CORS for classic scripts, Anonymous for modules.
+            break :blk if (is_module) .anonymous else .no_cors;
+        };
+
+        if (std.ascii.eqlIgnoreCase(value, "use-credentials")) {
+            break :blk .use_credentials;
+        }
+
+        // Empty-value and invalid-value defaults are both Anonymous.
+        break :blk .anonymous;
+    };
+
+    return switch (mode) {
+        .no_cors => .{ .request_mode = .no_cors, .credentials_mode = .include },
+        .anonymous => .{ .request_mode = .cors, .credentials_mode = .same_origin },
+        .use_credentials => .{ .request_mode = .cors, .credentials_mode = .include },
+    };
+}
+
 // Returns true when a fetch was started: the link's load/error event fires
 // when the fetch settles. false (duplicate hint) = no event will fire.
 // element is null when the hint came from the prescan rather than a <link>.
@@ -109,7 +141,7 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
     const arena = try frame.getArena(.small, "SM.preloadScript");
     errdefer arena.release();
 
-    const owned_url = try arena.dupeZ(u8, url);
+    const owned_url = try arena.dupeSentinel(u8, url, 0);
 
     const script = try arena.create(Script);
     script.* = .{
@@ -130,16 +162,16 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
         log.debug(.http, "script queue", .{ .url = owned_url, .ctx = "preload" });
     }
 
+    const settings = corsSettings(if (element) |e| e.asElement() else null, false);
+
     try frame.makeRequest(.{
         .ctx = script,
         .url = owned_url,
         .method = .GET,
-        .frame_id = frame._frame_id,
-        .loader_id = frame._loader_id,
-        .cookie_jar = &frame._session.cookie_jar,
-        .cookie_origin = frame.url,
+        .origin = frame.origin,
         .resource_type = .script,
-        .notification = frame._session.notification,
+        .request_mode = settings.request_mode,
+        .credentials_mode = settings.credentials_mode,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,
@@ -167,7 +199,7 @@ fn waitForPreload(self: *ScriptManager, url: [:0]const u8) ?*Script {
                 _ = client.tickSync(200) catch return null;
                 continue;
             },
-            .done => |script| {
+            .done, .failed => |script| {
                 // Preload scripts are single-use. We return it and it becomes
                 // the caller's responsibility to free.
                 _ = self.preloaded_scripts.remove(url);
@@ -197,7 +229,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     }
 
     const kind: Script.Extra.FrameExtra.Kind = blk: {
-        const script_type = element.getAttributeSafe(comptime .wrap("type")) orelse break :blk .javascript;
+        const script_type = element.getAttributeInterned("type") orelse break :blk .javascript;
         if (script_type.len == 0) {
             break :blk .javascript;
         }
@@ -223,7 +255,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     const frame = self.frame;
     const base_url = frame.base();
 
-    const src = element.getAttributeSafe(comptime .wrap("src")) orelse {
+    const src = element.getAttributeInterned("src") orelse {
         return self.addInlineScript(script_element, kind);
     };
 
@@ -242,12 +274,12 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     script_element._executed = true;
 
     const mode: Script.Extra.FrameExtra.Mode = blk: {
-        if (element.getAttributeSafe(comptime .wrap("async")) != null) {
+        if (element.getAttributeInterned("async") != null) {
             break :blk .async;
         }
 
         // Check for defer or module (before checking dynamic script default)
-        if (kind == .module or element.getAttributeSafe(comptime .wrap("defer")) != null) {
+        if (kind == .module or element.getAttributeInterned("defer") != null) {
             break :blk .@"defer";
         }
 
@@ -286,7 +318,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     if (mode != .normal) {
         var preloaded = self.takePreload(remote_url);
         if (preloaded == null and kind == .module) {
-            preloaded = self.base.takeModuleHint(remote_url);
+            preloaded = try self.base.takeModuleHint(remote_url);
         }
         if (preloaded) |pre| {
             if (comptime lp.IS_DEBUG) {
@@ -347,22 +379,23 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 script.status = pre.status;
                 script.complete = true;
             } else {
+                const settings = corsSettings(script_element.asElement(), kind == .module);
+
                 const transfer = try self.base.client.newRequest(.{
                     .url = remote_url,
                     .method = .GET,
-                    .frame_id = frame._frame_id,
-                    .loader_id = frame._loader_id,
-                    .cookie_jar = &frame._session.cookie_jar,
-                    .cookie_origin = frame.url,
+                    .origin = frame.origin,
                     .resource_type = .script,
-                    .notification = frame._session.notification,
+                    .request_mode = settings.request_mode,
+                    .credentials_mode = settings.credentials_mode,
                     .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
                 }, &frame._http_owner);
                 {
                     errdefer transfer.deinit();
-                    try frame.headersForRequest(transfer);
+                    try frame.headersForRequest(transfer, .{});
                 }
-                const response = try self.base.client.syncRequest(transfer);
+
+                const response = try transfer.submitSync(.{});
 
                 // Take the body's arena rather than releasing it: `source`
                 // has to outlive this call, up to script.deinit().
@@ -392,27 +425,39 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     self.base.is_evaluating = true;
     defer self.base.endEvaluationWindow(was_evaluating);
 
-    errdefer self.base.scriptList(script).remove(&script.node);
-    try frame.makeRequest(.{
-        .ctx = script,
-        .url = remote_url,
-        .method = .GET,
-        .frame_id = frame._frame_id,
-        .loader_id = frame._loader_id,
-        .cookie_jar = &frame._session.cookie_jar,
-        .cookie_origin = frame.url,
-        .resource_type = .script,
-        .notification = frame._session.notification,
-        .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
-        .header_callback = Script.headerCallback,
-        .data_callback = Script.dataCallback,
-        .done_callback = Script.doneCallback,
-        .error_callback = Script.errorCallback,
-        // Nothing holds the transfer; teardown cleanup runs through
-        // the manager's script lists.
-        .shutdown_callback = HttpClient.noopShutdown,
-    });
+    const transfer = blk: {
+        errdefer self.base.scriptList(script).remove(&script.node);
+
+        const settings = corsSettings(script_element.asElement(), kind == .module);
+
+        const transfer = try frame.newRequest(.{
+            .ctx = script,
+            .url = remote_url,
+            .method = .GET,
+            .origin = frame.origin,
+            .resource_type = .script,
+            .request_mode = settings.request_mode,
+            .credentials_mode = settings.credentials_mode,
+            .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
+            .header_callback = Script.headerCallback,
+            .data_callback = Script.dataCallback,
+            .done_callback = Script.doneCallback,
+            .error_callback = Script.errorCallback,
+            // Nothing holds the transfer; teardown cleanup runs through
+            // the manager's script lists.
+            .shutdown_callback = HttpClient.noopShutdown,
+        });
+        errdefer transfer.deinit();
+        try frame.headersForRequest(transfer, .{});
+        break :blk transfer;
+    };
+
+    // Point of no return: submit() consumes the transfer, and on a synchronous
+    // failure fires Script.errorCallback, which removes the node and deinits
+    // the script (freeing our arena). Its error is already delivered there
+    // (same as Fetch), so there's nothing left for us to unwind.
     handover = true;
+    transfer.submit() catch {};
 }
 
 // A <script> with no src. Runs synchronously right now, except an inline
@@ -500,6 +545,7 @@ const PreloadedScript = struct {
     const State = union(enum) {
         loading: *Script,
         done: *Script,
+        failed: *Script,
     };
 
     pub fn deinit(self: PreloadedScript) void {
@@ -535,13 +581,15 @@ const PreloadedScript = struct {
         if (script.status == 404) {
             log.info(.http, "script 404", .{ .req = script.url, .extra = "preload" });
         } else {
-            log.warn(.http, "script fetch error", .{ .err = err, .req = script.url, .extra = "preload", .status = script.status });
+            log.debug(.http, "script fetch error", .{ .err = err, .req = script.url, .extra = "preload", .status = script.status });
         }
 
+        script.status = 0; // status == 0 is correctly treated as an error throughout
+        script.complete = true;
+
         const self: *ScriptManager = @fieldParentPtr("base", script.manager);
-        _ = self.preloaded_scripts.remove(script.url);
+        self.preloaded_scripts.getPtr(script.url).?.state = .{ .failed = script };
         script.queueHintEvent(.@"error");
-        script.deinit();
     }
 
     // Owner-driven teardown killed this preload fetch via Transfer.kill, which
@@ -563,6 +611,7 @@ const PreloadedScript = struct {
 };
 
 const testing = @import("../testing.zig");
+const Inbox = @import("../Inbox.zig");
 
 test "ScriptManager: PreloadedScript.shutdownCallback drops a .loading preload" {
     const page = try testing.pageTest("mcp_nav.html", .{});
@@ -619,12 +668,104 @@ test "ScriptManager: waitForPreload stops when teardown is pending" {
     try sm.preloaded_scripts.put(sm.base.allocator, url, .{ .state = .{ .loading = script } });
     defer sm.takePreload(url).?.deinit();
 
+    var inbox: Inbox = .{};
+    defer inbox.deinit();
+    client.test_inbox = &inbox;
+    defer client.test_inbox = null;
+
     const message_arena = try client.arena_pool.acquire(.tiny, "test teardown message");
-    client.inbox.push(message_arena, .{ .cdp = .{
+    inbox.push(message_arena, .{ .cdp = .{
         .raw = try message_arena.dupe(u8, "{}"),
         .input = .{ .method = "Target.closeTarget" },
     } });
-    defer client.inbox.pop().?.deinit();
 
     try testing.expect(sm.waitForPreload(url) == null);
+}
+
+// Production crash (release overflow on unrelated pooled objects): a
+// synchronous submit() failure fires Script.errorCallback, which deinits the
+// script and releases its arena, and then returns the error, so addFromElement's
+// errdefer released the same arena again — a pooled-arena double release.
+test "ScriptManager: async script whose submit fails synchronously releases its arena once" {
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const client = frame._script_manager.base.client;
+    client.test_fail_submit = error.TestSubmitFailure;
+    defer client.test_fail_submit = null;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // A dynamically inserted external script is async, the mode whose
+    // errorCallback tears the script down itself. On the unfixed code the
+    // second release trips ArenaPool.release's double-release assert from
+    // inside this eval — that assert is the test's real check.
+    try ls.local.eval(
+        \\const s = document.createElement('script');
+        \\s.src = 'http://127.0.0.1:9582/fails-at-submit.js';
+        \\document.head.appendChild(s);
+    , null);
+}
+
+test "ScriptManager: preload whose submit fails synchronously releases its arena once" {
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const sm = &frame._script_manager;
+    const client = sm.base.client;
+    client.test_fail_submit = error.TestSubmitFailure;
+    defer client.test_fail_submit = null;
+
+    const url = "http://127.0.0.1:9582/fails-at-submit.js";
+    // A fetch was started (and failed), so the hint's error event fires.
+    try testing.expectEqual(true, try sm.preloadScript(null, url));
+    // The failed entry stays for a <script> to consume; reset() frees it.
+    try testing.expect(sm.preloaded_scripts.getPtr(url).?.state == .failed);
+}
+
+// A failed preload used to be dropped, so the <script> consuming it fetched
+// again: a blocked script logged "blocked url" and counted in
+// adblock_verdicts twice. Unblocking before the <script>s and import() run
+// makes a refetch observable: it would succeed and run the script.
+test "ScriptManager: a failed preload is consumed, not refetched" {
+    const client = &testing.test_session.browser.http_client;
+    try client.setBlockedUrls(&.{ "*/preload_failed.js", "*/preload_failed_module.js" });
+    defer client.setBlockedUrls(&.{}) catch unreachable;
+
+    const page = try testing.pageTest("fixtures/preload_failed.html", .{});
+    defer page.close();
+    try client.setBlockedUrls(&.{});
+
+    {
+        const frame = page.frame().?;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        try ls.local.eval(
+            \\const classic = document.createElement('script');
+            \\classic.src = 'preload_failed.js';
+            \\classic.onerror = () => window.classic_error = true;
+            \\document.head.appendChild(classic);
+            \\const module = document.createElement('script');
+            \\module.type = 'module';
+            \\module.src = 'preload_failed_module.js';
+            \\module.onerror = () => window.module_error = true;
+            \\document.head.appendChild(module);
+            \\const dynamic = document.createElement('script');
+            \\dynamic.textContent = "import('./preload_failed_module.js').catch(() => window.import_error = true);";
+            \\document.head.appendChild(dynamic);
+        , null);
+    }
+
+    var runner = testing.test_session.runner(.{});
+    try runner.waitForScript(page.frame_id,
+        \\window.classic_hint_error && window.module_hint_error &&
+        \\window.classic_error && window.module_error && window.import_error &&
+        \\!window.failed_classic_ran && !window.failed_module_ran
+    , 2000);
 }

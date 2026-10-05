@@ -20,14 +20,17 @@ const std = @import("std");
 
 const Frame = @import("Frame.zig");
 const URL = @import("URL.zig");
+const Regex = @import("../Regex.zig");
 const TreeWalker = @import("webapi/TreeWalker.zig");
+const Label = @import("webapi/element/html/Label.zig");
+const AXNode = @import("../server/cdp/AXNode.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const InteractivityType = enum {
+const InteractivityType = enum {
     native,
     aria,
     contenteditable,
@@ -35,7 +38,7 @@ pub const InteractivityType = enum {
     focusable,
 };
 
-pub const InteractiveElement = struct {
+const InteractiveElement = struct {
     backendNodeId: ?u32 = null,
     node: *Node,
     tag_name: []const u8,
@@ -147,11 +150,18 @@ pub fn collectInteractiveElements(
     return walkInteractive(root, arena, frame, .{});
 }
 
-pub const FindFilter = struct {
+pub const Name = union(enum) {
+    /// Case-insensitive.
+    substring: []const u8,
+    /// Unanchored.
+    regex: Regex,
+};
+
+const FindFilter = struct {
     /// Exact role match (case-insensitive). When null, role is not filtered.
     role: ?[]const u8 = null,
-    /// Accessible-name substring match (case-insensitive). When null, name is not filtered.
-    name: ?[]const u8 = null,
+    /// Accessible-name match. When null, name is not filtered.
+    name: ?Name = null,
     /// Stop walking once this many matches accumulate. When null, walks the full subtree.
     max: ?usize = null,
 };
@@ -178,35 +188,60 @@ fn walkInteractive(
     // so classify and getListenerTypes are both O(1) per element.
     const listener_targets = try buildListenerTargetMap(frame, arena);
 
-    var css_cache: Element.PointerEventsCache = .empty;
+    var label_index: Label.LabelByForIndex = .{};
 
     var results: std.ArrayList(InteractiveElement) = .empty;
+
+    if (root.is(Element)) |root_el| {
+        // root is outside of the tree walk, so check its visibility upfront.
+        if (!root_el.isVisible(frame)) {
+            return &.{};
+        }
+    }
 
     var tw = TreeWalker.Full.init(root, .{});
     while (tw.next()) |node| {
         const el = node.is(Element) orelse continue;
-        const html_el = el.is(Element.Html) orelse continue;
 
-        // Skip non-visual elements that are never user-interactive.
         switch (el.getTag()) {
-            .script, .style, .link, .meta, .head, .noscript, .template => continue,
+            .script, .style, .link, .meta, .head, .noscript, .template => {
+                // Skip non-visual elements (and their children) that are never
+                // user-interactive.
+                tw.skipChildren();
+                continue;
+            },
             else => {},
         }
 
-        const itype = classifyInteractivity(frame, el, html_el, listener_targets, &css_cache) orelse continue;
+        // Not just the element's own display: a slotted element inherits
+        // from its slot, which this light-tree walk never visits.
+        if (!el.isVisible(frame)) {
+            tw.skipChildren();
+            continue;
+        }
 
-        const role = getRole(el);
+        const html_el = el.is(Element.Html) orelse continue;
+
+        const itype = classifyInteractivity(frame, el, html_el, listener_targets) orelse continue;
+
+        const axn = AXNode.fromNode(node);
+        const role = axRole(axn);
         if (filter.role) |rf| {
             const r = role orelse continue;
             if (!std.ascii.eqlIgnoreCase(r, rf)) continue;
         }
 
-        // Resolve accessible name only after the cheap role filter passes,
-        // since getAccessibleName walks the element's text subtree.
-        const name = try getAccessibleName(el, arena);
+        // Names walk labels and text; filter on role first. Role-less elements
+        // (listener/tabindex only) sit outside AccName; their text is the only handle.
+        const name = try axn.getName(frame, arena, &label_index) orelse
+            if (role == null) try getTextContent(node, arena) else null;
         if (filter.name) |nf| {
             const n = name orelse continue;
-            if (std.ascii.indexOfIgnoreCase(n, nf) == null) continue;
+            const hit = switch (nf) {
+                .substring => |s| std.ascii.findIgnoreCase(n, s) != null,
+                .regex => |re| re.matches(n),
+            };
+            if (!hit) continue;
         }
 
         const listener_types = getListenerTypes(el.asEventTarget(), listener_targets);
@@ -220,16 +255,16 @@ fn walkInteractive(
             .listener_types = listener_types,
             .disabled = el.isDisabled(),
             .tab_index = html_el.getTabIndex(),
-            .id = el.getAttributeSafe(comptime .wrap("id")),
-            .class = el.getAttributeSafe(comptime .wrap("class")),
-            .href = if (el.getAttributeSafe(comptime .wrap("href"))) |href|
+            .id = el.getId(),
+            .class = el.getClassName(),
+            .href = if (el.getAttributeInterned("href")) |href|
                 URL.resolve(arena, frame.base(), href, .{ .encoding = frame.charset }) catch href
             else
                 null,
             .input_type = getInputType(el),
             .value = getInputValue(el),
-            .element_name = el.getAttributeSafe(comptime .wrap("name")),
-            .placeholder = el.getAttributeSafe(comptime .wrap("placeholder")),
+            .element_name = el.getName(),
+            .placeholder = el.getAttributeInterned("placeholder"),
         });
 
         if (filter.max) |m| {
@@ -276,15 +311,14 @@ pub fn classifyInteractivity(
     el: *Element,
     html_el: *Element.Html,
     listener_targets: ListenerTargetMap,
-    cache: ?*Element.PointerEventsCache,
 ) ?InteractivityType {
-    if (el.hasPointerEventsNone(cache, frame)) return null;
+    if (el.hasPointerEventsNone(frame)) return null;
 
     // 1. Native interactive by tag
     switch (el.getTag()) {
         .button, .summary, .details, .select, .textarea => return .native,
         .anchor, .area => {
-            if (el.getAttributeSafe(comptime .wrap("href")) != null) return .native;
+            if (el.getAttributeInterned("href") != null) return .native;
         },
         .input => {
             if (el.is(Element.Html.Input)) |input| {
@@ -295,12 +329,12 @@ pub fn classifyInteractivity(
     }
 
     // 2. ARIA interactive role
-    if (el.getAttributeSafe(comptime .wrap("role"))) |role| {
+    if (explicitRole(el)) |role| {
         if (isInteractiveRole(role)) return .aria;
     }
 
-    // 3. contenteditable (15 bytes, exceeds SSO limit for comptime)
-    if (el.getAttributeSafe(.wrap("contenteditable"))) |ce| {
+    // 3. contenteditable
+    if (el.getAttributeInterned("contenteditable")) |ce| {
         if (ce.len == 0 or std.ascii.eqlIgnoreCase(ce, "true")) return .contenteditable;
     }
 
@@ -312,7 +346,7 @@ pub fn classifyInteractivity(
     // Only count elements with an EXPLICIT tabindex attribute,
     // since getTabIndex() returns 0 for all interactive tags by default
     // (including anchors without href and hidden inputs).
-    if (el.getAttributeSafe(comptime .wrap("tabindex"))) |_| {
+    if (el.getAttributeInterned("tabindex")) |_| {
         if (html_el.getTabIndex() >= 0) return .focusable;
     }
 
@@ -367,66 +401,17 @@ pub fn isContentRole(role: []const u8) bool {
     return content_roles.has(lowered);
 }
 
-fn getRole(el: *Element) ?[]const u8 {
-    // Explicit role attribute takes precedence
-    if (el.getAttributeSafe(comptime .wrap("role"))) |role| return role;
-
-    // Implicit role from tag
-    return switch (el.getTag()) {
-        .button, .summary => "button",
-        .anchor, .area => if (el.getAttributeSafe(comptime .wrap("href")) != null) "link" else null,
-        .input => blk: {
-            if (el.is(Element.Html.Input)) |input| {
-                break :blk switch (input._input_type) {
-                    .text, .tel, .url, .email => "textbox",
-                    .checkbox => "checkbox",
-                    .radio => "radio",
-                    .button, .submit, .reset, .image => "button",
-                    .range => "slider",
-                    .number => "spinbutton",
-                    .search => "searchbox",
-                    else => null,
-                };
-            }
-            break :blk null;
-        },
-        .select => "combobox",
-        .textarea => "textbox",
-        .details => "group",
-        else => null,
-    };
+// ARIA `role` is a space-separated fallback list; the first token wins.
+pub fn explicitRole(el: *Element) ?[]const u8 {
+    const attr = el.getAttributeInterned("role") orelse return null;
+    var it = std.mem.tokenizeAny(u8, attr, " \t\n\r");
+    return it.next();
 }
 
-fn getAccessibleName(el: *Element, arena: Allocator) !?[]const u8 {
-    // aria-label
-    if (el.getAttributeSafe(comptime .wrap("aria-label"))) |v| {
-        if (v.len > 0) return v;
-    }
-
-    // alt (for img, input[type=image])
-    if (el.getAttributeSafe(comptime .wrap("alt"))) |v| {
-        if (v.len > 0) return v;
-    }
-
-    // title
-    if (el.getAttributeSafe(comptime .wrap("title"))) |v| {
-        if (v.len > 0) return v;
-    }
-
-    // placeholder
-    if (el.getAttributeSafe(comptime .wrap("placeholder"))) |v| {
-        if (v.len > 0) return v;
-    }
-
-    // value (for buttons)
-    if (el.getTag() == .input) {
-        if (el.getAttributeSafe(comptime .wrap("value"))) |v| {
-            if (v.len > 0) return v;
-        }
-    }
-
-    // Text content (first non-empty text node, trimmed)
-    return try getTextContent(el.asNode(), arena);
+/// Null for elements with no role (interactive only by listener or tabindex).
+fn axRole(axn: AXNode) ?[]const u8 {
+    const role = axn.getRole() catch return null;
+    return if (std.mem.eql(u8, role, "none")) null else role;
 }
 
 pub fn getTextContent(node: *Node, arena: Allocator) !?[]const u8 {
@@ -506,6 +491,87 @@ fn testInteractive(html: []const u8) ![]InteractiveElement {
     return collectInteractiveElements(div.asNode(), frame.call_arena, frame);
 }
 
+/// Attached to the document so `<label for>` resolves.
+fn testInteractiveInBody(html: []const u8) ![]InteractiveElement {
+    const frame = try testing.createFrame();
+    errdefer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    _ = try doc.asNode().appendChild(div.asNode(), frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
+
+    return collectInteractiveElements(div.asNode(), frame.call_arena, frame);
+}
+
+test "browser.interactive: a name regex filters the walk" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<button>Add to cart</button><button>Cart</button><a href=\"#\">Add item</a>");
+
+    const context = testing.test_app.regex_context;
+    const options: Regex.Options = .{ .case_insensitive = true, .unicode = true };
+
+    const starts_add = try context.compile("^add", options, null);
+    defer starts_add.deinit();
+    const found_add = try findInteractiveElements(div.asNode(), frame.call_arena, frame, .{ .name = .{ .regex = starts_add } });
+    try testing.expectEqual(2, found_add.len);
+    try testing.expectEqual("Add to cart", found_add[0].name.?);
+    try testing.expectEqual("Add item", found_add[1].name.?);
+
+    const only_cart = try context.compile("^cart$", options, null);
+    defer only_cart.deinit();
+    const found_cart = try findInteractiveElements(div.asNode(), frame.call_arena, frame, .{ .name = .{ .regex = only_cart } });
+    try testing.expectEqual(1, found_cart.len);
+    try testing.expectEqual("Cart", found_cart[0].name.?);
+}
+
+test "browser.interactive: names come from labels, like the tree" {
+    const elements = try testInteractiveInBody(
+        \\<label for="email">Email address</label><input id="email" type="text">
+        \\<label>Password <input type="password"></label>
+        \\<span id="q-label">Search</span><input type="search" aria-labelledby="q-label">
+        \\<input type="text" placeholder="City">
+    );
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(4, elements.len);
+    try testing.expectEqual("textbox", elements[0].role.?);
+    try testing.expectEqual("Email address", elements[0].name.?);
+    try testing.expectEqual("textbox", elements[1].role.?);
+    try testing.expectEqual("Password", elements[1].name.?);
+    try testing.expectEqual("searchbox", elements[2].role.?);
+    try testing.expectEqual("Search", elements[2].name.?);
+    try testing.expectEqual("City", elements[3].name.?);
+}
+
+test "browser.interactive: an element with no role keeps its text as name" {
+    const elements = try testInteractive("<div tabindex=\"0\">Open menu</div>");
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(1, elements.len);
+    try testing.expectEqual(null, elements[0].role);
+    try testing.expectEqual("Open menu", elements[0].name.?);
+}
+
+test "browser.interactive: an element with a role takes only its accessible name" {
+    const elements = try testInteractive(
+        \\<select><option>Red</option></select>
+        \\<textarea>draft</textarea>
+        \\<details><summary>More</summary><p>Content</p></details>
+    );
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(4, elements.len);
+    try testing.expectEqual("combobox", elements[0].role.?);
+    try testing.expectEqual(null, elements[0].name);
+    try testing.expectEqual("textbox", elements[1].role.?);
+    try testing.expectEqual(null, elements[1].name);
+    try testing.expectEqual("group", elements[2].role.?);
+    try testing.expectEqual(null, elements[2].name);
+    try testing.expectEqual("button", elements[3].role.?);
+    try testing.expectEqual("More", elements[3].name.?);
+}
+
 test "browser.interactive: button" {
     const elements = try testInteractive("<button>Click me</button>");
     defer testing.test_session.closeAllPages();
@@ -563,6 +629,23 @@ test "browser.interactive: aria role" {
     try testing.expectEqual(InteractivityType.aria, elements[0].interactivity_type);
 }
 
+test "browser.interactive: aria role token list" {
+    const elements = try testInteractive(
+        \\<div role="switch checkbox">Fallback</div>
+        \\<div role=" button ">Padded</div>
+        \\<div role="">Empty</div>
+        \\<button role="  ">Blank</button>
+    );
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(3, elements.len);
+    try testing.expectEqual("switch", elements[0].role.?);
+    try testing.expectEqual(InteractivityType.aria, elements[0].interactivity_type);
+    try testing.expectEqual("button", elements[1].role.?);
+    try testing.expectEqual(InteractivityType.aria, elements[1].interactivity_type);
+    try testing.expectEqual("button", elements[2].tag_name);
+    try testing.expectEqual("button", elements[2].role.?);
+}
+
 test "browser.interactive: contenteditable" {
     const elements = try testInteractive("<div contenteditable=\"true\">Edit me</div>");
     defer testing.test_session.closeAllPages();
@@ -600,8 +683,24 @@ test "browser.interactive: disabled by fieldset" {
     try testing.expect(!elements[1].disabled);
 }
 
+test "browser.interactive: a slotted element inherits its slot's display" {
+    var page = try testing.pageTest("cdp/slotted_hidden.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const elements = try collectInteractiveElements(frame.window._document.asNode(), frame.call_arena, frame);
+    try testing.expectEqual(1, elements.len);
+    try testing.expectEqual("slotted-shown", elements[0].name.?);
+}
+
 test "browser.interactive: pointer-events none" {
     const elements = try testInteractive("<button style=\"pointer-events: none;\">Click me</button>");
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(0, elements.len);
+}
+
+test "browser.interactive: pointer-events none is case-insensitive" {
+    const elements = try testInteractive("<button style=\"pointer-events: NONE;\">Click me</button>");
     defer testing.test_session.closeAllPages();
     try testing.expectEqual(0, elements.len);
 }
@@ -633,4 +732,19 @@ test "browser.interactive: mixed elements" {
     );
     defer testing.test_session.closeAllPages();
     try testing.expectEqual(4, elements.len);
+}
+
+test "browser.interactive: hidden elements are skipped" {
+    const elements = try testInteractive(
+        \\<button style="display:none">Inline</button>
+        \\<button hidden>Attribute</button>
+        \\<div style="display:none"><a href="/x">Ancestor</a><input type="text"></div>
+        \\<div hidden><button>Ancestor attribute</button></div>
+        \\<svg style="display:none"><foreignObject><button>Foreign</button></foreignObject></svg>
+        \\<button>Visible</button>
+    );
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(1, elements.len);
+    try testing.expectEqual("button", elements[0].tag_name);
+    try testing.expectEqual("Visible", elements[0].name.?);
 }

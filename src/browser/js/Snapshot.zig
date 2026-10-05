@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("js.zig");
+const WasmStreaming = @import("WasmStreaming.zig");
 const bridge = @import("bridge.zig");
 const reflect = @import("../reflect.zig");
 
@@ -33,6 +34,7 @@ const log = lp.log;
 const JsApis = bridge.JsApis;
 const PageJsApis = bridge.PageJsApis;
 const SharedWorkerJsApis = bridge.SharedWorkerJsApis;
+const ServiceWorkerJsApis = bridge.ServiceWorkerJsApis;
 const DedicatedWorkerJsApis = bridge.DedicatedWorkerJsApis;
 
 const Snapshot = @This();
@@ -140,7 +142,7 @@ pub fn create() !Snapshot {
 
     var params: v8.CreateParams = undefined;
     v8.v8__Isolate__CreateParams__CONSTRUCT(&params);
-    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator();
+    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator(4 * 1024 * 1024 * 1024);
     defer v8.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
     params.external_references = @ptrCast(&external_references);
 
@@ -150,6 +152,11 @@ pub fn create() !Snapshot {
     var data_start: usize = 0;
     const isolate = v8.v8__SnapshotCreator__getIsolate(snapshot_creator).?;
     defer v8.v8__Isolate__LowMemoryNotification(isolate);
+
+    // WebAssembly.compileStreaming/instantiateStreaming are installed at
+    // context genesis, and only if the isolate has a streaming callback. The
+    // pointer is not serialized; the runtime isolate registers its own.
+    v8.v8__Isolate__SetWasmStreamingCallback(isolate, WasmStreaming.callback);
 
     {
         // CreateBlob, which we'll call once everything is setup, MUST NOT
@@ -219,6 +226,12 @@ pub fn create() !Snapshot {
             const index = try createSnapshotContext(.worker, &SharedWorkerJsApis, SharedWorkerGlobalScope.JsApi, isolate, snapshot_creator.?, &templates);
             std.debug.assert(index == 2);
         }
+
+        {
+            const ServiceWorkerGlobalScope = @import("../webapi/ServiceWorkerGlobalScope.zig");
+            const index = try createSnapshotContext(.worker, &ServiceWorkerJsApis, ServiceWorkerGlobalScope.JsApi, isolate, snapshot_creator.?, &templates);
+            std.debug.assert(index == 3);
+        }
     }
 
     const blob = v8.v8__SnapshotCreator__createBlob(snapshot_creator, v8.kKeep);
@@ -262,10 +275,11 @@ fn createSnapshotContext(
             .data = null,
             .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
         });
+        const window_index = @import("../webapi/Window.zig").JsApi.index;
         v8.v8__ObjectTemplate__SetIndexedHandler(global_template, &.{
-            .getter = @import("../webapi/Window.zig").JsApi.index.getter,
+            .getter = window_index.getter,
             .setter = null,
-            .query = null,
+            .query = window_index.query,
             .deleter = null,
             .enumerator = null,
             .definer = null,
@@ -312,22 +326,18 @@ fn createSnapshotContext(
         const template_index = comptime bridge.JsApiLookup.getId(JsApi);
         const func = v8.v8__FunctionTemplate__GetFunction(templates[template_index], context);
         if (@hasDecl(JsApi.Meta, "name")) {
+            const name = JsApi.Meta.name;
+            const v8_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
+            var maybe_result: v8.MaybeBool = undefined;
+            // Web IDL: interface objects on the global are non-enumerable.
+            v8.v8__Object__DefineOwnProperty(global_obj, context, v8_class_name, func, v8.DontEnum, &maybe_result);
+
             if (@hasDecl(JsApi.Meta, "constructor_alias")) {
                 const alias = JsApi.Meta.constructor_alias;
-                const v8_class_name = v8.v8__String__NewFromUtf8(isolate, alias.ptr, v8.kNormal, @intCast(alias.len));
-                var maybe_result: v8.MaybeBool = undefined;
-                v8.v8__Object__Set(global_obj, context, v8_class_name, func, &maybe_result);
-
-                const name = JsApi.Meta.name;
-                const illegal_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
-                var maybe_result2: v8.MaybeBool = undefined;
-                v8.v8__Object__DefineOwnProperty(global_obj, context, illegal_class_name, func, 0, &maybe_result2);
-            } else {
-                const name = JsApi.Meta.name;
-                const v8_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
-                var maybe_result: v8.MaybeBool = undefined;
-                // Web IDL: interface objects on the global are non-enumerable.
-                v8.v8__Object__DefineOwnProperty(global_obj, context, v8_class_name, func, v8.DontEnum, &maybe_result);
+                const alias_func = generateLegacyFactoryFunction(JsApi, isolate, templates[template_index], func.?, context.?);
+                const v8_alias_name = v8.v8__String__NewFromUtf8(isolate, alias.ptr, v8.kNormal, @intCast(alias.len));
+                var maybe_alias_result: v8.MaybeBool = undefined;
+                v8.v8__Object__DefineOwnProperty(global_obj, context, v8_alias_name, @ptrCast(alias_func), v8.DontEnum, &maybe_alias_result);
             }
         }
 
@@ -338,10 +348,10 @@ fn createSnapshotContext(
             const func_obj: *const v8.Object = @ptrCast(func);
             if (v8.v8__Object__Get(func_obj, context, prototype_key)) |proto_handle| {
                 const proto_obj: *const v8.Object = @ptrCast(proto_handle);
-                inline for (@typeInfo(JsApi).@"struct".decls) |d| {
-                    const exposed = comptime memberExposed(@field(JsApi, d.name));
+                inline for (@typeInfo(JsApi).@"struct".decl_names) |decl_name| {
+                    const exposed = comptime memberExposed(@field(JsApi, decl_name));
                     if (comptime exposed != .both and exposed != realm.asExposed()) {
-                        const name: [:0]const u8 = d.name;
+                        const name: [:0]const u8 = decl_name;
                         const name_v8 = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                         var maybe_deleted: v8.MaybeBool = undefined;
                         v8.v8__Object__Delete(proto_obj, context, name_v8, &maybe_deleted);
@@ -389,8 +399,8 @@ fn createSnapshotContext(
 
 fn hasGatedMember(comptime JsApi: type) bool {
     comptime {
-        for (@typeInfo(JsApi).@"struct".decls) |d| {
-            if (memberExposed(@field(JsApi, d.name)) != .both) {
+        for (@typeInfo(JsApi).@"struct".decl_names) |decl_name| {
+            if (memberExposed(@field(JsApi, decl_name)) != .both) {
                 return true;
             }
         }
@@ -434,9 +444,9 @@ fn countExternalReferences() comptime_int {
             count += 1;
         }
 
-        const declarations = @typeInfo(JsApi).@"struct".decls;
-        inline for (declarations) |d| {
-            const value = @field(JsApi, d.name);
+        const decl_names = @typeInfo(JsApi).@"struct".decl_names;
+        inline for (decl_names) |decl_name| {
+            const value = @field(JsApi, decl_name);
             const T = @TypeOf(value);
             if (T == bridge.Accessor) {
                 if (value.wpt_only and wpt_extensions_enabled == false) {
@@ -514,9 +524,9 @@ fn collectExternalReferences() [countExternalReferences()]isize {
             idx += 1;
         }
 
-        const declarations = @typeInfo(JsApi).@"struct".decls;
-        inline for (declarations) |d| {
-            const value = @field(JsApi, d.name);
+        const decl_names = @typeInfo(JsApi).@"struct".decl_names;
+        inline for (decl_names) |decl_name| {
+            const value = @field(JsApi, decl_name);
             const T = @TypeOf(value);
             if (T == bridge.Accessor) {
                 if (value.wpt_only and wpt_extensions_enabled == false) {
@@ -592,14 +602,15 @@ fn collectExternalReferences() [countExternalReferences()]isize {
         }
     }
 
-    if (comptime lp.IS_DEBUG) {
-        inline for (JsApis) |JsApi| {
-            if (!hasNamedIndexedGetter(JsApi)) {
-                references[idx] = @bitCast(@intFromPtr(bridge.unknownObjectPropertyCallback(JsApi)));
-                idx += 1;
-            }
-        }
-    }
+    // @LOG-UNKNOWN-PROPERTY
+    // if (comptime lp.IS_DEBUG) {
+    //     inline for (JsApis) |JsApi| {
+    //         if (!hasNamedIndexedGetter(JsApi)) {
+    //             references[idx] = @bitCast(@intFromPtr(bridge.unknownObjectPropertyCallback(JsApi)));
+    //             idx += 1;
+    //         }
+    //     }
+    // }
 
     return references;
 }
@@ -608,8 +619,8 @@ fn countInternalFields(comptime JsApi: type) u8 {
     var last_used_id = 0;
     var cache_count: u8 = 0;
 
-    inline for (@typeInfo(JsApi).@"struct".decls) |d| {
-        const name: [:0]const u8 = d.name;
+    inline for (@typeInfo(JsApi).@"struct".decl_names) |decl_name| {
+        const name: [:0]const u8 = decl_name;
         const value = @field(JsApi, name);
         const definition = @TypeOf(value);
 
@@ -657,7 +668,7 @@ fn illegalConstructorCallback(raw_info: ?*const v8.FunctionCallbackInfo) callcon
             if (v8.v8__Function__GetName(func)) |name_value| {
                 if (v8.v8__Value__IsString(name_value)) {
                     const str: *const v8.String = @ptrCast(name_value);
-                    const n = v8.v8__String__WriteUtf8(str, isolate, &name_buf, name_buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+                    const n = v8.v8__String__WriteUtf8(str, isolate, &name_buf, name_buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
                     name = name_buf[0..@intCast(n)];
                 }
             }
@@ -676,9 +687,9 @@ fn illegalConstructorCallback(raw_info: ?*const v8.FunctionCallbackInfo) callcon
 
 // Helper to check if a JsApi has a NamedIndexed handler (public for reuse)
 fn hasNamedIndexedGetter(comptime JsApi: type) bool {
-    const declarations = @typeInfo(JsApi).@"struct".decls;
-    inline for (declarations) |d| {
-        const value = @field(JsApi, d.name);
+    const decl_names = @typeInfo(JsApi).@"struct".decl_names;
+    inline for (decl_names) |decl_name| {
+        const value = @field(JsApi, decl_name);
         const T = @TypeOf(value);
         if (T == bridge.NamedIndexed) {
             return true;
@@ -704,9 +715,11 @@ fn protoIndexLookup(comptime JsApi: type) ?u16 {
 }
 
 // Generate a constructor template for a JsApi type (public for reuse)
-pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8.FunctionTemplate {
+fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8.FunctionTemplate {
     const callback, const arity = comptime blk: {
-        if (@hasDecl(JsApi, "constructor")) {
+        // The constructor belongs to the legacy factory function (`Image`),
+        // see generateLegacyFactoryFunction.
+        if (@hasDecl(JsApi, "constructor") and !@hasDecl(JsApi.Meta, "constructor_alias")) {
             break :blk .{ JsApi.constructor.func, JsApi.constructor.arity };
         }
         if (inheritsFromHtmlElement(JsApi)) {
@@ -732,6 +745,38 @@ pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8
     // Web IDL: interface object's `prototype` property is non-writable/non-configurable.
     v8.v8__FunctionTemplate__ReadOnlyPrototype(template);
     return template;
+}
+
+// https://webidl.spec.whatwg.org/#legacy-factory-functions
+// `Image`, `Audio`, `Option`: a function distinct from the interface object
+// (so `new HTMLImageElement()` stays illegal and `Image.name` is "Image"),
+// whose `prototype` is the interface's prototype object.
+fn generateLegacyFactoryFunction(comptime JsApi: type, isolate: *v8.Isolate, interface_template: *const v8.FunctionTemplate, interface_func: *const v8.Function, context: *const v8.Context) *const v8.Function {
+    const alias = JsApi.Meta.constructor_alias;
+    const template = v8.v8__FunctionTemplate__New__Config(isolate, &.{
+        .length = JsApi.constructor.arity,
+        .callback = JsApi.constructor.func,
+        .behavior = v8.kConstructorBehavior_Allow,
+    }).?;
+    // Inherit so that the objects we construct pass the interface's
+    // accessor and method signature checks.
+    v8.v8__FunctionTemplate__Inherit(template, interface_template);
+    {
+        const internal_field_count = comptime countInternalFields(JsApi);
+        if (internal_field_count > 0) {
+            const instance_template = v8.v8__FunctionTemplate__InstanceTemplate(template);
+            v8.v8__ObjectTemplate__SetInternalFieldCount(instance_template, internal_field_count);
+        }
+    }
+    const class_name = v8.v8__String__NewFromUtf8(isolate, alias.ptr, v8.kNormal, @intCast(alias.len));
+    v8.v8__FunctionTemplate__SetClassName(template, class_name);
+
+    const func = v8.v8__FunctionTemplate__GetFunction(template, context).?;
+    const prototype_key = v8.v8__String__NewFromUtf8(isolate, "prototype", v8.kNormal, 9);
+    const interface_prototype = v8.v8__Object__Get(@ptrCast(interface_func), context, prototype_key).?;
+    var maybe_result: v8.MaybeBool = undefined;
+    v8.v8__Object__DefineOwnProperty(@ptrCast(func), context, prototype_key, interface_prototype, v8.ReadOnly + v8.DontEnum + v8.DontDelete, &maybe_result);
+    return func;
 }
 
 // hard-coded special case for HtmlElement which can be extended but not
@@ -760,13 +805,12 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
     const own_properties = @hasDecl(JsApi.Meta, "own_properties") and JsApi.Meta.own_properties;
     const member_template = if (own_properties) instance else prototype;
 
-    const declarations = @typeInfo(JsApi).@"struct".decls;
+    const decl_names = @typeInfo(JsApi).@"struct".decl_names;
     var has_named_index_getter = false;
 
     const wpt_extensions_enabled = lp.build_config.wpt_extensions;
 
-    inline for (declarations) |d| {
-        const name: [:0]const u8 = d.name;
+    inline for (decl_names) |name| {
         const value = @field(JsApi, name);
         const definition = @TypeOf(value);
 
@@ -826,6 +870,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     .definer = if (value.definer) |definer| @ptrCast(definer) else null,
                     .descriptor = null,
                     .index_of = null,
+                    .iterable_to_list = null,
                     .data = null,
                     .flags = 0,
                 };
@@ -886,9 +931,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
         }
     }
 
-    // The remaining per-class setup targets the class's own instance template;
-    // in [Global] flattening mode the global already has these (or doesn't need
-    // them), so skip it.
+    // Flattening mirrors members onto a global, not per-interface setup.
     if (comptime flatten) {
         return;
     }
@@ -904,25 +947,27 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
         // "console", not "Console").
         const tag = if (@hasDecl(JsApi.Meta, "class_string")) JsApi.Meta.class_string else JsApi.Meta.name;
         const js_value = v8.v8__String__NewFromUtf8(isolate, tag.ptr, v8.kNormal, @intCast(tag.len));
-        v8.v8__Template__Set(@ptrCast(instance), js_name, js_value, v8.ReadOnly + v8.DontEnum);
+        // Interfaces inherit tags from prototypes; namespaces keep own tags.
+        v8.v8__Template__Set(@ptrCast(member_template), js_name, js_value, v8.ReadOnly + v8.DontEnum);
     }
 
-    if (comptime lp.IS_DEBUG) {
-        if (!has_named_index_getter) {
-            var configuration: v8.NamedPropertyHandlerConfiguration = .{
-                .getter = bridge.unknownObjectPropertyCallback(JsApi),
-                .setter = null,
-                .query = null,
-                .deleter = null,
-                .enumerator = null,
-                .definer = null,
-                .descriptor = null,
-                .data = null,
-                .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
-            };
-            v8.v8__ObjectTemplate__SetNamedHandler(instance, &configuration);
-        }
-    }
+    // @LOG-UNKNOWN-PROPERTY
+    // if (comptime lp.IS_DEBUG) {
+    //     if (!has_named_index_getter) {
+    //         var configuration: v8.NamedPropertyHandlerConfiguration = .{
+    //             .getter = bridge.unknownObjectPropertyCallback(JsApi),
+    //             .setter = null,
+    //             .query = null,
+    //             .deleter = null,
+    //             .enumerator = null,
+    //             .definer = null,
+    //             .descriptor = null,
+    //             .data = null,
+    //             .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
+    //         };
+    //         v8.v8__ObjectTemplate__SetNamedHandler(instance, &configuration);
+    //     }
+    // }
 }
 
 // The chain of interface types reachable from a [Global] interface via WebIDL
@@ -946,10 +991,10 @@ const unforgeables: []const Unforgeable = blk: {
     @setEvalBranchQuota(100_000);
     var list: []const Unforgeable = &.{};
     for (JsApis) |Api| {
-        for (@typeInfo(Api).@"struct".decls) |d| {
-            const value = @field(Api, d.name);
+        for (@typeInfo(Api).@"struct".decl_names) |decl_name| {
+            const value = @field(Api, decl_name);
             if (@TypeOf(value) == bridge.Accessor and value.unforgeable and !value.static) {
-                list = list ++ &[_]Unforgeable{.{ .Owner = Api, .name = d.name, .accessor = value }};
+                list = list ++ &[_]Unforgeable{.{ .Owner = Api, .name = decl_name, .accessor = value }};
             }
         }
     }

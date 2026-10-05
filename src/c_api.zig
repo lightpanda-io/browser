@@ -170,7 +170,7 @@ fn createBrowser(opts_: ?*const InitOpts) !*BrowserHandle {
             mode.user_agent = try arena.dupe(u8, span);
         }
         if (opts.http_proxy) |proxy| {
-            mode.http_proxy = try arena.dupeZ(u8, proxy[0..opts.http_proxy_len]);
+            mode.http_proxy = try arena.dupeSentinel(u8, proxy[0..opts.http_proxy_len], 0);
         }
         if (opts.http_cache_dir) |dir| {
             mode.http_cache_dir = try arena.dupe(u8, dir[0..opts.http_cache_dir_len]);
@@ -248,7 +248,7 @@ pub export fn lp_fetch(
     _ = handle.fetch_arena.reset(.{ .retain_with_limit = result_retain_limit });
     handle.last_error = "";
     const arena = handle.fetch_arena.allocator();
-    const url = arena.dupeZ(u8, url_ptr[0..url_len]) catch return .out_of_memory;
+    const url = arena.dupeSentinel(u8, url_ptr[0..url_len], 0) catch return .out_of_memory;
 
     var fetch_opts: lp.FetchOpts = .{ .dump = .{}, .dump_mode = .html };
     if (opts_) |opts| {
@@ -270,7 +270,7 @@ pub export fn lp_fetch(
             .done => .done,
         };
         if (opts.wait_selector) |selector| {
-            fetch_opts.wait_selector = arena.dupeZ(u8, selector[0..opts.wait_selector_len]) catch return .out_of_memory;
+            fetch_opts.wait_selector = arena.dupeSentinel(u8, selector[0..opts.wait_selector_len], 0) catch return .out_of_memory;
         }
     }
 
@@ -287,7 +287,7 @@ pub export fn lp_fetch(
         browser.env.isolate.enter();
     } else {
         const browser = c_allocator.create(lp.Browser) catch return .out_of_memory;
-        browser.init(handle.app, .{}, null) catch |err| {
+        browser.init(handle.app, .{}) catch |err| {
             c_allocator.destroy(browser);
             handle.last_error = @errorName(err);
             return errStatus(err);
@@ -332,7 +332,7 @@ fn toolStatus(err: lp.tools.ToolError) Status {
         error.NodeNotFound => .node_not_found,
         error.NavigationFailed => .navigation_failed,
         error.Cancelled => .cancelled,
-        error.Timeout => .timeout,
+        error.Timeout, error.NavigationTimeout => .timeout,
         error.InternalError => .internal,
         error.OutOfMemory => .out_of_memory,
     };
@@ -341,8 +341,8 @@ fn toolStatus(err: lp.tools.ToolError) Status {
 /// For the anyerror paths (init, fetch): tool errors keep their toolStatus
 /// mapping, anything else is internal.
 fn errStatus(err: anyerror) Status {
-    inline for (@typeInfo(lp.tools.ToolError).error_set.?) |e| {
-        const tool_err = @field(lp.tools.ToolError, e.name);
+    inline for (@typeInfo(lp.tools.ToolError).error_set.error_names.?) |name| {
+        const tool_err = @field(lp.tools.ToolError, name);
         if (err == tool_err) return toolStatus(tool_err);
     }
     return .internal;
@@ -433,7 +433,7 @@ pub export fn lp_call(
     entry.ts.enterIsolate();
     defer entry.ts.exitIsolate();
 
-    const result = lp.tools.call(arena, entry.ts.session, &entry.ts.registry, tool[0..tool_len], args) catch |err| {
+    const result = lp.tools.call(arena, entry.ts.session, &entry.ts.registry, tool[0..tool_len], args, .{}) catch |err| {
         entry.last_error = @errorName(err);
         return toolStatus(err);
     };
@@ -549,28 +549,28 @@ const testing = std.testing;
 test "c_api: mirrors the header ABI" {
     const h = @import("lightpanda_h");
 
-    try testing.expectEqual(h.LP_OK, @intFromEnum(Status.ok));
-    try testing.expectEqual(h.LP_ERR_INVALID_PARAMS, @intFromEnum(Status.invalid_params));
-    try testing.expectEqual(h.LP_ERR_FRAME_NOT_LOADED, @intFromEnum(Status.frame_not_loaded));
-    try testing.expectEqual(h.LP_ERR_NODE_NOT_FOUND, @intFromEnum(Status.node_not_found));
-    try testing.expectEqual(h.LP_ERR_NAVIGATION_FAILED, @intFromEnum(Status.navigation_failed));
-    try testing.expectEqual(h.LP_ERR_CANCELLED, @intFromEnum(Status.cancelled));
-    try testing.expectEqual(h.LP_ERR_TIMEOUT, @intFromEnum(Status.timeout));
-    try testing.expectEqual(h.LP_ERR_OUT_OF_MEMORY, @intFromEnum(Status.out_of_memory));
-    try testing.expectEqual(h.LP_ERR_INTERNAL, @intFromEnum(Status.internal));
-    try testing.expectEqual(h.LP_ERR_MISUSE, @intFromEnum(Status.misuse));
+    try testing.expectEqual(h.LP_OK, @backingInt(Status.ok));
+    try testing.expectEqual(h.LP_ERR_INVALID_PARAMS, @backingInt(Status.invalid_params));
+    try testing.expectEqual(h.LP_ERR_FRAME_NOT_LOADED, @backingInt(Status.frame_not_loaded));
+    try testing.expectEqual(h.LP_ERR_NODE_NOT_FOUND, @backingInt(Status.node_not_found));
+    try testing.expectEqual(h.LP_ERR_NAVIGATION_FAILED, @backingInt(Status.navigation_failed));
+    try testing.expectEqual(h.LP_ERR_CANCELLED, @backingInt(Status.cancelled));
+    try testing.expectEqual(h.LP_ERR_TIMEOUT, @backingInt(Status.timeout));
+    try testing.expectEqual(h.LP_ERR_OUT_OF_MEMORY, @backingInt(Status.out_of_memory));
+    try testing.expectEqual(h.LP_ERR_INTERNAL, @backingInt(Status.internal));
+    try testing.expectEqual(h.LP_ERR_MISUSE, @backingInt(Status.misuse));
 
-    try testing.expectEqual(h.LP_FORMAT_HTML, @intFromEnum(Format.html));
-    try testing.expectEqual(h.LP_FORMAT_MARKDOWN, @intFromEnum(Format.markdown));
-    try testing.expectEqual(h.LP_FORMAT_TREE_JSON, @intFromEnum(Format.tree_json));
-    try testing.expectEqual(h.LP_FORMAT_TREE_TEXT, @intFromEnum(Format.tree_text));
+    try testing.expectEqual(h.LP_FORMAT_HTML, @backingInt(Format.html));
+    try testing.expectEqual(h.LP_FORMAT_MARKDOWN, @backingInt(Format.markdown));
+    try testing.expectEqual(h.LP_FORMAT_TREE_JSON, @backingInt(Format.tree_json));
+    try testing.expectEqual(h.LP_FORMAT_TREE_TEXT, @backingInt(Format.tree_text));
 
-    try testing.expectEqual(h.LP_WAIT_DEFAULT, @intFromEnum(WaitUntil.default));
-    try testing.expectEqual(h.LP_WAIT_LOAD, @intFromEnum(WaitUntil.load));
-    try testing.expectEqual(h.LP_WAIT_DOMCONTENTLOADED, @intFromEnum(WaitUntil.domcontentloaded));
-    try testing.expectEqual(h.LP_WAIT_NETWORKALMOSTIDLE, @intFromEnum(WaitUntil.networkalmostidle));
-    try testing.expectEqual(h.LP_WAIT_NETWORKIDLE, @intFromEnum(WaitUntil.networkidle));
-    try testing.expectEqual(h.LP_WAIT_DONE, @intFromEnum(WaitUntil.done));
+    try testing.expectEqual(h.LP_WAIT_DEFAULT, @backingInt(WaitUntil.default));
+    try testing.expectEqual(h.LP_WAIT_LOAD, @backingInt(WaitUntil.load));
+    try testing.expectEqual(h.LP_WAIT_DOMCONTENTLOADED, @backingInt(WaitUntil.domcontentloaded));
+    try testing.expectEqual(h.LP_WAIT_NETWORKALMOSTIDLE, @backingInt(WaitUntil.networkalmostidle));
+    try testing.expectEqual(h.LP_WAIT_NETWORKIDLE, @backingInt(WaitUntil.networkidle));
+    try testing.expectEqual(h.LP_WAIT_DONE, @backingInt(WaitUntil.done));
 
     try expectSameLayout(h.lp_result, Result);
     try expectSameLayout(h.lp_options, InitOpts);
@@ -578,25 +578,25 @@ test "c_api: mirrors the header ABI" {
 
     // The exports are pub so this reflection sees them; a header prototype
     // must exist (compile error otherwise) and agree on arity and sizes.
-    inline for (@typeInfo(@This()).@"struct".decls) |decl| {
-        if (comptime std.mem.startsWith(u8, decl.name, "lp_")) {
-            try expectSameSignature(@TypeOf(@field(h, decl.name)), @TypeOf(@field(@This(), decl.name)));
+    inline for (@typeInfo(@This()).@"struct".decl_names) |name| {
+        if (comptime std.mem.startsWith(u8, name, "lp_")) {
+            try expectSameSignature(@TypeOf(@field(h, name)), @TypeOf(@field(@This(), name)));
         }
     }
 
     // The lines above only prove the Zig side exists in the header; the
     // counts catch a constant or function added to the header alone.
-    try testing.expectEqual(@typeInfo(Format).@"enum".fields.len, comptime countPrefixed(h, "LP_FORMAT_"));
-    try testing.expectEqual(@typeInfo(WaitUntil).@"enum".fields.len, comptime countPrefixed(h, "LP_WAIT_"));
-    try testing.expectEqual(@typeInfo(Status).@"enum".fields.len, comptime countPrefixed(h, "LP_ERR_") + 1); // + LP_OK
+    try testing.expectEqual(@typeInfo(Format).@"enum".field_names.len, comptime countPrefixed(h, "LP_FORMAT_"));
+    try testing.expectEqual(@typeInfo(WaitUntil).@"enum".field_names.len, comptime countPrefixed(h, "LP_WAIT_"));
+    try testing.expectEqual(@typeInfo(Status).@"enum".field_names.len, comptime countPrefixed(h, "LP_ERR_") + 1); // + LP_OK
     try testing.expectEqual(comptime countFns(@This(), "lp_"), comptime countFns(h, "lp_"));
 }
 
 fn countPrefixed(comptime T: type, comptime prefix: []const u8) usize {
     @setEvalBranchQuota(100_000);
     comptime var n: usize = 0;
-    inline for (@typeInfo(T).@"struct".decls) |decl| {
-        if (comptime std.mem.startsWith(u8, decl.name, prefix)) n += 1;
+    inline for (@typeInfo(T).@"struct".decl_names) |name| {
+        if (comptime std.mem.startsWith(u8, name, prefix)) n += 1;
     }
     return n;
 }
@@ -604,9 +604,9 @@ fn countPrefixed(comptime T: type, comptime prefix: []const u8) usize {
 fn countFns(comptime T: type, comptime prefix: []const u8) usize {
     @setEvalBranchQuota(100_000);
     comptime var n: usize = 0;
-    inline for (@typeInfo(T).@"struct".decls) |decl| {
-        if (comptime std.mem.startsWith(u8, decl.name, prefix) and
-            @typeInfo(@TypeOf(@field(T, decl.name))) == .@"fn") n += 1;
+    inline for (@typeInfo(T).@"struct".decl_names) |name| {
+        if (comptime std.mem.startsWith(u8, name, prefix) and
+            @typeInfo(@TypeOf(@field(T, name))) == .@"fn") n += 1;
     }
     return n;
 }
@@ -617,27 +617,28 @@ fn countFns(comptime T: type, comptime prefix: []const u8) usize {
 fn expectSameSignature(comptime C: type, comptime Zig: type) !void {
     const c_fn = @typeInfo(C).@"fn";
     const zig_fn = @typeInfo(Zig).@"fn";
-    try testing.expectEqual(c_fn.params.len, zig_fn.params.len);
+    try testing.expectEqual(c_fn.param_types.len, zig_fn.param_types.len);
     try testing.expectEqual(@sizeOf(c_fn.return_type.?), @sizeOf(zig_fn.return_type.?));
     // Over the min so an arity drift fails the expectEqual above instead
     // of breaking the unroll.
-    inline for (0..@min(c_fn.params.len, zig_fn.params.len)) |i| {
-        try testing.expectEqual(@sizeOf(c_fn.params[i].type.?), @sizeOf(zig_fn.params[i].type.?));
+    inline for (0..@min(c_fn.param_types.len, zig_fn.param_types.len)) |i| {
+        try testing.expectEqual(@sizeOf(c_fn.param_types[i].?), @sizeOf(zig_fn.param_types[i].?));
     }
 }
 
 fn expectSameLayout(comptime C: type, comptime Zig: type) !void {
     try testing.expectEqual(@sizeOf(C), @sizeOf(Zig));
-    inline for (@typeInfo(Zig).@"struct".fields) |field| {
-        try testing.expectEqual(@offsetOf(C, field.name), @offsetOf(Zig, field.name));
-        try testing.expectEqual(@sizeOf(@FieldType(C, field.name)), @sizeOf(field.type));
+    const info = @typeInfo(Zig).@"struct";
+    inline for (info.field_names, info.field_types) |name, T| {
+        try testing.expectEqual(@offsetOf(C, name), @offsetOf(Zig, name));
+        try testing.expectEqual(@sizeOf(@FieldType(C, name)), @sizeOf(T));
     }
 }
 
 test "c_api: defaults match the header's documented values" {
     var config = try lp.Config.init(testing.allocator, "lightpanda", .{ .embed = .{} });
     defer config.deinit(testing.allocator);
-    try testing.expectEqual(5000, config.httpTimeout());
+    try testing.expectEqual(15000, config.httpTimeout());
     try testing.expectEqual(30000, config.watchdogMs());
     try testing.expectEqual(5000, (lp.FetchOpts{ .dump = .{} }).wait_ms);
 }

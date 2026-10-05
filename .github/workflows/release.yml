@@ -45,7 +45,7 @@ jobs:
       OS: linux
 
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -58,10 +58,10 @@ jobs:
           arch: ${{env.ARCH}}
 
       - name: v8 snapshot
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast snapshot_creator -- src/snapshot.bin
 
       - name: zig build
-        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ env.VERSION_FLAG }}
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast -Dorderfile=orderfile/lightpanda.ld ${{ matrix.cpu_flag }} ${{ env.VERSION_FLAG }}
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
@@ -105,7 +105,7 @@ jobs:
       OS: macos
 
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -118,10 +118,10 @@ jobs:
           arch: ${{env.ARCH}}
 
       - name: v8 snapshot
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast snapshot_creator -- src/snapshot.bin
 
       - name: zig build
-        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast ${{ env.VERSION_FLAG }}
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast ${{ env.VERSION_FLAG }}
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
@@ -231,3 +231,41 @@ jobs:
             gh workflow run "Update Formula" \
               --repo lightpanda-io/homebrew-browser \
               --field tag="${{ env.RELEASE }}"
+
+  update-python-package:
+    # Version tags only (never nightly): start the wheels build on
+    # lightpanda-python. It bundles this release's binaries, publishes to PyPI
+    # once a maintainer approves the `pypi` environment deployment there, and
+    # then records the matching release on that repo itself — the app token
+    # below can start workflows there but cannot write repository contents.
+    if: github.ref_type == 'tag'
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Generate token for lightpanda-python
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: lightpanda-io
+          repositories: lightpanda-python
+
+      - name: Start the lightpanda-python wheels build
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PYTHON_REPO: lightpanda-io/lightpanda-python
+        run: |
+          if ! echo "$RELEASE" | grep -qE '^v?[0-9]+(\.[0-9]+)+$'; then
+            echo "tag $RELEASE is not version-shaped; not releasing to PyPI"
+            exit 0
+          fi
+          if gh release view "$RELEASE" --repo "$PYTHON_REPO" >/dev/null 2>&1; then
+            echo "release $RELEASE already exists on $PYTHON_REPO; nothing to do"
+            exit 0
+          fi
+          gh workflow run wheels.yml --repo "$PYTHON_REPO" \
+            --field release="$RELEASE" \
+            --field publish=pypi
+          echo "dispatched; the publish waits for pypi environment approval on $PYTHON_REPO"

@@ -31,7 +31,7 @@ const string = @import("../string.zig");
 const auth = @import("auth/auth.zig");
 const Candidate = zenai.provider.Candidate;
 
-pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, or MISTRAL_API_KEY (Vertex AI: VERTEX_API_KEY, or GOOGLE_CLOUD_PROJECT via gcloud; Codex: a ChatGPT subscription via /provider codex)";
+pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, MISTRAL_API_KEY, or OPENROUTER_API_KEY (Vertex AI: VERTEX_API_KEY, or GOOGLE_CLOUD_PROJECT via gcloud; Codex: a ChatGPT subscription via /provider codex)";
 
 /// Determine which provider to use and read its env key. Returns null
 /// only when no `--provider` was given AND no env key exists (the caller
@@ -126,7 +126,7 @@ pub fn gcloudAccessToken(allocator: std.mem.Allocator) ![:0]const u8 {
         std.debug.print("`gcloud auth print-access-token` failed:\n{s}", .{result.stderr});
         return error.GcloudTokenFailed;
     }
-    return allocator.dupeZ(u8, token);
+    return allocator.dupeSentinel(u8, token, 0);
 }
 
 /// True when a non-Ollama provider key is available (flag, remembered, or
@@ -271,24 +271,24 @@ pub const Remembered = struct {
     search_engine: ?lp.tools.SearchEngine = null,
 };
 
-pub fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
-    const data = std.Io.Dir.cwd().readFileAllocOptions(lp.io, remembered_path, allocator, .limited(1024), .of(u8), 0) catch return null;
-    defer allocator.free(data);
-    return parseRemembered(allocator, data);
+/// The result's strings live in `arena`.
+pub fn loadRemembered(gpa: std.mem.Allocator, arena: std.mem.Allocator) ?Remembered {
+    const data = std.Io.Dir.cwd().readFileAllocOptions(lp.io, remembered_path, gpa, .limited(1024), .of(u8), 0) catch return null;
+    defer gpa.free(data);
+    return parseRemembered(gpa, arena, data);
 }
 
-fn parseRemembered(allocator: std.mem.Allocator, data: [:0]const u8) ?Remembered {
-    // A real Diagnostics, not null: a type-check failure allocates an owned
-    // error note that leaks unless a Diagnostics owns it to free on deinit.
-    var diag: std.zon.parse.Diagnostics = .{};
-    defer diag.deinit(allocator);
-    const remembered = std.zon.parse.fromSliceAlloc(Remembered, allocator, data, &diag, .{}) catch return null;
+fn parseRemembered(gpa: std.mem.Allocator, arena: std.mem.Allocator, data: [:0]const u8) ?Remembered {
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const remembered = std.zon.parse.fromSlice(Remembered, .{
+        .gpa = gpa,
+        .arena = arena,
+        .source = data,
+        .diagnostics = &diag,
+    }) catch return null;
     // An empty model is corrupt only when a provider is set; a null provider
     // (LLM disabled) legitimately has no model to remember.
-    if (remembered.provider != null and remembered.model.len == 0) {
-        std.zon.parse.free(allocator, remembered);
-        return null;
-    }
+    if (remembered.provider != null and remembered.model.len == 0) return null;
     return remembered;
 }
 
@@ -336,9 +336,7 @@ pub fn resolveModelName(opts: Config.Agent, resolved: ?ResolvedProvider, remembe
     if (resolved) |r| {
         // Use the remembered model whenever it matches the chosen provider,
         // not only when the provider itself came from the remembered file.
-        if (remembered) |rem| {
-            if (rem.provider) |p| if (p == r.credential.provider) return rem.model;
-        }
+        if (remembered) |rem| if (rem.provider == r.credential.provider) return rem.model;
         return zenai.provider.defaultModel(r.credential.provider);
     }
     return "";
@@ -371,18 +369,12 @@ pub fn resolveStream(remembered: ?Remembered) bool {
     return true;
 }
 
-/// Precedence: remembered `.lp-agent.zon` value > default (auto). No CLI
-/// flag — the REPL `/searchEngine` command sets and persists it.
+/// Precedence: `--search-engine` > remembered `.lp-agent.zon` value >
+/// default (auto). The REPL `/searchEngine` command also sets and persists it.
 pub fn resolveSearchEngine(remembered: ?Remembered) lp.tools.SearchEngine {
     if (remembered) |r| if (r.search_engine) |e| return e;
     return .auto;
 }
-
-pub const ReconciledModel = union(enum) {
-    /// Owned by the allocator passed to reconcileModel.
-    use: []u8,
-    abort,
-};
 
 /// Validate `desired` against the provider's catalog, mirroring the interactive
 /// `/model` command. Empty list (unreachable server) leaves it unchecked; an
@@ -395,23 +387,23 @@ pub fn reconcileModel(
     desired: []const u8,
     base_url: ?[:0]const u8,
     explicit: bool,
-) !ReconciledModel {
+) ![]u8 {
     // A subscription provider can't list models via the provider API; trust the
     // desired model as-is rather than error against `/models`.
-    if (auth.descriptorFor(credential.provider) != null) return .{ .use = try allocator.dupe(u8, desired) };
+    if (auth.descriptorFor(credential.provider) != null) return try allocator.dupe(u8, desired);
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     const ids: []const []const u8 = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), credential.provider, credential.keySlice(), .{ .base_url = base_url, .environ = lp.environ() }) catch &.{};
-    if (ids.len == 0 or string.isOneOf(desired, ids)) return .{ .use = try allocator.dupe(u8, desired) };
+    if (ids.len == 0 or string.isOneOf(desired, ids)) return try allocator.dupe(u8, desired);
 
     if (!explicit) {
         switch (credential.provider) {
             .ollama, .llama_cpp => {},
-            else => return .{ .use = try allocator.dupe(u8, desired) },
+            else => return try allocator.dupe(u8, desired),
         }
         std.debug.print("Default {s} model '{s}' is not loaded; using '{s}'.\n", .{ @tagName(credential.provider), desired, ids[0] });
-        return .{ .use = try allocator.dupe(u8, ids[0]) };
+        return try allocator.dupe(u8, ids[0]);
     }
 
     if (credential.provider == .ollama) {
@@ -426,20 +418,21 @@ pub fn reconcileModel(
             .{ desired, @tagName(credential.provider) },
         );
     }
-    return .abort;
+    return error.ModelNotAvailable;
 }
 
 const testing = @import("../testing.zig");
 
-test "parseRemembered: invalid enum is rejected without leaking" {
-    // A bad enum builds an owned error note; the leak detector fails here if
-    // the Diagnostics doesn't free it.
-    try testing.expect(parseRemembered(testing.allocator, ".{ .provider = .not_a_provider, .model = \"x\" }") == null);
+test "parseRemembered: invalid enum is rejected" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    try testing.expect(parseRemembered(testing.allocator, arena.allocator(), ".{ .provider = .not_a_provider, .model = \"x\" }") == null);
 }
 
 test "parseRemembered: valid file round-trips" {
-    const remembered = parseRemembered(testing.allocator, ".{ .provider = null, .model = \"some-model\" }").?;
-    defer std.zon.parse.free(testing.allocator, remembered);
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const remembered = parseRemembered(testing.allocator, arena.allocator(), ".{ .provider = null, .model = \"some-model\" }").?;
     try testing.expect(remembered.provider == null);
     try testing.expectString("some-model", remembered.model);
     // Absent `stream` is null so pre-streaming files still fall back to the default.
@@ -447,21 +440,23 @@ test "parseRemembered: valid file round-trips" {
 }
 
 test "parseRemembered: stream field round-trips" {
-    const remembered = parseRemembered(testing.allocator, ".{ .model = \"m\", .stream = false }").?;
-    defer std.zon.parse.free(testing.allocator, remembered);
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const remembered = parseRemembered(testing.allocator, arena.allocator(), ".{ .model = \"m\", .stream = false }").?;
     try testing.expect(remembered.stream == false);
 }
 
 test "parseRemembered: search_engine field round-trips" {
-    const remembered = parseRemembered(testing.allocator, ".{ .model = \"m\", .search_engine = .brave }").?;
-    defer std.zon.parse.free(testing.allocator, remembered);
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const remembered = parseRemembered(testing.allocator, arena.allocator(), ".{ .model = \"m\", .search_engine = .brave }").?;
     try testing.expect(remembered.search_engine == .brave);
 }
 
 test "resolveSearchEngine: default auto, remembered wins" {
     try testing.expect(resolveSearchEngine(null) == .auto);
     try testing.expect(resolveSearchEngine(.{ .model = "m", .search_engine = null }) == .auto);
-    try testing.expect(resolveSearchEngine(.{ .model = "m", .search_engine = .duckduckgo }) == .duckduckgo);
+    try testing.expect(resolveSearchEngine(.{ .model = "m", .search_engine = .keenable }) == .keenable);
 }
 
 test "resolveStream: default on, remembered wins" {

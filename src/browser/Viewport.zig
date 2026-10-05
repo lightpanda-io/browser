@@ -20,6 +20,23 @@ const Viewport = @This();
 
 width: u32,
 height: u32,
+scale: f32 = 1.0, // CSS px to device px
+// window.screen dimensions; null means the same as the viewport.
+screen_width: ?u32 = null,
+screen_height: ?u32 = null,
+orientation: ?Orientation = null,
+
+pub const Orientation = struct {
+    type: Type,
+    angle: u16,
+
+    pub const Type = enum {
+        @"portrait-primary",
+        @"portrait-secondary",
+        @"landscape-primary",
+        @"landscape-secondary",
+    };
+};
 
 pub const default = Viewport{
     .width = 1920,

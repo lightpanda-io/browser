@@ -41,11 +41,11 @@ pub fn create(element: *Element, read_only: bool, frame: *Frame) !*PreserveAspec
     });
 }
 
-pub fn getAlign(self: *const PreserveAspectRatio) u16 {
+fn getAlign(self: *const PreserveAspectRatio) u16 {
     return self.current().alignment;
 }
 
-pub fn setAlign(self: *PreserveAspectRatio, alignment: u16, frame: *Frame) !void {
+fn setAlign(self: *PreserveAspectRatio, alignment: u16, frame: *Frame) !void {
     try self.ensureWritable();
     if (alignName(alignment) == null) return error.TypeError;
     var value = self.current();
@@ -53,11 +53,11 @@ pub fn setAlign(self: *PreserveAspectRatio, alignment: u16, frame: *Frame) !void
     try self.write(value, frame);
 }
 
-pub fn getMeetOrSlice(self: *const PreserveAspectRatio) u16 {
+fn getMeetOrSlice(self: *const PreserveAspectRatio) u16 {
     return self.current().meet_or_slice;
 }
 
-pub fn setMeetOrSlice(self: *PreserveAspectRatio, meet_or_slice: u16, frame: *Frame) !void {
+fn setMeetOrSlice(self: *PreserveAspectRatio, meet_or_slice: u16, frame: *Frame) !void {
     try self.ensureWritable();
     if (meetOrSliceName(meet_or_slice) == null) return error.TypeError;
     var value = self.current();
@@ -85,7 +85,7 @@ fn current(self: *const PreserveAspectRatio) Value {
 fn write(self: *PreserveAspectRatio, value: Value, frame: *Frame) !void {
     const alignment = alignName(value.alignment) orelse return error.TypeError;
     const meet_or_slice = meetOrSliceName(value.meet_or_slice) orelse return error.TypeError;
-    const serialized = try std.fmt.allocPrint(frame.local_arena, "{s} {s}", .{ alignment, meet_or_slice });
+    const serialized = try frame.local_arena.print("{s} {s}", .{ alignment, meet_or_slice });
     try self._element.setAttributeSafe(String.wrap("preserveAspectRatio"), .wrap(serialized), frame);
 }
 

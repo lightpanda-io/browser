@@ -25,13 +25,13 @@ pub const Kind = enum { comment, string, variable, interpolation, number, keywor
 /// block comments and template literals outlive a line boundary.
 pub const State = enum { normal, block_comment, template };
 
-pub const StringSpan = struct { end: usize, closed: bool };
+const StringSpan = struct { end: usize, closed: bool };
 
 /// Scan the quoted run opening at `text[start]`. Escapes are not honored —
 /// good enough for coloring, not parsing.
-pub fn scanString(text: []const u8, start: usize) StringSpan {
+fn scanString(text: []const u8, start: usize) StringSpan {
     if (start >= text.len) return .{ .end = start, .closed = false };
-    const close = std.mem.indexOfScalarPos(u8, text, start + 1, text[start]) orelse
+    const close = std.mem.findScalarPos(u8, text, start + 1, text[start]) orelse
         return .{ .end = text.len, .closed = false };
     return .{ .end = close + 1, .closed = true };
 }
@@ -45,7 +45,7 @@ fn dollarRefEnd(text: []const u8, start: usize, end: usize) usize {
     return i;
 }
 
-pub const DollarRef = struct { start: usize, end: usize, kind: Kind };
+const DollarRef = struct { start: usize, end: usize, kind: Kind };
 
 /// Next `$name` (`.variable`) ref at or after `from` within `text[..end]`,
 /// or null; bare `$`s are skipped. `interpolation` additionally recognizes
@@ -59,7 +59,7 @@ pub fn nextDollarRef(text: []const u8, from: usize, end: usize, interpolation: b
             continue;
         }
         if (interpolation and i + 1 < end and text[i + 1] == '{') {
-            const close = std.mem.indexOfScalarPos(u8, text[0..end], i + 2, '}');
+            const close = std.mem.findScalarPos(u8, text[0..end], i + 2, '}');
             return .{ .start = i, .end = if (close) |c| c + 1 else end, .kind = .interpolation };
         }
         const ref_end = dollarRefEnd(text, i, end);
@@ -79,13 +79,13 @@ pub fn tokenize(text: []const u8, state: State, sink: anytype) State {
 
     switch (state) {
         .block_comment => {
-            const close = std.mem.indexOfPos(u8, text, 0, "*/");
+            const close = std.mem.findPos(u8, text, 0, "*/");
             i = if (close) |p| p + 2 else text.len;
             if (i > 0) sink.emit(0, i, .comment);
             if (close == null) return .block_comment;
         },
         .template => {
-            const close = std.mem.indexOfScalarPos(u8, text, 0, '`');
+            const close = std.mem.findScalarPos(u8, text, 0, '`');
             i = if (close) |p| p + 1 else text.len;
             emitString(text, 0, i, true, sink);
             if (close == null) return .template;
@@ -98,11 +98,11 @@ pub fn tokenize(text: []const u8, state: State, sink: anytype) State {
         if (ch == '/' and i + 1 < text.len and (text[i + 1] == '/' or text[i + 1] == '*')) {
             const start = i;
             if (text[i + 1] == '/') {
-                i = std.mem.indexOfScalarPos(u8, text, i + 2, '\n') orelse text.len;
+                i = std.mem.findScalarPos(u8, text, i + 2, '\n') orelse text.len;
                 sink.emit(start, i - start, .comment);
                 continue;
             }
-            const close = std.mem.indexOfPos(u8, text, i + 2, "*/");
+            const close = std.mem.findPos(u8, text, i + 2, "*/");
             i = if (close) |p| p + 2 else text.len;
             sink.emit(start, i - start, .comment);
             if (close == null) return .block_comment;
@@ -190,25 +190,25 @@ const testing = std.testing;
 /// Records spans as `kind:text` so tests read as the tokenization, not offsets.
 const TestSink = struct {
     text: []const u8,
-    buf: std.ArrayListUnmanaged(u8) = .empty,
+    buf: std.Io.Writer.Allocating,
     last_end: usize = 0,
     overlapped: bool = false,
 
     fn emit(self: *TestSink, start: usize, len: usize, kind: Kind) void {
         if (start < self.last_end) self.overlapped = true;
         self.last_end = start + len;
-        self.buf.writer(testing.allocator).print("{s}:{s} ", .{
+        self.buf.writer.print("{s}:{s} ", .{
             @tagName(kind), self.text[start..][0..len],
         }) catch unreachable;
     }
 };
 
 fn expectTokens(expected: []const u8, src: []const u8) !void {
-    var sink: TestSink = .{ .text = src };
-    defer sink.buf.deinit(testing.allocator);
+    var sink: TestSink = .{ .text = src, .buf = .init(testing.allocator) };
+    defer sink.buf.deinit();
     _ = tokenize(src, .normal, &sink);
     try testing.expect(!sink.overlapped);
-    try testing.expectEqualStrings(expected, std.mem.trimEnd(u8, sink.buf.items, " "));
+    try testing.expectEqualStrings(expected, std.mem.trimEnd(u8, sink.buf.written(), " "));
 }
 
 test "js_highlight: keywords, globals, numbers" {
@@ -247,23 +247,23 @@ test "js_highlight: template interpolations split string spans" {
 }
 
 test "js_highlight: block comment spans lines" {
-    var sink: TestSink = .{ .text = "/* open" };
-    defer sink.buf.deinit(testing.allocator);
+    var sink: TestSink = .{ .text = "/* open", .buf = .init(testing.allocator) };
+    defer sink.buf.deinit();
     try testing.expectEqual(State.block_comment, tokenize("/* open", .normal, &sink));
 
-    var sink2: TestSink = .{ .text = "still */ const" };
-    defer sink2.buf.deinit(testing.allocator);
+    var sink2: TestSink = .{ .text = "still */ const", .buf = .init(testing.allocator) };
+    defer sink2.buf.deinit();
     try testing.expectEqual(State.normal, tokenize("still */ const", .block_comment, &sink2));
-    try testing.expectEqualStrings("comment:still */ keyword:const", std.mem.trimEnd(u8, sink2.buf.items, " "));
+    try testing.expectEqualStrings("comment:still */ keyword:const", std.mem.trimEnd(u8, sink2.buf.written(), " "));
 }
 
 test "js_highlight: template literal spans lines" {
-    var sink: TestSink = .{ .text = "`<div>" };
-    defer sink.buf.deinit(testing.allocator);
+    var sink: TestSink = .{ .text = "`<div>", .buf = .init(testing.allocator) };
+    defer sink.buf.deinit();
     try testing.expectEqual(State.template, tokenize("`<div>", .normal, &sink));
 
-    var sink2: TestSink = .{ .text = "</div>` + x" };
-    defer sink2.buf.deinit(testing.allocator);
+    var sink2: TestSink = .{ .text = "</div>` + x", .buf = .init(testing.allocator) };
+    defer sink2.buf.deinit();
     try testing.expectEqual(State.normal, tokenize("</div>` + x", .template, &sink2));
-    try testing.expectEqualStrings("string:</div>`", std.mem.trimEnd(u8, sink2.buf.items, " "));
+    try testing.expectEqualStrings("string:</div>`", std.mem.trimEnd(u8, sink2.buf.written(), " "));
 }

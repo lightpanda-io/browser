@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 const text_measure = @import("../../../text_measure.zig");
+const StyleManager = @import("../../../StyleManager.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -89,7 +90,8 @@ fn text(self: *TextContent, frame: *Frame) []const u8 {
 
 fn fontSize(self: *TextContent, frame: *Frame) f64 {
     const element = self.asElement();
-    return element.ownerFrame(frame)._style_manager.computedFontSize(element);
+    const owner = element.ownerFrame(frame) orelse return StyleManager.DEFAULT_FONT_SIZE;
+    return owner._style_manager.computedFontSize(element);
 }
 
 fn getTextLength(self: *TextContent, frame: *Frame) !*AnimatedLength {
@@ -100,15 +102,15 @@ fn getLengthAdjust(self: *TextContent, frame: *Frame) !*AnimatedEnumeration {
     return AnimatedEnumeration.getOrCreate(self.asElement(), .length_adjust, frame);
 }
 
-pub fn getNumberOfChars(self: *TextContent, frame: *Frame) u32 {
+fn getNumberOfChars(self: *TextContent, frame: *Frame) u32 {
     return text_measure.utf16Length(self.text(frame));
 }
 
-pub fn getComputedTextLength(self: *TextContent, frame: *Frame) f64 {
+fn getComputedTextLength(self: *TextContent, frame: *Frame) f64 {
     return text_measure.width(self.text(frame), self.fontSize(frame));
 }
 
-pub fn getSubStringLength(self: *TextContent, charnum: u32, nchars: u32, frame: *Frame) !f64 {
+fn getSubStringLength(self: *TextContent, charnum: u32, nchars: u32, frame: *Frame) !f64 {
     return text_measure.substringWidth(self.text(frame), charnum, nchars, self.fontSize(frame));
 }
 

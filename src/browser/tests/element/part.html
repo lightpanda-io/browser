@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id=d1 part="label  primary"></div>
+<div id=d2></div>
+
+<script id=part>
+{
+  const part = $('#d1').part;
+  testing.expectEqual(true, part instanceof DOMTokenList);
+  testing.expectEqual(part, $('#d1').part);
+  testing.expectEqual(2, part.length);
+  testing.expectEqual(true, part.contains('primary'));
+
+  part.add('active');
+  testing.expectEqual('label primary active', $('#d1').getAttribute('part'));
+  part.remove('label');
+  testing.expectEqual('primary active', $('#d1').getAttribute('part'));
+
+  testing.expectEqual(0, $('#d2').part.length);
+  $('#d2').part.add('x');
+  testing.expectEqual('x', $('#d2').getAttribute('part'));
+}
+</script>

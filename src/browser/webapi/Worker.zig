@@ -75,7 +75,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     errdefer arena.release();
 
     const resolved_url = try URL.resolve(arena.allocator(), frame.base(), url, .{ .encoding = frame.charset });
-    const self = try frame._page.factory.eventTargetWithAllocator(arena.allocator(), Worker{
+    const self = try frame.page.factory.eventTargetWithAllocator(arena.allocator(), Worker{
         ._arena = arena,
         ._proto = undefined,
         ._frame = frame,
@@ -91,14 +91,8 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     self._worker_scope = dedicated_worker;
     try frame.trackWorker(self);
 
-    // `--disable-workers` (or `LP.configureLoading { worker: false }`):
-    // skip the script fetch and eval. The Worker object is still
-    // constructed so JS `new Worker(url)` does not throw, but the
-    // worker's eval never runs (postMessage from the page is queued
-    // indefinitely with no handler to drain it). Mirrors the
-    // `subframe_loading_enabled` pattern for iframes.
-    if (!session.worker_loading_enabled) {
-        log.debug(.browser, "worker disabled", .{ .url = resolved_url });
+    if (session.load_resources.worker == false) {
+        log.warnDisabledWorker();
         return self;
     }
 
@@ -111,17 +105,17 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         .url = resolved_url,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
-        .resource_type = .script,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = resolved_url,
-        .notification = session.notification,
+        .resource_type = if (self._type == .module) .script else .worker,
+        .origin = frame.origin,
+        .request_mode = .same_origin,
+        .credentials_mode = .same_origin,
         .header_callback = httpHeaderCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
     }) catch |err| {
-        log.err(.browser, "Worker request", .{ .url = resolved_url, .err = err });
+        log.debug(.browser, "Worker request", .{ .url = resolved_url, .err = err });
         frame.removeWorker(self);
         return err;
     };
@@ -133,7 +127,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     self._http_transfer = transfer;
 
     transfer.submit() catch |err| {
-        log.err(.browser, "Worker request", .{ .url = resolved_url, .err = err });
+        log.debug(.browser, "Worker request", .{ .url = resolved_url, .err = err });
         frame.removeWorker(self);
         return err;
     };
@@ -145,7 +139,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
 pub fn deinit(self: *Worker) void {
     // No pending frame for workers, so we can abort all frames.
     if (self._http_transfer) |res| {
-        res.abort(error.Abort);
+        res.cancel();
         self._http_transfer = null;
     }
     self.releaseScriptArena();
@@ -162,16 +156,14 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     const status = transfer.responseStatus() orelse return .abort;
     if (status < 200 or status >= 300) {
-        log.warn(.browser, "Worker status", .{
+        log.debug(.browser, "Worker status", .{
             .url = self._url,
             .status = status,
         });
         return .abort;
     }
 
-    if (transfer.getContentLength()) |cl| {
-        try self._script_buffer.ensureTotalCapacityPrecise(self._script_arena.?.allocator(), cl);
-    }
+    try self._script_buffer.ensureTotalCapacityPrecise(self._script_arena.?.allocator(), transfer.bodyLen());
 
     return .proceed;
 }
@@ -243,7 +235,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
 
             js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_arena.?.allocator(), err);
-            log.err(.browser, "worker script error", .{ .url = self._url, .caught = caught });
+            log.debug(.browser, "worker script error", .{ .url = self._url, .caught = caught });
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);
             return;
         },
@@ -254,7 +246,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
 
             js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_arena.?.allocator(), err);
-            log.err(.browser, "worker module error", .{ .url = self._url, .caught = caught });
+            log.debug(.browser, "worker module error", .{ .url = self._url, .caught = caught });
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);
             return;
         },
@@ -274,10 +266,16 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._http_transfer = null;
     self.releaseScriptArena();
 
-    log.err(.browser, "worker fetch error", .{
-        .url = self._url,
-        .err = err,
-    });
+    // TransferCanceled is not a load failure: terminate() (or worker teardown)
+    // cancelled a still-inflight script fetch. We shouldn't fireErrorEvent
+    // (or bother logging)
+    const canceled = err == error.TransferCanceled;
+    if (!canceled) {
+        log.debug(.browser, "worker fetch error", .{
+            .url = self._url,
+            .err = err,
+        });
+    }
 
     // The worker will never load and onmessage will never be registered.
     // Drain any buffered messages so they get dispatched (and silently
@@ -286,7 +284,9 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._script_loaded = true;
     self._worker_scope.drainPendingMessages();
 
-    self.fireErrorEvent(@errorName(err), null);
+    if (!canceled) {
+        self.fireErrorEvent(@errorName(err), null);
+    }
 }
 
 fn releaseScriptArena(self: *Worker) void {
@@ -299,7 +299,7 @@ fn releaseScriptArena(self: *Worker) void {
 // Fire an error event on the Worker object (parent context)
 fn fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Global) void {
     self._fireErrorEvent(message, error_value) catch |err| {
-        log.warn(.browser, "worker fire error", .{ .err = err, .message = message });
+        log.debug(.browser, "worker fire error", .{ .err = err, .message = message });
     };
 }
 
@@ -320,7 +320,7 @@ fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Gl
         .filename = self._url,
         .bubbles = false,
         .cancelable = true,
-    }, frame._page);
+    }, frame.page);
 
     try frame._event_manager.dispatchDirect(target, error_event.asEvent(), on_error, .{
         .context = "Worker.onerror",
@@ -330,7 +330,7 @@ fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Gl
 pub fn terminate(self: *Worker) void {
     // Abort any pending script fetch
     if (self._http_transfer) |resp| {
-        resp.abort(error.Abort);
+        resp.cancel();
         self._http_transfer = null;
     }
 }
@@ -369,27 +369,27 @@ pub fn receiveMessage(self: *Worker, data: js.Value) !void {
     });
 }
 
-pub fn getOnMessage(self: *const Worker) ?js.Function.Global {
+fn getOnMessage(self: *const Worker) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *Worker, setter: ?FunctionSetter) void {
+fn setOnMessage(self: *Worker, setter: ?FunctionSetter) void {
     self._on_message = getFunctionFromSetter(setter);
 }
 
-pub fn getOnMessageError(self: *const Worker) ?js.Function.Global {
+fn getOnMessageError(self: *const Worker) ?js.Function.Global {
     return self._on_messageerror;
 }
 
-pub fn setOnMessageError(self: *Worker, setter: ?FunctionSetter) void {
+fn setOnMessageError(self: *Worker, setter: ?FunctionSetter) void {
     self._on_messageerror = getFunctionFromSetter(setter);
 }
 
-pub fn getOnError(self: *const Worker) ?js.Function.Global {
+fn getOnError(self: *const Worker) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *Worker, setter: ?FunctionSetter) void {
+fn setOnError(self: *Worker, setter: ?FunctionSetter) void {
     self._on_error = getFunctionFromSetter(setter);
 }
 
@@ -441,7 +441,7 @@ const ReceiveMessageCallback = struct {
                 .data = .{ .string = @errorName(err) },
                 .bubbles = false,
                 .cancelable = false,
-            }, frame._page)).asEvent();
+            }, frame.page)).asEvent();
             try frame._event_manager.dispatchDirect(target, event, on_messageerror, .{ .context = "Worker.messageerror" });
             return null;
         };
@@ -458,7 +458,7 @@ const ReceiveMessageCallback = struct {
             .data = .{ .value = data },
             .bubbles = false,
             .cancelable = false,
-        }, frame._page)).asEvent();
+        }, frame.page)).asEvent();
 
         try frame._event_manager.dispatchDirect(target, event, on_message, .{ .context = "Worker.receiveMessage" });
 
@@ -487,7 +487,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Worker" {
-    testing.silenceLog(&.{.http});
+    testing.silenceLog(&.{ .http, .browser, .browser });
 
     // Worker tests chain a worker-script fetch with a dynamic-import fetch
     // and a cross-context postMessage. The default 2 s assertion budget can

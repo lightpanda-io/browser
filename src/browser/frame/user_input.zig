@@ -18,7 +18,7 @@
 
 // Synthetic user input driving the DOM: mouse, wheel, keyboard, focus
 // navigation and text insertion. These are mostly fed by CDP's Input domain
-// (src/cdp/domains/input.zig) and by EventManager's default activation
+// (src/server/cdp/domains/input.zig) and by EventManager's default activation
 // behavior. Form submission itself lives on the Frame (it's a navigation
 // concern); the activation paths here call into it.
 
@@ -32,8 +32,11 @@ const Node = @import("../webapi/Node.zig");
 const Event = @import("../webapi/Event.zig");
 const Element = @import("../webapi/Element.zig");
 const TreeWalker = @import("../webapi/TreeWalker.zig");
+const TextEvent = @import("../webapi/event/TextEvent.zig");
+const InputEvent = @import("../webapi/event/InputEvent.zig");
 const MouseEvent = @import("../webapi/event/MouseEvent.zig");
 const WheelEvent = @import("../webapi/event/WheelEvent.zig");
+const PointerEvent = @import("../webapi/event/PointerEvent.zig");
 const KeyboardEvent = @import("../webapi/event/KeyboardEvent.zig");
 
 const log = lp.log;
@@ -48,24 +51,371 @@ pub const mouse_button = struct {
     pub const fifth: i32 = 4; // forward
 };
 
-// Dispatch a single trusted mouse event of the given type on `target`, carrying
-// the pressed button and pointer position. `detail` is the click count (used for
-// click/dblclick); 0 for events where it does not apply.
-fn dispatchMouseEventOn(frame: *Frame, target: *Element, comptime typ: []const u8, x: f64, y: f64, button: i32, detail: u32) !void {
+const HoverContext = struct {
+    x: f64 = 0,
+    y: f64 = 0,
+    buttons: u16 = 0,
+    modifiers: Modifiers = .{},
+};
+
+// Update the element being hovered. The page always tracks the currently
+// hovered item so that trasitions can fire the correct events. e.g. mouseout
+// bubbles up normally, but mouseleave will only fire on parents where the new
+// target isn't part of.
+pub fn updateHoverTarget(frame: *Frame, to: ?*Element, ctx: HoverContext) void {
+    const page = frame.page;
+    const from = page.input_hover_target;
+    if (from == to) {
+        return;
+    }
+    page.input_hover_target = to;
+
+    const pivot: ?*Node = blk: {
+        const a = from orelse break :blk null;
+        const b = to orelse break :blk null;
+        break :blk commonAncestor(a.asNode(), b.asNode());
+    };
+
+    if (from) |old| {
+        dispatchBoundaryEvent(frame, old, "mouseout", "pointerout", to, true, ctx);
+        var current: ?*Node = old.asNode();
+        while (current) |node| : (current = node.parentNode()) {
+            if (node == pivot) {
+                break;
+            }
+            if (node.is(Element)) |element| {
+                dispatchBoundaryEvent(frame, element, "mouseleave", "pointerleave", to, false, ctx);
+            }
+        }
+    }
+
+    if (to) |new| {
+        dispatchBoundaryEvent(frame, new, "mouseover", "pointerover", from, true, ctx);
+
+        // Enter fires outermost-first. The chain is walked without allocating:
+        // count the elements between the target and the pivot, then re-walk to
+        // reach each one from the deepest ancestor down.
+        var count: usize = 0;
+        var current: ?*Node = new.asNode();
+        while (current) |node| : (current = node.parentNode()) {
+            if (node == pivot) {
+                break;
+            }
+            if (node.is(Element) != null) {
+                count += 1;
+            }
+        }
+        while (count > 0) : (count -= 1) {
+            var remaining = count;
+            current = new.asNode();
+            while (current) |node| : (current = node.parentNode()) {
+                const element = node.is(Element) orelse continue;
+                remaining -= 1;
+                if (remaining == 0) {
+                    dispatchBoundaryEvent(frame, element, "mouseenter", "pointerenter", from, false, ctx);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// Fire a pointer/mouse event pair, e.g. pointerout + mouseout
+fn dispatchBoundaryEvent(frame: *Frame, target: *Element, comptime mouse_typ: []const u8, comptime pointer_typ: []const u8, related: ?*Element, bubbling: bool, ctx: HoverContext) void {
+    const modifiers = ctx.modifiers;
+    const related_target = if (related) |r| r.asEventTarget() else null;
+
+    const pointer_event = PointerEvent.initTrusted(pointer_typ, .{
+        .bubbles = bubbling,
+        .cancelable = bubbling,
+        .composed = bubbling,
+        .clientX = ctx.x,
+        .clientY = ctx.y,
+        // No button changed state: https://www.w3.org/TR/pointerevents3/#the-button-property
+        .button = -1,
+        .buttons = ctx.buttons,
+        .pointerId = 1,
+        .pointerType = "mouse",
+        .isPrimary = true,
+        .relatedTarget = related_target,
+        .ctrlKey = modifiers.ctrl,
+        .shiftKey = modifiers.shift,
+        .altKey = modifiers.alt,
+        .metaKey = modifiers.meta,
+    }, frame) catch |err| {
+        log.debug(.frame, "boundary pointer event", .{ .err = err, .type = pointer_typ });
+        return;
+    };
+    frame._event_manager.dispatch(target.asEventTarget(), pointer_event.asEvent()) catch |err| {
+        log.debug(.frame, "boundary pointer dispatch", .{ .err = err, .type = pointer_typ });
+    };
+
+    const mouse_event = MouseEvent.initTrusted(comptime .wrap(mouse_typ), .{
+        .bubbles = bubbling,
+        .cancelable = bubbling,
+        .composed = bubbling,
+        .clientX = ctx.x,
+        .clientY = ctx.y,
+        .buttons = ctx.buttons,
+        .relatedTarget = related_target,
+        .ctrlKey = modifiers.ctrl,
+        .shiftKey = modifiers.shift,
+        .altKey = modifiers.alt,
+        .metaKey = modifiers.meta,
+    }, frame) catch |err| {
+        log.debug(.frame, "boundary mouse event", .{ .err = err, .type = mouse_typ });
+        return;
+    };
+    frame._event_manager.dispatch(target.asEventTarget(), mouse_event.asEvent()) catch |err| {
+        log.debug(.frame, "boundary mouse dispatch", .{ .err = err, .type = mouse_typ });
+    };
+}
+
+const Gesture = struct {
+    button: i32 = mouse_button.main,
+    buttons_down: u16 = 0,
+    click_count: u32 = 0,
+    x: f64 = 0,
+    y: f64 = 0,
+    modifiers: Modifiers = .{},
+    emit_mouse_compat: bool = true,
+};
+
+/// Dispatch a trusted pointer event; returns whether preventDefault() cancelled it.
+fn emitPointer(
+    frame: *Frame,
+    target: *Element,
+    typ: []const u8,
+    g: Gesture,
+    detail: u32,
+) !bool {
+    const owner = target.ownerFrame(frame) orelse frame;
+    const event: *PointerEvent = try .initTrusted(typ, .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clientX = g.x,
+        .clientY = g.y,
+        .button = g.button,
+        .buttons = g.buttons_down,
+        .detail = detail,
+        .pointerId = 1,
+        .pointerType = "mouse",
+        .isPrimary = true,
+        .pressure = if (g.buttons_down != 0) 0.5 else 0.0,
+        .ctrlKey = g.modifiers.ctrl,
+        .shiftKey = g.modifiers.shift,
+        .altKey = g.modifiers.alt,
+        .metaKey = g.modifiers.meta,
+    }, owner);
+    return owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
+}
+
+/// Dispatch a trusted mouse event; returns whether preventDefault() cancelled it.
+fn emitMouse(
+    frame: *Frame,
+    target: *Element,
+    comptime typ: []const u8,
+    g: Gesture,
+    detail: u32,
+) !bool {
+    const owner = target.ownerFrame(frame) orelse frame;
     const event: *MouseEvent = try .initTrusted(comptime .wrap(typ), .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
-        .clientX = x,
-        .clientY = y,
-        .button = button,
+        .clientX = g.x,
+        .clientY = g.y,
+        .button = g.button,
+        .buttons = g.buttons_down,
         .detail = detail,
-    }, frame);
-    try frame._event_manager.dispatch(target.asEventTarget(), event.asEvent());
+        .ctrlKey = g.modifiers.ctrl,
+        .shiftKey = g.modifiers.shift,
+        .altKey = g.modifiers.alt,
+        .metaKey = g.modifiers.meta,
+    }, owner);
+    return owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
 }
 
-pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
-    const target = (try frame.window._document.elementFromPoint(x, y, frame)) orelse return;
+/// MouseEvent/PointerEvent.buttons bitmask for a MouseEvent.button value.
+/// https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/buttons
+fn buttonsBitmask(button: i32) u16 {
+    return switch (button) {
+        mouse_button.main => 1,
+        mouse_button.secondary => 2,
+        mouse_button.auxiliary => 4,
+        mouse_button.fourth => 8,
+        mouse_button.fifth => 16,
+        else => 0,
+    };
+}
+
+/// Held-button mask and suppression flag for the single synthetic mouse
+/// pointer, tracked across the split press/release messages of one gesture so
+/// a chord is told apart from a new gesture.
+pub const PointerButtons = struct {
+    /// Mask of buttons currently held.
+    held: u16 = 0,
+    /// Whether the gesture's opening pointerdown suppressed the compat mouse
+    /// events; held for the whole gesture so each split message reads it here.
+    mousedown_suppressed: bool = false,
+    /// Where the gesture's pointerdown landed, until its first release fires
+    /// the gesture's one click.
+    down_target: ?*Element = null,
+
+    /// `g.buttons_down` is ignored: the held mask supplies it.
+    pub fn press(self: *PointerButtons, frame: *Frame, target: *Element, g: Gesture) !void {
+        const bit = buttonsBitmask(g.button);
+        const starts_gesture = self.held & ~bit == 0;
+        if (starts_gesture) {
+            self.down_target = target;
+        }
+        self.held |= bit;
+
+        var pg = g;
+        pg.buttons_down = self.held;
+        const suppressed = try pressSequence(frame, target, pg, self.mousedown_suppressed);
+        if (starts_gesture) {
+            self.mousedown_suppressed = suppressed;
+        }
+    }
+
+    /// Returns the element the click fired at, if any. `g.buttons_down` is
+    /// ignored: the held mask supplies it.
+    pub fn release(self: *PointerButtons, frame: *Frame, target: *Element, g: Gesture) !?*Element {
+        const click_target = if (self.down_target) |down| commonClickTarget(down, target) else null;
+        const was_suppressed = self.mousedown_suppressed;
+        self.down_target = null;
+        self.releaseButton(g.button);
+
+        var rg = g;
+        rg.buttons_down = self.held;
+        try releaseSequence(frame, target, rg, was_suppressed, click_target);
+        return click_target;
+    }
+
+    /// The last held button releasing ends the gesture and clears its state.
+    fn releaseButton(self: *PointerButtons, button: i32) void {
+        self.held &= ~buttonsBitmask(button);
+        if (self.held == 0) {
+            self.mousedown_suppressed = false;
+            self.down_target = null;
+        }
+    }
+
+    /// Discards an in-progress gesture (a press that hit no element).
+    pub fn reset(self: *PointerButtons) void {
+        self.* = .{};
+    }
+};
+
+fn commonAncestor(a: *Node, b: *Node) ?*Node {
+    var current: ?*Node = a;
+    while (current) |node| : (current = node.parentNode()) {
+        if (node.contains(b)) {
+            return node;
+        }
+    }
+    return null;
+}
+
+/// A click whose mousedown and mouseup landed on different elements fires at
+/// their nearest common inclusive ancestor element.
+fn commonClickTarget(down: *Element, up: *Element) *Element {
+    if (down == up) {
+        return up;
+    }
+    const ancestor = commonAncestor(down.asNode(), up.asNode()) orelse return up;
+    return ancestor.is(Element) orelse up;
+}
+
+pub fn moveSequence(frame: *Frame, target: *Element, g: Gesture) !void {
+    if (g.emit_mouse_compat) {
+        updateHoverTarget(frame, target, .{ .x = g.x, .y = g.y, .buttons = g.buttons_down, .modifiers = g.modifiers });
+    }
+    // A move changes no button: https://www.w3.org/TR/pointerevents3/#the-button-property
+    var pg = g;
+    pg.button = -1;
+    _ = try emitPointer(frame, target, "pointermove", pg, 0);
+    if (g.emit_mouse_compat) {
+        _ = try emitMouse(frame, target, "mousemove", g, 0);
+    }
+}
+
+/// Returns whether the gesture's compat mouse events are suppressed: by the
+/// opening pointerdown, or for a chorded press, `chord_suppressed` carried over.
+fn pressSequence(frame: *Frame, target: *Element, g: Gesture, chord_suppressed: bool) !bool {
+    const starts_gesture = (g.buttons_down & ~buttonsBitmask(g.button)) == 0;
+    // A chorded press is a buttons-mask change (pointermove), not a second
+    // pointerdown: https://www.w3.org/TR/pointerevents3/#chorded-button-interactions
+    const suppressed = if (starts_gesture)
+        try emitPointer(frame, target, "pointerdown", g, 0)
+    else blk: {
+        _ = try emitPointer(frame, target, "pointermove", g, 0);
+        break :blk chord_suppressed;
+    };
+    if (!g.emit_mouse_compat) {
+        return suppressed;
+    }
+
+    // A disabled control gets the pointer events, contextmenu and auxclick,
+    // but no mouse events, click or focus, as in Chrome.
+    if (!suppressed and !target.isDisabled() and !try emitMouse(frame, target, "mousedown", g, g.click_count)) {
+        focusForMouseDown(frame, target) catch |err| log.debug(.app, "mousedown focus", .{ .err = err });
+    }
+    // Chrome on Linux and macOS fires contextmenu on press, even when the
+    // pointerdown was cancelled.
+    if (g.button == mouse_button.secondary) {
+        _ = try emitPointer(frame, target, "contextmenu", g, 0);
+    }
+    return suppressed;
+}
+
+/// A null `click_target` releases without a click, as for a later release in
+/// a chord.
+fn releaseSequence(frame: *Frame, up_target: *Element, g: Gesture, suppressed: bool, click_target: ?*Element) !void {
+    _ = try emitPointer(frame, up_target, if (g.buttons_down == 0) "pointerup" else "pointermove", g, 0);
+    if (g.emit_mouse_compat and !suppressed and !up_target.isDisabled()) {
+        _ = try emitMouse(frame, up_target, "mouseup", g, g.click_count);
+    }
+
+    // clickCount 0 releases without a click, as in Chrome.
+    const click_el = click_target orelse return;
+    if (!g.emit_mouse_compat or g.click_count == 0) {
+        return;
+    }
+
+    if (g.button == mouse_button.main) {
+        if (click_el.isDisabled()) {
+            return;
+        }
+        _ = try emitPointer(frame, click_el, "click", g, g.click_count);
+        if (g.click_count % 2 == 0) {
+            _ = try emitMouse(frame, click_el, "dblclick", g, g.click_count);
+        }
+    } else {
+        _ = try emitPointer(frame, click_el, "auxclick", g, g.click_count);
+    }
+}
+
+/// The trusted primary-button gesture a real user click produces; widgets key
+/// off pointerdown/mousedown, not click alone. A focus failure is logged, not
+/// returned.
+pub fn triggerClick(frame: *Frame, target: *Element, modifiers: Modifiers) !void {
+    try moveSequence(frame, target, .{ .modifiers = modifiers });
+
+    const g: Gesture = .{ .click_count = 1, .modifiers = modifiers };
+    var pointer: PointerButtons = .{};
+    try pointer.press(frame, target, g);
+    _ = try pointer.release(frame, target, g);
+}
+
+pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
+    const target = (try frame.window._document.elementFromPoint(x, y, frame)) orelse {
+        // Don't leave a prior gesture's state for the next message to misread.
+        frame.page.input_pointer.reset();
+        return;
+    };
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame mouse press", .{
             .url = frame.url,
@@ -76,8 +426,15 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
             .type = frame._type,
         });
     }
-    try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, 0);
-    try focusEditingHostForMouseDown(frame, target);
+
+    try frame.page.input_pointer.press(frame, target, .{
+        .button = button,
+        // clickCount 0 (omitted) stays 0, not forced to 1: Chrome and Firefox
+        // both fire mousedown with detail 0 in that case.
+        .click_count = if (click_count > 0) @intCast(click_count) else 0,
+        .x = x,
+        .y = y,
+    });
 }
 
 pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
@@ -92,34 +449,21 @@ pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
         });
     }
 
-    const move_event: *MouseEvent = try .initTrusted(comptime .wrap("mousemove"), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .clientX = x,
-        .clientY = y,
-    }, frame);
-    try frame._event_manager.dispatch(target.asEventTarget(), move_event.asEvent());
-
-    const over_event: *MouseEvent = try .initTrusted(comptime .wrap("mouseover"), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .clientX = x,
-        .clientY = y,
-    }, frame);
-    try frame._event_manager.dispatch(target.asEventTarget(), over_event.asEvent());
-
-    const enter_event: *MouseEvent = try .initTrusted(comptime .wrap("mouseenter"), .{
-        .composed = true,
-        .clientX = x,
-        .clientY = y,
-    }, frame);
-    try frame._event_manager.dispatch(target.asEventTarget(), enter_event.asEvent());
+    try moveSequence(frame, target, .{ .buttons_down = frame.page.input_pointer.held, .x = x, .y = y });
 }
 
 pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
-    const target = (try frame.window._document.elementFromPoint(x, y, frame)) orelse return;
+    const pointer = &frame.page.input_pointer;
+    // A release that misses every element still lets go of the button, so
+    // the next message doesn't read it as held.
+    const hit = frame.window._document.elementFromPoint(x, y, frame) catch |err| {
+        pointer.releaseButton(button);
+        return err;
+    };
+    const target = hit orelse {
+        pointer.releaseButton(button);
+        return;
+    };
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame mouse release", .{
             .url = frame.url,
@@ -131,27 +475,18 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
         });
     }
 
-    const detail: u32 = if (click_count > 0) @intCast(click_count) else 1;
-
-    try dispatchMouseEventOn(frame, target, "mouseup", x, y, button, detail);
-
-    // After mouseup, the activation event depends on the button.
-    switch (button) {
-        mouse_button.main => {
-            try dispatchMouseEventOn(frame, target, "click", x, y, button, detail);
-            // A second click in quick succession also fires dblclick.
-            if (click_count == 2) {
-                try dispatchMouseEventOn(frame, target, "dblclick", x, y, button, detail);
-            }
-        },
-        mouse_button.auxiliary => try dispatchMouseEventOn(frame, target, "auxclick", x, y, button, detail),
-        mouse_button.secondary => try dispatchMouseEventOn(frame, target, "contextmenu", x, y, button, detail),
-        else => {},
-    }
+    _ = try pointer.release(frame, target, .{
+        .button = button,
+        .click_count = if (click_count > 0) @intCast(click_count) else 0,
+        .x = x,
+        .y = y,
+    });
 }
 
 pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f64) !void {
-    const target = (try frame.window._document.elementFromPoint(x, y, frame)) orelse return;
+    const document = frame.window._document;
+    const target = (try document.elementFromPoint(x, y, frame)) orelse
+        document.getDocumentElement() orelse return;
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame mouse wheel", .{
             .url = frame.url,
@@ -164,97 +499,137 @@ pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f
         });
     }
 
-    const wheel_event: *WheelEvent = try .initTrusted("wheel", .{
+    try wheel(frame, target, x, y, delta_x, delta_y);
+}
+
+/// A wheel over `target`: a trusted `wheel`, then the scroll unless it was
+/// canceled. The event manager retypes it as Blink's legacy `mousewheel` for
+/// targets listening only to that, and makes it cancelable only while a
+/// listener on its dispatch path is non-passive.
+pub fn wheel(frame: *Frame, target: *Element, x: f64, y: f64, delta_x: f64, delta_y: f64) !void {
+    // Listeners live in the event manager of the element's own frame, which
+    // is not the caller's when the element belongs to an iframe's document.
+    const owner = target.ownerFrame(frame) orelse return;
+
+    const event: *WheelEvent = try .initTrusted("wheel", .{
         .bubbles = true,
-        .cancelable = true,
         .composed = true,
         .clientX = x,
         .clientY = y,
         .deltaX = delta_x,
         .deltaY = delta_y,
-    }, frame);
-
-    // Keep the event alive past dispatch so we can read _prevent_default.
-    wheel_event.asEvent().acquireRef();
-    defer _ = wheel_event.asEvent().releaseRef(frame._page);
-    try frame._event_manager.dispatch(target.asEventTarget(), wheel_event.asEvent());
-
-    if (wheel_event.asEvent()._prevent_default) {
+    }, owner);
+    event.asEvent()._cancelable_unless_passive = true;
+    if (try owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent())) {
         return;
     }
 
-    // Apply the scroll and fire a trusted scroll event, mirroring WebDriver wheel.
-    // CDP deltas are untrusted, so guard NaN and saturate the addition.
-    const new_left: i32 = @as(i32, @intCast(target.getScrollLeft(frame))) +| deltaToScroll(delta_x);
-    const new_top: i32 = @as(i32, @intCast(target.getScrollTop(frame))) +| deltaToScroll(delta_y);
-    try target.setScrollLeft(new_left, frame);
-    try target.setScrollTop(new_top, frame);
+    // Deltas come from the wire, so guard NaN and saturate the addition.
+    try scrollAxis(target, .width, deltaToScroll(delta_x), owner);
+    try scrollAxis(target, .height, deltaToScroll(delta_y), owner);
+}
 
-    const scroll_event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, frame._page);
-    try frame._event_manager.dispatch(target.asEventTarget(), scroll_event);
+/// A wheel latches to a single scroller and a delta is never split across two,
+/// as in Chrome's FindNodeToLatch (cc/input/input_handler.cc): the whole delta
+/// goes to the nearest ancestor-or-self container that can still move along
+/// this axis. One whose overscroll-behavior doesn't propagate takes the latch
+/// even when it can't move, which ends the walk.
+fn scrollAxis(target: *Element, comptime axis: Element.Axis, delta: i32, frame: *Frame) !void {
+    if (delta == 0) {
+        return;
+    }
+    const axes: Element.ScrollAxes = switch (axis) {
+        .width => .{ .x = true },
+        .height => .{ .y = true },
+    };
+
+    var current: ?*Element = target;
+    while (current) |el| {
+        const container = switch (el.scrollContainer(axes, frame)) {
+            .container => |c| c,
+            .viewport => break,
+        };
+        if (try container.scrollByAxis(axis, delta, frame)) {
+            return;
+        }
+        if (container.containsOverscroll(axes, frame)) {
+            return;
+        }
+        current = container.parentElement();
+    }
+
+    const opts: Element.ScrollToOpts = switch (axis) {
+        .width => .{ .opts = .{ .left = delta } },
+        .height => .{ .opts = .{ .top = delta } },
+    };
+    return frame.window.scrollBy(opts, null, frame);
 }
 
 fn deltaToScroll(d: f64) i32 {
     if (std.math.isNan(d)) return 0;
-    return @intFromFloat(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
+    return @trunc(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
-// callback when the "click" event reaches the frame.
-// Whether the element has a click activation behavior that handleClick
-// implements.
+/// Whether the element has a click activation behavior that handleClick
+/// implements.
 fn hasClickActivationBehavior(node: *Node) bool {
     const element = node.is(Element) orelse return false;
 
-    const html_element = element.is(Element.Html) orelse {
-        if (element.is(Element.Svg.Graphics.A) != null) {
-            return svgAnchorHref(element) != null;
-        }
-        return false;
-    };
+    const html_element = element.is(Element.Html) orelse return element.isSvgLink();
 
     return switch (html_element._type) {
-        .anchor => element.getAttributeSafe(comptime .wrap("href")) != null,
+        .anchor => element.getAttributeInterned("href") != null,
         .input, .button, .select, .textarea, .label => true,
         .generic => html_element.subtype(Element.Html.Generic)._tag == .summary,
         else => false,
     };
 }
 
-// SVG 2 <a> links via `href`; xlink:href is the deprecated SVG 1.1 spelling.
-fn svgAnchorHref(element: *Element) ?[]const u8 {
-    return element.getAttributeSafe(comptime .wrap("href")) orelse element.getAttributeSafe(comptime .wrap("xlink:href"));
-}
-
 // Clicks on editable content are for editing: they don't activate the
 // element or any enclosing link.
-// "contenteditable" is 15 bytes — past the comptime SSO limit — so the
-// String wrap runs at runtime, mirroring Html.getIsContentEditable.
 fn isEditingHost(node: *Node) bool {
     const element = node.is(Element) orelse return false;
-    const value = element.getAttributeSafe(.wrap("contenteditable")) orelse return false;
-    return std.ascii.eqlIgnoreCase(value, "false") == false;
+    return element.isEditingHost();
 }
 
-// A mousedown on editable content focuses its editing host: the outermost
-// element of the contiguous editable chain containing the target.
-pub fn focusEditingHostForMouseDown(frame: *Frame, target: *Element) !void {
+fn outermostEditingHost(target: *Element) ?*Element {
+    var host: ?*Element = null;
+    var current: ?*Element = target;
+    while (current) |el| : (current = el.parentElement()) {
+        if (el.getAttributeInterned("contenteditable") == null) {
+            continue;
+        }
+        if (el.isEditingHost() == false) {
+            break;
+        }
+        host = el;
+    }
+    return host;
+}
+
+/// Mousedown default action. A mousedown outside any focusable element moves
+/// focus to the body.
+pub fn focusForMouseDown(frame: *Frame, target: *Element) !void {
+    if (outermostEditingHost(target)) |host| {
+        try host.focus(frame);
+        return;
+    }
+
     var node: ?*Node = target.asNode();
-    var editable: ?*Node = null;
     while (node) |n| : (node = n._parent) {
-        if (isEditingHost(n)) {
-            editable = n;
-            break;
+        const el = n.is(Element) orelse continue;
+        // Unlike sequential focus navigation, a negative tabindex is still
+        // mouse-focusable, so any focusable area qualifies.
+        if (el.focusTabIndex() != null) {
+            try el.focus(frame);
+            return;
         }
     }
-    var host = editable orelse return;
-    while (host._parent) |p| {
-        if (!isEditingHost(p)) {
-            break;
-        }
-        host = p;
+
+    const doc = target.asNode().ownerDocument(frame) orelse frame.document;
+    if (doc._active_element) |active| {
+        try active.blur(frame);
     }
-    const host_element = host.is(Element) orelse return;
-    try host_element.focus(frame);
 }
 
 // Per the DOM dispatch algorithm, a click's activation target is the event
@@ -315,11 +690,11 @@ const JavascriptUrlTask = struct {
         defer ls.deinit();
 
         const script = ls.local.compile(self.source, "javascript:") catch |err| {
-            log.warn(.browser, "javascript-url compile", .{ .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.browser, "javascript-url compile", .{ .err = err, .type = frame._type, .url = frame.url });
             return null;
         };
         _ = script.run() catch |err| {
-            log.warn(.browser, "javascript-url run", .{ .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.browser, "javascript-url run", .{ .err = err, .type = frame._type, .url = frame.url });
         };
         return null;
     }
@@ -343,8 +718,8 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
     const element = target.is(Element) orelse return;
 
     if (element.is(Element.Svg.Graphics.A) != null) {
-        const href = svgAnchorHref(element) orelse return;
-        const target_name = element.getAttributeSafe(comptime .wrap("target")) orelse "";
+        const href = element.svgAnchorHref() orelse return;
+        const target_name = element.getAttributeInterned("target") orelse "";
         return followLink(frame, target, element, href, target_name);
     }
 
@@ -353,12 +728,11 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
     switch (html_element._type) {
         .anchor => {
             const anchor = html_element.subtype(Element.Html.Anchor);
-            const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
+            const href = element.getAttributeInterned("href") orelse return;
             return followLink(frame, target, element, href, anchor.getTarget());
         },
         .input => {
             const input = html_element.subtype(Element.Html.Input);
-            try element.focus(frame);
             // Per HTML §4.10.18.6.4 "Image Button state (type=image)", clicking an
             // image button submits its form. The form-data set already gets the
             // submitter's coordinate fields appended via FormData.collectForm
@@ -369,12 +743,10 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
         },
         .button => {
             const button = html_element.subtype(Element.Html.Button);
-            try element.focus(frame);
             if (std.mem.eql(u8, button.getType(), "submit")) {
                 return frame.submitForm(element, button.getForm(frame), .{});
             }
         },
-        .select, .textarea => try element.focus(frame),
         .label => {
             const label = html_element.subtype(Element.Html.Label);
             // Per HTML §4.10.4 "The label element", a label's activation
@@ -387,6 +759,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
                 // label (into an infinite loop)
                 return;
             }
+            try control.focus(frame);
             const control_html = control.is(Element.Html) orelse return;
             try control_html.click(frame);
         },
@@ -422,51 +795,149 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
         // Navigating to a javascript: URL evaluates the script in the
         // node's frame as a queued task. (A string completion value
         // would replace the document; we ignore results.)
-        return runJavascriptUrl(target.ownerFrame(frame), href["javascript:".len..]);
+        return runJavascriptUrl(target.ownerFrame(frame) orelse return, href["javascript:".len..]);
     }
 
     if (try element.hasAttribute(comptime .wrap("download"), frame)) {
-        log.warn(.browser, "a.download", .{ .type = frame._type, .url = frame.url });
+        log.debug(.browser, "a.download", .{ .type = frame._type, .url = frame.url });
         return;
     }
 
     const target_frame = blk: {
         if (target_name.len == 0) {
-            break :blk target.ownerFrame(frame);
+            break :blk target.ownerFrame(frame) orelse return;
         }
-        break :blk frame.resolveTargetFrame(target_name) orelse {
-            log.warn(.not_implemented, "target", .{ .type = frame._type, .url = frame.url, .target = target_name });
-            return;
+        break :blk switch (frame.resolveTargetFrame(target_name)) {
+            .frame => |f| f,
+            .blank => {
+                _ = try (target.ownerFrame(frame) orelse return).openBlankTarget(element, href);
+                return;
+            },
         };
     };
 
-    try element.focus(frame);
     try frame.scheduleNavigation(href, .{
         .reason = .script,
         .kind = .{ .push = null },
     }, .{ .anchor = target_frame });
 }
 
-pub fn triggerKeyboard(frame: *Frame, keyboard_event: *KeyboardEvent) !void {
-    const event = keyboard_event.asEvent();
-    // Dispatch to the effective active element. When nothing is explicitly
-    // focused this resolves to <body> (matching `document.activeElement`), so
-    // the keydown still fires and its default action — e.g. sequential focus
-    // navigation on Tab — can run.
-    const element = frame.window._document.getActiveElement() orelse {
-        event.deinit(frame._page);
+pub fn triggerKeyDown(frame: *Frame, keydown: *KeyboardEvent, text: ?[]const u8) !bool {
+    const element = focusedElement(frame) orelse {
+        keydown.asEvent().deinit(frame.page);
+        return false;
+    };
+    return pressKey(frame, element, keydown, text);
+}
+
+pub fn triggerKeyUp(frame: *Frame, keyup: *KeyboardEvent) !void {
+    const element = focusedElement(frame) orelse {
+        keyup.asEvent().deinit(frame.page);
         return;
     };
+    try frame._event_manager.dispatch(element.asEventTarget(), keyup.asEvent());
+}
 
+/// Where a key event goes: `document.activeElement`, so with nothing focused
+/// a key still fires on <body> and Tab's focus navigation can run.
+pub fn focusedElement(frame: *Frame) ?*Element {
+    return frame.window._document.getActiveElement();
+}
+
+/// The frame keyboard input goes to. Starting from `frame`, descend while the
+/// focused element is an <iframe> with a loaded document: that iframe holds
+/// the focus chain, so its document's focused element is where keys land.
+pub fn focusedFrame(frame: *Frame) *Frame {
+    var current = frame;
+    while (current.document._active_element) |active| {
+        const iframe = active.is(Element.Html.IFrame) orelse break;
+        const window = iframe._window orelse break;
+        current = window._frame;
+    }
+    return current;
+}
+
+/// Dispatches a trusted keydown on `target` then, unless cancelled, types
+/// `text` (Chrome's WebKeyboardEvent.text; null when the client sends the
+/// char as its own event, as chromedp does). Returns whether the keydown was
+/// cancelled.
+pub fn pressKey(frame: *Frame, target: *Element, keydown: *KeyboardEvent, text: ?[]const u8) !bool {
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame keydown", .{
             .url = frame.url,
-            .node = element,
-            .key = keyboard_event._key,
+            .node = target,
+            .key = keydown._key,
             .type = frame._type,
         });
     }
-    try frame._event_manager.dispatch(element.asEventTarget(), event);
+    const event = keydown.asEvent();
+    const t = text orelse return frame._event_manager.dispatchCancelable(target.asEventTarget(), event);
+
+    // dispatch drops the event; keypressFor still needs it.
+    event.acquireRef();
+    defer event.releaseRef(frame.page);
+    if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), event)) {
+        return true;
+    }
+    // logged like a default action's failure, not the key event's
+    typeChar(frame, target, try keypressFor(frame, keydown), t) catch |err| {
+        log.debug(.frame, "frame.keypress", .{ .err = err });
+    };
+    return false;
+}
+
+/// The text a key press produces, following Chrome's WebKeyboardEvent.text: the
+/// key itself when printable, "\r" for Enter, nothing when ctrl/meta turn the
+/// press into a shortcut.
+pub fn textForKey(keyboard_event: *const KeyboardEvent) ?[]const u8 {
+    if (keyboard_event.getCtrlKey() or keyboard_event.getMetaKey()) {
+        return null;
+    }
+    const key = keyboard_event.getKey();
+    if (key == .Enter) {
+        return "\r";
+    }
+    return if (key.isPrintable()) key.asString() else null;
+}
+
+/// The char half of a key press (Chrome's WebInputEvent::kChar): fires
+/// `keypress` on `target` and, unless a listener cancels it, performs the
+/// text edit it stands for.
+pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text: []const u8) !void {
+    if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), keypress.asEvent())) {
+        return;
+    }
+    const is_enter = text.len == 1 and (text[0] == '\r' or text[0] == '\n');
+    if (is_enter and isButton(target)) {
+        return dispatchKeyboardClick(frame, target);
+    }
+
+    if (target.is(Element.Html.Input)) |input| {
+        if (is_enter) {
+            return frame.submitForm(input.asElement(), input.getForm(frame), .{});
+        }
+        return insertInto(frame, input, text);
+    }
+
+    if (target.is(Element.Html.TextArea)) |textarea| {
+        if (is_enter) {
+            if (try allowEdit(frame, textarea.asElement(), null, "\n", "insertLineBreak")) {
+                try textarea.innerInsert("\n", frame);
+            }
+            return;
+        }
+        return insertInto(frame, textarea, text);
+    }
+}
+
+fn keypressFor(frame: *Frame, keydown: *const KeyboardEvent) !*KeyboardEvent {
+    return KeyboardEvent.initTrusted(comptime .wrap("keypress"), .{
+        .key = keydown.getKey().asString(),
+        .ctrlKey = keydown.getCtrlKey(),
+        .shiftKey = keydown.getShiftKey(),
+        .altKey = keydown.getAltKey(),
+        .metaKey = keydown.getMetaKey(),
+    }, frame);
 }
 
 pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
@@ -482,34 +953,159 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         return moveFocus(frame, keyboard_event.getShiftKey() == false);
     }
 
-    if (target.is(Element.Html.Input)) |input| {
-        if (key == .Enter) {
-            return frame.submitForm(input.asElement(), input.getForm(frame), .{});
+    if (key == .Enter and event.getIsTrusted()) {
+        if (target.is(Element)) |element| {
+            if (enterFollowsLink(element)) {
+                return dispatchKeyboardClick(frame, element);
+            }
         }
+    }
 
-        // Don't handle text input for radio/checkbox
-        const input_type = input._input_type;
-        if (input_type == .radio or input_type == .checkbox) {
+    if (target.is(Element.Html.Input)) |input| {
+        if (!input.acceptsTextEntry()) {
             return;
         }
-
-        // Handle printable characters
-        if (key.isPrintable()) {
-            try input.innerInsert(key.asString(), frame);
-        }
-        return;
+        return editKey(frame, keyboard_event, input, key);
     }
 
     if (target.is(Element.Html.TextArea)) |textarea| {
-        // zig fmt: off
-        const append =
-            if (key == .Enter) "\n"
-            else if (key.isPrintable()) key.asString()
-            else return
-        ;
-        // zig fmt: on
-        return textarea.innerInsert(append, frame);
+        return editKey(frame, keyboard_event, textarea, key);
     }
+}
+
+// edit keys other than text insertion (typeChar's) are handled by Input and
+// TextArea the same
+fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: KeyboardEvent.Key) !void {
+    if (caretMove(key, ctl)) |move| {
+        // Word/paragraph motions (ctrl/alt/meta variants) aren't modeled.
+        if (keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey()) {
+            return;
+        }
+        return ctl.moveCaret(move, keyboard_event.getShiftKey(), frame);
+    }
+
+    if (key == .Backspace or key == .Delete) {
+        const forward = key == .Delete;
+        if (!keyboard_event.asEvent().getIsTrusted() or try allowEdit(frame, ctl.asElement(), null, null, deleteInputType(forward))) {
+            try ctl.innerDelete(forward, frame);
+        }
+    }
+}
+
+fn insertInto(frame: *Frame, ctl: anytype, text: []const u8) !void {
+    if (!ctl.acceptsTextEntry()) {
+        return;
+    }
+    if (try allowEdit(frame, ctl.asElement(), text, text, "insertText")) {
+        try ctl.innerInsert(text, frame);
+    }
+}
+
+// Caret movement a key's default action performs on `ctl`, if any. On a
+// single-line <input> ArrowUp/ArrowDown go to the ends of the value, as in
+// Chrome; on a <textarea> they would need line geometry, so they do nothing.
+fn caretMove(key: KeyboardEvent.Key, ctl: anytype) ?@TypeOf(ctl.*).CaretMove {
+    return switch (key) {
+        .ArrowLeft => .backward,
+        .ArrowRight => .forward,
+        .Home => .line_start,
+        .End => .line_end,
+        .ArrowUp => if (@TypeOf(ctl) == *Element.Html.Input) .line_start else null,
+        .ArrowDown => if (@TypeOf(ctl) == *Element.Html.Input) .line_end else null,
+        else => null,
+    };
+}
+
+fn deleteInputType(forward: bool) []const u8 {
+    return if (forward) "deleteContentForward" else "deleteContentBackward";
+}
+
+// pre-edit events for a trusted key's default action, can cancel the edit
+// (i.e. by returning false)
+fn allowEdit(frame: *Frame, target: *Element, before_data: ?[]const u8, text_data: ?[]const u8, input_type: []const u8) !bool {
+    {
+        const before = (try InputEvent.initTrusted(comptime .wrap("beforeinput"), .{
+            .bubbles = true,
+            .cancelable = true,
+            .composed = true,
+            .data = before_data,
+            .inputType = input_type,
+        }, frame)).asEvent();
+        if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), before)) {
+            return false;
+        }
+    }
+
+    {
+        const data = text_data orelse return true;
+        const text_event = (try TextEvent.initTrusted("textInput", .{
+            .bubbles = true,
+            .cancelable = true,
+            .view = frame.window,
+            .data = data,
+        }, frame)).asEvent();
+        return !try frame._event_manager.dispatchCancelable(target.asEventTarget(), text_event);
+    }
+}
+
+pub fn handleKeyup(frame: *Frame, target: *Node, event: *Event) !void {
+    if (event.getIsTrusted() == false) {
+        return;
+    }
+    const keyboard_event = event.is(KeyboardEvent) orelse return;
+    const key = keyboard_event.getKey();
+
+    if (key.isPrintable() == false or std.mem.eql(u8, key.asString(), " ") == false) {
+        return;
+    }
+    const element = target.is(Element) orelse return;
+    if (spaceActivates(element)) {
+        // on keyup, for a trusted event and on specific element types, space
+        // triggers a click-like event
+        return dispatchKeyboardClick(frame, element);
+    }
+}
+
+// keydown+enter or keyup+space trigger this syntthetic pointer event (under
+// specific conditions, see handleKeydown and handleKeyup).
+fn dispatchKeyboardClick(frame: *Frame, element: *Element) !void {
+    const event = try PointerEvent.initTrusted("click", .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .pointerId = -1,
+    }, frame);
+    try frame._event_manager.dispatch(element.asEventTarget(), event.asEvent());
+}
+
+// Which elements act on which key, and at which step: a link follows Enter on
+// the keydown, a button clicks on Enter's keypress (typeChar) and on Space's
+// keyup, as do checkboxes and radios for Space.
+fn enterFollowsLink(element: *Element) bool {
+    const html_element = element.is(Element.Html) orelse return false;
+    return html_element._type == .anchor and element.getAttributeInterned("href") != null;
+}
+
+fn isButton(element: *Element) bool {
+    const html_element = element.is(Element.Html) orelse return false;
+    if (html_element._type == .button) {
+        return true;
+    }
+    if (element.is(Element.Html.Input)) |input| {
+        return switch (input._input_type) {
+            .button, .submit, .reset, .image => true,
+            else => false,
+        };
+    }
+    return false;
+}
+
+fn spaceActivates(element: *Element) bool {
+    if (isButton(element)) {
+        return true;
+    }
+    const input = element.is(Element.Html.Input) orelse return false;
+    return input._input_type == .checkbox or input._input_type == .radio;
 }
 
 // Sequential focus navigation: move `document.activeElement` to the next (Tab)
@@ -545,37 +1141,10 @@ fn moveFocus(frame: *Frame, forward: bool) !void {
 
     var tw = TreeWalker.Full.Elements.init(document.asNode(), .{});
     while (tw.next()) |candidate| {
-        if (candidate.isDisabled()) {
+        const candidate_tab_index = candidate.focusTabIndex() orelse continue;
+        if (candidate_tab_index < 0) {
             continue;
         }
-        if (candidate.is(Element.Html) == null) {
-            continue;
-        }
-
-        const candidate_tab_index = blk: {
-            if (candidate.getAttributeSafe(comptime .wrap("tabindex"))) |attr| {
-                if (Element.Html.parseInteger(attr)) |tab_index| {
-                    if (tab_index < 0) {
-                        continue;
-                    }
-                    break :blk tab_index;
-                }
-                break :blk 0;
-            }
-
-            // no tab index, maybe this item isn't focusable..
-            const focusable = switch (candidate.getTag()) {
-                .button, .select, .textarea, .iframe => true,
-                .input => candidate.as(Element.Html.Input)._input_type != .hidden,
-                .anchor, .area => candidate.getAttributeSafe(comptime .wrap("href")) != null,
-                else => false,
-            };
-            if (focusable == false) {
-                continue;
-            }
-
-            break :blk 0;
-        };
 
         if (edge == null or focusOrderBefore(candidate, candidate_tab_index, edge.?, edge_tab_index) == forward) {
             edge = candidate;
@@ -620,20 +1189,22 @@ fn focusOrderBefore(a: *Element, a_tab_index: i32, b: *Element, b_tab_index: i32
     return a_tab_index < b_tab_index;
 }
 
-// insertText is a shortcut to insert text into the active element.
+/// Text input without a key press (IME, paste): beforeinput but no keypress.
 pub fn insertText(frame: *Frame, v: []const u8) !void {
     const html_element = frame.document._active_element orelse return;
 
     if (html_element.is(Element.Html.Input)) |input| {
-        const input_type = input._input_type;
-        if (input_type == .radio or input_type == .checkbox) {
-            return;
-        }
-
-        return input.innerInsert(v, frame);
+        return insertInto(frame, input, v);
     }
 
     if (html_element.is(Element.Html.TextArea)) |textarea| {
-        return textarea.innerInsert(v, frame);
+        return insertInto(frame, textarea, v);
     }
 }
+
+pub const Modifiers = struct {
+    ctrl: bool = false,
+    shift: bool = false,
+    alt: bool = false,
+    meta: bool = false,
+};

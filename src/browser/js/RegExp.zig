@@ -35,7 +35,7 @@ pub const Flag = struct {
     pub const unicode: c_int = v8.kRegExpUnicode;
     pub const dot_all: c_int = v8.kRegExpDotAll;
     pub const linear: c_int = v8.kRegExpLinear;
-    pub const has_inSelfdices: c_int = v8.kRegExpHasIndices;
+    pub const has_indices: c_int = v8.kRegExpHasIndices;
     pub const unicode_sets: c_int = v8.kRegExpUnicodeSets;
 };
 

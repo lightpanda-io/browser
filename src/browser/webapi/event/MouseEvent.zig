@@ -34,14 +34,6 @@ const MouseEvent = @This();
 
 pub const Proto = UIEvent;
 
-pub const MouseButton = enum(u8) {
-    main = 0,
-    auxiliary = 1,
-    secondary = 2,
-    fourth = 3,
-    fifth = 4,
-};
-
 pub const Type = union(enum) {
     generic,
     pointer_event: *PointerEvent,
@@ -53,8 +45,7 @@ _type: Type,
 _proto: *UIEvent,
 
 _alt_key: bool,
-// Per spec a short; the MouseButton enum only names the standard buttons,
-// any value is allowed.
+// Per spec a short: 0-4 are the standard buttons, but any value is allowed.
 _button: i16,
 _buttons: u16,
 _client_x: f64,
@@ -67,7 +58,7 @@ _screen_x: f64,
 _screen_y: f64,
 _shift_key: bool,
 
-pub const MouseEventOptions = struct {
+const MouseEventOptions = struct {
     altKey: bool = false,
     button: i32 = 0,
     buttons: u16 = 0,
@@ -152,16 +143,34 @@ pub fn getButton(self: *const MouseEvent) i16 {
     return self._button;
 }
 
-pub fn getButtons(self: *const MouseEvent) u16 {
+fn getButtons(self: *const MouseEvent) u16 {
     return self._buttons;
 }
 
-pub fn getClientX(self: *const MouseEvent) f64 {
-    return self._client_x;
+// Chrome exposes fractional coordinates on PointerEvent only: MouseEvent and
+// its other subclasses floor them to integers for web compatibility, even
+// though CSSOM-View types the getters as double.
+// https://drafts.csswg.org/cssom-view/#extensions-to-the-mouseevent-interface
+fn compatCoordinate(self: *const MouseEvent, value: f64) f64 {
+    return switch (self._type) {
+        .pointer_event => {
+            const ty = self._proto._proto._type_string;
+            if (ty.eql(comptime .wrap("click")) or ty.eql(comptime .wrap("auxclick")) or ty.eql(comptime .wrap("contextmenu"))) {
+                // these "click-like" event types also floor
+                return @floor(value);
+            }
+            return value;
+        },
+        else => @floor(value),
+    };
 }
 
-pub fn getClientY(self: *const MouseEvent) f64 {
-    return self._client_y;
+fn getClientX(self: *const MouseEvent) f64 {
+    return self.compatCoordinate(self._client_x);
+}
+
+fn getClientY(self: *const MouseEvent) f64 {
+    return self.compatCoordinate(self._client_y);
 }
 
 pub fn getCtrlKey(self: *const MouseEvent) bool {
@@ -172,26 +181,26 @@ pub fn getMetaKey(self: *const MouseEvent) bool {
     return self._meta_key;
 }
 
-pub fn getPageX(self: *const MouseEvent) f64 {
+fn getPageX(self: *const MouseEvent) f64 {
     // this should be clientX + window.scrollX
-    return self._client_x;
+    return self.compatCoordinate(self._client_x);
 }
 
-pub fn getPageY(self: *const MouseEvent) f64 {
+fn getPageY(self: *const MouseEvent) f64 {
     // this should be clientY + window.scrollY
-    return self._client_y;
+    return self.compatCoordinate(self._client_y);
 }
 
-pub fn getRelatedTarget(self: *const MouseEvent) ?*EventTarget {
+fn getRelatedTarget(self: *const MouseEvent) ?*EventTarget {
     return self._related_target;
 }
 
-pub fn getScreenX(self: *const MouseEvent) f64 {
-    return self._screen_x;
+fn getScreenX(self: *const MouseEvent) f64 {
+    return self.compatCoordinate(self._screen_x);
 }
 
-pub fn getScreenY(self: *const MouseEvent) f64 {
-    return self._screen_y;
+fn getScreenY(self: *const MouseEvent) f64 {
+    return self.compatCoordinate(self._screen_y);
 }
 
 pub fn getShiftKey(self: *const MouseEvent) bool {
@@ -199,15 +208,15 @@ pub fn getShiftKey(self: *const MouseEvent) bool {
 }
 
 // Deprecated: tracks the same value as offsetX/clientX in the absence of layout.
-pub fn getLayerX(self: *const MouseEvent) f64 {
-    return self._client_x;
+fn getLayerX(self: *const MouseEvent) f64 {
+    return self.compatCoordinate(self._client_x);
 }
 
-pub fn getLayerY(self: *const MouseEvent) f64 {
-    return self._client_y;
+fn getLayerY(self: *const MouseEvent) f64 {
+    return self.compatCoordinate(self._client_y);
 }
 
-pub fn getModifierState(self: *const MouseEvent, key: []const u8) bool {
+fn getModifierState(self: *const MouseEvent, key: []const u8) bool {
     if (std.mem.eql(u8, key, "Alt") or std.mem.eql(u8, key, "AltGraph")) return self._alt_key;
     if (std.mem.eql(u8, key, "Control")) return self._ctrl_key;
     if (std.mem.eql(u8, key, "Shift")) return self._shift_key;
@@ -216,7 +225,7 @@ pub fn getModifierState(self: *const MouseEvent, key: []const u8) bool {
     return false;
 }
 
-pub fn initMouseEvent(
+fn initMouseEvent(
     self: *MouseEvent,
     typ: []const u8,
     bubbles: ?bool,

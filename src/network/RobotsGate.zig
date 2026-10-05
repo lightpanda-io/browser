@@ -30,11 +30,11 @@ const ArenaPool = @import("../ArenaPool.zig");
 const http = @import("http.zig");
 const Robots = @import("Robots.zig");
 const Network = @import("Network.zig");
-const Transfer = @import("HttpClient.zig").Transfer;
+const HttpClient = @import("HttpClient.zig");
 const SingleFlight = @import("SingleFlight.zig");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
+const Transfer = HttpClient.Transfer;
 
 const RobotsGate = @This();
 
@@ -51,18 +51,11 @@ pub fn check(self: *RobotsGate, transfer: *Transfer) !Result {
     const url = transfer.req.url;
     const robots_url = try URL.getRobotsUrl(transfer.arena.allocator(), url);
 
-    if (self.network.robot_store.get(robots_url)) |robot_entry| {
-        switch (robot_entry) {
+    if (self.network.robot_store.checkPath(robots_url, URL.getPathname(url))) |decision| {
+        switch (decision) {
             .allowed => return .allowed,
-            .disallowed => {
-                log.warn(.http, "blocked by robots", .{ .url = url });
-                return .blocked;
-            },
-            .present => |robots| {
-                if (robots.isAllowed(URL.getPathname(url))) {
-                    return .allowed;
-                }
-                log.warn(.http, "blocked by robots", .{ .url = url });
+            .blocked => {
+                log.debug(.http, "blocked by robots", .{ .url = url });
                 return .blocked;
             },
         }
@@ -93,20 +86,19 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
     const arena = try client.arena_pool.acquire(.small, "RobotsGate.RobotsContext");
     errdefer arena.release();
 
-    const owned_url = try arena.dupeZ(u8, robots_url);
+    const owned_url = try arena.dupeSentinel(u8, robots_url, 0);
     const robots_ctx = try arena.create(RobotsContext);
     robots_ctx.* = .{
         .gate = self,
         .buffer = .empty,
         .arena = arena,
-        .arena_pool = client.arena_pool,
         .robots_url = owned_url,
     };
 
     log.debug(.browser, "fetching robots.txt", .{ .robots_url = owned_url });
 
-    // Only the parent's frame/loader ids (CDP correlation) and notification
-    // carry over — no cookies, credentials, headers, or timeout.
+    // Ownerless: no cookies, credentials, headers, or timeout. We attribute to
+    // the parent for CDP correlation
     const fetch_transfer = try client.newRequest(.{
         .url = owned_url,
         .method = .GET,
@@ -116,8 +108,9 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
         .document_frame_id = transfer.req.document_frame_id,
         .loader_id = transfer.req.loader_id,
         .notification = transfer.req.notification,
-        .cookie_jar = null,
-        .cookie_origin = owned_url,
+        .origin = null,
+        .credentials_mode = .omit,
+        .request_mode = .no_cors,
         .ctx = robots_ctx,
         .header_callback = RobotsContext.headerCallback,
         .data_callback = RobotsContext.dataCallback,
@@ -134,26 +127,35 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
     fetch_transfer.submit() catch {};
 }
 
+const Outcome = union(enum) {
+    decision: Robots.RobotStore.Decision,
+    robots: Robots.Robots,
+    challenged,
+};
+
 // The robots.txt fetch resolved: hand every waiter back to the pipeline,
 // each judged against its own path. No store entry (fetch failed, or a 200
 // whose body never got parsed) fails open.
-fn flushPending(self: *RobotsGate, robots_url: []const u8) void {
+fn flushPending(self: *RobotsGate, robots_url: []const u8, outcome: Outcome) void {
     var queued = self.single_flight.take(robots_url) orelse return;
     defer queued.deinit(self.single_flight.allocator);
 
-    const robot_entry = self.network.robot_store.get(robots_url);
     for (queued.items) |transfer| {
         transfer.unpark();
 
-        const allowed = if (robot_entry) |entry| switch (entry) {
-            .allowed => true,
-            .disallowed => false,
-            .present => |robots| robots.isAllowed(URL.getPathname(transfer.req.url)),
-        } else true;
+        const decision: Robots.RobotStore.Decision = switch (outcome) {
+            .decision => |d| d,
+            .robots => |r| if (r.isAllowed(URL.getPathname(transfer.req.url))) .allowed else .blocked,
+            .challenged => {
+                lp.metrics.robots_access.incr(.deny);
+                transfer.failAsync(error.BotChallenge);
+                continue;
+            },
+        };
 
-        if (!allowed) {
+        if (decision == .blocked) {
             lp.metrics.robots_access.incr(.deny);
-            log.warn(.http, "blocked by robots", .{ .url = transfer.req.url });
+            log.debug(.http, "blocked by robots", .{ .url = transfer.req.url });
             transfer.failAsync(error.RobotsBlocked);
             continue;
         }
@@ -170,10 +172,10 @@ fn flushPending(self: *RobotsGate, robots_url: []const u8) void {
 const RobotsContext = struct {
     gate: *RobotsGate,
     arena: *lp.Arena,
-    arena_pool: *ArenaPool,
     robots_url: [:0]const u8,
     buffer: std.ArrayList(u8),
     status: u16 = 0,
+    challenge: ?HttpClient.BotChallenge = null,
 
     fn headerCallback(transfer: *Transfer) anyerror!Transfer.HeaderResult {
         const self: *RobotsContext = @ptrCast(@alignCast(transfer.req.ctx));
@@ -181,10 +183,9 @@ const RobotsContext = struct {
             log.debug(.browser, "robots status", .{ .status = hdr.status, .robots_url = self.robots_url });
             self.status = hdr.status;
         }
+        self.challenge = transfer.botChallenge();
         lp.metrics.robots_status.incr(http.statusCategory(self.status));
-        if (transfer.getContentLength()) |cl| {
-            try self.buffer.ensureTotalCapacityPrecise(self.arena.allocator(), cl);
-        }
+        try self.buffer.ensureTotalCapacityPrecise(self.arena.allocator(), transfer.bodyLen());
         return .proceed;
     }
 
@@ -200,27 +201,40 @@ const RobotsContext = struct {
         const robots_url = self.robots_url;
         const network = self.gate.network;
 
+        if (self.challenge) |challenge| {
+            // Nothing here can solve it, but the challenge might be gone by
+            // the next request, so don't cache it.
+            log.warn(.http, "robots.txt bot challenge", .{
+                .url = robots_url,
+                .status = self.status,
+                .provider = challenge,
+            });
+            self.settle(.{ .outcome = .challenged, .cache = false });
+            return;
+        }
+
         switch (self.status) {
             200 => {
-                if (self.buffer.items.len > 0) {
-                    const robots: ?Robots = network.robot_store.robotsFromBytes(
-                        network.config.http_headers.user_agent,
-                        self.buffer.items,
-                    ) catch |err| blk: {
-                        // We only return an error if an allocation or something fails.
-                        // Our parser does already leniently handle malformed input and takes whichever rules it can parse.
-                        // On this case of an allocation failure, it is our fault so we put it as disallowed.
-                        log.warn(.browser, "error while parsing robots.txt", .{ .robots_url = robots_url, .err = err });
-                        try network.robot_store.putDisallowed(robots_url);
-                        break :blk null;
-                    };
-                    if (robots) |r| {
-                        try network.robot_store.put(robots_url, r);
-                    }
-                } else {
+                if (self.buffer.items.len == 0) {
                     // Empty robots.txt means we can short-circuit the allowed path.
-                    try network.robot_store.putAllowed(robots_url);
+                    self.settle(.{ .outcome = .{ .decision = .allowed } });
+                    return;
                 }
+
+                const robots = network.robot_store.robotsFromBytes(
+                    network.config.http_headers.user_agent,
+                    self.buffer.items,
+                ) catch |err| {
+                    // We only return an error if an allocation or something fails.
+                    // Our parser does already leniently handle malformed input and takes whichever rules it can parse.
+                    // On this case of an allocation failure, it is our fault so we put it as disallowed.
+                    log.debug(.browser, "error while parsing robots.txt", .{ .robots_url = robots_url, .err = err });
+                    self.settle(.{ .outcome = .{ .decision = .blocked } });
+                    return;
+                };
+
+                // BE CAREFUL: robots can be invalidated after this call
+                self.settle(.{ .outcome = .{ .robots = robots } });
             },
             // Unauthorized/Forbidden: treat as fully disallowed since we can't verify permissions.
             401, 403 => {
@@ -228,40 +242,39 @@ const RobotsContext = struct {
                     .url = robots_url,
                     .status = self.status,
                 });
-                try network.robot_store.putDisallowed(robots_url);
+                self.settle(.{ .outcome = .{ .decision = .blocked } });
             },
             // RFC9309: Unavailable (400-499) means that we may access any resources on the server.
             400, 402, 404...499 => {
                 log.debug(.http, "robots.txt unavailable", .{ .url = robots_url });
-                try network.robot_store.putAllowed(robots_url);
+                self.settle(.{ .outcome = .{ .decision = .allowed } });
             },
             // RFC9309: Unreachable (500-599) means that we are completely disallowed.
             500...599 => {
-                log.warn(.http, "robots.txt unreachable", .{
+                log.debug(.http, "robots.txt unreachable", .{
                     .url = robots_url,
                     .status = self.status,
                 });
-                try network.robot_store.putDisallowed(robots_url);
+                self.settle(.{ .outcome = .{ .decision = .blocked } });
             },
             else => {
                 log.debug(.http, "unexpected status on robots", .{
                     .url = robots_url,
                     .status = self.status,
                 });
-                try network.robot_store.putDisallowed(robots_url);
+                self.settle(.{ .outcome = .{ .decision = .blocked } });
             },
         }
-
-        // If anything above threw, error_callback fires next and resolves
-        // instead — resolve() must run exactly once.
-        self.resolve();
     }
 
     fn errorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
 
-        log.warn(.http, "robots fetch failed", .{ .err = err });
-        self.resolve();
+        log.debug(.http, "robots fetch failed", .{ .err = err });
+        self.settle(.{
+            .outcome = .{ .decision = .allowed },
+            .cache = false,
+        });
     }
 
     fn shutdownCallback(ctx_ptr: *anyopaque) void {
@@ -274,10 +287,35 @@ const RobotsContext = struct {
         arena.release();
     }
 
-    fn resolve(self: *RobotsContext) void {
-        const gate = self.gate;
+    const SettleOptions = struct {
+        outcome: RobotsGate.Outcome,
+        cache: bool = true,
+    };
+
+    fn settle(self: *RobotsContext, options: SettleOptions) void {
         const arena = self.arena;
-        gate.flushPending(self.robots_url);
-        arena.release();
+        defer arena.release();
+
+        const gate = self.gate;
+        const network = gate.network;
+
+        gate.flushPending(self.robots_url, options.outcome);
+
+        if (options.cache) {
+            switch (options.outcome) {
+                .decision => |d| switch (d) {
+                    .allowed => network.robot_store.putAllowed(self.robots_url) catch |err| {
+                        log.warn(.browser, "cache robots decision", .{ .url = self.robots_url, .err = err });
+                    },
+                    .blocked => network.robot_store.putDisallowed(self.robots_url) catch |err| {
+                        log.warn(.browser, "cache robots decision", .{ .url = self.robots_url, .err = err });
+                    },
+                },
+                .robots => |r| network.robot_store.put(self.robots_url, r) catch |err| {
+                    log.warn(.browser, "cache robots rules", .{ .url = self.robots_url, .err = err });
+                },
+                .challenged => {},
+            }
+        }
     }
 };

@@ -68,7 +68,7 @@ pub fn getType(self: *const CSSRule) u16 {
         // `@layer` rules postdate the legacy numeric type constants, so
         // their `type` is 0 (CSSOM §6.4.1) — same as unknown at-rules.
         .layer, .unknown => 0,
-        else => @as(u16, @intFromEnum(std.meta.activeTag(self._type))) + 1,
+        else => @as(u16, @backingInt(std.meta.activeTag(self._type))) + 1,
     };
 }
 
@@ -76,11 +76,11 @@ pub fn getCssText(self: *const CSSRule, _: *Frame) []const u8 {
     return self._text;
 }
 
-pub fn getParentRule(_: *const CSSRule) ?*CSSRule {
+fn getParentRule(_: *const CSSRule) ?*CSSRule {
     return null;
 }
 
-pub fn getParentStyleSheet(self: *const CSSRule) ?*CSSRule {
+fn getParentStyleSheet(self: *const CSSRule) ?*CSSRule {
     _ = self;
     return null;
 }

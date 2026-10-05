@@ -82,7 +82,7 @@ _on_open: ?js.Function.Global = null,
 _on_message: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
 
-pub const ReadyState = enum(u8) {
+const ReadyState = enum(u8) {
     connecting = 0,
     open = 1,
     closed = 2,
@@ -132,7 +132,7 @@ pub fn deinit(self: *EventSource, _: *Page) void {
     self._ready_state = .closed;
     if (self._transfer) |transfer| {
         self._transfer = null;
-        transfer.abort(error.Abort);
+        transfer.cancel();
     }
 
     if (self._on_open) |func| {
@@ -162,8 +162,6 @@ fn asEventTarget(self: *EventSource) *EventTarget {
 
 fn connect(self: *EventSource) !void {
     const exec = self._exec;
-    const session = exec.session;
-
     self._skip_lf = false;
     self._bom_checked = false;
     self._line_buf.clearRetainingCapacity();
@@ -174,19 +172,16 @@ fn connect(self: *EventSource) !void {
     try self._id_buf.appendSlice(self._arena.allocator(), self._last_event_id.items);
 
     const same_origin = exec.isSameOrigin(self._url);
-    const cookie_support = self._with_credentials or same_origin;
 
     const transfer = try exec.newRequest(.{
         .ctx = self,
         .url = self._url,
         .method = .GET,
-        .frame_id = exec.frameId(),
-        .loader_id = exec.loaderId(),
-        .cookie_jar = if (cookie_support) &session.cookie_jar else null,
-        .cookie_origin = exec.url.*,
+        .origin = exec.origin(),
+        .request_mode = .cors,
+        .credentials_mode = if (self._with_credentials) .include else .same_origin,
         .resource_type = .eventsource,
         .streaming = true,
-        .notification = session.notification,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
@@ -206,7 +201,7 @@ fn connect(self: *EventSource) !void {
             // document's origin ("null" for opaque origins, like Chrome).
             try transfer.setHeader("Origin", exec.origin() orelse "null", .{});
         }
-        try exec.headersForRequest(transfer);
+        try exec.headersForRequest(transfer, .{});
     }
 
     self._transfer = transfer;
@@ -221,7 +216,7 @@ fn reconnectTask(self: *EventSource) void {
         return;
     }
     self.connect() catch |err| {
-        log.warn(.http, "EventSource reconnect", .{ .err = err, .url = self._url });
+        log.debug(.http, "EventSource reconnect", .{ .err = err, .url = self._url });
         self.failConnection();
     };
 }
@@ -241,7 +236,7 @@ fn deactivate(self: *EventSource) void {
     self._active = false;
     if (self._transfer) |transfer| {
         self._transfer = null;
-        transfer.abort(error.Abort);
+        transfer.cancel();
     }
     self.releaseRef(self._exec.page);
 }
@@ -252,7 +247,7 @@ fn failConnection(self: *EventSource) void {
     }
     self._ready_state = .closed;
     self.dispatchEvent("error", self._on_error) catch |err| {
-        log.err(.http, "EventSource error event", .{ .err = err, .url = self._url });
+        log.debug(.http, "EventSource error event", .{ .err = err, .url = self._url });
     };
     self.deactivate();
 }
@@ -263,7 +258,7 @@ fn reestablish(self: *EventSource) void {
     }
     self._ready_state = .connecting;
     self.dispatchEvent("error", self._on_error) catch |err| {
-        log.err(.http, "EventSource error event", .{ .err = err, .url = self._url });
+        log.debug(.http, "EventSource error event", .{ .err = err, .url = self._url });
     };
     // the error handler may have close()d us
     if (self._ready_state == .closed) {
@@ -336,7 +331,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     self._exec.js.localScope(&ls);
     defer ls.deinit();
 
-    const final_url = try self._arena.dupeZ(u8, transfer.req.url);
+    const final_url = try self._arena.dupeSentinel(u8, transfer.req.url, 0);
     self._event_origin = (URL.getOrigin(self._arena.allocator(), final_url) catch null) orelse "";
 
     // https://html.spec.whatwg.org/multipage/server-sent-events.html#announce-the-connection
@@ -353,11 +348,10 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 fn corsAllowed(self: *const EventSource, transfer: *Transfer) bool {
     var allow_origin: ?[]const u8 = null;
     var allow_credentials: ?[]const u8 = null;
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
-        if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-origin")) {
+    for (transfer.responseHeaders()) |hdr| {
+        if (std.mem.eql(u8, hdr.name, "access-control-allow-origin")) {
             allow_origin = hdr.value;
-        } else if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-credentials")) {
+        } else if (std.mem.eql(u8, hdr.name, "access-control-allow-credentials")) {
             allow_credentials = hdr.value;
         }
     }
@@ -429,7 +423,7 @@ fn parse(self: *EventSource, chunk: []const u8) !void {
 
     while (rest.len > 0) {
         // lines end at CR, LF or CRLF
-        const idx = std.mem.indexOfAny(u8, rest, "\r\n") orelse {
+        const idx = std.mem.findAny(u8, rest, "\r\n") orelse {
             // no terminator; hold the partial line for the next chunk
             return self.bufferLine(rest);
         };
@@ -480,7 +474,7 @@ fn processLine(self: *EventSource) !void {
 
     var field = line;
     var value: []const u8 = "";
-    if (std.mem.indexOfScalar(u8, line, ':')) |colon| {
+    if (std.mem.findScalar(u8, line, ':')) |colon| {
         field = line[0..colon];
         value = line[colon + 1 ..];
         if (value.len > 0 and value[0] == ' ') {
@@ -505,7 +499,7 @@ fn processLine(self: *EventSource) !void {
     }
 
     if (std.mem.eql(u8, field, "id")) {
-        if (std.mem.indexOfScalar(u8, value, 0) == null) {
+        if (std.mem.findScalar(u8, value, 0) == null) {
             self._id_buf.clearRetainingCapacity();
             try self._id_buf.appendSlice(arena.allocator(), value);
         }
@@ -575,41 +569,41 @@ pub fn getUrl(self: *const EventSource) []const u8 {
     return self._url;
 }
 
-pub fn getReadyState(self: *const EventSource) u16 {
-    return @intFromEnum(self._ready_state);
+fn getReadyState(self: *const EventSource) u16 {
+    return @backingInt(self._ready_state);
 }
 
-pub fn getWithCredentials(self: *const EventSource) bool {
+fn getWithCredentials(self: *const EventSource) bool {
     return self._with_credentials;
 }
 
-pub fn getOnOpen(self: *const EventSource) ?js.Function.Global {
+fn getOnOpen(self: *const EventSource) ?js.Function.Global {
     return self._on_open;
 }
 
-pub fn setOnOpen(self: *EventSource, cb_: ?js.Function) !void {
+fn setOnOpen(self: *EventSource, cb_: ?js.Function) !void {
     if (self._on_open) |old| {
         old.release();
     }
     self._on_open = if (cb_) |cb| try cb.persistWithThis(self) else null;
 }
 
-pub fn getOnMessage(self: *const EventSource) ?js.Function.Global {
+fn getOnMessage(self: *const EventSource) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *EventSource, cb_: ?js.Function) !void {
+fn setOnMessage(self: *EventSource, cb_: ?js.Function) !void {
     if (self._on_message) |old| {
         old.release();
     }
     self._on_message = if (cb_) |cb| try cb.persistWithThis(self) else null;
 }
 
-pub fn getOnError(self: *const EventSource) ?js.Function.Global {
+fn getOnError(self: *const EventSource) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *EventSource, cb_: ?js.Function) !void {
+fn setOnError(self: *EventSource, cb_: ?js.Function) !void {
     if (self._on_error) |old| {
         old.release();
     }
@@ -627,9 +621,9 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(EventSource.init, .{});
 
-    pub const CONNECTING = bridge.property(@intFromEnum(ReadyState.connecting), .{ .template = true });
-    pub const OPEN = bridge.property(@intFromEnum(ReadyState.open), .{ .template = true });
-    pub const CLOSED = bridge.property(@intFromEnum(ReadyState.closed), .{ .template = true });
+    pub const CONNECTING = bridge.property(@backingInt(ReadyState.connecting), .{ .template = true });
+    pub const OPEN = bridge.property(@backingInt(ReadyState.open), .{ .template = true });
+    pub const CLOSED = bridge.property(@backingInt(ReadyState.closed), .{ .template = true });
 
     pub const url = bridge.accessor(EventSource.getUrl, null, .{});
     pub const readyState = bridge.accessor(EventSource.getReadyState, null, .{});

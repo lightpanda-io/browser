@@ -174,7 +174,7 @@ pub const TransformStreamDefaultController = struct {
         try self._stream._readable._controller.enqueueValue(value);
     }
 
-    pub fn doError(self: *TransformStreamDefaultController, reason: []const u8) !void {
+    fn doError(self: *TransformStreamDefaultController, reason: []const u8) !void {
         try self._stream._readable._controller.doError(reason);
     }
 

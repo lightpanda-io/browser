@@ -44,7 +44,7 @@ pub fn init(options_: ?Options, exec: *const Execution) !*TaskController {
     });
 }
 
-pub fn setPriority(self: *TaskController, priority: Scheduler.Priority, exec: *const Execution) !void {
+fn setPriority(self: *TaskController, priority: Scheduler.Priority, exec: *const Execution) !void {
     return self._proto._signal._type.task_signal.setPriority(priority, exec);
 }
 

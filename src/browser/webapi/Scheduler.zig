@@ -22,7 +22,6 @@ const js = @import("../js/js.zig");
 
 const AbortSignal = @import("AbortSignal.zig");
 
-const log = lp.log;
 const Execution = js.Execution;
 
 const Scheduler = @This();

@@ -329,7 +329,7 @@ pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !
 }
 
 pub fn setInnerText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
-    const items = try renderedTextFragment(text, frame);
+    const items = try renderedTextFragment(self.asNode().getDocument(frame), text, frame);
     try self.asElement().replaceChildren(items, frame);
 }
 
@@ -346,7 +346,7 @@ pub fn setOuterText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
     const prev = node.previousSibling();
     const next = node.nextSibling();
 
-    var items: []const Node.NodeOrText = try renderedTextFragment(text, frame);
+    var items: []const Node.NodeOrText = try renderedTextFragment(node.getDocument(frame), text, frame);
     if (items.len == 0) {
         // A fragment with no node still replaces the element with an empty Text
         // node so surrounding text can merge with it.
@@ -381,8 +381,16 @@ pub fn insertAdjacentHTML(
     frame: *Frame,
 ) !void {
     const DocumentFragment = @import("../DocumentFragment.zig");
-    const fragment = (try DocumentFragment.init(frame)).asNode();
-    try Frame.parse.htmlAsChildren(frame, fragment, html);
+
+    // The parse context is the node we insert into
+    const context_node, _ = try self.asNode().findAdjacentNodes(position, .html);
+    const context = if (context_node.is(Element)) |el|
+        if (el.is(Element.Html.Html) == null) el else null
+    else
+        null;
+
+    const fragment = (try DocumentFragment.init(self.asNode().getDocument(frame), frame)).asNode();
+    try Frame.parse.fragment(frame, fragment, html, .{ .context = context });
 
     const target_node, const prev_node = try self.asNode().findAdjacentNodes(position, .html);
 
@@ -394,11 +402,7 @@ pub fn insertAdjacentHTML(
 
 pub fn click(self: *HtmlElement, frame: *Frame) !void {
     switch (self._type) {
-        inline .button, .input, .textarea, .select => |tag| {
-            if (self.subtype(Subtype(tag)).getDisabled()) {
-                return;
-            }
-        },
+        .button, .input, .textarea, .select, .option, .optgroup => if (self.asElement().isDisabled()) return,
         else => {},
     }
 
@@ -409,22 +413,14 @@ pub fn click(self: *HtmlElement, frame: *Frame) !void {
     flags.click_in_progress = true;
     defer flags.click_in_progress = false;
 
-    const event = (try @import("../event/MouseEvent.zig").init("click", .{
+    const event = (try @import("../event/PointerEvent.zig").init("click", .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
-        .clientX = 0,
-        .clientY = 0,
+        .pointerId = -1,
     }, frame)).asEvent();
 
-    // Keep the event alive past dispatch (which runs handlers/microtasks) so we
-    // can read _prevent_default afterwards.
-    event.acquireRef();
-    defer _ = event.releaseRef(frame._page);
-
-    try frame._event_manager.dispatch(self.asEventTarget(), event);
-
-    if (event._prevent_default == false) {
+    if (!try frame._event_manager.dispatchCancelable(self.asEventTarget(), event)) {
         // toggle the popover_target
         const explicit: ?*Element = switch (self._type) {
             .button => self.subtype(Button)._popover_target,
@@ -438,7 +434,7 @@ pub fn click(self: *HtmlElement, frame: *Frame) !void {
 // TODO: Per spec, hidden is a tristate: true | false | "until-found".
 // We only support boolean for now; "until-found" would need bridge union support.
 pub fn getHidden(self: *HtmlElement) bool {
-    return self.asElement().getAttributeSafe(comptime .wrap("hidden")) != null;
+    return self.asElement().getAttributeInterned("hidden") != null;
 }
 
 pub fn setHidden(self: *HtmlElement, hidden: bool, frame: *Frame) !void {
@@ -446,6 +442,18 @@ pub fn setHidden(self: *HtmlElement, hidden: bool, frame: *Frame) !void {
         try self.asElement().setAttributeSafe(comptime .wrap("hidden"), .wrap(""), frame);
     } else {
         try self.asElement().removeAttribute(comptime .wrap("hidden"), frame);
+    }
+}
+
+pub fn getInert(self: *HtmlElement) bool {
+    return self.asElement().hasAttributeSafe(comptime .wrap("inert"));
+}
+
+pub fn setInert(self: *HtmlElement, inert: bool, frame: *Frame) !void {
+    if (inert) {
+        try self.asElement().setAttributeSafe(comptime .wrap("inert"), .wrap(""), frame);
+    } else {
+        try self.asElement().removeAttribute(comptime .wrap("inert"), frame);
     }
 }
 
@@ -471,6 +479,30 @@ pub fn setTranslate(self: *HtmlElement, translate: bool, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("translate"), .wrap(if (translate) "yes" else "no"), frame);
 }
 
+// The draggable IDL attribute reflects the enumerated content attribute:
+// "true" => true, "false" => false, anything else (or no attribute) is the
+// auto state, which defaults to true only for <img> and <a> with an href.
+// https://html.spec.whatwg.org/multipage/dnd.html#the-draggable-attribute
+pub fn getDraggable(self: *HtmlElement) bool {
+    if (self.asElement().getAttributeInterned("draggable")) |value| {
+        if (std.ascii.eqlIgnoreCase(value, "true")) {
+            return true;
+        }
+        if (std.ascii.eqlIgnoreCase(value, "false")) {
+            return false;
+        }
+    }
+    return switch (self._type) {
+        .img => true,
+        .anchor => self.asElement().getAttributeInterned("href") != null,
+        else => false,
+    };
+}
+
+pub fn setDraggable(self: *HtmlElement, draggable: bool, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("draggable"), .wrap(if (draggable) "true" else "false"), frame);
+}
+
 // accessKeyLabel: the UA-assigned shortcut for a valid (single character)
 // accesskey, or the empty string. We report an Alt+ chord like Chromium.
 pub fn getAccessKeyLabel(self: *HtmlElement, frame: *Frame) ![]const u8 {
@@ -479,7 +511,7 @@ pub fn getAccessKeyLabel(self: *HtmlElement, frame: *Frame) ![]const u8 {
     if (codepoints != 1) {
         return "";
     }
-    return std.fmt.allocPrint(frame.local_arena, "Alt+{s}", .{value});
+    return frame.local_arena.print("Alt+{s}", .{value});
 }
 
 pub fn getPopover(self: *HtmlElement) ?[]const u8 {
@@ -509,7 +541,7 @@ pub fn togglePopover(self: *HtmlElement, force: ?bool, frame: *Frame) !bool {
 }
 
 pub fn getTabIndex(self: *HtmlElement) i32 {
-    if (self.asElement().getAttributeSafe(comptime .wrap("tabindex"))) |attr| {
+    if (self.asElement().getAttributeInterned("tabindex")) |attr| {
         if (parseInteger(attr)) |tab_index| {
             return tab_index;
         }
@@ -523,12 +555,12 @@ pub fn getTabIndex(self: *HtmlElement) i32 {
 
 pub fn setTabIndex(self: *HtmlElement, value: i32, frame: *Frame) !void {
     var buf: [12]u8 = undefined;
-    const str = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    const str = std.mem.print(&buf, "{d}", .{value}) catch unreachable;
     try self.asElement().setAttributeSafe(comptime .wrap("tabindex"), .wrap(str), frame);
 }
 
 pub fn getDir(self: *HtmlElement) []const u8 {
-    return reflection.enumeratedValue(self.asElement().getAttributeSafe(comptime .wrap("dir")), &.{ "ltr", "rtl", "auto" }, "", "").?;
+    return reflection.enumeratedValue(self.asElement().getDir(), &.{ "ltr", "rtl", "auto" }, "", "").?;
 }
 
 pub fn getAccessKey(self: *HtmlElement) []const u8 {
@@ -540,7 +572,7 @@ pub fn setAccessKey(self: *HtmlElement, value: []const u8, frame: *Frame) !void 
 }
 
 pub fn getAutofocus(self: *HtmlElement) bool {
-    return self.asElement().getAttributeSafe(comptime .wrap("autofocus")) != null;
+    return self.asElement().getAttributeInterned("autofocus") != null;
 }
 
 pub fn setAutofocus(self: *HtmlElement, autofocus: bool, frame: *Frame) !void {
@@ -560,7 +592,7 @@ pub fn setNonce(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getLang(self: *HtmlElement) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("lang")) orelse "";
+    return self.asElement().getAttributeInterned("lang") orelse "";
 }
 
 pub fn setLang(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
@@ -568,7 +600,7 @@ pub fn setLang(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getTitle(self: *HtmlElement) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("title")) orelse "";
+    return self.asElement().getAttributeInterned("title") orelse "";
 }
 
 pub fn setTitle(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
@@ -585,17 +617,31 @@ pub fn setTitle(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
 // unsupported value. Spec walk per HTML §7.7.5.2 still applies — the nearest
 // ancestor with `contenteditable` wins; "false" disables. See PR #2310 for
 // the routing-vs-fail-loud discussion.
-//
-// "contenteditable" is 15 bytes — past the comptime SSO limit — so the
-// String wrap runs at runtime, mirroring the pattern in interactive.zig.
-pub fn getIsContentEditable(self: *HtmlElement) bool {
-    var current: ?*Element = self.asElement();
-    while (current) |el| : (current = el.parentElement()) {
-        const raw = el.getAttributeSafe(.wrap("contenteditable")) orelse continue;
-        if (!std.ascii.eqlIgnoreCase(raw, "false")) {
-            log.info(.not_implemented, "IsContentEditable", .{});
+/// Reflects the attribute only; `isContentEditable` stays false regardless.
+pub fn getContentEditable(self: *HtmlElement) []const u8 {
+    const raw = self.asElement().getAttributeInterned("contenteditable") orelse return "inherit";
+    if (raw.len == 0 or std.ascii.eqlIgnoreCase(raw, "true")) return "true";
+    if (std.ascii.eqlIgnoreCase(raw, "false")) return "false";
+    if (std.ascii.eqlIgnoreCase(raw, "plaintext-only")) return "plaintext-only";
+    return "inherit";
+}
+
+pub fn setContentEditable(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
+    const el = self.asElement();
+    if (std.ascii.eqlIgnoreCase(value, "inherit")) {
+        return el.removeAttribute(.wrap("contenteditable"), frame);
+    }
+    inline for (.{ "true", "false", "plaintext-only" }) |keyword| {
+        if (std.ascii.eqlIgnoreCase(value, keyword)) {
+            return el.setAttributeSafe(.wrap("contenteditable"), .wrap(keyword), frame);
         }
-        break;
+    }
+    return error.SyntaxError;
+}
+
+pub fn getIsContentEditable(self: *HtmlElement) bool {
+    if (self.asElement().isEditable()) {
+        log.info(.not_implemented, "IsContentEditable", .{});
     }
     return false;
 }
@@ -613,7 +659,7 @@ pub fn getAttributeFunction(
     const attr = element.getAttributeSafe(.wrap(@tagName(listener_type))) orelse return null;
     const function = frame.js.stringToPersistedFunction(attr, &.{"event"}, &.{}) catch |err| {
         // Not a valid expression; log this to find out if its something we should be supporting.
-        log.warn(.js, "Html.getAttributeFunction", .{
+        log.debug(.js, "Html.getAttributeFunction", .{
             .expression = attr,
             .err = err,
         });
@@ -1589,8 +1635,11 @@ fn handleChildElement(
     // is hidden through its parent. If you can el.innerText on an element, the
     // visibility of el.parent doesn't matter. So we only care about visibility
     // on the element itself and then on each child. This is much simpler too.
-    if (state.frame._style_manager.hasDisplayNone(he.asElement())) {
-        return;
+    const el = he.asElement();
+    if (el.ownerFrame(state.frame)) |owner| {
+        if (owner._style_manager.hasDisplayNone(el)) {
+            return;
+        }
     }
 
     if (he._type == .br) {
@@ -1748,13 +1797,13 @@ fn mergeTextNodes(left_node: *Node, right_node: *Node, frame: *Frame) !bool {
     return true;
 }
 
-fn renderedTextFragment(value: []const u8, frame: *Frame) ![]Node.NodeOrText {
+fn renderedTextFragment(document: *const Node.Document, value: []const u8, frame: *Frame) ![]Node.NodeOrText {
     const arena = frame.local_arena;
     var nodes: std.ArrayList(Node.NodeOrText) = .empty;
 
     var rest = value;
     while (true) {
-        const text_end = std.mem.indexOfAny(u8, rest, "\r\n") orelse rest.len;
+        const text_end = std.mem.findAny(u8, rest, "\r\n") orelse rest.len;
         if (text_end > 0) {
             try nodes.append(arena, .{ .text = rest[0..text_end] });
         }
@@ -1767,7 +1816,7 @@ fn renderedTextFragment(value: []const u8, frame: *Frame) ![]Node.NodeOrText {
         // break (so "\r\n" is one <br> but "\n\n" is two).
         const break_len: usize = if (rest[0] == '\r' and rest.len > 1 and rest[1] == '\n') 2 else 1;
 
-        try nodes.append(arena, .{ .node = try Frame.node_factory.createElementNS(frame, .html, "br", null) });
+        try nodes.append(arena, .{ .node = try Frame.node_factory.createElementNS(document, .html, "br", null) });
         rest = rest[break_len..];
     }
 }
@@ -1808,13 +1857,16 @@ pub const JsApi = struct {
     pub const accessKey = bridge.accessor(HtmlElement.getAccessKey, HtmlElement.setAccessKey, .{ .ce_reactions = true });
     pub const autofocus = bridge.accessor(HtmlElement.getAutofocus, HtmlElement.setAutofocus, .{ .ce_reactions = true });
     pub const dir = reflect.enumerated("dir", &.{ "ltr", "rtl", "auto" }, .{});
+    pub const draggable = bridge.accessor(HtmlElement.getDraggable, HtmlElement.setDraggable, .{ .ce_reactions = true });
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
+    pub const inert = bridge.accessor(HtmlElement.getInert, HtmlElement.setInert, .{ .ce_reactions = true });
     pub const translate = bridge.accessor(HtmlElement.getTranslate, HtmlElement.setTranslate, .{ .ce_reactions = true });
     pub const accessKeyLabel = bridge.accessor(HtmlElement.getAccessKeyLabel, null, .{});
     pub const popover = bridge.accessor(HtmlElement.getPopover, HtmlElement.setPopover, .{ .ce_reactions = true });
     pub const showPopover = bridge.function(HtmlElement.showPopover, .{});
     pub const hidePopover = bridge.function(HtmlElement.hidePopover, .{});
     pub const togglePopover = bridge.function(HtmlElement.togglePopover, .{});
+    pub const contentEditable = bridge.accessor(HtmlElement.getContentEditable, HtmlElement.setContentEditable, .{ .ce_reactions = true });
     pub const isContentEditable = bridge.accessor(HtmlElement.getIsContentEditable, null, .{});
     pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{ .ce_reactions = true });
     pub const nonce = bridge.accessor(HtmlElement.getNonce, HtmlElement.setNonce, .{ .ce_reactions = true });

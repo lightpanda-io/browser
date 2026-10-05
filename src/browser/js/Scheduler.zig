@@ -127,7 +127,7 @@ pub fn run(self: *Scheduler) !void {
         self.generation +%= 1;
 
         const repeat_in_ms = task.callback(task.ctx) catch |err| {
-            log.warn(.scheduler, "task.callback", .{ .name = task.name, .err = err });
+            log.debug(.scheduler, "task.callback", .{ .name = task.name, .err = err });
             continue;
         };
 

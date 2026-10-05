@@ -5,6 +5,13 @@
 <form id="form_with_name" name="myForm"></form>
 <form id="form_without_name"></form>
 
+<form id="form_controls">
+  <input name="user" autocomplete="off">
+  <input id="pass" type="password" autocomplete="off">
+  <input type="radio" name="choice" value="1" autocomplete="off">
+  <input type="radio" name="choice" value="2" autocomplete="off">
+</form>
+
 <script id="name_initial">
 {
   testing.expectEqual('myForm', $('#form_with_name').name)
@@ -37,6 +44,27 @@
     form.action = 'https://lightpanda.io/hello';
     testing.expectEqual('https://lightpanda.io/hello', form.action)
   }
+</script>
+
+<script id="direct_form_named_access">
+{
+  const form = $('#form_controls');
+  testing.expectEqual(form.elements.user, form.user);
+  testing.expectEqual(form.elements.pass, form.pass);
+
+  // more than one match: a live RadioNodeList
+  testing.expectTrue(form.choice instanceof RadioNodeList);
+  testing.expectEqual(2, form.choice.length);
+  testing.expectEqual('', form.choice.value);
+  form.choice[1].checked = true;
+  testing.expectEqual('2', form.choice.value);
+  form.choice[1].checked = false;
+
+  testing.expectEqual(undefined, form.nope);
+  testing.expectTrue('user' in form);
+  testing.expectFalse('nope' in form);
+  testing.expectFalse(Object.keys(form).includes('user'));
+}
 </script>
 
 <!-- Test fixtures for form.method -->
@@ -659,5 +687,26 @@
 
   new FormData(form);
   testing.expectEqual('InvalidStateError', caught);
+}
+</script>
+
+<script id="elements_named_presence">
+{
+  const els = $('#form_controls').elements;
+
+  testing.expectEqual(true, 'user' in els);
+  testing.expectEqual(true, 'pass' in els);
+  testing.expectEqual(true, Object.hasOwn(els, 'choice'));
+
+  testing.expectEqual(false, 'nonExistent' in els);
+  testing.expectEqual(false, Object.hasOwn(els, 'nonExistent'));
+  testing.expectEqual(false, '' in els);
+
+  // a duplicated name is still one present property, backed by a RadioNodeList
+  testing.expectEqual('RadioNodeList', els.choice.constructor.name);
+
+  // [LegacyUnenumerableNamedProperties]
+  testing.expectEqual(false, Object.keys(els).includes('user'));
+  testing.expectEqual(false, Object.getOwnPropertyDescriptor(els, 'user').enumerable);
 }
 </script>

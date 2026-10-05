@@ -100,21 +100,24 @@ pub const Command = union(enum) {
         }
 
         fn schema(self: ToolCall) *const Schema {
-            return &Schema.all()[@intFromEnum(self.tool)];
+            return &Schema.all()[@backingInt(self.tool)];
         }
 
         /// Skip the line when the recorded form would not round-trip:
-        /// - no `selector` AND (tool needs one OR only locator is the
-        ///   ephemeral `backendNodeId`);
+        /// - an arg the replay requires (`Tool.replayRequires`) is missing;
+        /// - the only locator is the ephemeral `backendNodeId`;
         /// - a string field can't be quoted unambiguously.
         fn isRecorded(self: ToolCall) bool {
             if (!self.tool.isRecorded()) return false;
             const s = self.schema();
-            const args = self.args orelse return s.required.len == 0 and !self.tool.needsLocator();
-            if (args != .object) return !self.tool.needsLocator();
+            const required = self.tool.replayRequires();
+            const args = self.args orelse return s.required.len == 0 and required.len == 0;
+            if (args != .object) return required.len == 0;
 
-            const has_selector = args.object.contains("selector");
-            if (!has_selector and (self.tool.needsLocator() or args.object.contains("backendNodeId"))) return false;
+            if (!args.object.contains("selector") and args.object.contains("backendNodeId")) return false;
+            for (required) |field| {
+                if (!args.object.contains(field)) return false;
+            }
 
             const positional = s.isBarePositional(args.object);
 
@@ -157,10 +160,10 @@ pub const Command = union(enum) {
 
         const split = Schema.splitNameRest(trimmed[1..]) orelse return error.MissingName;
 
-        inline for (std.meta.fields(LlmCommand)) |f| {
-            if (std.ascii.eqlIgnoreCase(split.name, f.name)) {
+        inline for (@typeInfo(LlmCommand).@"enum".field_names) |field_name| {
+            if (std.ascii.eqlIgnoreCase(split.name, field_name)) {
                 if (split.rest.len > 0) return error.MalformedKv;
-                return .{ .llm = @field(LlmCommand, f.name) };
+                return .{ .llm = @field(LlmCommand, field_name) };
             }
         }
 
@@ -305,12 +308,12 @@ fn writeExtractSchema(
     schema_src: []const u8,
 ) (std.Io.Writer.Error || error{OutOfMemory})!void {
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, schema_src, .{}) catch {
-        return writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.indexOfScalar(u8, schema_src, '\n') != null });
+        return writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.findScalar(u8, schema_src, '\n') != null });
     };
     if (parsed == .object) {
         try writeJsValue(arena, writer, parsed, .{});
     } else {
-        try writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.indexOfScalar(u8, schema_src, '\n') != null });
+        try writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.findScalar(u8, schema_src, '\n') != null });
     }
 }
 
@@ -327,11 +330,11 @@ fn writeJsonString(writer: *std.Io.Writer, value: []const u8) std.Io.Writer.Erro
 }
 
 fn canUseTemplateLiteral(value: []const u8) bool {
-    if (std.mem.indexOfScalar(u8, value, '\n') == null) return false;
-    if (std.mem.indexOfScalar(u8, value, '`') != null) return false;
-    if (std.mem.indexOf(u8, value, "${") != null) return false;
-    if (std.mem.indexOfScalar(u8, value, '\\') != null) return false;
-    if (std.mem.indexOfScalar(u8, value, '\r') != null) return false;
+    if (std.mem.findScalar(u8, value, '\n') == null) return false;
+    if (std.mem.findScalar(u8, value, '`') != null) return false;
+    if (std.mem.find(u8, value, "${") != null) return false;
+    if (std.mem.findScalar(u8, value, '\\') != null) return false;
+    if (std.mem.findScalar(u8, value, '\r') != null) return false;
     return true;
 }
 
@@ -496,6 +499,22 @@ test "isRecorded / producesData via tool flags" {
 
     const login: Command = .{ .llm = .login };
     try testing.expect(!login.isRecorded());
+}
+
+test "isRecorded: screenshot needs a path to replay" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    try testing.expect(!Command.fromToolCall(.screenshot, null).isRecorded());
+
+    var without: std.json.ObjectMap = .empty;
+    try without.put(aa, "selector", .{ .string = "#main" });
+    try testing.expect(!Command.fromToolCall(.screenshot, .{ .object = without }).isRecorded());
+
+    var with: std.json.ObjectMap = .empty;
+    try with.put(aa, "path", .{ .string = "shot.png" });
+    try testing.expect(Command.fromToolCall(.screenshot, .{ .object = with }).isRecorded());
 }
 
 test "isRecorded: args shape and locator semantics" {

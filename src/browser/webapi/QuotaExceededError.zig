@@ -65,11 +65,11 @@ pub fn throw(local: *const js.Local, exec: *const Execution) error{ TryCatchReth
     return error.TryCatchRethrow;
 }
 
-pub fn getQuota(self: *const QuotaExceededError) ?f64 {
+fn getQuota(self: *const QuotaExceededError) ?f64 {
     return self._quota;
 }
 
-pub fn getRequested(self: *const QuotaExceededError) ?f64 {
+fn getRequested(self: *const QuotaExceededError) ?f64 {
     return self._requested;
 }
 

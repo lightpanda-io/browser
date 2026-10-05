@@ -78,7 +78,7 @@ pub fn decode(alloc: Allocator, in: BinInput) ![]const u8 {
     // Step 3: a length % 4 == 1 can't represent valid base64.
     if (src.len % 4 == 1) return error.InvalidCharacterError;
     // Any "=" still present is misplaced padding.
-    if (std.mem.indexOfScalar(u8, src, '=') != null) return error.InvalidCharacterError;
+    if (std.mem.findScalar(u8, src, '=') != null) return error.InvalidCharacterError;
 
     const out_len = src.len / 4 * 3 + switch (src.len % 4) {
         0 => @as(usize, 0),

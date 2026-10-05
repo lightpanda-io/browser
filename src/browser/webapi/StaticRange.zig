@@ -34,7 +34,7 @@ _proto: *AbstractRange,
 // https://dom.spec.whatwg.org/#dictdef-staticrangeinit
 // All members are required. The fields are non-optional with no default, so the
 // argument decoder rejects a missing or null member with a TypeError.
-pub const StaticRangeInit = struct {
+const StaticRangeInit = struct {
     endContainer: *Node,
     endOffset: u32,
     startContainer: *Node,

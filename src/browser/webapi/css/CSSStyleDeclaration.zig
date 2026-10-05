@@ -44,7 +44,7 @@ pub fn parseInlineStyle(self: *CSSStyleDeclaration, frame: *Frame) !void {
         return;
     }
     const el = self._element orelse return;
-    const attr_value = el.getAttributeSafe(comptime .wrap("style")) orelse return;
+    const attr_value = el.getAttributeInterned("style") orelse return;
     try self.applyDeclarations(attr_value, frame);
 }
 
@@ -82,63 +82,143 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     // tree builders (Playwright ariaSnapshot) consult on every element.
     if (self._is_computed) {
         if (self._element) |element| {
-            const style_manager = &element.ownerFrame(frame)._style_manager;
-            if (wrapped.eql(comptime .wrap("display"))) {
-                if (style_manager.hasDisplayNone(element)) return "none";
-            } else if (wrapped.eql(comptime .wrap("visibility"))) {
-                if (style_manager.hasVisibilityHiddenInherited(element)) return "hidden";
+            if (element.ownerFrame(frame)) |owner| {
+                const style_manager = &owner._style_manager;
+                if (wrapped.eql(comptime .wrap("display"))) {
+                    if (style_manager.hasDisplayNone(element)) {
+                        return "none";
+                    }
+                } else if (wrapped.eql(comptime .wrap("visibility"))) {
+                    if (style_manager.hasVisibilityHiddenInherited(element)) {
+                        return "hidden";
+                    }
+                }
             }
         }
     }
 
-    const prop = self.findProperty(wrapped) orelse {
-        // Only return default values for computed styles
-        if (self._is_computed) {
-            if (self._element) |element| {
-                // Resolve inline `style=` declarations through the element's
-                // parsed inline style, so computed values match `el.style`.
-                if (element.ownerFrame(frame)._style_manager.inlineStyleValue(element, wrapped)) |value| {
-                    return value;
-                }
+    if (self.declaredValue(wrapped, frame)) |value| {
+        return value;
+    }
 
-                // Computed width/height must agree with the synthetic layout
-                // metrics. Returning "" makes measurement code see
-                // contradictory sizes — jQuery's "shrink text until it fits"
-                // loops then never terminate. jQuery's .width() reads this
-                // value, so it must also carry clientWidth's content fallback
-                // or append-until-wide marquee loops never terminate.
-                if (wrapped.eql(comptime .wrap("width"))) {
-                    return resolvedDimension(element, .width, frame);
-                }
-                if (wrapped.eql(comptime .wrap("height"))) {
-                    return resolvedDimension(element, .height, frame);
-                }
-            }
-            return getDefaultPropertyValue(self, wrapped);
-        }
+    // Only return default values for computed styles
+    if (!self._is_computed) {
         return "";
-    };
+    }
+    if (self._element) |element| {
+        if (element.ownerFrame(frame)) |owner| {
+            const style_manager = &owner._style_manager;
+
+            if (isCustomProperty(normalized)) {
+                return style_manager.customPropertyValue(element, wrapped) orelse "";
+            }
+
+            // Resolve inline `style=` declarations through the element's
+            // parsed inline style, so computed values match `el.style`. One
+            // an !important rule beats falls through to the values below.
+            if (style_manager.inlineStyleValue(element, wrapped)) |value| {
+                return value;
+            }
+
+            // Computed width/height must agree with the synthetic layout
+            // metrics. Returning "" makes measurement code see
+            // contradictory sizes — jQuery's "shrink text until it fits"
+            // loops then never terminate. jQuery's .width() reads this
+            // value, so it must also carry clientWidth's content fallback
+            // or append-until-wide marquee loops never terminate.
+            if (wrapped.eql(comptime .wrap("width"))) {
+                return resolvedDimension(element, .width, frame);
+            }
+            if (wrapped.eql(comptime .wrap("height"))) {
+                return resolvedDimension(element, .height, frame);
+            }
+        }
+    }
+    return getDefaultPropertyValue(self, wrapped);
+}
+
+/// The value of a declared property, or null when it isn't declared. An axis
+/// shorthand reads as its longhands when both are present with the same
+/// priority, the way the CSSOM serializes a shorthand.
+pub fn declaredValue(self: *const CSSStyleDeclaration, name: String, frame: *Frame) ?[]const u8 {
+    if (CssParser.axisShorthand(name.str())) |shorthand| {
+        const x = self.findProperty(.wrap(shorthand.x)) orelse return null;
+        const pair = self.axisPair(x) orelse return null;
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+        pair.formatValue(&buf.writer) catch return null;
+        return buf.written();
+    }
+    const prop = self.findProperty(name) orelse return null;
     return prop._value.str();
 }
 
+/// Both longhands of an axis shorthand, declared with the same priority: the
+/// pair reads and serializes as the shorthand.
+const AxisPair = struct {
+    name: []const u8,
+    x: *const Property,
+    y: *const Property,
+
+    fn formatValue(self: AxisPair, writer: *std.Io.Writer) !void {
+        try self.x._value.format(writer);
+        if (!self.x._value.eql(self.y._value)) {
+            try writer.writeByte(' ');
+            try self.y._value.format(writer);
+        }
+    }
+
+    fn format(self: AxisPair, writer: *std.Io.Writer) !void {
+        try writer.writeAll(self.name);
+        try writer.writeAll(": ");
+        try self.formatValue(writer);
+        try formatDeclarationEnd(self.x._important, writer);
+    }
+};
+
+/// The pair `prop` belongs to, when it is an axis longhand and the other is
+/// declared with the same priority.
+fn axisPair(self: *const CSSStyleDeclaration, prop: *const Property) ?AxisPair {
+    const longhand = CssParser.axisLonghand(prop._name.str()) orelse return null;
+    const partner = self.findProperty(.wrap(longhand.partner())) orelse return null;
+    if (partner._important != prop._important) {
+        return null;
+    }
+    const name = longhand.shorthand.name;
+    return if (longhand.is_x) .{ .name = name, .x = prop, .y = partner } else .{ .name = name, .x = partner, .y = prop };
+}
+
 fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame: *Frame) []const u8 {
-    if (!element.checkVisibilityCached(null, frame)) {
+    if (!element.isVisible(frame)) {
         return "auto";
     }
     const value = switch (dimension) {
         .width => element.boxAxis(frame, .width),
         .height => element.boxAxis(frame, .height),
     };
-    return std.fmt.allocPrint(frame.local_arena, "{d}px", .{value}) catch "auto";
+    return frame.local_arena.print("{d}px", .{value}) catch "auto";
 }
 
 pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {
     const normalized = normalizePropertyName(property_name, &frame.buf);
-    const prop = self.findProperty(.wrap(normalized)) orelse return "";
-    return if (prop._important) "important" else "";
+    return if (self.declaredImportant(.wrap(normalized))) "important" else "";
+}
+
+/// Whether a declared property is !important; false when it isn't declared.
+pub fn declaredImportant(self: *const CSSStyleDeclaration, name: String) bool {
+    if (CssParser.axisShorthand(name.str())) |shorthand| {
+        const x = self.findProperty(.wrap(shorthand.x)) orelse return false;
+        const pair = self.axisPair(x) orelse return false;
+        return pair.x._important;
+    }
+    const prop = self.findProperty(name) orelse return false;
+    return prop._important;
 }
 
 pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, priority_: ?[]const u8, frame: *Frame) !void {
+    if (self._is_computed) {
+        return error.NoModificationAllowed;
+    }
+
     // Validate priority
     const priority = priority_ orelse "";
     const important = if (priority.len > 0) blk: {
@@ -148,66 +228,101 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
         break :blk true;
     } else false;
 
-    try self.setPropertyImpl(property_name, value, important, frame);
-
-    try self.syncStyleAttribute(frame);
+    if (try self.setPropertyImpl(property_name, value, important, frame)) {
+        try self.syncStyleAttribute(frame);
+    }
 }
 
 /// Apply one declaration parsed from a `style=` block. Unlike the imperative
 /// setProperty path, within a single declaration block a normal declaration must
 /// not override an earlier !important one (CSS cascade precedence).
 fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Declaration, frame: *Frame) !void {
+    const normalized = normalizePropertyName(declaration.name, &frame.buf);
+    if (CssParser.axisShorthand(normalized)) |shorthand| {
+        const values = CssParser.splitAxisPair(declaration.value) orelse return;
+        try self.applyParsedDeclaration(.{ .name = shorthand.x, .value = values.x, .important = declaration.important }, frame);
+        try self.applyParsedDeclaration(.{ .name = shorthand.y, .value = values.y, .important = declaration.important }, frame);
+        return;
+    }
     if (!declaration.important) {
-        const normalized = normalizePropertyName(declaration.name, &frame.buf);
         if (self.findProperty(.wrap(normalized))) |existing| {
             if (existing._important) return;
         }
     }
-    try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, frame);
+    _ = try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, frame);
 }
 
-fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, important: bool, frame: *Frame) !void {
+fn initOwnedString(allocator: Allocator, value: []const u8) !String {
+    if (value.len <= 12) return String.wrap(value);
+    if (value.len >= std.math.maxInt(i32)) return error.StringTooLarge;
+    return String.wrap(try allocator.dupe(u8, value));
+}
+
+fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, important: bool, frame: *Frame) !bool {
     if (value.len == 0) {
-        _ = try self.removePropertyImpl(property_name, frame);
-        return;
+        return (try self.removePropertyImpl(property_name, frame)) != null;
     }
 
     const normalized = normalizePropertyName(property_name, &frame.buf);
+    if (CssParser.axisShorthand(normalized)) |shorthand| {
+        const values = CssParser.splitAxisPair(value) orelse return false;
+        const x = try self.setPropertyImpl(shorthand.x, values.x, important, frame);
+        const y = try self.setPropertyImpl(shorthand.y, values.y, important, frame);
+        return x or y;
+    }
 
     // Normalize the value for canonical serialization
     const normalized_value = try normalizePropertyValue(frame.local_arena, normalized, value);
 
     // Find existing property
     if (self.findProperty(.wrap(normalized))) |existing| {
-        existing._value = try String.init(frame.arena, normalized_value, .{});
+        if (existing._value.eql(.wrap(normalized_value)) and existing._important == important) return false;
+        const allocator = frame._factory.storageAllocator();
+        const new_value = try initOwnedString(allocator, normalized_value);
+        existing._value.deinit(allocator);
+        existing._value = new_value;
         existing._important = important;
-        return;
+        return true;
     }
 
     // Create new property
     const prop = try frame._factory.create(Property{
         ._node = .{},
         ._name = try String.init(frame.arena, normalized, .{}),
-        ._value = try String.init(frame.arena, normalized_value, .{}),
+        ._value = try initOwnedString(frame._factory.storageAllocator(), normalized_value),
         ._important = important,
     });
     self._properties.append(&prop._node);
+    return true;
 }
 
 pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) ![]const u8 {
-    const result = try self.removePropertyImpl(property_name, frame);
+    if (self._is_computed) {
+        return error.NoModificationAllowed;
+    }
+    const result = (try self.removePropertyImpl(property_name, frame)) orelse return "";
     try self.syncStyleAttribute(frame);
     return result;
 }
 
-fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) ![]const u8 {
+fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) !?[]const u8 {
     const normalized = normalizePropertyName(property_name, &frame.buf);
-    const prop = self.findProperty(.wrap(normalized)) orelse return "";
+    if (CssParser.axisShorthand(normalized)) |shorthand| {
+        const old_value = self.declaredValue(.wrap(shorthand.name), frame) orelse "";
+        const x = try self.removePropertyImpl(shorthand.x, frame);
+        const y = try self.removePropertyImpl(shorthand.y, frame);
+        if (x == null and y == null) {
+            return null;
+        }
+        return old_value;
+    }
+    const prop = self.findProperty(.wrap(normalized)) orelse return null;
 
     // the value might not be on the heap (it could be inlined in the small string
     // optimization), so we need to dupe it.
     const old_value = try frame.call_arena.dupe(u8, prop._value.str());
     self._properties.remove(&prop._node);
+    prop._value.deinit(frame._factory.storageAllocator());
     frame._factory.destroy(prop);
     return old_value;
 }
@@ -242,27 +357,41 @@ fn clearProperties(self: *CSSStyleDeclaration, frame: *Frame) void {
         const next = n.next;
         const prop = Property.fromNodeLink(n);
         self._properties.remove(n);
+        prop._value.deinit(frame._factory.storageAllocator());
         frame._factory.destroy(prop);
         node = next;
     }
 }
 
-pub fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
+fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
     return self.getPropertyValue("float", frame);
 }
 
-pub fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) !void {
-    try self.setPropertyImpl("float", value_ orelse "", false, frame);
-    try self.syncStyleAttribute(frame);
+fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) !void {
+    if (self._is_computed) {
+        return error.NoModificationAllowed;
+    }
+    if (try self.setPropertyImpl("float", value_ orelse "", false, frame)) {
+        try self.syncStyleAttribute(frame);
+    }
 }
 
-pub fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
+fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
     var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     try self.format(&buf.writer);
     return buf.written();
 }
 
 pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !void {
+    if (self._is_computed) {
+        return error.NoModificationAllowed;
+    }
+    try self.replaceCssText(text, frame);
+}
+
+// setCssText without the read-only check, for declarations that are never
+// computed (a CSSStyleRule's style).
+pub fn replaceCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !void {
     self.clearProperties(frame);
 
     try self.applyDeclarations(text, frame);
@@ -270,16 +399,40 @@ pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !
 }
 
 pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
-    const node = self._properties.first orelse return;
-    try Property.fromNodeLink(node).format(writer);
-
-    var next = node.next;
-    while (next) |n| {
-        try writer.writeByte(' ');
-        try Property.fromNodeLink(n).format(writer);
-        next = n.next;
+    var first = true;
+    // An axis pair serializes once, where its first longhand sits.
+    var skip: ?*const Property = null;
+    var it = self.iterator();
+    while (it.next()) |prop| {
+        if (prop == skip) {
+            continue;
+        }
+        if (!first) {
+            try writer.writeByte(' ');
+        }
+        first = false;
+        if (self.axisPair(prop)) |pair| {
+            try pair.format(writer);
+            skip = if (pair.x == prop) pair.y else pair.x;
+        } else {
+            try prop.format(writer);
+        }
     }
 }
+
+pub fn iterator(self: *const CSSStyleDeclaration) Iterator {
+    return .{ .node = self._properties.first };
+}
+
+pub const Iterator = struct {
+    node: ?*std.DoublyLinkedList.Node,
+
+    pub fn next(self: *Iterator) ?*Property {
+        const node = self.node orelse return null;
+        self.node = node.next;
+        return Property.fromNodeLink(node);
+    }
+};
 
 pub fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
     var node = self._properties.first;
@@ -294,11 +447,20 @@ pub fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
 }
 
 fn normalizePropertyName(name: []const u8, buf: []u8) []const u8 {
+    if (isCustomProperty(name)) {
+        // Custom properties are case-sensitive
+        return name;
+    }
+
     if (name.len > buf.len) {
         log.info(.dom, "css.long.name", .{ .name = name });
         return name;
     }
     return std.ascii.lowerString(buf, name);
+}
+
+fn isCustomProperty(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "--");
 }
 
 // Normalize CSS property values for canonical serialization
@@ -330,13 +492,13 @@ fn normalizePropertyValue(arena: Allocator, property_name: []const u8, raw_value
     }
 
     // Canonicalize anchor-size() function: anchor name (dashed ident) comes before size keyword
-    if (std.mem.indexOf(u8, value, "anchor-size(")) |idx| {
+    if (std.mem.find(u8, value, "anchor-size(")) |idx| {
         return canonicalizeAnchorSize(arena, value, idx);
     }
 
     // Canonicalize anchor() function: anchor name (dashed ident) comes before position keyword
     // Note: indexOf finds first occurrence, so we check it's not part of "anchor-size("
-    if (std.mem.indexOf(u8, value, "anchor(")) |idx| {
+    if (std.mem.find(u8, value, "anchor(")) |idx| {
         if (idx == 0 or value[idx - 1] != '-') {
             return canonicalizeAnchor(arena, value, idx);
         }
@@ -615,14 +777,14 @@ fn canonicalizeAnchor(arena: Allocator, value: []const u8, start_index: usize) !
 
 // Check if a value is "X X" (duplicate) and return just "X"
 fn collapseDuplicateValue(value: []const u8) ?[]const u8 {
-    const space_idx = std.mem.indexOfScalar(u8, value, ' ') orelse return null;
+    const space_idx = std.mem.findScalar(u8, value, ' ') orelse return null;
     if (space_idx == 0 or space_idx >= value.len - 1) return null;
 
     const first = value[0..space_idx];
     const rest = std.mem.trimStart(u8, value[space_idx + 1 ..], " ");
 
     // Check if there's only one more value (no additional spaces)
-    if (std.mem.indexOfScalar(u8, rest, ' ') != null) return null;
+    if (std.mem.findScalar(u8, rest, ' ') != null) return null;
 
     if (std.mem.eql(u8, first, rest)) {
         return first;
@@ -647,7 +809,6 @@ fn isTwoValueShorthand(name: []const u8) bool {
         .{ "border-inline-width", {} },
         .{ "border-block-color", {} },
         .{ "border-inline-color", {} },
-        .{ "overflow", {} },
         .{ "overscroll-behavior", {} },
         .{ "gap", {} },
         .{ "grid-gap", {} },
@@ -880,13 +1041,16 @@ pub const Property = struct {
         try self._name.format(writer);
         try writer.writeAll(": ");
         try self._value.format(writer);
-
-        if (self._important) {
-            try writer.writeAll(" !important");
-        }
-        try writer.writeByte(';');
+        try formatDeclarationEnd(self._important, writer);
     }
 };
+
+fn formatDeclarationEnd(important: bool, writer: *std.Io.Writer) !void {
+    if (important) {
+        try writer.writeAll(" !important");
+    }
+    try writer.writeByte(';');
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CSSStyleDeclaration);
@@ -897,7 +1061,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const cssText = bridge.accessor(CSSStyleDeclaration.getCssText, CSSStyleDeclaration.setCssText, .{});
+    pub const cssText = bridge.accessor(CSSStyleDeclaration.getCssText, CSSStyleDeclaration.setCssText, .{ .ce_reactions = true });
     pub const length = bridge.accessor(CSSStyleDeclaration.length, null, .{});
     pub const item = bridge.function(_item, .{});
 
@@ -910,12 +1074,29 @@ pub const JsApi = struct {
 
     pub const getPropertyValue = bridge.function(CSSStyleDeclaration.getPropertyValue, .{});
     pub const getPropertyPriority = bridge.function(CSSStyleDeclaration.getPropertyPriority, .{});
-    pub const setProperty = bridge.function(CSSStyleDeclaration.setProperty, .{});
-    pub const removeProperty = bridge.function(CSSStyleDeclaration.removeProperty, .{});
-    pub const cssFloat = bridge.accessor(CSSStyleDeclaration.getFloat, CSSStyleDeclaration.setFloat, .{});
+    pub const setProperty = bridge.function(CSSStyleDeclaration.setProperty, .{ .ce_reactions = true });
+    pub const removeProperty = bridge.function(CSSStyleDeclaration.removeProperty, .{ .ce_reactions = true });
+    pub const cssFloat = bridge.accessor(CSSStyleDeclaration.getFloat, CSSStyleDeclaration.setFloat, .{ .ce_reactions = true });
 };
 
 const testing = @import("../../../testing.zig");
+test "CSS property value storage is reused" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var style = CSSStyleDeclaration{};
+    defer style.clearProperties(frame);
+
+    try testing.expect(try style.setPropertyImpl("transform", "translate3d(1px,0,0)", false, frame));
+    const first_ptr = style.findProperty(comptime .wrap("transform")).?._value.suffix.ptr;
+    try testing.expect(try style.setPropertyImpl("transform", "translate3d(2px,0,0)", false, frame));
+    try testing.expect(try style.setPropertyImpl("transform", "translate3d(3px,0,0)", false, frame));
+
+    const property = style.findProperty(comptime .wrap("transform")).?;
+    try testing.expectEqual(first_ptr, property._value.suffix.ptr);
+    try std.testing.expectEqualStrings("translate3d(3px,0,0)", property._value.str());
+}
+
 test "normalizePropertyValue: unitless zero to 0px" {
     const cases = .{
         .{ "width", "0", "0px" },
@@ -950,14 +1131,12 @@ test "normalizePropertyValue: first baseline to baseline" {
 
 test "normalizePropertyValue: collapse duplicate two-value shorthands" {
     const cases = .{
-        .{ "overflow", "hidden hidden", "hidden" },
         .{ "gap", "10px 10px", "10px" },
         .{ "scroll-snap-align", "start start", "start" },
         .{ "scroll-padding-block", "5px 5px", "5px" },
         .{ "background-size", "auto auto", "auto" },
         .{ "overscroll-behavior", "auto auto", "auto" },
         // Different values should NOT collapse
-        .{ "overflow", "hidden scroll", "hidden scroll" },
         .{ "gap", "10px 20px", "10px 20px" },
     };
     inline for (cases) |case| {

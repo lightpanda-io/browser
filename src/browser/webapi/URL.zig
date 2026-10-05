@@ -60,6 +60,9 @@ pub fn parse(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) ?
 
 pub fn deinit(self: *URL, page: *Page) void {
     if (self._search_params) |search_params| {
+        // The params can outlive the URL. Unlink it.
+        search_params._url = null;
+        // And, remove the RC that we (URL) were holding on it.
         search_params.releaseRef(page);
     }
     // Not tracked by arena.
@@ -74,18 +77,18 @@ pub fn releaseRef(self: *URL, page: *Page) void {
     self._rc.release(self, page);
 }
 
-pub fn getUsername(self: *const URL) []const u8 {
+fn getUsername(self: *const URL) []const u8 {
     var out: [*]const u8 = undefined;
     var len: usize = 0;
     U.url_get_username(self._url, &out, &len);
     return out[0..len];
 }
 
-pub fn setUsername(self: *URL, value: []const u8) void {
+fn setUsername(self: *URL, value: []const u8) void {
     _ = U.url_set_username(self._url, value.ptr, value.len);
 }
 
-pub fn getPassword(self: *const URL) []const u8 {
+fn getPassword(self: *const URL) []const u8 {
     var out: [*]const u8 = undefined;
     var len: usize = 0;
     const res = U.url_get_password(self._url, &out, &len);
@@ -95,7 +98,7 @@ pub fn getPassword(self: *const URL) []const u8 {
     return out[0..len];
 }
 
-pub fn setPassword(self: *URL, value: []const u8) void {
+fn setPassword(self: *URL, value: []const u8) void {
     _ = U.url_set_password(self._url, value.ptr, value.len);
 }
 
@@ -119,7 +122,7 @@ pub fn getProtocol(self: *const URL) []const u8 {
     return out[0 .. len + 1];
 }
 
-pub fn setProtocol(self: *URL, value: []const u8) void {
+fn setProtocol(self: *URL, value: []const u8) void {
     _ = U.url_set_scheme(self._url, value.ptr, value.len);
 }
 
@@ -132,7 +135,7 @@ pub fn getHostname(self: *const URL) []const u8 {
     return out[0..len];
 }
 
-pub fn setHostname(self: *URL, value: []const u8) void {
+fn setHostname(self: *URL, value: []const u8) void {
     _ = U.url_set_hostname(self._url, value.ptr, value.len);
 }
 
@@ -145,17 +148,17 @@ pub fn getHost(self: *const URL) []const u8 {
     return out[0..len];
 }
 
-pub fn setHost(self: *URL, value: []const u8) void {
+fn setHost(self: *URL, value: []const u8) void {
     _ = U.url_set_host(self._url, value.ptr, value.len);
 }
 
 pub fn getPort(self: *URL) []const u8 {
     const port = U.urlGetPort(self._url) orelse return "";
-    return std.fmt.bufPrint(&self._port, "{d}", .{port}) catch unreachable;
+    return std.mem.print(&self._port, "{d}", .{port}) catch unreachable;
 }
 
 /// Spec requires us to silently ignore errors of this setter.
-pub fn setPort(self: *URL, maybe_value: ?[]const u8) void {
+fn setPort(self: *URL, maybe_value: ?[]const u8) void {
     // A null or empty value clears the port.
     const value = maybe_value orelse {
         _ = U.url_set_port_to_null(self._url);
@@ -171,18 +174,8 @@ pub fn setPort(self: *URL, maybe_value: ?[]const u8) void {
     _ = U.url_set_port(self._url, port);
 }
 
-pub fn getSearch(self: *const URL, exec: *const Execution) ![]const u8 {
-    if (self._search_params) |search_params| {
-        if (search_params.getSize() == 0) {
-            return "";
-        }
-
-        var buf = std.Io.Writer.Allocating.init(exec.local_arena);
-        try buf.writer.writeByte('?');
-        try search_params.toString(&buf.writer);
-        return buf.written();
-    }
-
+// searchParam pushes its mutations to URL, so self._url is always in sync
+pub fn getSearch(self: *const URL, _: *const Execution) ![]const u8 {
     var out: [*]const u8 = undefined;
     var len: usize = 0;
     const res = U.url_get_query(self._url, &out, &len);
@@ -194,7 +187,7 @@ pub fn getSearch(self: *const URL, exec: *const Execution) ![]const u8 {
     return (out - 1)[0 .. len + 1];
 }
 
-pub fn setSearch(self: *URL, value: []const u8, exec: *const Execution) !void {
+fn setSearch(self: *URL, value: []const u8, exec: *const Execution) !void {
     // Empty value clears the query entirely.
     if (value.len == 0) {
         // Reset searchParams.
@@ -234,7 +227,7 @@ pub fn getHash(self: *const URL) []const u8 {
     return (out - 1)[0 .. len + 1];
 }
 
-pub fn setHash(self: *URL, value: []const u8) void {
+fn setHash(self: *URL, value: []const u8) void {
     // An empty value clears the fragment entirely (removes the '#').
     if (value.len == 0) {
         U.url_set_fragment_to_null(self._url);
@@ -245,7 +238,7 @@ pub fn setHash(self: *URL, value: []const u8) void {
     _ = U.url_set_fragment(self._url, fragment.ptr, fragment.len);
 }
 
-pub fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
+fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
     if (self._search_params) |sp| {
         return sp;
     }
@@ -257,10 +250,26 @@ pub fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
     const search_value = if (U.url_get_query(self._url, &out, &len) == 0) (out - 1)[0 .. len + 1] else "";
 
     const params = try URLSearchParams.init(.{ .query_string = search_value }, exec);
-    // Released in deinit; the cached params must outlive their JS wrapper.
     params.acquireRef();
+    params._url = self;
     self._search_params = params;
     return params;
+}
+
+// Every update to the url's _search_params needs to keep the url in sync
+pub fn syncQueryFromParams(self: *URL, exec: *const Execution) !void {
+    const params = self._search_params orelse return;
+    if (params.getSize() == 0) {
+        U.url_set_query_to_null(self._url);
+        return;
+    }
+
+    var buf = std.Io.Writer.Allocating.init(exec.local_arena);
+    try params.toString(&buf.writer);
+    const query = buf.written();
+    if (U.url_set_query(self._url, query.ptr, query.len) != 0) {
+        return error.TypeError;
+    }
 }
 
 pub fn getOrigin(self: *const URL, exec: *const Execution) ![]const u8 {
@@ -288,46 +297,26 @@ pub fn setHref(self: *URL, value: []const u8, exec: *const Execution) !void {
     try search_params.updateFromString(search_value, exec);
 }
 
-pub fn toString(self: *const URL, exec: *const Execution) ![]const u8 {
-    if (self._search_params) |search_params| {
-        if (search_params.getSize() == 0) {
-            U.url_set_query_to_null(self._url);
-        } else {
-            var buf = std.Io.Writer.Allocating.init(exec.local_arena);
-            defer buf.deinit();
-            try search_params.toString(&buf.writer);
-            const query = buf.written();
-            if (U.url_set_query(self._url, query.ptr, query.len) != 0) {
-                return error.ToString;
-            }
-        }
-    }
-
+pub fn toString(self: *const URL, _: *const Execution) ![]const u8 {
     var out: [*]const u8 = undefined;
     var len: usize = 0;
     U.url_to_string(self._url, &out, &len);
     return out[0..len];
 }
 
-pub const canParse = @import("../URL.zig").canParse;
+const canParse = @import("../URL.zig").canParse;
 
-pub fn createObjectURL(blob: *Blob, exec: *const Execution) ![]const u8 {
-    switch (exec.js.global) {
-        inline else => |g| return g._page.createBlobUrl(blob, g.origin, g._frame_id),
-    }
+fn createObjectURL(blob: *Blob, exec: *const Execution) ![]const u8 {
+    return exec.page.createBlobUrl(blob, exec.origin(), exec.frameId());
 }
 
-pub fn revokeObjectURL(url: []const u8, exec: *const Execution) void {
-    switch (exec.js.global) {
-        inline else => |g| {
-            if (!Blob.urlBelongsToOrigin(url, g.origin)) {
-                // different origin cannot revoke an object URL. Failure should
-                // be silent
-                return;
-            }
-            g._page.revokeBlobUrl(url);
-        },
+fn revokeObjectURL(url: []const u8, exec: *const Execution) void {
+    if (Blob.urlBelongsToOrigin(url, exec.origin()) == false) {
+        // different origin cannot revoke an object URL. Failure should
+        // be silent
+        return;
     }
+    exec.page.revokeBlobUrl(url);
 }
 
 pub const JsApi = struct {

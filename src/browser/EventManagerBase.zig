@@ -190,7 +190,7 @@ pub fn removeListener(self: *EventManagerBase, list: *std.DoublyLinkedList, list
 }
 
 /// Check if there are any listeners registered for a target/type combination.
-pub fn hasListeners(self: *EventManagerBase, target: *EventTarget, typ: []const u8) bool {
+fn hasListeners(self: *EventManagerBase, target: *EventTarget, typ: []const u8) bool {
     return self.lookup.get(.{
         .event_target = @intFromPtr(target),
         .type_string = .wrap(typ),
@@ -203,6 +203,24 @@ pub fn getListeners(self: *EventManagerBase, target: *EventTarget, event_type: S
         .event_target = @intFromPtr(target),
         .type_string = event_type,
     });
+}
+
+/// Whether the list still holds a listener, or one that can call
+/// preventDefault. A listener removed during a dispatch stays linked until
+/// the dispatch unwinds, but isn't "in" the list anymore, same as
+/// findListener.
+pub fn hasListener(list: *const std.DoublyLinkedList, comptime which: enum { any, non_passive }) bool {
+    var node = list.first;
+    while (node) |n| : (node = n.next) {
+        const listener: *align(8) Listener = @fieldParentPtr("node", n);
+        if (listener.removed) {
+            continue;
+        }
+        if (which == .any or !listener.passive) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Dispatching can be recursive from the compiler's point of view, so we need to
@@ -290,17 +308,21 @@ pub fn dispatchDirect(
     // Call the property handler (e.g., onmessage) if present
     if (getFunction(handler, &ls.local)) |func| {
         event._current_target = target;
-        var caught: js.TryCatch.Caught = .{};
-        _ = func.tryCallWithThis(void, target, .{event}, &caught) catch |err| {
-            if (err == error.ExecutionTerminated) {
-                return error.ExecutionTerminated;
-            }
-            page.recordJsError(err);
-            if (err == error.JsException) {
+        // Reported like an exception from an addEventListener listener (see
+        // Listener.run), so the global's "error" event / onerror fires.
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+        func.callWithThisRethrow(void, target, .{event}) catch |err| switch (err) {
+            error.ExecutionTerminated => return error.ExecutionTerminated,
+            error.JsException, error.TryCatchRethrow => {
                 event._listeners_did_throw = true;
-            } else {
-                log.warn(.event, opts.context, .{ .err = err, .caught = caught });
-            }
+                Listener.reportException(&try_catch, &ls.local);
+            },
+            else => {
+                page.recordJsError(err);
+                log.debug(.event, opts.context, .{ .err = err });
+            },
         };
     }
 
@@ -454,11 +476,11 @@ pub const Listener = struct {
                         reportException(&try_catch, local);
                     },
                     error.ExecutionTerminated => return error.ExecutionTerminated,
-                    else => log.warn(.event, context, .{ .err = err }),
+                    else => log.debug(.event, context, .{ .err = err }),
                 };
             },
             .string => |string| {
-                const str = try arena.dupeZ(u8, string.str());
+                const str = try arena.dupeSentinel(u8, string.str(), 0);
                 local.eval(str, null) catch |err| {
                     if (err == error.ExecutionTerminated) {
                         return error.ExecutionTerminated;
@@ -467,7 +489,7 @@ pub const Listener = struct {
                     if (err == error.JsException) {
                         event._listeners_did_throw = true;
                     } else {
-                        log.warn(.event, context, .{ .err = err });
+                        log.debug(.event, context, .{ .err = err });
                     }
                 };
             },
@@ -485,7 +507,7 @@ pub const Listener = struct {
                         event._listeners_did_throw = true;
                         reportException(&try_catch, local);
                     } else {
-                        log.warn(.event, context, .{ .err = err });
+                        log.debug(.event, context, .{ .err = err });
                     }
                     return;
                 };
@@ -511,7 +533,7 @@ pub const Listener = struct {
                         reportException(&try_catch, local);
                     },
                     error.ExecutionTerminated => return error.ExecutionTerminated,
-                    else => log.warn(.event, context, .{ .err = err }),
+                    else => log.debug(.event, context, .{ .err = err }),
                 };
             },
         }
@@ -519,19 +541,15 @@ pub const Listener = struct {
 
     // Reports a listener exception to the relevant global (firing
     // window.onerror / an "error" event) without stopping the dispatch.
-    fn reportException(try_catch: *js.TryCatch, local: *const js.Local) void {
+    pub fn reportException(try_catch: *js.TryCatch, local: *const js.Local) void {
         const exc = try_catch.exceptionValue() orelse return;
         reportExceptionValue(local, exc);
     }
 
     fn reportExceptionValue(local: *const js.Local, exc: js.Value) void {
-        switch (local.ctx.global) {
-            .frame => |frame| frame.window.reportError(exc, frame) catch |err| {
-                log.warn(.event, "listener report error", .{ .err = err });
-            },
-            // No worker error-event plumbing here (yet); still count it.
-            .worker => local.ctx.page.recordJsError(error.JsException),
-        }
+        local.ctx.global.reportError(exc) catch |err| {
+            log.debug(.event, "listener report error", .{ .err = err });
+        };
     }
 };
 
@@ -540,14 +558,14 @@ pub const Function = union(enum) {
     string: String,
     object: js.Object.Global,
 
-    pub fn eqlFunction(self: Function, func: js.Function) bool {
+    fn eqlFunction(self: Function, func: js.Function) bool {
         return switch (self) {
             .value => |v| v.isEqual(func),
             else => false,
         };
     }
 
-    pub fn eqlObject(self: Function, obj: js.Object) bool {
+    fn eqlObject(self: Function, obj: js.Object) bool {
         return switch (self) {
             .object => |o| return o.isEqual(obj),
             else => false,

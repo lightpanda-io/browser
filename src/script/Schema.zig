@@ -40,7 +40,7 @@ fields: []const FieldEntry,
 hints: []const HintSlot,
 parameters: std.json.Value,
 
-pub const FieldType = enum { string, integer, number, boolean, other };
+const FieldType = enum { string, integer, number, boolean, other };
 
 pub const FieldEntry = struct {
     name: []const u8,
@@ -63,7 +63,7 @@ pub const FieldEntry = struct {
 
 /// REPL argument-syntax hint slot. `fragment` is pre-rendered as `<name>`
 /// for required and `[name=…]` for optional.
-pub const HintSlot = struct {
+const HintSlot = struct {
     name: []const u8,
     required: bool,
     fragment: []const u8,
@@ -126,7 +126,7 @@ pub fn findField(self: Schema, key: []const u8) ?FieldEntry {
 
 /// Rename keys in `obj` to canonical casing. Unknown keys pass through;
 /// keys that collide on the canonical form return `error.DuplicateField`.
-pub fn normalizeKeys(self: Schema, arena: std.mem.Allocator, obj: *std.json.ObjectMap) !void {
+fn normalizeKeys(self: Schema, arena: std.mem.Allocator, obj: *std.json.ObjectMap) !void {
     const Rename = struct { from: []const u8, to: []const u8 };
     var renames: std.ArrayList(Rename) = .empty;
     var it = obj.iterator();
@@ -163,7 +163,7 @@ pub fn skipForFormat(self: Schema, key: []const u8, v: std.json.Value) bool {
     return std.mem.eql(u8, key, "backendNodeId");
 }
 
-pub fn visibleArgCount(self: Schema, args: std.json.ObjectMap) usize {
+fn visibleArgCount(self: Schema, args: std.json.ObjectMap) usize {
     var n: usize = 0;
     for (self.fields) |f| {
         const v = args.get(f.name) orelse continue;
@@ -238,7 +238,7 @@ pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const 
         list.appendAssumeCapacity(.{ .key = positional_field.?, .value = stripQuotes(tokens[0]) });
     }
     for (tokens[kv_start..]) |tok| {
-        const eq = std.mem.indexOfScalar(u8, tok, '=') orelse {
+        const eq = std.mem.findScalar(u8, tok, '=') orelse {
             // `/extract save=x '{…}'` — the value would have bound fine as a
             // leading positional, so point at the ordering instead of the
             // generic kv complaint.
@@ -325,7 +325,7 @@ fn coerce(self: Schema, arena: std.mem.Allocator, key: []const u8, value: []cons
 pub fn splitNameRest(input: []const u8) ?Split {
     const trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
     if (trimmed.len == 0) return null;
-    const name_end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
+    const name_end = std.mem.findAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
     return .{
         .name = trimmed[0..name_end],
         .rest = std.mem.trimStart(u8, trimmed[name_end..], &std.ascii.whitespace),
@@ -340,7 +340,7 @@ pub fn parseSlashCommand(input: []const u8) ?Split {
 
 fn find(schemas: []const Schema, name: []const u8) ?*const Schema {
     if (std.meta.stringToEnum(BrowserTool, name)) |tool| {
-        const idx = @intFromEnum(tool);
+        const idx = @backingInt(tool);
         if (idx < schemas.len) return &schemas[idx];
     }
     for (schemas) |*s| {
@@ -353,7 +353,7 @@ pub fn findByName(name: []const u8) ?*const Schema {
     return find(all(), name);
 }
 
-/// Lazy process-wide cache, keyed by `@intFromEnum(BrowserTool)`.
+/// Lazy process-wide cache, keyed by `@backingInt(BrowserTool)`.
 /// Panics on init failure — `tool_defs` is comptime-constant, so any
 /// parse/build error is a build-time bug.
 pub fn all() []const Schema {
@@ -369,7 +369,7 @@ fn initGlobal() void {
     global_arena = .init(std.heap.page_allocator);
     const a = global_arena.allocator();
     for (browser_tools.tool_defs, 0..) |td, i| {
-        const tool: BrowserTool = @enumFromInt(i);
+        const tool: BrowserTool = @fromBackingInt(@intCast(i));
         const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, td.input_schema, .{}) catch |err| {
             std.debug.panic("failed to parse schema for tool '{s}': {s}", .{ @tagName(tool), @errorName(err) });
         };
@@ -436,7 +436,7 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
         out[idx] = .{
             .name = name,
             .required = true,
-            .fragment = try std.fmt.allocPrint(arena, "<{s}>", .{name}),
+            .fragment = try arena.print("<{s}>", .{name}),
         };
         idx += 1;
     }
@@ -445,7 +445,7 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
         out[idx] = .{
             .name = f.name,
             .required = false,
-            .fragment = try std.fmt.allocPrint(arena, "[{s}=…]", .{f.name}),
+            .fragment = try arena.print("[{s}=…]", .{f.name}),
         };
         idx += 1;
     }
@@ -507,7 +507,7 @@ fn tokenize(arena: std.mem.Allocator, input: []const u8) ParseError![][]const u8
                 const is_triple = i + 2 < input.len and input[i + 1] == ch and input[i + 2] == ch;
                 if (is_triple) {
                     const triple_delim = input[i .. i + 3];
-                    const close = std.mem.indexOfPos(u8, input, i + 3, triple_delim) orelse return error.UnterminatedQuote;
+                    const close = std.mem.findPos(u8, input, i + 3, triple_delim) orelse return error.UnterminatedQuote;
                     i = close + 2;
                 } else {
                     // Odd run of `\` before the closer = escape attempt; even = literal.
@@ -558,8 +558,8 @@ fn stripQuotes(raw: []const u8) []const u8 {
 fn looksLikeKv(tok: []const u8) bool {
     if (tok.len == 0) return false;
     if (tok[0] == '\'' or tok[0] == '"') return false;
-    const end = std.mem.indexOfAny(u8, tok, "'\"") orelse tok.len;
-    const eq = std.mem.indexOfScalar(u8, tok[0..end], '=') orelse return false;
+    const end = std.mem.findAny(u8, tok, "'\"") orelse tok.len;
+    const eq = std.mem.findScalar(u8, tok[0..end], '=') orelse return false;
     if (eq == 0) return false;
     if (!std.ascii.isAlphabetic(tok[0]) and tok[0] != '_') return false;
     for (tok[1..eq]) |c| {
@@ -597,23 +597,23 @@ pub fn hasUnclosedTripleQuote(input: []const u8) bool {
 pub fn quotedSpanEnd(input: []const u8, start: usize) usize {
     const ch = input[start];
     if (start + 2 < input.len and input[start + 1] == ch and input[start + 2] == ch) {
-        const close = std.mem.indexOfPos(u8, input, start + 3, input[start .. start + 3]) orelse
+        const close = std.mem.findPos(u8, input, start + 3, input[start .. start + 3]) orelse
             return input.len;
         return close + 3;
     }
-    const close = std.mem.indexOfScalarPos(u8, input, start + 1, ch) orelse return input.len;
+    const close = std.mem.findScalarPos(u8, input, start + 1, ch) orelse return input.len;
     return close + 1;
 }
 
 /// `body=true`: string is emitted as a `'''…'''` block (newlines OK).
 /// `body=false`: single-line kv quoting (no newlines representable).
 pub fn quotableInline(s: []const u8, body: bool) bool {
-    const has_triple_single = std.mem.indexOf(u8, s, "'''") != null;
-    const has_triple_double = std.mem.indexOf(u8, s, "\"\"\"") != null;
+    const has_triple_single = std.mem.find(u8, s, "'''") != null;
+    const has_triple_double = std.mem.find(u8, s, "\"\"\"") != null;
     if (body) return !(has_triple_single and has_triple_double);
-    if (std.mem.indexOfScalar(u8, s, '\n') != null) return false;
-    const has_single = std.mem.indexOfScalar(u8, s, '\'') != null;
-    const has_double = std.mem.indexOfScalar(u8, s, '"') != null;
+    if (std.mem.findScalar(u8, s, '\n') != null) return false;
+    const has_single = std.mem.findScalar(u8, s, '\'') != null;
+    const has_double = std.mem.findScalar(u8, s, '"') != null;
     if (has_single and has_double) return !(has_triple_single and has_triple_double);
     return true;
 }

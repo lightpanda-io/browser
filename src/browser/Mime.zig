@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const repeat = @import("../string.zig").repeat;
 const Allocator = std.mem.Allocator;
 
 const Mime = @This();
@@ -28,13 +29,22 @@ charset_len: usize = default_charset_len,
 is_default_charset: bool = true,
 
 /// String "UTF-8" continued by null characters.
-const default_charset = .{ 'U', 'T', 'F', '-', '8' } ++ .{0} ** 36;
+const default_charset = charsetBuf("UTF-8");
 const default_charset_len = 5;
+
+fn charsetBuf(comptime name: []const u8) [41]u8 {
+    var buf: [41]u8 = @splat(0);
+    @memcpy(buf[0..name.len], name);
+    return buf;
+}
 
 /// Mime with unknown Content-Type, empty params and empty charset.
 pub const unknown = Mime{ .content_type = .{ .unknown = {} } };
 
-pub const ContentTypeEnum = enum {
+/// The fallback for a Content-Type that fails to parse.
+pub const octet_stream = Mime{ .content_type = .{ .application_octet_stream = {} } };
+
+const ContentTypeEnum = enum {
     text_xml,
     text_html,
     text_javascript,
@@ -47,12 +57,13 @@ pub const ContentTypeEnum = enum {
     image_png,
     image_webp,
     application_json,
+    application_octet_stream,
     unknown,
     other,
     other_xml,
 };
 
-pub const ContentType = union(ContentTypeEnum) {
+const ContentType = union(ContentTypeEnum) {
     text_xml: void,
     text_html: void,
     text_javascript: void,
@@ -65,6 +76,7 @@ pub const ContentType = union(ContentTypeEnum) {
     image_png: void,
     image_webp: void,
     application_json: void,
+    application_octet_stream: void,
     unknown: void,
     // A valid but unrecognized type/subtype. Keeping it would require some
     // memory management of the input. Nothing needs it right now, so why bother.
@@ -86,6 +98,7 @@ pub fn contentTypeString(mime: *const Mime) []const u8 {
         .image_gif => "image/gif",
         .image_webp => "image/webp",
         .application_json => "application/json",
+        .application_octet_stream => "application/octet-stream",
         else => "",
     };
 }
@@ -102,7 +115,7 @@ pub const ContentTypeIterator = struct {
         // Skip whitespace.
         const trimmed = std.mem.trimStart(u8, content_type, &.{ ' ', '\t' });
         // Find semicolon delimiter; or just use the end position.
-        const end = std.mem.indexOfScalar(u8, trimmed, ';') orelse trimmed.len;
+        const end = std.mem.findScalar(u8, trimmed, ';') orelse trimmed.len;
         const essence = std.mem.trimEnd(u8, trimmed[0..end], &.{ ' ', '\t' });
 
         // Rest of the parameters.
@@ -110,7 +123,7 @@ pub const ContentTypeIterator = struct {
         return .{ .rest = rest, .essence = essence };
     }
 
-    pub const Parameter = struct {
+    const Parameter = struct {
         key: []const u8,
         /// `value` can be an empty string ("").
         value: []const u8,
@@ -121,12 +134,12 @@ pub const ContentTypeIterator = struct {
         while (self.rest.len > 0) {
             // `rest` always sits at the `;` that introduced this parameter.
             var param = self.rest[1..];
-            const end = std.mem.indexOfScalar(u8, param, ';') orelse param.len;
+            const end = std.mem.findScalar(u8, param, ';') orelse param.len;
             self.rest = param[end..];
             param = std.mem.trim(u8, param[0..end], " \t");
 
             // Parameters without `=` are malformed; skip them.
-            const eq = std.mem.indexOfScalar(u8, param, '=') orelse continue;
+            const eq = std.mem.findScalar(u8, param, '=') orelse continue;
             const key = std.mem.trimEnd(u8, param[0..eq], " \t");
             if (key.len == 0) {
                 continue;
@@ -155,7 +168,7 @@ pub const ContentTypeIterator = struct {
 };
 
 /// Returns the null-terminated charset value.
-pub fn charsetStringZ(mime: *const Mime) [:0]const u8 {
+fn charsetStringZ(mime: *const Mime) [:0]const u8 {
     return mime.charset[0..mime.charset_len :0];
 }
 
@@ -198,6 +211,30 @@ pub fn parse(input: []const u8) !Mime {
     return mime;
 }
 
+/// Try to parse a header which may contain several comma-joined values
+/// (happens when a server and proxy both set the Content-Type).
+pub fn parseLenient(input: []const u8) !Mime {
+    var in_quotes = false;
+    var last_comma: ?usize = null;
+    var i: usize = 0;
+    while (i < input.len) : (i += 1) {
+        switch (input[i]) {
+            '"' => in_quotes = !in_quotes,
+            '\\' => if (in_quotes) {
+                i += 1;
+            },
+            ',' => if (in_quotes == false) {
+                last_comma = i;
+            },
+            else => {},
+        }
+    }
+
+    // last value wins
+    const comma = last_comma orelse return parse(input);
+    return parse(input[comma + 1 ..]) catch parse(input);
+}
+
 /// Prescan the first 1024 bytes of an HTML document for a charset declaration.
 /// Looks for `<meta charset="X">` and `<meta http-equiv="Content-Type" content="...;charset=X">`.
 /// Returns the charset value or null if none found.
@@ -210,7 +247,7 @@ pub fn prescanCharset(html: []const u8) ?[]const u8 {
     var pos: usize = 0;
     while (pos < data.len) {
         // Find next '<'
-        pos = std.mem.indexOfScalarPos(u8, data, pos, '<') orelse return null;
+        pos = std.mem.findScalarPos(u8, data, pos, '<') orelse return null;
         pos += 1;
         if (pos >= data.len) return null;
 
@@ -232,7 +269,7 @@ pub fn prescanCharset(html: []const u8) ?[]const u8 {
         }
 
         // Scan attributes within this meta tag
-        const tag_end = std.mem.indexOfScalarPos(u8, data, pos, '>') orelse return null;
+        const tag_end = std.mem.findScalarPos(u8, data, pos, '>') orelse return null;
         const attrs = data[pos..tag_end];
 
         // Look for charset= attribute directly
@@ -346,7 +383,7 @@ pub fn sniff(body: []const u8) ?Mime {
             // UTF-16 big-endian BOM
             return .{
                 .content_type = .{ .text_plain = {} },
-                .charset = .{ 'U', 'T', 'F', '-', '1', '6', 'B', 'E' } ++ .{0} ** 33,
+                .charset = comptime charsetBuf("UTF-16BE"),
                 .charset_len = 8,
                 .is_default_charset = false,
             };
@@ -355,7 +392,7 @@ pub fn sniff(body: []const u8) ?Mime {
             // UTF-16 little-endian BOM
             return .{
                 .content_type = .{ .text_plain = {} },
-                .charset = .{ 'U', 'T', 'F', '-', '1', '6', 'L', 'E' } ++ .{0} ** 33,
+                .charset = comptime charsetBuf("UTF-16LE"),
                 .charset_len = 8,
                 .is_default_charset = false,
             };
@@ -429,7 +466,7 @@ pub fn isText(mime: *const Mime) bool {
 
 // we expect value to be lowercase
 fn parseContentType(value: []const u8) !struct { ContentType, usize } {
-    const end = std.mem.indexOfScalarPos(u8, value, 0, ';') orelse value.len;
+    const end = std.mem.findScalarPos(u8, value, 0, ';') orelse value.len;
     const type_name = trimRight(value[0..end]);
     const attribute_start = end + 1;
 
@@ -451,6 +488,7 @@ fn parseContentType(value: []const u8) !struct { ContentType, usize } {
         @"image/webp",
 
         @"application/json",
+        @"application/octet-stream",
         @"application/xml",
     }, type_name)) |known_type| {
         const ct: ContentType = switch (known_type) {
@@ -467,11 +505,12 @@ fn parseContentType(value: []const u8) !struct { ContentType, usize } {
             .@"image/gif" => .{ .image_gif = {} },
             .@"image/webp" => .{ .image_webp = {} },
             .@"application/json" => .{ .application_json = {} },
+            .@"application/octet-stream" => .{ .application_octet_stream = {} },
         };
         return .{ ct, attribute_start };
     }
 
-    const separator = std.mem.indexOfScalarPos(u8, type_name, 0, '/') orelse return error.Invalid;
+    const separator = std.mem.findScalarPos(u8, type_name, 0, '/') orelse return error.Invalid;
 
     const main_type = value[0..separator];
     const sub_type = trimRight(value[separator + 1 .. end]);
@@ -520,14 +559,14 @@ pub fn serialize(arena: Allocator, input: []const u8) ![]const u8 {
     }
 
     // type "/" subtype
-    const slash = std.mem.indexOfScalarPos(u8, trimmed, 0, '/') orelse return "";
+    const slash = std.mem.findScalarPos(u8, trimmed, 0, '/') orelse return "";
     const type_name = trimmed[0..slash];
     if (isHttpToken(type_name) == false) {
         return "";
     }
 
     var rest = trimmed[slash + 1 ..];
-    const subtype_end = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
+    const subtype_end = std.mem.findScalar(u8, rest, ';') orelse rest.len;
     const subtype = std.mem.trimEnd(u8, rest[0..subtype_end], &HTTP_WHITESPACE);
     if (isHttpToken(subtype) == false) {
         return "";
@@ -843,6 +882,26 @@ test "Mime: invalid" {
     }
 }
 
+test "Mime: parseLenient takes the last comma-joined value" {
+    {
+        const m = try parseLenient("text/plain; charset=gbk, text/html; charset=windows-1254");
+        try testing.expectEqual(.text_html, std.meta.activeTag(m.content_type));
+        try testing.expectString("windows-1254", m.charset[0..m.charset_len]);
+    }
+    {
+        const m = try parseLenient("text/html, text/html");
+        try testing.expectEqual(.text_html, std.meta.activeTag(m.content_type));
+    }
+    {
+        // A comma inside a quoted parameter value is not a separator.
+        const m = try parseLenient("text/html;x=\",text/plain\";charset=gbk");
+        try testing.expectEqual(.text_html, std.meta.activeTag(m.content_type));
+        try testing.expectString("gbk", m.charset[0..m.charset_len]);
+    }
+    try testing.expectError(error.Invalid, parseLenient("text, html"));
+    try testing.expectError(error.Invalid, parseLenient("garbage"));
+}
+
 test "Mime: malformed parameters are ignored" {
 
     // These should all parse successfully as text/html with malformed params ignored
@@ -898,6 +957,8 @@ test "Mime: parse common" {
     try expect(.{ .content_type = .{ .image_png = {} } }, "image/png");
     try expect(.{ .content_type = .{ .image_gif = {} } }, "image/gif");
     try expect(.{ .content_type = .{ .image_webp = {} } }, "image/webp");
+
+    try expect(.{ .content_type = .{ .application_octet_stream = {} } }, "application/octet-stream");
 }
 
 test "Mime: parse uncommon" {
@@ -963,7 +1024,7 @@ test "Mime: parse charset (WHATWG parameter semantics)" {
     try expect(.{ .content_type = .{ .text_html = {} }, .charset = "UTF-8" }, "text/html;charset =gbk");
 
     // A long preceding parameter doesn't hide a later charset.
-    try expect(.{ .content_type = .{ .text_html = {} }, .charset = "gbk" }, "text/html;" ++ ("a" ** 130) ++ "=x;charset=gbk");
+    try expect(.{ .content_type = .{ .text_html = {} }, .charset = "gbk" }, "text/html;" ++ (repeat("a", 130)) ++ "=x;charset=gbk");
 }
 
 test "Mime: isHTML" {

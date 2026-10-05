@@ -18,71 +18,26 @@
 
 const std = @import("std");
 
-const Frame = @import("Frame.zig");
 const URL = @import("URL.zig");
+const Frame = @import("Frame.zig");
+const RenderTree = @import("RenderTree.zig");
+const StyleManager = @import("StyleManager.zig");
 
 const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
-const TreeWalker = @import("webapi/TreeWalker.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
 
+const LimitedWriter = @import("../LimitedWriter.zig");
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
-const truncateUtf8 = @import("../string.zig").truncateUtf8;
+const repeat = @import("../string.zig").repeat;
 
 pub const Opts = struct {
     max_bytes: ?u32 = null,
 };
 
-const truncation_marker = "\n\n[truncated]\n";
+const truncation_marker = LimitedWriter.truncation_marker;
 
-const LimitedWriter = struct {
-    inner: *std.Io.Writer,
-    remaining: usize,
-    truncated: bool = false,
-    writer: std.Io.Writer,
-
-    fn init(inner: *std.Io.Writer, max_bytes: u32) LimitedWriter {
-        return .{
-            .inner = inner,
-            .remaining = max_bytes,
-            .writer = .{
-                .vtable = &vtable,
-                .buffer = &.{},
-            },
-        };
-    }
-
-    const vtable = std.Io.Writer.VTable{ .drain = drain };
-
-    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
-        const self: *LimitedWriter = @alignCast(@fieldParentPtr("writer", w));
-        var total: usize = 0;
-        for (data[0 .. data.len - 1]) |slice| {
-            try self.consume(slice);
-            total += slice.len;
-        }
-        const pattern = data[data.len - 1];
-        for (0..splat) |_| {
-            try self.consume(pattern);
-            total += pattern.len;
-        }
-        return total;
-    }
-
-    fn consume(self: *LimitedWriter, bytes: []const u8) std.Io.Writer.Error!void {
-        if (bytes.len <= self.remaining) {
-            try self.inner.writeAll(bytes);
-            self.remaining -= bytes.len;
-            return;
-        }
-        if (self.remaining > 0) {
-            try self.inner.writeAll(truncateUtf8(bytes, self.remaining));
-            self.remaining = 0;
-        }
-        self.truncated = true;
-        return error.WriteFailed;
-    }
-};
+const Error = error{ WriteFailed, OutOfMemory };
 
 const State = struct {
     const ListType = enum { ordered, unordered };
@@ -107,92 +62,60 @@ fn shouldAddSpacing(tag: Element.Tag) bool {
     };
 }
 
-fn isLayoutBlock(tag: Element.Tag) bool {
-    return switch (tag) {
-        .main, .section, .article, .nav, .aside, .header, .footer, .div, .ul, .ol => true,
-        else => false,
-    };
-}
-
-fn isStandaloneAnchor(el: *Element) bool {
-    const node = el.asNode();
-    const parent = node.parentNode() orelse return false;
-    const parent_el = parent.is(Element) orelse return false;
-
-    if (!isLayoutBlock(parent_el.getTag())) return false;
-
-    var prev = node.previousSibling();
-    while (prev) |p| : (prev = p.previousSibling()) {
-        if (isSignificantText(p)) return false;
-        if (p.is(Element)) |pe| {
-            if (isVisibleElement(pe)) break;
-        }
-    }
-
-    var next = node.nextSibling();
-    while (next) |n| : (next = n.nextSibling()) {
-        if (isSignificantText(n)) return false;
-        if (n.is(Element)) |ne| {
-            if (isVisibleElement(ne)) break;
-        }
-    }
-
-    return true;
-}
-
-fn isSignificantText(node: *Node) bool {
-    const text = node.is(Node.CData.Text) orelse return false;
-    return !isAllWhitespace(text.ownData());
-}
-
-fn isVisibleElement(el: *Element) bool {
-    const tag = el.getTag();
-    return !tag.isMetadata() and tag != .svg;
-}
-
 fn getAnchorLabel(el: *Element) ?[]const u8 {
-    return el.getAttributeSafe(comptime .wrap("aria-label")) orelse el.getAttributeSafe(comptime .wrap("title"));
+    return el.getAttributeInterned("aria-label") orelse el.getAttributeInterned("title");
 }
 
-const ContentInfo = struct {
-    has_visible: bool,
-    has_block: bool,
-};
+/// The fence info string for a `<pre>`: the `language-*` (or `lang-*`) class
+/// on the `<pre>` itself or on a `<code>` that is its first element child.
+fn codeLanguage(pre: *Element) ?[]const u8 {
+    if (classLanguage(pre)) |lang| return lang;
+    const child = pre.firstElementChild() orelse return null;
+    if (child.getTag() != .code) return null;
+    return classLanguage(child);
+}
 
-fn analyzeContent(root: *Node) ContentInfo {
-    var result: ContentInfo = .{ .has_visible = false, .has_block = false };
-    var tw = TreeWalker.FullExcludeSelf.init(root, .{});
-    while (tw.next()) |node| {
-        if (isSignificantText(node)) {
-            result.has_visible = true;
-            if (result.has_block) return result;
-        } else if (node.is(Element)) |el| {
-            if (!isVisibleElement(el)) {
-                tw.skipChildren();
-            } else {
-                const tag = el.getTag();
-                if (tag == .img) {
-                    result.has_visible = true;
-                    if (result.has_block) return result;
-                }
-                if (tag.isBlock()) {
-                    result.has_block = true;
-                    if (result.has_visible) return result;
-                }
-            }
+fn classLanguage(el: *Element) ?[]const u8 {
+    const class = el.getClassName() orelse return null;
+    var it = std.mem.tokenizeAny(u8, class, &std.ascii.whitespace);
+    while (it.next()) |token| {
+        for ([_][]const u8{ "language-", "lang-" }) |prefix| {
+            if (!std.mem.startsWith(u8, token, prefix)) continue;
+            const lang = token[prefix.len..];
+            // A backtick would end the fence's info string early.
+            if (lang.len > 0 and std.mem.findScalar(u8, lang, '`') == null) return lang;
         }
     }
-    return result;
+    return null;
 }
 
+// Iterative else large trees will stackoverflow
 const Context = struct {
     state: State,
     writer: *std.Io.Writer,
     frame: *Frame,
+    tree: RenderTree,
+    stack: std.ArrayList(Open) = .empty,
 
-    // When there's a slot-attribute, we skip rendering, unless this flag has
-    // bet set to true.
-    force_slot: bool = false,
+    // Content still to render, followed by what closes the element.
+    const Open = struct {
+        iter: RenderTree.Slotted,
+        epilogue: Epilogue,
+    };
+
+    // what follows after the children
+    const Epilogue = union(enum) {
+        none,
+        // A standalone anchor without href: its own line, but no link syntax.
+        standalone_text,
+        element: Element.Tag,
+        block_anchor: struct { href: []const u8, label: ?[]const u8 },
+        inline_anchor: struct { href: []const u8, standalone: bool },
+    };
+
+    fn deinit(self: *Context) void {
+        self.stack.deinit(self.frame.local_arena);
+    }
 
     fn ensureNewline(self: *Context) !void {
         if (!self.state.last_char_was_newline) {
@@ -201,66 +124,53 @@ const Context = struct {
         }
     }
 
-    fn render(self: *Context, node: *Node) error{WriteFailed}!void {
+    fn render(self: *Context, node: *Node) Error!void {
         switch (node._type) {
-            .document, .document_fragment => {
-                try self.renderChildren(node);
-            },
-            .element => {
-                try self.renderElement(node.subtype(Node.Element));
-            },
-            .cdata => {
-                if (node.is(Node.CData.Text)) |_| {
-                    var text = node.subtype(Node.CData).getData().str();
-                    if (self.state.pre_node) |pre| {
-                        if (node.parentNode() == pre and node.nextSibling() == null) {
-                            text = std.mem.trimEnd(u8, text, " \t\r\n");
-                        }
-                    }
-                    try self.renderText(text);
+            .document, .document_fragment => try self.open(.init(self.tree.children(node, false)), .none),
+            else => {
+                if (self.tree.classify(node, .{})) |child| {
+                    try self.renderChild(child);
                 }
             },
-            else => {},
         }
-    }
 
-    fn renderChildren(self: *Context, parent: *Node) !void {
-        var it = parent.childrenIterator();
-        while (it.next()) |child| {
-            try self.render(child);
-        }
-    }
-
-    // Render a <slot>'s assigned light-DOM nodes, or its own children as
-    // fallback. Same as dump's dumpSlotContent.
-    fn renderSlotContent(self: *Context, slot: *Slot) !void {
-        const assigned = slot.assignedNodes(null, self.frame) catch return;
-        if (assigned.len == 0) {
-            return self.renderChildren(slot.asNode());
-        }
-        for (assigned) |node| {
-            // ensures that we don't skip this element when rending it.
-            self.force_slot = true;
-            try self.render(node);
-        }
-        self.force_slot = false;
-    }
-
-    fn renderElement(self: *Context, el: *Element) !void {
-        const force_slot = self.force_slot;
-        self.force_slot = false;
-
-        const tag = el.getTag();
-
-        if (!isVisibleElement(el)) return;
-
-        if (!force_slot) {
-            if (el.getAttributeSafe(comptime .wrap("slot")) != null) {
-                // This element has a slot attribute, and we aren't forcing slot
-                // rendering (i.e. this is the light-DOM), skip it.
-                return;
+        while (self.stack.items.len > 0) {
+            // renderChild can grow the stack, so we can't re-use top on continue
+            const top = &self.stack.items[self.stack.items.len - 1];
+            if (top.iter.next()) |child| {
+                try self.renderChild(child);
+                continue;
             }
+            try self.close(self.stack.pop().?.epilogue);
         }
+    }
+
+    fn open(self: *Context, iter: RenderTree.Slotted, epilogue: Epilogue) Error!void {
+        return self.stack.append(self.frame.local_arena, .{ .iter = iter, .epilogue = epilogue });
+    }
+
+    fn renderChild(self: *Context, child: RenderTree.Child) Error!void {
+        switch (child.what) {
+            .element => |display| {
+                const el = child.node.subtype(Node.Element);
+                if (child.separated and !el.getTag().isBlock() and !self.state.last_char_was_newline) {
+                    try self.writer.writeByte(' ');
+                }
+                try self.renderElement(el, display);
+            },
+            .text => |text| {
+                if (child.separated and !self.state.last_char_was_newline) {
+                    try self.writer.writeByte(' ');
+                }
+                try self.renderText(text);
+            },
+        }
+    }
+
+    // write the element's opening markers and push its contents
+    fn renderElement(self: *Context, el: *Element, display: StyleManager.Display) Error!void {
+        const tag = el.getTag();
+        const boxed = display == .flex or display == .grid;
 
         // Ensure block elements start on a new line
         if (tag.isBlock() and !self.state.in_table) {
@@ -322,7 +232,9 @@ const Context = struct {
                 self.state.last_char_was_newline = false;
             },
             .pre => {
-                try self.writer.writeAll("```\n");
+                try self.writer.writeAll("```");
+                if (codeLanguage(el)) |lang| try self.writer.writeAll(lang);
+                try self.writer.writeByte('\n');
                 self.state.pre_node = el.asNode();
                 self.state.last_char_was_newline = true;
             },
@@ -360,11 +272,11 @@ const Context = struct {
             },
             .img => {
                 try self.writer.writeAll("![");
-                if (el.getAttributeSafe(comptime .wrap("alt"))) |alt| {
+                if (el.getAttributeInterned("alt")) |alt| {
                     try self.escape(alt);
                 }
                 try self.writer.writeAll("](");
-                if (el.getAttributeSafe(comptime .wrap("src"))) |src| {
+                if (el.getAttributeInterned("src")) |src| {
                     const frame = self.frame;
                     const absolute_src = URL.resolve(frame.call_arena, frame.base(), src, .{ .encoding = frame.charset }) catch src;
                     try self.writer.writeAll(absolute_src);
@@ -375,44 +287,78 @@ const Context = struct {
             },
             .anchor => {
                 const frame = self.frame;
-                const info = analyzeContent(el.asNode());
+                // Without href, <a> is a placeholder, not a hyperlink.
+                const href_raw = el.getAttributeInterned("href") orelse {
+                    if (!RenderTree.isStandaloneAnchor(el, frame)) {
+                        return self.open(.init(self.tree.content(el, boxed)), .none);
+                    }
+                    try self.ensureNewline();
+                    return self.open(.init(self.tree.content(el, boxed)), .standalone_text);
+                };
+
+                const info = RenderTree.analyzeContent(el.asNode(), frame);
                 const label = getAnchorLabel(el);
-                const href_raw = el.getAttributeSafe(comptime .wrap("href"));
-
-                if (!info.has_visible and label == null and href_raw == null) return;
-
-                const href = if (href_raw) |h| URL.resolve(frame.local_arena, frame.base(), h, .{ .encoding = frame.charset }) catch h else null;
+                const href = URL.resolve(frame.local_arena, frame.base(), href_raw, .{ .encoding = frame.charset }) catch href_raw;
 
                 if (info.has_block) {
-                    try self.renderChildren(el.asNode());
-                    if (href) |h| {
-                        if (!self.state.last_char_was_newline) try self.writer.writeByte('\n');
-                        try self.writer.writeByte('[');
-                        try self.writer.writeAll(label orelse h);
-                        try self.writer.writeAll("](");
-                        try self.writer.writeAll(h);
-                        try self.writer.writeAll(")\n");
-                        self.state.last_char_was_newline = true;
-                    }
-                    return;
+                    return self.open(.init(self.tree.content(el, boxed)), .{ .block_anchor = .{
+                        .href = href,
+                        .label = label,
+                    } });
                 }
 
-                const standalone = isStandaloneAnchor(el);
+                const standalone = RenderTree.isStandaloneAnchor(el, frame);
                 if (standalone) {
                     if (!self.state.last_char_was_newline) try self.writer.writeByte('\n');
                 }
                 try self.writer.writeByte('[');
+
+                const epilogue: Epilogue = .{ .inline_anchor = .{ .href = href, .standalone = standalone } };
                 if (info.has_visible) {
-                    try self.renderChildren(el.asNode());
-                } else {
-                    try self.writer.writeAll(label orelse "");
+                    return self.open(.init(self.tree.content(el, boxed)), epilogue);
                 }
+                try self.writer.writeAll(label orelse "");
+                return self.close(epilogue);
+            },
+            .input => {
+                const type_attr = el.getAttributeInterned("type") orelse return;
+                if (std.ascii.eqlIgnoreCase(type_attr, "checkbox")) {
+                    const checked = el.getAttributeInterned("checked") != null;
+                    try self.writer.writeAll(if (checked) "[x] " else "[ ] ");
+                    self.state.last_char_was_newline = false;
+                }
+                return;
+            },
+            .slot => return self.open(self.tree.slotted(el.as(Slot)), .none),
+            else => {},
+        }
+
+        return self.open(.init(self.tree.content(el, boxed)), .{ .element = tag });
+    }
+
+    // Finish the element after renderElement has written the children
+    fn close(self: *Context, epilogue: Epilogue) Error!void {
+        const tag = switch (epilogue) {
+            .none => return,
+            .standalone_text => {
+                try self.ensureNewline();
+                return;
+            },
+            .element => |t| t,
+            .block_anchor => |anchor| {
+                try self.ensureNewline();
+                try self.writer.writeByte('[');
+                try self.writer.writeAll(anchor.label orelse anchor.href);
                 try self.writer.writeAll("](");
-                if (href) |h| {
-                    try self.writer.writeAll(h);
-                }
+                try self.writer.writeAll(anchor.href);
+                try self.writer.writeAll(")\n");
+                return;
+            },
+            .inline_anchor => |anchor| {
+                try self.writer.writeAll("](");
+                try self.writer.writeAll(anchor.href);
                 try self.writer.writeByte(')');
-                if (standalone) {
+                if (anchor.standalone) {
                     try self.writer.writeByte('\n');
                     self.state.last_char_was_newline = true;
                 } else {
@@ -420,39 +366,13 @@ const Context = struct {
                 }
                 return;
             },
-            .input => {
-                const type_attr = el.getAttributeSafe(comptime .wrap("type")) orelse return;
-                if (std.ascii.eqlIgnoreCase(type_attr, "checkbox")) {
-                    const checked = el.getAttributeSafe(comptime .wrap("checked")) != null;
-                    try self.writer.writeAll(if (checked) "[x] " else "[ ] ");
-                    self.state.last_char_was_newline = false;
-                }
-                return;
-            },
-            .slot => return self.renderSlotContent(el.as(Slot)),
-            else => {},
-        }
-
-        // Composed tree: a shadow host renders its shadow tree in place of its
-        // light-DOM children (light DOM is visible only through <slot>). Applies
-        // to open and closed roots alike. markdown is always a rendered-content
-        // path (cf. dump.zig's default .rendered mode), so we always pierce; the
-        // early-return tags above can never be valid shadow hosts, so only this
-        // generic path needs the check.
-        if (el.hostedShadowRoot(self.frame)) |shadow| {
-            try self.renderChildren(shadow.asNode());
-        } else {
-            try self.renderChildren(el.asNode());
-        }
+        };
 
         switch (tag) {
             .pre => {
-                if (!self.state.last_char_was_newline) {
-                    try self.writer.writeByte('\n');
-                }
+                try self.ensureNewline();
                 try self.writer.writeAll("```\n");
                 self.state.pre_node = null;
-                self.state.last_char_was_newline = true;
             },
             .code => {
                 if (self.state.pre_node == null) {
@@ -557,15 +477,19 @@ const Context = struct {
     }
 };
 
-pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
+pub fn dump(state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
+    const node = state.root;
     if (opts.max_bytes) |limit| {
         var lw = LimitedWriter.init(writer, limit);
         var ctx: Context = .{
             .state = .{},
             .writer = &lw.writer,
             .frame = frame,
+            .tree = .{ .frame = frame, .state = state },
         };
+        defer ctx.deinit();
         ctx.render(node) catch |err| switch (err) {
+            error.OutOfMemory => return err,
             error.WriteFailed => {
                 if (!lw.truncated) return err;
                 try writer.writeAll(truncation_marker);
@@ -582,7 +506,9 @@ pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !voi
         .state = .{},
         .writer = writer,
         .frame = frame,
+        .tree = .{ .frame = frame, .state = state },
     };
+    defer ctx.deinit();
     try ctx.render(node);
     if (!ctx.state.last_char_was_newline) {
         try writer.writeByte('\n');
@@ -603,7 +529,7 @@ fn testMarkdownHTML(html: []const u8, expected: []const u8) !void {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(div.asNode(), .{}, &aw.writer, frame);
+    try dump(.{ .root = div.asNode() }, .{}, &aw.writer, frame);
 
     try testing.expectString(expected, aw.written());
 }
@@ -647,6 +573,36 @@ test "browser.markdown: table" {
         \\| Cell 1 | Cell 2 |
         \\
     );
+}
+
+test "browser.markdown: flex and grid items are separated" {
+    try testMarkdownHTML(
+        \\<a href="/p" style="display:flex">Title<b>Aug 04 2026</b></a>
+    , "[Title **Aug 04 2026**](http://localhost/p)\n");
+    try testMarkdownHTML(
+        \\<div style="display:grid"><span>a</span><span>b</span> <span style="display:none">x</span><span>c</span></div>
+    , "a b c\n");
+    try testMarkdownHTML(
+        \\<div style="display:inline-flex"> lead <b>x</b> tail </div>
+    , "lead **x** tail\n");
+    try testMarkdownHTML(
+        \\<div style="display:flex"><div>a</div><div>b</div></div>
+    , "a\nb\n");
+}
+
+test "browser.markdown: flex from a stylesheet" {
+    var page = try testing.pageTest("markdown_flex.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dump(.{ .root = frame.window._document.asNode() }, .{}, &aw.writer, frame);
+    try testing.expectString(
+        \\[Title **Aug 04 2026**](http://127.0.0.1:9582/p)
+        \\
+        \\Title**date**
+        \\
+    , aw.written());
 }
 
 test "browser.markdown: nested lists" {
@@ -693,6 +649,30 @@ test "browser.markdown: code" {
         \\```
         \\line 1
         \\line 2
+        \\```
+        \\
+    );
+}
+
+test "browser.markdown: code fence keeps the language" {
+    try testMarkdownHTML("<pre><code class=\"hljs language-zig\">const x = 1;</code></pre>",
+        \\
+        \\```zig
+        \\const x = 1;
+        \\```
+        \\
+    );
+    try testMarkdownHTML("<pre class=\"lang-sh\">ls</pre>",
+        \\
+        \\```sh
+        \\ls
+        \\```
+        \\
+    );
+    try testMarkdownHTML("<pre class=\"language-\">x</pre>",
+        \\
+        \\```
+        \\x
         \\```
         \\
     );
@@ -808,7 +788,7 @@ test "browser.markdown: resolve links" {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(div.asNode(), .{}, &aw.writer, frame);
+    try dump(.{ .root = div.asNode() }, .{}, &aw.writer, frame);
 
     try testing.expectString(
         \\[Link](https://example.com/a/b)
@@ -832,6 +812,116 @@ test "browser.markdown: anchor fallback label" {
     , "[](http://localhost/no-label)\n");
 }
 
+test "browser.markdown: anchor without href is plain text" {
+    try testMarkdownHTML(
+        \\<p>Read the <a class="term">glossary</a> first.</p>
+    , "\nRead the glossary first.\n");
+
+    try testMarkdownHTML(
+        \\<nav><a class="x">Home</a><a class="x"><b>About</b></a></nav>
+    , "Home\n**About**\n");
+
+    try testMarkdownHTML(
+        \\<a aria-label="Menu"><svg></svg></a>
+    , "");
+}
+
+test "browser.markdown: hidden elements are skipped" {
+    try testMarkdownHTML(
+        \\<p>before</p>
+        \\<p style="display:none">inline</p>
+        \\<div hidden><p>attribute</p></div>
+        \\<p aria-hidden="true">aria</p>
+        \\<span aria-hidden="TRUE">aria caps</span>
+        \\<p aria-hidden="false">aria false</p>
+        \\<details><summary>Summary</summary><p>collapsed</p></details><dialog><p>closed dialog</p></dialog><p>after</p>
+    ,
+        \\
+        \\before
+        \\
+        \\aria false
+        \\Summary
+        \\
+        \\after
+        \\
+    );
+}
+
+test "browser.markdown: stylesheet display:none is skipped" {
+    var page = try testing.pageTest("dump.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dump(.{ .root = frame.window._document.asNode() }, .{}, &aw.writer, frame);
+
+    try testing.expectString(
+        \\
+        \\# Title
+        \\![]()
+        \\
+        \\visible & well
+        \\
+    , aw.written());
+}
+
+test "browser.markdown: anchor with only hidden content falls back to label" {
+    try testMarkdownHTML(
+        \\<a href="/x" aria-label="Label"><span hidden>secret</span></a>
+    , "[Label](http://localhost/x)\n");
+}
+
+test "browser.markdown: scoped dump of a hidden subtree still renders it" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    frame.url = "http://localhost/";
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<div id="modal" style="display:none"><p>dialog text</p><p hidden>nested hidden</p></div>
+    );
+    const modal = div.asNode().firstChild().?;
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(.{ .root = modal }, .{}, &aw.writer, frame);
+
+    try testing.expectString("\ndialog text\n", aw.written());
+}
+
+test "browser.markdown: strip.ui drops images and other visual elements" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    frame.url = "http://localhost/";
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>Text <img src=\"a.png\" alt=\"A\"> more<canvas>fallback</canvas></p>");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(.{ .root = div.asNode(), .strip = .{ .ui = true } }, .{}, &aw.writer, frame);
+
+    try testing.expectString("\nText  more\n", aw.written());
+}
+
+test "browser.markdown: strip.shell drops page chrome" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    frame.url = "http://localhost/";
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<nav><a href=\"/\">Home</a></nav><main><p>Body</p></main><footer>Legal</footer>");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(.{ .root = div.asNode(), .strip = .{ .shell = true } }, .{}, &aw.writer, frame);
+
+    try testing.expectString("\nBody\n", aw.written());
+}
+
 test "browser.markdown: max_bytes leaves output untouched when under cap" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
@@ -843,7 +933,7 @@ test "browser.markdown: max_bytes leaves output untouched when under cap" {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(div.asNode(), .{ .max_bytes = 1024 }, &aw.writer, frame);
+    try dump(.{ .root = div.asNode() }, .{ .max_bytes = 1024 }, &aw.writer, frame);
 
     try testing.expectString("\nShort\n", aw.written());
 }
@@ -855,11 +945,11 @@ test "browser.markdown: max_bytes truncates with marker" {
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>" ++ ("AAAA " ** 100) ++ "</p>");
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>" ++ (repeat("AAAA ", 100)) ++ "</p>");
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(div.asNode(), .{ .max_bytes = 50 }, &aw.writer, frame);
+    try dump(.{ .root = div.asNode() }, .{ .max_bytes = 50 }, &aw.writer, frame);
 
     const out = aw.written();
     try testing.expect(std.mem.endsWith(u8, out, "[truncated]\n"));
@@ -886,7 +976,7 @@ fn testMarkdownShadow(light: []const u8, shadow: []const u8, expected: []const u
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(host.asNode(), .{}, &aw.writer, frame);
+    try dump(.{ .root = host.asNode() }, .{}, &aw.writer, frame);
 
     try testing.expectString(expected, aw.written());
 }
@@ -932,11 +1022,33 @@ test "browser.markdown: declarative shadow DOM renders through piercing" {
     const host = try doc.createElement("div", null, frame);
     try host.setHTMLUnsafe(
         \\<div><template shadowrootmode="open"><p>shadow content</p></template></div>
-    , frame);
+    , null, frame);
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(host.asNode(), .{}, &aw.writer, frame);
+    try dump(.{ .root = host.asNode() }, .{}, &aw.writer, frame);
 
     try testing.expectString("\nshadow content\n", aw.written());
+}
+
+test "browser.markdown: deep nesting doesn't overflow the native stack" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const depth = 50_000;
+    const doc = frame.window._document;
+    var top = (try doc.createElement("i", null, frame)).asNode();
+    for (1..depth) |_| {
+        const parent = (try doc.createElement("i", null, frame)).asNode();
+        _ = try parent.appendChild(top, frame);
+        top = parent;
+    }
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(.{ .root = top }, .{}, &aw.writer, frame);
+
+    // Every <i> opens and closes with a '*', then dump's trailing newline.
+    try testing.expectEqual(depth * 2 + 1, aw.written().len);
+    try testing.expectString("**", aw.written()[0..2]);
 }

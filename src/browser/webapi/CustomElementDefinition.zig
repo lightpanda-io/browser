@@ -43,10 +43,6 @@ pub fn isAttributeObserved(self: *const CustomElementDefinition, name: String) b
     return self.observed_attributes.contains(name.str());
 }
 
-pub fn isAutonomous(self: *const CustomElementDefinition) bool {
-    return self.extends == null;
-}
-
 pub fn isCustomizedBuiltIn(self: *const CustomElementDefinition) bool {
     return self.extends != null;
 }

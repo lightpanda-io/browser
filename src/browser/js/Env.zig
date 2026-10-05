@@ -22,15 +22,19 @@ const lp = @import("lightpanda");
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
 const Context = @import("Context.zig");
+const WasmStreaming = @import("WasmStreaming.zig");
 const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");
 const Inspector = @import("Inspector.zig");
 
 const App = @import("../../App.zig");
+const string = @import("../../string.zig");
+
 const Frame = @import("../Frame.zig");
 const Window = @import("../webapi/Window.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 const SharedWorkerGlobalScope = @import("../webapi/SharedWorkerGlobalScope.zig");
+const ServiceWorkerGlobalScope = @import("../webapi/ServiceWorkerGlobalScope.zig");
 const DedicatedWorkerGlobalScope = @import("../webapi/DedicatedWorkerGlobalScope.zig");
 
 const v8 = js.v8;
@@ -90,8 +94,11 @@ templates: []*const v8.FunctionTemplate,
 inspector: ?*Inspector,
 
 // We can store data in a v8::Object's Private data bag. The keys are v8::Private
-// which an be created once per isolaet.
+// which an be created once per isolate.
 private_symbols: PrivateSymbols,
+
+// Interned names for `hideServiceWorker`.
+disabled_api_names: DisabledApiNames,
 
 microtask_queues_are_running: bool,
 
@@ -103,6 +110,24 @@ terminate_mutex: std.Io.Mutex = .init,
 // Set from network thread, saying termination should happen. Read from worker
 // thread making sure terminate hasn't been canceled.
 terminate_requested: std.atomic.Value(bool) = .init(false),
+
+// Boot-clock ms at which the watchdog asked for a stall report; 0 = none.
+// Set by the watchdog thread, consumed on the worker by terminateInterrupt so
+// the stalled script can be identified before it is killed.
+stall_report_requested_at: std.atomic.Value(u64) = .init(0),
+// How long the worker had stalled when the watchdog requested the report.
+// Published before stall_report_requested_at, so it's visible to whoever
+// observes that as non-zero.
+stall_report_stalled_ms: std.atomic.Value(u64) = .init(0),
+
+// Set while a V8 context (or the isolate) is being disposed.
+tearing_down: bool = false,
+
+heap_limit_protected: bool = false,
+
+// Message for the next TypeError the bridge builds. Set by local.typeError.
+// Think of it as our own little global errno. How cute.
+error_message: ?[]const u8 = null,
 
 pub const InitOpts = struct {
     with_inspector: bool = false,
@@ -128,7 +153,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     v8.v8__Isolate__CreateParams__CONSTRUCT(params);
     params.snapshot_blob = @ptrCast(&snapshot.startup_data);
 
-    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator().?;
+    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator(js.ArrayBuffer.MAX_LENGTH).?;
     errdefer v8.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
 
     params.external_references = &snapshot.external_references;
@@ -147,6 +172,8 @@ pub fn init(app: *App, opts: InitOpts) !Env {
 
     v8.v8__Isolate__SetHostImportModuleDynamicallyCallback(isolate_handle, Context.dynamicModuleCallback);
     v8.v8__Isolate__SetPromiseRejectCallback(isolate_handle, promiseRejectCallback);
+    // Also set on the snapshot isolate, see Snapshot.create.
+    v8.v8__Isolate__SetWasmStreamingCallback(isolate_handle, WasmStreaming.callback);
     v8.v8__Isolate__SetMicrotasksPolicy(isolate_handle, v8.kExplicit);
     v8.v8__Isolate__SetFatalErrorHandler(isolate_handle, fatalCallback);
     v8.v8__Isolate__SetOOMErrorHandler(isolate_handle, oomCallback);
@@ -168,6 +195,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     errdefer allocator.free(templates);
 
     var private_symbols: PrivateSymbols = undefined;
+    var disabled_api_names: DisabledApiNames = undefined;
     {
         var temp_scope: js.HandleScope = undefined;
         temp_scope.init(isolate);
@@ -185,6 +213,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         }
 
         private_symbols = PrivateSymbols.init(isolate_handle);
+        disabled_api_names = DisabledApiNames.init(isolate_handle);
     }
 
     var inspector: ?*js.Inspector = null;
@@ -203,12 +232,17 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         .isolate_params = params,
         .inspector = inspector,
         .private_symbols = private_symbols,
+        .disabled_api_names = disabled_api_names,
         .microtask_queues_are_running = false,
         .eternal_function_templates = eternal_function_templates,
     };
 }
 
 pub fn deinit(self: *Env) void {
+    // Prevent callbacks during isolate disposal.
+    self.tearing_down = true;
+    self.releaseHeapLimit();
+
     if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.contexts.items.len == 0);
     }
@@ -228,13 +262,17 @@ pub fn deinit(self: *Env) void {
     allocator.free(self.eternal_function_templates);
     self.private_symbols.deinit();
 
+    // This has to be before it's destroyed, since the handle has to exist to
+    // be able to notify the platform about it. Documentation hits at this order:
+    // "Notifies the given platform about the Isolate getting deleted soon"
+    v8.v8__Platform__NotifyIsolateShutdown(self.platform.handle, self.isolate.handle);
     self.isolate.exit();
     self.isolate.deinit();
     v8.v8__ArrayBuffer__Allocator__DELETE(self.isolate_params.array_buffer_allocator.?);
     allocator.destroy(self.isolate_params);
 }
 
-pub const ContextParams = struct {
+const ContextParams = struct {
     identity: *js.Identity,
     identity_arena: Allocator,
     call_arena: Allocator,
@@ -276,10 +314,11 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     };
 
     // Restore the context from the snapshot
-    // (0 = Page, 1 = DedicatedWorker, 2 = SharedWorker)
+    // (0 = Page, 1 = DedicatedWorker, 2 = SharedWorker, 3 = ServiceWorker)
     const snapshot_index: u32 = if (comptime is_frame) 0 else switch (global._type) {
         .dedicated => 1,
         .shared => 2,
+        .service => 3,
     };
     const v8_context = v8.v8__Context__FromSnapshot__Config(isolate.handle, snapshot_index, &.{
         .global_template = null,
@@ -293,6 +332,10 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
 
     // Get the global object for the context
     const global_obj = v8.v8__Context__Global(v8_context).?;
+
+    if (global._session.experimental_features.serviceworker == false) {
+        self.hideServiceWorker(is_frame, v8_context, global_obj);
+    }
 
     // Store our TAO inside the internal field of the global object. This
     // maps the v8::Object -> Zig instance.
@@ -315,13 +358,19 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
             .prototype_len = @intCast(SharedWorkerGlobalScope.JsApi.Meta.prototype_chain.len),
             .subtype = null,
         },
+        .service => |scope| .{
+            .value = @ptrCast(scope),
+            .prototype_chain = (&ServiceWorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
+            .prototype_len = @intCast(ServiceWorkerGlobalScope.JsApi.Meta.prototype_chain.len),
+            .subtype = null,
+        },
     };
     v8.v8__Object__SetAlignedPointerInInternalField(global_obj, 0, tao);
 
     const context_id = self.context_id;
     self.context_id = context_id + 1;
 
-    const page = global._page;
+    const page = global.page;
     const origin = try page.getOrCreateOrigin(null);
     errdefer page.releaseOrigin(origin);
 
@@ -384,6 +433,44 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     return context;
 }
 
+// When ServiceWorkers are disabled (as they are by default), or the frame isn't
+// a secure context, this must be false:
+//     'serviceWorker' in navigator
+// If you disable ServiceWorkers in FireFox (about:config) this is the behavior
+// you get, and it seems to be the safest way to not break sites. BUT, the
+// accessor is baked into the snapshot, so every frame context deletes it from
+// its own Navigator.prototype (2 Gets + 1 Delete).
+// (If this proves to be an issue, we could swap the logic, and dynamically ADD
+// it when it is enabled, but that's a lot more code).
+pub fn hideServiceWorker(self: *const Env, comptime is_frame: bool, v8_context: *const v8.Context, global_obj: *const v8.Object) void {
+    if (comptime is_frame) {
+        self.deletePrototypeMember(v8_context, global_obj, "navigator", "service_worker");
+    }
+
+    // A [Global] interface's members are on its prototype and mirrored onto the
+    // global itself.
+    self.deletePrototypeMember(v8_context, global_obj, if (comptime is_frame) "window" else "worker_global_scope", "caches");
+    var deleted: v8.MaybeBool = undefined;
+    v8.v8__Object__Delete(global_obj, v8_context, @ptrCast(self.disabled_api_names.get(self.isolate.handle, "caches")), &deleted);
+    if (deleted.has_value == false or deleted.value == false) {
+        log.warn(.js, "experimental API not hidden", .{ .interface = "global", .member = "caches" });
+    }
+}
+
+fn deletePrototypeMember(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object, comptime interface: []const u8, comptime member: []const u8) void {
+    const isolate = self.isolate.handle;
+    const names = &self.disabled_api_names;
+
+    const constructor = v8.v8__Object__Get(global_obj, v8_context, @ptrCast(names.get(isolate, interface))) orelse return;
+    const prototype = v8.v8__Object__Get(@ptrCast(constructor), v8_context, @ptrCast(names.get(isolate, "prototype"))) orelse return;
+
+    var deleted: v8.MaybeBool = undefined;
+    v8.v8__Object__Delete(@ptrCast(prototype), v8_context, @ptrCast(names.get(isolate, member)), &deleted);
+    if (deleted.has_value == false or deleted.value == false) {
+        log.warn(.js, "experimental API not hidden", .{ .interface = interface, .member = member });
+    }
+}
+
 pub fn destroyContext(self: *Env, context: *Context) void {
     for (self.contexts.items, 0..) |ctx, i| {
         if (ctx == context) {
@@ -426,7 +513,9 @@ pub fn runMicrotasks(self: *Env) void {
         var i: usize = 0;
         while (i < self.contexts.items.len) : (i += 1) {
             const ctx = self.contexts.items[i];
+            const page_scope = ctx.page.logScope();
             v8.v8__MicrotaskQueue__PerformCheckpoint(ctx.microtask_queue, v8_isolate);
+            page_scope.exit();
 
             if (self.terminatePending()) {
                 if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate)) {
@@ -500,6 +589,10 @@ pub fn pumpMessageLoop(self: *const Env) void {
     while (v8.v8__Platform__PumpMessageLoop(platform, isolate, false)) {}
 }
 
+pub fn setForegroundTaskPostedCallback(self: *const Env, callback: v8.ForegroundTaskPostedCallback, ctx: ?*anyopaque) void {
+    v8.v8__Platform__SetForegroundTaskPostedCallback(self.platform.handle, self.isolate.handle, callback, ctx);
+}
+
 pub fn hasBackgroundTasks(self: *const Env) bool {
     return v8.v8__Isolate__HasPendingBackgroundTasks(self.isolate.handle);
 }
@@ -537,27 +630,6 @@ pub fn memoryPressureNotification(self: *Env, level: Isolate.MemoryPressureLevel
     self.isolate.memoryPressureNotification(level);
 }
 
-pub fn dumpMemoryStats(self: *Env) void {
-    const stats = self.isolate.getHeapStatistics();
-    std.debug.print(
-        \\ Total Heap Size: {d}
-        \\ Total Heap Size Executable: {d}
-        \\ Total Physical Size: {d}
-        \\ Total Available Size: {d}
-        \\ Used Heap Size: {d}
-        \\ Heap Size Limit: {d}
-        \\ Malloced Memory: {d}
-        \\ External Memory: {d}
-        \\ Peak Malloced Memory: {d}
-        \\ Number Of Native Contexts: {d}
-        \\ Number Of Detached Contexts: {d}
-        \\ Total Global Handles Size: {d}
-        \\ Used Global Handles Size: {d}
-        \\ Zap Garbage: {any}
-        \\
-    , .{ stats.total_heap_size, stats.total_heap_size_executable, stats.total_physical_size, stats.total_available_size, stats.used_heap_size, stats.heap_size_limit, stats.malloced_memory, stats.external_memory, stats.peak_malloced_memory, stats.number_of_native_contexts, stats.number_of_detached_contexts, stats.total_global_handles_size, stats.used_global_handles_size, stats.does_zap_garbage });
-}
-
 // The single "must not run JS" predicate. We're the only ones who ever call
 // TerminateExecution (here and in terminateInterrupt) and both set this flag,
 // so it's always at least as true as v8__Isolate__IsExecutionTerminating —
@@ -574,14 +646,11 @@ pub fn terminate(self: *Env) void {
     v8.v8__Isolate__TerminateExecution(self.isolate.handle);
 }
 
-// We need a stable pointer for *Env, so can't be setup in init.
+/// We need a stable pointer for `*Env`, so can't be setup in `init`.
 pub fn protectHeapLimit(self: *Env) void {
+    self.heap_limit_protected = true;
     v8.v8__Isolate__AddNearHeapLimitCallback(self.isolate.handle, nearHeapLimit, self);
-    // TODO: uncomment this when https://github.com/lightpanda-io/zig-v8-fork/pull/187 lands
-    // if our nearHeapLimit extends the memory, we want to  restore the original
-    // value, since the isolate can be long lived (relative to the page/script
-    // that caused the memory spike).
-    // v8.v8__Isolate__AutomaticallyRestoreInitialHeapLimit(self.isolate.handle, 0.5);
+    v8.v8__Isolate__AutomaticallyRestoreInitialHeapLimit(self.isolate.handle, 0.5);
 }
 
 // v8 is telling us it's about to run out of memory for this isolate. We'll
@@ -599,12 +668,29 @@ pub fn protectHeapLimit(self: *Env) void {
 // V8 expects.
 fn nearHeapLimit(data: ?*anyopaque, current_limit: usize, initial_limit: usize) callconv(.c) usize {
     const self: *Env = @ptrCast(@alignCast(data.?));
+    return self.onNearHeapLimit(current_limit, initial_limit);
+}
+
+fn releaseHeapLimit(self: *Env) void {
+    if (self.heap_limit_protected == false) {
+        return;
+    }
+    self.heap_limit_protected = false;
+    v8.v8__Isolate__RemoveNearHeapLimitCallback(self.isolate.handle, nearHeapLimit, 0);
+}
+
+fn onNearHeapLimit(self: *Env, current_limit: usize, initial_limit: usize) usize {
     lp.metrics.js_heap_limits.incr();
     log.err(.app, "JS heap limit reached", .{
         .initial_limit = initial_limit,
         .current_limit = current_limit,
+        .tearing_down = self.tearing_down,
     });
-    self.requestTerminate();
+
+    // Context disposal can trigger this after execution has ended.
+    if (self.tearing_down == false) {
+        self.requestTerminate();
+    }
 
     const cap = initial_limit + 256 * 1024 * 1024;
     if (current_limit >= cap) {
@@ -619,12 +705,82 @@ pub fn requestTerminate(self: *Env) void {
     v8.v8__Isolate__RequestInterrupt(self.isolate.handle, terminateInterrupt, self);
 }
 
+// Called from the watchdog thread. Like requestTerminate, but the worker also
+// logs the running script's frame URL and stack before termination.
+pub fn requestTerminateForStall(self: *Env, stalled_ms: u64) void {
+    self.stall_report_stalled_ms.store(stalled_ms, .monotonic);
+    self.stall_report_requested_at.store(@max(lp.datetime.milliTimestamp(.boot), 1), .release);
+    self.requestTerminate();
+}
+
+// Boot-clock ms at which a stall report was requested but not yet logged by
+// the worker, or null. Read by the watchdog thread.
+pub fn pendingStallReport(self: *const Env) ?u64 {
+    const requested_at = self.stall_report_requested_at.load(.acquire);
+    return if (requested_at == 0) null else requested_at;
+}
+
 // Runs on the worker thread
 fn terminateInterrupt(_: ?*v8.Isolate, data: ?*anyopaque) callconv(.c) void {
     const self: *Env = @ptrCast(@alignCast(data.?));
     if (self.terminate_requested.load(.acquire)) {
+        const requested_at = self.stall_report_requested_at.swap(0, .acq_rel);
+        if (requested_at != 0) {
+            self.logStall(requested_at);
+        }
         v8.v8__Isolate__TerminateExecution(self.isolate.handle);
     }
+}
+
+const STALL_STACK_FRAMES = 12;
+const STALL_URL_MAX = 512;
+
+const StallReport = struct {
+    url: []const u8 = "",
+    page_url: []const u8 = "",
+    stack: []const u8 = "",
+};
+
+// Runs on the worker thread, inside a V8 interrupt: reads the current stack
+// but never runs JavaScript. Everything returned is either in `stack_buf` or
+// owned by the frame, so it's only valid until the caller returns.
+fn stallReport(self: *Env, stack_buf: []u8) StallReport {
+    const isolate = self.isolate.handle;
+    var hs: v8.HandleScope = undefined;
+    v8.v8__HandleScope__CONSTRUCT(&hs, isolate);
+    defer v8.v8__HandleScope__DESTRUCT(&hs);
+
+    var report: StallReport = .{};
+    if (Context.fromIsolate(self.isolate)) |entry| {
+        const ctx, _ = entry;
+        report.url = string.truncateUtf8(ctx.global.url(), STALL_URL_MAX);
+        report.page_url = string.truncateUtf8(switch (ctx.global) {
+            .frame => |frame| frame.page.frame.url,
+            .worker => |worker| worker.page.frame.url,
+        }, STALL_URL_MAX);
+    }
+
+    var writer: std.Io.Writer = .fixed(stack_buf);
+    if (v8.v8__StackTrace__CurrentStackTrace__STATIC(isolate, STALL_STACK_FRAMES)) |stack| {
+        // A full buffer truncates the stack; the frames written are kept.
+        js.writeStackTrace(isolate, stack, &writer) catch {};
+    }
+    report.stack = writer.buffered();
+    return report;
+}
+
+fn logStall(self: *Env, requested_at: u64) void {
+    var stack_buf: [1536]u8 = undefined;
+    const report = self.stallReport(&stack_buf);
+    log.warn(.watchdog, "watchdog stall script", .{
+        .stalled_ms = self.stall_report_stalled_ms.load(.monotonic),
+        .url = report.url,
+        .page_url = report.page_url,
+        // Large when the stall was in native code: the interrupt only lands
+        // once control is back in JavaScript.
+        .interrupt_delay_ms = lp.datetime.milliTimestamp(.boot) -| requested_at,
+        .stack = report.stack,
+    });
 }
 
 /// Clears a pending termination so V8 calls (e.g. those made during cleanup)
@@ -635,6 +791,7 @@ pub fn cancelTerminate(self: *Env) void {
     self.terminate_mutex.lockUncancelable(lp.io);
     defer self.terminate_mutex.unlock(lp.io);
     self.terminate_requested.store(false, .release);
+    self.stall_report_requested_at.store(0, .release);
     v8.v8__Isolate__CancelTerminateExecution(self.isolate.handle);
 }
 
@@ -673,7 +830,7 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
                 .local = &local,
                 .handle = &message_handle,
             }, frame) catch |err| {
-                log.warn(.browser, "unhandled rejection handler", .{ .err = err, .target = "window" });
+                log.debug(.browser, "unhandled rejection handler", .{ .err = err, .target = "window" });
             };
         },
         .worker => |wsg| {
@@ -681,7 +838,7 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
                 .local = &local,
                 .handle = &message_handle,
             }) catch |err| {
-                log.warn(.browser, "unhandled rejection handler", .{ .err = err, .target = "worker" });
+                log.debug(.browser, "unhandled rejection handler", .{ .err = err, .target = "worker" });
             };
         },
     }
@@ -696,10 +853,41 @@ fn fatalCallback(c_location: [*c]const u8, c_message: [*c]const u8) callconv(.c)
 
 fn oomCallback(c_location: [*c]const u8, details: ?*const v8.OOMDetails) callconv(.c) void {
     const location = std.mem.span(c_location);
-    const detail = if (details) |d| std.mem.span(d.detail) else "";
-    log.fatal(.app, "V8 OOM", .{ .location = location, .detail = detail });
+    const d = details orelse &v8.OOMDetails{};
+    const detail: []const u8 = if (d.detail == null) "" else std.mem.span(d.detail);
+    log.fatal(.app, "V8 OOM", .{ .location = location, .detail = detail, .is_heap_oom = d.is_heap_oom });
     @import("../../crash_handler.zig").crash("V8 OOM", .{ .location = location, .detail = detail }, @returnAddress());
 }
+
+const DisabledApiNames = struct {
+    navigator: v8.Eternal,
+    window: v8.Eternal,
+    worker_global_scope: v8.Eternal,
+    prototype: v8.Eternal,
+    service_worker: v8.Eternal,
+    caches: v8.Eternal,
+
+    fn init(isolate: *v8.Isolate) DisabledApiNames {
+        var self: DisabledApiNames = undefined;
+        intern(isolate, &self.navigator, "Navigator");
+        intern(isolate, &self.window, "Window");
+        intern(isolate, &self.worker_global_scope, "WorkerGlobalScope");
+        intern(isolate, &self.prototype, "prototype");
+        intern(isolate, &self.service_worker, "serviceWorker");
+        intern(isolate, &self.caches, "caches");
+        return self;
+    }
+
+    fn intern(isolate: *v8.Isolate, out: *v8.Eternal, comptime name: [:0]const u8) void {
+        const str = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, name.len);
+        v8.v8__Eternal__New(isolate, @ptrCast(str), out);
+    }
+
+    fn get(self: *const DisabledApiNames, isolate: *v8.Isolate, comptime field: []const u8) *const v8.String {
+        const eternal = &@field(self, field);
+        return @ptrCast(@alignCast(v8.v8__Eternal__Get(@constCast(eternal), isolate).?));
+    }
+};
 
 const PrivateSymbols = struct {
     const Private = @import("Private.zig");
@@ -718,9 +906,126 @@ const PrivateSymbols = struct {
 };
 
 const testing = @import("../../testing.zig");
+
+test "Env: a heap limit reached during teardown does not arm a termination" {
+    testing.expectLog(&.{.app});
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const env = frame.js.env;
+    const limit: usize = 64 * 1024 * 1024;
+
+    env.tearing_down = true;
+    defer env.tearing_down = false;
+
+    const granted = env.onNearHeapLimit(limit, limit);
+    try testing.expectEqual(false, env.terminatePending());
+    try testing.expect(granted > limit);
+}
+
+test "Env: stall report names the running frame and script stack" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const State = struct {
+        env: *Env,
+        url: [64]u8 = undefined,
+        url_len: usize = 0,
+        page_url_matches: bool = false,
+        stack: [1536]u8 = undefined,
+        stack_len: usize = 0,
+
+        fn capture(self: *@This()) void {
+            var buf: [1536]u8 = undefined;
+            const report = self.env.stallReport(&buf);
+            self.url_len = @min(report.url.len, self.url.len);
+            @memcpy(self.url[0..self.url_len], report.url[0..self.url_len]);
+            self.page_url_matches = std.mem.eql(u8, report.url, report.page_url);
+            self.stack_len = report.stack.len;
+            @memcpy(self.stack[0..self.stack_len], report.stack);
+        }
+    };
+    var state = State{ .env = frame.js.env };
+
+    const driver = try local.exec(
+        \\(function(capture) {
+        \\  function stallOuter() { stallInner(); }
+        \\  function stallInner() { capture(); }
+        \\  stallOuter();
+        \\})
+    , "https://example.com/stall.js");
+    const driver_fn = js.Function{ .local = local, .handle = @ptrCast(driver.handle) };
+    try driver_fn.call(void, .{local.newCallback(State.capture, &state)});
+
+    try testing.expectEqual(frame.url, state.url[0..state.url_len]);
+    try testing.expectEqual(true, state.page_url_matches);
+    const stack = state.stack[0..state.stack_len];
+    const inner = std.mem.find(u8, stack, "stallInner (https://example.com/stall.js:3:") orelse return error.MissingInnerFrame;
+    const outer = std.mem.find(u8, stack, "stallOuter (https://example.com/stall.js:2:") orelse return error.MissingOuterFrame;
+    try testing.expect(inner < outer);
+}
+
+test "Env: watchdog termination logs the stalled script once" {
+    testing.expectLog(&.{.watchdog});
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const env = frame.js.env;
+    defer env.cancelTerminate();
+
+    const State = struct {
+        env: *Env,
+        fn stall(self: *@This()) void {
+            // Two in-flight interrupts must still produce one report.
+            self.env.requestTerminateForStall(31_000);
+            self.env.requestTerminateForStall(32_000);
+        }
+    };
+    var state = State{ .env = env };
+
+    const driver = try local.exec("(function(stall) { stall(); for(;;){} })", null);
+    const driver_fn = js.Function{ .local = local, .handle = @ptrCast(driver.handle) };
+    var caught: js.TryCatch.Caught = .{};
+    try testing.expectError(error.ExecutionTerminated, driver_fn.tryCall(void, .{local.newCallback(State.stall, &state)}, &caught));
+    try testing.expectEqual(0, env.stall_report_requested_at.load(.acquire));
+}
+
+test "Env: canceling a termination drops its pending stall report" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const env = frame.js.env;
+    env.requestTerminateForStall(31_000);
+    try testing.expect(env.pendingStallReport() != null);
+    env.cancelTerminate();
+    try testing.expectEqual(null, env.pendingStallReport());
+    try testing.expectEqual(0, env.stall_report_requested_at.load(.acquire));
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try testing.expectEqual(3, try (try ls.local.exec("1 + 2", null)).toI32());
+}
+
 test "Env: Worker context " {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
+
+    // Navigate the frame first to avoid CORS blocking request for the worker.
+    try frame.navigate("http://localhost:9582/", .{});
+    try testing.waitForFrame();
 
     const worker = try @import("../webapi/Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", null, frame);
 

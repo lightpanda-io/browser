@@ -73,7 +73,7 @@ pub fn asEvent(self: *SubmitEvent) *Event {
     return self._proto;
 }
 
-pub fn getSubmitter(self: *const SubmitEvent) ?*HtmlElement {
+fn getSubmitter(self: *const SubmitEvent) ?*HtmlElement {
     return self._submitter;
 }
 

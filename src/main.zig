@@ -32,13 +32,13 @@ pub const std_options: std.Options = .{
 
 pub fn main(init: std.process.Init) !void {
     // allocator
-    // - in Debug mode we use the General Purpose Allocator to detect memory leaks
+    // - in Debug mode we use the SafeAllocator to detect memory leaks
     // - in Release mode we use the c allocator
-    var gpa_instance: std.heap.DebugAllocator(.{ .stack_trace_frames = 10 }) = .init;
+    var gpa_instance: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{ .stack_trace_frames = 10 });
     const gpa = if (lp.IS_DEBUG) gpa_instance.allocator() else std.heap.c_allocator;
 
     defer if (lp.IS_DEBUG) {
-        if (gpa_instance.detectLeaks() != 0) std.process.exit(1);
+        if (gpa_instance.deinit() != 0) std.process.exit(1);
     };
 
     // arena for main-specific allocations
@@ -49,8 +49,11 @@ pub fn main(init: std.process.Init) !void {
     run(gpa, main_arena, init.minimal.args) catch |err| {
         if (err == error.UserCancelled) std.process.exit(130);
         // error.AgentFailed: the agent thread reported the failure in-context.
+        // error.PageFailed: fetch already logged every failing url.
         // lp.Agent.UserError: a user-facing message was already printed.
-        if (err == error.AgentFailed or lp.Agent.isUserError(err)) std.process.exit(1);
+        if (err == error.AgentFailed or err == error.PageFailed or lp.Agent.isUserError(err)) std.process.exit(1);
+        // curl's code for --fail on an HTTP error, also already reported per url.
+        if (err == error.HttpError) std.process.exit(22);
         log.fatal(.app, "exit", .{ .err = err });
         std.process.exit(1);
     };
@@ -58,8 +61,19 @@ pub fn main(init: std.process.Init) !void {
 
 fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args) !void {
     lp.core_dump.disableIfRequested();
+    lp.malloc_tuning.apply();
+    lp.crash_handler.attachSignalHandlers();
 
-    const args = try Config.parseArgs(main_arena, proc_args);
+    const args = Config.parseArgs(main_arena, proc_args) catch |err| switch (err) {
+        // Already logged where they were found.
+        error.UnknownCommand,
+        error.UnknownOption,
+        error.InvalidArgument,
+        error.MissingArgument,
+        error.TooManyPositionalArguments,
+        => std.process.exit(1),
+        else => return err,
+    };
     defer args.deinit(main_arena);
 
     switch (args.mode) {
@@ -80,16 +94,6 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
         else => {},
     }
 
-    if (args.logLevel()) |ll| {
-        log.opts.level = ll;
-    }
-    if (args.logFormat()) |lf| {
-        log.opts.format = lf;
-    }
-
-    // Set log filter scopes.
-    log.opts.scope_enabled = log.resolveFilterScopes(args.logFilterScopes().items);
-
     // must be installed before any other threads
     const sighandler = try main_arena.create(SigHandler);
     sighandler.* = .{ .arena = main_arena };
@@ -100,6 +104,8 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
     defer app.deinit();
 
     app.telemetry.record(.{ .run = {} });
+
+    logConfigTips(app.config);
 
     defer if (app.config.dumpMetricsOnExit()) {
         var writer = std.Io.File.stdout().writerStreaming(lp.io, &.{});
@@ -136,11 +142,6 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
         .fetch => |opts| {
             const urls = opts.url.items;
 
-            if (urls.len == 0) {
-                log.fatal(.app, "missing URL", .{});
-                return error.MissingArgument;
-            }
-
             // Plain (non-JSON) dump writes one document to stdout with no
             // framing, so it can't disambiguate more than one page.
             if (urls.len == 1) {
@@ -163,6 +164,19 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 });
             }
 
+            if (opts.dump == null and opts.dump_selector != null) {
+                log.fatal(.app, "--dump-selector needs --dump", .{});
+                return error.InvalidArgument;
+            }
+            if (opts.dump == null and opts.dump_max_bytes != null) {
+                log.fatal(.app, "--dump-max-bytes needs --dump", .{});
+                return error.InvalidArgument;
+            }
+            if (opts.dump_max_bytes != null and opts.dump != .html and opts.dump != .markdown) {
+                log.fatal(.app, "--dump-max-bytes needs text", .{ .dump = opts.dump, .allowed = "html, markdown" });
+                return error.InvalidArgument;
+            }
+
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = opts.wait_ms,
                 .wait_until = opts.wait_until,
@@ -170,10 +184,13 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 .inject_script = opts.inject_script,
                 .wait_selector = opts.wait_selector,
                 .dump_mode = opts.dump,
+                .selector = opts.dump_selector,
+                .fail_on_http_error = opts.fail_on_http_error,
                 .dump = .{
                     .strip = opts.strip_mode,
                     .with_base = opts.with_base,
                     .with_frames = opts.with_frames,
+                    .max_bytes = opts.dump_max_bytes,
                 },
                 .json = opts.json,
             };
@@ -201,8 +218,6 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
         },
         .mcp => |opts| {
             log.info(.mcp, "starting server", .{});
-
-            log.opts.format = .logfmt;
 
             // --port serves MCP over HTTP instead of stdio. It and --cdp-port
             // each run their accept loop on this thread, so they can't combine.
@@ -348,7 +363,7 @@ const FetchTerminator = struct {
 
 fn fetchThread(app: *App, ft: *FetchTerminator, urls: []const [:0]const u8, fetch_opts: lp.FetchOpts, err_out: *?anyerror) void {
     var browser: lp.Browser = undefined;
-    browser.init(app, .{}, null) catch |err| {
+    browser.init(app, .{}) catch |err| {
         err_out.* = err;
         log.fatal(.app, "browser init error", .{ .err = err });
         return;
@@ -363,6 +378,8 @@ fn fetchThread(app: *App, ft: *FetchTerminator, urls: []const [:0]const u8, fetc
 
     lp.fetch(app, &browser, urls, fetch_opts) catch |err| {
         err_out.* = err;
+        // Both are already reported per url by fetch itself.
+        if (err == error.PageFailed or err == error.HttpError) return;
         log.fatal(.app, "fetch error", .{ .err = err, .url_count = urls.len });
     };
 }
@@ -386,4 +403,21 @@ fn mcpThread(allocator: std.mem.Allocator, app: *App, cdp_server: ?*lp.Server, e
         err_out.* = err;
         log.fatal(.mcp, "mcp error", .{ .err = err });
     };
+}
+
+fn logConfigTips(config: *const Config) void {
+    // Only for a person reading the terminal, not for scripts capturing stderr.
+    if (!Config.stderrIsTty()) return;
+
+    var count: usize = 0;
+    var tips: [2]log.KV = undefined;
+    if (config.obeyRobots() == false) {
+        tips[count] = .init("robots", "use '--obey-robots' to use a sites robots.txt");
+        count += 1;
+    }
+
+    if (count > 0) {
+        tips[count] = .init("meta", "use '--log-filter note' to silence this message");
+        log.logKVs(.note, .note, "config tips", tips[0 .. count + 1]);
+    }
 }

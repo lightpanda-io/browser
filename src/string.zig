@@ -178,10 +178,6 @@ pub const String = extern struct {
         return p[0..ul];
     }
 
-    pub fn isDeleted(self: *const String) bool {
-        return self.len == tombstone;
-    }
-
     pub fn format(self: String, writer: *std.Io.Writer) !void {
         return writer.writeAll(self.str());
     }
@@ -228,7 +224,7 @@ pub const String = extern struct {
         deleted,
         equal: bool,
     };
-    pub fn eqlSliceOrDeleted(a: String, b: []const u8) EqualOrDeleted {
+    fn eqlSliceOrDeleted(a: String, b: []const u8) EqualOrDeleted {
         if (a.len == tombstone) {
             return .deleted;
         }
@@ -329,6 +325,7 @@ pub const String = extern struct {
                 asUint("charset") => return "charset",
                 asUint("checked") => return "checked",
                 asUint("loading") => return "loading",
+                asUint("popover") => return "popover",
                 else => {},
             },
             8 => switch (@as(u64, @bitCast(input[0..8].*))) {
@@ -393,6 +390,7 @@ pub const String = extern struct {
             },
             15 => switch (@as(u120, @bitCast(input[0..15].*))) {
                 asUint("text-decoration") => return "text-decoration",
+                asUint("contenteditable") => return "contenteditable",
                 asUint("justify-content") => return "justify-content",
                 asUint("aria-labelledby") => return "aria-labelledby",
                 else => {},
@@ -419,6 +417,58 @@ pub fn isOneOf(needle: []const u8, haystack: []const []const u8) bool {
     return for (haystack) |s| {
         if (std.mem.eql(u8, s, needle)) break true;
     } else false;
+}
+
+/// Case-insensitive, and swapping two adjacent characters counts as one
+/// edit. Inputs over 64 bytes return `maxInt`; that fits the longest CLI flag.
+fn editDistance(a: []const u8, b: []const u8) usize {
+    const max = 64;
+    if (a.len > max or b.len > max) return std.math.maxInt(usize);
+    var a_buf: [max]u8 = undefined;
+    var b_buf: [max]u8 = undefined;
+    const la = std.ascii.lowerString(&a_buf, a);
+    const lb = std.ascii.lowerString(&b_buf, b);
+
+    var prev2: [max + 1]u8 = undefined;
+    var prev: [max + 1]u8 = undefined;
+    var cur: [max + 1]u8 = undefined;
+    for (0..lb.len + 1) |j| prev[j] = @intCast(j);
+    for (la, 1..) |ca, i| {
+        cur[0] = @intCast(i);
+        for (lb, 1..) |cb, j| {
+            const cost: u8 = if (ca == cb) 0 else 1;
+            cur[j] = @min(@min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + cost);
+            if (i > 1 and j > 1 and ca == lb[j - 2] and la[i - 2] == cb) {
+                cur[j] = @min(cur[j], prev2[j - 2] + 1);
+            }
+        }
+        prev2 = prev;
+        prev = cur;
+    }
+    return prev[b.len];
+}
+
+/// The candidate nearest to `name`, within about one edit per three characters
+/// (rustc's rule). A prefix every candidate shares, like a flag's `--`, doesn't
+/// count toward the length. Earlier candidates win ties.
+pub fn closest(name: []const u8, candidates: []const []const u8) ?[]const u8 {
+    if (candidates.len == 0) return null;
+    var shared = candidates[0];
+    for (candidates[1..]) |cand| {
+        shared = shared[0 .. std.mem.findDiff(u8, shared, cand) orelse shared.len];
+    }
+    const typed = if (std.mem.startsWith(u8, name, shared)) name.len - shared.len else name.len;
+    const max_dist = @max(typed, 3) / 3;
+    var best: ?[]const u8 = null;
+    var best_dist: usize = std.math.maxInt(usize);
+    for (candidates) |cand| {
+        const dist = editDistance(name, cand);
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = cand;
+        }
+    }
+    return if (best_dist <= max_dist) best else null;
 }
 
 /// Largest prefix of `bytes` whose length is at most `max_bytes` and
@@ -476,7 +526,7 @@ pub const Global = struct {
     str: String,
 };
 
-fn asUint(comptime string: anytype) std.meta.Int(
+fn asUint(comptime string: anytype) @Int(
     .unsigned,
     @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
 ) {
@@ -487,6 +537,27 @@ fn asUint(comptime string: anytype) std.meta.Int(
     }
 
     return @bitCast(@as(*const [byteLength]u8, string).*);
+}
+
+/// `s` concatenated `n` times, the replacement for the removed `s ** n`.
+pub fn repeat(comptime s: []const u8, comptime n: usize) *const [s.len * n:0]u8 {
+    return &Repeated(s, n).value;
+}
+
+fn Repeated(comptime s: []const u8, comptime n: usize) type {
+    return struct {
+        const value: [s.len * n:0]u8 = blk: {
+            // Doubling: log2(n) concatenations instead of n comptime memcpys.
+            var acc: []const u8 = "";
+            var pow: []const u8 = s;
+            var k = n;
+            while (k > 0) : (k >>= 1) {
+                if (k & 1 == 1) acc = acc ++ pow;
+                if (k > 1) pow = pow ++ pow;
+            }
+            break :blk acc[0 .. s.len * n].* ++ [_:0]u8{};
+        };
+    };
 }
 
 const testing = @import("testing.zig");
@@ -515,6 +586,45 @@ test "truncateUtf8" {
     try testing.expectEqual("\xFFx", truncateUtf8("\xFFx", 2));
 }
 
+test "editDistance" {
+    try testing.expectEqual(@as(usize, 0), editDistance("", ""));
+    try testing.expectEqual(@as(usize, 0), editDistance("wait-ms", "wait-ms"));
+    try testing.expectEqual(@as(usize, 0), editDistance("Wait-MS", "wait-ms"));
+    try testing.expectEqual(@as(usize, 1), editDistance("wait-mss", "wait-ms"));
+    try testing.expectEqual(@as(usize, 1), editDistance("wait-m", "wait-ms"));
+    try testing.expectEqual(@as(usize, 1), editDistance("wait_ms", "wait-ms"));
+    try testing.expectEqual(@as(usize, 3), editDistance("kitten", "sitting"));
+    try testing.expectEqual(@as(usize, 1), editDistance("dmup", "dump"));
+    try testing.expectEqual(@as(usize, 1), editDistance("ab", "ba"));
+    try testing.expectEqual(@as(usize, 3), editDistance("", "abc"));
+    try testing.expectEqual(@as(usize, 3), editDistance("abc", ""));
+
+    const long = repeat("x", 64);
+    try testing.expectEqual(@as(usize, 0), editDistance(long, long));
+    try testing.expectEqual(std.math.maxInt(usize), editDistance(long ++ "x", long));
+}
+
+test "closest" {
+    const names = [_][]const u8{ "--dump", "--wait-ms", "--wait-until", "--insecure-disable-tls-host-verification" };
+    try testing.expectEqual("--wait-ms", closest("--wait-mss", &names));
+    try testing.expectEqual("--dump", closest("--dmup", &names));
+    try testing.expectEqual(null, closest("--dmpx", &names));
+    try testing.expectEqual(null, closest("--totally-wrong", &names));
+    try testing.expectEqual(null, closest("--dump", &.{}));
+    try testing.expectEqual("--insecure-disable-tls-host-verification", closest("--insecure-disable-tls-verification", &names));
+
+    const formats = [_][]const u8{ "html", "markdown", "pdf", "png" };
+    try testing.expectEqual(null, closest("md", &formats));
+    try testing.expectEqual("pdf", closest("pdg", &formats));
+
+    const commands = [_][]const u8{ "fetch", "mcp", "run" };
+    try testing.expectEqual("run", closest("fun", &commands));
+    try testing.expectEqual(null, closest("ab", &commands));
+
+    const tie = [_][]const u8{ "abcd", "abce" };
+    try testing.expectEqual("abcd", closest("abc", &tie));
+}
+
 test "latin1ToUtf8" {
     const cases = [_]struct { in: []const u8, out: []const u8 }{
         .{ .in = "caf\xE9.txt", .out = "café.txt" },
@@ -531,11 +641,11 @@ test "latin1ToUtf8" {
 
 test "String" {
     const other_short = try String.init(undefined, "other_short", .{});
-    const other_long = try String.init(testing.allocator, "other_long" ** 100, .{});
+    const other_long = try String.init(testing.allocator, repeat("other_long", 100), .{});
     defer other_long.deinit(testing.allocator);
 
     inline for (0..100) |i| {
-        const input = "a" ** i;
+        const input = repeat("a", i);
         const str = try String.init(testing.allocator, input, .{});
         defer str.deinit(testing.allocator);
 
@@ -547,7 +657,7 @@ test "String" {
         try testing.expectEqual(false, str.eqlSlice("other_short"));
 
         try testing.expectEqual(false, str.eql(other_long));
-        try testing.expectEqual(false, str.eqlSlice("other_long" ** 100));
+        try testing.expectEqual(false, str.eqlSlice(repeat("other_long", 100)));
     }
 }
 
@@ -564,8 +674,8 @@ test "String.trim" {
     try expect("hi", "  hi  ", " "); // SSO, both ends
     try expect("hello", "hello", " "); // nothing to trim (no allocation)
     try expect("", "   ", " "); // fully trimmed away
-    try expect("x" ** 20, "   " ++ ("x" ** 20) ++ "\t", &.{ ' ', '\t' }); // heap stays heap (view)
-    try expect("abc", "abc" ++ ("  " ** 6), " "); // heap trims down to SSO
+    try expect(repeat("x", 20), "   " ++ (repeat("x", 20)) ++ "\t", &.{ ' ', '\t' }); // heap stays heap (view)
+    try expect("abc", "abc" ++ (repeat("  ", 6)), " "); // heap trims down to SSO
 }
 
 test "String.concat" {

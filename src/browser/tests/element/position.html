@@ -100,10 +100,13 @@
   testing.expectTrue(zeroWidth.scrollWidth > 0);
 
   // The root containers keep their synthetic size rather than summing
-  // children, so horizontal page-overflow checks stay stable.
+  // children, so horizontal page-overflow checks stay stable. In standards
+  // mode the root element's clientWidth is the viewport (CSSOM View), not
+  // its box; offsetWidth and scrollWidth still report the box.
   testing.expectEqual(document.body.clientWidth, document.body.scrollWidth);
+  testing.expectEqual(window.innerWidth, document.documentElement.clientWidth);
   testing.expectEqual(
-    document.documentElement.clientWidth,
+    document.documentElement.offsetWidth,
     document.documentElement.scrollWidth,
   );
 }
@@ -334,13 +337,12 @@
   testing.expectEqual(0, panel.clientHeight);
   testing.expectTrue(panel.scrollHeight > 0);
 
-  // The root containers keep their synthetic size rather than summing
-  // children. This is what keeps infinite-scroll triggers reading
-  // `scrollTop + clientHeight >= scrollHeight` on body/documentElement
-  // behaving as they do today.
+  // The root element's clientHeight is the viewport (CSSOM View); jstracker
+  // tiles it with elementFromPoint calls.
   testing.expectEqual(document.body.clientHeight, document.body.scrollHeight);
+  testing.expectEqual(window.innerHeight, document.documentElement.clientHeight);
   testing.expectEqual(
-    document.documentElement.clientHeight,
+    Math.max(document.documentElement.offsetHeight, document.documentElement.clientHeight),
     document.documentElement.scrollHeight,
   );
 }
@@ -573,6 +575,11 @@
   deep.id = 'deep';
   document.body.appendChild(deep);
 
+  // Room to scroll it to the top
+  const room = document.createElement('div');
+  room.style.height = '10000px';
+  document.body.appendChild(room);
+
   const targetY = deep.getBoundingClientRect().y;
   testing.expectTrue(targetY > 0);
 
@@ -593,5 +600,99 @@
   window.scrollTo(0, targetY + window.innerHeight + 100);
   deep.scrollIntoViewIfNeeded();
   testing.expectEqual(targetY, window.scrollY);
+}
+</script>
+
+<div id="clampBox" style="width: 100px; height: 100px; overflow: scroll;">
+  <div style="width: 500px; height: 500px;">content</div>
+</div>
+
+<script id="scrollClampsToExtent">
+{
+  // The limit is scrollHeight - clientHeight, whatever those measure: a real
+  // browser reserves scrollbar space in clientHeight and lands a few px lower.
+  const box = $('#clampBox');
+  const maxTop = box.scrollHeight - box.clientHeight;
+  const maxLeft = box.scrollWidth - box.clientWidth;
+  testing.expectTrue(maxTop > 0);
+
+  box.scrollTop = 9999;
+  box.scrollLeft = 9999;
+  testing.expectEqual(maxTop, box.scrollTop);
+  testing.expectEqual(maxLeft, box.scrollLeft);
+
+  box.scrollTo(10, 10);
+  box.scrollBy(9999, 9999);
+  testing.expectEqual(maxTop, box.scrollTop);
+  testing.expectEqual(maxLeft, box.scrollLeft);
+
+  box.scrollBy(-9999, -9999);
+  testing.expectEqual(0, box.scrollTop);
+  testing.expectEqual(0, box.scrollLeft);
+}
+</script>
+
+<style>
+  .sheetBox { height: 100px; overflow: auto; }
+  #sheetAuto { height: auto; }
+  .sheetVh { height: 10vh; }
+</style>
+<div id="sheetBox" class="sheetBox"><div style="height: 500px;">content</div></div>
+<div id="sheetAuto" class="sheetBox"><div style="height: 500px;">content</div></div>
+<div id="inlineAuto" class="sheetBox" style="height: 50%"><div style="height: 500px;">content</div></div>
+<div id="sheetVh" class="sheetVh"></div>
+
+<script id="sheetSizedBox">
+{
+  // A sheet size is as explicit as an inline one
+  const box = $('#sheetBox');
+  testing.expectEqual(100, box.clientHeight);
+  testing.expectEqual(500, box.scrollHeight);
+  testing.expectEqual('100px', getComputedStyle(box).height);
+
+  box.scrollTop = 9999;
+  testing.expectEqual(400, box.scrollTop);
+
+  // A stronger rule's `auto` wins, leaving no size to clamp to. Chrome
+  // clamps to 0; we can't tell auto from max-height, so we don't clamp.
+  const auto = $('#sheetAuto');
+  testing.expectEqual(500, auto.clientHeight);
+  auto.scrollTop = 9999;
+  testing.expectEqual(9999, auto.scrollTop);
+
+  // So does an unresolvable inline value
+  testing.expectEqual(500, $('#inlineAuto').clientHeight);
+
+  testing.expectEqual(window.innerHeight / 10, $('#sheetVh').clientHeight);
+}
+</script>
+
+<div id="textBox" style="height: 100px; width: 200px; overflow: auto;">
+  one two three four five six seven eight nine ten eleven twelve thirteen
+  fourteen fifteen sixteen seventeen eighteen nineteen twenty twenty-one
+  twenty-two twenty-three twenty-four twenty-five twenty-six twenty-seven
+</div>
+<div id="textFree">one two three four five six seven eight nine ten eleven twelve</div>
+<div id="textSmall" style="width: 200px; font-size: 8px">one two three four five six seven eight nine ten eleven twelve</div>
+
+<script id="textWrapsAtExplicitWidth">
+{
+  // Text wraps at an explicit width
+  const box = $('#textBox');
+  testing.expectEqual(100, box.clientHeight);
+  testing.expectEqual(200, box.scrollWidth);
+  testing.expectTrue(box.scrollHeight > box.clientHeight);
+
+  box.scrollTop = 9999;
+  testing.expectTrue(box.scrollTop > 0);
+  testing.expectEqual(box.scrollHeight - box.clientHeight, box.scrollTop);
+
+  // Without one, it isn't measured
+  testing.expectEqual(5, $('#textFree').scrollHeight);
+
+  const small = $('#textSmall');
+  const before = small.clientHeight;
+  small.style.fontSize = '4px';
+  testing.expectTrue(small.clientHeight < before);
 }
 </script>

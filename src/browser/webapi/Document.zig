@@ -19,17 +19,19 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
-const Window = @import("Window.zig");
-const URL = @import("../URL.zig");
 const idna = @import("../../sys/idna.zig");
 const public_suffix_list = @import("../../data/public_suffix_list.zig");
 
+const URL = @import("../URL.zig");
+const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
+const Parser = @import("../parser/Parser.zig");
+
 const Node = @import("Node.zig");
+const Window = @import("Window.zig");
 const Element = @import("Element.zig");
 const Location = @import("Location.zig");
-const Parser = @import("../parser/Parser.zig");
 const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
 const DOMTreeWalker = @import("DOMTreeWalker.zig");
@@ -38,6 +40,7 @@ const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
 const FontFaceSet = @import("css/FontFaceSet.zig");
 const Selection = @import("Selection.zig");
+const Sanitizer = @import("Sanitizer.zig");
 const XPathResult = @import("XPathResult.zig");
 const XPathExpression = @import("XPathExpression.zig");
 
@@ -53,7 +56,10 @@ pub const Proto = Node;
 
 _type: Type,
 _proto: *Node,
+_page: *Page,
+_index: u32, // browser.documents index
 _frame: ?*Frame = null,
+_template_contents_owner: ?*Document = null,
 _url: ?[:0]const u8 = null, // URL for documents created via DOMImplementation (about:blank)
 // content type override for documents created via DOMImplementation.createDocument
 _content_type: ?[]const u8 = null,
@@ -61,6 +67,9 @@ _content_type: ?[]const u8 = null,
 // createDocument) are UTF-8 regardless of the frame's encoding
 _charset: ?[]const u8 = null,
 _ready_state: ReadyState = .loading,
+_load_aborted: bool = false,
+// HTML's "active parser was aborted" flag also makes open/write no-ops.
+_active_parser_aborted: bool = false,
 _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
 // Track IDs that were removed from the map - they might have duplicates in the tree
@@ -74,6 +83,13 @@ _script_created_parser: ?Parser.Streaming = null,
 _close_requested: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
+// extent() cache, keyed on style version and viewport.
+_extent: ?struct {
+    version: usize,
+    viewport_width: u32,
+    viewport_height: u32,
+    extent: Extent,
+} = null,
 // Ordered stack of currently-showing popovers
 _open_popovers: std.ArrayList(*Element) = .empty,
 
@@ -84,11 +100,11 @@ _throw_on_dynamic_markup_insertion_counter: u32 = 0,
 
 _on_selectionchange: ?js.Function.Global = null,
 
-pub fn getOnSelectionChange(self: *Document) ?js.Function.Global {
+fn getOnSelectionChange(self: *Document) ?js.Function.Global {
     return self._on_selectionchange;
 }
 
-pub fn setOnSelectionChange(self: *Document, listener: ?js.Function) !void {
+fn setOnSelectionChange(self: *Document, listener: ?js.Function) !void {
     if (listener) |listen| {
         self._on_selectionchange = try listen.persistWithThis(self);
     } else {
@@ -99,11 +115,11 @@ pub fn setOnSelectionChange(self: *Document, listener: ?js.Function) !void {
 // Stored in the frame's attribute-listener map (like element and ShadowRoot
 // property handlers), which the dispatch propagation path consults for any
 // event target.
-pub fn getOnClick(self: *Document, frame: *Frame) ?js.Function.Global {
+fn getOnClick(self: *Document, frame: *Frame) ?js.Function.Global {
     return (self._frame orelse frame)._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = .onclick });
 }
 
-pub fn setOnClick(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+fn setOnClick(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
     const owner = self._frame orelse frame;
     if (Window.getFunctionFromSetter(setter)) |cb| {
         try owner._event_target_attr_listeners.put(owner.arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
@@ -157,7 +173,7 @@ pub fn getLocation(self: *const Document) ?*Location {
     return doc_frame.window._location;
 }
 
-pub fn setLocation(self: *Document, url: [:0]const u8) !void {
+fn setLocation(self: *Document, url: [:0]const u8) !void {
     if (self._type != .html) return;
     const frame = self._frame orelse return;
     return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
@@ -177,19 +193,19 @@ pub fn isQuirksMode(self: *const Document) bool {
     return true;
 }
 
-pub fn getCompatMode(self: *const Document) []const u8 {
+fn getCompatMode(self: *const Document) []const u8 {
     return if (self.isQuirksMode()) "BackCompat" else "CSS1Compat";
 }
 
 // document.lastModified: the response's Last-Modified header in local time,
 // "MM/DD/YYYY hh:mm:ss", defaulting to the current time.
-pub fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
+fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
     const dt = @import("../../datetime.zig");
 
     const timestamp = blk: {
         if (self._frame) |owner| {
             for (owner._http_headers.items) |header| {
-                if (std.ascii.eqlIgnoreCase(header.name, "last-modified")) {
+                if (std.mem.eql(u8, header.name, "last-modified")) {
                     if (dt.DateTime.parse(header.value, .rfc822)) |parsed| {
                         break :blk parsed.unix(.seconds);
                     } else |_| {}
@@ -202,7 +218,7 @@ pub fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
     };
 
     const tm = try dt.localTime(timestamp);
-    return std.fmt.allocPrint(frame.local_arena, "{d:0>2}/{d:0>2}/{d} {d:0>2}:{d:0>2}:{d:0>2}", .{
+    return frame.local_arena.print("{d:0>2}/{d:0>2}/{d} {d:0>2}:{d:0>2}:{d:0>2}", .{
         @as(u32, @intCast(tm.tm_mon + 1)),
         @as(u32, @intCast(tm.tm_mday)),
         tm.tm_year + 1900,
@@ -212,7 +228,7 @@ pub fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
     });
 }
 
-pub fn getReferrer(self: *const Document) []const u8 {
+fn getReferrer(self: *const Document) []const u8 {
     const frame = self._frame orelse return "";
     return frame._referrer orelse "";
 }
@@ -236,7 +252,7 @@ pub fn getContentType(self: *const Document) []const u8 {
     };
 }
 
-pub fn getDomain(self: *const Document, frame: *const Frame) []const u8 {
+fn getDomain(self: *const Document, frame: *const Frame) []const u8 {
     const doc_frame = self._frame orelse frame;
 
     // When document.domain has been set, the effective domain is encoded in
@@ -254,7 +270,7 @@ pub fn getDomain(self: *const Document, frame: *const Frame) []const u8 {
     return URL.getOriginHostname(origin);
 }
 
-pub fn setDomain(self: *Document, value: []const u8) !void {
+fn setDomain(self: *Document, value: []const u8) !void {
     // e.g. (new Document().domain = '')
     const doc_frame = self._frame orelse return error.SecurityError;
     const origin = doc_frame.origin orelse return error.SecurityError;
@@ -274,7 +290,7 @@ pub fn setDomain(self: *Document, value: []const u8) !void {
     // only ever match another explicitly set domain.
     // The scheme is preserved (http and https must never collide) and the
     // port is dropped, per spec.
-    const scheme_end = (std.mem.indexOf(u8, origin, "://") orelse return error.SecurityError) + 3;
+    const scheme_end = (std.mem.find(u8, origin, "://") orelse return error.SecurityError) + 3;
     const key = try std.mem.concat(arena, u8, &.{ "!", origin[0..scheme_end], requested });
     try doc_frame.js.setOrigin(key);
 }
@@ -287,14 +303,15 @@ fn isCookieAverse(self: *const Document, frame: *const Frame) bool {
     return doc_frame.document != self and frame.document != self;
 }
 
-pub fn getCookie(self: *Document, frame: *Frame) ![]const u8 {
+fn getCookie(self: *Document, frame: *Frame) ![]const u8 {
     if (self.isCookieAverse(frame)) {
         return "";
     }
     var aw: std.Io.Writer.Allocating = .init(frame.local_arena);
     try frame._session.cookie_jar.forRequest(frame.url, &aw.writer, .{
         .is_http = false,
-        .is_navigation = true,
+        .kind = .subresource,
+        .origin_url = frame.siteForCookies(),
     });
     return aw.written();
 }
@@ -313,6 +330,10 @@ pub fn setCookie(self: *Document, cookie_str: []const u8, frame: *Frame) ![]cons
     if (c.http_only) {
         c.deinit();
         return ""; // HttpOnly cookies cannot be set from JS
+    }
+    if (c.same_site != .none and frame.siteForCookies() == .none) {
+        c.deinit();
+        return ""; // SameSite cookies cannot be set from a cross-site context.
     }
     try frame._session.cookie_jar.add(c, lp.datetime.timestamp(.real), false);
     return cookie_str;
@@ -344,7 +365,7 @@ fn isRelaxableTo(host: []const u8, requested: []const u8) bool {
     }
 
     // it can't be a bare TLD, "com"
-    if (std.mem.indexOfScalar(u8, requested, '.') == null) {
+    if (std.mem.findScalar(u8, requested, '.') == null) {
         return false;
     }
 
@@ -367,13 +388,8 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     };
     // HTML documents are case-insensitive - lowercase the tag name
 
-    const node = try Frame.node_factory.createElementNS(frame, ns, normalized_name, null);
+    const node = try self.createElementNode(ns, normalized_name);
     const element = node.as(Element);
-
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
 
     const options = options_ orelse return element;
     if (options.is) |is_value| {
@@ -388,39 +404,38 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
     _ = try validateAndExtract(namespace, name, .element);
     const ns = Element.Namespace.parse(namespace);
     // Per spec, createElementNS does NOT lowercase (unlike createElement).
-    const node = try Frame.node_factory.createElementNS(frame, ns, name, null);
+    const node = try self.createElementNode(ns, name);
 
     // Store original URI for unknown namespaces so lookupNamespaceURI can return it
     if (ns == .unknown) {
         if (namespace) |uri| {
             const duped = try frame.dupeString(uri);
-            try frame._element_namespace_uris.put(frame.arena, node.as(Element), duped);
+            try self._page.element_namespace_uris.put(self._page.frame_arena, node.as(Element), duped);
         }
-    }
-
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
     }
     return node.as(Element);
 }
 
-pub fn createAttribute(_: *const Document, name: String.Global, frame: *Frame) !?*Element.Attribute {
+fn createElementNode(self: *Document, ns: Element.Namespace, name: []const u8) !*Node {
+    return Frame.node_factory.createElementNS(self, ns, name, null);
+}
+
+fn createAttribute(self: *const Document, name: String.Global, frame: *Frame) !?*Element.Attribute {
     try Element.Attribute.validateAttributeName(name.str);
-    return frame._factory.node(Element.Attribute{
+    return frame._factory.node(self, Element.Attribute{
         ._name = name.str,
         ._value = String.empty,
         ._element = null,
     });
 }
 
-pub fn createAttributeNS(_: *const Document, namespace: []const u8, name: String.Global, frame: *Frame) !?*Element.Attribute {
+pub fn createAttributeNS(self: *const Document, namespace: []const u8, name: String.Global, frame: *Frame) !?*Element.Attribute {
     if (std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml") == false) {
-        log.warn(.not_implemented, "document.createAttributeNS", .{ .namespace = namespace });
+        log.debug(.not_implemented, "document.createAttributeNS", .{ .namespace = namespace });
     }
 
     try Element.Attribute.validateAttributeName(name.str);
-    return frame._factory.node(Element.Attribute{
+    return frame._factory.node(self, Element.Attribute{
         ._name = name.str,
         ._value = String.empty,
         ._element = null,
@@ -440,7 +455,7 @@ pub fn getElementById(self: *Document, id: []const u8, frame: *Frame) ?*Element 
     if (self._removed_ids.remove(id)) {
         var tw = @import("TreeWalker.zig").Full.Elements.init(self.asNode(), .{});
         while (tw.next()) |el| {
-            const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse continue;
+            const element_id = el.getId() orelse continue;
             if (std.mem.eql(u8, element_id, id)) {
                 // we ignore this error to keep getElementById easy to call
                 // if it really failed, then we're out of memory and nothing's
@@ -467,13 +482,13 @@ pub fn getElementsByClassName(self: *Document, class_name: []const u8, frame: *F
     return self.asNode().getElementsByClassName(class_name, frame);
 }
 
-pub fn getElementsByName(self: *Document, name: []const u8, frame: *Frame) !collections.NodeLive(.name) {
+fn getElementsByName(self: *Document, name: []const u8, frame: *Frame) !collections.NodeLive(.name) {
     const arena = frame.arena;
     const filter = try arena.dupe(u8, name);
     return collections.NodeLive(.name).init(self.asNode(), filter, frame);
 }
 
-pub fn getChildren(self: *Document, frame: *Frame) !collections.NodeLive(.child_elements) {
+fn getChildren(self: *Document, frame: *Frame) !collections.NodeLive(.child_elements) {
     return collections.NodeLive(.child_elements).init(self.asNode(), {}, frame);
 }
 
@@ -488,7 +503,82 @@ pub fn getDocumentElement(self: *Document) ?*Element {
     return null;
 }
 
-pub fn getSelection(self: *Document) *Selection {
+pub const Extent = struct { width: f64, height: f64 };
+
+/// The document's size. Height: enough for every synthetic position (5px per
+/// node), the bottom of every element with an inline height, and body's
+/// stacked children. Width: body's widest child. An inline size on body
+/// stretches both. A document without a frame isn't rendered, so it has no
+/// size.
+pub fn extent(self: *Document) Extent {
+    const frame = self._frame orelse return .{ .width = 0, .height = 0 };
+    const version = frame.page.style_version;
+    const viewport = frame.page.getViewport();
+    if (self._extent) |cached| {
+        if (cached.version == version and cached.viewport_width == viewport.width and cached.viewport_height == viewport.height) {
+            return cached.extent;
+        }
+    }
+
+    const style_manager = &frame._style_manager;
+    var size: Extent = .{ .width = 0, .height = 0 };
+
+    // A nested spacer (virtualized lists) must extend the document even when
+    // its auto-height ancestors count as 5px each. Body's own children are
+    // stacked below instead. Only inline heights: virtualizers set theirs
+    // inline, and the cascade per element is too slow on every mutation.
+    var index: f64 = 0;
+    var tw = @import("TreeWalker.zig").Full.init(self.asNode(), .{});
+    while (tw.next()) |node| : (index += 1) {
+        const el = node.is(Element) orelse continue;
+        const parent = el.parentElement() orelse continue;
+        if (parent.isRootContainer()) {
+            continue;
+        }
+        if (style_manager.inlineSize(el, .height)) |height| {
+            size.height = @max(size.height, index * 5.0 + height);
+        }
+    }
+    size.height = @max(size.height, index * 5.0);
+
+    if (self.is(HTMLDocument)) |html_doc| {
+        if (html_doc.getBody()) |html_body| {
+            const body = html_body.asElement();
+            size.height = @max(size.height, body.contentAxis(frame, .height), style_manager.inlineSize(body, .height) orelse 0);
+            size.width = style_manager.inlineSize(body, .width) orelse 0;
+            var child = body.asNode().firstChild();
+            while (child) |node| : (child = node.nextSibling()) {
+                const el = node.is(Element) orelse continue;
+                if (!style_manager.hasDisplayNone(el)) {
+                    size.width = @max(size.width, el.getElementAxis(frame, .width).value);
+                }
+            }
+        }
+    }
+
+    // Whole pixels, like scroll offsets
+    size = .{ .width = @ceil(size.width), .height = @ceil(size.height) };
+    self._extent = .{
+        .version = version,
+        .viewport_width = viewport.width,
+        .viewport_height = viewport.height,
+        .extent = size,
+    };
+    return size;
+}
+
+/// What the viewport scrolls over: the document, at least viewport-sized.
+pub fn scrollSize(self: *Document) Extent {
+    const frame = self._frame orelse return .{ .width = 0, .height = 0 };
+    const size = self.extent();
+    const viewport = frame.page.getViewport();
+    return .{
+        .width = @max(size.width, @as(f64, @floatFromInt(viewport.width))),
+        .height = @max(size.height, @as(f64, @floatFromInt(viewport.height))),
+    };
+}
+
+fn getSelection(self: *Document) *Selection {
     return &self._selection;
 }
 
@@ -500,68 +590,68 @@ pub fn querySelectorAll(self: *Document, input: String, frame: *Frame) !*Selecto
     return Selector.querySelectorAll(self.asNode(), input.str(), frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
-pub fn getImplementation(self: *Document, frame: *Frame) !*DOMImplementation {
+fn getImplementation(self: *Document, frame: *Frame) !*DOMImplementation {
     if (self._implementation) |impl| return impl;
     const impl = try frame._factory.create(DOMImplementation{ ._document = self });
     self._implementation = impl;
     return impl;
 }
 
-pub fn createDocumentFragment(self: *Document, frame: *Frame) !*Node.DocumentFragment {
-    const frag = try Node.DocumentFragment.init(frame);
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(frag.asNode(), self);
-    }
-    return frag;
+fn createDocumentFragment(self: *Document, frame: *Frame) !*Node.DocumentFragment {
+    return Node.DocumentFragment.init(self, frame);
 }
 
-pub fn createComment(self: *Document, data: []const u8, frame: *Frame) !*Node {
-    const node = try Frame.node_factory.createComment(frame, data);
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
+// https://html.spec.whatwg.org/multipage/scripting.html#appropriate-template-contents-owner-document
+// A <template>'s content lives in a document with no browsing context, shared
+// by every template of this document (and by the templates nested in that
+// content). Nothing in there is connected, scripts never run and, having no
+// custom element registry, custom elements are never constructed.
+//
+// Only a copy stamped into a real document gets upgraded.
+pub fn templateContentsOwner(self: *Document, frame: *Frame) !*Document {
+    if (self._template_contents_owner) |owner| {
+        return owner;
     }
-    return node;
+
+    const owner: *Document = if (self._type == .html)
+        (try frame._factory.document(HTMLDocument{ ._proto = undefined })).asDocument()
+    else
+        try frame._factory.genericDocument(.{});
+    owner._url = "about:blank";
+    owner._charset = "UTF-8";
+    owner._ready_state = .complete;
+    // Its own templates' content stays in it.
+    owner._template_contents_owner = owner;
+
+    self._template_contents_owner = owner;
+    return owner;
 }
 
-pub fn createTextNode(self: *Document, data: []const u8, frame: *Frame) !*Node {
-    const node = try Frame.node_factory.createTextNode(frame, data);
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
-    return node;
+pub fn createComment(self: *Document, data: []const u8) !*Node {
+    return Frame.node_factory.createComment(self, data);
 }
 
-pub fn createCDATASection(self: *Document, data: []const u8, frame: *Frame) !*Node {
-    const node = switch (self._type) {
-        .html => return error.NotSupported, // cannot create a CDataSection in an HTMLDocument
-        .xml => try Frame.node_factory.createCDATASection(frame, data),
-        .generic => try Frame.node_factory.createCDATASection(frame, data),
+pub fn createTextNode(self: *Document, data: []const u8) !*Node {
+    return Frame.node_factory.createTextNode(self, data);
+}
+
+pub fn createCDATASection(self: *Document, data: []const u8) !*Node {
+    return switch (self._type) {
+        .html => error.NotSupported, // cannot create a CDataSection in an HTMLDocument
+        .xml, .generic => Frame.node_factory.createCDATASection(self, data),
     };
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
-    return node;
 }
 
-pub fn createProcessingInstruction(self: *Document, target: []const u8, data: []const u8, frame: *Frame) !*Node {
-    const node = try Frame.node_factory.createProcessingInstruction(frame, target, data);
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
-    return node;
+pub fn createProcessingInstruction(self: *Document, target: []const u8, data: []const u8) !*Node {
+    return Frame.node_factory.createProcessingInstruction(self, target, data);
 }
 
 const Range = @import("Range.zig");
-pub fn createRange(self: *Document, frame: *Frame) !*Range {
+fn createRange(self: *Document, frame: *Frame) !*Range {
     return Range.initIn(self.asNode(), frame);
 }
 
-pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@import("Event.zig") {
+fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@import("Event.zig") {
     const Event = @import("Event.zig");
     if (event_type.len > 100) {
         return error.NotSupported;
@@ -570,12 +660,12 @@ pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*
 
     const event: *Event = blk: {
         if (std.mem.eql(u8, normalized, "event") or std.mem.eql(u8, normalized, "events") or std.mem.eql(u8, normalized, "htmlevents") or std.mem.eql(u8, normalized, "svgevents")) {
-            break :blk try Event.init("", null, frame._page);
+            break :blk try Event.init("", null, frame.page);
         }
 
         if (std.mem.eql(u8, normalized, "customevent")) {
             const CustomEvent = @import("event/CustomEvent.zig");
-            break :blk (try CustomEvent.init("", null, frame._page)).asEvent();
+            break :blk (try CustomEvent.init("", null, frame.page)).asEvent();
         }
 
         if (std.mem.eql(u8, normalized, "keyboardevent")) {
@@ -600,7 +690,7 @@ pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*
 
         if (std.mem.eql(u8, normalized, "messageevent")) {
             const MessageEvent = @import("event/MessageEvent.zig");
-            break :blk (try MessageEvent.init("", null, frame._page)).asEvent();
+            break :blk (try MessageEvent.init("", null, frame.page)).asEvent();
         }
 
         if (std.mem.eql(u8, normalized, "hashchangeevent")) {
@@ -662,11 +752,11 @@ pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*
     return event;
 }
 
-pub fn createTreeWalker(_: *const Document, root: *Node, what_to_show: ?js.Value, filter: ?DOMTreeWalker.FilterOpts, frame: *Frame) !*DOMTreeWalker {
+fn createTreeWalker(_: *const Document, root: *Node, what_to_show: ?js.Value, filter: ?DOMTreeWalker.FilterOpts, frame: *Frame) !*DOMTreeWalker {
     return DOMTreeWalker.init(root, try whatToShow(what_to_show), filter, frame);
 }
 
-pub fn createNodeIterator(_: *const Document, root: *Node, what_to_show: ?js.Value, filter: ?DOMNodeIterator.FilterOpts, frame: *Frame) !*DOMNodeIterator {
+fn createNodeIterator(_: *const Document, root: *Node, what_to_show: ?js.Value, filter: ?DOMNodeIterator.FilterOpts, frame: *Frame) !*DOMNodeIterator {
     return DOMNodeIterator.init(root, try whatToShow(what_to_show), filter, frame);
 }
 
@@ -694,7 +784,7 @@ pub fn evaluate(
     );
 }
 
-pub fn createExpression(
+fn createExpression(
     _: *const Document,
     expression: []const u8,
     resolver: ?js.Value,
@@ -704,7 +794,7 @@ pub fn createExpression(
     return XPathExpression.init(expression, frame);
 }
 
-pub fn createNSResolver(_: *const Document, node: *Node) ?*Node {
+fn createNSResolver(_: *const Document, node: *Node) ?*Node {
     return node;
 }
 
@@ -722,7 +812,7 @@ fn whatToShow(value_: ?js.Value) !u32 {
     return value.toZig(u32);
 }
 
-pub fn getReadyState(self: *const Document) []const u8 {
+fn getReadyState(self: *const Document) []const u8 {
     return @tagName(self._ready_state);
 }
 
@@ -750,6 +840,16 @@ pub fn getActiveElement(self: *Document) ?*Element {
     return self.getDocumentElement();
 }
 
+/// Focus takes part in the cascade (`:focus`, `:focus-within`), so every write
+/// to `_active_element` has to go through here to stamp the style version.
+pub fn setActiveElement(self: *Document, element: ?*Element, frame: *Frame) void {
+    if (self._active_element == element) {
+        return;
+    }
+    self._active_element = element;
+    frame.styleChanged();
+}
+
 pub fn getStyleSheets(self: *Document, frame: *Frame) !*StyleSheetList {
     if (self._style_sheets) |sheets| {
         return sheets;
@@ -759,7 +859,7 @@ pub fn getStyleSheets(self: *Document, frame: *Frame) !*StyleSheetList {
     return sheets;
 }
 
-pub fn getFonts(self: *Document, frame: *Frame) !*FontFaceSet {
+fn getFonts(self: *Document, frame: *Frame) !*FontFaceSet {
     if (self._fonts) |fonts| {
         return fonts;
     }
@@ -769,7 +869,7 @@ pub fn getFonts(self: *Document, frame: *Frame) !*FontFaceSet {
     return fonts;
 }
 
-pub fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
+fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
     if (node._type == .document) {
         return error.NotSupported;
     }
@@ -777,7 +877,7 @@ pub fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
         return error.HierarchyError;
     }
 
-    const old_owner = node.ownerDocument(frame) orelse frame.document;
+    const old_owner = node.ownerDocument(frame).?;
 
     if (node._parent) |parent| {
         frame.removeNode(parent, node, .{ .reconnect_to = null });
@@ -790,12 +890,12 @@ pub fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
     return node;
 }
 
-pub fn importNode(_: *const Document, node: *Node, deep_: ?bool, frame: *Frame) !*Node {
+fn importNode(self: *const Document, node: *Node, deep_: ?bool, frame: *Frame) !*Node {
     if (node._type == .document) {
         return error.NotSupported;
     }
 
-    return node.cloneNode(deep_, frame);
+    return node.cloneNodeInto(deep_ orelse false, self, frame);
 }
 
 pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
@@ -805,7 +905,7 @@ pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !v
     frame.domChanged();
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self);
 
         // DocumentFragments are special - append all their children
         if (child.is(Node.DocumentFragment)) |_| {
@@ -831,7 +931,7 @@ pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !
     var i = nodes.len;
     while (i > 0) {
         i -= 1;
-        const child = try nodes[i].toNode(frame);
+        const child = try nodes[i].toNode(self);
 
         // DocumentFragments are special - need to insert all their children
         if (child.is(Node.DocumentFragment)) |frag| {
@@ -894,19 +994,22 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
     // (which itself is O(N)). Once the counter's y passes the query y, no
     // later element can contain the point, and we can return.
     //
-    // We also share a single VisibilityCache across all elements so the
-    // ancestor-walk inside isHidden gets amortized.
+    // Hidden subtrees still count towards the index so positions agree with
+    // getBoundingClientRect; the hidden verdict just rides down the stack.
     var topmost: ?*Element = null;
 
     const root = self.asNode();
-    var stack: std.ArrayList(*Node) = .empty;
-    try stack.append(frame.local_arena, root);
+    const style_manager = &(root.ownerFrame(frame) orelse return null)._style_manager;
+    const Entry = struct { node: *Node, hidden: bool };
+    var stack: std.ArrayList(Entry) = .empty;
+    try stack.append(frame.local_arena, .{ .node = root, .hidden = false });
 
-    var visibility_cache: Element.VisibilityCache = .{};
     var preorder_index: f64 = 0;
 
     while (stack.items.len > 0) {
-        const node = stack.pop() orelse break;
+        const entry = stack.pop() orelse break;
+        const node = entry.node;
+        var hidden = entry.hidden;
         const pos = preorder_index * 5.0;
 
         if (pos > y) {
@@ -916,7 +1019,8 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
 
         preorder_index += 1;
         if (node.is(Element)) |element| {
-            if (element.checkVisibilityCached(&visibility_cache, frame)) {
+            hidden = hidden or style_manager.hasDisplayNone(element);
+            if (!hidden) {
                 if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
                     if (ignore_x) {
                         topmost = element;
@@ -935,7 +1039,7 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
         // Add children to stack in reverse order so we process them in document order
         var child = node.lastChild();
         while (child) |c| {
-            try stack.append(frame.local_arena, c);
+            try stack.append(frame.local_arena, .{ .node = c, .hidden = hidden });
             child = c.previousSibling();
         }
     }
@@ -943,7 +1047,7 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
     return topmost;
 }
 
-pub fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *Element {
+fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *Element {
     // Get topmost element
     var current: ?*Element = (try self.elementFromPoint(x, y, frame)) orelse return &.{};
     var result: std.ArrayList(*Element) = .empty;
@@ -954,7 +1058,7 @@ pub fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]cons
     return result.items;
 }
 
-pub fn getDocType(self: *Document) ?*Node {
+fn getDocType(self: *Document) ?*Node {
     var tw = @import("TreeWalker.zig").Full.init(self.asNode(), .{});
     while (tw.next()) |node| {
         if (node._type == .document_type) {
@@ -986,7 +1090,7 @@ pub fn write(self: *Document, text: []const []const u8, frame: *Frame) !void {
 // https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#dom-document-writeln
 // `writeln(...text)` runs the document write steps with `text` followed by a
 // U+000A LINE FEED character.
-pub fn writeln(self: *Document, text: []const []const u8, frame: *Frame) !void {
+fn writeln(self: *Document, text: []const []const u8, frame: *Frame) !void {
     return self.writeInternal(text, true, frame);
 }
 
@@ -1004,6 +1108,8 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
     if (self._throw_on_dynamic_markup_insertion_counter > 0) {
         return error.InvalidStateError;
     }
+
+    if (self._active_parser_aborted) return;
 
     const html = blk: {
         var joined: std.ArrayList(u8) = .empty;
@@ -1061,7 +1167,7 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
 
     // Our implementation is hacky. We'll write to a DocumentFragment, then
     // append its children.
-    const fragment = try Node.DocumentFragment.init(frame);
+    const fragment = try Node.DocumentFragment.init(self, frame);
     const fragment_node = fragment.asNode();
 
     const previous_parse_mode = frame._parse_mode;
@@ -1117,7 +1223,7 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
     }
 
     frame.domChanged();
-    self._write_insertion_point = children_to_insert.getLast();
+    self._write_insertion_point = children_to_insert.last().?;
 }
 
 pub fn open(self: *Document, call_frame: *Frame) !*Document {
@@ -1131,7 +1237,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
         return error.InvalidStateError;
     }
 
-    if (frame._load_state == .parsing) {
+    if (self._active_parser_aborted or frame._load_state == .parsing) {
         return self;
     }
 
@@ -1152,13 +1258,24 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
 
     // reset the document
     self._elements_by_id.clearAndFree(frame.arena);
-    self._active_element = null;
+    self.setActiveElement(null, frame);
     self._open_popovers = .empty;
     self._style_sheets = null;
     self._implementation = null;
     self._ready_state = .loading;
+    // open() cancels an ongoing navigation; the aborted document's load is
+    // gone for good, as in Chrome.
+    frame.cancelQueuedNavigation();
 
+    if (std.mem.findScalar(*Document, frame._script_created_parser_docs.items, self) == null) {
+        // have the page track this document (if it isn't already)
+        // so that, on shutdown, it can close the parser if needed.
+        try frame._script_created_parser_docs.append(frame.arena, self);
+    }
     self._script_created_parser = Parser.Streaming.init(frame.arena, doc_node, frame, .{ .allow_declarative_shadow = true });
+    // on start() failure the internal `handle` isn't yet create. So we can't
+    // call done() and we don't want any subsequent cleanup to call done().
+    errdefer self._script_created_parser = null;
     try self._script_created_parser.?.start();
     frame._parse_mode = .document;
 
@@ -1209,7 +1326,7 @@ fn finishScriptCreatedParser(self: *Document, frame: *Frame) !void {
     frame.documentIsComplete();
 }
 
-pub fn getFirstElementChild(self: *Document) ?*Element {
+fn getFirstElementChild(self: *Document) ?*Element {
     var it = self.asNode().childrenIterator();
     while (it.next()) |child| {
         if (child.is(Element)) |el| {
@@ -1219,7 +1336,7 @@ pub fn getFirstElementChild(self: *Document) ?*Element {
     return null;
 }
 
-pub fn getLastElementChild(self: *Document) ?*Element {
+fn getLastElementChild(self: *Document) ?*Element {
     var maybe_child = self.asNode().lastChild();
     while (maybe_child) |child| {
         if (child.is(Element)) |el| {
@@ -1230,7 +1347,7 @@ pub fn getLastElementChild(self: *Document) ?*Element {
     return null;
 }
 
-pub fn getChildElementCount(self: *Document) u32 {
+fn getChildElementCount(self: *Document) u32 {
     var i: u32 = 0;
     var it = self.asNode().childrenIterator();
     while (it.next()) |child| {
@@ -1241,7 +1358,7 @@ pub fn getChildElementCount(self: *Document) u32 {
     return i;
 }
 
-pub fn getAdoptedStyleSheets(self: *Document, frame: *Frame) !js.Object.Global {
+fn getAdoptedStyleSheets(self: *Document, frame: *Frame) !js.Object.Global {
     if (self._adopted_style_sheets) |ass| {
         return ass;
     }
@@ -1251,12 +1368,21 @@ pub fn getAdoptedStyleSheets(self: *Document, frame: *Frame) !js.Object.Global {
     return self._adopted_style_sheets.?;
 }
 
+fn getFullscreenElement(_: *const Document) ?*Element {
+    // see Element.requestFullscreen, nothing is ever fullscreen
+    return null;
+}
+
+fn exitFullscreen(_: *Document, frame: *Frame) js.Promise {
+    return frame.js.local.?.rejectPromise(.{ .type_error = "Document not in fullscreen" });
+}
+
 pub fn hasFocus(_: *Document) bool {
     log.debug(.not_implemented, "Document.hasFocus", .{});
     return true;
 }
 
-pub fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
+fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
     self._adopted_style_sheets = try sheets.persist();
 }
 
@@ -1359,7 +1485,7 @@ fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText, compti
 
 // DOM §1.4 "Name validation" productions.
 
-pub fn isValidElementLocalName(name: []const u8) bool {
+fn isValidElementLocalName(name: []const u8) bool {
     if (name.len == 0) {
         return false;
     }
@@ -1389,7 +1515,7 @@ pub fn isValidElementLocalName(name: []const u8) bool {
     return true;
 }
 
-pub fn isValidNamespacePrefix(prefix: []const u8) bool {
+fn isValidNamespacePrefix(prefix: []const u8) bool {
     if (prefix.len == 0) {
         return false;
     }
@@ -1402,7 +1528,7 @@ pub fn isValidNamespacePrefix(prefix: []const u8) bool {
     return true;
 }
 
-pub fn isValidAttributeLocalName(name: []const u8) bool {
+fn isValidAttributeLocalName(name: []const u8) bool {
     if (name.len == 0) {
         return false;
     }
@@ -1421,7 +1547,7 @@ fn validateElementName(name: []const u8) !void {
     }
 }
 
-pub const ValidatedName = struct {
+const ValidatedName = struct {
     prefix: ?[]const u8,
     local_name: []const u8,
     namespace: ?[]const u8,
@@ -1438,7 +1564,7 @@ pub fn validateAndExtract(namespace_: ?[]const u8, qualified_name: []const u8, c
 
     var prefix: ?[]const u8 = null;
     var local_name = qualified_name;
-    if (std.mem.indexOfScalar(u8, qualified_name, ':')) |colon| {
+    if (std.mem.findScalar(u8, qualified_name, ':')) |colon| {
         prefix = qualified_name[0..colon];
         local_name = qualified_name[colon + 1 ..];
         if (!isValidNamespacePrefix(prefix.?)) {
@@ -1489,9 +1615,9 @@ fn _injectBlank(self: *Document, frame: *Frame) !void {
         std.debug.assert(self.asNode()._first_child == null);
     }
 
-    const html = try Frame.node_factory.createElementNS(frame, .html, "html", null);
-    const head = try Frame.node_factory.createElementNS(frame, .html, "head", null);
-    const body = try Frame.node_factory.createElementNS(frame, .html, "body", null);
+    const html = try Frame.node_factory.createElementNS(self, .html, "html", null);
+    const head = try Frame.node_factory.createElementNS(self, .html, "head", null);
+    const body = try Frame.node_factory.createElementNS(self, .html, "body", null);
     try frame.appendNode(html, head, .{});
     try frame.appendNode(html, body, .{});
     try frame.appendNode(self.asNode(), html, .{});
@@ -1514,12 +1640,17 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(_constructor, .{});
     fn _constructor(frame: *Frame) !*Document {
-        return frame._factory.node(Document{
-            ._proto = undefined,
-            ._type = .generic,
-            ._url = "about:blank",
-            ._charset = "UTF-8",
-        });
+        return frame._factory.genericDocument(.{ .url = "about:blank", .charset = "UTF-8" });
+    }
+
+    pub const parseHTML = bridge.function(_parseHTML, .{ .static = true });
+    fn _parseHTML(html: []const u8, options: ?Sanitizer.Options, frame: *Frame) !*Document {
+        return Sanitizer.parseHTML(html, options, true, frame);
+    }
+
+    pub const parseHTMLUnsafe = bridge.function(_parseHTMLUnsafe, .{ .static = true });
+    fn _parseHTMLUnsafe(html: []const u8, options: ?Sanitizer.Options, frame: *Frame) !*Document {
+        return Sanitizer.parseHTML(html, options, false, frame);
     }
 
     pub const onselectionchange = bridge.accessor(Document.getOnSelectionChange, Document.setOnSelectionChange, .{});
@@ -1602,6 +1733,10 @@ pub const JsApi = struct {
         }
     }.defaultView, null, .{});
     pub const hasFocus = bridge.function(Document.hasFocus, .{});
+    pub const fullscreenEnabled = bridge.property(false, .{ .template = false, .readonly = true });
+    pub const fullscreen = bridge.property(false, .{ .template = false, .readonly = true });
+    pub const fullscreenElement = bridge.accessor(Document.getFullscreenElement, null, .{});
+    pub const exitFullscreen = bridge.function(Document.exitFullscreen, .{});
 
     pub const prerendering = bridge.property(false, .{ .template = false });
     pub const characterSet = bridge.accessor(Document.getCharset, null, .{});
@@ -1633,12 +1768,62 @@ pub const JsApi = struct {
 };
 
 const testing = @import("../../testing.zig");
+const HttpClient = @import("../../network/HttpClient.zig");
+
 test "WebApi: Document" {
     try testing.htmlRunner("document", .{});
 }
 
 test "WebApi: Document.evaluate" {
     try testing.htmlRunner("xpath/document_evaluate.html", .{});
+}
+
+test "Document: cookie access from a cross-site frame" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    const doc = frame.document;
+    const jar = &frame._session.cookie_jar;
+    defer jar.clearRetainingCapacity();
+
+    // victim.example embedded by attacker.example: the ancestor chain is
+    // cross-site, so the frame has no site for cookies.
+    var top_url: [:0]const u8 = "https://attacker.example/";
+    var top: HttpClient.Owner = undefined;
+    top.url = &top_url;
+    top.parent = null;
+    frame.url = "https://victim.example/inner";
+    frame._http_owner.parent = &top;
+    defer frame._http_owner.parent = null;
+
+    try jar.populateFromResponse("https://victim.example/", "strict=1; SameSite=Strict");
+    try jar.populateFromResponse("https://victim.example/", "lax=2; SameSite=Lax");
+    try jar.populateFromResponse("https://victim.example/", "default=3");
+    try jar.populateFromResponse("https://victim.example/", "none=4; SameSite=None; Secure");
+
+    // Reads: only SameSite=None is visible from a cross-site context. Lax
+    // gets no navigation exception for script access.
+    try testing.expectEqual("none=4", try doc.getCookie(frame));
+
+    // Writes: SameSite=None is stored, everything else (including the Lax
+    // default for an unspecified attribute) is silently dropped.
+    _ = try doc.setCookie("set_strict=5; SameSite=Strict", frame);
+    _ = try doc.setCookie("set_lax=6; SameSite=Lax", frame);
+    _ = try doc.setCookie("set_default=7", frame);
+    _ = try doc.setCookie("set_none=8; SameSite=None; Secure", frame);
+    try testing.expectEqual("none=4; set_none=8", try doc.getCookie(frame));
+
+    // The same jar seen from a same-site chain: everything applies, and the
+    // dropped writes really were dropped rather than hidden.
+    top_url = "https://victim.example/";
+    try testing.expectEqual("strict=1; lax=2; default=3; none=4; set_none=8", try doc.getCookie(frame));
+    _ = try doc.setCookie("set_strict=5; SameSite=Strict", frame);
+    _ = try doc.setCookie("set_default=7", frame);
+    try testing.expectEqual("strict=1; lax=2; default=3; none=4; set_none=8; set_strict=5; set_default=7", try doc.getCookie(frame));
+
+    // Back in the cross-site context, the newly written cookies obey the
+    // same visibility rules.
+    top_url = "https://attacker.example/";
+    try testing.expectEqual("none=4; set_none=8", try doc.getCookie(frame));
 }
 
 test "Document: isRelaxableTo" {

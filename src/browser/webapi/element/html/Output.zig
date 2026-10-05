@@ -27,6 +27,7 @@ const DOMTokenList = @import("../../collections.zig").DOMTokenList;
 
 const HtmlElement = @import("../Html.zig");
 
+const String = lp.String;
 const Output = @This();
 
 pub const Proto = HtmlElement;
@@ -41,16 +42,21 @@ pub fn asNode(self: *Output) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getLabels(self: *Output, frame: *Frame) !js.Array {
+fn getLabels(self: *Output, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
-pub fn getHtmlFor(self: *Output, frame: *Frame) !?*DOMTokenList {
+fn getHtmlFor(self: *Output, frame: *Frame) !?*DOMTokenList {
     const element = self.asElement();
     if (element._namespace != .html) {
         return null;
     }
     return element.getTokenList(.@"for", frame);
+}
+
+fn setHtmlFor(self: *Output, value: String, frame: *Frame) !void {
+    const list = try self.getHtmlFor(frame) orelse return;
+    try list.setValue(value, frame);
 }
 
 pub const JsApi = struct {
@@ -66,5 +72,5 @@ pub const JsApi = struct {
     pub const name = reflect.string("name");
 
     pub const labels = bridge.accessor(Output.getLabels, null, .{});
-    pub const htmlFor = bridge.accessor(Output.getHtmlFor, null, .{ .null_as_undefined = true });
+    pub const htmlFor = bridge.accessor(Output.getHtmlFor, Output.setHtmlFor, .{ .null_as_undefined = true, .ce_reactions = true });
 };

@@ -58,20 +58,10 @@ pub fn toSliceWithAlloc(self: String, allocator: Allocator) ![]u8 {
     return self._toSlice(false, allocator);
 }
 
-// e.g. after a header byte — instead of allocating a temporary and copying.
-pub fn toSliceWithBuf(self: String, buf: []u8) []u8 {
-    const n = v8.v8__String__WriteUtf8(self.handle, self.local.isolate.handle, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
-    return buf[0..@intCast(n)];
-}
-
 fn _toSlice(self: String, comptime null_terminate: bool, allocator: Allocator) !(if (null_terminate) [:0]u8 else []u8) {
-    const local = self.local;
-    const handle = self.handle;
-    const isolate = local.isolate.handle;
-
-    const l = v8.v8__String__Utf8Length(handle, isolate);
-    const buf = try (if (comptime null_terminate) allocator.allocSentinel(u8, @intCast(l), 0) else allocator.alloc(u8, @intCast(l)));
-    const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+    const l = self.len();
+    const buf = try (if (comptime null_terminate) allocator.allocSentinel(u8, l, 0) else allocator.alloc(u8, l));
+    const n = self.writeUtf8(buf, null);
     if (comptime lp.IS_DEBUG) {
         std.debug.assert(n == l);
     }
@@ -86,14 +76,11 @@ pub fn toSSO(self: String, comptime global: bool) !(if (global) lp.String.Global
     return self.toSSOWithAlloc(self.local.call_arena);
 }
 pub fn toSSOWithAlloc(self: String, allocator: Allocator) !lp.String {
-    const handle = self.handle;
-    const isolate = self.local.isolate.handle;
-
-    const l: usize = @intCast(v8.v8__String__Utf8Length(handle, isolate));
+    const l = self.len();
 
     if (l <= 12) {
         var content: [12]u8 = undefined;
-        const n = v8.v8__String__WriteUtf8(handle, isolate, &content[0], content.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+        const n = self.writeUtf8(&content, null);
         if (comptime lp.IS_DEBUG) {
             std.debug.assert(n == l);
         }
@@ -109,7 +96,7 @@ pub fn toSSOWithAlloc(self: String, allocator: Allocator) !lp.String {
     }
 
     const buf = try allocator.alloc(u8, l);
-    const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+    const n = self.writeUtf8(buf, null);
     if (comptime lp.IS_DEBUG) {
         std.debug.assert(n == l);
     }
@@ -122,27 +109,16 @@ pub fn toSSOWithAlloc(self: String, allocator: Allocator) !lp.String {
 }
 
 pub fn format(self: String, writer: *std.Io.Writer) !void {
-    const local = self.local;
-    const handle = self.handle;
-    const isolate = local.isolate.handle;
-
     var small: [1024]u8 = undefined;
-    const l = v8.v8__String__Utf8Length(handle, isolate);
-    var buf = if (l < 1024) &small else local.call_arena.alloc(u8, @intCast(l)) catch return error.WriteFailed;
+    const l = self.len();
+    const buf = if (l < 1024) &small else self.local.call_arena.alloc(u8, l) catch return error.WriteFailed;
 
-    const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+    const n = self.writeUtf8(buf, null);
     return writer.writeAll(buf[0..n]);
 }
 
 pub fn len(self: String) usize {
     return @intCast(v8.v8__String__Utf8Length(self.handle, self.local.isolate.handle));
-}
-
-// JS-level character (code unit) count, independent of encoding. Equivalent
-// to `s.length` in JavaScript. Use this — not `len()` — when allocating a
-// buffer for one-byte / Latin-1 reads.
-pub fn lenChars(self: String) usize {
-    return @intCast(v8.v8__String__Length(self.handle));
 }
 
 // True iff every code unit in the string fits in a single byte (codepoint
@@ -165,4 +141,11 @@ pub fn toOneByteSlice(self: String, allocator: Allocator) ![]u8 {
         v8.v8__String__WriteOneByte(handle, isolate, 0, length, buf.ptr);
     }
     return buf;
+}
+
+// Encodes into `dest`, stopping before any code point that doesn't fit and
+// replacing lone surrogates with U+FFFD. Returns the bytes written;
+// `processed` receives the UTF-16 code units consumed.
+pub fn writeUtf8(self: String, dest: []u8, processed: ?*usize) usize {
+    return v8.v8__String__WriteUtf8(self.handle, self.local.isolate.handle, dest.ptr, dest.len, v8.WRITE_REPLACE_INVALID_UTF8, processed);
 }

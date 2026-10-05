@@ -284,6 +284,7 @@ fn isIdentStart(self: *Tokenizer) bool {
     var b = self.nextByteUnchecked();
     if (b == '-') {
         b = if (self.hasAtLeast(1)) self.byteAt(1) else return false;
+        if (b == '-') return true; // --custom-property
     }
 
     return switch (b) {
@@ -612,7 +613,7 @@ fn consumeNumeric(self: *Tokenizer) Token {
             break :blk std.math.minInt(i32);
         }
 
-        break :blk @as(i32, @intFromFloat(value));
+        break :blk @as(i32, @trunc(value));
     } else null;
 
     if (!self.isEof() and self.nextByteUnchecked() == '%') {

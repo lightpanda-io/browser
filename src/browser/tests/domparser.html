@@ -115,6 +115,19 @@
 }
 </script>
 
+<script id=truncatedMetaCharset>
+{
+  // html5ever < 0.40 indexed past the end of a content attribute that stops
+  // right after "charset", aborting the process.
+  const parser = new DOMParser();
+  for (const content of ['charset', 'charset ', 'text/html;charset', 'text/html; charset', 'text/html;charset=', 'text/html;charset="']) {
+    const markup = '<meta http-equiv="Content-Type" content="' + content.replace(/"/g, '&quot;') + '">';
+    const doc = parser.parseFromString(markup, 'text/html');
+    testing.expectEqual(content, doc.querySelector('meta').getAttribute('content'));
+  }
+}
+</script>
+
 <script id=getElementById>
 {
   const doc = new DOMParser().parseFromString('<div id="new-node">new-node</div>', 'text/html');
@@ -420,6 +433,21 @@
 }
 </script>
 
+<script id=querySelector-xml>
+{
+  const doc = new DOMParser().parseFromString(
+    '<rss><channel><title>Feed</title><item><title>One</title><link>a</link><pubDate>Mon</pubDate></item><item><title>Two</title></item></channel></rss>',
+    'application/xml');
+
+  testing.expectEqual(2, doc.querySelectorAll('item').length);
+  testing.expectEqual('Feed', doc.querySelector('channel > title')?.textContent);
+  testing.expectEqual(['One', 'Two'], Array.from(doc.querySelectorAll('item title')).map(e => e.textContent));
+  testing.expectEqual(1, doc.querySelectorAll('link').length);
+  testing.expectEqual(1, doc.querySelectorAll('pubDate').length);
+  testing.expectEqual(true, doc.getElementsByTagName('title')[0].matches('title'));
+}
+</script>
+
 <script id=xml-namespaces>
 {
   const doc = new DOMParser().parseFromString(
@@ -506,6 +534,13 @@
     '<a b="1" b="2"/>',          // duplicate attribute
     '<x:a>1</x:a>',              // undeclared prefix
     '<a>&#0;</a>',
+    '<a><?1x?></a>',             // invalid processing instruction target
+    '<?1x?><a/>',
+    '<?xml version="2.0"?><a/>', // only 1.x versions are accepted
+    '<?xml version="10.0"?><a/>',
+    '<?xml version="1."?><a/>',
+    '<?xml version=1.0?><a/>',
+    '<?xml encoding="UTF-8"?><a/>', // version is required
   ]) {
     testing.expectEqual(bad + ' -> error', bad + (isError(p.parseFromString(bad, 'text/xml')) ? ' -> error' : ' -> ok'));
   }
@@ -514,6 +549,8 @@
   for (const good of [
     '<a/>',
     '<?xml version="1.0" encoding="UTF-8"?>\n<a/>\n',
+    "<?xml version = '1.1075' ?><a/>",
+    '<?xml version="1.000" standalone="yes"?><a/>',
     '\uFEFF<a/>',
     '<a><![CDATA[<x>]]><!-- c --><?pi d?></a><!-- trailing -->',
     '<a b="x&quot;y&apos;&lt;&#169;"/>',
@@ -533,6 +570,23 @@
   testing.expectEqual('svg', svg.doctype.name);
   testing.expectEqual('-//W3C//DTD SVG 1.1//EN', svg.doctype.publicId);
   testing.expectEqual('svg', svg.documentElement.localName);
+
+  // the XML declaration creates no node, a leading processing instruction does
+  const decl = p.parseFromString('<?xml version="1.0"?><?xml-stylesheet href="a.css"?><a/>', 'text/xml');
+  testing.expectEqual(2, decl.childNodes.length);
+  testing.expectEqual('xml-stylesheet', decl.firstChild.target);
+  testing.expectEqual('xml-stylesheet', p.parseFromString('<?xml-stylesheet href="a.css"?><a/>', 'text/xml').firstChild.target);
+}
+</script>
+
+<script id=noBrowsingContext>
+{
+  // The parsed document has no browsing context, so its <base> belongs to
+  // it alone: the page's base URL is untouched.
+  const base = document.baseURI;
+  const doc = new DOMParser().parseFromString('<base href="http://other.example/x/">', 'text/html');
+  testing.expectEqual('BASE', doc.querySelector('base').tagName);
+  testing.expectEqual(base, document.baseURI);
 }
 </script>
 

@@ -160,3 +160,31 @@
   testing.expectEqual('function', typeof mql.dispatchEvent);
 }
 </script>
+
+<script id=listeners>
+{
+  const mql = window.matchMedia('(min-width: 600px)');
+  let calls = 0;
+  const fn = () => calls++;
+
+  mql.addListener(fn);
+  mql.dispatchEvent(new Event('change'));
+  testing.expectEqual(1, calls);
+
+  mql.removeListener(fn);
+  mql.dispatchEvent(new Event('change'));
+  testing.expectEqual(1, calls);
+
+  mql.onchange = fn;
+  testing.expectEqual(fn, mql.onchange);
+  mql.dispatchEvent(new Event('change'));
+  testing.expectEqual(2, calls);
+  mql.onchange = null;
+  mql.dispatchEvent(new Event('change'));
+  testing.expectEqual(2, calls);
+
+  const ev = new MediaQueryListEvent('change', { matches: true, media: '(min-width: 600px)' });
+  testing.expectEqual(true, ev.matches);
+  testing.expectEqual('(min-width: 600px)', ev.media);
+}
+</script>

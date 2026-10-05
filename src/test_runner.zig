@@ -22,7 +22,7 @@ const builtin = @import("builtin");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
-const BORDER = "=" ** 80;
+const BORDER: [80]u8 = @splat('=');
 
 // use in custom panic handler
 var current_test: ?[]const u8 = null;
@@ -35,7 +35,7 @@ pub fn main(init: std.process.Init) !void {
     var mem: [8192]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&mem);
 
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    var gpa: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
 
@@ -90,7 +90,7 @@ const Runner = struct {
 
         Printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
 
-        var after_each: ?std.builtin.TestFn = null;
+        var after_each: ?std.lang.TestFn = null;
         for (builtin.test_functions) |t| {
             if (isAfterEach(t)) {
                 after_each = t;
@@ -118,13 +118,13 @@ const Runner = struct {
             const is_unnamed_test = isUnnamed(t);
             if (!is_unnamed_test) {
                 if (self.env.filter) |f| {
-                    if (std.mem.indexOf(u8, t.name, f) == null) {
+                    if (std.mem.find(u8, t.name, f) == null) {
                         continue;
                     }
                 } else if (webapi_html_test_mode) {
                     // allow filtering by subfilter only, assumes subfilters
                     // only exists for "WebApi: " tests (which is true for now).
-                    if (std.mem.indexOf(u8, t.name, "WebApi: ") == null) {
+                    if (std.mem.find(u8, t.name, "WebApi: ") == null) {
                         continue;
                     }
                 }
@@ -148,7 +148,10 @@ const Runner = struct {
             }
 
             current_test = friendly_name;
-            std.testing.allocator_instance = .{};
+            std.testing.allocator_instance = .init(std.heap.page_allocator, .{
+                .canary = 0xc3a701ba,
+                .check_write_after_free = true,
+            });
             var result = t.func();
             if (after_each) |ae| {
                 // always runs, so that it can reset state, but it can only
@@ -168,7 +171,7 @@ const Runner = struct {
             const ns_taken = slowest.endTiming(io, friendly_name, is_unnamed_test);
             ns_duration += ns_taken;
 
-            if (std.testing.allocator_instance.deinit() == .leak) {
+            if (std.testing.allocator_instance.deinit() != 0) {
                 leak += 1;
                 Printer.status(.fail, "\n{s}\n\"{s}\" - Memory Leak\n{s}\n", .{ BORDER, friendly_name, BORDER });
             }
@@ -186,7 +189,7 @@ const Runner = struct {
                     status = .fail;
                     fail += 1;
                     Printer.status(.fail, "\n{s}\n\"{s}\" - {s}\n", .{ BORDER, friendly_name, @errorName(err) });
-                    if (self.subtests.getLastOrNull()) |st| {
+                    if (self.subtests.last()) |st| {
                         Printer.status(.fail, " {s}\n", .{st});
                     }
                     Printer.status(.fail, BORDER ++ "\n", .{});
@@ -231,12 +234,11 @@ const Runner = struct {
         if (leak > 0) {
             Printer.status(.fail, "{d} test{s} leaked\n", .{ leak, if (leak != 1) "s" else "" });
         }
-        Printer.fmt("\n", .{});
 
-        try slowest.display();
-        Printer.fmt("\n", .{});
+        slowest.display();
         // stats
         if (self.env.metrics) {
+            Printer.fmt("\n", .{});
             const stdout = std.Io.File.stdout();
             var writer = stdout.writerStreaming(io, &.{});
             const stats = self.ta.stats();
@@ -258,11 +260,10 @@ const Runner = struct {
         }
 
         if (fail_list.items.len > 0) {
-            Printer.status(.fail, "Failed Test Summary: \n", .{});
+            Printer.status(.fail, "\nFailed Test Summary: \n", .{});
             for (fail_list.items) |name| {
                 Printer.status(.fail, "- {s}\n", .{name});
             }
-            Printer.fmt("\n", .{});
         }
 
         std.process.exit(if (fail == 0) 0 else 1);
@@ -277,7 +278,7 @@ pub fn hasSubfilter() bool {
 
 pub fn shouldRun(name: []const u8) bool {
     const sf = RUNNER.env.subfilter orelse return true;
-    return std.mem.indexOf(u8, name, sf) != null;
+    return std.mem.find(u8, name, sf) != null;
 }
 
 pub fn subtest(name: []const u8) !void {
@@ -296,7 +297,13 @@ const Printer = struct {
             .skip => std.debug.print("\x1b[33m", .{}),
             else => {},
         }
-        std.debug.print(format ++ "\x1b[0m", args);
+        // Reset before a trailing newline so the escape never starts the next line.
+        const reset = "\x1b[0m";
+        if (comptime std.mem.endsWith(u8, format, "\n")) {
+            std.debug.print(format[0 .. format.len - 1] ++ reset ++ "\n", args);
+        } else {
+            std.debug.print(format ++ reset, args);
+        }
     }
 };
 
@@ -345,7 +352,9 @@ const SlowTracker = struct {
         const start = self.start;
         self.start = timestamp;
         const ns: u64 = @intCast(start.durationTo(timestamp).toNanoseconds());
-        _ = is_unnamed_test;
+        if (is_unnamed_test) {
+            return ns;
+        }
 
         var slowest = &self.slowest;
 
@@ -372,10 +381,13 @@ const SlowTracker = struct {
         return ns;
     }
 
-    fn display(self: *SlowTracker) !void {
+    fn display(self: *SlowTracker) void {
         var slowest = self.slowest;
         const count = slowest.count();
-        Printer.fmt("Slowest {d} test{s}: \n", .{ count, if (count != 1) "s" else "" });
+        if (count == 0) {
+            return;
+        }
+        Printer.fmt("\nSlowest {d} test{s}: \n", .{ count, if (count != 1) "s" else "" });
         while (slowest.popMin()) |info| {
             const ms = @as(f64, @floatFromInt(info.ns)) / 1_000_000.0;
             Printer.fmt("  {d:.2}ms\t{s}\n", .{ ms, info.name });
@@ -421,7 +433,7 @@ const Env = struct {
         const ff = full_filter orelse return .{ null, null };
         if (ff.len == 0) return .{ null, null };
 
-        const split = std.mem.indexOfScalarPos(u8, ff, 0, '#') orelse {
+        const split = std.mem.findScalarPos(u8, ff, 0, '#') orelse {
             return .{ ff, null };
         };
 
@@ -435,10 +447,10 @@ const Env = struct {
 };
 
 pub const panic = std.debug.FullPanic(struct {
-    pub fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
         if (current_test) |ct| {
             std.debug.print("\x1b[31m{s}\npanic running \"{s}\"\n", .{ BORDER, ct });
-            if (RUNNER.subtests.getLastOrNull()) |st| {
+            if (RUNNER.subtests.last()) |st| {
                 std.debug.print(" {s}\n", .{st});
             }
             std.debug.print("\x1b[0m{s}\n", .{BORDER});
@@ -447,27 +459,27 @@ pub const panic = std.debug.FullPanic(struct {
     }
 }.panicFn);
 
-fn isUnnamed(t: std.builtin.TestFn) bool {
+fn isUnnamed(t: std.lang.TestFn) bool {
     const marker = ".test_";
     const test_name = t.name;
-    const index = std.mem.indexOf(u8, test_name, marker) orelse return false;
+    const index = std.mem.find(u8, test_name, marker) orelse return false;
     _ = std.fmt.parseInt(u32, test_name[index + marker.len ..], 10) catch return false;
     return true;
 }
 
-fn isSetup(t: std.builtin.TestFn) bool {
+fn isSetup(t: std.lang.TestFn) bool {
     return std.mem.endsWith(u8, t.name, "tests:beforeAll");
 }
 
-fn isTeardown(t: std.builtin.TestFn) bool {
+fn isTeardown(t: std.lang.TestFn) bool {
     return std.mem.endsWith(u8, t.name, "tests:afterAll");
 }
 
-fn isAfterEach(t: std.builtin.TestFn) bool {
+fn isAfterEach(t: std.lang.TestFn) bool {
     return std.mem.endsWith(u8, t.name, "tests:afterEach");
 }
 
-pub const TrackingAllocator = struct {
+const TrackingAllocator = struct {
     parent_allocator: Allocator,
     free_count: usize = 0,
     allocated_bytes: usize = 0,

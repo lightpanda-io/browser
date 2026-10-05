@@ -31,8 +31,6 @@ const FormData = @import("FormData.zig");
 const Headers = @import("Headers.zig");
 const body_init = @import("body_init.zig");
 
-const ContentTypeIterator = @import("../../Mime.zig").ContentTypeIterator;
-
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
@@ -58,11 +56,13 @@ _url: [:0]const u8,
 _is_redirected: bool,
 _http_transfer: ?*Transfer = null,
 _body_used: bool = false,
+_body_stream: ?*ReadableStream = null,
 
 const Body = union(enum) {
     empty,
     bytes: []const u8,
     stream: *ReadableStream,
+    errored,
 };
 
 const InitOpts = struct {
@@ -74,6 +74,7 @@ const InitOpts = struct {
 pub const BodyInit = body_init.BodyInit;
 
 pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Response {
+    try validateInit(opts_ orelse .{}, body_ != null);
     const session = exec.session;
 
     const bucket: lp.ArenaPool.BucketSize = blk: {
@@ -89,6 +90,33 @@ pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Respon
     const arena = try session.getPinnedArena(bucket, "Response");
     errdefer arena.release();
     return initWithArena(arena, body_, opts_, exec);
+}
+
+fn validateInit(opts: InitOpts, has_body: bool) !void {
+    if (opts.status < 200 or opts.status > 599) {
+        return error.RangeError;
+    }
+
+    if (opts.statusText) |status_text| {
+        // reason-phrase: HTAB, SP, VCHAR and obs-text, all within a ByteString
+        var it = (std.unicode.Utf8View.init(status_text) catch return error.TypeError).iterator();
+        while (it.nextCodepoint()) |cp| switch (cp) {
+            '\t', ' '...'~', 0x80...0xFF => {},
+            else => return error.TypeError,
+        };
+    }
+
+    if (has_body and isNullBodyStatus(opts.status)) {
+        return error.TypeError;
+    }
+}
+
+// https://fetch.spec.whatwg.org/#null-body-status
+pub fn isNullBodyStatus(status: u16) bool {
+    return switch (status) {
+        101, 103, 204, 205, 304 => true,
+        else => false,
+    };
 }
 
 // fetch()'s response shell.
@@ -115,9 +143,9 @@ fn initWithArena(arena: *lp.Arena, body_: ?BodyInit, opts_: ?InitOpts, exec: *co
         }
     };
 
-    const headers = try Headers.init(opts.headers, exec);
+    const headers = try Headers.initGuarded(opts.headers, .response, exec);
     if (content_type) |ct| {
-        if (!headers.has("content-type", exec)) {
+        if (try headers.has("content-type", exec) == false) {
             try headers.append("content-type", ct, exec);
         }
     }
@@ -151,13 +179,13 @@ pub fn createError(exec: *const Execution) !*Response {
         ._body = .empty,
         ._type = .@"error",
         ._is_redirected = false,
-        ._headers = try Headers.init(null, exec),
+        ._headers = try .initGuarded(null, .immutable, exec),
     };
     arena.report();
     return self;
 }
 
-pub fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !*Response {
+fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !*Response {
     const status = status_ orelse 302;
     switch (status) {
         301, 302, 303, 307, 308 => {},
@@ -171,7 +199,9 @@ pub fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !
     const location = try URL.resolve(arena.allocator(), exec.base(), url_, .{ .encoding = exec.charset.* });
 
     const headers = try Headers.init(null, exec);
+    // append location directly, then lock the headers
     try headers.set("location", location, exec);
+    headers._guard = .immutable;
 
     const self = try arena.create(Response);
     self.* = .{
@@ -188,7 +218,8 @@ pub fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !
     return self;
 }
 
-pub fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Response {
+fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Response {
+    try validateInit(opts_ orelse .{}, true);
     const session = exec.session;
     const arena = try session.getPinnedArena(.medium, "Response.json");
     errdefer arena.release();
@@ -204,8 +235,8 @@ pub fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Re
     const opts = opts_ orelse InitOpts{};
     const status_text = if (opts.statusText) |st| try arena.dupe(u8, st) else "";
 
-    const headers = try Headers.init(opts.headers, exec);
-    if (!headers.has("content-type", exec)) {
+    const headers = try Headers.initGuarded(opts.headers, .response, exec);
+    if (try headers.has("content-type", exec) == false) {
         try headers.append("content-type", "application/json", exec);
     }
 
@@ -226,7 +257,7 @@ pub fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Re
 
 pub fn deinit(self: *Response, _: *Page) void {
     if (self._http_transfer) |resp| {
-        resp.abort(error.Abort);
+        resp.cancel();
         self._http_transfer = null;
     }
     self._arena.release();
@@ -244,7 +275,7 @@ pub fn getStatus(self: *const Response) u16 {
     return self._status;
 }
 
-pub fn getStatusText(self: *const Response) []const u8 {
+fn getStatusText(self: *const Response) []const u8 {
     return self._status_text;
 }
 
@@ -252,7 +283,7 @@ pub fn getURL(self: *const Response) []const u8 {
     return self._url;
 }
 
-pub fn isRedirected(self: *const Response) bool {
+fn isRedirected(self: *const Response) bool {
     return self._is_redirected;
 }
 
@@ -269,96 +300,186 @@ pub fn getBody(self: *Response, exec: *const Execution) !?*ReadableStream {
         .empty => null,
         .stream => |stream| stream,
         .bytes => |body| {
-            if (body.len == 0) {
-                const stream = try ReadableStream.init(null, null, exec);
-                try stream._controller.close();
+            if (self._body_stream) |stream| {
                 return stream;
             }
-            return ReadableStream.initWithData(body, exec);
+            const stream = blk: {
+                if (body.len == 0) {
+                    const stream = try ReadableStream.init(null, null, exec);
+                    try stream._controller.close();
+                    break :blk stream;
+                }
+                break :blk try ReadableStream.initWithData(body, exec);
+            };
+            self._body_stream = stream;
+            if (self._body_used) {
+                try lockStream(stream, exec);
+            }
+            return stream;
+        },
+        .errored => {
+            if (self._body_stream) |stream| {
+                return stream;
+            }
+            const stream = try ReadableStream.init(null, null, exec);
+            try stream._controller.doError("Failed to read response body");
+            self._body_stream = stream;
+            if (self._body_used) {
+                try lockStream(stream, exec);
+            }
+            return stream;
         },
     };
+}
+
+// A consumed body's stream stays locked and disturbed (Fetch §6.4 never
+// releases the reader it read with).
+fn lockStream(stream: *ReadableStream, exec: *const Execution) !void {
+    _ = try stream.getReader(exec);
+    stream._disturbed = true;
 }
 
 pub fn isOK(self: *const Response) bool {
     return self._status >= 200 and self._status <= 299;
 }
 
-pub fn getBodyUsed(self: *const Response) bool {
+fn getBodyUsed(self: *const Response) bool {
     return switch (self._body) {
         .empty => false,
-        else => self._body_used,
+        .stream => |stream| stream._disturbed,
+        .bytes, .errored => self._body_used,
     };
 }
 
-// Marks a present body consumed; returns a rejected promise if it already was.
-fn consume(self: *Response, local: *const js.Local) ?js.Promise {
-    switch (self._body) {
-        .empty => return null,
-        else => {},
+// A TypeError if the body is disturbed or its stream is locked (Fetch §6.4).
+fn checkUnusable(self: *const Response, local: *const js.Local) !void {
+    const stream = switch (self._body) {
+        .empty => return,
+        .stream => |stream| stream,
+        .bytes, .errored => self._body_stream orelse {
+            if (self._body_used) {
+                return local.typeError("Body has already been read");
+            }
+            return;
+        },
+    };
+    if (stream._disturbed or stream.getLocked()) {
+        return local.typeError("Body is disturbed or locked");
     }
-    if (self._body_used) {
-        return local.rejectPromise(.{ .type_error = "Body has already been read" });
-    }
+}
+
+// Marks a present body consumed.
+fn consume(self: *Response, exec: *const Execution) !void {
+    const local = exec.js.local.?;
+    try self.checkUnusable(local);
     self._body_used = true;
-    return null;
+    switch (self._body) {
+        .bytes, .errored => if (self._body_stream) |stream| {
+            try lockStream(stream, exec);
+        },
+        .empty, .stream => {},
+    }
+}
+
+pub fn consumeBytes(self: *Response, exec: *const Execution) ![]const u8 {
+    try self.consume(exec);
+    return switch (self._body) {
+        .empty => "",
+        .bytes => |b| b,
+        .stream => exec.js.local.?.typeError("Response with a ReadableStream body is unsupported"),
+        .errored => exec.js.local.?.typeError("Failed to read response body"),
+    };
 }
 
 pub fn getText(self: *Response, exec: *const Execution) !js.Promise {
-    const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
-
-    const body = switch (self._body) {
-        .bytes => |b| body_init.stripUtf8Bom(b),
-        .empty => "",
-        .stream => return local.rejectPromise(.{ .type_error = "Cannot read text from stream body" }),
-    };
-    return local.resolvePromise(body);
+    return self.consumeAs(.text, exec);
 }
 
-pub fn getJson(self: *Response, exec: *const Execution) !js.Promise {
-    const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
-
-    const body = switch (self._body) {
-        .bytes => |b| body_init.stripUtf8Bom(b),
-        .empty => "",
-        .stream => return local.rejectPromise(.{ .type_error = "Cannot read JSON from stream body" }),
-    };
-    const value = local.parseJSON(body) catch {
-        return local.rejectPromise(.{ .syntax_error = "failed to parse" });
-    };
-    return local.resolvePromise(try value.persist());
+fn getJson(self: *Response, exec: *const Execution) !js.Promise {
+    return self.consumeAs(.json, exec);
 }
 
 pub fn arrayBuffer(self: *Response, exec: *const Execution) !js.Promise {
-    const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
-
-    return switch (self._body) {
-        .bytes => |body| local.resolvePromise(js.ArrayBuffer{ .values = body }),
-        .empty => local.resolvePromise(js.ArrayBuffer{ .values = "" }),
-        .stream => |stream| StreamConsumer.start(stream, exec),
-    };
+    return self.consumeAs(.array_buffer, exec);
 }
 
-/// Async consumer for reading all data from a ReadableStream
+pub fn blob(self: *Response, exec: *const Execution) !js.Promise {
+    return self.consumeAs(.blob, exec);
+}
+
+pub fn bytes(self: *Response, exec: *const Execution) !js.Promise {
+    return self.consumeAs(.bytes, exec);
+}
+
+pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
+    return self.consumeAs(.form_data, exec);
+}
+
+const Package = enum { array_buffer, bytes, text, json, blob, form_data };
+
+// a byte body is packaged right away, a stream body once it has been drained.
+fn consumeAs(self: *Response, kind: Package, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    try self.consume(exec);
+
+    const content_type = try self._headers.get("content-type", exec);
+    switch (self._body) {
+        .stream => |stream| return StreamConsumer.start(stream, kind, content_type, exec),
+        .errored => {
+            var resolver = local.createPromiseResolver();
+            resolver.rejectError("response body", .{ .type_error = "Failed to read response body" });
+            return resolver.promise();
+        },
+        .bytes, .empty => {},
+    }
+
+    var resolver = local.createPromiseResolver();
+    const body = switch (self._body) {
+        .bytes => |b| b,
+        else => "",
+    };
+    try package(kind, body, content_type, resolver, exec);
+    return resolver.promise();
+}
+
+// settles `resolver` with `body` as `kind`.
+fn package(kind: Package, body: []const u8, content_type: ?[]const u8, resolver: js.PromiseResolver, exec: *const Execution) !void {
+    switch (kind) {
+        .array_buffer => resolver.resolve("arrayBuffer", js.ArrayBuffer{ .values = body }),
+        .bytes => resolver.resolve("bytes", js.TypedArray(u8){ .values = body }),
+        .text => resolver.resolve("text", body_init.stripUtf8Bom(body)),
+        .json => {
+            const local = exec.js.local.?;
+            const value = local.parseJSON(body_init.stripUtf8Bom(body)) catch {
+                return resolver.rejectError("json", .{ .syntax_error = "failed to parse" });
+            };
+            resolver.resolve("json", value);
+        },
+        .blob => resolver.resolve("blob", try Blob.initFromBytes(body, content_type orelse "", exec)),
+        .form_data => {
+            const form_data = body_init.parseFormData(body, content_type, exec) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                error.TypeError => return resolver.rejectError("formData", .{ .type_error = "Failed to parse body as FormData" }),
+            };
+            resolver.resolve("formData", form_data);
+        },
+    }
+}
+
+// Drains a stream body chunk by chunk, then packages the concatenation.
 const StreamConsumer = struct {
     const ReadableStreamDefaultReader = @import("../streams/ReadableStreamDefaultReader.zig");
 
     execution: *const Execution,
+    kind: Package,
+    content_type: ?[]const u8,
     total_len: usize,
     arena: Allocator,
     reader: *ReadableStreamDefaultReader,
     chunks: std.ArrayList([]const u8),
     resolver: js.PromiseResolver.Global,
 
-    fn start(stream: *ReadableStream, exec: *const Execution) !js.Promise {
+    fn start(stream: *ReadableStream, kind: Package, content_type: ?[]const u8, exec: *const Execution) !js.Promise {
         const local = exec.js.local.?;
         var resolver = local.createPromiseResolver();
         const promise = resolver.promise();
@@ -368,6 +489,8 @@ const StreamConsumer = struct {
         const state = try exec.arena.create(StreamConsumer);
         state.* = .{
             .execution = exec,
+            .kind = kind,
+            .content_type = if (content_type) |ct| try exec.arena.dupe(u8, ct) else null,
             .reader = reader,
             .chunks = .empty,
             .total_len = 0,
@@ -391,52 +514,35 @@ const StreamConsumer = struct {
         };
     }
 
-    const ReadData = struct {
-        done: bool,
-        value: js.Value,
-    };
-
-    fn onReadFulfilled(self: *StreamConsumer, data_: ?ReadData) void {
+    fn onReadFulfilled(self: *StreamConsumer, result: js.Value) void {
         const local = self.execution.js.local.?;
-
-        const data = data_ orelse {
-            return self.finish(local, null);
-        };
-
-        self._onReadFulfilled(data) catch {
+        self._onReadFulfilled(result) catch {
             self.finish(local, null);
         };
     }
 
-    fn _onReadFulfilled(self: *StreamConsumer, data: ReadData) !void {
+    fn _onReadFulfilled(self: *StreamConsumer, result: js.Value) !void {
         const exec = self.execution;
         const local = exec.js.local.?;
 
-        if (data.done) {
-            // Stream is finished, concatenate all chunks and resolve
-            self.reader.releaseLock();
-            const result = try self.concatenateChunks(exec.call_arena);
-            local.toLocal(self.resolver).resolve("arrayBuffer complete", js.ArrayBuffer{ .values = result });
-            return;
+        if (result.isObject() == false) {
+            return self.finish(local, "Read result is not an object");
+        }
+        const obj = result.toObject();
+
+        if ((try obj.get("done")).toBool()) {
+            const body = try self.concatenateChunks(exec.call_arena);
+            return package(self.kind, body, self.content_type, local.toLocal(self.resolver), exec);
         }
 
-        // Collect the chunk data
-        const value = data.value;
-        if (!value.isUndefined()) {
-            // Try to get bytes from the value (could be Uint8Array or string)
-            if (value.isTypedArray() or value.isArrayBufferView() or value.isArrayBuffer()) {
-                if (local.jsValueToZig([]u8, value)) |typed_data| {
-                    const chunk_copy = try self.arena.dupe(u8, typed_data);
-                    try self.chunks.append(self.arena, chunk_copy);
-                    self.total_len += chunk_copy.len;
-                } else |_| {}
-            } else if (value.isString()) |str| {
-                const slice = try str.toSlice();
-                const chunk_copy = try self.arena.dupe(u8, slice);
-                try self.chunks.append(self.arena, chunk_copy);
-                self.total_len += chunk_copy.len;
-            }
+        const value = try obj.get("value");
+        if (value.isUint8Array() == false) {
+            // A chunk that is not a Uint8Array is a TypeError.
+            return self.finish(local, "Response body chunk is not a Uint8Array");
         }
+        const chunk_copy = try self.arena.dupe(u8, try local.jsValueToZig([]u8, value));
+        try self.chunks.append(self.arena, chunk_copy);
+        self.total_len += chunk_copy.len;
         try self.pumpRead();
     }
 
@@ -456,82 +562,16 @@ const StreamConsumer = struct {
 
     fn finish(self: *StreamConsumer, local: *const js.Local, err: ?[]const u8) void {
         self.reader.releaseLock();
-        local.toLocal(self.resolver).rejectError("arrayBuffer error", .{ .type_error = err orelse "Failed to read stream" });
+        local.toLocal(self.resolver).rejectError("stream body", .{ .type_error = err orelse "Failed to read stream" });
     }
 };
 
-pub fn blob(self: *Response, exec: *const Execution) !js.Promise {
-    const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| return rejected;
-    const body = switch (self._body) {
-        .bytes => |b| b,
-        .empty => "",
-        .stream => return local.rejectPromise(.{ .type_error = "Cannot read blob from stream body" }),
-    };
-    const content_type = try self._headers.get("content-type", exec) orelse "";
-    const b = try Blob.initFromBytes(body, content_type, exec);
-    return local.resolvePromise(b);
-}
-
-pub fn bytes(self: *Response, exec: *const Execution) !js.Promise {
-    const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| return rejected;
-    const body = switch (self._body) {
-        .bytes => |b| b,
-        .empty => "",
-        .stream => return local.rejectPromise(.{ .type_error = "Cannot read bytes from stream body" }),
-    };
-    return local.resolvePromise(js.TypedArray(u8){ .values = body });
-}
-
-pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
-    const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| return rejected;
-    const body = switch (self._body) {
-        .bytes => |b| b,
-        .empty => "",
-        .stream => return local.rejectPromise(.{ .type_error = "Cannot read FormData from stream body" }),
-    };
-
-    const content_type = try self._headers.get("content-type", exec) orelse {
-        return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
-    };
-    var it = ContentTypeIterator.init(content_type);
-    const essence = it.essence;
-
-    // [RFC7578]
-    // Parse bytes, using the value of the `boundary` parameter from mimeType,
-    // per the rules set forth in Returning Values from Forms: multipart/form-data.
-    if (std.ascii.eqlIgnoreCase(essence, "multipart/form-data")) {
-        const boundary = it.findBoundary();
-        if (boundary.len == 0) {
-            return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
-        }
-
-        const form_data = FormData.initFromMultipart(body, boundary, exec) catch |err| switch (err) {
-            error.OutOfMemory => return err,
-            else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
-        };
-        return local.resolvePromise(form_data);
-    }
-
-    if (std.ascii.eqlIgnoreCase(essence, "application/x-www-form-urlencoded")) {
-        const form_data = FormData.initFromUrlEncoded(body, exec) catch |err| switch (err) {
-            error.OutOfMemory => return err,
-            else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
-        };
-        return local.resolvePromise(form_data);
-    }
-
-    return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
-}
-
 pub fn clone(self: *const Response, exec: *const Execution) !*Response {
+    try self.checkUnusable(exec.js.local.?);
     const session = exec.session;
     const body_len = switch (self._body) {
         .bytes => |b| b.len,
-        .empty => 0,
-        .stream => 0,
+        .empty, .stream, .errored => 0,
     };
     const arena = try session.getPinnedArena(body_len + self._url.len + 256, "Response.clone");
     errdefer arena.release();
@@ -540,9 +580,10 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
         .bytes => |b| .{ .bytes = try arena.dupe(u8, b) },
         .empty => .empty,
         .stream => .empty, // TODO: implement stream tee for proper cloning
+        .errored => .errored,
     };
     const status_text = try arena.dupe(u8, self._status_text);
-    const url = try arena.dupeZ(u8, self._url);
+    const url = try arena.dupeSentinel(u8, self._url, 0);
 
     const cloned = try arena.create(Response);
     cloned.* = .{
@@ -553,7 +594,7 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
         ._body = body,
         ._type = self._type,
         ._is_redirected = self._is_redirected,
-        ._headers = try Headers.init(.{ .obj = self._headers }, exec),
+        ._headers = try .initGuarded(.{ .obj = self._headers }, self._headers._guard, exec),
         ._http_transfer = null,
     };
     arena.report();

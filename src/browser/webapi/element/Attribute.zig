@@ -71,9 +71,6 @@ pub fn setValue(self: *Attribute, data_: ?String, frame: *Frame) !void {
     };
     // this takes ownership of the data
     try el.setAttribute(self._name, data, frame);
-
-    // not the most efficient, but we don't expect this to be called often
-    self._value = (try el.getAttribute(self._name, frame)) orelse String.empty;
 }
 
 pub fn getNamespaceURI(_: *const Attribute) ?[]const u8 {
@@ -88,9 +85,9 @@ pub fn isEqualNode(self: *const Attribute, other: *const Attribute) bool {
     return self.getName().eql(other.getName()) and self.getValue().eql(other.getValue());
 }
 
-pub fn clone(self: *const Attribute, frame: *Frame) !*Attribute {
-    return frame._factory.node(Attribute{
-        ._element = self._element,
+pub fn clone(self: *const Attribute, document: *const Node.Document, frame: *Frame) !*Attribute {
+    return frame._factory.node(document, Attribute{
+        ._element = null,
         ._name = self._name,
         ._value = self._value,
     });
@@ -126,7 +123,7 @@ pub const JsApi = struct {
 // Attribute value (the same JSValue) when called multiple time, and that gets
 // more important when you look at the [hardly every used] el.removeAttributeNode
 // and setAttributeNode.
-// So, we maintain a lookup, frame._attribute_lookup, to serve as an identity map
+// So, we maintain a lookup, page.attribute_lookup, to serve as an identity map
 // from our internal Entry to a proper Attribute. This is lazily populated
 // whenever an Attribute is created. Why not just have an ?*Attribute field
 // in our Entry? Because that would require an extra 8 bytes for every single
@@ -141,8 +138,8 @@ pub const List = struct {
 
     pub const Lookup = std.AutoHashMapUnmanaged(LookupKey, *Attribute);
 
-    // for Frame._attribute_lookup which is our identity map for attributes
-    pub const LookupKey = struct {
+    // for Page.attribute_lookup which is our identity map for attributes
+    const LookupKey = struct {
         list: *const List,
         // canonical (see canonicalizeName), so identity is the address
         name: [*]const u8,
@@ -193,19 +190,29 @@ pub const List = struct {
         return self.getEntryWithNormalizedName(name) != null;
     }
 
-    pub fn getAttribute(self: *const List, name: String, element: ?*Element, frame: *Frame) !?*Attribute {
+    // Like getSafe, but faster! Only usable for values that are String.intern
+    // so that the comparison becomes a single pointer equality.
+    pub fn getInterned(self: *const List, comptime name: []const u8) ?[]const u8 {
+        const entry = self.getEntryWithInternedName(name) orelse return null;
+        return entry.value();
+    }
+
+    pub fn hasInterned(self: *const List, comptime name: []const u8) bool {
+        return self.getEntryWithInternedName(name) != null;
+    }
+
+    pub fn getAttribute(self: *const List, name: String, element: *Element, frame: *Frame) !?*Attribute {
         const entry = (try self.getEntry(name, frame)) orelse return null;
         return self.getOrCreateAttribute(entry, element, frame);
     }
 
     // Identity map access: a given (list, name) always yields the same
-    // *Attribute until the attribute is removed. The map must be the
-    // element's frame's, not the caller's frame.
-    pub fn getOrCreateAttribute(self: *const List, entry: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
-        const owner = if (element) |el| el.ownerFrame(frame) else frame;
-        const gop = try owner._attribute_lookup.getOrPut(owner.arena, .{ .list = self, .name = entry._name_ptr });
+    // *Attribute until the attribute is removed.
+    pub fn getOrCreateAttribute(self: *const List, entry: *const Entry, element: *Element, frame: *Frame) !*Attribute {
+        const page = frame.page;
+        const gop = try page.attribute_lookup.getOrPut(page.frame_arena, .{ .list = self, .name = entry._name_ptr });
         if (!gop.found_existing) {
-            gop.value_ptr.* = try entry.toAttribute(element, owner);
+            gop.value_ptr.* = try entry.toAttribute(element, element.ownerFrame(frame) orelse frame);
         }
         return gop.value_ptr.*;
     }
@@ -224,7 +231,7 @@ pub const List = struct {
     // run script which mutates the list, moving or shifting entries. The
     // canonical name is interned, so it stays valid.
     fn _put(self: *List, result: NormalizeAndEntry, value: String, element: *Element, frame: *Frame) ![]const u8 {
-        const owner = element.ownerFrame(frame);
+        const owner = element.ownerFrame(frame) orelse frame;
         const is_id = shouldAddToIdMap(result.normalized, element);
 
         var entry: *Entry = undefined;
@@ -237,6 +244,16 @@ pub const List = struct {
             }
             e.setValue(try owner.dupeString(value.str()));
             entry = e;
+
+            // An Attr is the attribute itself, so one handed out earlier must
+            // see the new value. Every write to an existing entry lands here.
+            // putAttribute detaches the Attr it replaces before calling us:
+            // that one keeps its old value.
+            if (frame.page.attribute_lookup.get(.{ .list = self, .name = e._name_ptr })) |attr| {
+                if (attr._element != null) {
+                    attr._value = .wrap(e.value());
+                }
+            }
         } else {
             try self.ensureUnusedCapacity(1, owner);
             entry = &self._entries[self._len];
@@ -293,8 +310,8 @@ pub const List = struct {
 
         const name = try self.put(attribute._name, attribute._value, element, frame);
         attribute._element = element;
-        const owner = element.ownerFrame(frame);
-        try owner._attribute_lookup.put(owner.arena, .{ .list = self, .name = name.ptr }, attribute);
+        const page = frame.page;
+        try page.attribute_lookup.put(page.frame_arena, .{ .list = self, .name = name.ptr }, attribute);
         return existing_attribute;
     }
 
@@ -331,7 +348,7 @@ pub const List = struct {
     }
 
     fn _delete(self: *List, entry: *Entry, normalized: String, element: *Element, frame: *Frame) void {
-        const owner = element.ownerFrame(frame);
+        const owner = element.ownerFrame(frame) orelse frame;
         const is_id = shouldAddToIdMap(normalized, element);
         const old_value = entry.value();
 
@@ -341,7 +358,10 @@ pub const List = struct {
 
         // remove this BEFORE triggering anything, incase that re-enters delete
         // or some other callback.
-        _ = owner._attribute_lookup.remove(.{ .list = self, .name = entry._name_ptr });
+        if (frame.page.attribute_lookup.fetchRemove(.{ .list = self, .name = entry._name_ptr })) |kv| {
+            // The attribute can still be alive
+            kv.value._element = null;
+        }
         const index = (@intFromPtr(entry) - @intFromPtr(self._entries)) / @sizeOf(Entry);
         const list_entries = self._entries[0..self._len];
         std.mem.copyForwards(Entry, list_entries[index .. list_entries.len - 1], list_entries[index + 1 ..]);
@@ -421,6 +441,25 @@ pub const List = struct {
         return null;
     }
 
+    fn getEntryWithInternedName(self: *const List, comptime name: []const u8) ?*Entry {
+        const static = comptime String.intern(name) orelse
+            @compileError("not an interned attribute name: " ++ name);
+
+        for (self._entries[0..self._len]) |*e| {
+            if (e._name_ptr == static.ptr) {
+                return e;
+            }
+            // The invariant above rests on identical string literals sharing
+            // one address, which is a compiler detail rather than a language
+            // guarantee. If it ever stops holding the compare just misses, so
+            // trip here instead of returning a silent null.
+            if (comptime lp.IS_DEBUG) {
+                std.debug.assert(std.mem.eql(u8, e.name(), name) == false);
+            }
+        }
+        return null;
+    }
+
     // Two []const u8 would be 32 bytes. Packed like this, it's 24.
     pub const Entry = struct {
         _name_ptr: [*]const u8,
@@ -463,8 +502,8 @@ pub const List = struct {
             return formatAttribute(self.name(), self.value(), writer);
         }
 
-        pub fn toAttribute(self: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
-            return frame._factory.node(Attribute{
+        fn toAttribute(self: *const Entry, element: *Element, frame: *Frame) !*Attribute {
+            return frame._factory.node(element.getDocument(frame), Attribute{
                 ._element = element,
                 // The entry's bytes outlive the entry itself, so the
                 // Attribute can wrap them without duping.
@@ -489,6 +528,9 @@ fn shouldAddToIdMap(normalized_name: String, element: *Element) bool {
     return node.isConnected();
 }
 
+// names and things that would break serialization aren't allowed.
+const invalid_name_chars = "\x00\t\n\x0C\r />=";
+
 pub fn validateAttributeName(name: String) !void {
     const name_str = name.str();
 
@@ -496,37 +538,23 @@ pub fn validateAttributeName(name: String) !void {
         return error.InvalidCharacterError;
     }
 
-    const first = name_str[0];
-    if ((first >= '0' and first <= '9') or first == '-' or first == '.') {
+    if (std.mem.findAny(u8, name_str, invalid_name_chars) != null) {
         return error.InvalidCharacterError;
-    }
-
-    for (name_str) |c| {
-        if (c == 0 or c == '/' or c == '=' or c == '>' or std.ascii.isWhitespace(c)) {
-            return error.InvalidCharacterError;
-        }
-
-        const is_valid = std.ascii.isAlphanumeric(c) or
-            c == '_' or c == '-' or c == '.' or c == ':';
-
-        if (!is_valid) {
-            return error.InvalidCharacterError;
-        }
     }
 }
 
 // Every stored entry name either comes from the static String.intern or from
-// the frame._attribute_names. Beyond avoiding extra dupes/allocations, this
-// gives a stable pointer for the frame's lifetime, which List.LookupKey
-// relies on for identity. The pointer is NOT comparable across frames (each
-// frame has its own pool), which is why lookups byte-compare.
+// the page's attribute_names. Beyond avoiding extra dupes/allocations, this
+// gives a stable pointer for the page's lifetime, which List.LookupKey
+// relies on for identity.
 fn canonicalizeName(name: []const u8, frame: *Frame) ![]const u8 {
     if (String.intern(name)) |static| {
         return static;
     }
-    const gop = try frame._attribute_names.getOrPut(frame.arena, name);
+    const page = frame.page;
+    const gop = try page.attribute_names.getOrPut(page.frame_arena, name);
     if (!gop.found_existing) {
-        gop.key_ptr.* = try frame.arena.dupe(u8, name);
+        gop.key_ptr.* = try page.frame_arena.dupe(u8, name);
     }
     return gop.key_ptr.*;
 }
@@ -593,17 +621,24 @@ pub const NamedNodeMap = struct {
         return self.list().getAttribute(name, self._element, frame);
     }
 
-    pub fn set(self: *const NamedNodeMap, attribute: *Attribute, frame: *Frame) !?*Attribute {
-        attribute._element = null; // just a requirement of list.putAttribute, it'll re-set it.
-        return self.list().putAttribute(attribute, self._element, frame);
+    fn getByNameNS(self: *const NamedNodeMap, namespace: ?[]const u8, local_name: String, frame: *Frame) !?*Attribute {
+        return self._element.getAttributeNodeNS(namespace, local_name, frame);
     }
 
-    pub fn removeByName(self: *const NamedNodeMap, name: String, frame: *Frame) !?*Attribute {
+    pub fn set(self: *const NamedNodeMap, attribute: *Attribute, frame: *Frame) !?*Attribute {
+        return self._element.setAttributeNode(attribute, frame);
+    }
+
+    fn removeByName(self: *const NamedNodeMap, name: String, frame: *Frame) !?*Attribute {
         // this 2-step process (get then delete) isn't efficient. But we don't
         // expect this to be called often, and this lets us keep delete straightforward.
         const attr = (try self.getByName(name, frame)) orelse return null;
         try self.list().delete(name, self._element, frame);
         return attr;
+    }
+
+    fn removeByNameNS(self: *const NamedNodeMap, namespace: ?[]const u8, local_name: String, frame: *Frame) !?*Attribute {
+        return self.removeByName(try self._element.attributeNameNS(namespace, local_name, frame), frame);
     }
 
     pub fn iterator(self: *const NamedNodeMap, frame: *Frame) !*Iterator {
@@ -631,29 +666,43 @@ pub const NamedNodeMap = struct {
         };
 
         pub const length = bridge.accessor(NamedNodeMap.length, null, .{});
-        pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, getIndexes, .{ .null_as_undefined = true });
-        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, getNames, null, .{ .null_as_undefined = true });
-
-        fn getIndexes(self: *const NamedNodeMap, frame: *Frame) !js.Array {
-            const len = self.length();
-            var arr = frame.js.local.?.newArray(len);
-            for (0..len) |i| {
-                _ = try arr.set(@intCast(i), i, .{});
+        pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, struct {
+            fn wrap(self: *const NamedNodeMap, frame: *Frame) !js.Array {
+                const len = self.length();
+                var arr = frame.js.local.?.newArray(len);
+                for (0..len) |i| {
+                    _ = try arr.set(@intCast(i), i, .{});
+                }
+                return arr;
             }
-            return arr;
-        }
+        }.wrap, .{ .null_as_undefined = true });
 
-        fn getNames(self: *const NamedNodeMap, frame: *Frame) !js.Array {
-            const names = try self.list().getNames(frame.local_arena);
-            var arr = frame.js.local.?.newArray(@intCast(names.len));
-            for (names, 0..) |name, i| {
-                _ = try arr.set(@intCast(i), name, .{});
+        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, struct {
+            fn wrap(self: *const NamedNodeMap, frame: *Frame) !js.Array {
+                const names = try self.list().getNames(frame.local_arena);
+                var arr = frame.js.local.?.newArray(@intCast(names.len));
+                for (names, 0..) |name, i| {
+                    _ = try arr.set(@intCast(i), name, .{});
+                }
+                return arr;
             }
-            return arr;
-        }
+        }.wrap, struct {
+            fn wrap(self: *const NamedNodeMap, name: String, frame: *Frame) !u32 {
+                if ((try self.list().get(name, frame)) != null) {
+                    // Named properties are [LegacyUnenumerableNamedProperties]
+                    return js.v8.DontEnum;
+                }
+                return error.NotHandled;
+            }
+        }.wrap, .{ .null_as_undefined = true });
+
         pub const getNamedItem = bridge.function(NamedNodeMap.getByName, .{});
+        pub const getNamedItemNS = bridge.function(NamedNodeMap.getByNameNS, .{});
         pub const setNamedItem = bridge.function(NamedNodeMap.set, .{ .ce_reactions = true });
+        // Attributes don't carry a namespace, so this is setNamedItem.
+        pub const setNamedItemNS = bridge.function(NamedNodeMap.set, .{ .ce_reactions = true });
         pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{ .ce_reactions = true });
+        pub const removeNamedItemNS = bridge.function(NamedNodeMap.removeByNameNS, .{ .ce_reactions = true });
         pub const item = bridge.function(_item, .{});
         fn _item(self: *const NamedNodeMap, index: i32, frame: *Frame) !?*Attribute {
             // the bridge.indexed handles this, so if we want
@@ -684,7 +733,7 @@ fn formatAttribute(name: []const u8, value: []const u8, writer: *std.Io.Writer) 
     }
 
     try writer.writeByte('"');
-    const offset = std.mem.indexOfAny(u8, value, "`' &\"<>=") orelse {
+    const offset = std.mem.findAny(u8, value, "`' &\"<>=") orelse {
         try writer.writeAll(value);
         return writer.writeByte('"');
     };
@@ -740,7 +789,7 @@ fn writeEscapedAttributeValue(value: []const u8, first_offset: usize, writer: *s
     });
 
     var remaining = value[first_offset + 1 ..];
-    while (std.mem.indexOfAny(u8, remaining, "&\"<>")) |offset| {
+    while (std.mem.findAny(u8, remaining, "&\"<>")) |offset| {
         try writer.writeAll(remaining[0..offset]);
         try writer.writeAll(switch (remaining[offset]) {
             '&' => "&amp;",

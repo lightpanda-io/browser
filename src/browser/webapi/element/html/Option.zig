@@ -26,6 +26,7 @@ const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+const Select = @import("Select.zig");
 
 const String = lp.String;
 
@@ -37,6 +38,26 @@ _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _value: ?[]const u8 = null,
 _selected: bool = false,
 _default_selected: bool = false,
+
+pub fn constructor(text_: ?js.NullableString, value_: ?js.NullableString, default_selected_: ?bool, selected_: ?bool, frame: *Frame) !*Option {
+    const node = try Frame.node_factory.createElementNS(frame.document, .html, "option", null);
+    const el = node.as(Element);
+
+    const text = if (text_) |t| t.value else "";
+    if (text.len > 0) {
+        _ = try node.appendChild(try frame.document.createTextNode(text), frame);
+    }
+    if (value_) |v| {
+        try el.setAttributeSafe(comptime .wrap("value"), .wrap(v.value), frame);
+    }
+    if (default_selected_ orelse false) {
+        try el.setAttributeSafe(comptime .wrap("selected"), comptime .wrap(""), frame);
+    }
+
+    const self = el.as(Option);
+    self._selected = selected_ orelse false;
+    return self;
+}
 
 pub fn asElement(self: *Option) *Element {
     return Factory.protoOf(self).asElement();
@@ -70,7 +91,7 @@ pub fn getText(self: *const Option, frame: *Frame) []const u8 {
     return node.getTextContentAlloc(frame.call_arena) catch "";
 }
 
-pub fn setText(self: *Option, value: []const u8, frame: *Frame) !void {
+fn setText(self: *Option, value: []const u8, frame: *Frame) !void {
     try self.asNode().setTextContent(value, frame);
 }
 
@@ -79,17 +100,36 @@ pub fn getSelected(self: *const Option) bool {
 }
 
 pub fn setSelected(self: *Option, selected: bool, frame: *Frame) !void {
-    // TODO: When setting selected=true, may need to unselect other options
-    // in the parent <select> if it doesn't have multiple attribute
-    self._selected = selected;
+    self.setSelectedness(selected);
     frame.domChanged();
 }
 
-pub fn getDefaultSelected(self: *const Option) bool {
-    return self.asConstElement().hasAttributeSafe(comptime .wrap("selected"));
+fn setSelectedness(self: *Option, selected: bool) void {
+    if (self._selected == selected) {
+        // Deselecting an option that isn't selected doesn't ask for a reset.
+        return;
+    }
+    self._selected = selected;
+    if (self.ownerSelect()) |select| {
+        select.optionSelectednessChanged(self);
+    }
 }
 
-pub fn setDefaultSelected(self: *Option, value: bool, frame: *Frame) !void {
+/// The <select> this option belongs to, directly or through an <optgroup>.
+pub fn ownerSelect(self: *Option) ?*Select {
+    var node = self.asNode().parentNode();
+    while (node) |n| : (node = n.parentNode()) {
+        if (n.is(Select)) |select| return select;
+        if (n.is(Element.Html.OptGroup) == null) return null;
+    }
+    return null;
+}
+
+fn getDefaultSelected(self: *const Option) bool {
+    return self.asConstElement().hasAttributeInterned("selected");
+}
+
+fn setDefaultSelected(self: *Option, value: bool, frame: *Frame) !void {
     self._default_selected = value;
     if (value) {
         try self.asElement().setAttributeSafe(comptime .wrap("selected"), .wrap(""), frame);
@@ -99,17 +139,14 @@ pub fn setDefaultSelected(self: *Option, value: bool, frame: *Frame) !void {
 }
 
 // https://html.spec.whatwg.org/multipage/form-elements.html#dom-option-label
-// On getting, return the `label` content attribute if present and non-empty,
-// otherwise the value of the `text` IDL attribute. On setting, reflect to the
-// `label` content attribute.
-pub fn getLabel(self: *const Option, frame: *Frame) []const u8 {
-    if (self.asConstElement().getAttributeSafe(comptime .wrap("label"))) |label| {
-        if (label.len != 0) return label;
-    }
-    return self.getText(frame);
+// On getting, return the `label` content attribute if present (verbatim, even
+// when empty), otherwise the value of the `text` IDL attribute. On setting,
+// reflect to the `label` content attribute.
+fn getLabel(self: *const Option, frame: *Frame) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("label")) orelse self.getText(frame);
 }
 
-pub fn setLabel(self: *Option, label: []const u8, frame: *Frame) !void {
+fn setLabel(self: *Option, label: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("label"), .wrap(label), frame);
 }
 
@@ -118,19 +155,20 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "HTMLOptionElement";
+        pub const constructor_alias = "Option";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
     const reflect = Element.Reflect(Option);
 
+    pub const constructor = bridge.constructor(Option.constructor, .{});
     pub const value = bridge.accessor(Option.getValue, Option.setValue, .{ .ce_reactions = true });
     pub const text = bridge.accessor(Option.getText, Option.setText, .{ .ce_reactions = true });
     pub const label = bridge.accessor(Option.getLabel, Option.setLabel, .{ .ce_reactions = true });
     pub const selected = bridge.accessor(Option.getSelected, Option.setSelected, .{});
     pub const defaultSelected = bridge.accessor(Option.getDefaultSelected, Option.setDefaultSelected, .{ .ce_reactions = true });
     pub const disabled = reflect.boolean("disabled");
-    pub const name = reflect.string("name");
 };
 
 pub const Build = struct {
@@ -139,10 +177,10 @@ pub const Build = struct {
         const element = self.asElement();
 
         // Check for value attribute
-        self._value = element.getAttributeSafe(comptime .wrap("value"));
+        self._value = element.getAttributeInterned("value");
 
         // Check for selected attribute
-        self._default_selected = element.getAttributeSafe(comptime .wrap("selected")) != null;
+        self._default_selected = element.getAttributeInterned("selected") != null;
         self._selected = self._default_selected;
     }
 
@@ -152,10 +190,10 @@ pub const Build = struct {
         switch (attribute) {
             // `value` is passed by value; for <= 12 bytes, str() points into our
             // own parameter copy, so we have to re-read the owned bytes.
-            .value => self._value = element.getAttributeSafe(comptime .wrap("value")),
+            .value => self._value = element.getAttributeInterned("value"),
             .selected => {
                 self._default_selected = true;
-                self._selected = true;
+                self.setSelectedness(true);
             },
         }
     }
@@ -167,7 +205,7 @@ pub const Build = struct {
             .value => self._value = null,
             .selected => {
                 self._default_selected = false;
-                self._selected = false;
+                self.setSelectedness(false);
             },
         }
     }

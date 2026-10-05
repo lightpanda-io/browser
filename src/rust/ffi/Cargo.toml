@@ -1,0 +1,13 @@
+[package]
+name = "lightpanda-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "lightpanda_ffi"
+path = "lib.rs"
+crate-type = ["staticlib"]
+
+[dependencies]
+lightpanda-html5ever = { path = "../html5ever" }
+lightpanda-render = { path = "../render" }

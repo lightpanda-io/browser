@@ -14,11 +14,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Bindings for Servo's rust-url (https://github.com/servo/rust-url).
-//! Check @src/html5ever/url.rs for Rust-side of the bindings.
+//! Check @src/rust/html5ever/url.rs for Rust-side of the bindings.
 
 pub const Url = anyopaque;
 
-pub const OwnedString = extern struct {
+const OwnedString = extern struct {
     ptr: [*]const u8,
     len: usize,
 

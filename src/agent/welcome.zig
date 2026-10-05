@@ -83,7 +83,7 @@ comptime {
 /// hints beside it, vertically centered. `llm_active` picks the tagline.
 pub fn print(llm_active: bool) void {
     var version_buf: [192]u8 = undefined;
-    const version: []const u8 = std.fmt.bufPrint(&version_buf, ansi.dim ++ "{s}" ++ ansi.reset, .{lp.build_config.version}) catch "";
+    const version: []const u8 = std.mem.print(&version_buf, ansi.dim ++ "{s}" ++ ansi.reset, .{lp.build_config.version}) catch "";
 
     var lines: [9][]const u8 = undefined;
     var n: usize = 0;

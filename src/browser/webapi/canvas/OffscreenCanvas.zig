@@ -31,6 +31,7 @@ pub const _prototype_root = true;
 
 _width: u32,
 _height: u32,
+_cached: ?DrawingContext = null,
 
 /// Since there's no base class rendering contexts inherit from,
 /// we're using tagged union.
@@ -49,7 +50,7 @@ pub fn getWidth(self: *const OffscreenCanvas) u32 {
     return self._width;
 }
 
-pub fn setWidth(self: *OffscreenCanvas, value: u32) void {
+fn setWidth(self: *OffscreenCanvas, value: u32) void {
     self._width = value;
 }
 
@@ -57,14 +58,21 @@ pub fn getHeight(self: *const OffscreenCanvas) u32 {
     return self._height;
 }
 
-pub fn setHeight(self: *OffscreenCanvas, value: u32) void {
+fn setHeight(self: *OffscreenCanvas, value: u32) void {
     self._height = value;
 }
 
-pub fn getContext(_: *OffscreenCanvas, context_type: []const u8, exec: *Execution) !?DrawingContext {
+fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execution) !?DrawingContext {
+    if (self._cached) |cached| {
+        return switch (cached) {
+            .@"2d" => if (std.mem.eql(u8, context_type, "2d")) cached else null,
+        };
+    }
+
     if (std.mem.eql(u8, context_type, "2d")) {
-        const ctx = try exec._factory.create(OffscreenCanvasRenderingContext2D{});
-        return .{ .@"2d" = ctx };
+        const ctx = try exec._factory.create(OffscreenCanvasRenderingContext2D{ ._canvas = self });
+        self._cached = .{ .@"2d" = ctx };
+        return self._cached;
     }
 
     return null;
@@ -72,7 +80,7 @@ pub fn getContext(_: *OffscreenCanvas, context_type: []const u8, exec: *Executio
 
 /// Resolves to the same blank PNG as `HTMLCanvasElement.toBlob`. A canvas
 /// with no pixels rejects with IndexSizeError, per spec.
-pub fn convertToBlob(self: *const OffscreenCanvas, exec: *Execution) !js.Promise {
+fn convertToBlob(self: *const OffscreenCanvas, exec: *Execution) !js.Promise {
     if (!BlankPNG.hasBitmap(self._width, self._height)) {
         return error.IndexSizeError;
     }
@@ -81,7 +89,7 @@ pub fn convertToBlob(self: *const OffscreenCanvas, exec: *Execution) !js.Promise
 }
 
 /// Returns an ImageBitmap with the rendered content (stub).
-pub fn transferToImageBitmap(_: *OffscreenCanvas) ?void {
+fn transferToImageBitmap(_: *OffscreenCanvas) ?void {
     // ImageBitmap not implemented yet, return null
     return null;
 }

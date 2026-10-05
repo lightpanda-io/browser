@@ -1,9 +1,29 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+
 const lp = @import("lightpanda");
-const Factory = @import("../../../Factory.zig");
+
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
+const Factory = @import("../../../Factory.zig");
+
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+
 const HtmlElement = @import("../Html.zig");
 
 const Font = @This();
@@ -20,11 +40,11 @@ pub fn asNode(self: *Font) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getColor(self: *Font) []const u8 {
+fn getColor(self: *Font) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("color")) orelse "";
 }
 
-pub fn setColor(self: *Font, value: js.Value, frame: *Frame) !void {
+fn setColor(self: *Font, value: js.Value, frame: *Frame) !void {
     // color is `[LegacyNullToEmptyString] DOMString`: a JS null becomes "",
     // not the string "null".
     const str: []const u8 = if (value.isNull()) "" else try value.toZig([]const u8);

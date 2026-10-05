@@ -150,7 +150,7 @@ pub const Lookup = struct {
         return @intCast(self._data.count());
     }
 
-    pub fn hasItem(self: *const Lookup, k: []const u8) bool {
+    fn hasItem(self: *const Lookup, k: []const u8) bool {
         return self._data.contains(k);
     }
 
@@ -187,22 +187,22 @@ pub const Lookup = struct {
         // int -> string conversion
         fn _getByIndex(self: *const Lookup, idx: u32) ?[]const u8 {
             var buf: [10]u8 = undefined;
-            return self._data.get(std.fmt.bufPrint(&buf, "{d}", .{idx}) catch unreachable);
+            return self._data.get(std.mem.print(&buf, "{d}", .{idx}) catch unreachable);
         }
 
         fn _setByIndex(self: *Lookup, idx: u32, value: []const u8) !void {
             var buf: [10]u8 = undefined;
-            return self.setItem(std.fmt.bufPrint(&buf, "{d}", .{idx}) catch unreachable, value);
+            return self.setItem(std.mem.print(&buf, "{d}", .{idx}) catch unreachable, value);
         }
 
         fn _removeByIndex(self: *Lookup, idx: u32) void {
             var buf: [10]u8 = undefined;
-            return self.removeItem(std.fmt.bufPrint(&buf, "{d}", .{idx}) catch unreachable);
+            return self.removeItem(std.mem.print(&buf, "{d}", .{idx}) catch unreachable);
         }
 
         fn _indexHas(self: *const Lookup, idx: u32) bool {
             var buf: [10]u8 = undefined;
-            return self._data.contains(std.fmt.bufPrint(&buf, "{d}", .{idx}) catch unreachable);
+            return self._data.contains(std.mem.print(&buf, "{d}", .{idx}) catch unreachable);
         }
     };
 };

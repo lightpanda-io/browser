@@ -84,7 +84,7 @@ pub fn play(self: *Animation, frame: *Frame) !void {
 
     // Schedule the transition from .running => .finished in 10ms.
     self.acquireRef();
-    errdefer self.releaseRef(frame._page);
+    errdefer self.releaseRef(frame.page);
     try frame.js.scheduler.add(
         self,
         Animation.update,
@@ -97,7 +97,7 @@ pub fn play(self: *Animation, frame: *Frame) !void {
 // and `cancelled` are mutually exclusive, so play()'s ref is released once.
 fn cancelled(ctx: *anyopaque) void {
     const self: *Animation = @ptrCast(@alignCast(ctx));
-    self.releaseRef(self._frame._page);
+    self.releaseRef(self._frame.page);
 }
 
 pub fn pause(self: *Animation) void {
@@ -125,13 +125,13 @@ pub fn finish(self: *Animation, frame: *Frame) void {
     // call onfinish
     if (self._onFinish) |func| {
         frame.js.local.?.toLocal(func).call(void, .{}) catch |err| {
-            log.warn(.js, "Animation._onFinish", .{ .err = err });
+            log.debug(.js, "Animation._onFinish", .{ .err = err });
         };
     }
 }
 
 pub fn reverse(_: *Animation) void {
-    log.warn(.not_implemented, "Animation.reverse", .{});
+    log.debug(.not_implemented, "Animation.reverse", .{});
 }
 
 pub fn getFinished(self: *Animation, frame: *Frame) !js.Promise {
@@ -154,19 +154,19 @@ pub fn getReady(self: *Animation, frame: *Frame) !js.Promise {
     return frame.js.toLocal(self._ready_resolver).?.promise();
 }
 
-pub fn getEffect(self: *const Animation) ?js.Object.Global {
+fn getEffect(self: *const Animation) ?js.Object.Global {
     return self._effect;
 }
 
-pub fn setEffect(self: *Animation, effect: ?js.Object.Global) !void {
+fn setEffect(self: *Animation, effect: ?js.Object.Global) !void {
     self._effect = effect;
 }
 
-pub fn getTimeline(self: *const Animation) ?js.Object.Global {
+fn getTimeline(self: *const Animation) ?js.Object.Global {
     return self._timeline;
 }
 
-pub fn setTimeline(self: *Animation, timeline: ?js.Object.Global) !void {
+fn setTimeline(self: *Animation, timeline: ?js.Object.Global) !void {
     self._timeline = timeline;
 }
 
@@ -174,7 +174,7 @@ pub fn getStartTime(self: *const Animation) ?f64 {
     return self._startTime;
 }
 
-pub fn setStartTime(self: *Animation, value: ?f64, frame: *Frame) !void {
+fn setStartTime(self: *Animation, value: ?f64, frame: *Frame) !void {
     self._startTime = value;
 
     // if the startTime is null, don't play the animation.
@@ -185,7 +185,7 @@ pub fn setStartTime(self: *Animation, value: ?f64, frame: *Frame) !void {
     return self.play(frame);
 }
 
-pub fn getOnFinish(self: *const Animation) ?js.Function.Global {
+fn getOnFinish(self: *const Animation) ?js.Function.Global {
     return self._onFinish;
 }
 
@@ -209,7 +209,7 @@ fn update(ctx: *anyopaque) !?u32 {
             // call onfinish
             if (self._onFinish) |func| {
                 ls.toLocal(func).call(void, .{}) catch |err| {
-                    log.warn(.js, "Animation._onFinish", .{ .err = err });
+                    log.debug(.js, "Animation._onFinish", .{ .err = err });
                 };
             }
         },
@@ -217,15 +217,15 @@ fn update(ctx: *anyopaque) !?u32 {
     }
 
     // No future change scheduled, set the object weak for garbage collection.
-    self.releaseRef(self._frame._page);
+    self.releaseRef(self._frame.page);
     return null;
 }
 
-pub fn setOnFinish(self: *Animation, cb: ?js.Function.Global) !void {
+fn setOnFinish(self: *Animation, cb: ?js.Function.Global) !void {
     self._onFinish = cb;
 }
 
-pub fn playState(self: *const Animation) []const u8 {
+fn playState(self: *const Animation) []const u8 {
     return @tagName(self._playState);
 }
 

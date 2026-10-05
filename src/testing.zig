@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const repeat = @import("string.zig").repeat;
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -33,7 +34,7 @@ pub const expectEqualSlices = std.testing.expectEqualSlices;
 // in a test. Like, you need a mutable string, so you just want to dupe a
 // string literal. It has nothing to do with the code under test, it's just
 // infrastructure for the test itself.
-pub var arena_instance = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+var arena_instance = std.heap.ArenaAllocator.init(std.heap.c_allocator);
 pub const arena_allocator = arena_instance.allocator();
 
 pub fn reset() void {
@@ -66,8 +67,8 @@ pub fn expectEqual(expected: anytype, actual: anytype) !void {
             }
         },
         .@"struct" => |structType| {
-            inline for (structType.fields) |field| {
-                try expectEqual(@field(expected, field.name), @field(actual, field.name));
+            inline for (structType.field_names) |field_name| {
+                try expectEqual(@field(expected, field_name), @field(actual, field_name));
             }
             return;
         },
@@ -90,9 +91,9 @@ pub fn expectEqual(expected: anytype, actual: anytype) !void {
             const actualTag = @as(Tag, actual);
             try expectEqual(expectedTag, actualTag);
 
-            inline for (std.meta.fields(@TypeOf(actual))) |fld| {
-                if (std.mem.eql(u8, fld.name, @tagName(actualTag))) {
-                    try expectEqual(@field(expected, fld.name), @field(actual, fld.name));
+            inline for (@typeInfo(@TypeOf(actual)).@"union".field_names) |field_name| {
+                if (std.mem.eql(u8, field_name, @tagName(actualTag))) {
+                    try expectEqual(@field(expected, field_name), @field(actual, field_name));
                     return;
                 }
             }
@@ -147,19 +148,19 @@ fn isStringArray(comptime T: type) bool {
     return std.meta.Elem(T) == u8;
 }
 
-pub const TraitFn = fn (type) bool;
-pub fn is(comptime id: std.builtin.TypeId) TraitFn {
+const TraitFn = fn (type) bool;
+pub fn is(comptime id: std.lang.TypeId) TraitFn {
     const Closure = struct {
-        pub fn trait(comptime T: type) bool {
+        fn trait(comptime T: type) bool {
             return id == @typeInfo(T);
         }
     };
     return Closure.trait;
 }
 
-pub fn isPtrTo(comptime id: std.builtin.TypeId) TraitFn {
+fn isPtrTo(comptime id: std.lang.TypeId) TraitFn {
     const Closure = struct {
-        pub fn trait(comptime T: type) bool {
+        fn trait(comptime T: type) bool {
             if (!comptime isSingleItemPtr(T)) return false;
             return id == @typeInfo(std.meta.Child(T));
         }
@@ -167,7 +168,7 @@ pub fn isPtrTo(comptime id: std.builtin.TypeId) TraitFn {
     return Closure.trait;
 }
 
-pub fn isSingleItemPtr(comptime T: type) bool {
+fn isSingleItemPtr(comptime T: type) bool {
     if (comptime is(.pointer)(T)) {
         return @typeInfo(T).pointer.size == .one;
     }
@@ -188,18 +189,6 @@ pub const Random = struct {
     pub fn fill(buf: []u8) void {
         var r = random();
         r.bytes(buf);
-    }
-
-    pub fn fillAtLeast(buf: []u8, min: usize) []u8 {
-        var r = random();
-        const l = r.intRangeAtMost(usize, min, buf.len);
-        r.bytes(buf[0..l]);
-        return buf;
-    }
-
-    pub fn intRange(comptime T: type, min: T, max: T) T {
-        var r = random();
-        return r.intRangeAtMost(T, min, max);
     }
 
     pub fn random() std.Random {
@@ -334,14 +323,18 @@ fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
 
 pub var test_app: *App = undefined;
 pub var test_browser: Browser = undefined;
-pub var test_notification: *Notification = undefined;
+var test_notification: *Notification = undefined;
 pub var test_session: *Session = undefined;
 
 const WEB_API_TEST_ROOT = "src/browser/tests/";
 const HtmlRunnerOpts = struct {
     timeout_ms: u32 = 2000,
     inject_script: ?[]const u8 = null,
-    load_external_stylesheets: bool = false,
+    load_resources: Config.LoadResources = .{
+        .worker = true,
+        .iframe = true,
+    },
+    experimental_features: Config.ExperimentalFeatures = .{},
 };
 
 // Create a fresh page on `test_session` and return its root frame — for tests
@@ -367,8 +360,15 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
     }
     defer test_session.inject_scripts = &.{};
 
-    test_session.load_external_stylesheets = opts.load_external_stylesheets;
-    defer test_session.load_external_stylesheets = false;
+    test_session.load_resources = opts.load_resources;
+    defer test_session.load_resources = .{
+        // original defaults, tests expect these to be on
+        .worker = true,
+        .iframe = true,
+    };
+
+    test_session.experimental_features = opts.experimental_features;
+    defer test_session.experimental_features = .{};
 
     const root = try std.fs.path.joinZ(arena_allocator, &.{ WEB_API_TEST_ROOT, path });
     const stat = std.Io.Dir.cwd().statFile(io, root, .{}) catch |err| {
@@ -422,8 +422,7 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
     const page = try test_session.createPage();
     defer page.close();
 
-    const url = try std.fmt.allocPrintSentinel(
-        arena_allocator,
+    const url = try arena_allocator.printSentinel(
         "http://127.0.0.1:9582/{s}",
         .{test_file},
         0,
@@ -453,7 +452,11 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
         try_catch.init(&ls.local);
         defer try_catch.deinit();
 
-        const js_val = ls.local.exec("testing.assertOk()", "testing.assertOk()") catch |err| {
+        const js_val = ls.local.exec(
+            // testing is undefined until testing.js is run
+            "typeof testing === 'undefined' ? false : testing.assertOk()",
+            "testing.assertOk()",
+        ) catch |err| {
             const caught = try_catch.caughtOrError(arena_allocator, err);
             std.debug.print("{s}: test failure\nError: {f}\n", .{ test_file, caught });
             return err;
@@ -462,7 +465,7 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
             return;
         }
         const sleep_ms: usize = switch (try runner.tickForFrame(page.frame_id, 20, .{ .until = .done })) {
-            .done => 20,
+            .done => @min(test_session.browser.msToNextTask() orelse 20, 20), // could be at BLOCKING_NESTING, so wait a bit more
             .ok => |next_ms| @min(next_ms, 20),
         };
 
@@ -474,7 +477,14 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
             return error.TestTimedOut;
         }
         wait_ms -= @intCast(ms_elapsed);
-        lp.io.sleep(.fromMilliseconds(@intCast(sleep_ms)), .awake) catch {};
+
+        // WebSocket connection doesn't count as pending work, but we much prefer
+        // waiting on on activity than a blind sleep.
+        const http_client = &test_session.browser.http_client;
+        const waited = http_client.activity().ws_conns > 0 and try http_client.tick(@intCast(sleep_ms));
+        if (waited == false) {
+            lp.io.sleep(.fromMilliseconds(@intCast(sleep_ms)), .awake) catch {};
+        }
     }
 }
 
@@ -485,8 +495,7 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !Session.Pag
     const page = try test_session.createPage();
     errdefer page.close();
 
-    const url = try std.fmt.allocPrintSentinel(
-        arena_allocator,
+    const url = try arena_allocator.printSentinel(
         "http://127.0.0.1:9582/{s}{s}",
         .{ WEB_API_TEST_ROOT, test_file },
         0,
@@ -500,11 +509,11 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !Session.Pag
     return page;
 }
 
-const TestHTTPServer = @import("TestHTTPServer.zig");
+const Server = @import("server/Server.zig");
 const TestWSServer = @import("TestWSServer.zig");
+const TestHTTPServer = @import("TestHTTPServer.zig");
 
-const Server = @import("Server.zig");
-var test_cdp_server: ?*Server = null;
+pub var test_cdp_server: ?*Server = null;
 var test_cdp_server_thread: ?std.Thread = null;
 var test_http_server: ?TestHTTPServer = null;
 var test_http_server_thread: ?std.Thread = null;
@@ -517,7 +526,7 @@ var test_ws_server_thread: ?std.Thread = null;
 var sse_flag = std.atomic.Value(bool).init(false);
 var sse_reconnect_hits = std.atomic.Value(usize).init(0);
 
-var test_config: Config = undefined;
+pub var test_config: Config = undefined;
 
 test "tests:beforeAll" {
     log.opts.level = .warn;
@@ -525,16 +534,20 @@ test "tests:beforeAll" {
 
     const test_allocator = @import("root").tracking_allocator;
 
-    test_config = try Config.init(test_allocator, "test", .{ .serve = .{
-        .insecure_disable_tls_host_verification = true,
-        .user_agent_suffix = "internal-tester",
-        .ws_max_concurrent = 50,
-    } });
+    test_config = try Config.init(test_allocator, "test", .{
+        .serve = .{
+            .insecure_disable_tls_host_verification = true,
+            .user_agent_suffix = "internal-tester",
+            .ws_max_concurrent = 50,
+            .load_resources = .{ .worker = true, .iframe = true },
+            .watchdog_ms = 0,
+        },
+    });
 
     test_app = try App.init(test_allocator, &test_config);
     errdefer test_app.deinit();
 
-    try test_browser.init(test_app, .{}, null);
+    try test_browser.init(test_app, .{});
     errdefer test_browser.deinit();
 
     // Create notification for testing
@@ -605,6 +618,7 @@ fn serveCDP(wg: *lp.WaitGroup) !void {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
+    test_cdp_server.?.protocols = .{ .cdp = true, .webdriver = true };
     wg.finish();
 
     test_cdp_server.?.run();
@@ -620,13 +634,42 @@ var serve_counts = [_]struct { name: []const u8, count: u32 = 0 }{
     .{ .name = "prescan_module" },
 };
 
+fn origin(req: *std.http.Server.Request) ?[]const u8 {
+    var it = req.iterateHeaders();
+    while (it.next()) |h| {
+        if (std.mem.eql(u8, "origin", h.name)) {
+            return h.value;
+        }
+    }
+
+    return null;
+}
+
 fn testHTTPHandler(req: *std.http.Server.Request) !void {
     const path = req.head.target;
 
-    if (std.mem.eql(u8, path, "/xhr")) {
-        return req.respond("1234567890" ** 10, .{
+    if (std.mem.eql(u8, path, "/")) {
+        return req.respond("<html><head></head><body></body></html>", .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr")) {
+        return req.respond(repeat("1234567890", 10), .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/slow")) {
+        // Long enough for a timer scheduled by the requester to fire first.
+        lp.io.sleep(.fromMilliseconds(100), .awake) catch {};
+        return req.respond("slow", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
             },
         });
     }
@@ -674,6 +717,33 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    // Scripts, so a cross-origin (localhost) load doesn't depend on CORS.
+    if (std.mem.eql(u8, path, "/resource-timing/tao")) {
+        return req.respond("window.__rt_tao = true;", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/javascript" },
+                .{ .name = "Timing-Allow-Origin", .value = "https://example.com, *" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/resource-timing/plain")) {
+        return req.respond("window.__rt_plain = true;", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/javascript" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/resource-timing/redirect")) {
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "/resource-timing/plain" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/redirect-no-fragment")) {
         return req.respond("", .{
             .status = .found,
@@ -688,6 +758,19 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
             .status = .found,
             .extra_headers = &.{
                 .{ .name = "Location", .value = "http://localhost:9582/echo-x-hop" },
+            },
+        });
+    }
+
+    // Bounces to the same path on the other loopback host, e.g. for an iframe
+    // whose origin must change between its request and its response.
+    if (std.mem.startsWith(u8, path, "/redirect-cross-origin/")) {
+        var location_buf: [1024]u8 = undefined;
+        const location = try std.mem.print(&location_buf, "http://localhost:9582/{s}", .{path["/redirect-cross-origin/".len..]});
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = location },
             },
         });
     }
@@ -805,11 +888,32 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         };
         slot.* += 1;
         var buf: [64]u8 = undefined;
-        const body = try std.fmt.bufPrint(&buf, "window.__serve_count_{s} = {d};", .{ name, slot.* });
+        const body = try std.mem.print(&buf, "window.__serve_count_{s} = {d};", .{ name, slot.* });
         return req.respond(body, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/javascript" },
                 .{ .name = "Cache-Control", .value = "no-store" },
+            },
+        });
+    }
+
+    if (std.mem.startsWith(u8, path, "/status/")) {
+        const code = try std.fmt.parseInt(u16, path["/status/".len..], 10);
+        return req.respond("", .{ .status = @fromBackingInt(@intCast(code)) });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/reason")) {
+        return req.respond("", .{
+            .status = .service_unavailable,
+            .reason = "HOUSTON WE HAVE A",
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/401")) {
+        return req.respond("No", .{
+            .status = .unauthorized,
+            .extra_headers = &.{
+                .{ .name = "WWW-Authenticate", .value = "Basic realm=\"test\"" },
             },
         });
     }
@@ -821,6 +925,18 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 .{ .name = "Content-Type", .value = "text/plain" },
             },
         });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/bad_gzip")) {
+        return req.respond("not actually gzip", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Encoding", .value = "gzip" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/no_content_type")) {
+        return req.respond("untyped", .{});
     }
 
     if (std.mem.eql(u8, path, "/xhr/binary")) {
@@ -840,6 +956,24 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 .{ .name = "Content-Type", .value = "text/event-stream" },
             },
         });
+    }
+
+    if (std.mem.eql(u8, path, "/stop_loading/streaming.html")) {
+        var send_buffer: [1024]u8 = undefined;
+        var res = try req.respondStreaming(&send_buffer, .{
+            .respond_options = .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                },
+            },
+        });
+        try res.writer.writeAll("<html><body><p id=first>first</p>");
+        try res.writer.flush();
+        try res.flush();
+        lp.io.sleep(.fromMilliseconds(1500), .awake) catch {};
+        try res.writer.writeAll("<p id=second>second</p></body></html>");
+        try res.writer.flush();
+        return res.end();
     }
 
     if (std.mem.eql(u8, path, "/sse/streaming")) {
@@ -922,6 +1056,14 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/styles/important-cascade.css")) {
+        return req.respond(".no-js-flex { display: none !important; }", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/styles/visibility.css")) {
         // Used by css/external_stylesheet.html — drives the visibility
         // cascade through StyleManager via Frame.loadExternalStylesheet
@@ -969,6 +1111,88 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    // Bodies are non-empty so that libcurl always reaches the write callback,
+    // which is where a partial request decides whether to drain or abort.
+    // ok.png takes the abort branch, small.png the drain branch; both must
+    // behave identically as far as the DOM is concerned.
+    if (std.mem.eql(u8, path, "/images/ok.png")) {
+        // > HttpClient.Request.PARTIAL_DRAIN_MAX. The synthetic PNG
+        // header advertises 1000 x 750 pixels; no bitmap is decoded.
+        const body = try arena_allocator.alloc(u8, 16 * 1024 + 1);
+        @memset(body, 'x');
+        @memcpy(body[0..24], "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x03\xe8\x00\x00\x02\xee");
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "image/png" },
+            },
+        });
+    }
+
+    // startsWith, not eql: a caller can append a query string to get distinct
+    // URLs (and so distinct transfers) off this one route.
+    if (std.mem.startsWith(u8, path, "/images/small.png")) {
+        const body = try arena_allocator.alloc(u8, 1024);
+        @memset(body, 'x');
+        @memcpy(body[0..24], "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x01\x40\x00\x00\x00\xf0");
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "image/png" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/images/photo.jpg")) {
+        const body = "\xff\xd8\xff\xe1\x00\x04\x00\x00\xff\xc0\x00\x0b\x08\x02\xee\x03\xe8\x01\x01\x11\x00";
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "image/jpeg" },
+            },
+        });
+    }
+
+    // No Content-Length: whether the body is small enough to drain can only
+    // be decided as it arrives.
+    if (std.mem.eql(u8, path, "/images/chunked.png")) {
+        var send_buffer: [1024]u8 = undefined;
+        var res = try req.respondStreaming(&send_buffer, .{
+            .respond_options = .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "image/svg+xml" },
+                },
+            },
+        });
+        try res.writer.writeAll("<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+        try res.writer.flush();
+        return res.end();
+    }
+
+    if (std.mem.eql(u8, path, "/images/404.png")) {
+        return req.respond("not here", .{
+            .status = .not_found,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/images/500.png")) {
+        return req.respond("boom", .{
+            .status = .internal_server_error,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/images/redirect.png")) {
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "/images/ok.png" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/echo_referer")) {
         // Echo the request's Referer header back as HTML so tests can assert
         // what Referer the navigation sent. Used by the cross-page Referer test.
@@ -981,10 +1205,11 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
             }
         }
         var html_buf: [512]u8 = undefined;
-        const html = try std.fmt.bufPrint(&html_buf, "<html><body>referer={s}</body></html>", .{referer});
+        const html = try std.mem.print(&html_buf, "<html><body>referer={s}</body></html>", .{referer});
         return req.respond(html, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                .{ .name = "Access-Control-Allow-Origin", .value = origin(req) orelse "*" },
             },
         });
     }
@@ -1007,7 +1232,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         // method the navigation used. Used by the Page.reload-replays-POST test.
         const method_name = @tagName(req.head.method);
         var html_buf: [128]u8 = undefined;
-        const html = try std.fmt.bufPrint(&html_buf, "<html><body>method={s}</body></html>", .{method_name});
+        const html = try std.mem.print(&html_buf, "<html><body>method={s}</body></html>", .{method_name});
         return req.respond(html, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
@@ -1031,18 +1256,59 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.eql(u8, path, "/echo_headers")) {
+        if (req.head.method == .OPTIONS) {
+            return req.respond("", .{
+                .extra_headers = &.{
+                    .{ .name = "Access-Control-Allow-Origin", .value = origin(req) orelse "*" },
+                    .{ .name = "Access-Control-Allow-Methods", .value = "GET" },
+                    .{ .name = "Access-Control-Allow-Headers", .value = "x-hop" },
+                },
+            });
+        }
+
         // Echo every request header back as "name: value" lines, so tests
         // can assert on the headers a request actually sent.
         var buf: [8192]u8 = undefined;
         var pos: usize = 0;
         var it = req.iterateHeaders();
         while (it.next()) |header| {
-            const line = try std.fmt.bufPrint(buf[pos..], "{s}: {s}\n", .{ header.name, header.value });
+            const line = try std.mem.print(buf[pos..], "{s}: {s}\n", .{ header.name, header.value });
             pos += line.len;
         }
         return req.respond(buf[0..pos], .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
+                .{ .name = "Access-Control-Allow-Origin", .value = origin(req) orelse "*" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/set_cookie")) {
+        return req.respond("", .{
+            .extra_headers = &.{
+                .{ .name = "Set-Cookie", .value = "lp_hidden=1; Path=/set_cookie_scope" },
+                .{ .name = "X-Visible", .value = "yes" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/redirect_same_echo_headers")) {
+        // Same-origin 302 to /echo_headers: Authorization must survive the hop.
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "/echo_headers" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/redirect_cross_echo_headers")) {
+        // 302 to /echo_headers on the localhost alias — a cross-origin hop, so
+        // Authorization must be stripped before the request is re-sent.
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "http://localhost:9582/echo_headers" },
             },
         });
     }
@@ -1092,7 +1358,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.startsWith(u8, path, "/src/browser/tests/")) {
-        if (std.mem.indexOf(u8, path, "delay_ms=")) |pos| {
+        if (std.mem.find(u8, path, "delay_ms=")) |pos| {
             const digits_start = pos + "delay_ms=".len;
             var end = digits_start;
             while (end < path.len and std.ascii.isDigit(path[end])) : (end += 1) {}
@@ -1115,7 +1381,7 @@ pub const expectLog = log.expectLog;
 /// Suppresses every line from `scopes` for the rest of the test.
 pub fn silenceLog(comptime scopes: []const log.Scope) void {
     inline for (scopes) |scope| {
-        log.opts.scope_enabled[@intFromEnum(scope)] = false;
+        log.opts.scope_enabled[@backingInt(scope)] = false;
     }
 }
 
@@ -1134,7 +1400,7 @@ test "tests:afterEach" {
             continue;
         }
         failed = true;
-        const scope: log.Scope = @enumFromInt(i);
+        const scope: log.Scope = @fromBackingInt(@intCast(i));
         std.debug.print("expected {d} more {s} log line(s)\n", .{ count, @tagName(scope) });
     }
 

@@ -86,19 +86,19 @@ pub fn close(self: *DedicatedWorkerGlobalScope) void {
     self._closed = true;
 }
 
-pub fn getOnMessage(self: *const DedicatedWorkerGlobalScope) ?js.Function.Global {
+fn getOnMessage(self: *const DedicatedWorkerGlobalScope) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *DedicatedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
+fn setOnMessage(self: *DedicatedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
     self._on_message = WorkerGlobalScope.getFunctionFromSetter(setter);
 }
 
-pub fn getOnMessageError(self: *const DedicatedWorkerGlobalScope) ?js.Function.Global {
+fn getOnMessageError(self: *const DedicatedWorkerGlobalScope) ?js.Function.Global {
     return self._on_messageerror;
 }
 
-pub fn setOnMessageError(self: *DedicatedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
+fn setOnMessageError(self: *DedicatedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
     self._on_messageerror = WorkerGlobalScope.getFunctionFromSetter(setter);
 }
 
@@ -172,7 +172,7 @@ fn scheduleMessage(self: *DedicatedWorkerGlobalScope, cloned_data: ?js.Value.Glo
 pub fn drainPendingMessages(self: *DedicatedWorkerGlobalScope) void {
     for (self._pending_messages.items) |cloned_data| {
         self.scheduleMessage(cloned_data) catch |err| {
-            lp.log.warn(.browser, "worker drain msg failed", .{ .err = err });
+            lp.log.debug(.browser, "worker drain msg failed", .{ .err = err });
             if (cloned_data) |d| d.release();
         };
     }
@@ -213,7 +213,7 @@ const ReceiveMessageCallback = struct {
             const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
                 .bubbles = false,
                 .cancelable = false,
-            }, wsg._page)).asEvent();
+            }, wsg.page)).asEvent();
             try wsg.dispatch(target, event, on_messageerror, .{});
             return null;
         }
@@ -230,7 +230,7 @@ const ReceiveMessageCallback = struct {
             .data = .{ .value = self.data.? },
             .bubbles = false,
             .cancelable = false,
-        }, wsg._page)).asEvent();
+        }, wsg.page)).asEvent();
         try wsg.dispatch(target, event, on_message, .{});
         return null;
     }

@@ -185,11 +185,11 @@ pub fn getProtocol(self: *const URLPattern) []const u8 {
     return self._protocol.pattern_string;
 }
 
-pub fn getUsername(self: *const URLPattern) []const u8 {
+fn getUsername(self: *const URLPattern) []const u8 {
     return self._username.pattern_string;
 }
 
-pub fn getPassword(self: *const URLPattern) []const u8 {
+fn getPassword(self: *const URLPattern) []const u8 {
     return self._password.pattern_string;
 }
 
@@ -213,7 +213,7 @@ pub fn getHash(self: *const URLPattern) []const u8 {
     return self._hash.pattern_string;
 }
 
-pub fn getHasRegExpGroups(self: *const URLPattern) bool {
+fn getHasRegExpGroups(self: *const URLPattern) bool {
     inline for (component_names) |name| {
         if (@field(self, "_" ++ name).has_regexp_groups) {
             return true;
@@ -222,15 +222,15 @@ pub fn getHasRegExpGroups(self: *const URLPattern) bool {
     return false;
 }
 
-pub fn testFn(self: *const URLPattern, input: ?Input, base_url: ?[]const u8, exec: *const Execution) !bool {
+fn testFn(self: *const URLPattern, input: ?Input, base_url: ?[]const u8, exec: *const Execution) !bool {
     return (try self.match(input, base_url, exec)) != null;
 }
 
-pub fn execFn(self: *const URLPattern, input: ?Input, base_url: ?[]const u8, exec: *const Execution) !?Result {
+fn execFn(self: *const URLPattern, input: ?Input, base_url: ?[]const u8, exec: *const Execution) !?Result {
     return self.match(input, base_url, exec);
 }
 
-pub const ComponentName = enum {
+const ComponentName = enum {
     protocol,
     username,
     password,
@@ -251,7 +251,7 @@ fn getComponent(self: *const URLPattern, name: ComponentName) *const Component {
 
 // Tentative (Chromium-only, WPT urlpattern-compare.tentative): orders two
 // patterns' components by specificity.
-pub fn compareComponent(name: ComponentName, left: *const URLPattern, right: *const URLPattern, exec: *const Execution) !i32 {
+fn compareComponent(name: ComponentName, left: *const URLPattern, right: *const URLPattern, exec: *const Execution) !i32 {
     const env: Env = .{ .arena = exec.local_arena, .local = exec.js.local.? };
     return left.getComponent(name).compare(right.getComponent(name), env);
 }
@@ -312,9 +312,9 @@ fn match(self: *const URLPattern, input: ?Input, base_url: ?[]const u8, exec: *c
             // The IDL conversion yields a fresh dictionary; that, not the
             // caller's object, is what ends up in result.inputs.
             const dict = local.newObject();
-            inline for (@typeInfo(Init).@"struct".fields) |f| {
-                if (@field(dict_init, f.name)) |v| {
-                    _ = try dict.set(f.name, v, .{});
+            inline for (@typeInfo(Init).@"struct".field_names) |field_name| {
+                if (@field(dict_init, field_name)) |v| {
+                    _ = try dict.set(field_name, v, .{});
                 }
             }
             inputs = local.newArray(1);
@@ -357,7 +357,7 @@ fn match(self: *const URLPattern, input: ?Input, base_url: ?[]const u8, exec: *c
         const groups = local.newObject();
         var key_buf: [16]u8 = undefined;
         for (component.group_names, 1..) |group_name, i| {
-            const key = std.fmt.bufPrint(&key_buf, "{d}", .{i}) catch unreachable;
+            const key = std.mem.print(&key_buf, "{d}", .{i}) catch unreachable;
             _ = try groups.set(group_name, try exec_result.get(key), .{});
         }
         @field(result, name) = .{ .input = value, .groups = groups };
@@ -794,7 +794,7 @@ fn processInit(arena: Allocator, in: Init, comptime typ: InitType) Error!Init {
         if (base) |b| {
             if (!urlHasOpaquePath(b) and !isAbsolutePathname(pathname, typ)) {
                 const base_path = try processBaseUrlString(arena, urlPath(b), typ);
-                if (std.mem.lastIndexOfScalar(u8, base_path, '/')) |slash| {
+                if (std.mem.findScalarLast(u8, base_path, '/')) |slash| {
                     pathname = try std.mem.concat(arena, u8, &.{ base_path[0 .. slash + 1], pathname });
                 }
             }
@@ -874,7 +874,7 @@ fn urlHost(url: *const U.Url) []const u8 {
 
 fn urlPort(arena: Allocator, url: *const U.Url) Error![]const u8 {
     const port = U.urlGetPort(url) orelse return "";
-    return std.fmt.allocPrint(arena, "{d}", .{port});
+    return arena.print("{d}", .{port});
 }
 
 fn urlPath(url: *const U.Url) []const u8 {
@@ -1005,7 +1005,7 @@ fn canonicalizePort(arena: Allocator, value: []const u8, protocol: ?[]const u8) 
     if (digits == 0) {
         return error.TypeError;
     }
-    const serialized = try std.fmt.allocPrint(arena, "{d}", .{port});
+    const serialized = try arena.print("{d}", .{port});
     if (protocol) |p| {
         if (defaultPort(p)) |default| {
             if (std.mem.eql(u8, default, serialized)) {
@@ -1362,7 +1362,7 @@ const Part = struct {
             };
         }
     };
-    pub const Modifier = enum {
+    const Modifier = enum {
         none,
         optional,
         zero_or_more,
@@ -1546,7 +1546,7 @@ const Parser = struct {
         if (name_token) |t| {
             name = t.value;
         } else if (regexp_or_wildcard != null) {
-            name = try std.fmt.allocPrint(self.env.arena, "{d}", .{self.next_numeric_name});
+            name = try self.env.arena.print("{d}", .{self.next_numeric_name});
             self.next_numeric_name += 1;
         }
         for (self.parts.items) |part| {
@@ -1898,7 +1898,7 @@ const Component = struct {
                     const raw = groups.get(part.name) orelse return error.TypeError;
                     const value = try self.encoding(env.arena, raw);
                     if (self.options.delimiter) |delimiter| {
-                        if (std.mem.indexOfScalar(u8, value, delimiter) != null) {
+                        if (std.mem.findScalar(u8, value, delimiter) != null) {
                             return error.TypeError;
                         }
                     }

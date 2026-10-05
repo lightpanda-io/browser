@@ -122,7 +122,7 @@ pub fn getName(self: *const File) []const u8 {
     return self._name;
 }
 
-pub fn getLastModified(self: *const File) f64 {
+fn getLastModified(self: *const File) f64 {
     return @floatFromInt(self._last_modified);
 }
 

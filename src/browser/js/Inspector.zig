@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
 const js = @import("js.zig");
 const v8 = js.v8;
 
@@ -42,7 +41,6 @@ isolate: *v8.Isolate,
 handle: *v8.Inspector,
 client: *v8.InspectorClientImpl,
 default_context: ?v8.Global,
-session: ?Session,
 
 pub fn init(allocator: Allocator, isolate: *v8.Isolate) !*Inspector {
     const self = try allocator.create(Inspector);
@@ -50,7 +48,6 @@ pub fn init(allocator: Allocator, isolate: *v8.Isolate) !*Inspector {
 
     self.* = .{
         .unique_id = 1,
-        .session = null,
         .isolate = isolate,
         .client = undefined,
         .handle = undefined,
@@ -72,27 +69,9 @@ pub fn deinit(self: *const Inspector, allocator: Allocator) void {
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
-    if (self.session) |*s| {
-        s.deinit();
-    }
     v8.v8_inspector__Client__IMPL__DELETE(self.client);
     v8.v8_inspector__Inspector__DELETE(self.handle);
     allocator.destroy(self);
-}
-
-pub fn startSession(self: *Inspector, ctx: anytype) *Session {
-    if (comptime lp.IS_DEBUG) {
-        std.debug.assert(self.session == null);
-    }
-
-    self.session = @as(Session, undefined);
-    Session.init(&self.session.?, self, ctx);
-    return &self.session.?;
-}
-
-pub fn stopSession(self: *Inspector) void {
-    self.session.?.deinit();
-    self.session = null;
 }
 
 // From CDP docs
@@ -150,7 +129,7 @@ pub fn resetContextGroup(self: *const Inspector) void {
     v8.v8_inspector__Inspector__ResetContextGroup(self.handle, CONTEXT_GROUP_ID);
 }
 
-pub const RemoteObject = struct {
+const RemoteObject = struct {
     handle: *v8.RemoteObject,
 
     pub fn deinit(self: RemoteObject) void {
@@ -199,7 +178,10 @@ pub const RemoteObject = struct {
 // Combines a v8::InspectorSession and a v8::InspectorChannelImpl. The
 // InspectorSession is for zig -> v8 (sending messages to the inspector). The
 // Channel is for v8 -> zig, getting events from the Inspector (that we'll pass
-// back to some opaque context, i.e the CDP BrowserContext).
+// back to some opaque context, i.e the CDP AttachedSession).
+// The channel keeps the Session's address, so the owner must not move it
+// between init and deinit. Every Session connects to the same
+// CONTEXT_GROUP_ID and so sees every context.
 // The channel callbacks are defined below, as:
 //   pub export fn v8_inspector__Channel__IMPL__XYZ
 pub const Session = struct {
@@ -212,7 +194,7 @@ pub const Session = struct {
     onNotif: *const fn (ctx: *anyopaque, msg: []const u8) void,
     onResp: *const fn (ctx: *anyopaque, call_id: u32, msg: []const u8) void,
 
-    fn init(self: *Session, inspector: *Inspector, ctx: anytype) void {
+    pub fn init(self: *Session, inspector: *Inspector, ctx: anytype) void {
         const Container = @typeInfo(@TypeOf(ctx)).pointer.child;
 
         const channel = v8.v8_inspector__Channel__IMPL__CREATE(inspector.isolate);
@@ -234,10 +216,22 @@ pub const Session = struct {
         };
     }
 
-    fn deinit(self: *const Session) void {
+    pub fn deinit(self: *Session) void {
+        // Deleting the V8 session fails its pending evaluations, which V8
+        // answers through the channel. The client is gone: drop them.
+        self.onResp = dropResponse;
+        self.onNotif = dropNotification;
+
+        var hs: v8.HandleScope = undefined;
+        v8.v8__HandleScope__CONSTRUCT(&hs, self.inspector.isolate);
+        defer v8.v8__HandleScope__DESTRUCT(&hs);
+
         v8.v8_inspector__Session__DELETE(self.handle);
         v8.v8_inspector__Channel__IMPL__DELETE(self.channel);
     }
+
+    fn dropResponse(_: *anyopaque, _: u32, _: []const u8) void {}
+    fn dropNotification(_: *anyopaque, _: []const u8) void {}
 
     pub fn send(self: *const Session, msg: []const u8) void {
         const isolate = self.inspector.isolate;
@@ -367,13 +361,7 @@ pub fn getTaggedOpaque(value: *const v8.Value) ?*TaggedOpaque {
     if (!v8.v8__Value__IsObject(value)) {
         return null;
     }
-    const internal_field_count = v8.v8__Object__InternalFieldCount(value);
-    if (internal_field_count == 0) {
-        return null;
-    }
-
-    const tao_ptr = v8.v8__Object__GetAlignedPointerFromInternalField(value, 0).?;
-    return @ptrCast(@alignCast(tao_ptr));
+    return TaggedOpaque.fromObject(@ptrCast(value));
 }
 
 fn cZigStringToString(s: v8.CZigString) ?[]const u8 {

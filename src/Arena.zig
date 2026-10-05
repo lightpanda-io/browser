@@ -48,6 +48,10 @@ bucket: *ArenaPool.Bucket,
 // Only meaningful while this arena sits in its bucket's free list.
 next: ?*Arena,
 
+// Used to detect a double-release. Allows us to fail when it happens rather
+// than triggering a double-free which will fail in a seemingly unrelated way
+released: bool,
+
 // Bytes _arena holds from the backing allocator, maintained by the vtable
 // below. Changes only when the arena grows or frees a node, so this costs
 // O(log n) updates over an arena's life, not one per allocation.
@@ -105,8 +109,8 @@ pub fn dupe(self: *Arena, comptime T: type, m: []const T) ![]T {
     return self.allocator().dupe(T, m);
 }
 
-pub fn dupeZ(self: *Arena, comptime T: type, m: []const T) ![:0]T {
-    return self.allocator().dupeZ(T, m);
+pub fn dupeSentinel(self: *Arena, comptime T: type, m: []const T, comptime sentinel: T) ![:sentinel]T {
+    return self.allocator().dupeSentinel(T, m, sentinel);
 }
 
 // Arena is being released. Account goes back to 0 (everything is being released)

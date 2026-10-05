@@ -125,7 +125,7 @@ pub fn getOrigin(self: *const MessageEvent) []const u8 {
     return self._origin;
 }
 
-pub fn getLastEventId(self: *const MessageEvent) []const u8 {
+fn getLastEventId(self: *const MessageEvent) []const u8 {
     return self._last_event_id;
 }
 
@@ -134,7 +134,7 @@ const SourceAccess = union(enum) {
     port: *MessagePort,
 };
 
-pub fn getSource(self: *const MessageEvent, exec: *js.Execution) ?SourceAccess {
+fn getSource(self: *const MessageEvent, exec: *js.Execution) ?SourceAccess {
     const source = self._source orelse return null;
     switch (source) {
         .port => |port| return .{ .port = port },
@@ -151,7 +151,7 @@ pub fn getSource(self: *const MessageEvent, exec: *js.Execution) ?SourceAccess {
     }
 }
 
-pub fn getPorts(self: *const MessageEvent) []const *MessagePort {
+fn getPorts(self: *const MessageEvent) []const *MessagePort {
     return self._ports;
 }
 

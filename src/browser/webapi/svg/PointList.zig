@@ -61,9 +61,10 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*PointList {
         .element = element,
         .kind = kind,
     };
-    const gop = try frame._svg_point_lists.getOrPut(frame.arena, key);
+    const page = frame.page;
+    const gop = try page._svg_point_lists.getOrPut(page.frame_arena, key);
     if (!gop.found_existing) {
-        errdefer _ = frame._svg_point_lists.remove(key);
+        errdefer _ = page._svg_point_lists.remove(key);
         gop.value_ptr.* = try frame._factory.create(PointList{
             ._frame = frame,
             ._element = element,
@@ -91,7 +92,7 @@ fn attrName(_: *const PointList) lp.String {
 fn prepareItem(_: *PointList, item: *DOMPoint, frame: *Frame) !*DOMPoint {
     if (!std.math.isFinite(item._proto._x) or !std.math.isFinite(item._proto._y)) return error.TypeError;
     const prepared = if (item._proto.isAttached())
-        try DOMPoint.create(item._proto._x, item._proto._y, item._proto._z, item._proto._w, frame._page)
+        try DOMPoint.create(item._proto._x, item._proto._y, item._proto._z, item._proto._w, frame.page)
     else
         item;
     prepared._proto.acquireRef();
@@ -148,16 +149,16 @@ fn mutatePoint(
 fn parse(raw: []const u8, frame: *Frame) !std.ArrayList(*DOMPoint) {
     var scanner = NumberScanner{ .input = raw };
     var parsed: std.ArrayList(*DOMPoint) = .empty;
-    errdefer for (parsed.items) |point| point._proto.releaseRef(frame._page);
+    errdefer for (parsed.items) |point| point._proto.releaseRef(frame.page);
 
     while (try scanner.next()) |x| {
         // A trailing coordinate with no pair truncates the list; only a
         // malformed number invalidates the whole attribute.
         const y = (try scanner.next()) orelse break;
-        const point = try DOMPoint.create(x, y, 0, 1, frame._page);
+        const point = try DOMPoint.create(x, y, 0, 1, frame.page);
         point._proto.acquireRef();
         parsed.append(frame.local_arena, point) catch |err| {
-            point._proto.releaseRef(frame._page);
+            point._proto.releaseRef(frame.page);
             return err;
         };
     }

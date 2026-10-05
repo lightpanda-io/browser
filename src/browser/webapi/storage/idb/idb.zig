@@ -26,6 +26,7 @@ pub const Manager = @import("Manager.zig");
 pub const IDBFactory = @import("IDBFactory.zig");
 pub const IDBRecord = @import("IDBRecord.zig");
 pub const IDBRequest = @import("IDBRequest.zig");
+pub const IDBOpenDBRequest = @import("IDBOpenDBRequest.zig");
 pub const IDBCursor = @import("IDBCursor.zig");
 pub const IDBIndex = @import("IDBIndex.zig");
 pub const IDBDatabase = @import("IDBDatabase.zig");
@@ -40,6 +41,7 @@ pub fn registerTypes() []const type {
         IDBFactory,
         IDBRecord,
         IDBRequest,
+        IDBOpenDBRequest,
         IDBCursor,
         IDBIndex,
         IDBDatabase,
@@ -75,6 +77,14 @@ pub const FunctionSetter = union(enum) {
     func: js.Function.Global,
     anything: js.Value,
 };
+
+pub fn functionFromSetter(setter: ?FunctionSetter) ?js.Function.Global {
+    const s = setter orelse return null;
+    return switch (s) {
+        .func => |f| f,
+        .anything => null,
+    };
+}
 
 const testing = @import("../../../../testing.zig");
 test "WebApi: IndexedDB" {

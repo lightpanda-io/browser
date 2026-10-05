@@ -250,12 +250,7 @@ fn fireToggle(
         .newState = new_state,
     }, frame)).asEvent();
 
-    // Keep the event alive while dispatching so we can read _prevent_default.
-    event.acquireRef();
-    defer _ = event.releaseRef(frame._page);
-
-    try frame._event_manager.dispatch(el.asEventTarget(), event);
-    return event._prevent_default;
+    return frame._event_manager.dispatchCancelable(el.asEventTarget(), event);
 }
 
 fn hasChanged(el: *Element, frame: *Frame, original: State) bool {

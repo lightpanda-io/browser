@@ -214,7 +214,7 @@ pub fn has(self: *const FormData, name: String) bool {
     return false;
 }
 
-pub const EntryValue = union(enum) {
+const EntryValue = union(enum) {
     blob: *Blob, // can be of _type == .file
     bytes: []const u8, //must be last, everything can coerce to a []const u8
 };
@@ -319,7 +319,7 @@ pub fn forEach(self: *FormData, cb_: js.Function, js_this_: ?js.Object) !void {
     for (self._entries.items) |*entry| {
         cb.call(void, .{ entry.value.asString(), entry.name.str(), self }) catch |err| {
             // this is a non-JS error
-            log.warn(.js, "FormData.forEach", .{ .err = err });
+            log.debug(.js, "FormData.forEach", .{ .err = err });
         };
     }
 }
@@ -331,7 +331,7 @@ pub const EncType = union(enum) {
     plaintext,
 };
 
-pub const WriteOpts = struct {
+const WriteOpts = struct {
     encoding: EncType = .urlencode,
     charset: []const u8 = "UTF-8",
 };
@@ -495,13 +495,13 @@ fn writeMultipartName(writer: *std.Io.Writer, name: []const u8, comptime newline
 // Inverse of urlEncode: application/x-www-form-urlencoded parsing per
 // URL §5.1 — '+' decodes to a space, invalid percent sequences pass through
 // verbatim, and a pair without '=' becomes an entry with an empty value.
-pub fn parseUrlEncoded(self: *FormData, bytes: []const u8) !void {
+fn parseUrlEncoded(self: *FormData, bytes: []const u8) !void {
     var it = std.mem.splitScalar(u8, bytes, '&');
     while (it.next()) |pair| {
         if (pair.len == 0) {
             continue;
         }
-        if (std.mem.indexOfScalar(u8, pair, '=')) |idx| {
+        if (std.mem.findScalar(u8, pair, '=')) |idx| {
             try self.appendText(
                 try urlDecode(self._arena.allocator(), pair[0..idx]),
                 try urlDecode(self._arena.allocator(), pair[idx + 1 ..]),
@@ -519,7 +519,7 @@ pub fn parseUrlEncoded(self: *FormData, bytes: []const u8) !void {
 fn indexOfSpecial(slice: []const u8) ?usize {
     const vector_len = std.simd.suggestVectorLength(u8) orelse {
         // Non-SIMD path.
-        return std.mem.indexOfAnyPos(u8, slice, 0, "%+");
+        return std.mem.findAnyPos(u8, slice, 0, "%+");
     };
     const Vector = @Vector(vector_len, u8);
 
@@ -530,14 +530,14 @@ fn indexOfSpecial(slice: []const u8) ?usize {
         const chunk: Vector = slice[end..][0..vector_len].*;
 
         const mask = @intFromBool(chunk == percent) | @intFromBool(chunk == plus);
-        const mask_int = @as(std.meta.Int(.unsigned, vector_len), @bitCast(mask));
+        const mask_int = @as(@Int(.unsigned, vector_len), @bitCast(mask));
 
         if (mask_int != 0) {
             return end + @ctz(mask_int);
         }
     }
 
-    return std.mem.indexOfAnyPos(u8, slice, end, "%+");
+    return std.mem.findAnyPos(u8, slice, end, "%+");
 }
 
 /// URL-decodes passed `raw` slice; returned value may or may not be heap allocated.
@@ -700,7 +700,7 @@ fn parseMultipart(self: *FormData, bytes: []const u8, boundary: []const u8, exec
 // prefix of longer text does not terminate the part.
 fn indexOfBoundary(haystack: []const u8, boundary: []const u8) ?usize {
     var start: usize = 0;
-    while (std.mem.indexOfPos(u8, haystack, start, "\r\n--")) |i| {
+    while (std.mem.findPos(u8, haystack, start, "\r\n--")) |i| {
         const rest = haystack[i + 4 ..];
         if (std.mem.startsWith(u8, rest, boundary)) {
             const after = rest[boundary.len..];
@@ -716,7 +716,7 @@ fn indexOfBoundary(haystack: []const u8, boundary: []const u8) ?usize {
 // "Parse a multipart/form-data name": undo writeMultipartName's escapes
 // (%0A, %0D, %22); any other percent sequence passes through verbatim.
 fn decodeMultipartName(arena: Allocator, raw: []const u8) ![]const u8 {
-    if (std.mem.indexOfScalar(u8, raw, '%') == null) {
+    if (std.mem.findScalar(u8, raw, '%') == null) {
         return raw;
     }
 
@@ -811,16 +811,16 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
                     continue;
                 }
 
-                const name = element.getAttributeSafe(comptime .wrap("name"));
-                const x_key = if (name) |n| try std.fmt.allocPrint(arena, "{s}.x", .{n}) else "x";
-                const y_key = if (name) |n| try std.fmt.allocPrint(arena, "{s}.y", .{n}) else "y";
+                const name = element.getName();
+                const x_key = if (name) |n| try arena.print("{s}.x", .{n}) else "x";
+                const y_key = if (name) |n| try arena.print("{s}.y", .{n}) else "y";
                 try appendString(&list, arena, x_key, "0");
                 try appendString(&list, arena, y_key, "0");
                 continue;
             }
         }
 
-        const name = element.getAttributeSafe(comptime .wrap("name")) orelse continue;
+        const name = element.getName() orelse continue;
         const value = blk: {
             if (element.is(Form.Input)) |input| {
                 const input_type = input._input_type;
@@ -861,18 +861,14 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
             }
 
             if (element.is(Form.Select)) |select| {
-                if (select.getMultiple() == false) {
-                    // Per the HTML spec, a single-select with no selectedness
-                    // candidate (zero options or every option disabled)
-                    // contributes no entry. Otherwise emit the candidate's
-                    // value.
-                    const opt = select.effectiveOption() orelse continue;
-                    break :blk opt.getValue(frame);
-                }
-
                 var options = try select.getSelectedOptions(frame);
-                while (options.next()) |option| {
-                    try appendString(&list, arena, name, option.as(Form.Select.Option).getValue(frame));
+                while (options.next()) |node| {
+                    const option = node.as(Form.Select.Option);
+                    // A disabled option can be selected, but isn't submitted.
+                    if (option.asElement().isDisabled()) {
+                        continue;
+                    }
+                    try appendString(&list, arena, name, option.getValue(frame));
                 }
                 continue;
             }
@@ -1028,8 +1024,8 @@ test "FormData: multipart with file" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const file = try buildTestFile(allocator, frame._page, "hello.txt", "text/plain", "hello");
-    defer file._proto.releaseRef(frame._page);
+    const file = try buildTestFile(allocator, frame.page, "hello.txt", "text/plain", "hello");
+    defer file._proto.releaseRef(frame.page);
 
     var fd = FormData{
         ._rc = .{},
@@ -1065,8 +1061,8 @@ test "FormData: multipart with empty file defaults to octet-stream" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const file = try buildTestFile(allocator, frame._page, "", "", "");
-    defer file._proto.releaseRef(frame._page);
+    const file = try buildTestFile(allocator, frame.page, "", "", "");
+    defer file._proto.releaseRef(frame.page);
 
     var fd = FormData{
         ._rc = .{},
@@ -1098,8 +1094,8 @@ test "FormData: multipart escapes file name and filename" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const file = try buildTestFile(allocator, frame._page, "a\"b\r\nc.txt", "text/plain", "x");
-    defer file._proto.releaseRef(frame._page);
+    const file = try buildTestFile(allocator, frame.page, "a\"b\r\nc.txt", "text/plain", "x");
+    defer file._proto.releaseRef(frame.page);
 
     var fd = FormData{
         ._rc = .{},
@@ -1131,8 +1127,8 @@ test "FormData: file entry collapses to filename in urlencode" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const file = try buildTestFile(allocator, frame._page, "hello.txt", "text/plain", "hello");
-    defer file._proto.releaseRef(frame._page);
+    const file = try buildTestFile(allocator, frame.page, "hello.txt", "text/plain", "hello");
+    defer file._proto.releaseRef(frame.page);
 
     var fd = FormData{
         ._rc = .{},
@@ -1334,7 +1330,7 @@ test "FormData: multipart parse with file" {
         "bytes\r\n" ++
         "--B--\r\n", "B", &frame.js.execution);
     defer for (fd._entries.items) |entry| switch (entry.value) {
-        .file => |file| file.releaseRef(frame._page),
+        .file => |file| file.releaseRef(frame.page),
         else => {},
     };
 

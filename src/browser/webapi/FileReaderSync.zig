@@ -35,19 +35,19 @@ pub fn init() FileReaderSync {
     return .{};
 }
 
-pub fn readAsArrayBuffer(_: *const FileReaderSync, blob: *Blob) !js.ArrayBuffer {
+fn readAsArrayBuffer(_: *const FileReaderSync, blob: *Blob) !js.ArrayBuffer {
     return .{ .values = blob._slice };
 }
 
-pub fn readAsBinaryString(_: *const FileReaderSync, blob: *Blob) !js.String.OneByte {
+fn readAsBinaryString(_: *const FileReaderSync, blob: *Blob) !js.String.OneByte {
     return .{ .bytes = blob._slice };
 }
 
-pub fn readAsText(_: *const FileReaderSync, blob: *Blob, encoding_: ?[]const u8, exec: *const Execution) ![]const u8 {
+fn readAsText(_: *const FileReaderSync, blob: *Blob, encoding_: ?[]const u8, exec: *const Execution) ![]const u8 {
     return FileReader.decodeText(exec.local_arena, blob._slice, encoding_, blob._mime);
 }
 
-pub fn readAsDataURL(_: *const FileReaderSync, blob: *Blob, exec: *const Execution) ![]const u8 {
+fn readAsDataURL(_: *const FileReaderSync, blob: *Blob, exec: *const Execution) ![]const u8 {
     const mime = if (blob._mime.len > 0) blob._mime else "application/octet-stream";
     return FileReader.encodeDataURL(exec.local_arena, mime, blob._slice);
 }

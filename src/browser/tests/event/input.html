@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id=constructorDefaults>
+
+  {
+    // Constructed events follow the EventInit dictionary defaults.
+    let evt = new InputEvent('beforeinput');
+    testing.expectEqual(true, evt instanceof InputEvent);
+    testing.expectEqual(true, evt instanceof UIEvent);
+    testing.expectEqual(false, evt.bubbles);
+    testing.expectEqual(false, evt.cancelable);
+    testing.expectEqual(false, evt.composed);
+    testing.expectEqual(null, evt.data);
+    testing.expectEqual('', evt.inputType);
+    testing.expectEqual(false, evt.isComposing);
+  }
+
+</script>
+
+<script id=constructorOptions>
+
+  {
+    let evt = new InputEvent('beforeinput', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      data: 'x',
+      inputType: 'insertText',
+      isComposing: true,
+    });
+    testing.expectEqual(true, evt.bubbles);
+    testing.expectEqual(true, evt.cancelable);
+    testing.expectEqual(true, evt.composed);
+    testing.expectEqual('x', evt.data);
+    testing.expectEqual('insertText', evt.inputType);
+    testing.expectEqual(true, evt.isComposing);
+  }
+
+</script>
+
+<script id=constructorCancelable>
+
+  {
+    // preventDefault() only takes effect on a cancelable event.
+    let cancelable = new InputEvent('beforeinput', {cancelable: true});
+    cancelable.preventDefault();
+    testing.expectEqual(true, cancelable.defaultPrevented);
+
+    let plain = new InputEvent('beforeinput');
+    plain.preventDefault();
+    testing.expectEqual(false, plain.defaultPrevented);
+  }
+
+</script>
+
+<script id=createEvent>
+
+  {
+    // document.createEvent leaves the flags unset until initEvent runs.
+    let evt = document.createEvent('InputEvent');
+    testing.expectEqual(true, evt instanceof InputEvent);
+    testing.expectEqual(false, evt.bubbles);
+    testing.expectEqual(false, evt.cancelable);
+  }
+
+</script>

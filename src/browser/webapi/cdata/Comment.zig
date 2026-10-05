@@ -31,7 +31,7 @@ _pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *CData else void = undefined,
 
 pub fn init(str: ?js.NullableString, frame: *Frame) !*Comment {
-    const node = try Frame.node_factory.createComment(frame, if (str) |s| s.value else "");
+    const node = try Frame.node_factory.createComment(frame.document, if (str) |s| s.value else "");
     return node.as(Comment);
 }
 

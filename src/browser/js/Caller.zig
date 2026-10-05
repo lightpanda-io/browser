@@ -105,7 +105,7 @@ pub fn deinit(self: *Caller) void {
     // Unlike call_arena, local_arena is reset on _every_ return, since its
     // users promise not to hold data across a nested call. In debug, free
     // back to the backing allocator so a stale pointer trips the
-    // DebugAllocator's use-after-free detection; in release, retain a buffer
+    // SafeAllocator's use-after-free detection; in release, retain a buffer
     // to avoid realloc churn.
     {
         const local_arena: *ArenaAllocator = @ptrCast(@alignCast(ctx.local_arena.ptr));
@@ -202,7 +202,7 @@ fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, inf
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = idx;
-    if (@typeInfo(F).@"fn".params.len == 3) {
+    if (@typeInfo(F).@"fn".param_types.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
@@ -228,7 +228,7 @@ fn _getNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
-    if (@typeInfo(F).@"fn".params.len == 3) {
+    if (@typeInfo(F).@"fn".param_types.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
@@ -255,7 +255,7 @@ fn _setIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, js_
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = idx;
     @field(args, "2") = try local.jsValueToZig(@TypeOf(@field(args, "2")), js_value);
-    if (@typeInfo(F).@"fn".params.len == 4) {
+    if (@typeInfo(F).@"fn".param_types.len == 4) {
         @field(args, "3") = getGlobalArg(@TypeOf(args.@"3"), local.ctx);
     }
     const ret = @call(.auto, func, args);
@@ -281,7 +281,7 @@ fn _deleteOrDefineIndex(comptime T: type, local: *const Local, func: anytype, id
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = idx;
-    if (@typeInfo(F).@"fn".params.len == 3) {
+    if (@typeInfo(F).@"fn".param_types.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
@@ -308,7 +308,7 @@ fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
     @field(args, "2") = try local.jsValueToZig(@TypeOf(@field(args, "2")), js_value);
-    if (@typeInfo(F).@"fn".params.len == 4) {
+    if (@typeInfo(F).@"fn".param_types.len == 4) {
         @field(args, "3") = getGlobalArg(@TypeOf(args.@"3"), local.ctx);
     }
     const ret = @call(.auto, func, args);
@@ -334,7 +334,7 @@ fn _deleteOrDefineNamedIndex(comptime T: type, local: *const Local, func: anytyp
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
-    if (@typeInfo(F).@"fn".params.len == 3) {
+    if (@typeInfo(F).@"fn".param_types.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
@@ -359,7 +359,7 @@ fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: Pr
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
-    if (@typeInfo(F).@"fn".params.len == 2) {
+    if (@typeInfo(F).@"fn".param_types.len == 2) {
         @field(args, "1") = getGlobalArg(@TypeOf(args.@"1"), local.ctx);
     }
     const ret = @call(.auto, func, args);
@@ -385,7 +385,7 @@ fn _getIndexQuery(comptime T: type, local: *const Local, func: anytype, idx: u32
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = idx;
-    if (@typeInfo(F).@"fn".params.len == 3) {
+    if (@typeInfo(F).@"fn".param_types.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     return queryReturn(local, @call(.auto, func, args), info);
@@ -410,7 +410,7 @@ fn _getNamedQuery(comptime T: type, local: *const Local, func: anytype, name: *c
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
-    if (@typeInfo(F).@"fn".params.len == 3) {
+    if (@typeInfo(F).@"fn".param_types.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     return queryReturn(local, @call(.auto, func, args), info);
@@ -483,8 +483,8 @@ fn returnsBool(comptime F: type) bool {
 }
 
 fn isInErrorSet(err: anyerror, comptime T: type) bool {
-    inline for (@typeInfo(T).error_set.?) |e| {
-        if (err == @field(anyerror, e.name)) return true;
+    inline for (@typeInfo(T).error_set.error_names.?) |name| {
+        if (err == @field(anyerror, name)) return true;
     }
     return false;
 }
@@ -585,6 +585,9 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
     }
 
     const err_local = errorLocal(T, local, info);
+    const env = local.ctx.env;
+    const message = env.error_message orelse "";
+    env.error_message = null;
 
     const js_err: *const v8.Value = blk: {
         // Error constructors use the isolate's current context: enter the
@@ -595,7 +598,7 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
 
         break :blk switch (err) {
             error.InvalidArgument => isolate.createTypeError("invalid argument"),
-            error.TypeError => isolate.createTypeError(""),
+            error.TypeError => isolate.createTypeError(message),
             error.RangeError => isolate.createRangeError(""),
             error.OutOfMemory => isolate.createError("out of memory"),
             error.IllegalConstructor => isolate.createError("Illegal Constructor"),
@@ -655,7 +658,7 @@ fn serializeFunctionArgs(local: *const Local, info: FunctionCallbackInfo) ![]con
     for (0..info.length()) |i| {
         try buf.writer.print("{s}{d} - ", .{ separator, i + 1 });
         const js_value = info.getArg(@intCast(i), local);
-        try local.debugValue(js_value, &buf.writer);
+        try js_value.format(&buf.writer);
     }
     return buf.written();
 }
@@ -663,11 +666,11 @@ fn serializeFunctionArgs(local: *const Local, info: FunctionCallbackInfo) ![]con
 // Takes a function, and returns a tuple for its argument. Used when we
 // @call a function
 fn ParameterTypes(comptime F: type) type {
-    const params = @typeInfo(F).@"fn".params;
-    var types: [params.len]type = undefined;
+    const param_types = @typeInfo(F).@"fn".param_types;
+    var types: [param_types.len]type = undefined;
 
-    inline for (params, 0..) |param, i| {
-        types[i] = param.type.?;
+    inline for (param_types, 0..) |param_type, i| {
+        types[i] = param_type.?;
     }
 
     return @Tuple(&types);
@@ -782,7 +785,7 @@ const ReturnValue = struct {
         }
     }
 
-    pub fn setValueHandle(self: ReturnValue, handle: *const v8.Value) void {
+    fn setValueHandle(self: ReturnValue, handle: *const v8.Value) void {
         v8.v8__ReturnValue__Set(self.handle, handle);
     }
 };
@@ -1015,7 +1018,7 @@ pub const Function = struct {
 fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: FunctionCallbackInfo) !ParameterTypes(F) {
     var args: ParameterTypes(F) = undefined;
 
-    const params = @typeInfo(F).@"fn".params[offset..];
+    const params = @typeInfo(F).@"fn".param_types[offset..];
     // Except for the constructor, the first parameter is always `self`
     // This isn't something we'll bind from JS, so skip it.
     const params_to_map = blk: {
@@ -1026,7 +1029,7 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
         // If the last parameter is Frame/Page/Execution, set it from
         // context and exclude it from our params slice, because we don't want
         // to bind it to a JS argument.
-        const LastParamType = params[params.len - 1].type.?;
+        const LastParamType = params[params.len - 1].?;
         if (comptime isFrame(LastParamType) or isPage(LastParamType) or isExecution(LastParamType)) {
             @field(args, tupleFieldName(params.len - 1 + offset)) = getGlobalArg(LastParamType, local.ctx);
             break :blk params[0 .. params.len - 1];
@@ -1050,7 +1053,7 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
         // is a slice AND the corresponding javascript parameter is
         // NOT an an array, then we'll treat it as a variadic.
 
-        const last_parameter_type = params_to_map[params_to_map.len - 1].type.?;
+        const last_parameter_type = params_to_map[params_to_map.len - 1].?;
         const last_parameter_type_info = @typeInfo(last_parameter_type);
         if (last_parameter_type_info == .pointer and last_parameter_type_info.pointer.size == .slice) {
             const slice_type = last_parameter_type_info.pointer.child;
@@ -1072,7 +1075,7 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
         }
     }
 
-    inline for (params_to_map, 0..) |param, i| {
+    inline for (params_to_map, 0..) |param_type, i| {
         const field_index = comptime i + offset;
         if (comptime i == params_to_map.len - 1) {
             if (is_variadic) {
@@ -1080,14 +1083,14 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             }
         }
 
-        if (comptime isFrame(param.type.?)) {
+        if (comptime isFrame(param_type.?)) {
             @compileError("Frame must be the last parameter: " ++ @typeName(F));
-        } else if (comptime isPage(param.type.?)) {
+        } else if (comptime isPage(param_type.?)) {
             @compileError("Page must be the last parameter: " ++ @typeName(F));
-        } else if (comptime isExecution(param.type.?)) {
+        } else if (comptime isExecution(param_type.?)) {
             @compileError("Execution must be the last parameter: " ++ @typeName(F));
         } else if (i >= js_parameter_count) {
-            if (@typeInfo(param.type.?) != .optional) {
+            if (@typeInfo(param_type.?) != .optional) {
                 return error.InvalidArgument;
             }
             @field(args, tupleFieldName(field_index)) = null;
@@ -1099,7 +1102,7 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             // to the right DOMException. Compared by name because the per-
             // type instantiation of jsValueToZig may not include such errors
             // in its inferred error set.
-            @field(args, tupleFieldName(field_index)) = local.jsValueToZig(param.type.?, js_val) catch |err| {
+            @field(args, tupleFieldName(field_index)) = local.jsValueToZig(param_type.?, js_val) catch |err| {
                 if (err == error.JsException) {
                     // an exception thrown by user code (e.g. a toString
                     // getter) is pending; propagate it untouched

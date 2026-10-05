@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=absent_properties_do_not_mutate_style>
+    {
+        for (const initial of [null, '', 'color:red']) {
+            const element = document.createElement('div');
+            if (initial !== null) element.setAttribute('style', initial);
+            const observer = new MutationObserver(() => {});
+            observer.observe(element, { attributes: true });
+            testing.expectEqual('', element.style.removeProperty('display'));
+            element.style.display = '';
+            element.style.setProperty('display', '');
+            element.style.cssFloat = '';
+            element.style.removeProperty('--absent');
+            testing.expectEqual(0, observer.takeRecords().length);
+            testing.expectEqual(initial, element.getAttribute('style'));
+            observer.disconnect();
+        }
+    }
+</script>
+
+<script id=identical_declarations_preserve_raw_style>
+    {
+        const element = document.createElement('div');
+        const raw = 'color:red; margin-top:0px; float:left; --token:x';
+        element.setAttribute('style', raw);
+        const observer = new MutationObserver(() => {});
+        observer.observe(element, { attributes: true });
+        element.style.color = 'red';
+        element.style.setProperty('COLOR', 'red');
+        element.style.marginTop = '0';
+        element.style.cssFloat = 'left';
+        element.style.setProperty('--token', 'x');
+        testing.expectEqual(0, observer.takeRecords().length);
+        testing.expectEqual(raw, element.getAttribute('style'));
+        observer.disconnect();
+    }
+</script>
+
+<script id=priority_changes_and_empty_values>
+    {
+        const element = document.createElement('div');
+        element.style.setProperty('color', 'red', 'important');
+        const observer = new MutationObserver(() => {});
+        observer.observe(element, { attributes: true, attributeOldValue: true });
+        element.style.setProperty('color', 'red', 'IMPORTANT');
+        testing.expectEqual(0, observer.takeRecords().length);
+        element.style.setProperty('color', 'blue', 'invalid');
+        testing.expectEqual(0, observer.takeRecords().length);
+        testing.expectEqual('red', element.style.color);
+        element.style.setProperty('color', 'red');
+        const priorityRecords = observer.takeRecords();
+        testing.expectEqual(1, priorityRecords.length);
+        testing.expectEqual('color: red !important;', priorityRecords[0].oldValue);
+        testing.expectEqual('', element.style.getPropertyPriority('color'));
+        element.style.setProperty('color', '', 'important');
+        const removed = observer.takeRecords();
+        testing.expectEqual(1, removed.length);
+        testing.expectEqual('color: red;', removed[0].oldValue);
+        testing.expectEqual('', element.getAttribute('style'));
+        element.style.setProperty('color', '', 'important');
+        testing.expectEqual(0, observer.takeRecords().length);
+        observer.disconnect();
+    }
+</script>
+
+<script id=real_changes_and_explicit_assignments_still_notify>
+    {
+        const element = document.createElement('div');
+        element.style.color = 'red';
+        const observer = new MutationObserver(() => {});
+        observer.observe(element, { attributes: true, attributeOldValue: true });
+        element.style.color = 'blue';
+        let records = observer.takeRecords();
+        testing.expectEqual(1, records.length);
+        testing.expectEqual('style', records[0].attributeName);
+        testing.expectEqual('color: red;', records[0].oldValue);
+        testing.expectEqual('blue', element.style.color);
+        element.style.cssText = element.style.cssText;
+        testing.expectEqual(1, observer.takeRecords().length);
+        element.setAttribute('style', element.getAttribute('style'));
+        testing.expectEqual(1, observer.takeRecords().length);
+        testing.expectEqual('blue', element.style.removeProperty('COLOR'));
+        records = observer.takeRecords();
+        testing.expectEqual(1, records.length);
+        testing.expectEqual('color: blue;', records[0].oldValue);
+        testing.expectEqual('', element.style.removeProperty('color'));
+        testing.expectEqual(0, observer.takeRecords().length);
+        element.style.cssText = '';
+        testing.expectEqual(1, observer.takeRecords().length);
+        observer.disconnect();
+    }
+</script>
+
+<script id=css_float_priority_changes_notify>
+    {
+        const element = document.createElement('div');
+        element.style.setProperty('float', 'left', 'important');
+        const observer = new MutationObserver(() => {});
+        observer.observe(element, { attributes: true });
+        element.style.cssFloat = 'left';
+        testing.expectEqual(1, observer.takeRecords().length);
+        testing.expectEqual('', element.style.getPropertyPriority('float'));
+        element.style.cssFloat = 'left';
+        testing.expectEqual(0, observer.takeRecords().length);
+        observer.disconnect();
+    }
+</script>
+
+<script id=custom_property_case_is_significant>
+    {
+        const element = document.createElement('div');
+        element.style.setProperty('--Token', 'x');
+        const observer = new MutationObserver(() => {});
+        observer.observe(element, { attributes: true });
+        element.style.setProperty('--token', 'x');
+        testing.expectEqual(1, observer.takeRecords().length);
+        element.style.setProperty('--Token', 'y');
+        testing.expectEqual(1, observer.takeRecords().length);
+        element.style.setProperty('--Token', 'y');
+        testing.expectEqual(0, observer.takeRecords().length);
+        testing.expectEqual('x', element.style.getPropertyValue('--token'));
+        testing.expectEqual('y', element.style.getPropertyValue('--Token'));
+        observer.disconnect();
+    }
+</script>
+
+<script id=observer_reapplying_style_converges>
+    (async () => {
+        const state = await testing.async();
+        const element = document.createElement('div');
+        let calls = 0;
+        const observer = new MutationObserver(() => {
+            if (++calls >= 4) observer.disconnect();
+            element.style.color = 'red';
+            element.style.removeProperty('display');
+            element.style.cssFloat = '';
+        });
+        observer.observe(element, { attributes: true });
+        element.style.color = 'red';
+        await new Promise(resolve => setTimeout(resolve, 0));
+        observer.disconnect();
+        state.resolve();
+        await state.done(() => {
+            testing.expectEqual(1, calls);
+            testing.expectEqual('red', element.style.color);
+        });
+    })();
+</script>
+
+<script id=healthy_batches_are_not_disconnected>
+    (async () => {
+        const state = await testing.async();
+        const element = document.createElement('div');
+        let delivered = 0;
+        const observers = Array.from({ length: 64 }, () => {
+            const observer = new MutationObserver(() => delivered++);
+            observer.observe(element, { attributes: true });
+            return observer;
+        });
+        for (let round = 0; round < 32; round++) {
+            element.setAttribute('data-round', String(round));
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        observers.forEach(observer => observer.disconnect());
+        state.resolve();
+        await state.done(() => testing.expectEqual(2048, delivered));
+    })();
+</script>

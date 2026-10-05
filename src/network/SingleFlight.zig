@@ -38,7 +38,7 @@ pub fn deinit(self: *SingleFlight) void {
     self.pending.deinit(self.allocator);
 }
 
-pub const EnterResult = enum { initial, queued };
+const EnterResult = enum { initial, queued };
 
 pub fn enter(self: *SingleFlight, key: []const u8, transfer: *Transfer, reason: Transfer.ParkedBy) !EnterResult {
     const gop = try self.pending.getOrPut(self.allocator, key);
@@ -104,14 +104,12 @@ fn makeTestTransfer(arena: *lp.Arena, client: *HttpClient, id: u32) !*Transfer {
         .arena = arena,
         .owner = null,
         .req = .{
-            .frame_id = 0,
-            .loader_id = 0,
             .method = .GET,
             .url = "http://example.com/",
-            .cookie_jar = null,
-            .cookie_origin = "",
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
             .resource_type = .document,
-            .notification = undefined,
             .shutdown_callback = HttpClient.noopShutdown,
         },
         .client = client,

@@ -22,14 +22,15 @@ const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
 const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
+const Reaction = @import("../../../CustomElementReactions.zig").Reaction;
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
-const TreeWalker = @import("../../TreeWalker.zig");
 const Document = @import("../../Document.zig");
-const HtmlElement = @import("../Html.zig");
+const TreeWalker = @import("../../TreeWalker.zig");
 const CustomElementDefinition = @import("../../CustomElementDefinition.zig");
-const Reaction = @import("../../../CustomElementReactions.zig").Reaction;
+
+const HtmlElement = @import("../Html.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -43,6 +44,8 @@ _definition: ?*CustomElementDefinition,
 _connected_callback_invoked: bool = false,
 _disconnected_callback_invoked: bool = false,
 _upgrade_failed: bool = false, // a failed upgrade is never retried
+_upgrade_in_progress: bool = false,
+_upgrade_candidate: bool = false, // listed in a frame's _undefined_custom_elements
 
 pub fn asElement(self: *Custom) *Element {
     return Factory.protoOf(self).asElement();
@@ -58,22 +61,36 @@ pub fn asNode(self: *Custom) *Node {
 // we queue a reaction so that a redundant enqueue (already-in-this-state)
 // is dropped, and a remove+re-insert in the same scope queues both reactions
 // in order. Fire-time is unconditional.
-
 pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *Element, frame: *Frame) error{OutOfMemory}!void {
     // Autonomous custom element
     if (element.is(Custom)) |custom| {
+        if (custom._upgrade_in_progress) return;
         // Upgrade if a definition exists but isn't yet attached
         if (custom._definition == null) {
             if (custom._upgrade_failed) {
                 return;
             }
+
+            {
+                // a document without a browsing context (DOMParser et al.) has
+                // no custom element.
+                const document = element.asNode().ownerDocument(frame) orelse return;
+                if (document._frame == null) {
+                    return;
+                }
+            }
+
             const name = custom._tag_name.str();
             if (frame.window._custom_elements._definitions.get(name)) |definition| {
                 const CustomElementRegistry = @import("../../CustomElementRegistry.zig");
                 CustomElementRegistry.upgradeCustomElement(custom, definition, frame) catch {};
                 return;
             }
-            // Element is undefined and no definition exists yet — nothing to queue.
+
+            if (!custom._upgrade_candidate) {
+                custom._upgrade_candidate = true;
+                try frame._undefined_custom_elements.append(frame.arena, custom);
+            }
             return;
         }
 
@@ -114,7 +131,7 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
 
 pub fn enqueueDisconnectedCallbackOnElement(element: *Element, frame: *Frame) void {
     if (element.is(Custom)) |custom| {
-        if (custom._definition == null) return;
+        if (custom._definition == null or custom._upgrade_in_progress) return;
         if (custom._disconnected_callback_invoked) return;
         custom._disconnected_callback_invoked = true;
         custom._connected_callback_invoked = false;
@@ -147,7 +164,7 @@ pub fn enqueueDisconnectedCallbackOnElement(element: *Element, frame: *Frame) vo
 // moves with it.
 pub fn enqueueMoveCallbackOnElement(element: *Element, frame: *Frame) void {
     const eligible = if (element.is(Custom)) |custom|
-        custom._definition != null
+        custom._definition != null and !custom._upgrade_in_progress
     else
         frame.getCustomizedBuiltInDefinition(element) != null;
 
@@ -181,7 +198,7 @@ pub fn enqueueShadowTreeCallbacks(host: *Element, comptime reaction: enum { conn
 
 pub fn enqueueAdoptedCallbackOnElement(element: *Element, old_document: *Document, new_document: *Document, frame: *Frame) void {
     if (element.is(Custom)) |custom| {
-        if (custom._definition == null) return;
+        if (custom._definition == null or custom._upgrade_in_progress) return;
     } else {
         if (frame.getCustomizedBuiltInDefinition(element) == null) return;
     }
@@ -192,6 +209,7 @@ pub fn enqueueAdoptedCallbackOnElement(element: *Element, old_document: *Documen
 
 pub fn enqueueAttributeChangedCallbackOnElement(element: *Element, name: String, old_value: ?String, new_value: ?String, namespace: ?String, frame: *Frame) void {
     if (element.is(Custom)) |custom| {
+        if (custom._upgrade_in_progress) return;
         const definition = custom._definition orelse return;
         if (!definition.isAttributeObserved(name)) return;
     } else {
@@ -207,6 +225,11 @@ pub fn enqueueAttributeChangedCallbackOnElement(element: *Element, name: String,
 // Filtering already happened at enqueue time, so just fire unconditionally.
 pub fn fireReaction(reaction: Reaction, frame: *Frame) void {
     switch (reaction) {
+        .upgrade => |u| {
+            if (u.element._definition != null or u.element._upgrade_failed) return;
+            const CustomElementRegistry = @import("../../CustomElementRegistry.zig");
+            CustomElementRegistry.upgradeCustomElement(u.element, u.definition, frame) catch {};
+        },
         .connected => |el| {
             if (el.is(Custom)) |custom| {
                 custom.invokeCallback("connectedCallback", .{}, frame);
@@ -316,7 +339,7 @@ pub fn checkAndAttachBuiltIn(element: *Element, frame: *Frame) !void {
 
     var caught: js.TryCatch.Caught = .{};
     _ = local.toLocal(definition.constructor).newInstance(&caught) catch |err| {
-        log.warn(.js, "custom builtin ctor", .{ .name = is_value, .err = err, .caught = caught });
+        log.debug(.js, "custom builtin ctor", .{ .name = is_value, .err = err, .caught = caught });
         return;
     };
 }
@@ -342,5 +365,9 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        // The template only applies to wrappers created outside construction:
+        // undefined elements, or a defined one first seen by an isolated world.
+        // Both get HTMLElement.prototype.
+        pub const wrap_as = HtmlElement.JsApi;
     };
 };

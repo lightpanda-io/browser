@@ -1,0 +1,1611 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+const std = @import("std");
+const lp = @import("lightpanda");
+
+const Base64Writer = @import("../Base64Writer.zig");
+const isAllWhitespace = @import("../string.zig").isAllWhitespace;
+
+const URL = @import("URL.zig");
+const Frame = @import("Frame.zig");
+const Viewport = @import("Viewport.zig");
+const RenderTree = @import("RenderTree.zig");
+const StyleManager = @import("StyleManager.zig");
+
+const Node = @import("webapi/Node.zig");
+const Element = @import("webapi/Element.zig");
+const Slot = @import("webapi/element/html/Slot.zig");
+
+const log = lp.log;
+const Allocator = std.mem.Allocator;
+
+pub const Opts = struct {
+    width: u32,
+    height: u32 = 0,
+    clip: ?Clip = null,
+    scale: f32 = 1.0,
+
+    const Clip = struct {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    };
+
+    /// Height 0 renders the whole content instead of one viewport.
+    pub fn fromViewport(viewport: Viewport, full_page: bool) Opts {
+        return .{
+            .width = viewport.width,
+            .height = if (full_page) 0 else viewport.height,
+            .scale = viewport.scale,
+        };
+    }
+};
+
+// Parsed fonts, shaping scratch and the glyph cache, on the Rust side. One
+// per Browser, created on the first screenshot.
+pub const Renderer = opaque {
+    pub fn deinit(self: *Renderer) void {
+        lp_render_free(self);
+    }
+};
+
+/// The block model laid out by the Rust side at scale 1, as flat arrays
+/// (see `LpLayout`). Lives on the Rust heap until `deinit`.
+pub const Layout = struct {
+    handle: *LayoutHandle,
+    raw: LpLayout,
+
+    pub fn deinit(self: *Layout) void {
+        lp_layout_free(self.handle);
+    }
+
+    pub fn blocks(self: *const Layout) []const LpLayoutBlock {
+        return self.raw.blocks[0..self.raw.blocks_len];
+    }
+    pub fn lines(self: *const Layout) []const LpLine {
+        return self.raw.lines[0..self.raw.lines_len];
+    }
+    pub fn runs(self: *const Layout) []const LpRun {
+        return self.raw.runs[0..self.raw.runs_len];
+    }
+    pub fn glyphs(self: *const Layout) []const LpGlyph {
+        return self.raw.glyphs[0..self.raw.glyphs_len];
+    }
+    pub fn clusters(self: *const Layout) []const LpCluster {
+        return self.raw.clusters[0..self.raw.clusters_len];
+    }
+    pub fn fonts(self: *const Layout) []const LpFont {
+        return self.raw.fonts[0..self.raw.fonts_len];
+    }
+};
+
+const LayoutHandle = opaque {};
+
+/// Flows `blocks` into a column `width` layout px wide with `margin` on
+/// every side.
+pub fn layout(renderer: *Renderer, blocks: []const LpBlock, width: f32, margin: f32) error{LayoutFailed}!Layout {
+    var raw: LpLayout = undefined;
+    const handle = lp_layout_new(renderer, blocks.ptr, blocks.len, width, margin, &raw) orelse return error.LayoutFailed;
+    return .{ .handle = handle, .raw = raw };
+}
+
+pub fn rendererFor(frame: *Frame) !*Renderer {
+    const browser = frame._session.browser;
+    if (browser.renderer) |r| {
+        return r;
+    }
+    const r = lp_render_new() orelse return error.RendererInit;
+    browser.renderer = r;
+    return r;
+}
+
+pub fn png(arena: Allocator, state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !u32 {
+    const prepared = try preparePng(arena, state, opts, frame);
+    return prepared.write(writer);
+}
+
+/// The height a render at `width` would have.
+pub fn contentHeight(arena: Allocator, node: *Node, width: u32, frame: *Frame) !u32 {
+    const prepared = try preparePng(arena, .{ .root = node }, .{ .width = width }, frame);
+    return prepared.measure();
+}
+
+// The DOM walk, done up front so it can fail (allocation) before any output
+// starts. Rasterizing is then a pure write: `Prepared` can be embedded in a
+// std.json value and streams itself as a base64 string.
+pub fn preparePng(arena: Allocator, state: RenderTree.State, opts: Opts, frame: *Frame) !Prepared {
+    if (opts.width == 0 or !(opts.scale > 0 and opts.scale <= 8)) {
+        return error.InvalidScreenshotOptions;
+    }
+    return .{
+        .opts = opts,
+        .blocks = try collect(arena, state, frame),
+        .renderer = try rendererFor(frame),
+    };
+}
+
+pub fn collect(arena: Allocator, state: RenderTree.State, frame: *Frame) ![]const LpBlock {
+    var builder: Builder = .{
+        .frame = frame,
+        .arena = arena,
+        .tree = .{ .frame = frame, .state = state },
+    };
+    try builder.render(state.root);
+    try builder.closeBlock();
+    return builder.blocks.items;
+}
+
+// Any non-zero rc means nothing usable was written, so the caller has to fail
+// rather than hand back a truncated file. WriteFailed is the only error
+// jsonStringify's signature can carry, hence the log line.
+fn renderFailed(comptime what: []const u8, rc: i32) error{WriteFailed} {
+    log.err(.browser, what, .{ .reason = switch (rc) {
+        RC_WRITE_REFUSED => "write refused",
+        RC_INVALID => "invalid options",
+        RC_NO_RASTER => "raster allocation failed",
+        RC_ENCODE_FAILED => "png encoding failed",
+        RC_PANIC => "renderer panicked",
+        else => "unknown",
+    }, .rc = rc });
+    return error.WriteFailed;
+}
+
+pub const Prepared = struct {
+    opts: Opts,
+    blocks: []const LpBlock,
+    renderer: *Renderer,
+
+    pub fn write(self: *const Prepared, writer: *std.Io.Writer) std.Io.Writer.Error!u32 {
+        return self.render(writer, 0);
+    }
+
+    /// The content height at `opts.width`, without rasterizing.
+    pub fn measure(self: *const Prepared) std.Io.Writer.Error!u32 {
+        var discard: std.Io.Writer.Discarding = .init(&.{});
+        return self.render(&discard.writer, RENDER_MEASURE_ONLY);
+    }
+
+    /// Bound the render for a consumer with size limits. Layout reflows to
+    /// the width, so the height is measured after narrowing, and only when it
+    /// isn't already a fixed strip within the limit.
+    pub fn fit(self: *Prepared, max_width: u32, max_height: u32) std.Io.Writer.Error!void {
+        self.opts.width = @min(self.opts.width, max_width);
+        if (self.opts.height == 0 or self.opts.height > max_height) {
+            self.opts.height = @min(try self.measure(), max_height);
+        }
+    }
+
+    fn render(self: *const Prepared, writer: *std.Io.Writer, flags: u32) std.Io.Writer.Error!u32 {
+        const opts = self.opts;
+        const clip = opts.clip orelse Opts.Clip{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        var content_height: u32 = 0;
+        var sink: Sink = .{ .writer = writer };
+        const rc = lp_render_png(self.renderer, self.blocks.ptr, self.blocks.len, .{
+            .width = opts.width,
+            .height = opts.height,
+            .clip_x = clip.x,
+            .clip_y = clip.y,
+            .clip_w = clip.width,
+            .clip_h = clip.height,
+            .scale = opts.scale,
+            .flags = flags,
+        }, &content_height, &sink, Sink.write);
+
+        if (rc == RC_OK) {
+            return content_height;
+        }
+        return renderFailed("screenshot render", rc);
+    }
+
+    // Serializes as a base64 string, streamed: no PNG or base64 buffer.
+    pub fn jsonStringify(self: *const Prepared, jws: *std.json.Stringify) std.Io.Writer.Error!void {
+        try jws.beginWriteRaw();
+        try jws.writer.writeByte('"');
+        try self.writeBase64(jws.writer);
+        try jws.writer.writeByte('"');
+        jws.endWriteRaw();
+    }
+
+    /// The PNG as base64, for APIs that want it as one string.
+    pub fn base64Alloc(self: *const Prepared, arena: Allocator) ![]const u8 {
+        var aw: std.Io.Writer.Allocating = .init(arena);
+        try self.writeBase64(&aw.writer);
+        return aw.written();
+    }
+
+    fn writeBase64(self: *const Prepared, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        var b64 = Base64Writer.init(writer, .standard);
+        _ = try self.write(&b64.writer);
+        try b64.finish();
+    }
+};
+
+const Sink = struct {
+    writer: *std.Io.Writer,
+
+    fn write(ctx: *anyopaque, data: [*]const u8, len: usize) callconv(.c) bool {
+        const self: *Sink = @ptrCast(@alignCast(ctx));
+        self.writer.writeAll(data[0..len]) catch return false;
+        return true;
+    }
+};
+
+// Mirrors the C ABI in src/rust/render/lib.rs.
+const LpSpan = extern struct {
+    text: [*]const u8,
+    len: usize,
+    flags: u32,
+    color: u32,
+    href: [*]const u8,
+    href_len: usize,
+};
+
+pub const LpBlock = extern struct {
+    spans: [*]const LpSpan,
+    spans_len: usize,
+    marker: [*]const u8,
+    marker_len: usize,
+    kind: Kind,
+    level: u8,
+    list_depth: u8,
+    quote_depth: u8,
+    flags: u8,
+
+    pub const Kind = enum(u8) {
+        paragraph = 0,
+        heading = 1,
+        pre = 2,
+        rule = 3,
+    };
+};
+
+const LpRenderOpts = extern struct {
+    width: u32,
+    height: u32,
+    clip_x: f32,
+    clip_y: f32,
+    clip_w: f32,
+    clip_h: f32,
+    scale: f32,
+    flags: u32,
+};
+
+const SPAN_BOLD: u32 = 1 << 0;
+const SPAN_ITALIC: u32 = 1 << 1;
+const SPAN_UNDERLINE: u32 = 1 << 2;
+const SPAN_MONO: u32 = 1 << 3;
+const SPAN_STRIKE: u32 = 1 << 4;
+const SPAN_HAS_COLOR: u32 = 1 << 5;
+
+const BLOCK_TIGHT: u8 = 1 << 0;
+
+const RENDER_MEASURE_ONLY: u32 = 1 << 0;
+
+// The laid-out document `lp_layout_new` exports, in layout px: blocks own a
+// range of lines, lines a range of runs and clusters, runs a range of
+// glyphs. Consumed by pdf.zig; see the Rust definitions for field docs.
+const LpLayout = extern struct {
+    height: f32,
+    pre_pad: f32,
+    quote_indent: f32,
+    rule_color: u32,
+    pre_bg: u32,
+    blocks: [*]const LpLayoutBlock,
+    blocks_len: usize,
+    lines: [*]const LpLine,
+    lines_len: usize,
+    runs: [*]const LpRun,
+    runs_len: usize,
+    glyphs: [*]const LpGlyph,
+    glyphs_len: usize,
+    clusters: [*]const LpCluster,
+    clusters_len: usize,
+    fonts: [*]const LpFont,
+    fonts_len: usize,
+};
+
+pub const LAYOUT_NONE: u32 = std.math.maxInt(u32);
+
+pub const LpLayoutBlock = extern struct {
+    x: f32,
+    y: f32,
+    quote_x: f32,
+    lines: u32,
+    lines_len: u32,
+    marker_line: u32,
+    kind: u8,
+    quote_bars: u8,
+};
+
+pub const LpLine = extern struct {
+    x: f32,
+    top: f32,
+    bottom: f32,
+    runs: u32,
+    runs_len: u32,
+    clusters: u32,
+    clusters_len: u32,
+};
+
+pub const LpRun = extern struct {
+    font: u32,
+    size: f32,
+    skew: f32,
+    color: u32,
+    offset: f32,
+    baseline: f32,
+    advance: f32,
+    glyphs: u32,
+    glyphs_len: u32,
+    underline: LpDecoration,
+    strike: LpDecoration,
+};
+
+pub const LpDecoration = extern struct {
+    enabled: u32,
+    offset: f32,
+    size: f32,
+    color: u32,
+};
+
+const LpGlyph = extern struct {
+    id: u32,
+    x: f32,
+    y: f32,
+    advance: f32,
+};
+
+const LpCluster = extern struct {
+    font: u32,
+    glyph: u32,
+    text_start: u32,
+    text_len: u32,
+    x: f32,
+    advance: f32,
+    flags: u32,
+};
+
+pub const CLUSTER_LIGATURE_START: u32 = 1 << 0;
+pub const CLUSTER_LIGATURE_CONT: u32 = 1 << 1;
+
+pub const LpFont = extern struct {
+    data: [*]const u8,
+    data_len: usize,
+    index: u32,
+    name: [*]const u8,
+    name_len: usize,
+    mono: u8,
+};
+
+const RC_OK: i32 = 0;
+const RC_WRITE_REFUSED: i32 = 1;
+const RC_INVALID: i32 = 2;
+const RC_NO_RASTER: i32 = 3;
+const RC_ENCODE_FAILED: i32 = 4;
+const RC_PANIC: i32 = 5;
+
+// What the Rust side reports about the mirror above; see the "rust abi" test.
+const LpAbi = extern struct {
+    size: u32,
+
+    span_size: u32,
+    span_align: u32,
+    span_text: u32,
+    span_len: u32,
+    span_flags: u32,
+    span_color: u32,
+    span_href: u32,
+    span_href_len: u32,
+
+    block_size: u32,
+    block_align: u32,
+    block_spans: u32,
+    block_spans_len: u32,
+    block_marker: u32,
+    block_marker_len: u32,
+    block_kind: u32,
+    block_level: u32,
+    block_list_depth: u32,
+    block_quote_depth: u32,
+    block_flags: u32,
+
+    opts_size: u32,
+    opts_align: u32,
+    opts_width: u32,
+    opts_height: u32,
+    opts_clip_x: u32,
+    opts_clip_y: u32,
+    opts_clip_w: u32,
+    opts_clip_h: u32,
+    opts_scale: u32,
+    opts_flags: u32,
+
+    layout_sizeof: u32,
+    layout_alignof: u32,
+    layout_height: u32,
+    layout_pre_pad: u32,
+    layout_quote_indent: u32,
+    layout_rule_color: u32,
+    layout_pre_bg: u32,
+    layout_blocks: u32,
+    layout_blocks_len: u32,
+    layout_lines: u32,
+    layout_lines_len: u32,
+    layout_runs: u32,
+    layout_runs_len: u32,
+    layout_glyphs: u32,
+    layout_glyphs_len: u32,
+    layout_clusters: u32,
+    layout_clusters_len: u32,
+    layout_fonts: u32,
+    layout_fonts_len: u32,
+    lblock_sizeof: u32,
+    lblock_alignof: u32,
+    lblock_x: u32,
+    lblock_y: u32,
+    lblock_quote_x: u32,
+    lblock_lines: u32,
+    lblock_lines_len: u32,
+    lblock_marker_line: u32,
+    lblock_kind: u32,
+    lblock_quote_bars: u32,
+    line_sizeof: u32,
+    line_alignof: u32,
+    line_x: u32,
+    line_top: u32,
+    line_bottom: u32,
+    line_runs: u32,
+    line_runs_len: u32,
+    line_clusters: u32,
+    line_clusters_len: u32,
+    run_sizeof: u32,
+    run_alignof: u32,
+    run_font: u32,
+    run_size: u32,
+    run_skew: u32,
+    run_color: u32,
+    run_offset: u32,
+    run_baseline: u32,
+    run_advance: u32,
+    run_glyphs: u32,
+    run_glyphs_len: u32,
+    run_underline: u32,
+    run_strike: u32,
+    deco_sizeof: u32,
+    deco_alignof: u32,
+    deco_enabled: u32,
+    deco_offset: u32,
+    deco_size: u32,
+    deco_color: u32,
+    glyph_sizeof: u32,
+    glyph_alignof: u32,
+    glyph_id: u32,
+    glyph_x: u32,
+    glyph_y: u32,
+    glyph_advance: u32,
+    cluster_sizeof: u32,
+    cluster_alignof: u32,
+    cluster_font: u32,
+    cluster_glyph: u32,
+    cluster_text_start: u32,
+    cluster_text_len: u32,
+    cluster_x: u32,
+    cluster_advance: u32,
+    cluster_flags: u32,
+    font_sizeof: u32,
+    font_alignof: u32,
+    font_data: u32,
+    font_data_len: u32,
+    font_index: u32,
+    font_name: u32,
+    font_name_len: u32,
+    font_mono: u32,
+    layout_none: u32,
+    cluster_ligature_start: u32,
+    cluster_ligature_cont: u32,
+    span_bold: u32,
+    span_italic: u32,
+    span_underline: u32,
+    span_mono: u32,
+    span_strike: u32,
+    span_has_color: u32,
+
+    block_heading: u32,
+    block_pre: u32,
+    block_rule: u32,
+    block_tight: u32,
+
+    render_measure_only: u32,
+
+    rc_ok: u32,
+    rc_write_refused: u32,
+    rc_invalid: u32,
+    rc_no_raster: u32,
+    rc_encode_failed: u32,
+    rc_panic: u32,
+};
+
+const LINK_COLOR: u32 = 0x1a0dab;
+const MUTED_COLOR: u32 = 0x6b6b6b;
+
+extern "c" fn lp_render_new() ?*Renderer;
+extern "c" fn lp_render_free(r: *Renderer) void;
+extern "c" fn lp_render_png(
+    r: *Renderer,
+    blocks: [*]const LpBlock,
+    blocks_len: usize,
+    opts: LpRenderOpts,
+    content_height: *u32,
+    ctx: *anyopaque,
+    write: *const fn (ctx: *anyopaque, data: [*]const u8, len: usize) callconv(.c) bool,
+) i32;
+extern "c" fn lp_layout_new(
+    r: *Renderer,
+    blocks: [*]const LpBlock,
+    blocks_len: usize,
+    width: f32,
+    margin: f32,
+    out: *LpLayout,
+) ?*LayoutHandle;
+extern "c" fn lp_layout_free(h: *LayoutHandle) void;
+extern "c" fn lp_render_abi(out: *LpAbi) void;
+
+// Iterative else large trees will stackoverflow
+const Builder = struct {
+    frame: *Frame,
+    arena: Allocator,
+    tree: RenderTree,
+
+    // Content still to render, followed by what closes the element.
+    stack: std.ArrayList(Open) = .empty,
+
+    blocks: std.ArrayList(LpBlock) = .empty,
+
+    // The block being built.
+    block_open: bool = false,
+    kind: LpBlock.Kind = .paragraph,
+    level: u8 = 0,
+    marker: []const u8 = "",
+    spans: std.ArrayList(LpSpan) = .empty,
+    // Text of the span being built, and the flags it was started with.
+    text: std.ArrayList(u8) = .empty,
+    text_flags: u32 = 0,
+    text_color: u32 = 0,
+    text_href: []const u8 = "",
+    has_content: bool = false,
+    pending_space: bool = false,
+    // Nothing appended since an <a> closed. Adjacent links with no whitespace
+    // between them (nav bars) would otherwise fuse into one word.
+    after_anchor: bool = false,
+
+    // Set by <li>; consumed by the first block it produces.
+    pending_marker: []const u8 = "",
+
+    // Inline style nesting.
+    bold: u8 = 0,
+    italic: u8 = 0,
+    underline: u8 = 0,
+    mono: u8 = 0,
+    strike: u8 = 0,
+    link: u8 = 0,
+    // Resolved href of the nearest enclosing <a>; "" outside one.
+    href: []const u8 = "",
+    muted: u8 = 0,
+    // Nearest enclosing <pre>, for whitespace preservation.
+    pre_node: ?*Node = null,
+
+    quote_depth: u8 = 0,
+    list_depth: u8 = 0,
+    list_stack: [16]ListState = undefined,
+    // Blocks closed while > 0 get list-like vertical spacing.
+    tight: u8 = 0,
+
+    const ListState = struct {
+        ordered: bool,
+        index: u32,
+    };
+
+    const Open = struct {
+        iter: RenderTree.Slotted,
+        epilogue: Epilogue,
+    };
+
+    // what follows after the children
+    const Epilogue = union(enum) {
+        none,
+        block,
+        pre: ?*Node,
+        list: bool,
+        list_item: bool,
+        blockquote,
+        anchor: Anchor,
+        cell: bool,
+        element: Element.Tag,
+
+        const Anchor = struct {
+            linked: bool,
+            prev_href: []const u8,
+            standalone: bool,
+        };
+    };
+
+    const Error = Allocator.Error;
+
+    fn currentFlags(self: *const Builder) u32 {
+        var flags: u32 = 0;
+        if (self.bold > 0) {
+            flags |= SPAN_BOLD;
+        }
+        if (self.italic > 0) {
+            flags |= SPAN_ITALIC;
+        }
+        if (self.underline > 0 or self.link > 0) {
+            flags |= SPAN_UNDERLINE;
+        }
+        if (self.mono > 0) {
+            flags |= SPAN_MONO;
+        }
+        if (self.strike > 0) {
+            flags |= SPAN_STRIKE;
+        }
+        if (self.link > 0 or self.muted > 0) {
+            flags |= SPAN_HAS_COLOR;
+        }
+        return flags;
+    }
+
+    fn currentColor(self: *const Builder) u32 {
+        if (self.link > 0) {
+            return LINK_COLOR;
+        }
+        if (self.muted > 0) {
+            return MUTED_COLOR;
+        }
+        return 0;
+    }
+
+    fn openBlock(self: *Builder, kind: LpBlock.Kind, level: u8) Error!void {
+        try self.closeBlock();
+        self.block_open = true;
+        self.kind = kind;
+        self.level = level;
+        self.marker = self.pending_marker;
+        self.pending_marker = "";
+    }
+
+    fn ensureBlock(self: *Builder) Error!void {
+        if (!self.block_open) {
+            try self.openBlock(.paragraph, 0);
+        }
+    }
+
+    fn flushSpan(self: *Builder) Error!void {
+        if (self.text.items.len == 0) return;
+        const copy = try self.arena.dupe(u8, self.text.items);
+        try self.spans.append(self.arena, .{
+            .text = copy.ptr,
+            .len = copy.len,
+            .flags = self.text_flags,
+            .color = self.text_color,
+            .href = self.text_href.ptr,
+            .href_len = self.text_href.len,
+        });
+        self.text.clearRetainingCapacity();
+    }
+
+    fn closeBlock(self: *Builder) Error!void {
+        if (!self.block_open) return;
+        try self.flushSpan();
+        if (self.spans.items.len > 0 or self.kind == .rule) {
+            const spans = try self.arena.dupe(LpSpan, self.spans.items);
+            try self.blocks.append(self.arena, .{
+                .spans = spans.ptr,
+                .spans_len = spans.len,
+                .marker = self.marker.ptr,
+                .marker_len = self.marker.len,
+                .kind = self.kind,
+                .level = self.level,
+                .list_depth = self.list_depth,
+                .quote_depth = self.quote_depth,
+                .flags = if (self.tight > 0) BLOCK_TIGHT else 0,
+            });
+        } else if (self.marker.len > 0) {
+            // Empty <li>: keep the marker for whatever block comes next.
+            self.pending_marker = self.marker;
+        }
+        self.block_open = false;
+        self.marker = "";
+        self.spans.clearRetainingCapacity();
+        self.has_content = false;
+        self.pending_space = false;
+        self.after_anchor = false;
+    }
+
+    // Appends already-collapsed text in the current inline style.
+    fn append(self: *Builder, text: []const u8) Error!void {
+        try self.ensureBlock();
+        const flags = self.currentFlags();
+        const color = self.currentColor();
+        if (self.text.items.len > 0 and (flags != self.text_flags or color != self.text_color or !std.mem.eql(u8, self.href, self.text_href))) {
+            try self.flushSpan();
+        }
+        self.text_flags = flags;
+        self.text_color = color;
+        self.text_href = self.href;
+        try self.text.appendSlice(self.arena, text);
+        self.has_content = true;
+        self.after_anchor = false;
+    }
+
+    fn appendWord(self: *Builder, word: []const u8) Error!void {
+        if (self.pending_space and self.has_content) {
+            try self.appendSpace();
+        }
+        self.pending_space = false;
+        try self.append(word);
+    }
+
+    // A collapsed space between two runs takes only the styling both sides
+    // share, so an underline never spills onto the gap before a link.
+    fn appendSpace(self: *Builder) Error!void {
+        var flags = self.text_flags & self.currentFlags();
+        var color = self.text_color;
+        if (flags & SPAN_HAS_COLOR != 0 and color != self.currentColor()) {
+            flags &= ~SPAN_HAS_COLOR;
+        }
+        if (flags & SPAN_HAS_COLOR == 0) color = 0;
+        // Same for the link: the gap is part of it only when both sides are
+        // the same link, so a hit box never bridges two.
+        const href = if (std.mem.eql(u8, self.text_href, self.href)) self.text_href else "";
+
+        if (flags != self.text_flags or color != self.text_color or !std.mem.eql(u8, href, self.text_href)) {
+            try self.flushSpan();
+            self.text_flags = flags;
+            self.text_color = color;
+            self.text_href = href;
+        }
+        try self.text.append(self.arena, ' ');
+    }
+
+    fn render(self: *Builder, node: *Node) Error!void {
+        switch (node._type) {
+            .document, .document_fragment => try self.open(.init(self.tree.children(node, false)), .none),
+            else => if (self.tree.classify(node, .{})) |child| try self.renderChild(child),
+        }
+
+        while (self.stack.items.len > 0) {
+            // renderChild can grow the stack, so we can't re-use top on continue
+            const top = &self.stack.items[self.stack.items.len - 1];
+            if (top.iter.next()) |child| {
+                try self.renderChild(child);
+                continue;
+            }
+            try self.close(self.stack.pop().?.epilogue);
+        }
+    }
+
+    fn open(self: *Builder, iter: RenderTree.Slotted, epilogue: Epilogue) Error!void {
+        return self.stack.append(self.arena, .{ .iter = iter, .epilogue = epilogue });
+    }
+
+    fn renderChild(self: *Builder, child: RenderTree.Child) Error!void {
+        if (child.separated) self.pending_space = true;
+        switch (child.what) {
+            .element => |display| try self.renderElement(child.node.subtype(Node.Element), display),
+            .text => |text| try self.renderText(text),
+        }
+    }
+
+    fn renderText(self: *Builder, text: []const u8) Error!void {
+        if (text.len == 0) return;
+
+        if (self.pre_node != null) {
+            return self.append(text);
+        }
+
+        if (isAllWhitespace(text)) {
+            self.pending_space = true;
+            return;
+        }
+
+        if (std.ascii.isWhitespace(text[0])) {
+            self.pending_space = true;
+        }
+        var it = std.mem.tokenizeAny(u8, text, " \t\n\r");
+        while (it.next()) |word| {
+            try self.appendWord(word);
+            self.pending_space = true;
+        }
+        self.pending_space = std.ascii.isWhitespace(text[text.len - 1]);
+    }
+
+    fn renderElement(self: *Builder, el: *Element, display: StyleManager.Display) Error!void {
+        const tag = el.getTag();
+        const boxed = display == .flex or display == .grid;
+
+        switch (tag) {
+            .h1, .h2, .h3, .h4, .h5, .h6 => {
+                const level: u8 = switch (tag) {
+                    .h1 => 1,
+                    .h2 => 2,
+                    .h3 => 3,
+                    .h4 => 4,
+                    .h5 => 5,
+                    else => 6,
+                };
+                try self.openBlock(.heading, level);
+                return self.open(.init(self.tree.content(el, boxed)), .block);
+            },
+            .pre => {
+                try self.openBlock(.pre, 0);
+                const prev = self.pre_node;
+                self.pre_node = el.asNode();
+                return self.open(.init(self.tree.content(el, boxed)), .{ .pre = prev });
+            },
+            .hr => {
+                try self.openBlock(.rule, 0);
+                return self.closeBlock();
+            },
+            .br => {
+                if (self.pre_node != null) return self.append("\n");
+                if (!self.has_content) return;
+                // A hard break within the block: parley honors '\n'.
+                try self.append("\n");
+                self.pending_space = false;
+                return;
+            },
+            .ul, .ol => {
+                try self.closeBlock();
+                const pushed = self.list_depth < self.list_stack.len;
+                if (pushed) {
+                    self.list_stack[self.list_depth] = .{ .ordered = tag == .ol, .index = 1 };
+                    self.list_depth += 1;
+                }
+                return self.open(.init(self.tree.content(el, boxed)), .{ .list = pushed });
+            },
+            .li => {
+                try self.closeBlock();
+                // A stray <li> outside any list still gets a bullet.
+                const stray = self.list_depth == 0;
+                if (stray) self.list_depth = 1;
+                if (!stray and self.list_stack[self.list_depth - 1].ordered) {
+                    const state = &self.list_stack[self.list_depth - 1];
+                    self.pending_marker = try self.arena.print("{d}.", .{state.index});
+                    state.index += 1;
+                } else {
+                    self.pending_marker = "•";
+                }
+                return self.open(.init(self.tree.content(el, boxed)), .{ .list_item = stray });
+            },
+            .blockquote => {
+                try self.closeBlock();
+                self.quote_depth +|= 1;
+                return self.open(.init(self.tree.content(el, boxed)), .blockquote);
+            },
+            .img => {
+                const alt = el.getAttributeInterned("alt") orelse return;
+                if (isAllWhitespace(alt)) return;
+                self.italic += 1;
+                self.muted += 1;
+                try self.renderText(alt);
+                self.muted -= 1;
+                self.italic -= 1;
+                return;
+            },
+            .input => {
+                const type_attr = el.getAttributeInterned("type") orelse return;
+                if (std.ascii.eqlIgnoreCase(type_attr, "checkbox")) {
+                    const checked = el.getAttributeInterned("checked") != null;
+                    try self.appendWord(if (checked) "☑" else "☐");
+                    self.pending_space = true;
+                }
+                return;
+            },
+            .anchor => {
+                const href = el.getAttributeInterned("href");
+                const label = el.getAttributeInterned("aria-label") orelse el.getAttributeInterned("title");
+                const info = RenderTree.analyzeContent(el.asNode(), self.frame);
+                if (!info.has_visible and label == null) return;
+
+                // Same split as markdown: an anchor wrapping blocks, or one
+                // sitting among element-only siblings (nav bars, post lists),
+                // gets its own tight block instead of flowing inline.
+                const standalone = info.has_block or RenderTree.isStandaloneAnchor(el, self.frame);
+                if (standalone) {
+                    try self.closeBlock();
+                    self.tight += 1;
+                }
+                if (self.after_anchor) self.pending_space = true;
+                const prev_href = self.href;
+                if (href) |h| {
+                    self.link += 1;
+                    // Absolute, like markdown: the PDF's link annotations
+                    // point outside the document.
+                    self.href = URL.resolve(self.arena, self.frame.base(), h, .{ .encoding = self.frame.charset }) catch h;
+                }
+
+                const epilogue: Epilogue = .{ .anchor = .{
+                    .linked = href != null,
+                    .prev_href = prev_href,
+                    .standalone = standalone,
+                } };
+                if (info.has_visible) {
+                    return self.open(.init(self.tree.content(el, boxed)), epilogue);
+                }
+                try self.renderText(label.?);
+                return self.close(epilogue);
+            },
+            .slot => return self.open(self.tree.slotted(el.as(Slot)), .none),
+            .td, .th => {
+                if (self.has_content) {
+                    self.pending_space = true;
+                    self.muted += 1;
+                    try self.appendWord("|");
+                    self.muted -= 1;
+                    self.pending_space = true;
+                }
+                if (tag == .th) self.bold += 1;
+                return self.open(.init(self.tree.content(el, boxed)), .{ .cell = tag == .th });
+            },
+            else => {},
+        }
+
+        if (isBlockTag(tag)) try self.closeBlock();
+
+        switch (tag) {
+            .b, .strong => self.bold += 1,
+            .i, .em, .dfn => self.italic += 1,
+            .ins => self.underline += 1,
+            .s, .del => self.strike += 1,
+            .code => self.mono += 1,
+            else => {},
+        }
+        return self.open(.init(self.tree.content(el, boxed)), .{ .element = tag });
+    }
+
+    // Finish the element after renderElement has written the children
+    fn close(self: *Builder, epilogue: Epilogue) Error!void {
+        switch (epilogue) {
+            .none => {},
+            .block => try self.closeBlock(),
+            .pre => |prev| {
+                self.pre_node = prev;
+                try self.closeBlock();
+            },
+            .list => |pushed| {
+                try self.closeBlock();
+                if (pushed) self.list_depth -= 1;
+            },
+            .list_item => |stray| {
+                try self.closeBlock();
+                self.pending_marker = "";
+                if (stray) self.list_depth = 0;
+            },
+            .blockquote => {
+                try self.closeBlock();
+                self.quote_depth -= 1;
+            },
+            .anchor => |anchor| {
+                if (anchor.linked) {
+                    self.link -= 1;
+                    self.href = anchor.prev_href;
+                }
+                if (anchor.standalone) {
+                    try self.closeBlock();
+                    self.tight -= 1;
+                } else {
+                    self.after_anchor = true;
+                }
+            },
+            .cell => |header| {
+                if (header) self.bold -= 1;
+                self.pending_space = true;
+            },
+            .element => |tag| {
+                switch (tag) {
+                    .b, .strong => self.bold -= 1,
+                    .i, .em, .dfn => self.italic -= 1,
+                    .ins => self.underline -= 1,
+                    .s, .del => self.strike -= 1,
+                    .code => self.mono -= 1,
+                    else => {},
+                }
+                if (isBlockTag(tag)) try self.closeBlock();
+            },
+        }
+    }
+};
+
+// Tags that get a block of their own, beyond the ones CSS calls blocks.
+fn isBlockTag(tag: Element.Tag) bool {
+    return tag.isBlock() or switch (tag) {
+        .tr, .dt, .dd, .details, .summary, .caption, .legend, .option, .textarea => true,
+        else => false,
+    };
+}
+
+const testing = @import("../testing.zig");
+test "browser.screenshot: rust abi matches" {
+    var got: LpAbi = undefined;
+    lp_render_abi(&got);
+
+    const expected: LpAbi = .{
+        .size = @sizeOf(LpAbi),
+
+        .span_size = @sizeOf(LpSpan),
+        .span_align = @alignOf(LpSpan),
+        .span_text = @offsetOf(LpSpan, "text"),
+        .span_len = @offsetOf(LpSpan, "len"),
+        .span_flags = @offsetOf(LpSpan, "flags"),
+        .span_color = @offsetOf(LpSpan, "color"),
+        .span_href = @offsetOf(LpSpan, "href"),
+        .span_href_len = @offsetOf(LpSpan, "href_len"),
+
+        .block_size = @sizeOf(LpBlock),
+        .block_align = @alignOf(LpBlock),
+        .block_spans = @offsetOf(LpBlock, "spans"),
+        .block_spans_len = @offsetOf(LpBlock, "spans_len"),
+        .block_marker = @offsetOf(LpBlock, "marker"),
+        .block_marker_len = @offsetOf(LpBlock, "marker_len"),
+        .block_kind = @offsetOf(LpBlock, "kind"),
+        .block_level = @offsetOf(LpBlock, "level"),
+        .block_list_depth = @offsetOf(LpBlock, "list_depth"),
+        .block_quote_depth = @offsetOf(LpBlock, "quote_depth"),
+        .block_flags = @offsetOf(LpBlock, "flags"),
+
+        .opts_size = @sizeOf(LpRenderOpts),
+        .opts_align = @alignOf(LpRenderOpts),
+        .opts_width = @offsetOf(LpRenderOpts, "width"),
+        .opts_height = @offsetOf(LpRenderOpts, "height"),
+        .opts_clip_x = @offsetOf(LpRenderOpts, "clip_x"),
+        .opts_clip_y = @offsetOf(LpRenderOpts, "clip_y"),
+        .opts_clip_w = @offsetOf(LpRenderOpts, "clip_w"),
+        .opts_clip_h = @offsetOf(LpRenderOpts, "clip_h"),
+        .opts_scale = @offsetOf(LpRenderOpts, "scale"),
+        .opts_flags = @offsetOf(LpRenderOpts, "flags"),
+
+        .layout_sizeof = @sizeOf(LpLayout),
+        .layout_alignof = @alignOf(LpLayout),
+        .layout_height = @offsetOf(LpLayout, "height"),
+        .layout_pre_pad = @offsetOf(LpLayout, "pre_pad"),
+        .layout_quote_indent = @offsetOf(LpLayout, "quote_indent"),
+        .layout_rule_color = @offsetOf(LpLayout, "rule_color"),
+        .layout_pre_bg = @offsetOf(LpLayout, "pre_bg"),
+        .layout_blocks = @offsetOf(LpLayout, "blocks"),
+        .layout_blocks_len = @offsetOf(LpLayout, "blocks_len"),
+        .layout_lines = @offsetOf(LpLayout, "lines"),
+        .layout_lines_len = @offsetOf(LpLayout, "lines_len"),
+        .layout_runs = @offsetOf(LpLayout, "runs"),
+        .layout_runs_len = @offsetOf(LpLayout, "runs_len"),
+        .layout_glyphs = @offsetOf(LpLayout, "glyphs"),
+        .layout_glyphs_len = @offsetOf(LpLayout, "glyphs_len"),
+        .layout_clusters = @offsetOf(LpLayout, "clusters"),
+        .layout_clusters_len = @offsetOf(LpLayout, "clusters_len"),
+        .layout_fonts = @offsetOf(LpLayout, "fonts"),
+        .layout_fonts_len = @offsetOf(LpLayout, "fonts_len"),
+        .lblock_sizeof = @sizeOf(LpLayoutBlock),
+        .lblock_alignof = @alignOf(LpLayoutBlock),
+        .lblock_x = @offsetOf(LpLayoutBlock, "x"),
+        .lblock_y = @offsetOf(LpLayoutBlock, "y"),
+        .lblock_quote_x = @offsetOf(LpLayoutBlock, "quote_x"),
+        .lblock_lines = @offsetOf(LpLayoutBlock, "lines"),
+        .lblock_lines_len = @offsetOf(LpLayoutBlock, "lines_len"),
+        .lblock_marker_line = @offsetOf(LpLayoutBlock, "marker_line"),
+        .lblock_kind = @offsetOf(LpLayoutBlock, "kind"),
+        .lblock_quote_bars = @offsetOf(LpLayoutBlock, "quote_bars"),
+        .line_sizeof = @sizeOf(LpLine),
+        .line_alignof = @alignOf(LpLine),
+        .line_x = @offsetOf(LpLine, "x"),
+        .line_top = @offsetOf(LpLine, "top"),
+        .line_bottom = @offsetOf(LpLine, "bottom"),
+        .line_runs = @offsetOf(LpLine, "runs"),
+        .line_runs_len = @offsetOf(LpLine, "runs_len"),
+        .line_clusters = @offsetOf(LpLine, "clusters"),
+        .line_clusters_len = @offsetOf(LpLine, "clusters_len"),
+        .run_sizeof = @sizeOf(LpRun),
+        .run_alignof = @alignOf(LpRun),
+        .run_font = @offsetOf(LpRun, "font"),
+        .run_size = @offsetOf(LpRun, "size"),
+        .run_skew = @offsetOf(LpRun, "skew"),
+        .run_color = @offsetOf(LpRun, "color"),
+        .run_offset = @offsetOf(LpRun, "offset"),
+        .run_baseline = @offsetOf(LpRun, "baseline"),
+        .run_advance = @offsetOf(LpRun, "advance"),
+        .run_glyphs = @offsetOf(LpRun, "glyphs"),
+        .run_glyphs_len = @offsetOf(LpRun, "glyphs_len"),
+        .run_underline = @offsetOf(LpRun, "underline"),
+        .run_strike = @offsetOf(LpRun, "strike"),
+        .deco_sizeof = @sizeOf(LpDecoration),
+        .deco_alignof = @alignOf(LpDecoration),
+        .deco_enabled = @offsetOf(LpDecoration, "enabled"),
+        .deco_offset = @offsetOf(LpDecoration, "offset"),
+        .deco_size = @offsetOf(LpDecoration, "size"),
+        .deco_color = @offsetOf(LpDecoration, "color"),
+        .glyph_sizeof = @sizeOf(LpGlyph),
+        .glyph_alignof = @alignOf(LpGlyph),
+        .glyph_id = @offsetOf(LpGlyph, "id"),
+        .glyph_x = @offsetOf(LpGlyph, "x"),
+        .glyph_y = @offsetOf(LpGlyph, "y"),
+        .glyph_advance = @offsetOf(LpGlyph, "advance"),
+        .cluster_sizeof = @sizeOf(LpCluster),
+        .cluster_alignof = @alignOf(LpCluster),
+        .cluster_font = @offsetOf(LpCluster, "font"),
+        .cluster_glyph = @offsetOf(LpCluster, "glyph"),
+        .cluster_text_start = @offsetOf(LpCluster, "text_start"),
+        .cluster_text_len = @offsetOf(LpCluster, "text_len"),
+        .cluster_x = @offsetOf(LpCluster, "x"),
+        .cluster_advance = @offsetOf(LpCluster, "advance"),
+        .cluster_flags = @offsetOf(LpCluster, "flags"),
+        .font_sizeof = @sizeOf(LpFont),
+        .font_alignof = @alignOf(LpFont),
+        .font_data = @offsetOf(LpFont, "data"),
+        .font_data_len = @offsetOf(LpFont, "data_len"),
+        .font_index = @offsetOf(LpFont, "index"),
+        .font_name = @offsetOf(LpFont, "name"),
+        .font_name_len = @offsetOf(LpFont, "name_len"),
+        .font_mono = @offsetOf(LpFont, "mono"),
+        .layout_none = LAYOUT_NONE,
+        .cluster_ligature_start = CLUSTER_LIGATURE_START,
+        .cluster_ligature_cont = CLUSTER_LIGATURE_CONT,
+        .span_bold = SPAN_BOLD,
+        .span_italic = SPAN_ITALIC,
+        .span_underline = SPAN_UNDERLINE,
+        .span_mono = SPAN_MONO,
+        .span_strike = SPAN_STRIKE,
+        .span_has_color = SPAN_HAS_COLOR,
+
+        .block_heading = @backingInt(LpBlock.Kind.heading),
+        .block_pre = @backingInt(LpBlock.Kind.pre),
+        .block_rule = @backingInt(LpBlock.Kind.rule),
+        .block_tight = BLOCK_TIGHT,
+
+        .render_measure_only = RENDER_MEASURE_ONLY,
+
+        .rc_ok = @intCast(RC_OK),
+        .rc_write_refused = @intCast(RC_WRITE_REFUSED),
+        .rc_invalid = @intCast(RC_INVALID),
+        .rc_no_raster = @intCast(RC_NO_RASTER),
+        .rc_encode_failed = @intCast(RC_ENCODE_FAILED),
+        .rc_panic = @intCast(RC_PANIC),
+    };
+
+    // Size first: a field present on only one side of LpAbi itself shifts
+    // everything after it, and the per-field loop would just report noise.
+    try testing.expectEqual(expected.size, got.size);
+    inline for (@typeInfo(LpAbi).@"struct".field_names) |field_name| {
+        testing.expectEqual(@field(expected, field_name), @field(got, field_name)) catch |err| {
+            std.debug.print("rust/zig abi mismatch on {s}\n", .{field_name});
+            return err;
+        };
+    }
+}
+
+test "browser.screenshot: png signature and dimensions" {
+    defer testing.test_session.closeAllPages();
+    const out = try testPng("<h1>Title</h1><p>Hello <b>world</b> <a href='/x'>link</a></p>", 640);
+
+    try testing.expectEqual(true, out.len > 100);
+    try testing.expectEqual("\x89PNG\r\n\x1a\n", out[0..8]);
+    // IHDR width/height are big-endian at offsets 16 and 20.
+    try testing.expectEqual(640, std.mem.readInt(u32, out[16..20], .big));
+    const height = std.mem.readInt(u32, out[20..24], .big);
+    // Two blocks plus margins.
+    try testing.expectEqual(true, height > 60 and height < 200);
+}
+
+test "browser.screenshot: fixed height, clip and scale" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>one</p><p>two</p><p>three</p>");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const content_height = try png(testing.arena_allocator, .{ .root = div.asNode() }, .{ .width = 300, .height = 50, .scale = 2.0 }, &aw.writer, frame);
+    try testing.expectEqual(true, content_height > 50);
+    try testing.expectEqual(600, std.mem.readInt(u32, aw.written()[16..20], .big));
+    try testing.expectEqual(100, std.mem.readInt(u32, aw.written()[20..24], .big));
+
+    try testing.expectEqual(content_height, try contentHeight(frame.call_arena, div.asNode(), 300, frame));
+
+    aw.clearRetainingCapacity();
+    _ = try png(frame.call_arena, .{ .root = div.asNode() }, .{
+        .width = 300,
+        .clip = .{ .x = 10, .y = 10, .width = 100, .height = 40 },
+    }, &aw.writer, frame);
+    try testing.expectEqual(100, std.mem.readInt(u32, aw.written()[16..20], .big));
+    try testing.expectEqual(40, std.mem.readInt(u32, aw.written()[20..24], .big));
+}
+
+test "browser.screenshot: a clip past the viewport extends the strip" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>one</p><p>two</p><p>three</p><p>four</p><p>five</p><p>six</p>");
+
+    const full = try contentHeight(testing.arena_allocator, div.asNode(), 300, frame);
+    try testing.expectEqual(true, full > 100);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    _ = try png(frame.call_arena, .{ .root = div.asNode() }, .{
+        .width = 300,
+        .height = 100,
+        .clip = .{ .x = 0, .y = 0, .width = 300, .height = @floatFromInt(full) },
+    }, &aw.writer, frame);
+    try testing.expectEqual(300, std.mem.readInt(u32, aw.written()[16..20], .big));
+    try testing.expectEqual(full, std.mem.readInt(u32, aw.written()[20..24], .big));
+
+    // Never past the content, so an absurd probe resolves to the full page
+    // instead of a 1e8-tall raster.
+    aw.clearRetainingCapacity();
+    _ = try png(testing.arena_allocator, .{ .root = div.asNode() }, .{
+        .width = 300,
+        .height = 100,
+        .clip = .{ .x = 0, .y = 0, .width = 300, .height = 1e8 },
+    }, &aw.writer, frame);
+    try testing.expectEqual(full, std.mem.readInt(u32, aw.written()[20..24], .big));
+}
+
+test "browser.screenshot: raster is bounded" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>hello</p>");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+
+    _ = try png(testing.arena_allocator, .{ .root = div.asNode() }, .{ .width = 300000, .height = 8 }, &aw.writer, frame);
+    try testing.expectEqual(16384, std.mem.readInt(u32, aw.written()[16..20], .big));
+    try testing.expectEqual(8, std.mem.readInt(u32, aw.written()[20..24], .big));
+
+    aw.clearRetainingCapacity();
+    _ = try png(testing.arena_allocator, .{ .root = div.asNode() }, .{ .width = 8, .height = 100000 }, &aw.writer, frame);
+    try testing.expectEqual(8, std.mem.readInt(u32, aw.written()[16..20], .big));
+    try testing.expectEqual(16384, std.mem.readInt(u32, aw.written()[20..24], .big));
+}
+
+test "browser.screenshot: a refused write fails the capture" {
+    defer testing.test_session.closeAllPages();
+    testing.silenceLog(&.{.browser});
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>hello</p>");
+
+    // Far too small for the PNG, so the sink refuses partway through. That
+    // has to surface as an error and not as a truncated image.
+    var buf: [64]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try testing.expectError(error.WriteFailed, png(testing.arena_allocator, .{ .root = div.asNode() }, .{ .width = 300 }, &w, frame));
+}
+
+test "browser.screenshot: json streams base64" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>hello</p>");
+
+    const prepared = try preparePng(testing.arena_allocator, .{ .root = div.asNode() }, .{ .width = 200 }, frame);
+
+    var raw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer raw.deinit();
+    _ = try prepared.write(&raw.writer);
+
+    var json: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer json.deinit();
+    try std.json.Stringify.value(.{ .data = prepared }, .{}, &json.writer);
+
+    const enc = std.base64.standard.Encoder;
+    const expected = try testing.allocator.alloc(u8, enc.calcSize(raw.written().len) + 11);
+    defer testing.allocator.free(expected);
+    @memcpy(expected[0..9], "{\"data\":\"");
+    _ = enc.encode(expected[9 .. expected.len - 2], raw.written());
+    @memcpy(expected[expected.len - 2 ..], "\"}");
+    try testing.expectString(expected, json.written());
+    try testing.expectString(expected[9 .. expected.len - 2], try prepared.base64Alloc(testing.arena_allocator));
+}
+
+test "browser.screenshot: block extraction" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<h2> Head  ing </h2>
+        \\<p>Some <b>bold <i>both</i></b> text <a href="/l">a link</a><span> tail</span></p>
+        \\<ul><li>one</li><li><p>two</p><ol><li>nested</li></ol></li></ul>
+        \\<blockquote>quote</blockquote>
+        \\<pre>  keep
+        \\   this</pre>
+        \\<hr>
+        \\<div><img alt="a picture"><span></span></div>
+        \\<table><tr><th>A</th><td>B</td></tr><tr><td>C</td></tr></table>
+        \\<div>   </div>
+    );
+
+    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame, .tree = .{ .frame = frame, .state = .{ .root = div.asNode() } } };
+    try builder.render(div.asNode());
+    try builder.closeBlock();
+
+    const blocks = builder.blocks.items;
+    try testing.expectEqual(11, blocks.len);
+
+    const S = struct {
+        fn text(b: LpBlock, arena: Allocator) ![]const u8 {
+            var out: std.ArrayList(u8) = .empty;
+            for (b.spans[0..b.spans_len]) |s| try out.appendSlice(arena, s.text[0..s.len]);
+            return out.items;
+        }
+    };
+    const arena = testing.arena_allocator;
+
+    try testing.expectEqual(.heading, blocks[0].kind);
+    try testing.expectEqual(2, blocks[0].level);
+    try testing.expectEqual("Head ing", try S.text(blocks[0], arena));
+
+    try testing.expectEqual(.paragraph, blocks[1].kind);
+    try testing.expectEqual("Some bold both text a link tail", try S.text(blocks[1], arena));
+    try testing.expectEqual(6, blocks[1].spans_len);
+    try testing.expectEqual("Some ", blocks[1].spans[0].text[0..blocks[1].spans[0].len]);
+    try testing.expectEqual(SPAN_BOLD, blocks[1].spans[1].flags);
+    try testing.expectEqual("bold ", blocks[1].spans[1].text[0..blocks[1].spans[1].len]);
+    try testing.expectEqual(SPAN_BOLD | SPAN_ITALIC, blocks[1].spans[2].flags);
+    try testing.expectEqual("both", blocks[1].spans[2].text[0..blocks[1].spans[2].len]);
+    try testing.expectEqual(0, blocks[1].spans[3].flags);
+    try testing.expectEqual(" text ", blocks[1].spans[3].text[0..blocks[1].spans[3].len]);
+    try testing.expectEqual(SPAN_UNDERLINE | SPAN_HAS_COLOR, blocks[1].spans[4].flags);
+    try testing.expectEqual(LINK_COLOR, blocks[1].spans[4].color);
+    try testing.expectEqual("a link", blocks[1].spans[4].text[0..blocks[1].spans[4].len]);
+    try testing.expectEqual("http://localhost/l", blocks[1].spans[4].href[0..blocks[1].spans[4].href_len]);
+    try testing.expectEqual(0, blocks[1].spans[3].href_len);
+    try testing.expectEqual(" tail", blocks[1].spans[5].text[0..blocks[1].spans[5].len]);
+    try testing.expectEqual(0, blocks[1].spans[5].href_len);
+
+    try testing.expectEqual("one", try S.text(blocks[2], arena));
+    try testing.expectEqual(1, blocks[2].list_depth);
+    try testing.expectEqual("•", blocks[2].marker[0..blocks[2].marker_len]);
+    try testing.expectEqual("two", try S.text(blocks[3], arena));
+    try testing.expectEqual("•", blocks[3].marker[0..blocks[3].marker_len]);
+    try testing.expectEqual("nested", try S.text(blocks[4], arena));
+    try testing.expectEqual(2, blocks[4].list_depth);
+    try testing.expectEqual("1.", blocks[4].marker[0..blocks[4].marker_len]);
+
+    try testing.expectEqual("quote", try S.text(blocks[5], arena));
+    try testing.expectEqual(1, blocks[5].quote_depth);
+    try testing.expectEqual(0, blocks[5].list_depth);
+
+    try testing.expectEqual(.pre, blocks[6].kind);
+    try testing.expectEqual("  keep\n   this", try S.text(blocks[6], arena));
+    try testing.expectEqual(.rule, blocks[7].kind);
+    try testing.expectEqual("a picture", try S.text(blocks[8], arena));
+    try testing.expectEqual(SPAN_ITALIC | SPAN_HAS_COLOR, blocks[8].spans[0].flags);
+    try testing.expectEqual("A | B", try S.text(blocks[9], arena));
+    try testing.expectEqual(SPAN_BOLD, blocks[9].spans[0].flags);
+    try testing.expectEqual("C", try S.text(blocks[10], arena));
+}
+
+test "browser.screenshot: adjacent anchors" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    // Inside <p> (not a layout block) so markdown's standalone rule doesn't
+    // apply and the anchors flow inline.
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<p><a href="/a">Log In</a><a href="/b">Sign Up</a><b>!</b> see <a href="/c">this</a>.</p>
+    );
+
+    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame, .tree = .{ .frame = frame, .state = .{ .root = div.asNode() } } };
+    try builder.render(div.asNode());
+    try builder.closeBlock();
+    const blocks = builder.blocks.items;
+    try testing.expectEqual(1, blocks.len);
+    var out: std.ArrayList(u8) = .empty;
+    for (blocks[0].spans[0..blocks[0].spans_len]) |sp| try out.appendSlice(testing.arena_allocator, sp.text[0..sp.len]);
+    try testing.expectString("Log In Sign Up! see this.", out.items);
+}
+
+test "browser.screenshot: standalone anchors get their own block" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<nav><a href="/a">bsky</a><a href="/b">rss</a></nav>
+        \\<div><a href="/p"><h3>Post title</h3><span>Aug 04</span></a></div>
+        \\<p>inline <a href="/x">link</a> here</p>
+    );
+
+    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame, .tree = .{ .frame = frame, .state = .{ .root = div.asNode() } } };
+    try builder.render(div.asNode());
+    try builder.closeBlock();
+    const blocks = builder.blocks.items;
+    try testing.expectEqual(5, blocks.len);
+    try testing.expectString("bsky", blocks[0].spans[0].text[0..blocks[0].spans[0].len]);
+    try testing.expectEqual(BLOCK_TIGHT, blocks[0].flags);
+    try testing.expectString("rss", blocks[1].spans[0].text[0..blocks[1].spans[0].len]);
+    try testing.expectEqual(.heading, blocks[2].kind);
+    try testing.expectString("Post title", blocks[2].spans[0].text[0..blocks[2].spans[0].len]);
+    try testing.expectEqual(SPAN_UNDERLINE | SPAN_HAS_COLOR, blocks[2].spans[0].flags);
+    try testing.expectString("Aug 04", blocks[3].spans[0].text[0..blocks[3].spans[0].len]);
+    try testing.expectEqual(3, blocks[4].spans_len);
+    try testing.expectEqual(0, blocks[4].flags);
+}
+
+test "browser.screenshot: shadow dom and slots" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try div.setHTMLUnsafe(
+        \\<x-host><template shadowrootmode="open"><p>shadow <slot></slot></p></template>light</x-host>
+    , null, frame);
+
+    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame, .tree = .{ .frame = frame, .state = .{ .root = div.asNode() } } };
+    try builder.render(div.asNode());
+    try builder.closeBlock();
+    const blocks = builder.blocks.items;
+    try testing.expectEqual(1, blocks.len);
+    try testing.expectEqual(1, blocks[0].spans_len);
+    try testing.expectEqual("shadow light", blocks[0].spans[0].text[0..blocks[0].spans[0].len]);
+}
+
+test "browser.screenshot: hidden elements are skipped" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<p>before</p>
+        \\<p style="display:none">inline</p>
+        \\<div hidden><p>attribute</p></div>
+        \\<p aria-hidden="true">aria</p>
+        \\<span aria-hidden="TRUE">aria caps</span>
+        \\<p aria-hidden="false">aria false</p>
+        \\<details><summary>Summary</summary><p>collapsed</p></details><dialog><p>closed dialog</p></dialog><p>after</p>
+    );
+    try testing.expectString("before\naria false\nSummary\nafter", try collectLines(div.asNode(), frame));
+
+    // The root is exempt, so a shot scoped to a hidden subtree still renders it.
+    const modal = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, modal.asNode(),
+        \\<div style="display:none"><p>dialog text</p><p hidden>nested hidden</p></div>
+    );
+    try testing.expectString("dialog text", try collectLines(modal.asNode().firstChild().?, frame));
+}
+
+test "browser.screenshot: flex and grid items are separated" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<a href="/p" style="display:flex">Title<b>Aug 04 2026</b></a>
+        \\<div style="display:grid"><span>a</span><span>b</span> <span style="display:none">x</span><span>c</span></div>
+        \\<div style="display:inline-flex"> lead <b>x</b> tail </div>
+        \\<div style="display:flex"><div>a</div><div>b</div></div>
+        \\<p>Title<b>date</b></p>
+    );
+    try testing.expectString(
+        \\Title Aug 04 2026
+        \\a b c
+        \\lead x tail
+        \\a
+        \\b
+        \\Titledate
+    , try collectLines(div.asNode(), frame));
+}
+
+test "browser.screenshot: flex from a stylesheet" {
+    var page = try testing.pageTest("markdown_flex.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    try testing.expectString("Title Aug 04 2026\nTitledate", try collectLines(frame.window._document.asNode(), frame));
+}
+
+// The text of each block on its own line: what renders, not how.
+fn collectLines(node: *Node, frame: *Frame) ![]const u8 {
+    const arena = testing.arena_allocator;
+    const blocks = try collect(arena, .{ .root = node }, frame);
+    var out: std.ArrayList(u8) = .empty;
+    for (blocks, 0..) |b, i| {
+        if (i > 0) try out.append(arena, '\n');
+        for (b.spans[0..b.spans_len]) |sp| try out.appendSlice(arena, sp.text[0..sp.len]);
+    }
+    return out.items;
+}
+
+fn testPng(html: []const u8, width: u32) ![]const u8 {
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    _ = try png(testing.arena_allocator, .{ .root = div.asNode() }, .{ .width = width }, &aw.writer, frame);
+    return aw.written();
+}
+
+test "browser.screenshot: collect honours strip flags" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<nav><p>menu</p></nav><p>Body text</p><img alt="pic"><footer><p>legal</p></footer>
+    );
+
+    const arena = testing.arena_allocator;
+    const S = struct {
+        fn text(b: LpBlock, a: Allocator) ![]const u8 {
+            var out: std.ArrayList(u8) = .empty;
+            for (b.spans[0..b.spans_len]) |sp| try out.appendSlice(a, sp.text[0..sp.len]);
+            return out.items;
+        }
+    };
+
+    const all = try collect(arena, .{ .root = div.asNode() }, frame);
+    try testing.expectEqual(4, all.len);
+
+    const stripped = try collect(arena, .{ .root = div.asNode(), .strip = .{ .shell = true, .ui = true } }, frame);
+    try testing.expectEqual(1, stripped.len);
+    try testing.expectEqual("Body text", try S.text(stripped[0], arena));
+}
+
+test "browser.screenshot: deep nesting doesn't overflow the native stack" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+
+    // <div>, not an inline tag: the inline style counters are u8, and nesting
+    // one 256 deep overflows them long before the walk is the problem.
+    const depth = 50_000;
+    const doc = frame.window._document;
+    const innermost = (try doc.createElement("div", null, frame)).asNode();
+    _ = try innermost.appendChild(try doc.createTextNode("deep"), frame);
+
+    var top = innermost;
+    for (1..depth) |_| {
+        const parent = (try doc.createElement("div", null, frame)).asNode();
+        _ = try parent.appendChild(top, frame);
+        top = parent;
+    }
+
+    const blocks = try collect(testing.arena_allocator, .{ .root = top }, frame);
+    try testing.expectEqual(1, blocks.len);
+    try testing.expectEqual(1, blocks[0].spans_len);
+    try testing.expectEqual("deep", blocks[0].spans[0].text[0..blocks[0].spans[0].len]);
+}

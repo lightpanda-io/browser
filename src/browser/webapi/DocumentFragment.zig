@@ -23,6 +23,7 @@ const Frame = @import("../Frame.zig");
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
+const Template = @import("element/html/Template.zig");
 const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
 
@@ -32,6 +33,7 @@ pub const Proto = Node;
 
 _type: Type,
 _proto: *Node,
+_template: ?*Template = null,
 
 pub const Type = union(enum) {
     generic,
@@ -54,11 +56,18 @@ pub fn as(self: *DocumentFragment, comptime T: type) *T {
     return self.is(T).?;
 }
 
-pub fn init(frame: *Frame) !*DocumentFragment {
-    return frame._factory.node(DocumentFragment{
+pub fn init(document: *const Node.Document, frame: *Frame) !*DocumentFragment {
+    return frame._factory.node(document, DocumentFragment{
         ._type = .generic,
         ._proto = undefined,
     });
+}
+
+pub fn getHost(self: *const DocumentFragment) ?*Element {
+    return switch (self._type) {
+        .shadow_root => |shadow_root| shadow_root._host,
+        .generic => if (self._template) |template| template.asElement() else null,
+    };
 }
 
 pub fn asNode(self: *DocumentFragment) *Node {
@@ -76,7 +85,7 @@ pub fn getElementById(self: *DocumentFragment, id: []const u8) ?*Element {
 
     var tw = @import("TreeWalker.zig").Full.Elements.init(self.asNode(), .{});
     while (tw.next()) |el| {
-        if (el.getAttributeSafe(comptime .wrap("id"))) |element_id| {
+        if (el.getId()) |element_id| {
             if (std.mem.eql(u8, element_id, id)) {
                 return el;
             }
@@ -93,7 +102,7 @@ pub fn querySelectorAll(self: *DocumentFragment, input: []const u8, frame: *Fram
     return Selector.querySelectorAll(self.asNode(), input, frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
-pub fn getChildren(self: *DocumentFragment, frame: *Frame) !collections.NodeLive(.child_elements) {
+fn getChildren(self: *DocumentFragment, frame: *Frame) !collections.NodeLive(.child_elements) {
     return collections.NodeLive(.child_elements).init(self.asNode(), {}, frame);
 }
 
@@ -106,7 +115,7 @@ pub fn firstElementChild(self: *DocumentFragment) ?*Element {
     return null;
 }
 
-pub fn lastElementChild(self: *DocumentFragment) ?*Element {
+fn lastElementChild(self: *DocumentFragment) ?*Element {
     var maybe_child = self.asNode().lastChild();
     while (maybe_child) |child| {
         if (child.is(Element)) |el| return el;
@@ -115,7 +124,7 @@ pub fn lastElementChild(self: *DocumentFragment) ?*Element {
     return null;
 }
 
-pub fn getChildElementCount(self: *DocumentFragment) usize {
+fn getChildElementCount(self: *DocumentFragment) usize {
     var count: usize = 0;
     var it = self.asNode().childrenIterator();
     while (it.next()) |node| {
@@ -129,7 +138,7 @@ pub fn getChildElementCount(self: *DocumentFragment) usize {
 pub fn append(self: *DocumentFragment, nodes: []const Node.NodeOrText, frame: *Frame) !void {
     const parent = self.asNode();
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(parent.getDocument(frame));
         _ = try parent.appendChild(child, frame);
     }
 }
@@ -139,7 +148,7 @@ pub fn prepend(self: *DocumentFragment, nodes: []const Node.NodeOrText, frame: *
     var i = nodes.len;
     while (i > 0) {
         i -= 1;
-        const child = try nodes[i].toNode(frame);
+        const child = try nodes[i].toNode(parent.getDocument(frame));
         _ = try parent.insertBefore(child, parent.firstChild(), frame);
     }
 }
@@ -162,26 +171,15 @@ pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer, frame: *Fra
 
 pub fn setInnerHTML(self: *DocumentFragment, html: []const u8, frame: *Frame) !void {
     const parent = self.asNode();
-    return parent.setHTML(html, false, frame);
+    return parent.setHTML(html, .{}, frame);
 }
 
-/// allows declarative shadow dom
-pub fn setHTMLUnsafe(self: *DocumentFragment, html: []const u8, frame: *Frame) !void {
-    const parent = self.asNode();
-    return parent.setHTML(html, true, frame);
-}
-
-pub fn cloneFragment(self: *DocumentFragment, deep: bool, frame: *Frame) !*Node {
-    const fragment = try DocumentFragment.init(frame);
+pub fn cloneFragment(self: *DocumentFragment, deep: bool, document: *const Node.Document, frame: *Frame) !*Node {
+    const fragment = try DocumentFragment.init(document, frame);
     const fragment_node = fragment.asNode();
 
     if (deep) {
-        var child_it = self.asNode().childrenIterator();
-        while (child_it.next()) |child| {
-            if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
-                try frame.appendNode(fragment_node, cloned_child, .{});
-            }
-        }
+        try self.asNode().cloneChildrenInto(fragment_node, document, frame);
     }
 
     return fragment_node;
@@ -196,7 +194,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(DocumentFragment.init, .{});
+    pub const constructor = bridge.constructor(_constructor, .{});
+    fn _constructor(frame: *Frame) !*DocumentFragment {
+        return init(frame.document, frame);
+    }
 
     pub const getElementById = bridge.function(_getElementById, .{});
     fn _getElementById(self: *DocumentFragment, value_: ?js.Value) !?*Element {

@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <script src="testing.js"></script>
 
+<!-- Room to scroll -->
+<div style="height: 10000px; width: 10000px"></div>
+
 <script id=scrollBy_exists>
   testing.expectEqual('function', typeof window.scrollBy);
 </script>
@@ -28,11 +31,58 @@
   testing.expectEqual(40, window.scrollY);
 </script>
 
+<script id=scrollTo_opts_omitted_axis_untouched>
+  window.scrollTo(30, 40);
+  window.scrollTo({ top: 60 });
+  testing.expectEqual(30, window.scrollX);
+  testing.expectEqual(60, window.scrollY);
+  window.scrollTo({ left: 10 });
+  testing.expectEqual(10, window.scrollX);
+  testing.expectEqual(60, window.scrollY);
+</script>
+
 <script id=scrollBy_negative_clamp>
   window.scrollTo(10, 10);
   window.scrollBy(-100, -100);
   testing.expectEqual(0, window.scrollX);
   testing.expectEqual(0, window.scrollY);
+</script>
+
+<script id=scrollTo_clamps_to_document>
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  testing.expectTrue(max > 0);
+  window.scrollTo(0, 99999999);
+  testing.expectEqual(max, window.scrollY);
+  window.scrollBy(0, 100);
+  testing.expectEqual(max, window.scrollY);
+
+  const maxX = document.documentElement.scrollWidth - window.innerWidth;
+  testing.expectTrue(maxX > 0);
+  window.scrollTo(99999999, 0);
+  testing.expectEqual(maxX, window.scrollX);
+
+  // Added content extends the limit
+  const more = document.createElement('div');
+  more.style.height = '5000px';
+  document.body.appendChild(more);
+  window.scrollTo(0, 99999999);
+  testing.expectEqual(max + 5000, window.scrollY);
+  more.remove();
+  window.scrollTo(0, 0);
+</script>
+
+<script id=scrollTo_reaches_nested_spacer>
+  // Virtualized lists size an inner spacer inside an auto-height wrapper
+  const outer = document.createElement('div');
+  const spacer = document.createElement('div');
+  spacer.style.height = '20000px';
+  outer.appendChild(spacer);
+  document.body.appendChild(outer);
+  window.scrollTo(0, 99999999);
+  testing.expectTrue(window.scrollY + window.innerHeight >= 20000);
+  testing.expectEqual(document.documentElement.scrollHeight - window.innerHeight, window.scrollY);
+  outer.remove();
+  window.scrollTo(0, 0);
 </script>
 
 <script id=element_scroll_events_coalesce_and_preserve_reentrancy type=module>
@@ -82,4 +132,36 @@
     testing.expectEqual(0, scrolls);
     testing.expectEqual(0, scrollends);
   });
+</script>
+
+<script id=nested_root_tags_are_not_roots>
+  // A <body> or <html> placed inside body is sized like any other element
+  // (5px each), not as the document root, which recursed forever.
+  const before = document.documentElement.scrollHeight;
+  const nested_body = document.body.appendChild(document.createElement('body'));
+  const nested_html = document.body.appendChild(document.createElement('html'));
+  testing.expectEqual(before + 10, document.documentElement.scrollHeight);
+  testing.expectTrue(document.documentElement.scrollWidth > 0);
+  nested_body.remove();
+  nested_html.remove();
+</script>
+
+<script id=nested_root_tags_are_ordinary_elements>
+  const nested_root = document.body.appendChild(document.createElement('body'));
+  const nested_child = nested_root.appendChild(document.createElement('div'));
+  nested_child.style.height = '300px';
+  // Sized from its content, not as the viewport or the document.
+  testing.expectEqual(300, nested_root.clientHeight);
+  testing.expectEqual(300, nested_root.scrollHeight);
+  nested_root.remove();
+</script>
+
+<script id=nested_root_tags_extend_the_document>
+  // A nested <body> is an ordinary wrapper, so a spacer inside it extends
+  // the document like one inside a <div>.
+  const spacer_root = document.body.appendChild(document.createElement('body'));
+  const root_spacer = spacer_root.appendChild(document.createElement('div'));
+  root_spacer.style.height = '20000px';
+  testing.expectTrue(document.documentElement.scrollHeight >= 20000);
+  spacer_root.remove();
 </script>

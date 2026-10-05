@@ -66,7 +66,7 @@ pub fn getData(self: *const CompositionEvent) []const u8 {
     return self._data;
 }
 
-pub fn initCompositionEvent(
+fn initCompositionEvent(
     self: *CompositionEvent,
     typ: []const u8,
     bubbles: ?bool,

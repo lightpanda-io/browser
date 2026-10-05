@@ -46,7 +46,7 @@ const Unit = enum(u16) {
 };
 
 pub fn detached(frame: *Frame) !*Angle {
-    const arena = try frame._page.getArena(.tiny, "SVGAngle");
+    const arena = try frame.page.getArena(.tiny, "SVGAngle");
     errdefer arena.release();
     const self = try arena.create(Angle);
     self.* = .{ ._arena = arena };
@@ -65,11 +65,11 @@ pub fn releaseRef(self: *Angle, page: *Page) void {
     self._rc.release(self, page);
 }
 
-pub fn getUnitType(self: *Angle) u16 {
+fn getUnitType(self: *Angle) u16 {
     self.syncFromAttribute();
     return switch (self._unit) {
         .turn => 0,
-        else => @intFromEnum(self._unit),
+        else => @backingInt(self._unit),
     };
 }
 
@@ -91,12 +91,12 @@ pub fn setValue(self: *Angle, value: f64, frame: *Frame) !void {
     try self.writeBack(frame);
 }
 
-pub fn getValueInSpecifiedUnits(self: *Angle) f64 {
+fn getValueInSpecifiedUnits(self: *Angle) f64 {
     self.syncFromAttribute();
     return self._value;
 }
 
-pub fn setValueInSpecifiedUnits(self: *Angle, value: f64, frame: *Frame) !void {
+fn setValueInSpecifiedUnits(self: *Angle, value: f64, frame: *Frame) !void {
     try self.ensureWritable();
     try ensureFinite(value);
     self.syncFromAttribute();
@@ -107,12 +107,12 @@ pub fn setValueInSpecifiedUnits(self: *Angle, value: f64, frame: *Frame) !void {
     try self.writeBack(frame);
 }
 
-pub fn getValueAsString(self: *Angle, frame: *Frame) ![]const u8 {
+fn getValueAsString(self: *Angle, frame: *Frame) ![]const u8 {
     self.syncFromAttribute();
     return self.serialize(frame);
 }
 
-pub fn setValueAsString(self: *Angle, value: String, frame: *Frame) !void {
+fn setValueAsString(self: *Angle, value: String, frame: *Frame) !void {
     try self.ensureWritable();
     const parsed = parse(value.str()) catch return error.SyntaxError;
     self._value = parsed.value;
@@ -120,7 +120,7 @@ pub fn setValueAsString(self: *Angle, value: String, frame: *Frame) !void {
     try self.writeBack(frame);
 }
 
-pub fn newValueSpecifiedUnits(self: *Angle, unit_type: u16, value: f64, frame: *Frame) !void {
+fn newValueSpecifiedUnits(self: *Angle, unit_type: u16, value: f64, frame: *Frame) !void {
     try self.ensureWritable();
     const unit = try checkedUnit(unit_type);
     try ensureFinite(value);
@@ -129,7 +129,7 @@ pub fn newValueSpecifiedUnits(self: *Angle, unit_type: u16, value: f64, frame: *
     try self.writeBack(frame);
 }
 
-pub fn convertToSpecifiedUnits(self: *Angle, unit_type: u16, frame: *Frame) !void {
+fn convertToSpecifiedUnits(self: *Angle, unit_type: u16, frame: *Frame) !void {
     try self.ensureWritable();
     const target = try checkedUnit(unit_type);
     const degrees = self.getValue();
@@ -173,7 +173,7 @@ fn writeBack(self: *Angle, frame: *Frame) !void {
 }
 
 fn serialize(self: *const Angle, frame: *Frame) ![]const u8 {
-    return std.fmt.allocPrint(frame.local_arena, "{d}{s}", .{ self._value, unitSuffix(self._unit) });
+    return frame.local_arena.print("{d}{s}", .{ self._value, unitSuffix(self._unit) });
 }
 
 const Parsed = struct {

@@ -82,3 +82,44 @@
     testing.expectEqual(-1, d3.tabIndex);
   }
 </script>
+
+<script id="draggable">
+  {
+    // Explicit keywords win, matched ASCII case-insensitively.
+    const d = document.createElement('div');
+    d.setAttribute('draggable', 'true');
+    testing.expectEqual(true, d.draggable);
+    d.setAttribute('draggable', 'TRUE');
+    testing.expectEqual(true, d.draggable);
+    d.setAttribute('draggable', 'false');
+    testing.expectEqual(false, d.draggable);
+
+    // Missing or invalid values are the auto state: false for most elements.
+    d.removeAttribute('draggable');
+    testing.expectEqual(false, d.draggable);
+    d.setAttribute('draggable', 'auto');
+    testing.expectEqual(false, d.draggable);
+    d.setAttribute('draggable', '');
+    testing.expectEqual(false, d.draggable);
+
+    // Auto defaults to true for <img> and <a> with an href.
+    const img = document.createElement('img');
+    testing.expectEqual(true, img.draggable);
+    img.setAttribute('draggable', 'false');
+    testing.expectEqual(false, img.draggable);
+
+    const a = document.createElement('a');
+    testing.expectEqual(false, a.draggable);
+    a.setAttribute('href', '/x');
+    testing.expectEqual(true, a.draggable);
+    a.setAttribute('draggable', 'false');
+    testing.expectEqual(false, a.draggable);
+
+    // The setter reflects to the content attribute as "true"/"false".
+    const s = document.createElement('div');
+    s.draggable = true;
+    testing.expectEqual('true', s.getAttribute('draggable'));
+    s.draggable = false;
+    testing.expectEqual('false', s.getAttribute('draggable'));
+  }
+</script>

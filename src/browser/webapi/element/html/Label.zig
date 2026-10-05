@@ -1,12 +1,32 @@
-const lp = @import("lightpanda");
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../../../js/js.zig");
-const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
+const Factory = @import("../../../Factory.zig");
+
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
-const HtmlElement = @import("../Html.zig");
 const TreeWalker = @import("../../TreeWalker.zig");
+
+const HtmlElement = @import("../Html.zig");
 
 const Label = @This();
 
@@ -23,7 +43,7 @@ pub fn asNode(self: *Label) *Node {
 }
 
 pub fn getControl(self: *Label, frame: *Frame) ?*Element {
-    if (self.asElement().getAttributeSafe(comptime .wrap("for"))) |id| {
+    if (self.asElement().getAttributeInterned("for")) |id| {
         const el = frame.getElementByIdFromNode(self.asElement().asNode(), id) orelse return null;
         if (!isLabelable(el)) {
             return null;
@@ -59,17 +79,6 @@ pub fn findWrappingLabel(control: *Element) ?*Element {
     return null;
 }
 
-/// First `<label for="id">` descendant of `root`, if any.
-pub fn findLabelByFor(root: *Node, id: []const u8) ?*Element {
-    var it = TreeWalker.Full.Elements.init(root, .{});
-    while (it.next()) |el| {
-        if (el.getTag() != .label) continue;
-        const for_attr = el.getAttributeSafe(comptime .wrap("for")) orelse continue;
-        if (std.mem.eql(u8, for_attr, id)) return el;
-    }
-    return null;
-}
-
 /// Lazy `for`-attribute → `<label>` index. Built in one tree walk on first
 /// lookup; subsequent lookups are O(1). Use when the same document is queried
 /// multiple times (e.g. one AX tree walk resolves names for every labellable
@@ -83,7 +92,7 @@ pub const LabelByForIndex = struct {
             var it = TreeWalker.Full.Elements.init(root, .{});
             while (it.next()) |el| {
                 if (el.getTag() != .label) continue;
-                const for_attr = el.getAttributeSafe(comptime .wrap("for")) orelse continue;
+                const for_attr = el.getAttributeInterned("for") orelse continue;
                 if (for_attr.len == 0) continue;
                 const gop = try self.map.getOrPut(allocator, for_attr);
                 if (!gop.found_existing) gop.value_ptr.* = el;
@@ -103,14 +112,14 @@ pub fn getControlLabels(control: *Element, frame: *Frame) !js.Array {
     var arr = local.newArray(0);
     var idx: u32 = 0;
 
-    if (control.getAttributeSafe(comptime .wrap("id"))) |id_value| {
+    if (control.getId()) |id_value| {
         if (id_value.len > 0) {
             const doc = control.asNode().ownerDocument(frame);
             const search_root: *Node = if (doc) |d| d.asNode() else control.asNode();
             var it = TreeWalker.Full.Elements.init(search_root, .{});
             while (it.next()) |el| {
                 if (el.getTag() != .label) continue;
-                const for_attr = el.getAttributeSafe(comptime .wrap("for")) orelse continue;
+                const for_attr = el.getAttributeInterned("for") orelse continue;
                 if (!std.mem.eql(u8, for_attr, id_value)) continue;
                 _ = try arr.set(idx, el, .{});
                 idx += 1;

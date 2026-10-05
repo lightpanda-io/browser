@@ -25,7 +25,8 @@
     let evt = document.createEvent('TextEvent');
     evt.initTextEvent('foo');
     testing.expectEqual('foo', evt.type);
-    testing.expectEqual('', evt.data);
+    // legacy IDL default: optional DOMString dataArg = "undefined"
+    testing.expectEqual('undefined', evt.data);
     testing.expectEqual(false, evt.bubbles);
     testing.expectEqual(false, evt.cancelable);
   }

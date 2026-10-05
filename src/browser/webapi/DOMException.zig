@@ -34,7 +34,6 @@ pub fn init(message: ?[]const u8, name: ?[]const u8) DOMException {
         ._custom_message = message,
     };
 }
-
 pub fn fromError(err: anyerror) ?DOMException {
     return switch (err) {
         error.SyntaxError => .{ ._code = .syntax_error },
@@ -70,11 +69,11 @@ pub fn fromError(err: anyerror) ?DOMException {
     };
 }
 
-pub fn getCode(self: *const DOMException) u8 {
+fn getCode(self: *const DOMException) u8 {
     return switch (self._code) {
         // no legacy numeric code
         .operation_error, .data_error, .constraint_error, .version_error, .transaction_inactive_error, .read_only_error => 0,
-        else => @intFromEnum(self._code),
+        else => @backingInt(self._code),
     };
 }
 
@@ -116,7 +115,7 @@ pub fn getName(self: *const DOMException) []const u8 {
     };
 }
 
-pub fn getMessage(self: *const DOMException) []const u8 {
+fn getMessage(self: *const DOMException) []const u8 {
     if (self._custom_message) |msg| {
         return msg;
     }
@@ -163,7 +162,7 @@ pub fn toString(self: *const DOMException, exec: *js.Execution) ![]const u8 {
             else => break :blk self.getMessage(),
         }
     };
-    return std.fmt.bufPrint(exec.buf, "{s}: {s}", .{ self.getName(), msg }) catch return msg;
+    return std.mem.print(exec.buf, "{s}: {s}", .{ self.getName(), msg }) catch return msg;
 }
 
 const Code = enum(u8) {
@@ -205,7 +204,7 @@ const Code = enum(u8) {
 
     /// Maps a standard error name to its legacy code
     /// Returns .none (code 0) for non-legacy error names
-    pub fn fromName(name: []const u8) Code {
+    fn fromName(name: []const u8) Code {
         const lookup = std.StaticStringMap(Code).initComptime(.{
             .{ "IndexSizeError", .index_size_error },
             .{ "HierarchyRequestError", .hierarchy_error },
@@ -249,7 +248,15 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(DOMException.init, .{});
+    pub const constructor = bridge.constructor(struct {
+        fn constructor(m_: ?[]const u8, n_: ?[]const u8, exec: *const js.Execution) !DOMException {
+            return init(
+                if (m_) |m| try exec.dupeString(m) else null,
+                if (n_) |n| try exec.dupeString(n) else null,
+            );
+        }
+    }.constructor, .{});
+
     pub const code = bridge.accessor(DOMException.getCode, null, .{});
     pub const name = bridge.accessor(DOMException.getName, null, .{});
     pub const message = bridge.accessor(DOMException.getMessage, null, .{});

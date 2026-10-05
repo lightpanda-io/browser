@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=cache_storage type=module>
+  const state = await testing.async();
+
+  testing.expectTrue('caches' in window);
+  testing.expectTrue(caches instanceof CacheStorage);
+  testing.expectTrue(caches === window.caches);
+
+  await caches.delete('cs-a');
+  await caches.delete('cs-b');
+
+  const before = await caches.has('cs-a');
+  const a = await caches.open('cs-a');
+  await caches.open('cs-b');
+  const after = await caches.has('cs-a');
+  const names = await caches.keys();
+
+  const deleted = await caches.delete('cs-a');
+  const deleted_again = await caches.delete('cs-a');
+  const gone = await caches.has('cs-a');
+
+  // A Cache outlives its name.
+  await a.put('/orphan', new Response('orphan'));
+  const orphan = await (await a.match('/orphan')).text();
+  const unreachable = await caches.match('/orphan');
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(false, before);
+    testing.expectTrue(a instanceof Cache);
+    testing.expectEqual(true, after);
+    // creation order
+    testing.expectTrue(names.indexOf('cs-a') >= 0);
+    testing.expectEqual(names.indexOf('cs-a') + 1, names.indexOf('cs-b'));
+    testing.expectEqual(true, deleted);
+    testing.expectEqual(false, deleted_again);
+    testing.expectEqual(false, gone);
+    testing.expectEqual('orphan', orphan);
+    testing.expectEqual(undefined, unreachable);
+  });
+</script>
+
+<script id=put_match type=module>
+  const state = await testing.async();
+
+  await caches.delete('put-match');
+  const cache = await caches.open('put-match');
+
+  const miss = await cache.match('/nope');
+
+  const stored = new Response('hello', {
+    status: 201,
+    statusText: 'Created',
+    headers: { 'Content-Type': 'text/x-test', 'X-Custom': 'abc' },
+  });
+  const put_result = await cache.put('/a?x=1#frag', stored);
+
+  const hit = await cache.match(new Request('/a?x=1'));
+  const hit_text = await hit.text();
+  // every match is a new Response, with its own body
+  const hit2 = await cache.match('/a?x=1#other');
+  const hit2_text = await hit2.text();
+
+  const no_search = await cache.match('/a');
+  const ignore_search = await cache.match('/a?y=2', { ignoreSearch: true });
+  const post = await cache.match(new Request('/a?x=1', { method: 'POST' }));
+
+  // put replaces
+  await cache.put('/a?x=1', new Response('replaced'));
+  const replaced = await (await cache.match('/a?x=1')).text();
+  const keys = await cache.keys();
+
+  let immutable = null;
+  try {
+    hit.headers.set('x-custom', 'nope');
+  } catch (e) {
+    immutable = e;
+  }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(undefined, miss);
+    testing.expectEqual(undefined, put_result);
+    testing.expectEqual(true, stored.bodyUsed);
+
+    testing.expectTrue(hit instanceof Response);
+    testing.expectEqual(201, hit.status);
+    testing.expectEqual('Created', hit.statusText);
+    testing.expectEqual('text/x-test', hit.headers.get('content-type'));
+    testing.expectEqual('abc', hit.headers.get('x-custom'));
+    testing.expectTrue(immutable instanceof TypeError);
+    testing.expectEqual('hello', hit_text);
+    testing.expectTrue(hit !== hit2);
+    testing.expectEqual('hello', hit2_text);
+
+    testing.expectEqual(undefined, no_search);
+    testing.expectTrue(ignore_search instanceof Response);
+    testing.expectEqual(undefined, post);
+
+    testing.expectEqual('replaced', replaced);
+    testing.expectEqual(1, keys.length);
+    testing.expectTrue(keys[0] instanceof Request);
+    testing.expectEqual('GET', keys[0].method);
+    testing.expectTrue(keys[0].url.endsWith('/a?x=1'));
+  });
+</script>
+
+<script id=put_rejects type=module>
+  const state = await testing.async();
+
+  await caches.delete('put-rejects');
+  const cache = await caches.open('put-rejects');
+
+  async function rejection(promise) {
+    try {
+      await promise;
+      return null;
+    } catch (e) {
+      return e;
+    }
+  }
+
+  const used = new Response('used');
+  await used.text();
+
+  const errors = [
+    await rejection(cache.put(new Request('/p', { method: 'POST', body: 'x' }), new Response('x'))),
+    await rejection(cache.put('data:text/plain,x', new Response('x'))),
+    await rejection(cache.put('/p', new Response('x', { status: 206 }))),
+    await rejection(cache.put('/p', new Response('x', { headers: { Vary: 'Accept, *' } }))),
+    await rejection(cache.put('/p', used)),
+  ];
+  const vary_ok = await rejection(cache.put('/p', new Response('x', { headers: { Vary: 'Accept' } })));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('TypeError,TypeError,TypeError,TypeError,TypeError', errors.map((e) => e && e.name).join(','));
+    testing.expectEqual(null, vary_ok);
+  });
+</script>
+
+<script id=delete type=module>
+  const state = await testing.async();
+
+  await caches.delete('delete');
+  const cache = await caches.open('delete');
+  await cache.put('/d?x=1', new Response('1'));
+  await cache.put('/d?x=2', new Response('2'));
+  await cache.put('/other', new Response('3'));
+
+  const miss = await cache.delete('/d');
+  const one = await cache.delete('/d?x=1');
+  const after_one = (await cache.keys()).length;
+  await cache.put('/d?x=1', new Response('1'));
+  const all = await cache.delete('/d', { ignoreSearch: true });
+  const keys = await cache.keys();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(false, miss);
+    testing.expectEqual(true, one);
+    testing.expectEqual(2, after_one);
+    testing.expectEqual(true, all);
+    testing.expectEqual(1, keys.length);
+    testing.expectTrue(keys[0].url.endsWith('/other'));
+  });
+</script>
+
+<script id=storage_match type=module>
+  const state = await testing.async();
+
+  await caches.delete('sm-1');
+  await caches.delete('sm-2');
+  const one = await caches.open('sm-1');
+  const two = await caches.open('sm-2');
+  await one.put('/sm', new Response('one'));
+  await two.put('/sm', new Response('two'));
+  await two.put('/sm-two', new Response('only two'));
+
+  const first = await (await caches.match('/sm')).text();
+  const named = await (await caches.match('/sm', { cacheName: 'sm-2' })).text();
+  const any = await (await caches.match('/sm-two')).text();
+  const wrong_cache = await caches.match('/sm-two', { cacheName: 'sm-1' });
+  const no_cache = await caches.match('/sm', { cacheName: 'sm-nope' });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('one', first);
+    testing.expectEqual('two', named);
+    testing.expectEqual('only two', any);
+    testing.expectEqual(undefined, wrong_cache);
+    testing.expectEqual(undefined, no_cache);
+  });
+</script>
+
+<script id=add type=module>
+  const state = await testing.async();
+
+  await caches.delete('add');
+  const cache = await caches.open('add');
+
+  const added = await cache.add('/xhr/json');
+  const json = await (await cache.match('/xhr/json')).json();
+
+  await cache.addAll(['/xhr', new Request('/xhr/json')]);
+  const count = (await cache.keys()).length;
+  await cache.addAll([]);
+
+  // All or nothing: one 404 and the good one isn't stored either.
+  let not_ok = null;
+  try {
+    await cache.addAll(['/xhr/xml', '/xhr/404']);
+  } catch (e) {
+    not_ok = e;
+  }
+  const xml = await cache.match('/xhr/xml');
+
+  let not_get = null;
+  try {
+    await cache.add(new Request('/xhr', { method: 'POST' }));
+  } catch (e) {
+    not_get = e;
+  }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(undefined, added);
+    testing.expectEqual('9000!!!', json.over);
+    testing.expectEqual(2, count);
+    testing.expectTrue(not_ok instanceof TypeError);
+    testing.expectEqual(undefined, xml);
+    testing.expectTrue(not_get instanceof TypeError);
+  });
+</script>

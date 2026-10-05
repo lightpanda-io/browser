@@ -49,7 +49,7 @@ pub const Type = union(enum) {
 };
 
 // Stored in Page.blob_urls.
-pub const UrlEntry = struct {
+const UrlEntry = struct {
     blob: *Blob,
     creator: u32, // frame_id of creator
 };
@@ -238,7 +238,7 @@ const vector_sizes = blk: {
 };
 
 /// Writes a single part with optional line ending normalization.
-pub fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: *Writer) !void {
+fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: *Writer) !void {
     // Transparent - no conversion needed.
     if (!use_native_endings) {
         try writer.writeAll(part);
@@ -277,7 +277,7 @@ pub fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: 
             const match = chunk == cr;
 
             // Create a bitset out of match vector.
-            const bitset = std.bit_set.IntegerBitSet(vector_len){
+            const bitset = std.bit_set.Integer(vector_len){
                 .mask = @bitCast(@intFromBool(match)),
             };
 
@@ -338,7 +338,7 @@ pub fn stream(self: *const Blob, exec: *Execution) !*ReadableStream {
     return ReadableStream.initWithData(self._slice, exec);
 }
 
-pub fn textStream(self: *const Blob, exec: *const Execution) !*ReadableStream {
+fn textStream(self: *const Blob, exec: *const Execution) !*ReadableStream {
     return ReadableStream.initWithText(self._slice, exec);
 }
 
@@ -405,7 +405,7 @@ fn clampLongLong(value: f64) i64 {
     if (@abs(value - @trunc(value)) == 0.5 and @mod(rounded, 2) != 0) {
         rounded -= std.math.sign(value);
     }
-    return @intFromFloat(rounded);
+    return @trunc(rounded);
 }
 
 /// Returns the size of the Blob in bytes.
@@ -447,13 +447,13 @@ test "Blob: a pinned arena reaches the browser's account and is given back" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const page = frame._page;
-    const browser = frame._session.browser;
+    const page = frame.page;
+    const browser = page.session.browser;
 
     browser.flushArenaMemory();
     try testing.expectEqual(0, browser.arena_account.pending);
 
-    const data = [_]u8{'x'} ** (64 * 1024);
+    const data: [64 * 1024]u8 = @splat('x');
     const blob = try Blob.initFromBytes(&data, "text/plain", &frame.js.execution);
     try testing.expect(browser.arena_account.pending >= data.len);
 

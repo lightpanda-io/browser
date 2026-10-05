@@ -193,9 +193,10 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedLengt
         .element = element,
         .kind = kind,
     };
-    const gop = try frame._svg_animated_lengths.getOrPut(frame.arena, key);
+    const page = frame.page;
+    const gop = try page.svg_animated_lengths.getOrPut(page.frame_arena, key);
     if (!gop.found_existing) {
-        errdefer _ = frame._svg_animated_lengths.remove(key);
+        errdefer _ = page.svg_animated_lengths.remove(key);
         gop.value_ptr.* = try createConfigured(
             element,
             kind.attributeName(),
@@ -244,7 +245,7 @@ pub fn getBaseVal(self: *AnimatedLength) *Length {
     return self._base_val;
 }
 
-pub fn getAnimVal(self: *AnimatedLength) *Length {
+fn getAnimVal(self: *AnimatedLength) *Length {
     return self._anim_val;
 }
 

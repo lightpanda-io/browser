@@ -29,6 +29,7 @@ const ModelContext = @import("ModelContext.zig");
 const StorageManager = @import("StorageManager.zig");
 const NavigatorUAData = @import("NavigatorUAData.zig");
 const Geolocation = @import("geolocation/Geolocation.zig");
+const ServiceWorkerContainer = @import("ServiceWorkerContainer.zig");
 
 const Navigator = @This();
 
@@ -46,6 +47,7 @@ _permissions: Permissions = .{},
 _geolocation: ?*Geolocation = null,
 _storage: StorageManager = .{},
 _ua_data: NavigatorUAData = .{},
+_service_worker: ?*ServiceWorkerContainer = null,
 
 pub const init: Navigator = .{};
 
@@ -53,11 +55,11 @@ pub fn getUserAgent(_: *const Navigator, exec: *const Execution) []const u8 {
     return exec.session.browser.http_client.getUserAgent();
 }
 
-pub fn getLanguages(_: *const Navigator) [2][]const u8 {
-    return .{ "en-US", "en" };
+pub fn getLanguages(_: *const Navigator, exec: *const Execution) []const []const u8 {
+    return exec.session.browser.http_client.getLanguages();
 }
 
-pub fn getDoNotTrack(_: *const Navigator) ?[]const u8 {
+fn getDoNotTrack(_: *const Navigator) ?[]const u8 {
     return null;
 }
 
@@ -73,15 +75,16 @@ pub fn getAppVersion(_: *const Navigator) []const u8 {
     return "1.0";
 }
 
-pub fn getLanguage(_: *const Navigator) []const u8 {
-    return "en-US";
+pub fn getLanguage(self: *const Navigator, exec: *const Execution) []const u8 {
+    const languages = self.getLanguages(exec);
+    return if (languages.len == 0) "" else languages[0];
 }
 
 pub fn getOnLine(_: *const Navigator) bool {
     return true;
 }
 
-pub fn getCookieEnabled(_: *const Navigator) bool {
+fn getCookieEnabled(_: *const Navigator) bool {
     return true;
 }
 
@@ -93,7 +96,7 @@ pub fn getDeviceMemory(_: *const Navigator) f64 {
     return 8.0;
 }
 
-pub fn getMaxTouchPoints(_: *const Navigator) u32 {
+fn getMaxTouchPoints(_: *const Navigator) u32 {
     return 0;
 }
 
@@ -105,7 +108,7 @@ pub fn getProduct(_: *const Navigator) []const u8 {
     return "Gecko";
 }
 
-pub fn getWebdriver(_: *const Navigator) bool {
+fn getWebdriver(_: *const Navigator) bool {
     return false;
 }
 
@@ -119,7 +122,7 @@ pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
 }
 
 pub fn getPlatform(_: *const Navigator) []const u8 {
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .macos => "MacIntel",
         .windows => "Win32",
         .linux => "Linux x86_64",
@@ -129,26 +132,26 @@ pub fn getPlatform(_: *const Navigator) []const u8 {
 }
 
 /// Returns whether Java is enabled (always false)
-pub fn javaEnabled(_: *const Navigator) bool {
+fn javaEnabled(_: *const Navigator) bool {
     return false;
 }
 
 /// Noop, signal that the data was successfully queued
-pub fn sendBeacon(_: *const Navigator, url: js.Value, data: ?js.Value) bool {
+fn sendBeacon(_: *const Navigator, url: js.Value, data: ?js.Value) bool {
     _ = url;
     _ = data;
     return true;
 }
 
-pub fn getPlugins(self: *Navigator) *PluginArray {
+fn getPlugins(self: *Navigator) *PluginArray {
     return &self._plugins;
 }
 
-pub fn getPermissions(self: *Navigator) *Permissions {
+fn getPermissions(self: *Navigator) *Permissions {
     return &self._permissions;
 }
 
-pub fn getGeolocation(self: *Navigator, exec: *Execution) !*Geolocation {
+fn getGeolocation(self: *Navigator, exec: *Execution) !*Geolocation {
     if (self._geolocation) |g| {
         return g;
     }
@@ -157,23 +160,35 @@ pub fn getGeolocation(self: *Navigator, exec: *Execution) !*Geolocation {
     return g;
 }
 
-pub fn getStorage(self: *Navigator) *StorageManager {
+fn getStorage(self: *Navigator) *StorageManager {
     return &self._storage;
 }
 
-pub fn getUserAgentData(self: *Navigator) *NavigatorUAData {
+// NOTE, the binding for this API is removed at runtime if ServiceWorkers are
+// not enabled (Env.createContext; by default, they are not) or if the frame
+// isn't a secure context (Context.setOrigin).
+fn getServiceWorker(self: *Navigator, frame: *Frame) !*ServiceWorkerContainer {
+    if (self._service_worker) |sw| {
+        return sw;
+    }
+    const sw = try ServiceWorkerContainer.init(frame);
+    self._service_worker = sw;
+    return sw;
+}
+
+fn getUserAgentData(self: *Navigator) *NavigatorUAData {
     return &self._ua_data;
 }
 
-pub fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
+fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
     return &frame.window._model_context;
 }
 
-pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
+fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
     try validateProtocolHandlerScheme(scheme);
     try validateProtocolHandlerURL(url, frame);
 }
-pub fn unregisterProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
+fn unregisterProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
     try validateProtocolHandlerScheme(scheme);
     try validateProtocolHandlerURL(url, frame);
 }
@@ -229,7 +244,7 @@ fn validateProtocolHandlerScheme(scheme: []const u8) !void {
 }
 
 fn validateProtocolHandlerURL(url: [:0]const u8, frame: *const Frame) !void {
-    if (std.mem.indexOf(u8, url, "%s") == null) {
+    if (std.mem.find(u8, url, "%s") == null) {
         return error.SyntaxError;
     }
     if (frame.isSameOrigin(url) == false) {
@@ -265,17 +280,16 @@ pub const JsApi = struct {
     pub const globalPrivacyControl = bridge.accessor(Navigator.getGlobalPrivacyControl, null, .{});
 
     pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
-    pub const sendBeacon = bridge.function(Navigator.sendBeacon, .{ .exposed = .window, .noop = true });
+    pub const sendBeacon = bridge.function(Navigator.sendBeacon, .{});
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
+    pub const serviceWorker = bridge.accessor(Navigator.getServiceWorker, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
-
-    // window only
-    pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{ .exposed = .window });
-    pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{ .exposed = .window });
-    pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
-    pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .exposed = .window });
-    pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .exposed = .window });
+    pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
+    pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{});
+    pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{});
+    pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{});
+    pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{});
 };
 
 const testing = @import("../../testing.zig");

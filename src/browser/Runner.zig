@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("js/js.zig");
+const Frame = @import("Frame.zig");
 const Browser = @import("Browser.zig");
 const Session = @import("Session.zig");
 const HttpClient = @import("../network/HttpClient.zig");
@@ -34,6 +35,8 @@ const Runner = @This();
 session: *Session,
 browser: *Browser,
 http_client: *HttpClient,
+
+const network_idle_hold_ms = 500;
 
 pub const Opts = struct {};
 
@@ -185,7 +188,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     }
 }
 
-pub const TickResult = union(enum) {
+const TickResult = union(enum) {
     done,
     ok: u32,
 };
@@ -204,7 +207,10 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     const session = self.session;
     const browser = self.browser;
     const http_client = self.http_client;
-    defer browser.flushArenaMemory();
+    defer {
+        browser.flushArenaMemory();
+        browser.sampleJsHeap();
+    }
 
     // Arms the watchdog (and proves liveness): a stall anywhere in this tick
     // ages this stamp until the watchdog fires.
@@ -225,15 +231,20 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
 
     const activity = http_client.activity();
     const total_http_activity = activity.http;
-    const total_network_activity = activity.total();
 
     const network_idle = activity.idle();
     const is_done = browser.hasMacrotasks() == false and network_idle;
 
+    // Not Frame._notified_network_idle: that latches for CDP's one-shot
+    // lifecycle event, so a frame idle once reads idle forever.
+    const network_idle_held, const network_almost_idle_held = blk: {
+        const http_idle, const http_almost_idle = http_client.idleMs();
+        break :blk .{ http_idle >= network_idle_hold_ms, http_almost_idle >= network_idle_hold_ms };
+    };
+
     // Outside the condition loop: it skips resolved conditions, but an idle
     // notification needs a check 500ms+ after the hold starts, and on a quiet
-    // page one tick both starts the hold and resolves the condition. Before
-    // it, so `.networkidle` conditions read fresh state.
+    // page one tick both starts the hold and resolves the condition.
     var page_index: usize = 0;
     while (page_index < session.pages.items.len) : (page_index += 1) {
         // Indexed: notifyNetworkIdle dispatches to listeners.
@@ -277,7 +288,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                 condition.status = .complete;
             },
             .pre, .raw, .text, .image, .download => {
-                if (total_network_activity == 0) {
+                // Includes pending: another client may hold every connection.
+                if (network_idle) {
                     condition.status = .complete;
                 } else {
                     want_http_tick = true;
@@ -288,8 +300,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                     .done => is_done,
                     .domcontentloaded => frame._load_state == .load or frame._load_state == .complete,
                     .load => frame._load_state == .complete,
-                    .networkidle => frame._notified_network_idle == .done,
-                    .networkalmostidle => frame._notified_network_almost_idle == .done,
+                    .networkidle => network_idle_held,
+                    .networkalmostidle => network_almost_idle_held,
                 };
 
                 // `met` resolves the condition. Otherwise, as long as there's
@@ -313,9 +325,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
             if (has_runnable_page == false) {
                 break :blk 200;
             }
-            if (browser.hasBackgroundTasks()) {
-                // msToNextTask could be less than this, but 10ms drift is ok
-                break :blk 10;
+            if (browser.foreground_task_posted.load(.acquire)) {
+                break :blk 0;
             }
             break :blk browser.msToNextTask() orelse 200;
         };
@@ -518,9 +529,16 @@ test "Runner: networkidle notifies child frames" {
 
     // A `.networkidle` wait resolves via `is_done` once the page is fully
     // idle, which can happen before the 500ms idle-notification hold. Keep
-    // ticking (like the CDP serve loop does) until the notifications fire.
+    // ticking (like the CDP serve loop does) until the notifications fire,
+    // backdating each started hold so the test doesn't spend it.
+    const held_since = lp.datetime.milliTimestamp(.boot) -| 600;
     var attempts: usize = 0;
     while (frame._notified_network_idle != .done and attempts < 50) : (attempts += 1) {
+        const children = frame.child_frames.items;
+        for ([_]*Frame{ frame, children[0], children[1] }) |f| {
+            if (f._notified_network_idle == .triggered) f._notified_network_idle = .{ .triggered = held_since };
+            if (f._notified_network_almost_idle == .triggered) f._notified_network_almost_idle = .{ .triggered = held_since };
+        }
         _ = try runner.tickForFrame(page.frame_id, 20, .{ .until = .networkidle });
         lp.io.sleep(.fromMilliseconds(25), .awake) catch {};
     }
@@ -556,6 +574,25 @@ test "Runner: lazy iframe does not delay the load event" {
     try testing.expectEqual(true, lazy_child._parent_notified);
 }
 
+test "Runner: iframe that cancels its own navigation stops delaying the parent" {
+    const page = try testing.pageTest("runner/iframe_nav_cancel.html", .{ .wait_until_done = false });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .load });
+
+    const frame = page.frame().?;
+    try testing.expectEqual(true, frame._load_state == .complete);
+    try testing.expectEqual(0, frame._pending_loads);
+
+    // The child aborted its load for a navigation it then cancelled, so no
+    // replacement frame will ever notify the parent on its behalf.
+    const child = frame.child_frames.items[0];
+    try testing.expectEqual(true, child.document._load_aborted);
+    try testing.expectEqual(null, child._queued_navigation);
+    try testing.expectEqual(true, child._parent_notified);
+}
+
 test "Runner: idle notifications advance past a resolved condition" {
     const page = try testing.pageTest("runner/runner1.html", .{});
     defer page.close();
@@ -589,18 +626,21 @@ test "Runner: waits out a throttled navigation" {
     const http_client = &session.browser.http_client;
 
     // Enable the per-host navigation throttle for this test only, and spend
-    // 127.0.0.1's slot so the navigation below has to wait ~300ms.
+    // 127.0.0.1's slot so the navigation below has to wait ~100ms.
     const network = http_client.network;
-    network.rate_limiter = @import("../network/RateLimiter.zig").init(testing.allocator, 300, 1);
+    network.rate_limiter = @import("../network/RateLimiter.zig").init(testing.allocator, 100, 1);
     defer {
         network.rate_limiter.?.deinit();
         network.rate_limiter = null;
     }
-    const start = lp.datetime.milliTimestamp(.boot);
-    _ = try network.rate_limiter.?.reserve("127.0.0.1", start);
 
     const page = try session.createPage();
     defer page.close();
+
+    // Reserved after createPage: on a slow runner, creating the page can eat
+    // the whole interval and the navigation then goes out undelayed.
+    const start = lp.datetime.milliTimestamp(.boot);
+    _ = try network.rate_limiter.?.reserve("127.0.0.1", start);
     try page.navigate("http://127.0.0.1:9582/src/browser/tests/runner/runner1.html", .{});
     try testing.expectEqual(1, http_client.delayed_count);
     // A delayed navigation is in-flight work: the wait must not resolve early.
@@ -609,9 +649,30 @@ test "Runner: waits out a throttled navigation" {
     var runner = session.runner(.{});
     try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
     const elapsed = lp.datetime.milliTimestamp(.boot) - start;
-    try testing.expectEqual(true, elapsed >= 250);
+    try testing.expectEqual(true, elapsed >= 80);
     try testing.expectEqual(0, http_client.delayed_count);
 
     const el = try runner.waitForSelector(page.frame_id, "#sel1", 10);
     try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
+}
+
+test "Runner: networkidle waits out activity after the frame latched idle" {
+    const page = try testing.pageTest("runner/late_fetch.html", .{ .wait_until_done = false });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .load });
+
+    page.frame().?._notified_network_idle = .done;
+
+    const start = lp.datetime.milliTimestamp(.boot);
+    try runner.waitForFrame(page.frame_id, 3000, .{ .until = .networkidle });
+    try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - start >= 500);
+    _ = try runner.waitForSelector(page.frame_id, "#fetched", 0);
+
+    // Already idle past the hold: a fresh wait doesn't serve it again.
+    var again = page.session.runner(.{});
+    const again_start = lp.datetime.milliTimestamp(.boot);
+    try again.waitForFrame(page.frame_id, 3000, .{ .until = .networkidle });
+    try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - again_start < 250);
 }

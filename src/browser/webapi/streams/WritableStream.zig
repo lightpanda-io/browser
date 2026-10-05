@@ -87,7 +87,7 @@ pub fn initForTransform(transform_stream: *TransformStream, exec: *const Executi
     return self;
 }
 
-pub fn getWriter(self: *WritableStream, exec: *const Execution) !*WritableStreamDefaultWriter {
+fn getWriter(self: *WritableStream, exec: *const Execution) !*WritableStreamDefaultWriter {
     if (self.getLocked()) {
         return error.WriterLocked;
     }

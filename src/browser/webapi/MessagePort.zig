@@ -116,7 +116,7 @@ pub fn start(self: *MessagePort) void {
 
     for (self._pending.items) |message| {
         self.scheduleDelivery(message) catch |err| {
-            log.warn(.dom, "MessagePort.start drain", .{ .err = err });
+            log.debug(.dom, "MessagePort.start drain", .{ .err = err });
             message.release();
         };
     }
@@ -142,22 +142,22 @@ pub fn close(self: *MessagePort) void {
     self._entangled_port = null;
 }
 
-pub fn getOnMessage(self: *const MessagePort) ?js.Function.Global {
+fn getOnMessage(self: *const MessagePort) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *MessagePort, cb: ?js.Function.Global) !void {
+fn setOnMessage(self: *MessagePort, cb: ?js.Function.Global) !void {
     self._on_message = cb;
     if (cb != null) {
         self.start();
     }
 }
 
-pub fn getOnMessageError(self: *const MessagePort) ?js.Function.Global {
+fn getOnMessageError(self: *const MessagePort) ?js.Function.Global {
     return self._on_message_error;
 }
 
-pub fn setOnMessageError(self: *MessagePort, cb: ?js.Function.Global) !void {
+fn setOnMessageError(self: *MessagePort, cb: ?js.Function.Global) !void {
     self._on_message_error = cb;
 }
 
@@ -219,12 +219,12 @@ const DeliverCallback = struct {
             .source = null,
         }, exec.page) catch |err| {
             self.message.release();
-            log.err(.dom, "MessagePort.postMessage", .{ .err = err });
+            log.debug(.dom, "MessagePort.postMessage", .{ .err = err });
             return null;
         }).asEvent();
 
         exec.dispatch(target, event, port._on_message, .{ .context = "MessagePort message" }) catch |err| {
-            log.err(.dom, "MessagePort.postMessage", .{ .err = err });
+            log.debug(.dom, "MessagePort.postMessage", .{ .err = err });
         };
 
         return null;

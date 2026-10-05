@@ -15,6 +15,10 @@ onmessage = async function(event) {
 
     const results = {
       has_navigator: typeof navigator !== 'undefined',
+      // The worker realm exposes WorkerNavigator, not Navigator.
+      is_worker_navigator: Object.getPrototypeOf(navigator) === WorkerNavigator.prototype,
+      to_string_tag: Object.prototype.toString.call(navigator),
+      no_navigator_interface: typeof Navigator === 'undefined',
       // userAgent must match the value the page sees (passed in via postMessage).
       user_agent: navigator.userAgent,
       user_agent_matches_page: navigator.userAgent === event.data.pageUserAgent,
@@ -25,6 +29,7 @@ onmessage = async function(event) {
       identity_stable: navigator === navigator,
 
       // Permissions
+      permissions_distinct: navigator.permissions !== navigator,
       permission_name: status.name,
       permission_state: status.state,
 
@@ -40,6 +45,8 @@ onmessage = async function(event) {
       no_plugins: navigator.plugins === undefined,
       no_register_protocol_handler: navigator.registerProtocolHandler === undefined,
       no_model_context: navigator.modelContext === undefined,
+      no_send_beacon: navigator.sendBeacon === undefined,
+      no_cookie_enabled: navigator.cookieEnabled === undefined,
     };
     postMessage({ ok: true, results });
   } catch (e) {

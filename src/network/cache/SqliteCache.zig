@@ -27,13 +27,10 @@ const RenewResponse = Cache.RenewResponse;
 const CachePutRequest = Cache.CachePutRequest;
 const CacheGetResult = Cache.CacheGetResult;
 const CachedResponse = Cache.CachedResponse;
-const CacheControl = Cache.CacheControl;
-const parseDeltaSeconds = Cache.parseDeltaSeconds;
 
 const Http = @import("../http.zig");
 const Blob = @import("../../storage/sqlite/Sqlite.zig").Blob;
 const Pool = @import("../../storage/sqlite/Pool.zig");
-const Conn = @import("../../storage/sqlite/Sqlite.zig").Conn;
 const Migration = @import("../../storage/sqlite/Sqlite.zig").Migration;
 const Migrations = @import("../../storage/sqlite/Sqlite.zig").Migrations;
 
@@ -82,7 +79,7 @@ const purge_expired_sql =
     \\     and stored_at + max_age - age_at_store <= $1
 ;
 
-pub const SqliteCachePath = union(enum) {
+const SqliteCachePath = union(enum) {
     path: []const u8,
     memory,
 
@@ -111,8 +108,7 @@ pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u3
                 return e;
             };
 
-            const full_path = try std.fmt.allocPrintSentinel(
-                allocator,
+            const full_path = try allocator.printSentinel(
                 "{s}/cache.db",
                 .{std.mem.trimEnd(u8, cache_dir, &.{'/'})},
                 0,
@@ -352,25 +348,7 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
     try conn.begin(.immediate);
     defer conn.rollback() catch {};
 
-    var age_at_store: u64 = 0;
-    var content_type: ?[]const u8 = null;
-    var etag: ?[]const u8 = null;
-    var last_modified: ?[]const u8 = null;
-    var cache_control: ?CacheControl = null;
-
-    for (req.headers) |h| {
-        if (std.ascii.eqlIgnoreCase(h.name, "Age")) {
-            age_at_store = parseDeltaSeconds(h.value) orelse 0;
-        } else if (std.ascii.eqlIgnoreCase(h.name, "Cache-Control")) {
-            cache_control = CacheControl.parse(h.value) orelse continue;
-        } else if (std.ascii.eqlIgnoreCase(h.name, "ETag")) {
-            etag = h.value;
-        } else if (std.ascii.eqlIgnoreCase(h.name, "Last-Modified")) {
-            last_modified = h.value;
-        } else if (std.ascii.eqlIgnoreCase(h.name, "Content-Type")) {
-            content_type = h.value;
-        }
-    }
+    const directive = req.directive();
 
     try conn.exec(
         \\ update cache
@@ -383,13 +361,13 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
         \\     last_modified = coalesce($7, last_modified)
         \\ where url = $8
     , .{
-        req.timestamp,
-        age_at_store,
-        if (cache_control) |cc| cc.max_age else null,
-        if (cache_control) |cc| cc.must_revalidate else null,
-        content_type,
-        etag,
-        last_modified,
+        directive.timestamp,
+        directive.age_at_store,
+        directive.max_age,
+        directive.must_revalidate,
+        directive.content_type,
+        directive.etag,
+        directive.last_modified,
         req.url,
     });
 
@@ -1025,7 +1003,7 @@ test "SqliteCache: expired purge uses the cache_expiry index" {
     defer plan.deinit();
 
     const detail = plan.get([]const u8, 3);
-    if (std.mem.indexOf(u8, detail, "cache_expiry") == null) {
+    if (std.mem.find(u8, detail, "cache_expiry") == null) {
         std.debug.print("query plan: {s}\n", .{detail});
         return error.FullTableScan;
     }

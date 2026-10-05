@@ -17,11 +17,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const lp = @import("lightpanda");
-const Factory = @import("../../../Factory.zig");
+
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
+const Factory = @import("../../../Factory.zig");
+
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+
 const HtmlElement = @import("../Html.zig");
 
 const Embed = @This();
@@ -42,14 +45,14 @@ pub fn asNode(self: *Embed) *Node {
 
 pub fn getSrc(self: *const Embed, frame: *Frame) ![]const u8 {
     const element = self.asConstElement();
-    const src = element.getAttributeSafe(comptime .wrap("src")) orelse return "";
+    const src = element.getAttributeInterned("src") orelse return "";
     if (src.len == 0) {
         return "";
     }
     return element.asConstNode().resolveURLReflect(src, frame, .{});
 }
 
-pub fn setSrc(self: *Embed, value: []const u8, frame: *Frame) !void {
+fn setSrc(self: *Embed, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), frame);
 }
 

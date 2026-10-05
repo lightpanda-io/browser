@@ -28,6 +28,7 @@ const DOMTokenList = @import("../../collections.zig").DOMTokenList;
 
 const HtmlElement = @import("../Html.zig");
 
+const String = lp.String;
 const Link = @This();
 
 pub const Proto = HtmlElement;
@@ -51,7 +52,7 @@ pub fn asNode(self: *Link) *Node {
 
 pub fn getHref(self: *Link, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return "";
+    const href = element.getAttributeInterned("href") orelse return "";
     if (href.len == 0) {
         return "";
     }
@@ -67,28 +68,33 @@ pub fn setHref(self: *Link, value: []const u8, frame: *Frame) !void {
     }
 }
 
-pub fn getRel(self: *Link) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("rel")) orelse return "";
+fn getRel(self: *Link) []const u8 {
+    return self.asElement().getAttributeInterned("rel") orelse return "";
 }
 
-pub fn setRel(self: *Link, value: []const u8, frame: *Frame) !void {
+fn setRel(self: *Link, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("rel"), .wrap(value), frame);
 }
 
 pub fn getMedia(self: *Link) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("media")) orelse return "";
+    return self.asElement().getAttributeInterned("media") orelse return "";
 }
 
 pub fn setMedia(self: *Link, value: []const u8, frame: *Frame) !void {
     return self.asElement().setAttributeSafe(comptime .wrap("media"), .wrap(value), frame);
 }
 
-pub fn getSizes(self: *Link, frame: *Frame) !?*DOMTokenList {
+fn getSizes(self: *Link, frame: *Frame) !?*DOMTokenList {
     const element = self.asElement();
     if (element._namespace != .html) {
         return null;
     }
     return element.getTokenList(.sizes, frame);
+}
+
+fn setSizes(self: *Link, value: String, frame: *Frame) !void {
+    const list = try self.getSizes(frame) orelse return;
+    try list.setValue(value, frame);
 }
 
 pub fn getRelList(self: *Link, frame: *Frame) !?*DOMTokenList {
@@ -100,6 +106,11 @@ pub fn getRelList(self: *Link, frame: *Frame) !?*DOMTokenList {
     return element.getRelList(frame);
 }
 
+fn setRelList(self: *Link, value: String, frame: *Frame) !void {
+    const list = try self.getRelList(frame) orelse return;
+    try list.setValue(value, frame);
+}
+
 pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     // if we're planning on navigating to another frame, don't trigger load event.
     if (frame.isGoingAway()) {
@@ -108,12 +119,17 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
 
     const element = self.asElement();
 
-    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
+    // A document without a browsing context (DOMParser et al.) loads nothing.
+    if (element.getDocument(frame)._frame == null) {
+        return;
+    }
+
+    const href = element.getAttributeInterned("href") orelse return;
     if (href.len == 0) {
         return;
     }
 
-    const rel = element.getAttributeSafe(comptime .wrap("rel")) orelse return;
+    const rel = element.getAttributeInterned("rel") orelse return;
 
     // Opt-in fetch for `rel="stylesheet"` — drives `frame.loadExternalStylesheet`,
     // which fires the load/error event itself.
@@ -171,8 +187,8 @@ pub const JsApi = struct {
     pub const @"type" = reflect.string("type");
     pub const rev = reflect.string("rev");
     pub const target = reflect.string("target");
-    pub const relList = bridge.accessor(Link.getRelList, null, .{ .null_as_undefined = true });
-    pub const sizes = bridge.accessor(Link.getSizes, null, .{ .null_as_undefined = true });
+    pub const relList = bridge.accessor(Link.getRelList, Link.setRelList, .{ .null_as_undefined = true, .ce_reactions = true });
+    pub const sizes = bridge.accessor(Link.getSizes, Link.setSizes, .{ .null_as_undefined = true, .ce_reactions = true });
 };
 
 // Parser-created <link> elements are void (no closing tag) so they never
@@ -193,7 +209,7 @@ test "WebApi: HTML.Link" {
 
 test "WebApi: HTML.Link external stylesheet" {
     testing.silenceLog(&.{.http});
-    try testing.htmlRunner("css/external_stylesheet.html", .{ .load_external_stylesheets = true });
+    try testing.htmlRunner("css/external_stylesheet.html", .{ .load_resources = .{ .stylesheet = true } });
 }
 
 // Regression: a synchronous external-stylesheet fetch must not strand the
@@ -202,5 +218,5 @@ test "WebApi: HTML.Link external stylesheet" {
 // never drains and the document is stuck at readyState "loading".
 test "WebApi: HTML.Link deferred script then external stylesheet" {
     testing.silenceLog(&.{.http});
-    try testing.htmlRunner("css/deferred_script_then_stylesheet.html", .{ .load_external_stylesheets = true });
+    try testing.htmlRunner("css/deferred_script_then_stylesheet.html", .{ .load_resources = .{ .stylesheet = true } });
 }

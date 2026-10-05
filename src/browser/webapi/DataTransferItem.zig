@@ -54,7 +54,7 @@ pub fn releaseRef(self: *DataTransferItem, page: *Page) void {
     self._data_transfer.releaseRef(page);
 }
 
-pub fn getKind(self: *const DataTransferItem) []const u8 {
+fn getKind(self: *const DataTransferItem) []const u8 {
     return switch (self._kind) {
         .string => "string",
         .file => "file",
@@ -65,7 +65,7 @@ pub fn getType(self: *const DataTransferItem) []const u8 {
     return self._type;
 }
 
-pub fn getAsFile(self: *const DataTransferItem) ?*File {
+fn getAsFile(self: *const DataTransferItem) ?*File {
     return switch (self._payload) {
         .file => |f| f,
         .string => null,

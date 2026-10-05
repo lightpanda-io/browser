@@ -19,28 +19,36 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+threadlocal var current_page: ?*PageContext = null;
+
 pub const Scope = enum {
     app,
-    dom,
-    bug,
+    bidi,
     browser,
+    bug,
+    cache,
     cdp,
     console,
-    http,
-    frame,
-    js,
+    disabled,
+    dom,
     event,
-    scheduler,
+    frame,
+    http,
+    js,
+    mcp,
+    note,
     not_implemented,
+    scheduler,
+    serve,
+    storage,
     telemetry,
     unknown_prop,
-    mcp,
-    cache,
+    watchdog,
     websocket,
-    storage,
+    cors,
 };
 
-pub const num_scopes = @typeInfo(Scope).@"enum".fields.len;
+const num_scopes = @typeInfo(Scope).@"enum".field_names.len;
 
 /// A single `--log-filter-scopes` directive. `scope == null` targets every
 /// scope (the `all` keyword). `enable` is true for `+X` (filter in), false
@@ -54,11 +62,11 @@ pub const FilterRule = struct {
 /// array. Directives apply left-to-right, so `-all,+cdp` disables every
 /// scope then re-enables `cdp`. Scopes untouched by any directive stay
 /// enabled.
-pub fn resolveFilterScopes(rules: []const FilterRule) [num_scopes]bool {
-    var scope_enabled = [_]bool{true} ** num_scopes;
+pub fn resolveFilters(rules: []const FilterRule) [num_scopes]bool {
+    var scope_enabled: [num_scopes]bool = @splat(true);
     for (rules) |rule| {
         if (rule.scope) |scope| {
-            scope_enabled[@intFromEnum(scope)] = rule.enable;
+            scope_enabled[@backingInt(scope)] = rule.enable;
         } else {
             for (&scope_enabled) |*e| e.* = rule.enable;
         }
@@ -70,11 +78,39 @@ const Opts = struct {
     format: Format = if (lp.IS_DEBUG) .pretty else .logfmt,
     level: Level = if (lp.IS_DEBUG) .info else .warn,
     // Per-scope enabled flags; a `false` entry suppresses that scope's logs.
-    // Only consulted in Debug builds. Default: everything enabled.
-    scope_enabled: [num_scopes]bool = [_]bool{true} ** num_scopes,
+    scope_enabled: [num_scopes]bool = @splat(true),
+    color: ?bool = null,
 };
 
 pub var opts = Opts{};
+
+var color_enabled_cached: bool = undefined;
+var color_enabled_once = lp.once(initColorEnabled);
+
+fn initColorEnabled() void {
+    if (std.c.getenv("NO_COLOR")) |val| {
+        if (std.mem.span(val).len > 0) {
+            color_enabled_cached = false;
+            return;
+        }
+    }
+    color_enabled_cached = std.Io.File.stderr().isTty(lp.io) catch false;
+}
+
+fn colorEnabled() bool {
+    if (opts.color) |c| return c;
+    if (comptime lp.IS_TEST) return true;
+    color_enabled_once.call();
+    return color_enabled_cached;
+}
+
+fn writeColor(code: []const u8, writer: *std.Io.Writer) !void {
+    if (colorEnabled()) try writer.writeAll(code);
+}
+
+fn clearColor(writer: *std.Io.Writer) !void {
+    if (colorEnabled()) try writer.writeAll("\x1b[0m");
+}
 
 /// Optional sink for formatted log lines. The agent's REPL terminal sets
 /// this so log output can be routed through `Spinner.emitAbove` instead
@@ -82,14 +118,12 @@ pub var opts = Opts{};
 pub var sink: ?*const fn (bytes: []const u8) void = null;
 
 pub fn enabled(scope: Scope, level: Level) bool {
-    if (@intFromEnum(level) < @intFromEnum(opts.level)) {
+    if (@backingInt(level) < @backingInt(opts.level)) {
         return false;
     }
 
-    if (comptime lp.IS_DEBUG) {
-        if (opts.scope_enabled[@intFromEnum(scope)] == false) {
-            return false;
-        }
+    if (opts.scope_enabled[@backingInt(scope)] == false) {
+        return false;
     }
 
     return true;
@@ -104,7 +138,7 @@ var expected_logs: [num_scopes]u16 = @splat(0);
 pub fn expectLog(comptime scopes: []const Scope) void {
     comptime std.debug.assert(lp.IS_TEST);
     inline for (scopes) |scope| {
-        expected_logs[@intFromEnum(scope)] += 1;
+        expected_logs[@backingInt(scope)] += 1;
     }
 }
 
@@ -138,49 +172,109 @@ pub const Format = enum {
     pretty,
 };
 
-pub fn debug(scope: Scope, msg: []const u8, data: anytype) void {
+// A message is a short, plain-text key; the detail belongs in the kvs.
+const max_msg_len = 30;
+
+/// The comptime form of the checks in logToErased. Those only fire in a debug
+/// build *and* only once the line actually runs, so a message on a rare path
+/// can ship and then panic on whoever first hits it. Every message below is a
+/// literal, so the same rules can be a build error instead.
+fn validateMsg(comptime msg: []const u8) void {
+    comptime {
+        if (msg.len > max_msg_len) {
+            @compileError("log msg cannot be more than 30 characters: " ++ msg);
+        }
+        for (msg) |b| {
+            switch (b) {
+                'A'...'Z', 'a'...'z', ' ', '0'...'9', '_', '-', '.', '{', '}' => {},
+                else => @compileError("log msg contains an invalid character: " ++ msg),
+            }
+        }
+    }
+}
+
+pub fn debug(scope: Scope, comptime msg: []const u8, data: anytype) void {
+    comptime validateMsg(msg);
     log(scope, .debug, msg, data);
 }
 
-pub fn info(scope: Scope, msg: []const u8, data: anytype) void {
+pub fn info(scope: Scope, comptime msg: []const u8, data: anytype) void {
+    comptime validateMsg(msg);
     log(scope, .info, msg, data);
 }
 
-pub fn warn(scope: Scope, msg: []const u8, data: anytype) void {
+pub fn warn(scope: Scope, comptime msg: []const u8, data: anytype) void {
+    comptime validateMsg(msg);
     log(scope, .warn, msg, data);
 }
 
-pub fn err(scope: Scope, msg: []const u8, data: anytype) void {
+pub fn err(scope: Scope, comptime msg: []const u8, data: anytype) void {
+    comptime validateMsg(msg);
     log(scope, .err, msg, data);
 }
 
-pub fn fatal(scope: Scope, msg: []const u8, data: anytype) void {
+pub fn fatal(scope: Scope, comptime msg: []const u8, data: anytype) void {
+    comptime validateMsg(msg);
     log(scope, .fatal, msg, data);
 }
 
-pub fn note(scope: Scope, msg: []const u8, data: anytype) void {
+pub fn note(scope: Scope, comptime msg: []const u8, data: anytype) void {
+    comptime validateMsg(msg);
     if (comptime lp.IS_TEST == false) {
         log(scope, .note, msg, data);
     }
 }
 
+var warned_disabled_worker = std.atomic.Value(bool).init(false);
+pub fn warnDisabledWorker() void {
+    if (warned_disabled_worker.swap(true, .monotonic) == false) {
+        warn(.disabled, "workers disabled", .{ .hint = "enable via --load-resources worker" });
+    }
+}
+
+var warned_disabled_iframe = std.atomic.Value(bool).init(false);
+pub fn warnDisabledIFrame() void {
+    if (warned_disabled_iframe.swap(true, .monotonic) == false) {
+        warn(.disabled, "iframes disabled", .{ .hint = "enable via --load-resources iframe" });
+    }
+}
+
 pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
+    var kvs: [@typeInfo(@TypeOf(data)).@"struct".field_names.len]KV = undefined;
+    initKVs(data, &kvs);
+    logKVs(scope, level, msg, &kvs);
+}
+
+inline fn initKVs(data: anytype, kvs: []KV) void {
+    inline for (@typeInfo(@TypeOf(data)).@"struct".field_names, 0..) |field_name, i| {
+        const value = @field(data, field_name);
+        kvs[i] = .{ .key = field_name, .value = Value.init(&value) };
+    }
+}
+
+pub fn logKVs(scope: Scope, level: Level, msg: []const u8, kvs: []const KV) void {
     if (enabled(scope, level) == false) {
         return;
     }
 
     if (comptime lp.IS_TEST) {
-        const expected = &expected_logs[@intFromEnum(scope)];
+        const expected = &expected_logs[@backingInt(scope)];
         if (expected.* > 0) {
             expected.* -= 1;
             return;
         }
     }
 
+    if (current_page) |page| {
+        if (level != .note and @backingInt(level) > @backingInt(page.max_level)) {
+            page.max_level = level;
+        }
+    }
+
     if (sink) |s| {
         var buf: [4096]u8 = undefined;
         var w: std.Io.Writer = .fixed(&buf);
-        logTo(scope, level, msg, data, &w) catch |log_err| {
+        logToErased(scope, level, msg, kvs, &w) catch |log_err| {
             std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.real), @tagName(scope), @errorName(log_err), msg });
             return;
         };
@@ -192,26 +286,22 @@ pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
     const stderr = std.debug.lockStderr(&buf);
     defer std.debug.unlockStderr();
 
-    logTo(scope, level, msg, data, &stderr.file_writer.interface) catch |log_err| {
-        std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.real), @errorName(log_err), @tagName(scope), msg });
+    logToErased(scope, level, msg, kvs, &stderr.file_writer.interface) catch |log_err| {
+        std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.real), @tagName(scope), @errorName(log_err), msg });
     };
 }
 
-// Converts each field of `data` into a runtime Value so that a single copy of
-// the formatting code (logToErased and below) can do the actual writing.
+// Like `log`, but to an explicit writer and without the enabled/sink
+// gating. Only used by tests.
 fn logTo(scope: Scope, level: Level, msg: []const u8, data: anytype, out: *std.Io.Writer) !void {
-    const fields = @typeInfo(@TypeOf(data)).@"struct".fields;
-    var kvs: [fields.len]KV = undefined;
-    inline for (fields, 0..) |f, i| {
-        const value = @field(data, f.name);
-        kvs[i] = .{ .key = f.name, .value = Value.init(&value) };
-    }
+    var kvs: [@typeInfo(@TypeOf(data)).@"struct".field_names.len]KV = undefined;
+    initKVs(data, &kvs);
     return logToErased(scope, level, msg, &kvs, out);
 }
 
 fn logToErased(scope: Scope, level: Level, msg: []const u8, kvs: []const KV, out: *std.Io.Writer) !void {
     if (lp.IS_DEBUG) {
-        if (msg.len > 30) {
+        if (msg.len > max_msg_len) {
             std.debug.print("debug-only-panic: log msg cannot be more than 30 characters: {s}", .{msg});
             @panic("invalid log msg");
         }
@@ -260,6 +350,10 @@ fn logLogFmtPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.
     try writer.writeAll(" $msg=\"");
     try writer.writeAll(msg);
     try writer.writeByte('"');
+
+    if (current_page) |page| {
+        try writer.print(" $page={d}", .{page.id});
+    }
 }
 
 fn logPretty(scope: Scope, level: Level, msg: []const u8, kvs: []const KV, writer: *std.Io.Writer) !void {
@@ -274,16 +368,29 @@ fn logPretty(scope: Scope, level: Level, msg: []const u8, kvs: []const KV, write
 
 fn logPrettyPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.Writer) !void {
     if (scope == .console and level == .fatal) {
-        try writer.writeAll("\x1b[0;104mWARN  ");
+        try writeColor("\x1b[0;104m", writer);
+        try writer.writeAll("WARN  ");
     } else {
+        const color_code = switch (level) {
+            .debug => "\x1b[0;36m",
+            .info, .note => "\x1b[0;32m",
+            .warn => "\x1b[0;33m",
+            .err => "\x1b[0;31m",
+            .fatal => "\x1b[0;35m",
+        };
+        try writeColor(color_code, writer);
         try writer.writeAll(switch (level) {
-            .debug => "\x1b[0;36mDEBUG\x1b[0m ",
-            .info => "\x1b[0;32mINFO\x1b[0m  ",
-            .warn => "\x1b[0;33mWARN\x1b[0m  ",
-            .err => "\x1b[0;31mERROR ",
-            .fatal => "\x1b[0;35mFATAL ",
-            .note => "\x1b[0;32mNOTE\x1b[0m  ",
+            .debug => "DEBUG",
+            .info => "INFO ",
+            .warn => "WARN ",
+            .err => "ERROR",
+            .fatal => "FATAL",
+            .note => "NOTE ",
         });
+        if (level != .err and level != .fatal) {
+            try clearColor(writer);
+        }
+        try writer.writeByte(' ');
     }
 
     try writer.writeAll(@tagName(scope));
@@ -291,26 +398,65 @@ fn logPrettyPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.
     try writer.writeAll(msg);
 
     {
-        // msg.len cannot be > 30, and @tagName(scope).len cannot be > 15
-        // so this is safe
-        const prefix_len = @tagName(scope).len + msg.len + 2;
-        const padding = 55 - prefix_len;
+        // msg.len cannot be > 30, and @tagName(scope).len cannot be > 15.
+        // The page tag eats into the dot leaders so the elapsed column stays
+        // aligned and the line stays within 80 columns.
+        const page_len = if (current_page) |page| std.fmt.count(" page={d}", .{page.id}) else 0;
+        const prefix_len = @tagName(scope).len + msg.len + 2 + page_len;
+        const padding = 55 -| prefix_len;
         for (0..padding / 2) |_| {
             try writer.writeAll(" .");
         }
         if (@mod(padding, 2) == 1) {
             try writer.writeByte(' ');
         }
+        if (current_page) |page| {
+            try writer.print(" page={d}", .{page.id});
+        }
         const el = elapsed();
-        try writer.print(" \x1b[0m[+{d}{s}]", .{ el.time, el.unit });
-        try writer.writeByte('\n');
+        try writer.writeByte(' ');
+        try clearColor(writer);
+        try writer.print("[+{d}{s}]\n", .{ el.time, el.unit });
     }
 }
 
-const KV = struct {
+pub const KV = struct {
     key: []const u8,
     value: Value,
+
+    // `vp` is a pointer, as with Value.init. A string literal is already one;
+    // for anything else pass `&value` and keep it alive until the log call.
+    pub fn init(key: []const u8, vp: anytype) KV {
+        return .{
+            .key = key,
+            .value = .init(vp),
+        };
+    }
 };
+
+/// A string the pretty format paints; logfmt writes it plainly.
+const Colored = struct {
+    code: []const u8,
+    text: []const u8,
+
+    pub fn logFmt(self: Colored, key: []const u8, writer: LogFormatWriter) !void {
+        return writer.write(key, self.text);
+    }
+
+    pub fn format(self: Colored, writer: *std.Io.Writer) !void {
+        try writeColor(self.code, writer);
+        try writer.writeAll(self.text);
+        try clearColor(writer);
+    }
+};
+
+pub fn red(text: []const u8) Colored {
+    return .{ .code = "\x1b[0;31m", .text = text };
+}
+
+pub fn green(text: []const u8) Colored {
+    return .{ .code = "\x1b[0;32m", .text = text };
+}
 
 const Value = union(enum) {
     null,
@@ -491,7 +637,7 @@ fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void 
 
     var rest = value;
     while (rest.len > 0) {
-        const pos = std.mem.indexOfAny(u8, rest, "\r\n\"") orelse {
+        const pos = std.mem.findAny(u8, rest, "\r\n\"") orelse {
             try writer.writeAll(rest);
             break;
         };
@@ -508,7 +654,7 @@ fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void 
     return writer.writeByte('"');
 }
 
-pub const LogFormatWriter = struct {
+const LogFormatWriter = struct {
     writer: *std.Io.Writer,
 
     pub fn write(self: LogFormatWriter, key: []const u8, value: anytype) !void {
@@ -542,7 +688,84 @@ fn timestamp(comptime clock: std.Io.Clock) u64 {
     return datetime.milliTimestamp(clock);
 }
 
+pub const PageContext = struct {
+    id: u64,
+    url: *const [:0]const u8,
+    max_level: Level = .info,
+};
+
+var page_id_gen = std.atomic.Value(u64).init(0);
+
+pub fn nextPageId() u64 {
+    return page_id_gen.fetchAdd(1, .monotonic) + 1;
+}
+
+pub const PageScope = struct {
+    page: ?*PageContext,
+    previous: ?*PageContext,
+
+    pub fn exit(self: PageScope) void {
+        if (comptime lp.IS_DEBUG) {
+            // enter/exit must nest
+            std.debug.assert(current_page == self.page);
+        }
+        current_page = self.previous;
+    }
+};
+
+pub fn enterPage(page: ?*PageContext) PageScope {
+    const previous = current_page;
+    current_page = page;
+    return .{ .page = page, .previous = previous };
+}
+
+pub fn currentPage() ?*const PageContext {
+    return current_page;
+}
+
 const testing = @import("testing.zig");
+test "log: colored" {
+    opts.format = .logfmt;
+    defer opts.format = .pretty;
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+
+    try logTo(.app, .err, "test", .{ .arg = red("--wait mss") }, &aw.writer);
+    try testing.expectEqual("$time=1739795092929 $scope=app $level=error $msg=\"test\" arg=\"--wait mss\"\n", aw.written());
+
+    aw.clearRetainingCapacity();
+    try writeValue(.pretty, green("--wait-ms"), &aw.writer);
+    try testing.expectEqual("\x1b[0;32m--wait-ms\x1b[0m", aw.written());
+}
+
+test "log: color disabled (NO_COLOR / non-tty)" {
+    opts.format = .pretty;
+    opts.color = false;
+    defer {
+        opts.format = .pretty;
+        opts.color = null;
+    }
+
+    try testing.expectEqual(false, colorEnabled());
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+
+    try writeValue(.pretty, green("--wait-ms"), &aw.writer);
+    try testing.expectEqual("--wait-ms", aw.written());
+
+    aw.clearRetainingCapacity();
+    try logTo(.app, .info, "test", .{}, &aw.writer);
+    try testing.expect(std.mem.find(u8, aw.written(), "\x1b") == null);
+    try testing.expect(std.mem.find(u8, aw.written(), "INFO  app : test") != null);
+
+    aw.clearRetainingCapacity();
+    try logTo(.app, .err, "test", .{}, &aw.writer);
+    try testing.expect(std.mem.find(u8, aw.written(), "\x1b") == null);
+    try testing.expect(std.mem.find(u8, aw.written(), "ERROR app : test") != null);
+}
+
 test "log: data" {
     opts.format = .logfmt;
     defer opts.format = .pretty;
@@ -602,43 +825,96 @@ test "log: string escape" {
     }
 }
 
-test "log: resolveFilterScopes" {
+test "log: page context" {
+    opts.format = .logfmt;
+    defer opts.format = .pretty;
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+
+    const url: [:0]const u8 = "https://lightpanda.io/";
+    var page: PageContext = .{ .id = 42, .url = &url };
+
+    const page_scope = enterPage(&page);
+    {
+        try logTo(.frame, .info, "tagged", .{}, &aw.writer);
+        try testing.expectEqual("$time=1739795092929 $scope=frame $level=info $msg=\"tagged\" $page=42\n", aw.written());
+    }
+
+    {
+        // Not expectLog: an expected line is consumed before it can raise
+        // max_level. Discard the output instead.
+        sink = struct {
+            fn discard(_: []const u8) void {}
+        }.discard;
+        defer sink = null;
+        err(.http, "first", .{});
+        warn(.http, "second", .{});
+        try testing.expectEqual(.err, page.max_level);
+    }
+
+    page_scope.exit();
+    try testing.expectEqual(null, currentPage());
+
+    {
+        var other: PageContext = .{ .id = 43, .url = &url };
+        const outer = enterPage(&page);
+        const inner = enterPage(&other);
+        try testing.expectEqual(&other, currentPage().?);
+        inner.exit();
+        try testing.expectEqual(&page, currentPage().?);
+        outer.exit();
+        try testing.expectEqual(null, currentPage());
+    }
+
+    {
+        aw.clearRetainingCapacity();
+        try logTo(.frame, .info, "untagged", .{}, &aw.writer);
+        try testing.expectEqual("$time=1739795092929 $scope=frame $level=info $msg=\"untagged\"\n", aw.written());
+
+        expectLog(&.{.http});
+        fatal(.http, "not this page", .{});
+        try testing.expectEqual(.err, page.max_level);
+    }
+}
+
+test "log: resolveFilters" {
     // No directives: everything enabled.
     {
-        const se = resolveFilterScopes(&.{});
-        try testing.expectEqual(true, se[@intFromEnum(Scope.cdp)]);
-        try testing.expectEqual(true, se[@intFromEnum(Scope.http)]);
+        const se = resolveFilters(&.{});
+        try testing.expectEqual(true, se[@backingInt(Scope.cdp)]);
+        try testing.expectEqual(true, se[@backingInt(Scope.http)]);
     }
 
     // Backward compatible: bare/`-` scope filters that scope out, rest stay in.
     {
-        const se = resolveFilterScopes(&.{
+        const se = resolveFilters(&.{
             .{ .scope = .cdp, .enable = false },
             .{ .scope = .http, .enable = false },
         });
-        try testing.expectEqual(false, se[@intFromEnum(Scope.cdp)]);
-        try testing.expectEqual(false, se[@intFromEnum(Scope.http)]);
-        try testing.expectEqual(true, se[@intFromEnum(Scope.js)]);
+        try testing.expectEqual(false, se[@backingInt(Scope.cdp)]);
+        try testing.expectEqual(false, se[@backingInt(Scope.http)]);
+        try testing.expectEqual(true, se[@backingInt(Scope.js)]);
     }
 
     // `-all,+cdp`: disable everything, then re-enable cdp.
     {
-        const se = resolveFilterScopes(&.{
+        const se = resolveFilters(&.{
             .{ .scope = null, .enable = false },
             .{ .scope = .cdp, .enable = true },
         });
-        try testing.expectEqual(true, se[@intFromEnum(Scope.cdp)]);
-        try testing.expectEqual(false, se[@intFromEnum(Scope.http)]);
-        try testing.expectEqual(false, se[@intFromEnum(Scope.js)]);
+        try testing.expectEqual(true, se[@backingInt(Scope.cdp)]);
+        try testing.expectEqual(false, se[@backingInt(Scope.http)]);
+        try testing.expectEqual(false, se[@backingInt(Scope.js)]);
     }
 
     // `+all,-cdp`: enable everything, then disable cdp. Order matters.
     {
-        const se = resolveFilterScopes(&.{
+        const se = resolveFilters(&.{
             .{ .scope = null, .enable = true },
             .{ .scope = .cdp, .enable = false },
         });
-        try testing.expectEqual(false, se[@intFromEnum(Scope.cdp)]);
-        try testing.expectEqual(true, se[@intFromEnum(Scope.http)]);
+        try testing.expectEqual(false, se[@backingInt(Scope.cdp)]);
+        try testing.expectEqual(true, se[@backingInt(Scope.http)]);
     }
 }

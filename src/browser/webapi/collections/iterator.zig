@@ -34,8 +34,6 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
         const Result = struct {
             done: bool,
             value: ?R.ValueType,
-
-            pub const js_as_object = true;
         };
 
         pub fn init(inner: Inner, executor: R.Executor) !*Self {
@@ -96,7 +94,7 @@ fn reflect(comptime Inner: type, comptime field: ?[]const u8) Reflect {
     const R = fn_info.return_type.?;
     const has_error_return = @typeInfo(R) == .error_union;
     // The executor type is the last parameter of inner.next (after self)
-    const Executor = fn_info.params[1].type.?;
+    const Executor = fn_info.param_types[1].?;
     return .{
         .has_error_return = has_error_return,
         .ValueType = ValueType(unwrapOptional(unwrapError(R)), field),
@@ -123,9 +121,9 @@ fn unwrapOptional(comptime T: type) type {
 
 fn ValueType(comptime R: type, comptime field_: ?[]const u8) type {
     const field = field_ orelse return R;
-    inline for (@typeInfo(R).@"struct".fields) |f| {
-        if (comptime std.mem.eql(u8, f.name, field)) {
-            return f.type;
+    inline for (@typeInfo(R).@"struct".field_names, @typeInfo(R).@"struct".field_types) |field_name, field_type| {
+        if (comptime std.mem.eql(u8, field_name, field)) {
+            return field_type;
         }
     }
     @compileError("Unknown EntryIterator field " ++ @typeName(R) ++ "." ++ field);

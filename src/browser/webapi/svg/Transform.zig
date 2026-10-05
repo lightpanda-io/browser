@@ -61,7 +61,7 @@ pub const State = struct {
     is_2d: bool,
 };
 
-pub const Attachment = struct {
+const Attachment = struct {
     owner: *anyopaque,
     mutate: *const fn (*anyopaque, *Transform, State) anyerror!void,
 };
@@ -79,8 +79,8 @@ pub fn releaseRef(self: *Transform, page: *Page) void {
 }
 
 pub fn detached(frame: *Frame) !*Transform {
-    const matrix = try DOMMatrix.create(RO.identity(), true, frame._page);
-    errdefer matrix._proto.deinit(frame._page);
+    const matrix = try DOMMatrix.create(RO.identity(), true, frame.page);
+    errdefer matrix._proto.deinit(frame.page);
     const self = try matrix._proto._arena.create(Transform);
     self.* = .{ ._matrix = matrix };
     self.attachMatrix();
@@ -89,8 +89,8 @@ pub fn detached(frame: *Frame) !*Transform {
 
 pub fn fromMatrix(init: ?DOMMatrix2DInit, frame: *Frame) !*Transform {
     const parsed = try fixup2D(init orelse .{});
-    const matrix = try DOMMatrix.create(parsed.m, true, frame._page);
-    errdefer matrix._proto.deinit(frame._page);
+    const matrix = try DOMMatrix.create(parsed.m, true, frame.page);
+    errdefer matrix._proto.deinit(frame.page);
     const self = try matrix._proto._arena.create(Transform);
     self.* = .{ ._matrix = matrix };
     self.attachMatrix();
@@ -107,8 +107,8 @@ pub fn fromParsed(parsed: RO.ParsedTransform, frame: *Frame) !*Transform {
         .skew_y => 6,
         else => return error.SyntaxError,
     };
-    const matrix = try DOMMatrix.create(parsed.matrix, parsed.is_2d, frame._page);
-    errdefer matrix._proto.deinit(frame._page);
+    const matrix = try DOMMatrix.create(parsed.matrix, parsed.is_2d, frame.page);
+    errdefer matrix._proto.deinit(frame.page);
     const self = try matrix._proto._arena.create(Transform);
     self.* = .{
         ._type = typ,
@@ -123,8 +123,8 @@ pub fn fromParsed(parsed: RO.ParsedTransform, frame: *Frame) !*Transform {
 
 pub fn clone(self: *const Transform, frame: *Frame) !*Transform {
     const current = self.getState();
-    const matrix = try DOMMatrix.create(current.matrix, current.is_2d, frame._page);
-    errdefer matrix._proto.deinit(frame._page);
+    const matrix = try DOMMatrix.create(current.matrix, current.is_2d, frame.page);
+    errdefer matrix._proto.deinit(frame.page);
     const cloned = try matrix._proto._arena.create(Transform);
     cloned.* = .{
         ._type = current.typ,
@@ -141,30 +141,30 @@ pub fn getType(self: *const Transform) u16 {
     return self._type;
 }
 
-pub fn getMatrix(self: *Transform) *DOMMatrix {
+fn getMatrix(self: *Transform) *DOMMatrix {
     return self._matrix;
 }
 
-pub fn getAngle(self: *const Transform) f64 {
+fn getAngle(self: *const Transform) f64 {
     return self._angle;
 }
 
-pub fn setMatrix(self: *Transform, init: ?DOMMatrix2DInit) !void {
+fn setMatrix(self: *Transform, init: ?DOMMatrix2DInit) !void {
     const parsed = try fixup2D(init orelse .{});
     try self.applyState(.{ .typ = 1, .angle = 0, .cx = 0, .cy = 0, .matrix = parsed.m, .is_2d = true });
 }
 
-pub fn setTranslate(self: *Transform, tx: f64, ty: f64) !void {
+fn setTranslate(self: *Transform, tx: f64, ty: f64) !void {
     try ensureFinite(&.{ tx, ty });
     try self.applyState(.{ .typ = 2, .angle = 0, .cx = 0, .cy = 0, .matrix = RO.translationMatrix(tx, ty, 0), .is_2d = true });
 }
 
-pub fn setScale(self: *Transform, sx: f64, sy: f64) !void {
+fn setScale(self: *Transform, sx: f64, sy: f64) !void {
     try ensureFinite(&.{ sx, sy });
     try self.applyState(.{ .typ = 3, .angle = 0, .cx = 0, .cy = 0, .matrix = RO.scaleMatrix(sx, sy, 1), .is_2d = true });
 }
 
-pub fn setRotate(self: *Transform, angle: f64, cx: f64, cy: f64) !void {
+fn setRotate(self: *Transform, angle: f64, cx: f64, cy: f64) !void {
     try ensureFinite(&.{ angle, cx, cy });
     const radians = angle * std.math.pi / 180.0;
     var matrix = RO.translationMatrix(cx, cy, 0);
@@ -173,12 +173,12 @@ pub fn setRotate(self: *Transform, angle: f64, cx: f64, cy: f64) !void {
     try self.applyState(.{ .typ = 4, .angle = angle, .cx = cx, .cy = cy, .matrix = matrix, .is_2d = true });
 }
 
-pub fn setSkewX(self: *Transform, angle: f64) !void {
+fn setSkewX(self: *Transform, angle: f64) !void {
     try ensureFinite(&.{angle});
     try self.applyState(.{ .typ = 5, .angle = angle, .cx = 0, .cy = 0, .matrix = RO.skewMatrix(angle * std.math.pi / 180.0, 0), .is_2d = true });
 }
 
-pub fn setSkewY(self: *Transform, angle: f64) !void {
+fn setSkewY(self: *Transform, angle: f64) !void {
     try ensureFinite(&.{angle});
     try self.applyState(.{ .typ = 6, .angle = angle, .cx = 0, .cy = 0, .matrix = RO.skewMatrix(0, angle * std.math.pi / 180.0), .is_2d = true });
 }

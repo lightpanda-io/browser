@@ -146,6 +146,7 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
     if (bucket.free_list) |entry| {
         bucket.free_list = entry.next;
         bucket.free_list_len -= 1;
+        entry.released = false;
         if (lp.IS_DEBUG) {
             entry.debug = debug;
             const gop = try self._leak_track.getOrPut(self.allocator, debug);
@@ -164,6 +165,7 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
     const entry = try self.entry_pool.create(self.allocator);
     entry.* = .{
         .next = null,
+        .released = false,
         .pool = self,
         .bucket = bucket,
         .bytes = 0,
@@ -191,22 +193,34 @@ pub fn release(self: *ArenaPool, entry: *Arena) void {
     const arena = &entry._arena;
     const bucket = entry.bucket;
 
-    lp.metrics.arena_inflight.decr(bucket.size);
-
-    if (lp.IS_DEBUG) {
+    {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
-        if (self._leak_track.getPtr(entry.debug)) |count| {
-            count.* -= 1;
-            if (count.* < 0) {
-                log.err(.bug, "ArenaPool double-free", .{ .name = entry.debug });
-                @panic("ArenaPool: double-free detected");
+
+        if (entry.released) {
+            // This arena was already released. It's better to crash here
+            // because it [hopefully] gives us the stack that re-released, else
+            // it'll crash in some random code.
+            lp.assert(false, "ArenaPool double release", .{
+                .bucket = @tagName(bucket.size),
+                .name = if (comptime lp.IS_DEBUG) entry.debug else "",
+            });
+        }
+        entry.released = true;
+
+        if (comptime lp.IS_DEBUG) {
+            if (self._leak_track.getPtr(entry.debug)) |count| {
+                // Can't go negative: the released check above already caught
+                // a double release of this entry.
+                count.* -= 1;
+            } else {
+                log.err(.bug, "ArenaPool release unknown", .{ .name = entry.debug });
+                @panic("ArenaPool: release of untracked arena");
             }
-        } else {
-            log.err(.bug, "ArenaPool release unknown", .{ .name = entry.debug });
-            @panic("ArenaPool: release of untracked arena");
         }
     }
+
+    lp.metrics.arena_inflight.decr(bucket.size);
 
     entry.unpin();
     _ = arena.reset(.{ .retain_with_limit = bucket.retain_bytes });

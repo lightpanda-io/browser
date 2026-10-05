@@ -46,7 +46,7 @@ pub const Type = union(enum) {
     touch_event: *@import("TouchEvent.zig"),
 };
 
-pub const UIEventOptions = struct {
+const UIEventOptions = struct {
     detail: u32 = 0,
     view: ?*Window = null,
 };
@@ -113,7 +113,7 @@ pub fn getDetail(self: *UIEvent) u32 {
 
 // sourceCapabilities not implemented
 
-pub fn getView(self: *UIEvent, frame: *Frame) ?*Window {
+fn getView(self: *UIEvent, frame: *Frame) ?*Window {
     if (self._view) |view| {
         return view;
     }
@@ -126,7 +126,7 @@ pub fn getView(self: *UIEvent, frame: *Frame) ?*Window {
 }
 
 // Legacy: see https://w3c.github.io/uievents/#dom-uievent-which
-pub fn getWhich(self: *const UIEvent) u32 {
+fn getWhich(self: *const UIEvent) u32 {
     return switch (self._type) {
         .mouse_event => |me| blk: {
             const button = me.getButton();
@@ -137,7 +137,7 @@ pub fn getWhich(self: *const UIEvent) u32 {
     };
 }
 
-pub fn initUIEvent(
+fn initUIEvent(
     self: *UIEvent,
     typ: []const u8,
     bubbles: ?bool,

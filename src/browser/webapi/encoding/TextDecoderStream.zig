@@ -97,11 +97,11 @@ pub fn getWritable(self: *const TextDecoderStream) *WritableStream {
     return self._transform.getWritable();
 }
 
-pub fn getFatal(self: *const TextDecoderStream) bool {
+fn getFatal(self: *const TextDecoderStream) bool {
     return self._fatal;
 }
 
-pub fn getIgnoreBOM(self: *const TextDecoderStream) bool {
+fn getIgnoreBOM(self: *const TextDecoderStream) bool {
     return self._ignore_bom;
 }
 

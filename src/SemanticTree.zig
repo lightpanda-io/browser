@@ -19,15 +19,17 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const isAllWhitespace = @import("string.zig").isAllWhitespace;
 const interactive = @import("browser/interactive.zig");
 const SelectorPath = @import("browser/SelectorPath.zig");
 
 const CData = @import("browser/webapi/CData.zig");
 const Element = @import("browser/webapi/Element.zig");
+const Label = @import("browser/webapi/element/html/Label.zig");
 const Node = @import("browser/webapi/Node.zig");
-const AXNode = @import("cdp/AXNode.zig");
-const CDPNode = @import("cdp/Node.zig");
+const AXNode = @import("server/cdp/AXNode.zig");
+
+const NodeRegistry = @import("NodeRegistry.zig");
+const isAllWhitespace = @import("string.zig").isAllWhitespace;
 
 const log = lp.log;
 const Frame = lp.Frame;
@@ -35,53 +37,64 @@ const Frame = lp.Frame;
 const Self = @This();
 
 dom_node: *Node,
-registry: *CDPNode.Registry,
-frame: *Frame,
+registry: *NodeRegistry,
+frame: *Frame, // we never visit iframes, every node we visit is in the same frame as dom_node
 arena: std.mem.Allocator,
-prune: bool = true,
-interactive_only: bool = false,
-max_depth: u32 = std.math.maxInt(u32) - 1,
+prune: bool,
+interactive_only: bool,
+max_depth: u32,
 
-pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
-    var visitor = JsonVisitor{ .jw = jw, .tree = self };
+pub const Opts = struct {
+    prune: bool = true,
+    interactive_only: bool = false,
+    max_depth: u32 = std.math.maxInt(u32) - 1,
+};
+
+/// `frame` only seeds the owner lookup; the tree is walked with the frame
+/// that owns `node`. A node whose document has no frame (DOMParser, XHR, or
+/// a frame that has since navigated away) has no styles or layout to
+/// describe.
+pub fn init(arena: std.mem.Allocator, node: *Node, registry: *NodeRegistry, frame: *Frame, opts: Opts) error{FramelessNode}!Self {
+    return .{
+        .dom_node = node,
+        .registry = registry,
+        .frame = node.ownerFrame(frame) orelse return error.FramelessNode,
+        .arena = arena,
+        .prune = opts.prune,
+        .interactive_only = opts.interactive_only,
+        .max_depth = opts.max_depth,
+    };
+}
+
+/// Walk the pruned tree with `visitor`: `visit(*Node, *NodeData) !bool`
+/// returns whether to descend into the children, `leave() !void` closes a
+/// visited node.
+fn visitAll(self: @This(), visitor: anytype) error{WriteFailed}!void {
     var xpath_buffer: std.ArrayList(u8) = .empty;
     const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
-    var visibility_cache: Element.VisibilityCache = .empty;
-    var pointer_events_cache: Element.PointerEventsCache = .empty;
+    var label_index: Label.LabelByForIndex = .{};
     var ctx: WalkContext = .{
         .xpath_buffer = &xpath_buffer,
         .listener_targets = listener_targets,
-        .visibility_cache = &visibility_cache,
-        .pointer_events_cache = &pointer_events_cache,
+        .label_index = &label_index,
     };
-    self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
-        log.err(.app, "semantic tree json dump failed", .{ .err = err });
+    self.walk(&ctx, visitor) catch |err| {
+        log.err(.app, "semantic tree walk failed", .{ .err = err });
         return error.WriteFailed;
     };
 }
 
+pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
+    var visitor = JsonVisitor{ .jw = jw, .tree = self };
+    return self.visitAll(&visitor);
+}
+
 pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
     var visitor = TextVisitor{ .writer = writer, .tree = self, .depth = 0 };
-    var xpath_buffer: std.ArrayList(u8) = .empty;
-    const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
-        log.err(.app, "listener map failed", .{ .err = err });
-        return error.WriteFailed;
-    };
-    var visibility_cache: Element.VisibilityCache = .empty;
-    var pointer_events_cache: Element.PointerEventsCache = .empty;
-    var ctx: WalkContext = .{
-        .xpath_buffer = &xpath_buffer,
-        .listener_targets = listener_targets,
-        .visibility_cache = &visibility_cache,
-        .pointer_events_cache = &pointer_events_cache,
-    };
-    self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
-        log.err(.app, "semantic tree text dump failed", .{ .err = err });
-        return error.WriteFailed;
-    };
+    return self.visitAll(&visitor);
 }
 
 const OptionData = struct {
@@ -91,7 +104,7 @@ const OptionData = struct {
 };
 
 const NodeData = struct {
-    id: CDPNode.Id,
+    id: NodeRegistry.Id,
     axn: AXNode,
     role: []const u8,
     name: ?[]const u8,
@@ -107,19 +120,63 @@ const NodeData = struct {
 const WalkContext = struct {
     xpath_buffer: *std.ArrayList(u8),
     listener_targets: interactive.ListenerTargetMap,
-    visibility_cache: *Element.VisibilityCache,
-    pointer_events_cache: *Element.PointerEventsCache,
+    label_index: *Label.LabelByForIndex,
 };
 
-fn walk(
+// A node whose children are still being walked
+const Open = struct {
+    next_child: ?*Node,
+    // for the children's xpath index
+    tag_counts: std.StringArrayHashMapUnmanaged(usize) = .empty,
+    name: ?[]const u8, // The children's parent_name
+    xpath_len: usize,
+    visited: bool,
+};
+
+fn walk(self: @This(), ctx: *WalkContext, visitor: anytype) !void {
+    var stack: std.ArrayList(Open) = .empty;
+    defer stack.deinit(self.arena);
+
+    try self.visitNode(ctx, &stack, self.dom_node, null, visitor, 1);
+    while (stack.items.len > 0) {
+        // Everything read from `top` is read before visitNode, which can grow (move) the stack.
+        const top = &stack.items[stack.items.len - 1];
+        if (top.next_child) |child| {
+            top.next_child = child._next;
+
+            var tag: []const u8 = "text()";
+            if (child.is(Element)) |el| {
+                tag = el.getTagNameLower();
+            }
+            const gop = try top.tag_counts.getOrPut(self.arena, tag);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = 0;
+            }
+            gop.value_ptr.* += 1;
+
+            try self.visitNode(ctx, &stack, child, top.name, visitor, gop.value_ptr.*);
+            continue;
+        }
+
+        const done = stack.pop().?;
+        if (done.visited) {
+            try visitor.leave();
+        }
+        ctx.xpath_buffer.shrinkRetainingCapacity(done.xpath_len);
+    }
+}
+
+// Every ancestor of `node` below the root is open, so the stack's length is its depth.
+fn visitNode(
     self: @This(),
     ctx: *WalkContext,
+    stack: *std.ArrayList(Open),
     node: *Node,
     parent_name: ?[]const u8,
     visitor: anytype,
     index: usize,
-    current_depth: u32,
 ) !void {
+    const current_depth = stack.items.len;
     if (current_depth > self.max_depth) return;
 
     // 1. Skip non-content nodes
@@ -130,8 +187,9 @@ fn walk(
         // We handle options/optgroups natively inside their parents, skip them in the general walk
         if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
-        // Check visibility using the engine's checkVisibility which handles CSS display: none
-        if (!el.checkVisibilityCached(ctx.visibility_cache, self.frame)) {
+        // Not just the element's own display: a slotted element inherits
+        // from its slot, which this light-tree walk never visits.
+        if (self.frame._style_manager.isHidden(el, .{})) {
             return;
         }
 
@@ -177,7 +235,7 @@ fn walk(
         }
 
         if (el.is(Element.Html)) |html_el| {
-            if (interactive.classifyInteractivity(self.frame, el, html_el, ctx.listener_targets, ctx.pointer_events_cache) != null) {
+            if (interactive.classifyInteractivity(self.frame, el, html_el, ctx.listener_targets) != null) {
                 is_interactive = true;
             }
         }
@@ -191,21 +249,21 @@ fn walk(
     try appendXPathSegment(node, ctx.xpath_buffer, self.arena, index);
     const xpath = ctx.xpath_buffer.items;
 
-    var name = try axn.getName(self.frame, self.arena);
-
     const has_explicit_label = if (node.is(Element)) |el|
-        el.getAttributeSafe(comptime .wrap("aria-label")) != null or el.getAttributeSafe(comptime .wrap("title")) != null
+        el.getAttributeInterned("aria-label") != null or el.getAttributeInterned("title") != null
     else
         false;
 
     const structural = isStructuralRole(role);
 
-    // Filter out computed concatenated names for generic containers without explicit labels.
+    // No computed concatenated names for generic containers without explicit labels.
     // This prevents token bloat and ensures their StaticText children aren't incorrectly pruned.
     // We ignore interactivity because a generic wrapper with an event listener still shouldn't hoist all text.
-    if (name != null and structural and !has_explicit_label) {
-        name = null;
-    }
+    // Not computing it also keeps a deep chain of containers from being O(depth²).
+    const name = if (structural and !has_explicit_label)
+        null
+    else
+        try axn.getName(self.frame, self.arena, ctx.label_index);
 
     var should_visit = true;
     if (self.interactive_only) {
@@ -230,7 +288,7 @@ fn walk(
         }
 
         if (std.mem.eql(u8, role, "StaticText") and node._parent != null) {
-            if (parent_name != null and name != null and std.mem.indexOf(u8, parent_name.?, name.?) != null) {
+            if (parent_name != null and name != null and std.mem.find(u8, parent_name.?, name.?) != null) {
                 should_visit = false;
             }
         }
@@ -260,32 +318,12 @@ fn walk(
         did_visit = false;
     }
 
-    if (should_walk_children) {
-        // If we are printing this node normally OR skipping it and unrolling its children,
-        // we walk the children iterator.
-        var it = node.childrenIterator();
-        var tag_counts: std.StringArrayHashMapUnmanaged(usize) = .empty;
-        while (it.next()) |child| {
-            var tag: []const u8 = "text()";
-            if (child.is(Element)) |el| {
-                tag = el.getTagNameLower();
-            }
-
-            const gop = try tag_counts.getOrPut(self.arena, tag);
-            if (!gop.found_existing) {
-                gop.value_ptr.* = 0;
-            }
-            gop.value_ptr.* += 1;
-
-            try self.walk(ctx, child, name, visitor, gop.value_ptr.*, current_depth + 1);
-        }
-    }
-
-    if (did_visit) {
-        try visitor.leave();
-    }
-
-    ctx.xpath_buffer.shrinkRetainingCapacity(initial_xpath_len);
+    try stack.append(self.arena, .{
+        .next_child = if (should_walk_children) node._first_child else null,
+        .name = name,
+        .xpath_len = initial_xpath_len,
+        .visited = did_visit,
+    });
 }
 
 fn extractSelectOptions(node: *Node, frame: *Frame, arena: std.mem.Allocator) ![]OptionData {
@@ -342,7 +380,7 @@ const JsonVisitor = struct {
         try self.jw.beginObject();
 
         try self.jw.objectField("nodeId");
-        try self.jw.write(try std.fmt.allocPrint(self.tree.arena, "{d}", .{data.id}));
+        try self.jw.write(try self.tree.arena.print("{d}", .{data.id}));
 
         try self.jw.objectField("backendDOMNodeId");
         try self.jw.write(data.id);
@@ -542,8 +580,8 @@ const TextVisitor = struct {
     }
 };
 
-pub const NodeDetails = struct {
-    backendNodeId: CDPNode.Id,
+const NodeDetails = struct {
+    backendNodeId: NodeRegistry.Id,
     tag_name: []const u8,
     role: []const u8,
     name: ?[]const u8,
@@ -646,16 +684,16 @@ pub const NodeDetails = struct {
     }
 };
 
-pub fn getNodeDetails(
-    arena: std.mem.Allocator,
-    node: *Node,
-    registry: *CDPNode.Registry,
-    frame: *Frame,
-) !NodeDetails {
-    const cdp_node = try registry.register(node);
+pub fn nodeDetails(self: Self) !NodeDetails {
+    const arena = self.arena;
+    const node = self.dom_node;
+    const frame = self.frame;
+
+    const cdp_node = try self.registry.register(node);
     const axn = AXNode.fromNode(node);
     const role = try axn.getRole();
-    const name = try axn.getName(frame, arena);
+    var labels: Label.LabelByForIndex = .{};
+    const name = try axn.getName(frame, arena, &labels);
 
     var is_interactive = false;
     var is_disabled = false;
@@ -673,12 +711,12 @@ pub fn getNodeDetails(
     if (node.is(Element)) |el| {
         tag_name = el.getTagNameLower();
         is_disabled = el.isDisabled();
-        id_attr = el.getAttributeSafe(comptime .wrap("id"));
-        class_attr = el.getAttributeSafe(comptime .wrap("class"));
+        id_attr = el.getId();
+        class_attr = el.getClassName();
         selector = try SelectorPath.init(arena, frame).build(el);
-        placeholder = el.getAttributeSafe(comptime .wrap("placeholder"));
+        placeholder = el.getAttributeInterned("placeholder");
 
-        if (el.getAttributeSafe(comptime .wrap("href"))) |h| {
+        if (el.getAttributeInterned("href")) |h| {
             const URL = lp.URL;
             href = URL.resolve(arena, frame.base(), h, .{ .encoding = frame.charset }) catch h;
         }
@@ -701,8 +739,7 @@ pub fn getNodeDetails(
 
         if (el.is(Element.Html)) |html_el| {
             const listener_targets = try interactive.buildListenerTargetMap(frame, arena);
-            var pointer_events_cache: Element.PointerEventsCache = .empty;
-            if (interactive.classifyInteractivity(frame, el, html_el, listener_targets, &pointer_events_cache) != null) {
+            if (interactive.classifyInteractivity(frame, el, html_el, listener_targets) != null) {
                 is_interactive = true;
             }
         }
@@ -730,46 +767,30 @@ pub fn getNodeDetails(
 const testing = @import("testing.zig");
 
 test "SemanticTree backendDOMNodeId" {
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry: NodeRegistry = .init(testing.allocator);
     defer registry.deinit();
 
     var page = try testing.pageTest("cdp/registry1.html", .{});
     defer page.close();
     const frame = page.frame().?;
 
-    const st: Self = .{
-        .dom_node = frame.window._document.asNode(),
-        .registry = &registry,
-        .frame = frame,
-        .arena = testing.arena_allocator,
-        .prune = false,
-        .interactive_only = false,
-        .max_depth = std.math.maxInt(u32) - 1,
-    };
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false });
 
     const json_str = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
     defer testing.allocator.free(json_str);
 
-    try testing.expect(std.mem.indexOf(u8, json_str, "\"backendDOMNodeId\":") != null);
+    try testing.expect(std.mem.find(u8, json_str, "\"backendDOMNodeId\":") != null);
 }
 
 test "SemanticTree max_depth" {
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry: NodeRegistry = .init(testing.allocator);
     defer registry.deinit();
 
     var page = try testing.pageTest("cdp/registry1.html", .{});
     defer page.close();
     const frame = page.frame().?;
 
-    const st: Self = .{
-        .dom_node = frame.window._document.asNode(),
-        .registry = &registry,
-        .frame = frame,
-        .arena = testing.arena_allocator,
-        .prune = false,
-        .interactive_only = false,
-        .max_depth = 1,
-    };
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false, .max_depth = 1 });
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
@@ -777,5 +798,54 @@ test "SemanticTree max_depth" {
     try st.textStringify(&aw.writer);
     const text_str = aw.written();
 
-    try testing.expect(std.mem.indexOf(u8, text_str, "other") == null);
+    try testing.expect(std.mem.find(u8, text_str, "other") == null);
+}
+
+test "SemanticTree: a slotted element inherits its slot's display" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/slotted_hidden.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false });
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try st.textStringify(&aw.writer);
+
+    try testing.expect(std.mem.find(u8, aw.written(), "slotted-shown") != null);
+    try testing.expect(std.mem.find(u8, aw.written(), "slotted-hidden") == null);
+}
+
+test "SemanticTree: deep nesting doesn't overflow the native stack" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    // The link's name comes from its content: the whole chain. The <g>s are
+    // pruned, so the JSON only nests link > text. SVG, as an HTML element's
+    // pointer-events lookup walks its ancestors: O(depth²).
+    const depth = 50_000;
+    const doc = frame.window._document;
+    var top = try doc.createTextNode("deep");
+    for (0..depth) |_| {
+        const parent = (try doc.createElementNS("http://www.w3.org/2000/svg", "g", frame)).asNode();
+        _ = try parent.appendChild(top, frame);
+        top = parent;
+    }
+    const link = try doc.createElement("a", null, frame);
+    try link.setAttribute(.wrap("href"), .wrap("#"), frame);
+    _ = try link.asNode().appendChild(top, frame);
+
+    const st: Self = try .init(testing.arena_allocator, link.asNode(), &registry, frame, .{});
+    const json_str = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
+    defer testing.allocator.free(json_str);
+
+    try testing.expect(std.mem.find(u8, json_str, "\"role\":\"link\",\"name\":\"deep\"") != null);
+    try testing.expectEqual(depth, std.mem.count(u8, json_str, "/g[1]"));
+    try testing.expect(std.mem.endsWith(u8, json_str, "/text()[1]\",\"nodeType\":3,\"nodeValue\":\"deep\",\"children\":[]}]}"));
 }

@@ -19,9 +19,11 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const ClockCache = @import("ClockCache.zig").ClockCache;
+
 const log = lp.log;
 
-pub const CompiledPattern = struct {
+const CompiledPattern = struct {
     pattern: []const u8,
     ty: enum {
         prefix, // "/admin/" - prefix match
@@ -37,7 +39,7 @@ pub const CompiledPattern = struct {
             };
         }
 
-        const is_wildcard = std.mem.indexOfScalar(u8, pattern, '*') != null;
+        const is_wildcard = std.mem.findScalar(u8, pattern, '*') != null;
 
         if (is_wildcard) {
             return .{
@@ -54,7 +56,7 @@ pub const CompiledPattern = struct {
     }
 };
 
-pub const Rule = union(enum) {
+const Rule = union(enum) {
     allow: CompiledPattern,
     disallow: CompiledPattern,
 
@@ -86,9 +88,6 @@ pub const ContentSignal = struct {
 pub const Robots = @This();
 pub const empty: Robots = .{ .rules = &.{}, .content_signals = &.{} };
 
-// Think twice before deleting/freeing any entries from the map. Readers, e.g.
-// get and getContentSignals, receive values from the map, and if another thread
-// was to delete / free those values while in use, UAF.
 pub const RobotStore = struct {
     const RobotsEntry = union(enum) {
         present: Robots,
@@ -96,39 +95,46 @@ pub const RobotStore = struct {
         disallowed,
     };
 
-    pub const RobotsMap = @import("Network.zig").HostHashMap(RobotsEntry);
-
     allocator: std.mem.Allocator,
-    map: RobotsMap,
+    map: ClockCache(RobotsEntry),
     mutex: std.Io.Mutex = .init,
 
-    pub fn init(allocator: std.mem.Allocator) RobotStore {
-        return .{ .allocator = allocator, .map = .empty };
+    pub fn init(allocator: std.mem.Allocator, capacity: u32) RobotStore {
+        return .{
+            .allocator = allocator,
+            .map = .init(allocator, capacity),
+        };
     }
 
     pub fn deinit(self: *RobotStore) void {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        var iter = self.map.iterator();
-
-        while (iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-
-            switch (entry.value_ptr.*) {
-                .present => |*robots| robots.deinit(self.allocator),
-                .allowed, .disallowed => {},
-            }
+        for (self.map.entries()) |*entry| {
+            self.freeEntry(&entry.value);
         }
-
-        self.map.deinit(self.allocator);
+        self.map.deinit();
     }
 
-    pub fn get(self: *RobotStore, url: []const u8) ?RobotsEntry {
+    fn freeEntry(self: *RobotStore, entry: *RobotsEntry) void {
+        switch (entry.*) {
+            .present => |*robots| robots.deinit(self.allocator),
+            .allowed, .disallowed => {},
+        }
+    }
+
+    pub const Decision = enum { allowed, blocked };
+
+    pub fn checkPath(self: *RobotStore, url: []const u8, path: []const u8) ?Decision {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        return self.map.get(url);
+        const entry = self.map.get(url) orelse return null;
+        return switch (entry.*) {
+            .allowed => .allowed,
+            .disallowed => .blocked,
+            .present => |robots| if (robots.isAllowed(path)) .allowed else .blocked,
+        };
     }
 
     pub fn robotsFromBytes(self: *RobotStore, user_agent: []const u8, bytes: []const u8) !Robots {
@@ -139,38 +145,62 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        const duped = try self.allocator.dupe(u8, url);
-        try self.map.put(self.allocator, duped, .{ .present = robots });
+        if (try self.insert(url, .{ .present = robots })) return;
+
+        var discarded = robots;
+        discarded.deinit(self.allocator);
     }
 
-    // The returned slice is owned by the store
-    pub fn getContentSignals(self: *RobotStore, url: []const u8) ?[]const ContentSignal {
+    pub fn getContentSignals(
+        self: *RobotStore,
+        allocator: std.mem.Allocator,
+        url: []const u8,
+    ) !?[]const ContentSignal {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
         const entry = self.map.get(url) orelse return null;
-        return switch (entry) {
+        const signals = switch (entry.*) {
             .present => |robots| robots.content_signals,
-            .allowed, .disallowed => null,
+            .allowed, .disallowed => return null,
         };
+
+        const out = try allocator.alloc(ContentSignal, signals.len);
+        for (signals, 0..) |signal, i| {
+            out[i] = .{
+                .name = try allocator.dupe(u8, signal.name),
+                .value = try allocator.dupe(u8, signal.value),
+            };
+        }
+        return out;
     }
 
     /// This URL has no restrictions on crawling.
     pub fn putAllowed(self: *RobotStore, url: []const u8) !void {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
-
-        const duped = try self.allocator.dupe(u8, url);
-        try self.map.put(self.allocator, duped, .allowed);
+        _ = try self.insert(url, .allowed);
     }
 
     /// This URL is fully restricted from crawling.
     pub fn putDisallowed(self: *RobotStore, url: []const u8) !void {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
+        _ = try self.insert(url, .disallowed);
+    }
 
-        const duped = try self.allocator.dupe(u8, url);
-        try self.map.put(self.allocator, duped, .disallowed);
+    fn insert(self: *RobotStore, url: []const u8, entry: RobotsEntry) !bool {
+        switch (try self.map.insert(url, entry)) {
+            .exists => return false,
+            .inserted => |evicted| {
+                if (evicted) |value| {
+                    lp.metrics.robots_evictions.incr();
+                    var e = value;
+                    self.freeEntry(&e);
+                }
+                return true;
+            },
+        }
     }
 };
 
@@ -222,7 +252,7 @@ fn appendContentSignals(
     var iter = std.mem.splitScalar(u8, value, ',');
     while (iter.next()) |raw_pair| {
         const pair = std.mem.trim(u8, raw_pair, &std.ascii.whitespace);
-        const eq = std.mem.indexOfScalarPos(u8, pair, 0, '=') orelse continue;
+        const eq = std.mem.findScalarPos(u8, pair, 0, '=') orelse continue;
 
         const name_raw = std.mem.trim(u8, pair[0..eq], &std.ascii.whitespace);
         const value_raw = std.mem.trim(u8, pair[eq + 1 ..], &std.ascii.whitespace);
@@ -279,15 +309,15 @@ fn parseRulesWithUserAgent(
         if (std.mem.startsWith(u8, trimmed, "#")) continue;
 
         // Remove end of line comment.
-        const true_line = if (std.mem.indexOfScalar(u8, trimmed, '#')) |pos|
+        const true_line = if (std.mem.findScalar(u8, trimmed, '#')) |pos|
             std.mem.trimEnd(u8, trimmed[0..pos], &std.ascii.whitespace)
         else
             trimmed;
 
         if (true_line.len == 0) continue;
 
-        const colon_idx = std.mem.indexOfScalar(u8, true_line, ':') orelse {
-            log.warn(.browser, "robots line missing colon", .{ .line = line });
+        const colon_idx = std.mem.findScalar(u8, true_line, ':') orelse {
+            log.debug(.browser, "robots line missing colon", .{ .line = line });
             continue;
         };
         const key_str = try std.ascii.allocLowerString(allocator, true_line[0..colon_idx]);
@@ -345,7 +375,7 @@ fn parseRulesWithUserAgent(
                         try wildcard_rules.append(allocator, Rule.allowRule(duped_value));
                     },
                     .not_in_entry => {
-                        log.warn(.browser, "robots unexpected rule", .{ .rule = "allow" });
+                        log.debug(.browser, "robots unexpected rule", .{ .rule = "allow" });
                         continue;
                     },
                 }
@@ -370,7 +400,7 @@ fn parseRulesWithUserAgent(
                         try wildcard_rules.append(allocator, Rule.disallowRule(duped_value));
                     },
                     .not_in_entry => {
-                        log.warn(.browser, "robots unexpected rule", .{ .rule = "disallow" });
+                        log.debug(.browser, "robots unexpected rule", .{ .rule = "disallow" });
                         continue;
                     },
                 }
@@ -417,7 +447,7 @@ fn parseRulesWithUserAgent(
     return .{ .rules = out_rules, .content_signals = out_signals };
 }
 
-pub fn fromBytes(allocator: std.mem.Allocator, user_agent: []const u8, bytes: []const u8) !Robots {
+fn fromBytes(allocator: std.mem.Allocator, user_agent: []const u8, bytes: []const u8) !Robots {
     const parsed = try parseRulesWithUserAgent(allocator, user_agent, bytes);
     const rules = parsed.rules;
 
@@ -1216,7 +1246,7 @@ test "Robots: content-signal prefers specific user-agent over wildcard" {
 test "Robots: RobotStore.getContentSignals round-trips" {
     const allocator = std.testing.allocator;
 
-    var store = RobotStore.init(allocator);
+    var store = RobotStore.init(allocator, 1000);
     defer store.deinit();
 
     const robots = try store.robotsFromBytes("MyBot",
@@ -1226,13 +1256,20 @@ test "Robots: RobotStore.getContentSignals round-trips" {
     );
     try store.put("https://example.com/robots.txt", robots);
 
-    const signals = store.getContentSignals("https://example.com/robots.txt").?;
+    const signals = (try store.getContentSignals(allocator, "https://example.com/robots.txt")).?;
+    defer {
+        for (signals) |signal| {
+            allocator.free(signal.name);
+            allocator.free(signal.value);
+        }
+        allocator.free(signals);
+    }
     try std.testing.expectEqual(1, signals.len);
     try std.testing.expectEqualStrings("ai-train", signals[0].name);
     try std.testing.expectEqualStrings("no", signals[0].value);
 
     // Unknown host has no stored robots.
-    try std.testing.expectEqual(null, store.getContentSignals("https://other.com/robots.txt"));
+    try std.testing.expectEqual(null, try store.getContentSignals(allocator, "https://other.com/robots.txt"));
 }
 
 fn testMatch(pattern: []const u8, path: []const u8) bool {

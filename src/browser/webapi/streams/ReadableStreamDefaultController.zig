@@ -62,8 +62,8 @@ pub fn init(stream: *ReadableStream, high_water_mark: u32, exec: *const Executio
     });
 }
 
-pub fn addPendingRead(self: *ReadableStreamDefaultController) !js.Promise {
-    const resolver = self._execution.js.local.?.createPromiseResolver();
+pub fn addPendingRead(self: *ReadableStreamDefaultController, local: *const js.Local) !js.Promise {
+    const resolver = local.createPromiseResolver();
     try self._pending_reads.append(self._arena, try resolver.persist());
     return resolver.promise();
 }

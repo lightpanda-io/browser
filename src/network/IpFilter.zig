@@ -23,10 +23,10 @@ const libcurl = @import("../sys/libcurl.zig");
 const IpFilter = @This();
 
 /// Binary representation for bitwise CIDR comparison.
-pub const Ipv4Addr = [4]u8;
-pub const Ipv6Addr = [16]u8;
+const Ipv4Addr = [4]u8;
+const Ipv6Addr = [16]u8;
 
-pub const CidrV4 = struct {
+const CidrV4 = struct {
     network: u32,
     mask: u32,
 
@@ -42,7 +42,7 @@ pub const CidrV4 = struct {
     }
 };
 
-pub const CidrV6 = struct {
+const CidrV6 = struct {
     network_hi: u64,
     network_lo: u64,
     mask_hi: u64,
@@ -147,7 +147,7 @@ fn parseIpv4(str: []const u8) ?Ipv4Addr {
 /// Returns null on parse failure.
 fn parseIpv6(str: []const u8) ?Ipv6Addr {
     // Strip zone ID
-    const clean = if (std.mem.indexOfScalar(u8, str, '%')) |idx| str[0..idx] else str;
+    const clean = if (std.mem.findScalar(u8, str, '%')) |idx| str[0..idx] else str;
     const parsed = std.Io.net.IpAddress.parseIp6(clean, 0) catch return null;
     return parsed.ip6.bytes;
 }
@@ -219,7 +219,7 @@ pub fn parseCidrList(
         const is_allow = trimmed[0] == '-';
         const cidr_part = if (is_allow) trimmed[1..] else trimmed;
 
-        const slash = std.mem.indexOfScalar(u8, cidr_part, '/') orelse return error.InvalidCidr;
+        const slash = std.mem.findScalar(u8, cidr_part, '/') orelse return error.InvalidCidr;
         const addr_str = cidr_part[0..slash];
         const prefix_str = cidr_part[slash + 1 ..];
 

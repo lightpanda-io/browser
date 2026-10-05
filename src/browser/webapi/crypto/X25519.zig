@@ -42,9 +42,7 @@ pub fn init(
     // Calculate usages; only matters for private key.
     // Only deriveKey() and deriveBits() be used for X25519.
     if (key_usages.len == 0) {
-        return local.rejectPromise(.{
-            .dom_exception = .{ .err = error.SyntaxError },
-        });
+        return error.SyntaxError;
     }
     var mask: u8 = 0;
     iter_usages: for (key_usages) |usage| {
@@ -55,9 +53,7 @@ pub fn init(
             }
         }
         // Unknown usage if got here.
-        return local.rejectPromise(.{
-            .dom_exception = .{ .err = error.SyntaxError },
-        });
+        return error.SyntaxError;
     }
 
     const public_value = try exec.local_arena.alloc(u8, crypto.X25519_PUBLIC_VALUE_LEN);

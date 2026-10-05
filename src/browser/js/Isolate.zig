@@ -48,7 +48,7 @@ pub const MemoryPressureLevel = enum(u32) {
 };
 
 pub fn memoryPressureNotification(self: Isolate, level: MemoryPressureLevel) void {
-    v8.v8__Isolate__MemoryPressureNotification(self.handle, @intFromEnum(level));
+    v8.v8__Isolate__MemoryPressureNotification(self.handle, @backingInt(level));
 }
 
 // Tells V8 how much native memory is hanging off objects in this isolate, so
@@ -58,7 +58,7 @@ pub fn adjustAmountOfExternalAllocatedMemory(self: Isolate, delta: i64) void {
 }
 
 pub fn notifyContextDisposed(self: Isolate) void {
-    _ = v8.v8__Isolate__ContextDisposedNotification(self.handle);
+    v8.v8__Isolate__ContextDisposedNotification(self.handle);
 }
 
 pub fn getHeapStatistics(self: Isolate) v8.HeapStatistics {
@@ -122,10 +122,6 @@ pub fn initTrue(self: Isolate) *const v8.Value {
 
 pub fn initInteger(self: Isolate, val: anytype) js.Integer {
     return js.Integer.init(self.handle, val);
-}
-
-pub fn initBigInt(self: Isolate, val: anytype) js.BigInt {
-    return js.BigInt.init(self.handle, val);
 }
 
 pub fn initNumber(self: Isolate, val: anytype) js.Number {

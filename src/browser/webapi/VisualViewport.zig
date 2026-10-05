@@ -30,20 +30,20 @@ pub fn asEventTarget(self: *VisualViewport) *EventTarget {
     return self._proto;
 }
 
-pub fn getPageLeft(_: *const VisualViewport, frame: *Frame) u32 {
+fn getPageLeft(_: *const VisualViewport, frame: *Frame) u32 {
     return frame.window.getScrollX();
 }
 
-pub fn getPageTop(_: *const VisualViewport, frame: *Frame) u32 {
+fn getPageTop(_: *const VisualViewport, frame: *Frame) u32 {
     return frame.window.getScrollY();
 }
 
 pub fn getWidth(_: *const VisualViewport, frame: *Frame) u32 {
-    return frame._page.getViewport().width;
+    return frame.page.getViewport().width;
 }
 
 pub fn getHeight(_: *const VisualViewport, frame: *Frame) u32 {
-    return frame._page.getViewport().height;
+    return frame.page.getViewport().height;
 }
 
 pub const JsApi = struct {

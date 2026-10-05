@@ -63,21 +63,40 @@ pub fn copy(arena: Allocator, original: KeyValueList) !KeyValueList {
 }
 
 pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?Normalizer, buf: []u8) !KeyValueList {
-    var it = try js_obj.nameIterator();
+    var it = try js_obj.iterator();
+
     var list = KeyValueList.init();
     try list.ensureTotalCapacity(arena, it.count);
 
-    while (try it.next()) |name| {
-        const js_value = try js_obj.get(name);
+    while (try it.next()) |kv| {
+        const name = kv.name;
         const normalized = if (comptime normalizer) |n| n(name, buf) else name;
+
+        // Two JS keys can mape to the same string, and in such cases, it's
+        // an update, not an append.
+        if (comptime normalizer == null) {
+            if (list.getEntryPtr(name)) |entry| {
+                entry.value = try kv.value.toSSOWithAlloc(arena);
+                continue;
+            }
+        }
 
         list._entries.appendAssumeCapacity(.{
             .name = try String.init(arena, normalized, .{}),
-            .value = try js_value.toSSOWithAlloc(arena),
+            .value = try kv.value.toSSOWithAlloc(arena),
         });
     }
 
     return list;
+}
+
+fn getEntryPtr(self: *KeyValueList, name: []const u8) ?*Entry {
+    for (self._entries.items) |*entry| {
+        if (entry.name.eqlSlice(name)) {
+            return entry;
+        }
+    }
+    return null;
 }
 
 pub fn fromArray(arena: Allocator, kvs: []const [2][]const u8, comptime normalizer: ?Normalizer, buf: []u8) !KeyValueList {
@@ -122,10 +141,12 @@ pub fn getAll(self: *const KeyValueList, allocator: Allocator, name: []const u8)
     return arr.items;
 }
 
-pub fn has(self: *const KeyValueList, name: []const u8) bool {
+pub fn has(self: *const KeyValueList, name: []const u8, value: ?[]const u8) bool {
     for (self._entries.items) |*entry| {
         if (entry.name.eqlSlice(name)) {
-            return true;
+            if (value == null or entry.value.eqlSlice(value.?)) {
+                return true;
+            }
         }
     }
     return false;
@@ -145,22 +166,47 @@ pub fn appendAssumeCapacity(self: *KeyValueList, allocator: Allocator, name: []c
     });
 }
 
+// Preserve the relative order
 pub fn delete(self: *KeyValueList, name: []const u8, value: ?[]const u8) void {
+    const entries = self._entries.items;
     var i: usize = 0;
-    while (i < self._entries.items.len) {
-        const entry = self._entries.items[i];
+    for (entries) |entry| {
         if (entry.name.eqlSlice(name)) {
             if (value == null or entry.value.eqlSlice(value.?)) {
-                _ = self._entries.swapRemove(i);
                 continue;
             }
         }
+        entries[i] = entry;
         i += 1;
     }
+    self._entries.items.len = i;
 }
 
+// Update the first match, remove all the others
 pub fn set(self: *KeyValueList, allocator: Allocator, name: []const u8, value: []const u8) !void {
-    self.delete(name, null);
+    const entries = self._entries.items;
+    for (entries, 0..) |*entry, i| {
+        if (entry.name.eqlSlice(name) == false) {
+            continue;
+        }
+
+        // this is our first matching entry, update its value
+        entry.value = try String.init(allocator, value, .{});
+
+        // and now delete all other matching entreis
+        var w: usize = i + 1;
+        for (entries[i + 1 ..]) |later| {
+            if (later.name.eqlSlice(name)) {
+                continue;
+            }
+            entries[w] = later;
+            w += 1;
+        }
+        self._entries.items.len = w;
+        return;
+    }
+
+    // wasn't found, append
     try self.append(allocator, name, value);
 }
 

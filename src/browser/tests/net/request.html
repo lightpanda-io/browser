@@ -209,7 +209,56 @@
     testing.expectEqual(req1.url, req2.url);
     testing.expectEqual(req1.method, req2.method);
     testing.expectEqual('value', req2.headers.get('X-Custom'));
+
+    // Each copy owns its headers.
+    req2.headers.set('X-Custom', 'changed');
+    req2.headers.append('X-Other', 'other');
+    testing.expectEqual('value', req1.headers.get('X-Custom'));
+    testing.expectEqual(null, req1.headers.get('X-Other'));
   }
+
+  {
+    const req1 = new Request('https://example.com/api', { mode: 'no-cors' });
+    const req2 = req1.clone();
+    testing.expectEqual('no-cors', req2.mode);
+    // The no-cors guard carries over: non-safelisted headers are dropped.
+    req2.headers.set('X-Custom', 'value');
+    testing.expectEqual(null, req2.headers.get('X-Custom'));
+  }
+</script>
+
+<script id=request_input_inherits>
+  {
+    const req1 = new Request('https://example.com/api', {
+      mode: 'same-origin',
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'manual',
+    });
+
+    for (const req2 of [new Request(req1), new Request(req1, {}), new Request(req1, { method: 'POST' })]) {
+      testing.expectEqual('same-origin', req2.mode);
+      testing.expectEqual('no-store', req2.cache);
+      testing.expectEqual('omit', req2.credentials);
+      testing.expectEqual('manual', req2.redirect);
+    }
+
+    const req3 = new Request(req1, { mode: 'cors', cache: 'reload', credentials: 'include', redirect: 'error' });
+    testing.expectEqual('cors', req3.mode);
+    testing.expectEqual('reload', req3.cache);
+    testing.expectEqual('include', req3.credentials);
+    testing.expectEqual('error', req3.redirect);
+  }
+
+  {
+    const req = new Request('https://example.com/api');
+    testing.expectEqual('cors', req.mode);
+    testing.expectEqual('default', req.cache);
+    testing.expectEqual('same-origin', req.credentials);
+    testing.expectEqual('follow', req.redirect);
+  }
+
+  testing.expectError('TypeError', () => new Request('https://example.com/api', { mode: 'navigate' }));
 </script>
 
 <script id=body_used type=module>
@@ -247,6 +296,67 @@
   });
 </script>
 
+<script id=stream_body type=module>
+  const state = await testing.async();
+  const enc = new TextEncoder();
+
+  // ky's request-streams probe: an open stream body constructs fine, and
+  // since `duplex` is never read, it concludes uploads can't stream.
+  let duplexRead = false;
+  const probe = new Request('https://empty.invalid', {
+    body: new ReadableStream(),
+    method: 'POST',
+    get duplex() { duplexRead = true; return 'half'; },
+  });
+  const probeHasContentType = probe.headers.has('Content-Type');
+
+  // Drained on first use, so a body enqueued after construction is read.
+  let controller;
+  const req1 = new Request('https://example.com', {
+    method: 'POST',
+    body: new ReadableStream({ start(c) { controller = c; } }),
+  });
+  const usedBefore1 = req1.bodyUsed;
+  controller.enqueue(enc.encode('late'));
+  controller.close();
+  const text1 = await req1.text();
+  const usedAfter1 = req1.bodyUsed;
+
+  // Still open at first use: TypeError.
+  const req2 = new Request('https://example.com', { method: 'POST', body: new ReadableStream() });
+  let rejected2 = false;
+  try { await req2.text(); } catch (e) { rejected2 = e instanceof TypeError; }
+
+  // A Request built from one with a stream body carries it.
+  const req3 = new Request(new Request('https://example.com', {
+    method: 'POST',
+    body: new ReadableStream({ start(c) { c.enqueue(enc.encode('carried')); c.close(); } }),
+  }));
+  const text3 = await req3.text();
+
+  // clone() drains, so both copies read the body.
+  const req4 = new Request('https://example.com', {
+    method: 'POST',
+    body: new ReadableStream({ start(c) { c.enqueue(enc.encode('twice')); c.close(); } }),
+  });
+  const req4b = req4.clone();
+  const text4 = await req4.text();
+  const text4b = await req4b.text();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectFalse(duplexRead);
+    testing.expectFalse(probeHasContentType);
+    testing.expectFalse(usedBefore1);
+    testing.expectEqual('late', text1);
+    testing.expectTrue(usedAfter1);
+    testing.expectTrue(rejected2);
+    testing.expectEqual('carried', text3);
+    testing.expectEqual('twice', text4);
+    testing.expectEqual('twice', text4b);
+  });
+</script>
+
 <script id=content_type_from_body>
   {
     const req = new Request('https://example.com', { method: 'POST', body: 'x' });
@@ -257,6 +367,26 @@
     const req = new Request('https://example.com', { method: 'POST', body: new Uint8Array([1, 2, 3]) });
     testing.expectTrue(req.headers.get('content-type') === null);
   }
+</script>
+
+<script id=buffer_source_bodies type=module>
+  const state = await testing.async();
+
+  // Every ArrayBufferView is a BufferSource, viewed as its raw bytes.
+  const int8 = await new Request('https://example.com', { method: 'POST', body: new Int8Array([-1, 2]) }).bytes();
+  const float32 = await new Request('https://example.com', { method: 'POST', body: new Float32Array([1]) }).bytes();
+  const buf = new ArrayBuffer(4);
+  new DataView(buf).setUint32(0, 0x41424344);
+  const view = await new Request('https://example.com', { method: 'POST', body: new DataView(buf, 1, 2) }).text();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(2, int8.length);
+    testing.expectEqual(255, int8[0]);
+    testing.expectEqual(2, int8[1]);
+    testing.expectEqual(4, float32.length);
+    testing.expectEqual('BC', view);
+  });
 </script>
 
 <script id=form_data type=module>
@@ -371,4 +501,11 @@
   const requests = Array.from({ length: 1024 }, (_, i) => new Request(`https://example.com/${i}`));
   testing.expectEqual(1024, requests.length);
   testing.expectEqual('https://example.com/1023', requests[1023].url);
+</script>
+
+<script id=method_errors>
+  // Forbidden methods and invalid tokens throw a TypeError.
+  for (const method of ['CONNECT', 'trace', 'TRACK', 'IN VALID']) {
+    testing.expectError('TypeError', () => new Request('https://example.com/api', { method }));
+  }
 </script>

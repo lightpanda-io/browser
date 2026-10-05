@@ -16,11 +16,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const lp = @import("lightpanda");
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../../../js/js.zig");
-const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
+const Factory = @import("../../../Factory.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -45,7 +46,7 @@ pub fn asNode(self: *Style) *Node {
 // Attribute-backed properties
 
 const CSSStyleSheet = @import("../../css/CSSStyleSheet.zig");
-pub fn getSheet(self: *Style, frame: *Frame) !?*CSSStyleSheet {
+fn getSheet(self: *Style, frame: *Frame) !?*CSSStyleSheet {
     // Per spec, sheet is null for disconnected elements or non-CSS types.
     // Valid types: absent (defaults to "text/css"), empty string, or
     // case-insensitive match for "text/css".
@@ -86,7 +87,7 @@ pub fn styleAddedCallback(self: *Style, frame: *Frame) !void {
 }
 
 pub fn getType(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "";
+    return self.asConstElement().getAttributeInterned("type") orelse "";
 }
 
 pub const JsApi = struct {

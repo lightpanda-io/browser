@@ -1,11 +1,31 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const lp = @import("lightpanda");
-const Factory = @import("../../../Factory.zig");
+
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
+const Factory = @import("../../../Factory.zig");
 
 const Event = @import("../../Event.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+
 const HtmlElement = @import("../Html.zig");
 
 const Dialog = @This();
@@ -38,7 +58,7 @@ pub fn show(self: *Dialog, frame: *Frame) !void {
 /// Focus trap, backdrop, and top-layer placement are no-ops — Lightpanda has
 /// no layout/compositor; [open] reflecting through to selectors is what
 /// downstream consumers rely on.
-pub fn showModal(self: *Dialog, frame: *Frame) !void {
+fn showModal(self: *Dialog, frame: *Frame) !void {
     if (self.getOpen()) return error.InvalidStateError;
     try self.asElement().setAttributeSafe(comptime .wrap("open"), .wrap(""), frame);
 }
@@ -52,7 +72,7 @@ pub fn close(self: *Dialog, return_value: ?[]const u8, frame: *Frame) !void {
     if (return_value) |v| {
         try self.asElement().setAttributeSafe(comptime .wrap("returnvalue"), .wrap(v), frame);
     }
-    const event = try Event.init("close", .{ .bubbles = false, .cancelable = false }, frame._page);
+    const event = try Event.init("close", .{ .bubbles = false, .cancelable = false }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 

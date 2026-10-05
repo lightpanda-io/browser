@@ -36,6 +36,7 @@ pub const Identity = @import("Identity.zig");
 pub const Context = @import("Context.zig");
 pub const Execution = @import("Execution.zig");
 pub const Local = @import("Local.zig");
+pub const TaggedOpaque = @import("TaggedOpaque.zig");
 pub const Inspector = @import("Inspector.zig");
 pub const Snapshot = @import("Snapshot.zig");
 pub const Platform = @import("Platform.zig");
@@ -166,9 +167,19 @@ pub fn TypedArray(comptime T: type) type {
 pub const ArrayBuffer = struct {
     values: []const u8,
 
+    // Larger lengths throw a RangeError. Nothing real needs more, and an
+    // overcommitted buffer that size can take the whole process down.
+    pub const MAX_LENGTH = 4 * 1024 * 1024 * 1024;
+
     pub fn dupe(self: ArrayBuffer, allocator: Allocator) !ArrayBuffer {
         return .{ .values = try allocator.dupe(u8, self.values) };
     }
+};
+
+// An ArrayBuffer or any typed array kind or a DataView, exposed as its raw bytes.
+// But not from an underying SharedBuffer
+pub const BufferSource = struct {
+    bytes: []const u8,
 };
 
 pub const ArrayType = enum(u8) {
@@ -233,8 +244,7 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
             } else {
                 const buffer_len = size * bits / 8;
                 const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, buffer_len).?;
-                const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
-                array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
+                array_buffer = newArrayBuffer(isolate, backing_store);
             }
 
             const handle: *const v8.Value = switch (comptime kind) {
@@ -266,13 +276,31 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
             }
             const byte_offset = v8.v8__ArrayBufferView__ByteOffset(view);
             const array_buffer = v8.v8__ArrayBufferView__Buffer(view).?;
-            const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
-            const backing_store = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr).?;
-            const data = v8.v8__BackingStore__Data(backing_store).?;
+            const data = arrayBufferData(array_buffer).?;
             const base = @as([*]u8, @ptrCast(data)) + byte_offset;
             return @as([*]BackingInt, @ptrCast(@alignCast(base)))[0 .. byte_len / @sizeOf(BackingInt)];
         }
     };
+}
+
+fn newArrayBuffer(isolate: Isolate, backing_store: *v8.BackingStore) *const v8.ArrayBuffer {
+    var backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
+    defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
+    return v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
+}
+
+pub fn arrayBufferData(array_buffer: *const v8.ArrayBuffer) ?*anyopaque {
+    var backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
+    defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
+    const backing_store = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr) orelse return null;
+    return v8.v8__BackingStore__Data(backing_store);
+}
+
+pub fn arrayBufferIsShared(array_buffer: *const v8.ArrayBuffer) bool {
+    var backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
+    defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
+    const backing_store = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr) orelse return false;
+    return v8.v8__BackingStore__IsShared(backing_store);
 }
 
 // If a WebAPI takes a []const u8, then we'll coerce any JS value to that string
@@ -317,13 +345,17 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
             if (value >= 0 and value <= 4_294_967_295) {
                 return @ptrCast(isolate.initInteger(@as(u32, @intCast(value))).handle);
             }
-            return @ptrCast(isolate.initBigInt(value).handle);
+            if (value >= -2_147_483_648 and value < 0) {
+                return @ptrCast(isolate.initInteger(@as(i32, @intCast(value))).handle);
+            }
+            // 64-bit numbers are represented as floats (that's how it works in JS)
+            return @ptrCast(isolate.initNumber(@as(f64, @floatFromInt(value))).handle);
         },
         .comptime_int => {
-            if (value > -2_147_483_648 and value <= 4_294_967_295) {
+            if (value >= -2_147_483_648 and value <= 4_294_967_295) {
                 return @ptrCast(isolate.initInteger(value).handle);
             }
-            return @ptrCast(isolate.initBigInt(value).handle);
+            return @ptrCast(isolate.initNumber(@as(f64, value)).handle);
         },
         .float, .comptime_float => return @ptrCast(isolate.initNumber(value).handle),
         .pointer => |ptr| {
@@ -354,13 +386,12 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
                 ArrayBuffer => {
                     const values = value.values;
                     const len = values.len;
-                    const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, len);
+                    const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, len).?;
                     if (len > 0) {
                         const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
                         @memcpy(data[0..len], @as([]const u8, @ptrCast(values))[0..len]);
                     }
-                    const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
-                    return @ptrCast(v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?);
+                    return @ptrCast(newArrayBuffer(isolate, backing_store));
                 },
                 // zig fmt: off
                 TypedArray(u8), TypedArray(u16), TypedArray(u32), TypedArray(u64),
@@ -385,8 +416,7 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
                         const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, buffer_len).?;
                         const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
                         @memcpy(data[0..buffer_len], @as([]const u8, @ptrCast(values))[0..buffer_len]);
-                        const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
-                        array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
+                        array_buffer = newArrayBuffer(isolate, backing_store);
                     }
 
                     switch (@typeInfo(value_type)) {
@@ -473,8 +503,50 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
 
 test "TaggedAnyOpaque" {
     // If we grow this, fine, but it should be a conscious decision
-    try std.testing.expectEqual(24, @sizeOf(@import("TaggedOpaque.zig")));
+    try std.testing.expectEqual(24, @sizeOf(TaggedOpaque));
 }
+
+test "js: ArrayBuffers crossing Zig don't keep a reference to their backing store" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    // Every buffer must end up owned by its ArrayBuffer alone, otherwise
+    // it's never freed.
+    const created = ArrayBufferRef(.uint8).init(local, 16);
+    try testing.expectEqual(1, backingStoreRefs(created.handle));
+    _ = created.slice();
+    try testing.expectEqual(1, backingStoreRefs(created.handle));
+
+    const typed = simpleZigValueToJs(local.isolate, TypedArray(u8){ .values = "abc" }, true, false);
+    try testing.expectEqual(1, backingStoreRefs(typed));
+
+    const buffer = simpleZigValueToJs(local.isolate, ArrayBuffer{ .values = "abc" }, true, false);
+    try testing.expectEqual(1, backingStoreRefs(buffer));
+
+    const from_js = try local.exec("new Uint8Array(8)", null);
+    _ = try from_js.toStringSmart();
+    _ = try from_js.toZig(TypedArray(u8));
+    try testing.expectEqual(1, backingStoreRefs(from_js.handle));
+}
+
+// References held on an ArrayBuffer's (or a view's) backing store, not
+// counting the one taken here to ask.
+fn backingStoreRefs(handle: *const v8.Value) i64 {
+    const array_buffer: *const v8.ArrayBuffer = if (v8.v8__Value__IsArrayBuffer(handle))
+        @ptrCast(handle)
+    else
+        v8.v8__ArrayBufferView__Buffer(@ptrCast(handle)).?;
+    var backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
+    defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
+    return v8.std__shared_ptr__v8__BackingStore__use_count(&backing_store_ptr) - 1;
+}
+
+const testing = @import("../../testing.zig");
 
 // Every finalizable instance of Zig gets 1 FinalizerCallback registered in the
 // Page. This is to ensure that, if v8 doesn't finalize the value, we can
@@ -536,12 +608,26 @@ pub fn writeStackTrace(isolate: *v8.Isolate, stack_handle: *const v8.StackTrace,
 
     for (0..@intCast(frame_count)) |i| {
         const frame_handle = v8.v8__StackTrace__GetFrame(stack_handle, isolate, @intCast(i)).?;
-        if (v8.v8__StackFrame__GetFunctionName(frame_handle)) |name| {
-            var buf: [1024]u8 = undefined;
-            const n = v8.v8__String__WriteUtf8(name, isolate, &buf, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
-            try writer.print("{s}{s}:{d}", .{ separator, buf[0..n], v8.v8__StackFrame__GetLineNumber(frame_handle) });
-        } else {
-            try writer.print("{s}<anonymous>:{d}", .{ separator, v8.v8__StackFrame__GetLineNumber(frame_handle) });
+
+        var name_buf: [512]u8 = undefined;
+        var name: []const u8 = "";
+        if (v8.v8__StackFrame__GetFunctionName(frame_handle)) |str| {
+            const n = v8.v8__String__WriteUtf8(str, isolate, &name_buf, name_buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
+            name = name_buf[0..n];
         }
+        var script_buf: [512]u8 = undefined;
+        var script: []const u8 = "";
+        if (v8.v8__StackFrame__GetScriptNameOrSourceURL(frame_handle)) |str| {
+            const n = v8.v8__String__WriteUtf8(str, isolate, &script_buf, script_buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
+            script = script_buf[0..n];
+        }
+
+        try writer.print("{s}{s} ({s}:{d}:{d})", .{
+            separator,
+            if (name.len == 0) "<anonymous>" else name,
+            if (script.len == 0) "<unknown>" else script,
+            v8.v8__StackFrame__GetLineNumber(frame_handle),
+            v8.v8__StackFrame__GetColumn(frame_handle),
+        });
     }
 }

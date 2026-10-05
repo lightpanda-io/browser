@@ -90,15 +90,15 @@ pub fn getAborted(self: *const AbortSignal) bool {
     return self._aborted;
 }
 
-pub fn getReason(self: *const AbortSignal) Reason {
+fn getReason(self: *const AbortSignal) Reason {
     return self._reason;
 }
 
-pub fn getOnAbort(self: *const AbortSignal) ?js.Function.Global {
+fn getOnAbort(self: *const AbortSignal) ?js.Function.Global {
     return self._on_abort;
 }
 
-pub fn setOnAbort(self: *AbortSignal, cb: ?js.Function.Global) !void {
+fn setOnAbort(self: *AbortSignal, cb: ?js.Function.Global) !void {
     self._on_abort = cb;
 }
 
@@ -126,7 +126,7 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !void
     try self.dispatchAbortEvent(exec);
     for (to_dispatch.items) |dep| {
         dep.dispatchAbortEvent(exec) catch |err| {
-            log.warn(.app, "abort dependent dispatch", .{ .err = err });
+            log.debug(.app, "abort dependent dispatch", .{ .err = err });
         };
     }
 }
@@ -179,13 +179,13 @@ pub fn reasonFromJs(reason_: ?js.Value) !?Reason {
 }
 
 // Static method to create an already-aborted signal
-pub fn createAborted(reason_: ?js.Value, exec: *const Execution) !*AbortSignal {
+fn createAborted(reason_: ?js.Value, exec: *const Execution) !*AbortSignal {
     const signal = try init(exec);
     try signal.abort(try reasonFromJs(reason_), exec);
     return signal;
 }
 
-pub fn createAny(signals_value: js.Value, exec: *const Execution) !*AbortSignal {
+fn createAny(signals_value: js.Value, exec: *const Execution) !*AbortSignal {
     // The parameter isn't optional. If we declared it as a slice directy, the
     // bridge would treat it as a variadic and map it to empty rather than throwing
     // a TypeError as it should.
@@ -215,7 +215,16 @@ pub fn createAny(signals_value: js.Value, exec: *const Execution) !*AbortSignal 
     return result;
 }
 
-pub fn createTimeout(delay: u32, exec: *const Execution) !*AbortSignal {
+fn createTimeout(milliseconds: f64, exec: *const Execution) !*AbortSignal {
+    if (std.math.isFinite(milliseconds) == false) {
+        return error.TypeError;
+    }
+    const truncated = @trunc(milliseconds);
+    if (truncated < 0 or truncated > std.math.maxInt(u53)) {
+        return error.TypeError;
+    }
+    const delay: u32 = @intFromFloat(@min(truncated, std.math.maxInt(u32)));
+
     const callback = try exec.arena.create(TimeoutCallback);
     callback.* = .{
         .exec = exec,
@@ -233,7 +242,7 @@ const ThrowIfAborted = union(enum) {
     exception: js.Exception,
     undefined: void,
 };
-pub fn throwIfAborted(self: *const AbortSignal, exec: *const Execution) !ThrowIfAborted {
+fn throwIfAborted(self: *const AbortSignal, exec: *const Execution) !ThrowIfAborted {
     const local = exec.js.local.?;
 
     if (self._aborted) {
@@ -272,7 +281,7 @@ const TimeoutCallback = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const self: *TimeoutCallback = @ptrCast(@alignCast(ctx));
         self.timeoutAbort() catch |err| {
-            log.warn(.app, "abort signal timeout", .{ .err = err });
+            log.debug(.app, "abort signal timeout", .{ .err = err });
         };
         return null;
     }

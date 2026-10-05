@@ -59,7 +59,7 @@ pub fn asEvent(self: *GamepadEvent) *Event {
 }
 
 // There are no gamepads in a headless browser.
-pub fn getGamepad(_: *const GamepadEvent) ?bool {
+fn getGamepad(_: *const GamepadEvent) ?bool {
     return null;
 }
 

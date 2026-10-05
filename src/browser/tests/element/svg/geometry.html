@@ -210,3 +210,29 @@
   testing.expectEqual(true, rootBox.height >= 100);
 }
 </script>
+
+<script id=ctm>
+{
+  const circle = document.querySelector('#transformed > g > circle');
+  const m = circle.getCTM();
+  testing.expectEqual(true, m instanceof DOMMatrix);
+  testing.expectEqual(2, m.a);
+  testing.expectEqual(0, m.b);
+  testing.expectEqual(0, m.c);
+  testing.expectEqual(2, m.d);
+  testing.expectEqual(10, m.e);
+  testing.expectEqual(20, m.f);
+
+  const root = $('#root').getCTM();
+  testing.expectEqual(1, root.a);
+  testing.expectEqual(0, root.e);
+
+  const rect = $('#root').getBoundingClientRect();
+  const s = circle.getScreenCTM();
+  testing.expectEqual(2, s.a);
+  testing.expectEqual(rect.x + 10, s.e);
+  testing.expectEqual(rect.y + 20, s.f);
+
+  testing.expectEqual(null, document.createElementNS('http://www.w3.org/2000/svg', 'rect').getCTM());
+}
+</script>

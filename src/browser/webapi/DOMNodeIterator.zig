@@ -69,7 +69,7 @@ pub fn acquireRef(self: *DOMNodeIterator) void {
     self._rc.acquire();
 }
 
-pub fn getRoot(self: *const DOMNodeIterator) *Node {
+fn getRoot(self: *const DOMNodeIterator) *Node {
     return self._root;
 }
 
@@ -110,23 +110,23 @@ pub fn nodeWillBeRemoved(self: *DOMNodeIterator, to_be_removed: *Node) void {
     }
 }
 
-pub fn getReferenceNode(self: *const DOMNodeIterator) *Node {
+fn getReferenceNode(self: *const DOMNodeIterator) *Node {
     return self._reference_node;
 }
 
-pub fn getPointerBeforeReferenceNode(self: *const DOMNodeIterator) bool {
+fn getPointerBeforeReferenceNode(self: *const DOMNodeIterator) bool {
     return self._pointer_before_reference_node;
 }
 
-pub fn getWhatToShow(self: *const DOMNodeIterator) u32 {
+fn getWhatToShow(self: *const DOMNodeIterator) u32 {
     return self._what_to_show;
 }
 
-pub fn getFilter(self: *const DOMNodeIterator) ?FilterOpts {
+fn getFilter(self: *const DOMNodeIterator) ?FilterOpts {
     return self._filter._opts;
 }
 
-pub fn nextNode(self: *DOMNodeIterator, frame: *Frame) !?*Node {
+fn nextNode(self: *DOMNodeIterator, frame: *Frame) !?*Node {
     if (self._active) {
         return error.InvalidStateError;
     }
@@ -164,7 +164,7 @@ pub fn nextNode(self: *DOMNodeIterator, frame: *Frame) !?*Node {
     }
 }
 
-pub fn previousNode(self: *DOMNodeIterator, frame: *Frame) !?*Node {
+fn previousNode(self: *DOMNodeIterator, frame: *Frame) !?*Node {
     if (self._active) {
         return error.InvalidStateError;
     }

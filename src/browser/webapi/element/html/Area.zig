@@ -13,12 +13,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const lp = @import("lightpanda");
 const std = @import("std");
-const js = @import("../../../js/js.zig");
-const Factory = @import("../../../Factory.zig");
-const Frame = @import("../../../Frame.zig");
+const lp = @import("lightpanda");
+
 const URL = @import("../../../URL.zig");
+const js = @import("../../../js/js.zig");
+const Frame = @import("../../../Frame.zig");
+const Factory = @import("../../../Factory.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -26,6 +27,7 @@ const DOMTokenList = @import("../../collections.zig").DOMTokenList;
 
 const HtmlElement = @import("../Html.zig");
 
+const String = lp.String;
 const Area = @This();
 
 pub const Proto = HtmlElement;
@@ -44,7 +46,7 @@ pub fn asNode(self: *Area) *Node {
 }
 
 pub fn getHref(self: *Area, frame: *Frame) ![]const u8 {
-    const href = self.asElement().getAttributeSafe(comptime .wrap("href")) orelse return "";
+    const href = self.asElement().getAttributeInterned("href") orelse return "";
     if (href.len == 0) {
         return "";
     }
@@ -82,7 +84,7 @@ pub fn getHost(self: *Area, frame: *Frame) ![]const u8 {
     return host;
 }
 
-pub fn setHost(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setHost(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setHost(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -93,29 +95,29 @@ pub fn getHostname(self: *Area, frame: *Frame) ![]const u8 {
     return URL.getHostname(href);
 }
 
-pub fn setHostname(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setHostname(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setHostname(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
 }
 
-pub fn getUsername(self: *Area, frame: *Frame) ![]const u8 {
+fn getUsername(self: *Area, frame: *Frame) ![]const u8 {
     const href = try getResolvedHref(self, frame) orelse return "";
     return URL.getUsername(href);
 }
 
-pub fn setUsername(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setUsername(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setUsername(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
 }
 
-pub fn getPassword(self: *Area, frame: *Frame) ![]const u8 {
+fn getPassword(self: *Area, frame: *Frame) ![]const u8 {
     const href = try getResolvedHref(self, frame) orelse return "";
     return URL.getPassword(href);
 }
 
-pub fn setPassword(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setPassword(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setPassword(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -138,7 +140,7 @@ pub fn getPort(self: *Area, frame: *Frame) ![]const u8 {
     return port;
 }
 
-pub fn setPort(self: *Area, value: ?[]const u8, frame: *Frame) !void {
+fn setPort(self: *Area, value: ?[]const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setPort(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -149,7 +151,7 @@ pub fn getSearch(self: *Area, frame: *Frame) ![]const u8 {
     return URL.getSearch(href);
 }
 
-pub fn setSearch(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setSearch(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setSearch(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -160,7 +162,7 @@ pub fn getHash(self: *Area, frame: *Frame) ![]const u8 {
     return URL.getHash(href);
 }
 
-pub fn setHash(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setHash(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setHash(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -182,7 +184,7 @@ pub fn getProtocol(self: *Area, frame: *Frame) ![]const u8 {
     return URL.getProtocol(href);
 }
 
-pub fn setProtocol(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setProtocol(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setProtocol(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -197,8 +199,13 @@ pub fn getRelList(self: *Area, frame: *Frame) !?*DOMTokenList {
     return element.getRelList(frame);
 }
 
+fn setRelList(self: *Area, value: String, frame: *Frame) !void {
+    const list = try self.getRelList(frame) orelse return;
+    try list.setValue(value, frame);
+}
+
 fn getResolvedHref(self: *Area, frame: *Frame) !?[:0]const u8 {
-    const href = self.asElement().getAttributeSafe(comptime .wrap("href")) orelse return null;
+    const href = self.asElement().getAttributeInterned("href") orelse return null;
     if (href.len == 0) {
         return null;
     }
@@ -244,7 +251,7 @@ pub const JsApi = struct {
     pub const rel = reflect.string("rel");
     pub const referrerPolicy = reflect.referrerPolicy();
     pub const toString = bridge.function(Area.getHref, .{});
-    pub const relList = bridge.accessor(Area.getRelList, null, .{ .null_as_undefined = true });
+    pub const relList = bridge.accessor(Area.getRelList, Area.setRelList, .{ .null_as_undefined = true, .ce_reactions = true });
 };
 
 const testing = @import("../../../../testing.zig");

@@ -36,7 +36,7 @@ const WebGLRenderingContext = @This();
 /// On Chrome and Safari, a call to `getSupportedExtensions` returns total of 39.
 /// The reference for it lists lesser number of extensions:
 /// https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API/Using_Extensions#extension_list
-pub const Extension = union(enum) {
+const Extension = union(enum) {
     ANGLE_instanced_arrays: void,
     EXT_blend_minmax: void,
     EXT_clip_control: void,
@@ -79,15 +79,9 @@ pub const Extension = union(enum) {
 
     /// Reified enum type from the fields of this union.
     const Kind = blk: {
-        const info = @typeInfo(Extension).@"union";
-        const fields = info.fields;
-        const Tag = std.math.IntFittingRange(0, if (fields.len == 0) 0 else fields.len - 1);
-        var names: [fields.len][:0]const u8 = undefined;
-        for (fields, 0..) |field, i| {
-            names[i] = field.name;
-        }
-
-        break :blk @Enum(Tag, .exhaustive, &names, &std.simd.iota(Tag, fields.len));
+        const names = @typeInfo(Extension).@"union".field_names;
+        const Tag = std.math.IntFittingRange(0, if (names.len == 0) 0 else names.len - 1);
+        break :blk @Enum(Tag, .exhaustive, names, &std.simd.iota(Tag, names.len));
     };
 
     /// Returns the `Extension.Kind` by its name.
@@ -98,9 +92,9 @@ pub const Extension = union(enum) {
         const kvs = comptime build_kvs: {
             const T = Extension.Kind;
             const EnumKV = struct { []const u8, T };
-            var kvs_array: [@typeInfo(T).@"enum".fields.len]EnumKV = undefined;
-            for (@typeInfo(T).@"enum".fields, 0..) |enumField, i| {
-                kvs_array[i] = .{ enumField.name, @field(T, enumField.name) };
+            var kvs_array: [@typeInfo(T).@"enum".field_names.len]EnumKV = undefined;
+            for (@typeInfo(T).@"enum".field_names, 0..) |field_name, i| {
+                kvs_array[i] = .{ field_name, @field(T, field_name) };
             }
             break :build_kvs kvs_array[0..];
         };
@@ -113,8 +107,8 @@ pub const Extension = union(enum) {
     pub const Type = struct {
         pub const WEBGL_debug_renderer_info = struct {
             _: u8 = 0,
-            pub const UNMASKED_VENDOR_WEBGL: u64 = 0x9245;
-            pub const UNMASKED_RENDERER_WEBGL: u64 = 0x9246;
+            const UNMASKED_VENDOR_WEBGL: u64 = 0x9245;
+            const UNMASKED_RENDERER_WEBGL: u64 = 0x9246;
 
             pub const JsApi = struct {
                 pub const bridge = js.Bridge(WEBGL_debug_renderer_info);
@@ -133,8 +127,8 @@ pub const Extension = union(enum) {
 
         pub const WEBGL_lose_context = struct {
             _: u8 = 0,
-            pub fn loseContext(_: *const WEBGL_lose_context) void {}
-            pub fn restoreContext(_: *const WEBGL_lose_context) void {}
+            fn loseContext(_: *const WEBGL_lose_context) void {}
+            fn restoreContext(_: *const WEBGL_lose_context) void {}
 
             pub const JsApi = struct {
                 pub const bridge = js.Bridge(WEBGL_lose_context);
@@ -156,13 +150,13 @@ pub const Extension = union(enum) {
 /// This actually takes "GLenum" which, in fact, is a fancy way to say number.
 /// Return value also depends on what's being passed as `pname`; we don't really
 /// support any though.
-pub fn getParameter(_: *const WebGLRenderingContext, pname: u32) []const u8 {
+fn getParameter(_: *const WebGLRenderingContext, pname: u32) []const u8 {
     _ = pname;
     return "";
 }
 
 /// Enables a WebGL extension.
-pub fn getExtension(_: *const WebGLRenderingContext, name: []const u8, frame: *Frame) !?Extension {
+fn getExtension(_: *const WebGLRenderingContext, name: []const u8, frame: *Frame) !?Extension {
     const tag = Extension.find(name) orelse return null;
 
     return switch (tag) {
@@ -179,8 +173,8 @@ pub fn getExtension(_: *const WebGLRenderingContext, name: []const u8, frame: *F
 }
 
 /// Returns a list of all the supported WebGL extensions.
-pub fn getSupportedExtensions(_: *const WebGLRenderingContext) []const []const u8 {
-    return std.meta.fieldNames(Extension.Kind);
+fn getSupportedExtensions(_: *const WebGLRenderingContext) []const []const u8 {
+    return @typeInfo(Extension.Kind).@"enum".field_names;
 }
 
 pub const JsApi = struct {

@@ -26,9 +26,12 @@ const EventManagerBase = @import("EventManagerBase.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const Window = @import("webapi/Window.zig");
-const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
+const Performance = @import("webapi/Performance.zig");
+const Screen = @import("webapi/Screen.zig");
+const EventTarget = @import("webapi/EventTarget.zig");
+const MediaQueryList = @import("webapi/css/MediaQueryList.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
 
 const log = lp.log;
@@ -37,7 +40,7 @@ const Allocator = std.mem.Allocator;
 // Re-export types from EventManagerBase for API compatibility
 pub const RegisterOptions = EventManagerBase.RegisterOptions;
 pub const Callback = EventManagerBase.Callback;
-pub const Listener = EventManagerBase.Listener;
+const Listener = EventManagerBase.Listener;
 
 pub const EventManager = @This();
 
@@ -71,11 +74,11 @@ pub fn remove(self: *EventManager, target: *EventTarget, typ: []const u8, callba
 }
 
 // Re-export DispatchError from base
-pub const DispatchError = EventManagerBase.DispatchError;
+const DispatchError = EventManagerBase.DispatchError;
 
 pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) DispatchError!void {
     event.acquireRef();
-    defer _ = event.releaseRef(self.frame._page);
+    defer _ = event.releaseRef(self.frame.page);
 
     // Increment event count for Event Timing API
     self.frame.window._performance._event_counts.increment(event._type_string.str());
@@ -87,9 +90,22 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
     switch (target._type) {
         .node => try self.dispatchNode(target.subtype(Node), event),
         .xhr => try self.dispatchDirect(target, event, target.subtype(XMLHttpRequestEventTarget).inlineHandler(event._type_string), .{ .context = "dispatch" }),
+        .media_query_list => try self.dispatchDirect(target, event, target.subtype(MediaQueryList).inlineHandler(event._type_string), .{ .context = "dispatch" }),
+        .performance => try self.dispatchDirect(target, event, target.subtype(Performance).inlineHandler(event._type_string), .{ .context = "dispatch" }),
+        .screen_orientation => try self.dispatchDirect(target, event, target.subtype(Screen.Orientation).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .window => try self.dispatchDirect(target, event, windowInlineHandler(target.subtype(Window), event._type_string), .{ .context = "dispatch" }),
         else => try self.dispatchDirect(target, event, null, .{ .context = "dispatch" }),
     }
+}
+
+/// dispatch() drops its reference, and with it the event, before returning;
+/// this keeps the event alive so the caller can learn whether a listener
+/// called preventDefault().
+pub fn dispatchCancelable(self: *EventManager, target: *EventTarget, event: *Event) DispatchError!bool {
+    event.acquireRef();
+    defer event.releaseRef(self.frame.page);
+    try self.dispatch(target, event);
+    return event.getDefaultPrevented();
 }
 
 // Resolves the Window's property event handler for the given event type.
@@ -126,7 +142,7 @@ pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, 
     window._current_event = event;
     defer window._current_event = prev_event;
 
-    try self.base.dispatchDirect(frame.call_arena, frame.js, target, event, handler, frame._page, opts);
+    try self.base.dispatchDirect(frame.call_arena, frame.js, target, event, handler, frame.page, opts);
 }
 
 /// Check if there are any listeners for a direct dispatch (non-DOM target).
@@ -223,13 +239,17 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             if (event.is(@import("webapi/event/MouseEvent.zig")) != null) {
                 if (Frame.user_input.findClickActivationTarget(target, event._bubbles)) |activation_target| {
                     Frame.user_input.handleClick(frame, activation_target, target) catch |err| {
-                        log.warn(.event, "frame.click", .{ .err = err });
+                        log.debug(.event, "frame.click", .{ .err = err });
                     };
                 }
             }
         } else if (event._type_string.eql(comptime .wrap("keydown"))) {
             Frame.user_input.handleKeydown(frame, target, event) catch |err| {
-                log.warn(.event, "frame.keydown", .{ .err = err });
+                log.debug(.event, "frame.keydown", .{ .err = err });
+            };
+        } else if (event._type_string.eql(comptime .wrap("keyup"))) {
+            Frame.user_input.handleKeyup(frame, target, event) catch |err| {
+                log.debug(.event, "frame.keyup", .{ .err = err });
             };
         }
     }
@@ -279,6 +299,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
 
     const path = path_buffer[0..path_len];
 
+    if (event._cancelable_unless_passive) {
+        event._cancelable = self.anyNonPassive(path, event);
+    }
+
     // Phase 1: Capturing phase (root → target, excluding target)
     // This happens for all events, regardless of bubbling
     event._event_phase = .capturing_phase;
@@ -287,8 +311,8 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
         i -= 1;
         if (event._stop_propagation) return;
         const current_target = path[i];
-        if (self.base.getListeners(current_target, event._type_string)) |list| {
-            try self.dispatchPhase(list, current_target, event, &was_handled, &ls.local, true);
+        if (self.listenersFor(current_target, event)) |listeners| {
+            try self.dispatchPhase(listeners, current_target, event, &was_handled, &ls.local, true);
         }
     }
 
@@ -310,15 +334,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
 
             // Inline handlers (e.g. onclick property) follow the same "report,
             // don't propagate" rule as addEventListener listeners — see Listener.run.
-            var caught: js.TryCatch.Caught = .{};
-            const handler_return: ?js.Value = ls.toLocal(inline_handler).tryCallWithThis(js.Value, target_et, .{event}, &caught) catch |err| ret: {
-                if (err == error.ExecutionTerminated) {
-                    return error.ExecutionTerminated;
-                }
-                frame._page.recordJsError(err);
-                log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
-                break :ret null;
-            };
+            const handler_return = try callInlineHandler(&ls.local, inline_handler, target_et, event);
             processHandlerReturnValue(event, handler_return);
 
             if (adjusted) |a| {
@@ -338,14 +354,14 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
         // and once during the bubbling iteration, each with its own snapshot
         // of the listener list: a bubble listener added while running the
         // target's capture listeners must run.
-        if (self.base.getListeners(target_et, event._type_string)) |list| {
-            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, true);
+        if (self.listenersFor(target_et, event)) |listeners| {
+            try self.dispatchPhase(listeners, target_et, event, &was_handled, &ls.local, true);
             if (event._stop_propagation) {
                 return;
             }
         }
-        if (self.base.getListeners(target_et, event._type_string)) |list| {
-            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, false);
+        if (self.listenersFor(target_et, event)) |listeners| {
+            try self.dispatchPhase(listeners, target_et, event, &was_handled, &ls.local, false);
             if (event._stop_propagation) {
                 return;
             }
@@ -371,15 +387,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
 
                 const adjusted: ?AdjustedTargets = if (event._needs_retargeting) .apply(event, current_target) else null;
 
-                var caught: js.TryCatch.Caught = .{};
-                const handler_return: ?js.Value = ls.toLocal(inline_handler).tryCallWithThis(js.Value, current_target, .{event}, &caught) catch |err| ret: {
-                    if (err == error.ExecutionTerminated) {
-                        return error.ExecutionTerminated;
-                    }
-                    frame._page.recordJsError(err);
-                    log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
-                    break :ret null;
-                };
+                const handler_return = try callInlineHandler(&ls.local, inline_handler, current_target, event);
                 processHandlerReturnValue(event, handler_return);
 
                 if (adjusted) |a| {
@@ -394,11 +402,78 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
                 }
             }
 
-            if (self.base.getListeners(current_target, event._type_string)) |list| {
-                try self.dispatchPhase(list, current_target, event, &was_handled, &ls.local, false);
+            if (self.listenersFor(current_target, event)) |listeners| {
+                try self.dispatchPhase(listeners, current_target, event, &was_handled, &ls.local, false);
             }
         }
     }
+}
+
+/// Whether a listener on the path could call preventDefault. An inline
+/// handler always can; addEventListener listeners can unless passive.
+fn anyNonPassive(self: *EventManager, path: []const *EventTarget, event: *Event) bool {
+    for (path) |target| {
+        if (self.getInlineHandler(target, event) != null) {
+            return true;
+        }
+        if (self.listenersFor(target, event)) |listeners| {
+            if (EventManagerBase.hasListener(listeners.list, .non_passive)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+const TargetListeners = struct {
+    list: *std.DoublyLinkedList,
+    typ: lp.String,
+};
+
+/// The listeners `target` runs for `event`. Like Blink, a target with none
+/// for the event's type falls back to the type's legacy alias: a
+/// `mousewheel` listener fires only where no `wheel` listener is registered.
+fn listenersFor(self: *EventManager, target: *EventTarget, event: *const Event) ?TargetListeners {
+    if (self.base.getListeners(target, event._type_string)) |list| {
+        if (EventManagerBase.hasListener(list, .any)) {
+            return .{ .list = list, .typ = event._type_string };
+        }
+    }
+    const legacy = legacyType(event) orelse return null;
+    const list = self.base.getListeners(target, legacy) orelse return null;
+    return .{ .list = list, .typ = legacy };
+}
+
+fn legacyType(event: *const Event) ?lp.String {
+    if (!event._is_trusted) {
+        return null;
+    }
+    if (event._type_string.eql(comptime .wrap("wheel"))) {
+        return comptime .wrap("mousewheel");
+    }
+    return null;
+}
+
+// Calls an inline handler (onclick attribute or property). An exception it
+// doesn't catch is reported to the global, as for an addEventListener
+// listener (Listener.run), and dispatch carries on.
+fn callInlineHandler(local: *const js.Local, handler: js.Function.Global, this: *EventTarget, event: *Event) error{ExecutionTerminated}!?js.Value {
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(local);
+    defer try_catch.deinit();
+
+    return local.toLocal(handler).callWithThisRethrow(js.Value, this, .{event}) catch |err| switch (err) {
+        error.ExecutionTerminated => return error.ExecutionTerminated,
+        error.JsException, error.TryCatchRethrow => {
+            Listener.reportException(&try_catch, local);
+            return null;
+        },
+        else => {
+            local.ctx.page.recordJsError(err);
+            log.debug(.event, "inline handler", .{ .err = err });
+            return null;
+        },
+    };
 }
 
 fn processHandlerReturnValue(event: *Event, handler_return: ?js.Value) void {
@@ -414,9 +489,15 @@ fn currentEventForTarget(target: *EventTarget, event: *Event) ?*Event {
     return if (rootIsShadowRoot(target)) null else event;
 }
 
-fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime capture_only: ?bool) !void {
+fn dispatchPhase(self: *EventManager, listeners: TargetListeners, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime capture_only: ?bool) !void {
     const frame = self.frame;
     const base = &self.base;
+    const list = listeners.list;
+
+    // Listeners registered under a legacy name see the event under that name.
+    const real_type = event._type_string;
+    event._type_string = listeners.typ;
+    defer event._type_string = real_type;
 
     const window = frame.window;
     const prev_current_event = window._current_event;
@@ -530,7 +611,7 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
     };
 
     return html_element.getAttributeFunction(handler_type, self.frame) catch |err| {
-        log.warn(.event, "inline html callback", .{ .type = handler_type, .err = err });
+        log.debug(.event, "inline html callback", .{ .type = handler_type, .err = err });
         return null;
     };
 }
@@ -566,7 +647,7 @@ const AdjustedTargets = struct {
     }
 };
 
-pub const EventPath = struct {
+const EventPath = struct {
     len: usize,
     // Whether a shadow root sits on the path, i.e. whether an invocation can
     // see a target other than the one the event was dispatched at.
@@ -764,6 +845,9 @@ const ActivationState = struct {
                 prev_radio._checked = true;
                 prev_radio._checked_dirty = true;
             }
+            // Listeners ran between setChecked and here, so `:checked` state
+            // built during dispatch has to be stamped as stale.
+            frame.styleChanged();
             return;
         }
 
@@ -773,10 +857,10 @@ const ActivationState = struct {
         const state_changed = (input._input_type == .checkbox) or !self.old_checked;
         if (state_changed and input.asElement().asNode().isConnected()) {
             fireEvent(frame, input, "input") catch |err| {
-                log.warn(.event, "input event", .{ .err = err });
+                log.debug(.event, "input event", .{ .err = err });
             };
             fireEvent(frame, input, "change") catch |err| {
-                log.warn(.event, "change event", .{ .err = err });
+                log.debug(.event, "change event", .{ .err = err });
             };
         }
     }
@@ -784,7 +868,7 @@ const ActivationState = struct {
     fn findCheckedRadioInGroup(input: *Input, frame: *Frame) !?*Input {
         const elem = input.asElement();
 
-        const name = elem.getAttributeSafe(comptime .wrap("name")) orelse return null;
+        const name = elem.getName() orelse return null;
         if (name.len == 0) {
             return null;
         }
@@ -811,7 +895,7 @@ const ActivationState = struct {
                 continue;
             }
 
-            const other_name = other_element.getAttributeSafe(comptime .wrap("name")) orelse continue;
+            const other_name = other_element.getName() orelse continue;
             if (!std.mem.eql(u8, name, other_name)) {
                 continue;
             }
@@ -840,7 +924,7 @@ const ActivationState = struct {
         const event = try Event.initTrusted(comptime .wrap(typ), .{
             .bubbles = true,
             .cancelable = false,
-        }, frame._page);
+        }, frame.page);
 
         const target = input.asElement().asEventTarget();
         try frame._event_manager.dispatch(target, event);

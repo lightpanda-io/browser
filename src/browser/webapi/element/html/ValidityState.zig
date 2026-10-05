@@ -34,53 +34,53 @@ const ValidityState = @This();
 // because the flag definitions are per-type in the HTML spec.
 _owner: *Element,
 
-pub fn getValueMissing(self: *const ValidityState, frame: *Frame) bool {
+fn getValueMissing(self: *const ValidityState, frame: *Frame) bool {
     if (self._owner.is(Input)) |input| return input.suffersValueMissing(frame);
     if (self._owner.is(Select)) |select| return select.suffersValueMissing();
     if (self._owner.is(TextArea)) |textarea| return textarea.suffersValueMissing();
     return false;
 }
 
-pub fn getTypeMismatch(self: *const ValidityState) bool {
+fn getTypeMismatch(self: *const ValidityState) bool {
     if (self._owner.is(Input)) |input| return input.suffersTypeMismatch();
     return false;
 }
 
-pub fn getPatternMismatch(self: *const ValidityState, frame: *Frame) bool {
+fn getPatternMismatch(self: *const ValidityState, frame: *Frame) bool {
     if (self._owner.is(Input)) |input| return input.suffersPatternMismatch(frame);
     return false;
 }
 
-pub fn getTooLong(self: *const ValidityState) bool {
+fn getTooLong(self: *const ValidityState) bool {
     if (self._owner.is(Input)) |input| return input.suffersTooLong();
     if (self._owner.is(TextArea)) |textarea| return textarea.suffersTooLong();
     return false;
 }
 
-pub fn getTooShort(self: *const ValidityState) bool {
+fn getTooShort(self: *const ValidityState) bool {
     if (self._owner.is(Input)) |input| return input.suffersTooShort();
     if (self._owner.is(TextArea)) |textarea| return textarea.suffersTooShort();
     return false;
 }
 
-pub fn getRangeUnderflow(self: *const ValidityState) bool {
+fn getRangeUnderflow(self: *const ValidityState) bool {
     if (self._owner.is(Input)) |input| return input.suffersRangeUnderflow();
     return false;
 }
 
-pub fn getRangeOverflow(self: *const ValidityState) bool {
+fn getRangeOverflow(self: *const ValidityState) bool {
     if (self._owner.is(Input)) |input| return input.suffersRangeOverflow();
     return false;
 }
 
-pub fn getStepMismatch(self: *const ValidityState) bool {
+fn getStepMismatch(self: *const ValidityState) bool {
     _ = self;
     // Step matching is not implemented yet (PR #2280 begins step rounding for
     // <input type=range>). Returning false keeps well-formed values valid.
     return false;
 }
 
-pub fn getBadInput(self: *const ValidityState) bool {
+fn getBadInput(self: *const ValidityState) bool {
     _ = self;
     // badInput flips when the UA cannot convert a user-typed string (e.g. the
     // user typed "abc" into <input type=number>). Headless Lightpanda receives
@@ -89,7 +89,7 @@ pub fn getBadInput(self: *const ValidityState) bool {
     return false;
 }
 
-pub fn getCustomError(self: *const ValidityState) bool {
+fn getCustomError(self: *const ValidityState) bool {
     if (self._owner.is(Input)) |input| return input.hasCustomValidity();
     if (self._owner.is(Select)) |select| return select.hasCustomValidity();
     if (self._owner.is(TextArea)) |textarea| return textarea.hasCustomValidity();

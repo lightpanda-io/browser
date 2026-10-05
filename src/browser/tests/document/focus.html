@@ -4,6 +4,7 @@
   <input id="input1" type="text">
   <input id="input2" type="text">
   <button id="btn1">Button</button>
+  <label id="lbl1" for="input1">Label 1</label>
 </body>
 
 <script id="activeElement_default">
@@ -255,37 +256,25 @@
 }
 </script>
 
-<script id="click_focuses_element">
+<script id="click_does_not_focus_element">
 {
   const input1 = $('#input1');
-  const input2 = $('#input2');
 
   if (document.activeElement) {
     document.activeElement.blur();
   }
 
   let focusCount = 0;
-  let blurCount = 0;
-
   input1.addEventListener('focus', () => focusCount++);
-  input1.addEventListener('blur', () => blurCount++);
-  input2.addEventListener('focus', () => focusCount++);
 
-  // Click input1 — should focus it and fire focus event
+  // el.click() does not move focus per HTML spec / Chrome parity
   input1.click();
-  testing.expectEqual(input1, document.activeElement);
-  testing.expectEqual(1, focusCount);
-  testing.expectEqual(0, blurCount);
-
-  // Click input2 — should move focus, fire blur on input1 and focus on input2
-  input2.click();
-  testing.expectEqual(input2, document.activeElement);
-  testing.expectEqual(2, focusCount);
-  testing.expectEqual(1, blurCount);
+  testing.expectEqual('BODY', document.activeElement.tagName);
+  testing.expectEqual(0, focusCount);
 }
 </script>
 
-<script id="click_focuses_button">
+<script id="click_does_not_focus_button">
 {
   const btn = $('#btn1');
 
@@ -294,7 +283,26 @@
   }
 
   btn.click();
-  testing.expectEqual(btn, document.activeElement);
+  testing.expectEqual('BODY', document.activeElement.tagName);
+}
+</script>
+
+<script id="label_click_focuses_control">
+{
+  const input1 = $('#input1');
+  const lbl = $('#lbl1');
+
+  if (document.activeElement) {
+    document.activeElement.blur();
+  }
+
+  let focusCount = 0;
+  input1.addEventListener('focus', () => focusCount++);
+
+  // Unlike other elements, label.click() explicitly focuses its control
+  lbl.click();
+  testing.expectEqual(input1, document.activeElement);
+  testing.expectEqual(1, focusCount);
 }
 </script>
 
@@ -351,6 +359,115 @@
   testing.expectEqual(1, focusCount);
 
   // Cleanup
+  wrapper.remove();
+}
+</script>
+
+<script id="focus_non_focusable_noop">
+{
+  // Only a focusable area can take focus: focus() on anything else leaves
+  // document.activeElement (and the element that holds it) alone.
+  const input1 = $('#input1');
+  input1.focus();
+
+  let blurCount = 0;
+  input1.addEventListener('blur', () => blurCount++);
+
+  const div = document.createElement('div');
+  document.body.appendChild(div);
+  div.focus();
+  testing.expectEqual(input1, document.activeElement);
+
+  // An unparsable tabindex counts as absent, so the div stays unfocusable
+  div.setAttribute('tabindex', 'nope');
+  div.focus();
+  testing.expectEqual(input1, document.activeElement);
+
+  const disabled = document.createElement('input');
+  disabled.disabled = true;
+  document.body.appendChild(disabled);
+  disabled.focus();
+  testing.expectEqual(input1, document.activeElement);
+
+  // An <a> without href isn't focusable either
+  const anchor = document.createElement('a');
+  anchor.textContent = 'no href';
+  document.body.appendChild(anchor);
+  anchor.focus();
+  testing.expectEqual(input1, document.activeElement);
+
+  testing.expectEqual(0, blurCount);
+
+  div.remove();
+  disabled.remove();
+  anchor.remove();
+}
+</script>
+
+<script id="focus_tabindex_makes_focusable">
+{
+  const div = document.createElement('div');
+  // A negative tabindex is skipped by Tab, but focus() still works
+  div.setAttribute('tabindex', '-1');
+  document.body.appendChild(div);
+
+  let focusCount = 0;
+  div.addEventListener('focus', () => focusCount++);
+
+  div.focus();
+  testing.expectEqual(div, document.activeElement);
+  testing.expectEqual(1, focusCount);
+
+  div.remove();
+}
+</script>
+
+<script id="focus_contenteditable">
+{
+  const div = document.createElement('div');
+  div.setAttribute('contenteditable', '');
+  const span = document.createElement('span');
+  span.textContent = 'child';
+  div.appendChild(span);
+  document.body.appendChild(div);
+
+  div.focus();
+  testing.expectEqual(div, document.activeElement);
+
+  // A descendant of an editing host is editable, but not itself a focusable
+  // area: the attribute has to be on the element
+  span.focus();
+  testing.expectEqual(div, document.activeElement);
+
+  // contenteditable="false" is not an editing host
+  const plain = document.createElement('div');
+  plain.setAttribute('contenteditable', 'false');
+  document.body.appendChild(plain);
+  plain.focus();
+  testing.expectEqual(div, document.activeElement);
+
+  div.remove();
+  plain.remove();
+}
+</script>
+
+<script id="focus_svg_link">
+{
+  const input1 = $('#input1');
+  input1.focus();
+
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = '<svg><a id="svg-link" href="#x"><rect/></a><a id="svg-plain"><rect/></a></svg>';
+  document.body.appendChild(wrapper);
+
+  // An SVG <a> without href is no more focusable than an HTML one
+  $('#svg-plain').focus();
+  testing.expectEqual(input1, document.activeElement);
+
+  const link = $('#svg-link');
+  link.focus();
+  testing.expectEqual(link, document.activeElement);
+
   wrapper.remove();
 }
 </script>

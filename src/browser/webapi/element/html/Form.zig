@@ -16,8 +16,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const lp = @import("lightpanda");
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../../../js/js.zig");
 const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
@@ -32,6 +33,9 @@ pub const Button = @import("Button.zig");
 pub const Select = @import("Select.zig");
 pub const TextArea = @import("TextArea.zig");
 
+const NodeLive = collections.NodeLive;
+const HTMLFormControlsCollection = collections.HTMLFormControlsCollection;
+
 const Form = @This();
 
 pub const Proto = HtmlElement;
@@ -45,9 +49,6 @@ _firing_submission_events: bool = false,
 // form. You can imagine an formdata = () => form.submit() endless loop.
 _constructing_entry_list: bool = false,
 
-pub fn asHtmlElement(self: *Form) *HtmlElement {
-    return Factory.protoOf(self);
-}
 fn asConstElement(self: *const Form) *const Element {
     return Factory.protoOf(self).asElement();
 }
@@ -83,60 +84,60 @@ pub fn normalizeEnctype(attr: ?[]const u8, missing_default: []const u8) []const 
 }
 
 pub fn getMethod(self: *const Form) []const u8 {
-    return normalizeMethod(self.asConstElement().getAttributeSafe(comptime .wrap("method")), "get");
+    return normalizeMethod(self.asConstElement().getAttributeInterned("method"), "get");
 }
 
 pub fn setMethod(self: *Form, method: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("method"), .wrap(method), frame);
 }
 
-pub fn getElements(self: *Form, frame: *Frame) !*collections.HTMLFormControlsCollection {
+pub fn getElements(self: *Form, frame: *Frame) !*HTMLFormControlsCollection {
     const node_live = self.iterator(frame);
     const elements = try frame._factory.chained(.{
         node_live.htmlCollectionValue(),
-        collections.HTMLFormControlsCollection{ ._proto = undefined },
+        HTMLFormControlsCollection{ ._proto = undefined },
     });
     elements._proto._chained = .form_controls;
     return elements;
 }
 
-pub fn iterator(self: *Form, frame: *Frame) collections.NodeLive(.form) {
-    const form_id = self.asElement().getAttributeSafe(comptime .wrap("id"));
+pub fn iterator(self: *Form, frame: *Frame) NodeLive(.form) {
+    const form_id = self.asElement().getId();
     const root = if (form_id != null)
         self.asNode().getRootNode(.{}) // Has ID: walk entire document to find form=ID controls
     else
         self.asNode(); // No ID: walk only form subtree (no external controls possible)
 
-    return collections.NodeLive(.form).init(root, .{ .form = self, .form_id = form_id }, frame);
+    return NodeLive(.form).init(root, .{ .form = self, .form_id = form_id }, frame);
 }
 
-pub fn getAction(self: *Form, frame: *Frame) ![]const u8 {
+fn getAction(self: *Form, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const owner_url = element.ownerFrame(frame).url;
-    const action = element.getAttributeSafe(comptime .wrap("action")) orelse return owner_url;
+    const owner_url = element.asNode().ownerDocument(frame).?.getURL(frame);
+    const action = element.getAttributeInterned("action") orelse return owner_url;
     if (action.len == 0) {
         return owner_url;
     }
     return element.asNode().resolveURLReflect(action, frame, .{});
 }
 
-pub fn setAction(self: *Form, value: []const u8, frame: *Frame) !void {
+fn setAction(self: *Form, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("action"), .wrap(value), frame);
 }
 
-pub fn getAcceptCharset(self: *Form) []const u8 {
+fn getAcceptCharset(self: *Form) []const u8 {
     return self.asElement().getAttributeSafe(.wrap("accept-charset")) orelse "";
 }
 
-pub fn setAcceptCharset(self: *Form, value: []const u8, frame: *Frame) !void {
+fn setAcceptCharset(self: *Form, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(.wrap("accept-charset"), .wrap(value), frame);
 }
 
-pub fn getEnctype(self: *const Form) []const u8 {
+fn getEnctype(self: *const Form) []const u8 {
     return normalizeEnctype(self.asConstElement().getAttributeSafe(comptime .wrap("enctype")), "application/x-www-form-urlencoded");
 }
 
-pub fn setEnctype(self: *Form, value: []const u8, frame: *Frame) !void {
+fn setEnctype(self: *Form, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("enctype"), .wrap(value), frame);
 }
 
@@ -190,6 +191,32 @@ fn getFormOwner(element: *Element, frame: *Frame) ?*Form {
     return null;
 }
 
+// https://html.spec.whatwg.org/multipage/forms.html#dom-form-nameditem
+// One matching control is returned as is; more than one as a live RadioNodeList.
+fn namedItem(self: *Form, name: []const u8, frame: *Frame) !?HTMLFormControlsCollection.NamedItemResult {
+    if (name.len == 0) {
+        return null;
+    }
+
+    var first: ?*Element = null;
+    var it = self.iterator(frame);
+    while (it.next()) |element| {
+        if (HTMLFormControlsCollection.matchesName(element, name) == false) {
+            continue;
+        }
+        if (first == null) {
+            first = element;
+            continue;
+        }
+        // Only the RadioNodeList needs a collection; it holds a ref to it.
+        const elements = try self.getElements(frame);
+        return .{ .radio_node_list = try elements.radioNodeList(name, frame) };
+    }
+
+    const element = first orelse return null;
+    return .{ .element = element };
+}
+
 /// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-form-checkvalidity
 /// Returns true if every submittable element in the form is valid. Fires an
 /// `invalid` event on each failing element.
@@ -205,7 +232,7 @@ pub fn checkValidity(self: *Form, frame: *Frame) !bool {
 
 /// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-form-reportvalidity
 /// Headless: identical to checkValidity (no UI to draw).
-pub fn reportValidity(self: *Form, frame: *Frame) !bool {
+fn reportValidity(self: *Form, frame: *Frame) !bool {
     return self.checkValidity(frame);
 }
 
@@ -218,7 +245,7 @@ fn checkElementValidity(element: *Element, frame: *Frame) !bool {
 }
 
 pub fn getNoValidate(self: *const Form) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("novalidate")) != null;
+    return self.asConstElement().getAttributeInterned("novalidate") != null;
 }
 
 pub const JsApi = struct {
@@ -228,6 +255,22 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const @"[str]" = bridge.namedIndexed(Form.namedItem, null, null, null, struct {
+        fn wrap(self: *Form, field_name: []const u8, frame: *Frame) !u32 {
+            if (field_name.len == 0) {
+                return error.NotHandled;
+            }
+
+            var it = self.iterator(frame);
+            while (it.next()) |element| {
+                if (HTMLFormControlsCollection.matchesName(element, field_name)) {
+                    return js.v8.DontEnum;
+                }
+            }
+            return error.NotHandled;
+        }
+    }.wrap, .{ .null_as_undefined = true });
 
     const reflect = Element.Reflect(Form);
     pub const encoding = reflect.enumerated("enctype", &.{ "application/x-www-form-urlencoded", "multipart/form-data", "text/plain" }, .{ .missing = "application/x-www-form-urlencoded" });

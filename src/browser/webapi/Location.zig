@@ -33,7 +33,7 @@ _rc: lp.RC = .{},
 pub fn init(raw_url: []const u8, frame: *Frame) !*Location {
     const url = try URL.init(raw_url, null, &frame.js.execution);
     url.acquireRef();
-    errdefer url.releaseRef(frame._page);
+    errdefer url.releaseRef(frame.page);
 
     return frame._factory.create(Location{
         ._url = url,
@@ -52,11 +52,11 @@ pub fn releaseRef(self: *Location, page: *Page) void {
     self._rc.release(self, page);
 }
 
-pub fn getPathname(self: *const Location) []const u8 {
+fn getPathname(self: *const Location) []const u8 {
     return self._url.getPathname();
 }
 
-pub fn getProtocol(self: *const Location) []const u8 {
+fn getProtocol(self: *const Location) []const u8 {
     return self._url.getProtocol();
 }
 
@@ -76,7 +76,7 @@ pub fn getOrigin(self: *const Location, exec: *const js.Execution) ![]const u8 {
     return self._url.getOrigin(exec);
 }
 
-pub fn getSearch(self: *const Location, exec: *const js.Execution) ![]const u8 {
+fn getSearch(self: *const Location, exec: *const js.Execution) ![]const u8 {
     return self._url.getSearch(exec);
 }
 
@@ -92,7 +92,7 @@ pub fn setPathname(_: *const Location, pathname: []const u8, frame: *Frame) !voi
     }, .{ .script = frame });
 }
 
-pub fn setSearch(_: *const Location, search: []const u8, frame: *Frame) !void {
+fn setSearch(_: *const Location, search: []const u8, frame: *Frame) !void {
     const new_url = try U.setSearch(frame.url, search, frame.call_arena);
     return frame.scheduleNavigation(new_url, .{
         .reason = .script,
@@ -100,9 +100,9 @@ pub fn setSearch(_: *const Location, search: []const u8, frame: *Frame) !void {
     }, .{ .script = frame });
 }
 
-pub fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
+fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
     const old_url = frame.url;
-    const base_end = std.mem.indexOfScalar(u8, old_url, '#') orelse old_url.len;
+    const base_end = std.mem.findScalar(u8, old_url, '#') orelse old_url.len;
     // Includes the leading '#'; empty when the URL has no fragment.
     const old_fragment = old_url[base_end..];
 
@@ -114,7 +114,7 @@ pub fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
         }
         // Scratch only: scheduleNavigation dupes the URL into its own arena
         // synchronously, so the local arena suffices.
-        break :blk try std.fmt.allocPrint(frame.local_arena, "#{s}", .{hash});
+        break :blk try frame.local_arena.print("#{s}", .{hash});
     };
 
     // Per the Location hash setter, when the fragment doesn't change no
@@ -132,7 +132,7 @@ pub fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
     }, .{ .script = frame });
 }
 
-pub fn assign(_: *const Location, url: [:0]const u8, frame: *Frame) !void {
+fn assign(_: *const Location, url: [:0]const u8, frame: *Frame) !void {
     return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
 }
 

@@ -4,7 +4,6 @@ const builtin = @import("builtin");
 const build_config = @import("build_config");
 
 const App = @import("../App.zig");
-const Config = @import("../Config.zig");
 
 const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");
@@ -24,13 +23,13 @@ const LINGER_MS = 5000;
 const LINGER_BATCH = 16;
 const URL = "https://telemetry.lightpanda.io/v2";
 
-const OS_CODE = switch (builtin.os.tag) {
+const OS_CODE = switch (builtin.target.os.tag) {
     .linux => "L",
     .macos => "M",
     .ios => "I",
     else => "O",
 };
-const ARCH_CODE = switch (builtin.cpu.arch) {
+const ARCH_CODE = switch (builtin.target.cpu.arch) {
     .x86_64 => "X",
     .aarch64 => "A",
     else => "O",
@@ -46,7 +45,7 @@ writer: std.Io.Writer.Allocating,
 
 iid: ?[36]u8 = null,
 mode: []const u8,
-proxy: u8,
+cli: Header.CLI,
 
 // `mutex` guards the ring buffer (head/tail/dropped), `running`, and the lazy
 // `thread` creation. The sender thread blocks on `cond` while idle.
@@ -70,17 +69,22 @@ running: bool = true,
 pending: std.ArrayList(telemetry.Event) = .empty,
 dropped: u32 = 0,
 
-pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode, interactive: bool) !void {
+pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8) !void {
+    const config = app.config;
+    const allocator = app.allocator;
     self.* = .{
         .iid = iid,
-        .allocator = app.allocator,
+        .allocator = allocator,
         .network = &app.network,
-        .proxy = if (app.config.httpProxy() != null) 1 else 0,
-        .writer = std.Io.Writer.Allocating.init(app.allocator),
-        .mode = switch (run_mode) {
+        .cli = .{
+            .proxy = config.httpProxy() != null,
+            .robots = config.obeyRobots(),
+        },
+        .writer = std.Io.Writer.Allocating.init(allocator),
+        .mode = switch (config.command) {
             .fetch => "F",
             .serve => "S",
-            .agent => if (interactive == false) "AR" else "A",
+            .agent => if (config.interactive()) "A" else "AR",
             .run => "R",
             .mcp => "M",
             .embed => "E",
@@ -181,7 +185,7 @@ fn run(self: *LightPanda) void {
 
         var sent: usize = 0;
         self.postEvents(&conn, batch.items, dropped, &sent) catch |err| {
-            log.warn(.telemetry, "postEvents", .{ .err = err, .events = batch.items.len, .dropped = dropped });
+            log.debug(.telemetry, "postEvents", .{ .err = err, .events = batch.items.len, .dropped = dropped });
         };
         const lost: u32 = @intCast(batch.items.len - sent);
 
@@ -244,7 +248,7 @@ fn postEvents(self: *LightPanda, conn: *http.Connection, events: []const telemet
 
 fn flush(self: *LightPanda, conn: *http.Connection) !void {
     self._flush(conn) catch |err| {
-        log.warn(.telemetry, "flush", .{ .err = err, .size = self.writer.written().len });
+        log.debug(.telemetry, "flush", .{ .err = err, .size = self.writer.written().len });
         return err;
     };
 }
@@ -267,7 +271,7 @@ fn writeHeader(self: *LightPanda) !bool {
     return self.writeLine(&Header{
         .iid = if (self.iid) |*iid| iid else "00000000-0000-0000-0000-000000000000",
         .mode = self.mode,
-        .proxy = self.proxy,
+        .cli = self.cli,
     });
 }
 
@@ -317,14 +321,20 @@ const EventRow = struct {
 const Header = struct {
     iid: []const u8,
     mode: []const u8,
-    proxy: u8,
+    cli: CLI,
+
+    const CLI = packed struct(u32) {
+        proxy: bool,
+        robots: bool,
+        _reserved: u30 = 0,
+    };
 
     pub fn jsonStringify(self: *const Header, writer: anytype) !void {
         try writer.beginArray();
         try writer.write(self.iid);
         try writer.write("H");
         try writer.write(self.mode);
-        try writer.write(self.proxy);
+        try writer.write(@as(u32, @bitCast(self.cli)));
         try writer.write(OS_CODE);
         try writer.write(ARCH_CODE);
         try writer.write(build_config.version);
@@ -378,11 +388,11 @@ test "Telemetry: header wire format" {
     const header = Header{
         .iid = "the-iid",
         .mode = "S",
-        .proxy = 1,
+        .cli = .{ .proxy = true, .robots = false },
     };
     try std.json.Stringify.value(&header, .{}, &w.writer);
 
-    const expected = try std.fmt.allocPrint(testing.allocator, "[\"the-iid\",\"H\",\"S\",1,\"{s}\",\"{s}\",\"{s}\"]", .{ OS_CODE, ARCH_CODE, build_config.version });
+    const expected = try testing.allocator.print("[\"the-iid\",\"H\",\"S\",1,\"{s}\",\"{s}\",\"{s}\"]", .{ OS_CODE, ARCH_CODE, build_config.version });
     defer testing.allocator.free(expected);
 
     try testing.expectEqual(expected, w.written());
