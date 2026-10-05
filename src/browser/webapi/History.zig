@@ -56,7 +56,7 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
     const url = if (_url) |u|
         try @import("../URL.zig").resolve(arena.allocator(), frame.url, u, .{})
     else
-        try arena.dupeZ(u8, frame.url);
+        try arena.dupeSentinel(u8, frame.url, 0);
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
     _ = try session.navigation.pushEntry(url, .{ .source = .history, .value = json }, frame, true);
@@ -80,7 +80,7 @@ fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8,
     const url = if (_url) |u|
         try @import("../URL.zig").resolve(arena.allocator(), frame.url, u, .{})
     else
-        try arena.dupeZ(u8, frame.url);
+        try arena.dupeSentinel(u8, frame.url, 0);
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
     _ = try session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, frame, true);

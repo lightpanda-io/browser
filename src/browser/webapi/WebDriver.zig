@@ -164,10 +164,17 @@ const ActionSequence = struct {
         frame.js.localScope(&ls);
         defer ls.deinit();
 
-        errdefer |err| {
+        performSources(self, &ls) catch |err| {
             ls.toLocal(self.resolver).reject("WebDriver.actionSequence", ls.local.newString(@errorName(err)));
-        }
+            return err;
+        };
 
+        ls.toLocal(self.resolver).resolve("WebDriver.actionSequence", {});
+        return null;
+    }
+
+    fn performSources(self: *ActionSequence, ls: *js.Local.Scope) !void {
+        const frame = self.frame;
         const sources = self.sources.local(&ls.local).toArray();
         for (0..sources.len()) |i| {
             const source_val = try sources.get(@intCast(i));
@@ -185,9 +192,6 @@ const ActionSequence = struct {
             }
             // "none" sources only carry pauses, which have no observable effect here.
         }
-
-        ls.toLocal(self.resolver).resolve("WebDriver.actionSequence", {});
-        return null;
     }
 
     fn finalize(ptr: *anyopaque) void {

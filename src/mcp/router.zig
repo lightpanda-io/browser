@@ -49,7 +49,7 @@ pub fn processRequests(server: anytype, reader: *std.Io.Reader, input: ?std.Io.F
 /// `takeDelimiter` may still block on a partial line, but MCP clients write
 /// whole lines. A full buffer also returns so StreamTooLong surfaces.
 fn idleUntilInput(server: anytype, reader: *std.Io.Reader, file: std.Io.File) void {
-    while (std.mem.indexOfScalar(u8, reader.buffered(), '\n') == null and
+    while (std.mem.findScalar(u8, reader.buffered(), '\n') == null and
         reader.bufferedLen() < reader.buffer.len)
     {
         const wait_ms = server.idle();
@@ -155,7 +155,7 @@ test "MCP.router - handleMessage - synchronous unit tests" {
         \\{"jsonrpc":"2.0","id":3,"method":"tools/list"}
     );
     try testing.expectJson(.{ .jsonrpc = "2.0", .id = 3 }, out_alloc.writer.buffered());
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"name\":\"goto\"") != null);
+    try testing.expect(std.mem.find(u8, out_alloc.writer.buffered(), "\"name\":\"goto\"") != null);
     out_alloc.writer.end = 0;
 
     // 4. Method not found

@@ -19,6 +19,7 @@
 const std = @import("std");
 
 const Engine = @import("Engine.zig");
+const repeat = @import("../../../../string.zig").repeat;
 
 const Allocator = std.mem.Allocator;
 
@@ -101,7 +102,7 @@ test "IDB - Manager: on-disk engines hash to per-origin files, isolated" {
     // A long origin (hostname near the 253-byte limit) must still open: the
     // hashed file name stays well under NAME_MAX where a transcribed one would
     // not.
-    const long_host = "https://" ++ ("a" ** 250) ++ ".com";
+    const long_host = "https://" ++ (repeat("a", 250)) ++ ".com";
     const a = try mgr.engineForOrigin(long_host);
     _ = try a.upsertDatabase("db", 7);
 

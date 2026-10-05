@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const Translator = @import("translate_c").Translator;
 
 const lightpanda_version = std.SemanticVersion.parse(@import("build.zig.zon").version) catch unreachable;
 const min_zig_version = std.SemanticVersion.parse(@import("build.zig.zon").minimum_zig_version) catch unreachable;
@@ -44,18 +45,18 @@ pub fn build(b: *Build) !void {
     const prebuilt_v8_path_option = b.option([]const u8, "prebuilt_v8_path", "Path to a prebuilt libc_v8.a or libc_v8.so");
 
     const dev_fast = b.option(bool, "dev_fast", "Linux debug builds: shared V8 + self-hosted backend. Implies -Dshared_v8, -Duse_llvm=false and a bundled-CRT target") orelse
-        (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64 and
-            optimize == .Debug and requested_target.query.isNative() and
+        (builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64 and
+            optimize == .debug and requested_target.query.isNative() and
             !enable_tsan and !enable_asan and
             (prebuilt_v8_path_option == null or std.mem.endsWith(u8, prebuilt_v8_path_option.?, ".so")));
 
     if (dev_fast) {
-        if (builtin.os.tag != .linux) {
-            std.debug.print("-Ddev_fast is Linux-only (host is {s})\n", .{@tagName(builtin.os.tag)});
+        if (builtin.target.os.tag != .linux) {
+            std.debug.print("-Ddev_fast is Linux-only (host is {s})\n", .{@tagName(builtin.target.os.tag)});
             return error.DevFastUnsupportedHost;
         }
-        if (optimize != .Debug) {
-            std.debug.print("-Ddev_fast is Debug-only (optimize is {s})\n", .{@tagName(optimize)});
+        if (optimize != .debug) {
+            std.debug.print("-Ddev_fast is debug-only (optimize is {s})\n", .{@tagName(optimize)});
             return error.DevFastRequiresDebug;
         }
         if (!requested_target.query.isNative()) {
@@ -75,10 +76,10 @@ pub fn build(b: *Build) !void {
     // Dependencies never follow -Doptimize, and they build for the requested
     // target rather than the dev_fast bundled-CRT query, so debug and release
     // builds share one set of dependency objects in the cache.
-    const debug_deps = b.option(bool, "debug_deps", "Build the C and Rust dependencies in Debug instead of ReleaseFast") orelse false;
+    const debug_deps = b.option(bool, "debug_deps", "Build the C and Rust dependencies in debug instead of fast") orelse false;
     const deps: Deps = .{
         .target = requested_target,
-        .optimize = if (debug_deps) .Debug else .ReleaseFast,
+        .optimize = if (debug_deps) .debug else .fast,
     };
 
     // Without an explicit -Dprebuilt_v8_path, pick up whatever `make
@@ -118,7 +119,7 @@ pub fn build(b: *Build) !void {
 
     const fmt_step = b.step("fmt", "Check code formatting");
     const fmt = b.addFmt(.{
-        .paths = &.{ "src", "build.zig", "build.zig.zon" },
+        .paths = b.pathList(&.{ "src", "build.zig", "build.zig.zon" }),
         .check = true,
     });
     fmt_step.dependOn(&fmt.step);
@@ -167,9 +168,7 @@ pub fn build(b: *Build) !void {
         b.installArtifact(exe);
 
         const run_cmd = b.addRunArtifact(exe);
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
-        }
+        run_cmd.addPassthruArgs();
         const run_step = b.step("run", "Run the app");
         run_step.dependOn(&run_cmd.step);
 
@@ -185,9 +184,7 @@ pub fn build(b: *Build) !void {
         extras_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
 
         const run_cmd = b.addRunArtifact(exe);
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
-        }
+        run_cmd.addPassthruArgs();
         const run_step = b.step("snapshot_creator", "Generate a v8 snapshot");
         run_step.dependOn(&run_cmd.step);
     }
@@ -197,7 +194,7 @@ pub fn build(b: *Build) !void {
         const exe = addExe(b, exe_config, "lightpanda-skills", "skills_check", "src/main_skills.zig");
 
         const run_cmd = b.addRunArtifact(exe);
-        const out_dir = run_cmd.addOutputDirectoryArg("skills");
+        const out_dir = run_cmd.addOutputDirectoryArg2("skills", .{});
         const install = b.addInstallDirectory(.{
             .source_dir = out_dir,
             .install_dir = .prefix,
@@ -222,14 +219,14 @@ pub fn build(b: *Build) !void {
 
 const Deps = struct {
     target: Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
 };
 
 const ExeConfig = struct {
     check: *Build.Step,
     lightpanda_module: *Build.Module,
     target: Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     use_llvm: bool,
     orderfile: ?[]const u8,
     sanitize_c: ?std.zig.SanitizeC,
@@ -255,7 +252,7 @@ fn addExe(b: *Build, config: ExeConfig, name: []const u8, check_name: []const u8
     if (config.orderfile) |path| {
         // Per-function/per-datum sections exist only so the orderfile script
         // can place individual hot functions; the self-hosted backend used by
-        // Debug builds does not support them on the C libraries, so they are
+        // debug builds does not support them on the C libraries, so they are
         // gated on the orderfile being set (release/LLVM only).
         exe.link_function_sections = true;
         exe.link_data_sections = true;
@@ -282,9 +279,11 @@ fn devFastGlibcVersion(b: *Build) std.SemanticVersion {
 /// it cannot drift from CI (the Makefile reads the same source of truth).
 fn findPrebuiltV8(b: *Build, target: Build.ResolvedTarget, dev_fast: bool) ?[]const u8 {
     const io = b.graph.io;
+    const action_path = ".github/actions/install/action.yml";
+    b.dependOnFileContents(b.path(action_path));
     const action = std.Io.Dir.cwd().readFileAlloc(
         io,
-        b.pathFromRoot(".github/actions/install/action.yml"),
+        rootPath(b, action_path),
         b.allocator,
         .limited(64 * 1024),
     ) catch return null;
@@ -294,7 +293,7 @@ fn findPrebuiltV8(b: *Build, target: Build.ResolvedTarget, dev_fast: bool) ?[]co
         return null;
     }
 
-    const cache_dir = b.pathFromRoot(".lp-cache");
+    const cache_dir = ".lp-cache";
     // The .so must keep the name the exe's DT_NEEDED records; the archive
     // name encodes V8 version, os and arch.
     const path = if (dev_fast)
@@ -307,12 +306,19 @@ fn findPrebuiltV8(b: *Build, target: Build.ResolvedTarget, dev_fast: bool) ?[]co
             @tagName(target.result.cpu.arch),
         }) });
     };
-    std.Io.Dir.cwd().access(io, path, .{}) catch {
+    std.Io.Dir.cwd().access(io, rootPath(b, path), .{}) catch {
+        // Zig can't track a missing file as a configure dependency; the
+        // source-build path poisons the configure cache instead.
         std.debug.print("No prebuilt V8 at {s}; using the V8 source-build path. `make download-v8` fetches the prebuilt.\n", .{path});
         return null;
     };
+    b.dependOnFileMetadata(b.path(path));
     std.debug.print("Using prebuilt V8: {s}\n", .{path});
     return path;
+}
+
+fn rootPath(b: *Build, sub_path: []const u8) []const u8 {
+    return b.root.joinString(b.allocator, sub_path) catch @panic("OOM");
 }
 
 /// Returns the quoted `default:` value of a top-level `key` in the install
@@ -346,18 +352,18 @@ fn markHotSections(b: *Build, archive: Build.LazyPath) Build.LazyPath {
         .root_module = b.createModule(.{
             .root_source_file = b.path("orderfile/mark_hot_sections.zig"),
             .target = b.graph.host,
-            .optimize = .ReleaseSafe,
+            .optimize = .safe,
         }),
     });
     const run = b.addRunArtifact(tool);
     run.addFileArg(archive);
     run.addFileArg(b.path("orderfile/v8.txt"));
-    return run.addOutputFileArg("libc_v8.a");
+    return run.addOutputFileArg2("libc_v8.a", .{});
 }
 
 /// Per-function/per-datum sections let the -Dorderfile linker script place
 /// individual hot functions. Only enabled for orderfile (release/LLVM) builds:
-/// the self-hosted backend used by Debug builds fails to link the C libraries
+/// the self-hosted backend used by debug builds fails to link the C libraries
 /// with them.
 fn sectionize(lib: *Build.Step.Compile, enabled: bool) *Build.Step.Compile {
     if (enabled) {
@@ -384,7 +390,7 @@ fn linkV8(
         .is_tsan = is_tsan,
         .inspector_subtype = false,
         .v8_enable_sandbox = is_tsan,
-        .cache_root = b.pathFromRoot(".lp-cache"),
+        .cache_root = rootPath(b, ".lp-cache"),
         .prebuilt_v8_path = prebuilt_v8_path,
         .shared_v8 = shared_v8,
     });
@@ -393,7 +399,7 @@ fn linkV8(
 
 fn linkRust(b: *Build, mod: *Build.Module, deps: Deps) void {
     // Cargo's "dev" profile writes to target/debug.
-    const profile, const out_subdir = if (deps.optimize == .Debug) .{ "dev", "debug" } else .{ "release", "release" };
+    const profile, const out_subdir = if (deps.optimize == .debug) .{ "dev", "debug" } else .{ "release", "release" };
 
     // One cargo workspace, one staticlib (src/rust/Cargo.toml explains why).
     const exec_cargo = b.addSystemCommand(&.{
@@ -412,7 +418,7 @@ fn linkRust(b: *Build, mod: *Build.Module, deps: Deps) void {
     _ = exec_cargo.captureStdErr(.{});
 
     // TODO: We can prefer `--artifact-dir` once it become stable.
-    const out_dir = exec_cargo.addPrefixedOutputDirectoryArg("--target-dir=", "rust");
+    const out_dir = exec_cargo.addOutputDirectoryArg2("rust", .{ .prefix = "--target-dir=" });
 
     const rust_step = b.step("rust", "Build the Rust staticlib (requires cargo)");
     rust_step.dependOn(&exec_cargo.step);
@@ -425,14 +431,18 @@ fn linkRust(b: *Build, mod: *Build.Module, deps: Deps) void {
 /// input of `run`, skipping the `skip_dir` subtree at any depth.
 fn addDirInputs(b: *Build, run: *Build.Step.Run, root: []const u8, skip_dir: []const u8) !void {
     const io = b.graph.io;
-    var dir = try b.build_root.handle.openDir(io, root, .{ .iterate = true });
+    var dir = try std.Io.Dir.cwd().openDir(io, rootPath(b, root), .{ .iterate = true });
     defer dir.close(io);
 
+    b.dependOnDirectoryContents(b.path(root));
     var walker = try dir.walk(b.allocator);
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
         switch (entry.kind) {
-            .directory => if (std.mem.eql(u8, entry.basename, skip_dir)) walker.leave(io),
+            .directory => if (std.mem.eql(u8, entry.basename, skip_dir))
+                walker.leave(io)
+            else
+                b.dependOnDirectoryContents(b.path(b.pathJoin(&.{ root, entry.path }))),
             .file => run.addFileInput(b.path(b.pathJoin(&.{ root, entry.path }))),
             else => {},
         }
@@ -440,14 +450,12 @@ fn addDirInputs(b: *Build, run: *Build.Step.Run, root: []const u8, skip_dir: []c
 }
 
 fn linkSqlite(b: *Build, mod: *Build.Module, deps: Deps, enable_csan: ?std.zig.SanitizeC, is_tsan: bool, section: bool) void {
-    const dep = b.dependency("sqlite3", .{
-        .target = deps.target,
-        .optimize = deps.optimize,
-    });
+    const dep = b.dependency("sqlite3", .{});
 
-    const lib = sectionize(dep.artifact("sqlite3"), section);
-    lib.root_module.sanitize_c = enable_csan;
-    lib.root_module.sanitize_thread = is_tsan;
+    const lib_mod = cLibModule(b, deps.target, deps.optimize, is_tsan);
+    lib_mod.sanitize_c = enable_csan;
+    lib_mod.addCSourceFile(.{ .file = dep.path("sqlite3.c") });
+    const lib = sectionize(b.addLibrary(.{ .name = "sqlite3", .root_module = lib_mod }), section);
 
     const macros = [_]struct { []const u8, []const u8 }{
         .{ "SQLITE_DEFAULT_FILE_PERMISSIONS", "0600" },
@@ -489,12 +497,7 @@ fn linkSqlite(b: *Build, mod: *Build.Module, deps: Deps, enable_csan: ?std.zig.S
 
     mod.linkLibrary(lib);
 
-    const translate_c = b.addTranslateC(.{
-        .root_source_file = lib.getEmittedIncludeTree().path(b, "sqlite3.h"),
-        .target = mod.resolved_target.?,
-        .optimize = mod.optimize.?,
-    });
-    mod.addImport("sqlite3", translate_c.createModule());
+    mod.addImport("sqlite3", translateC(b, mod, dep.path("sqlite3.h")).mod);
 }
 
 fn linkPcre2(b: *Build, mod: *Build.Module, deps: Deps, enable_csan: ?std.zig.SanitizeC, is_tsan: bool, section: bool) void {
@@ -509,13 +512,9 @@ fn linkPcre2(b: *Build, mod: *Build.Module, deps: Deps, enable_csan: ?std.zig.Sa
     lib.root_module.sanitize_thread = is_tsan;
     mod.linkLibrary(lib);
 
-    const translate_c = b.addTranslateC(.{
-        .root_source_file = lib.getEmittedIncludeTree().path(b, "pcre2.h"),
-        .target = mod.resolved_target.?,
-        .optimize = mod.optimize.?,
-    });
-    translate_c.defineCMacro("PCRE2_CODE_UNIT_WIDTH", "8");
-    mod.addImport("pcre2", translate_c.createModule());
+    const translator = translateC(b, mod, lib.getEmittedIncludeTree().path(b, "pcre2.h"));
+    translator.defineCMacro("PCRE2_CODE_UNIT_WIDTH", "8");
+    mod.addImport("pcre2", translator.mod);
 }
 
 fn linkCurl(b: *Build, mod: *Build.Module, deps: Deps, is_tsan: bool, section: bool) void {
@@ -523,13 +522,9 @@ fn linkCurl(b: *Build, mod: *Build.Module, deps: Deps, is_tsan: bool, section: b
     mod.linkLibrary(curl);
 
     const dep = b.dependency("curl", .{});
-    const translate_c = b.addTranslateC(.{
-        .root_source_file = dep.path("include/curl/curl.h"),
-        .target = mod.resolved_target.?,
-        .optimize = mod.optimize.?,
-    });
-    translate_c.addIncludePath(dep.path("include"));
-    mod.addImport("curl", translate_c.createModule());
+    const translator = translateC(b, mod, dep.path("include/curl/curl.h"));
+    translator.addIncludePath(dep.path("include"));
+    mod.addImport("curl", translator.mod);
 
     const zlib = buildZlib(b, deps.target, deps.optimize, is_tsan, section);
     curl.root_module.linkLibrary(zlib);
@@ -545,9 +540,7 @@ fn linkCurl(b: *Build, mod: *Build.Module, deps: Deps, is_tsan: bool, section: b
 
     if (deps.target.result.os.tag == .macos) {
         // needed for proxying on mac
-        const framework_path = if (b.sysroot) |sysroot|
-            b.pathJoin(&.{ sysroot, "System/Library/Frameworks" })
-        else if (b.graph.environ_map.get("SDKROOT")) |sdk_root|
+        const framework_path = if (b.graph.environ_map.get("SDKROOT")) |sdk_root|
             b.pathJoin(&.{ sdk_root, "System/Library/Frameworks" })
         else
             "/System/Library/Frameworks";
@@ -557,7 +550,7 @@ fn linkCurl(b: *Build, mod: *Build.Module, deps: Deps, is_tsan: bool, section: b
     }
 }
 
-fn cLibModule(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) *Build.Module {
+fn cLibModule(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimize, is_tsan: bool) *Build.Module {
     return b.createModule(.{
         .target = target,
         .optimize = optimize,
@@ -566,7 +559,7 @@ fn cLibModule(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opt
     });
 }
 
-fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool, section: bool) *Build.Step.Compile {
+fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimize, is_tsan: bool, section: bool) *Build.Step.Compile {
     const dep = b.dependency("zlib", .{});
 
     const mod = cLibModule(b, target, optimize, is_tsan);
@@ -592,7 +585,7 @@ fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opti
     return lib;
 }
 
-fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool, section: bool) [3]*Build.Step.Compile {
+fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimize, is_tsan: bool, section: bool) [3]*Build.Step.Compile {
     const dep = b.dependency("brotli", .{});
 
     const mod = cLibModule(b, target, optimize, is_tsan);
@@ -634,7 +627,7 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Op
     return .{ brotlicmn, brotlidec, brotlienc };
 }
 
-fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, section: bool) [2]*Build.Step.Compile {
+fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimize, section: bool) [2]*Build.Step.Compile {
     const dep = b.dependency("boringssl-zig", .{
         .target = target,
         .optimize = optimize,
@@ -650,7 +643,7 @@ fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin
     return .{ ssl, crypto };
 }
 
-fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool, section: bool) *Build.Step.Compile {
+fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimize, is_tsan: bool, section: bool) *Build.Step.Compile {
     const dep = b.dependency("nghttp2", .{});
 
     const mod = cLibModule(b, target, optimize, is_tsan);
@@ -696,7 +689,7 @@ fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.O
 fn buildCurl(
     b: *Build,
     target: Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     is_tsan: bool,
     section: bool,
 ) *Build.Step.Compile {
@@ -721,7 +714,7 @@ fn buildCurl(
 
     const byte_size = struct {
         fn it(b2: *std.Build, target2: Build.ResolvedTarget, name: []const u8, comptime ctype: std.Target.CType) []const u8 {
-            return b2.fmt("#define SIZEOF_{s} {d}", .{ name, target2.result.cTypeByteSize(ctype) });
+            return b2.fmt("#define SIZEOF_{s} {d}", .{ name, target2.result.cTypeByteSize(ctype).? });
         }
     }.it;
 
@@ -731,7 +724,6 @@ fn buildCurl(
         .USE_NGHTTP2 = true,
 
         .USE_OPENSSL = true,
-        .OPENSSL_IS_BORINGSSL = true,
         .CURL_BORINGSSL_VERSION = null,
         .CURL_CA_PATH = null,
         .CURL_CA_BUNDLE = null,
@@ -751,11 +743,9 @@ fn buildCurl(
         .CURL_DISABLE_LDAP = true,
         .CURL_DISABLE_LDAPS = true,
         .CURL_DISABLE_MQTT = true,
-        .CURL_DISABLE_NTLM = true,
         .CURL_DISABLE_PROGRESS_METER = true,
         .CURL_DISABLE_POP3 = true,
         .CURL_DISABLE_RTSP = true,
-        .CURL_DISABLE_SMB = true,
         .CURL_DISABLE_SMTP = true,
         .CURL_DISABLE_TELNET = true,
         .CURL_DISABLE_TFTP = true,
@@ -777,7 +767,6 @@ fn buildCurl(
 
         .SIZEOF_INT_CODE = byte_size(b, target, "INT", .int),
         .SIZEOF_LONG_CODE = byte_size(b, target, "LONG", .long),
-        .SIZEOF_LONG_LONG_CODE = byte_size(b, target, "LONG_LONG", .longlong),
 
         .SIZEOF_OFF_T_CODE = byte_size(b, target, "OFF_T", .longlong),
         .SIZEOF_CURL_OFF_T_CODE = byte_size(b, target, "CURL_OFF_T", .longlong),
@@ -805,8 +794,6 @@ fn buildCurl(
         .HAVE_PWD_H = !is_windows,
         .HAVE_STDATOMIC_H = true,
         .HAVE_STDBOOL_H = true,
-        .HAVE_STDDEF_H = true,
-        .HAVE_STDINT_H = true,
         .HAVE_STRINGS_H = true,
         .HAVE_STROPTS_H = false,
         .HAVE_SYS_EVENTFD_H = is_linux or is_freebsd or is_netbsd,
@@ -835,18 +822,15 @@ fn buildCurl(
         .HAVE_BUILTIN_AVAILABLE = true,
         .HAVE_CLOCK_GETTIME_MONOTONIC = !is_darwin and !is_windows,
         .HAVE_CLOCK_GETTIME_MONOTONIC_RAW = is_linux,
-        .HAVE_FILE_OFFSET_BITS = true,
         .HAVE_GETEUID = !is_windows,
         .HAVE_GETPPID = !is_windows,
         .HAVE_GETTIMEOFDAY = true,
         .HAVE_GLIBC_STRERROR_R = is_gnu,
         .HAVE_GMTIME_R = !is_windows,
         .HAVE_LOCALTIME_R = !is_windows,
-        .HAVE_LONGLONG = !is_windows,
         .HAVE_MACH_ABSOLUTE_TIME = is_darwin,
         .HAVE_MEMRCHR = !is_darwin and !is_windows,
         .HAVE_POSIX_STRERROR_R = !is_gnu and !is_windows,
-        .HAVE_PTHREAD_H = !is_windows,
         .HAVE_THREADS_POSIX = !is_windows,
         .HAVE_SETLOCALE = true,
         .HAVE_SETRLIMIT = !is_windows,
@@ -854,12 +838,8 @@ fn buildCurl(
         .HAVE_SIGINTERRUPT = !is_windows,
         .HAVE_SIGNAL = true,
         .HAVE_SIGSETJMP = !is_windows,
-        .HAVE_SIZEOF_SA_FAMILY_T = false,
-        .HAVE_SIZEOF_SUSECONDS_T = false,
-        .HAVE_SNPRINTF = true,
         .HAVE_STRCASECMP = !is_windows,
         .HAVE_STRCMPI = false,
-        .HAVE_STRDUP = true,
         .HAVE_STRERROR_R = !is_windows,
         .HAVE_STRICMP = false,
         .HAVE_STRUCT_TIMEVAL = true,
@@ -867,8 +847,6 @@ fn buildCurl(
         .HAVE_UTIME = true,
         .HAVE_UTIMES = !is_windows,
         .HAVE_WRITABLE_ARGV = !is_windows,
-        .HAVE__SETMODE = is_windows,
-        .USE_THREADS_POSIX = !is_windows,
         .USE_RESOLV_THREADED = !is_windows,
 
         // filesystem, network
@@ -885,16 +863,12 @@ fn buildCurl(
         .HAVE_FSETXATTR = is_darwin or is_linux or is_netbsd,
         .HAVE_FSETXATTR_5 = is_linux or is_netbsd,
         .HAVE_FSETXATTR_6 = is_darwin,
-        .HAVE_FTRUNCATE = true,
         .HAVE_GETADDRINFO = true,
         .HAVE_GETADDRINFO_THREADSAFE = is_linux or is_freebsd or is_netbsd,
         .HAVE_GETHOSTBYNAME_R = is_linux or is_freebsd,
         .HAVE_GETHOSTBYNAME_R_3 = false,
-        .HAVE_GETHOSTBYNAME_R_3_REENTRANT = false,
         .HAVE_GETHOSTBYNAME_R_5 = false,
-        .HAVE_GETHOSTBYNAME_R_5_REENTRANT = false,
         .HAVE_GETHOSTBYNAME_R_6 = is_linux,
-        .HAVE_GETHOSTBYNAME_R_6_REENTRANT = is_linux,
         .HAVE_GETHOSTNAME = true,
         .HAVE_GETIFADDRS = if (is_windows) false else !is_android or target.result.os.versionRange().linux.android >= 24,
         .HAVE_GETPASS_R = is_netbsd,
@@ -910,7 +884,6 @@ fn buildCurl(
         .HAVE_IOCTLSOCKET_FIONBIO = is_windows,
         .HAVE_IOCTL_FIONBIO = !is_windows,
         .HAVE_IOCTL_SIOCGIFADDR = !is_windows,
-        .HAVE_MSG_NOSIGNAL = !is_windows,
         .HAVE_OPENDIR = true,
         .HAVE_PIPE = !is_windows,
         .HAVE_PIPE2 = is_linux or is_freebsd or is_netbsd or is_openbsd,
@@ -922,9 +895,7 @@ fn buildCurl(
         .HAVE_SEND = true,
         .HAVE_SENDMMSG = !is_darwin and !is_windows,
         .HAVE_SENDMSG = !is_windows,
-        .HAVE_SETMODE = !is_linux,
         .HAVE_SETSOCKOPT_SO_NONBLOCK = false,
-        .HAVE_SOCKADDR_IN6_SIN6_ADDR = !is_windows,
         .HAVE_SOCKADDR_IN6_SIN6_SCOPE_ID = true,
         .HAVE_SOCKET = true,
         .HAVE_SOCKETPAIR = !is_windows,
@@ -1022,12 +993,17 @@ fn linkIsocline(b: *Build, mod: *Build.Module) void {
         .file = dep.path("src/isocline.c"),
     });
 
-    const translate_c = b.addTranslateC(.{
-        .root_source_file = dep.path("include/isocline.h"),
+    mod.addImport("isocline", translateC(b, mod, dep.path("include/isocline.h")).mod);
+}
+
+fn translateC(b: *Build, mod: *Build.Module, header: Build.LazyPath) Translator {
+    return .init(b.dependency("translate_c", .{}), .{
+        .c_source_file = header,
         .target = mod.resolved_target.?,
         .optimize = mod.optimize.?,
+        // Zig 0.16's built-in translate-c defaulted to this.
+        .default_init = true,
     });
-    mod.addImport("isocline", translate_c.createModule());
 }
 
 /// Resolves the semantic version of the build.
@@ -1072,10 +1048,14 @@ fn resolveVersion(b: *std.Build) std.SemanticVersion {
 }
 
 fn runGit(b: *std.Build, args: []const []const u8) ![]const u8 {
-    var code: u8 = undefined;
+    // HEAD moves without touching any file the cache could track cheaply.
+    b.graph.poisonCache();
     const command = try std.mem.concat(b.allocator, []const u8, &.{
-        &.{ "git", "-C", b.pathFromRoot(".") },
+        &.{ "git", "-C", rootPath(b, ".") },
         args,
     });
-    return b.runAllowFail(command, &code, .ignore);
+    return switch (b.runFallible(command, .{ .stderr_behavior = .ignore })) {
+        .success => |stdout| stdout,
+        else => error.GitFailed,
+    };
 }

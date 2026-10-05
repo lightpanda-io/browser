@@ -151,7 +151,7 @@ pub const ResponseDirectives = struct {
             // We only care about argument for max-age/s-maxage. For something like
             // `no-cache="set-cookie"` we ignore it and just treat it as "no-cache"
             // which is on the safe side.
-            const name, const argument = if (std.mem.indexOfScalar(u8, directive, '=')) |i|
+            const name, const argument = if (std.mem.findScalar(u8, directive, '=')) |i|
                 .{ directive[0..i], directive[i + 1 ..] }
             else
                 .{ directive, "" };
@@ -465,7 +465,7 @@ pub fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutR
     }
 
     return .{
-        .url = try arena.dupeZ(u8, url),
+        .url = try arena.dupeSentinel(u8, url, 0),
         .content_type = if (candidate.content_type) |ct| try arena.dupe(u8, ct) else "application/octet-stream",
         .status = status,
         .stored_at = candidate.timestamp,

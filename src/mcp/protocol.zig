@@ -318,7 +318,7 @@ test "MCP.protocol - error formatting" {
     const response = Response{
         .id = .{ .string = "abc" },
         .@"error" = .{
-            .code = @intFromEnum(ErrorCode.MethodNotFound),
+            .code = @backingInt(ErrorCode.MethodNotFound),
             .message = "Method not found",
         },
     };

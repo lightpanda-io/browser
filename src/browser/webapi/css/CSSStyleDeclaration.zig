@@ -195,7 +195,7 @@ fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame
         .width => element.boxAxis(frame, .width),
         .height => element.boxAxis(frame, .height),
     };
-    return std.fmt.allocPrint(frame.local_arena, "{d}px", .{value}) catch "auto";
+    return frame.local_arena.print("{d}px", .{value}) catch "auto";
 }
 
 pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {
@@ -492,13 +492,13 @@ fn normalizePropertyValue(arena: Allocator, property_name: []const u8, raw_value
     }
 
     // Canonicalize anchor-size() function: anchor name (dashed ident) comes before size keyword
-    if (std.mem.indexOf(u8, value, "anchor-size(")) |idx| {
+    if (std.mem.find(u8, value, "anchor-size(")) |idx| {
         return canonicalizeAnchorSize(arena, value, idx);
     }
 
     // Canonicalize anchor() function: anchor name (dashed ident) comes before position keyword
     // Note: indexOf finds first occurrence, so we check it's not part of "anchor-size("
-    if (std.mem.indexOf(u8, value, "anchor(")) |idx| {
+    if (std.mem.find(u8, value, "anchor(")) |idx| {
         if (idx == 0 or value[idx - 1] != '-') {
             return canonicalizeAnchor(arena, value, idx);
         }
@@ -777,14 +777,14 @@ fn canonicalizeAnchor(arena: Allocator, value: []const u8, start_index: usize) !
 
 // Check if a value is "X X" (duplicate) and return just "X"
 fn collapseDuplicateValue(value: []const u8) ?[]const u8 {
-    const space_idx = std.mem.indexOfScalar(u8, value, ' ') orelse return null;
+    const space_idx = std.mem.findScalar(u8, value, ' ') orelse return null;
     if (space_idx == 0 or space_idx >= value.len - 1) return null;
 
     const first = value[0..space_idx];
     const rest = std.mem.trimStart(u8, value[space_idx + 1 ..], " ");
 
     // Check if there's only one more value (no additional spaces)
-    if (std.mem.indexOfScalar(u8, rest, ' ') != null) return null;
+    if (std.mem.findScalar(u8, rest, ' ') != null) return null;
 
     if (std.mem.eql(u8, first, rest)) {
         return first;

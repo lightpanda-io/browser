@@ -137,7 +137,7 @@ fn isXPathQuery(q: []const u8) bool {
     // before it must be one of the 13 named axes. Walk back the run of
     // [a-zA-Z-] characters and look it up in the closed set.
     var idx: usize = 0;
-    while (std.mem.indexOfPos(u8, q, idx, "::")) |hit| : (idx = hit + 1) {
+    while (std.mem.findPos(u8, q, idx, "::")) |hit| : (idx = hit + 1) {
         if (hit == 0) continue;
         var start = hit;
         while (start > 0) {
@@ -739,7 +739,7 @@ fn fileFromDiskPath(path: []const u8, page: *Page) !*File {
 }
 
 fn mimeFromExtension(name: []const u8) []const u8 {
-    const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return "application/octet-stream";
+    const dot = std.mem.findScalarLast(u8, name, '.') orelse return "application/octet-stream";
     if (dot + 1 >= name.len) return "application/octet-stream";
     var buf: [16]u8 = undefined;
     const ext_raw = name[dot + 1 ..];

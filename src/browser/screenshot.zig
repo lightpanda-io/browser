@@ -887,7 +887,7 @@ const Builder = struct {
                 if (stray) self.list_depth = 1;
                 if (!stray and self.list_stack[self.list_depth - 1].ordered) {
                     const state = &self.list_stack[self.list_depth - 1];
-                    self.pending_marker = try std.fmt.allocPrint(self.arena, "{d}.", .{state.index});
+                    self.pending_marker = try self.arena.print("{d}.", .{state.index});
                     state.index += 1;
                 } else {
                     self.pending_marker = "•";
@@ -1171,9 +1171,9 @@ test "browser.screenshot: rust abi matches" {
         .span_strike = SPAN_STRIKE,
         .span_has_color = SPAN_HAS_COLOR,
 
-        .block_heading = @intFromEnum(LpBlock.Kind.heading),
-        .block_pre = @intFromEnum(LpBlock.Kind.pre),
-        .block_rule = @intFromEnum(LpBlock.Kind.rule),
+        .block_heading = @backingInt(LpBlock.Kind.heading),
+        .block_pre = @backingInt(LpBlock.Kind.pre),
+        .block_rule = @backingInt(LpBlock.Kind.rule),
         .block_tight = BLOCK_TIGHT,
 
         .render_measure_only = RENDER_MEASURE_ONLY,
@@ -1189,9 +1189,9 @@ test "browser.screenshot: rust abi matches" {
     // Size first: a field present on only one side of LpAbi itself shifts
     // everything after it, and the per-field loop would just report noise.
     try testing.expectEqual(expected.size, got.size);
-    inline for (@typeInfo(LpAbi).@"struct".fields) |f| {
-        testing.expectEqual(@field(expected, f.name), @field(got, f.name)) catch |err| {
-            std.debug.print("rust/zig abi mismatch on {s}\n", .{f.name});
+    inline for (@typeInfo(LpAbi).@"struct".field_names) |field_name| {
+        testing.expectEqual(@field(expected, field_name), @field(got, field_name)) catch |err| {
+            std.debug.print("rust/zig abi mismatch on {s}\n", .{field_name});
             return err;
         };
     }

@@ -453,9 +453,9 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
         },
         .substring => |expected| {
             return if (attr.case_insensitive)
-                std.ascii.indexOfIgnoreCase(value, expected) != null
+                std.ascii.findIgnoreCase(value, expected) != null
             else
-                std.mem.indexOf(u8, value, expected) != null;
+                std.mem.find(u8, value, expected) != null;
         },
         .starts_with => |expected| {
             return if (attr.case_insensitive)
@@ -506,7 +506,7 @@ fn attributeContainsWord(value: []const u8, word: []const u8) bool {
         const trimmed = std.mem.trimStart(u8, remaining, &std.ascii.whitespace);
         if (trimmed.len == 0) return false;
 
-        const end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
+        const end = std.mem.findAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
         const current_word = trimmed[0..end];
 
         if (std.mem.eql(u8, current_word, word)) {
@@ -677,7 +677,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         // Custom elements
         .defined => {
             const tag_name = el.getTagNameLower();
-            if (std.mem.indexOfScalar(u8, tag_name, '-') == null) return true;
+            if (std.mem.findScalar(u8, tag_name, '-') == null) return true;
             const registry = &frame.window._custom_elements;
             return registry.get(tag_name) != null;
         },
@@ -1066,7 +1066,7 @@ pub const NthCache = struct {
     };
 
     const TypeCounts = struct {
-        tags: [@typeInfo(Node.Element.Tag).@"enum".fields.len]u32 = @splat(0),
+        tags: [@typeInfo(Node.Element.Tag).@"enum".field_names.len]u32 = @splat(0),
         // Custom and unknown elements share a Tag, so those count by name.
         names: std.StringHashMapUnmanaged(u32) = .empty,
 
@@ -1074,7 +1074,7 @@ pub const NthCache = struct {
             const tag = el.getTag();
             return switch (tag) {
                 .custom, .unknown => (try self.names.getOrPutValue(allocator, el.getTagNameLower(), 0)).value_ptr,
-                else => &self.tags[@intFromEnum(tag)],
+                else => &self.tags[@backingInt(tag)],
             };
         }
     };
@@ -1119,7 +1119,6 @@ pub const NthCache = struct {
         while (it.next()) |child| {
             const el = child.is(Node.Element) orelse continue;
             seen_count += 1;
-
             const ordinals = self.entries.getPtr(child).?;
             ordinals.child_from_end = child_count - seen_count + 1;
             ordinals.of_type_from_end = (try type_counts.get(self.allocator, el)).* - ordinals.of_type + 1;

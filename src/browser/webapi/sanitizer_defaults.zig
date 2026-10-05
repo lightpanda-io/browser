@@ -260,7 +260,7 @@ pub const baseline_remove_elements: []const Name = &.{
 // behind by removeUnsafe().
 pub const event_handler_attributes: []const []const u8 = blk: {
     @setEvalBranchQuota(200_000);
-    const handlers = std.meta.fieldNames(global_event_handlers.Handler);
+    const handlers = @typeInfo(global_event_handlers.Handler).@"enum".field_names;
     var all: [html_event_handler_attributes.len + handlers.len][]const u8 = undefined;
     for (html_event_handler_attributes, 0..) |name, i| {
         all[i] = name;

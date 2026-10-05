@@ -1766,7 +1766,7 @@ test "cdp.input: dispatchKeyEvent Enter clicks buttons and submits once" {
     var id: u32 = 1;
     for (cases) |c| {
         var buf: [32]u8 = undefined;
-        _ = try ls.local.compileAndRun(try std.fmt.bufPrint(&buf, "arm('{s}')", .{c.id}), null);
+        _ = try ls.local.compileAndRun(try std.mem.print(&buf, "arm('{s}')", .{c.id}), null);
 
         try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter" } });
         try ctx.expectSentResult(null, .{ .id = id });

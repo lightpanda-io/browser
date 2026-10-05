@@ -291,7 +291,7 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     // `return <expr>` becomes that Promise's value, which we echo. (A bare
     // trailing expression no longer auto-prints — `await` and a script
     // completion value are mutually exclusive in JS.)
-    const wrapped = std.fmt.allocPrint(self.call_arena.allocator(), "(async () => {{\n{s}\n}})()", .{source}) catch
+    const wrapped = self.call_arena.allocator().print("(async () => {{\n{s}\n}})()", .{source}) catch
         return try self.dupeError("out of memory");
     const script_source = self.env.isolate.initStringHandle(wrapped);
 
@@ -717,7 +717,7 @@ fn callTool(
     const result = browser_tools.call(arena, self.session, self.registry, @tagName(tool), args, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.FrameNotLoaded => return .{ .fail = "no page loaded - run page.goto(url) first" },
-        else => return .{ .fail = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ @tagName(tool), @errorName(err) }) catch return error.OutOfMemory },
+        else => return .{ .fail = arena.print("{s} failed: {s}", .{ @tagName(tool), @errorName(err) }) catch return error.OutOfMemory },
     };
 
     if (result.is_error) return .{ .fail = result.text };
@@ -822,7 +822,7 @@ fn extractSchemaString(arena: std.mem.Allocator, value: std.json.Value) error{Ou
 fn normalizeExtractSchemaString(arena: std.mem.Allocator, schema: []const u8) error{OutOfMemory}![]const u8 {
     const trimmed = std.mem.trim(u8, schema, &std.ascii.whitespace);
     if (trimmed.len == 0 or trimmed[0] != '[') return schema;
-    return try std.fmt.allocPrint(arena, "{{\"__root\":{s}}}", .{schema});
+    return try arena.print("{{\"__root\":{s}}}", .{schema});
 }
 
 fn argJson(
@@ -925,7 +925,7 @@ fn formatCaught(
         break :blk if (n < 0) null else @as(u32, @intCast(n));
     };
     if (line) |n| {
-        return std.fmt.allocPrint(arena, "line {d}: {s}", .{ n, exception }) catch return error.OutOfMemory;
+        return arena.print("line {d}: {s}", .{ n, exception }) catch return error.OutOfMemory;
     }
     return try self.dupeError(exception);
 }
@@ -1017,7 +1017,7 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
     );
 
     const frame = testing.test_session.currentFrame().?;
-    try testing.expect(std.mem.indexOf(u8, frame.url, "/src/browser/tests/mcp_actions.html") != null);
+    try testing.expect(std.mem.find(u8, frame.url, "/src/browser/tests/mcp_actions.html") != null);
 }
 
 test "agent script runtime: Page must be called with new" {
@@ -1028,7 +1028,7 @@ test "agent script runtime: Page must be called with new" {
     defer runtime.deinit();
 
     const message = (try runtime.runSource("Page();", "agent-runtime-page-no-new.js")).?;
-    try testing.expect(std.mem.indexOf(u8, message, "must be called with new") != null);
+    try testing.expect(std.mem.find(u8, message, "must be called with new") != null);
 }
 
 test "agent script runtime: a method on an un-navigated page errors" {
@@ -1042,7 +1042,7 @@ test "agent script runtime: a method on an un-navigated page errors" {
         \\const page = new Page();
         \\page.extract({ btn: "#btn" });
     , "agent-runtime-not-navigated.js")).?;
-    try testing.expect(std.mem.indexOf(u8, message, "not navigated") != null);
+    try testing.expect(std.mem.find(u8, message, "not navigated") != null);
 }
 
 test "agent script runtime: page.close stales the handle" {
@@ -1062,7 +1062,7 @@ test "agent script runtime: page.close stales the handle" {
         \\page.close();
         \\page.extract({ btn: "#btn" });
     , "agent-runtime-close.js")).?;
-    try testing.expect(std.mem.indexOf(u8, message, "closed") != null);
+    try testing.expect(std.mem.find(u8, message, "closed") != null);
 }
 
 test "agent script runtime: parallel gotos coexist and route per page" {
@@ -1433,9 +1433,9 @@ test "agent script runtime: tool errors throw and stop execution" {
         \\globalThis.marker = "after";
     , "agent-runtime-failure.js")).?;
 
-    try testing.expect(std.mem.indexOf(u8, message, "click") != null or
-        std.mem.indexOf(u8, message, "NodeNotFound") != null or
-        std.mem.indexOf(u8, message, "#does-not-exist") != null);
+    try testing.expect(std.mem.find(u8, message, "click") != null or
+        std.mem.find(u8, message, "NodeNotFound") != null or
+        std.mem.find(u8, message, "#does-not-exist") != null);
 
     try runTestScript(runtime,
         \\if (globalThis.marker !== "before") throw new Error("script continued after tool failure");
@@ -1559,7 +1559,7 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
         const message = (try runtime.runSource(
             \\await new Page().goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { url: "http://other" });
         , "agent-runtime-conflict.js")).?;
-        try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
+        try testing.expect(std.mem.find(u8, message, "invalid arguments") != null);
     }
 
     // More positionals than the tool has fields throws.
@@ -1569,7 +1569,7 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
             \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
             \\page.click("#btn", "#extra");
         , "agent-runtime-arity.js")).?;
-        try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
+        try testing.expect(std.mem.find(u8, message, "invalid arguments") != null);
     }
 }
 

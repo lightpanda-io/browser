@@ -13,16 +13,16 @@ const McpTool = protocol.Tool;
 /// Tool identity comes from the `BrowserTool` tag — `tool_defs` only
 /// carries the LLM-facing description and JSON schema.
 const browser_tool_list = blk: {
-    const fields = @typeInfo(BrowserTool).@"enum".fields;
-    var tools: [fields.len]McpTool = undefined;
-    for (browser_tools.tool_defs, fields, 0..) |td, f, i| {
+    const field_names = @typeInfo(BrowserTool).@"enum".field_names;
+    var tools: [field_names.len]McpTool = undefined;
+    for (browser_tools.tool_defs, field_names, 0..) |td, field_name, i| {
         tools[i] = .{
-            .name = f.name,
+            .name = field_name,
             .title = td.summary,
             .description = td.description,
             .inputSchema = td.input_schema,
-            .outputSchema = if (@field(BrowserTool, f.name).reportsPageState()) page_state_schema else null,
-            .annotations = annotations(@field(BrowserTool, f.name)),
+            .outputSchema = if (@field(BrowserTool, field_name).reportsPageState()) page_state_schema else null,
+            .annotations = annotations(@field(BrowserTool, field_name)),
         };
     }
     break :blk tools;
@@ -226,14 +226,14 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         return sendErrorContent(server, id, "out of memory");
 
     writeScript(args.path, script) catch |err| {
-        const msg = std.fmt.allocPrint(arena, "could not write {s}: {s}", .{ args.path, @errorName(err) }) catch
+        const msg = arena.print("could not write {s}: {s}", .{ args.path, @errorName(err) }) catch
             return sendErrorContent(server, id, "could not write script file");
         return sendErrorContent(server, id, msg);
     };
 
     const where = browser_tools.absolutePath(arena, args.path);
     const lines = std.mem.count(u8, script, "\n") + 1;
-    const msg = std.fmt.allocPrint(arena, "saved {d} line(s) to {s}", .{ lines, where }) catch
+    const msg = arena.print("saved {d} line(s) to {s}", .{ lines, where }) catch
         return sendErrorContent(server, id, "out of memory");
 
     try sendToolResultText(server, id, msg, false);
@@ -321,7 +321,7 @@ fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void 
 }
 
 fn sendToolResultFmt(server: *Server, arena: std.mem.Allocator, id: std.json.Value, comptime fmt: []const u8, args: anytype) !void {
-    const msg = std.fmt.allocPrint(arena, fmt, args) catch
+    const msg = arena.print(fmt, args) catch
         return sendErrorContent(server, id, "out of memory");
     return sendToolResultText(server, id, msg, false);
 }
@@ -418,7 +418,7 @@ test "MCP - structuredContent on a navigation" {
         \\}
     ;
     try router.handleMessage(server, testing.arena_allocator, get_url);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "structuredContent") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "structuredContent") == null);
 
     // An action reports where it left the page, navigation or not.
     out.clearRetainingCapacity();
@@ -617,7 +617,7 @@ test "MCP - click on a target=_blank link follows the new window" {
         \\}
     ;
     try router.handleMessage(server, testing.arena_allocator, click);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
 
     out.clearRetainingCapacity();
     const get_url =
@@ -647,7 +647,7 @@ test "MCP - click on a target=_blank link follows the new window" {
         \\}
     ;
     try router.handleMessage(server, testing.arena_allocator, navigate);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":false") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":false") != null);
 
     out.clearRetainingCapacity();
     try router.handleMessage(server, testing.arena_allocator, get_url);
@@ -673,7 +673,7 @@ test "MCP - submitting a target=_blank form follows the new window" {
         \\}
     ;
     try router.handleMessage(server, testing.arena_allocator, click);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html?q=1") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html?q=1") != null);
 }
 
 test "MCP - evaluate: localStorage persists across navigations and is origin-scoped" {
@@ -1073,8 +1073,8 @@ test "MCP - evaluate: rejected Promise surfaces as is_error" {
         \\}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "nope") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "nope") != null);
 }
 
 test "MCP - evaluate: async IIFE without explicit return resolves to empty text" {
@@ -1144,7 +1144,7 @@ test "MCP - save rejects unsafe path" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"save","arguments":{"path":"../escape.js","script":"goto(\"x\");"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "must be relative") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "must be relative") != null);
 }
 
 test "MCP - save writes the script to disk" {
@@ -1160,7 +1160,7 @@ test "MCP - save writes the script to disk" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"save","arguments":{"path":"mcp-save-test-script.js","script":"const page = new Page();\nawait page.goto(\"https://example.com\");"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "saved 2 line") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "saved 2 line") != null);
 
     const written = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(4096));
     try std.testing.expectEqualStrings("const page = new Page();\nawait page.goto(\"https://example.com\");\n", written);
@@ -1176,7 +1176,7 @@ test "MCP - tree rejects stale backendNodeId instead of dumping whole document" 
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     const written = out.written();
-    try testing.expect(std.mem.indexOf(u8, written, "NodeNotFound") != null);
+    try testing.expect(std.mem.find(u8, written, "NodeNotFound") != null);
 }
 
 test "MCP - tree treats zero-filled backendNodeId as omitted" {
@@ -1189,8 +1189,8 @@ test "MCP - tree treats zero-filled backendNodeId as omitted" {
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     const written = out.written();
-    try testing.expect(std.mem.indexOf(u8, written, "NodeNotFound") == null);
-    try testing.expect(std.mem.indexOf(u8, written, "\"isError\":true") == null);
+    try testing.expect(std.mem.find(u8, written, "NodeNotFound") == null);
+    try testing.expect(std.mem.find(u8, written, "\"isError\":true") == null);
 }
 
 test "MCP - stale backendNodeId surfaces recovery guidance" {
@@ -1203,8 +1203,8 @@ test "MCP - stale backendNodeId surfaces recovery guidance" {
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     const written = out.written();
-    try testing.expect(std.mem.indexOf(u8, written, "NodeNotFound") != null);
-    try testing.expect(std.mem.indexOf(u8, written, "omit backendNodeId") != null);
+    try testing.expect(std.mem.find(u8, written, "NodeNotFound") != null);
+    try testing.expect(std.mem.find(u8, written, "omit backendNodeId") != null);
 }
 
 test "MCP - PascalCase argument keys from LLMs are normalized to canonical" {
@@ -1217,8 +1217,8 @@ test "MCP - PascalCase argument keys from LLMs are normalized to canonical" {
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     const written = out.written();
-    try testing.expect(std.mem.indexOf(u8, written, "\"isError\":true") == null);
-    try testing.expect(std.mem.indexOf(u8, written, "InvalidParams") == null);
+    try testing.expect(std.mem.find(u8, written, "\"isError\":true") == null);
+    try testing.expect(std.mem.find(u8, written, "InvalidParams") == null);
 }
 
 test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked" {
@@ -1238,18 +1238,18 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const btn = frame.document.getElementById("btn", frame).?.asNode();
         const btn_id = (try server.active_session.registry.register(btn)).id;
         var btn_id_buf: [12]u8 = undefined;
-        const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
+        const btn_id_str = std.mem.print(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
         const click_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}" });
         try router.handleMessage(server, aa, click_msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Clicked element") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Clicked element") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
         out.clearRetainingCapacity();
     }
 
     for ([_][]const u8{ "#btnPreventDefault", "#btnDisabled", "#focusTarget", "#plain" }) |selector| {
-        const msg = try std.fmt.allocPrint(aa, "{{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{{\"name\":\"click\",\"arguments\":{{\"selector\":\"{s}\"}}}}}}", .{selector});
+        const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{{\"name\":\"click\",\"arguments\":{{\"selector\":\"{s}\"}}}}}}", .{selector});
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Clicked element") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Clicked element") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1257,11 +1257,11 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const inp = frame.document.getElementById("inp", frame).?.asNode();
         const inp_id = (try server.active_session.registry.register(inp)).id;
         var inp_id_buf: [12]u8 = undefined;
-        const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
+        const inp_id_str = std.mem.print(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
         const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"value\":\"hello\"}}}" });
         try router.handleMessage(server, aa, fill_msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Filled element") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "with \\\"hello\\\"") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Filled element") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "with \\\"hello\\\"") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1269,11 +1269,11 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const sel = frame.document.getElementById("sel", frame).?.asNode();
         const sel_id = (try server.active_session.registry.register(sel)).id;
         var sel_id_buf: [12]u8 = undefined;
-        const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
+        const sel_id_str = std.mem.print(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
         const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"value\":\"opt2\"}}}" });
         try router.handleMessage(server, aa, fill_sel_msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Filled element") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "with \\\"opt2\\\"") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Filled element") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "with \\\"opt2\\\"") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1284,10 +1284,10 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     const plain = frame.document.getElementById("plain", frame).?.asNode();
     const plain_id = (try server.active_session.registry.register(plain)).id;
     for ([_]struct { id: lp.NodeRegistry.Id, y: i32 }{ .{ .id = scrollbox_id, .y = 50 }, .{ .id = plain_id, .y = 7 } }) |c| {
-        const msg = try std.fmt.allocPrint(aa, "{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":{d}}}}}}}", .{ c.id, c.y });
+        const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":{d}}}}}}}", .{ c.id, c.y });
         try router.handleMessage(server, aa, msg);
-        const expected = try std.fmt.allocPrint(aa, "Scrolled element (backendNodeId: {d}) to x: 0, y: {d}", .{ c.id, c.y });
-        try testing.expect(std.mem.indexOf(u8, out.written(), expected) != null);
+        const expected = try aa.print("Scrolled element (backendNodeId: {d}) to x: 0, y: {d}", .{ c.id, c.y });
+        try testing.expect(std.mem.find(u8, out.written(), expected) != null);
         out.clearRetainingCapacity();
     }
 
@@ -1297,10 +1297,10 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const leaf_id = (try server.active_session.registry.register(leaf)).id;
         const outer = frame.document.getElementById("outerscroll", frame).?.asNode();
         const outer_id = (try server.active_session.registry.register(outer)).id;
-        const msg = try std.fmt.allocPrint(aa, "{{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
+        const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
         try router.handleMessage(server, aa, msg);
-        const expected = try std.fmt.allocPrint(aa, "Scrolled scroll container (backendNodeId: {d}) of element (backendNodeId: {d}) to x: 0, y: 30", .{ outer_id, leaf_id });
-        try testing.expect(std.mem.indexOf(u8, out.written(), expected) != null);
+        const expected = try aa.print("Scrolled scroll container (backendNodeId: {d}) of element (backendNodeId: {d}) to x: 0, y: 30", .{ outer_id, leaf_id });
+        try testing.expect(std.mem.find(u8, out.written(), expected) != null);
         out.clearRetainingCapacity();
     }
 
@@ -1311,8 +1311,8 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         try router.handleMessage(server, aa,
             \\{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"scroll","arguments":{"selector":"#innerleaf","y":30}}}
         );
-        const expected = try std.fmt.allocPrint(aa, "Scrolled scroll container (backendNodeId: {d}) of element (selector: #innerleaf) to x: 0, y: 30", .{outer_id});
-        try testing.expect(std.mem.indexOf(u8, out.written(), expected) != null);
+        const expected = try aa.print("Scrolled scroll container (backendNodeId: {d}) of element (selector: #innerleaf) to x: 0, y: 30", .{outer_id});
+        try testing.expect(std.mem.find(u8, out.written(), expected) != null);
         out.clearRetainingCapacity();
     }
 
@@ -1322,10 +1322,10 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const leaf_id = (try server.active_session.registry.register(leaf)).id;
         const outer = frame.document.getElementById("sheetscroll", frame).?.asNode();
         const outer_id = (try server.active_session.registry.register(outer)).id;
-        const msg = try std.fmt.allocPrint(aa, "{{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
+        const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
         try router.handleMessage(server, aa, msg);
-        const expected = try std.fmt.allocPrint(aa, "Scrolled scroll container (backendNodeId: {d}) of element (backendNodeId: {d}) to x: 0, y: 30", .{ outer_id, leaf_id });
-        try testing.expect(std.mem.indexOf(u8, out.written(), expected) != null);
+        const expected = try aa.print("Scrolled scroll container (backendNodeId: {d}) of element (backendNodeId: {d}) to x: 0, y: 30", .{ outer_id, leaf_id });
+        try testing.expect(std.mem.find(u8, out.written(), expected) != null);
         out.clearRetainingCapacity();
     }
 
@@ -1334,12 +1334,12 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         try router.handleMessage(server, aa,
             \\{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"scroll","arguments":{"y":20}}}
         );
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Scrolled window to x: 0, y: 20") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Scrolled window to x: 0, y: 20") != null);
         out.clearRetainingCapacity();
         try router.handleMessage(server, aa,
             \\{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"scroll","arguments":{"x":5}}}
         );
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Scrolled window to x: 5, y: 20") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Scrolled window to x: 5, y: 20") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1347,10 +1347,10 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const el = frame.document.getElementById("hoverTarget", frame).?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"hover\",\"arguments\":{\"backendNodeId\":", id_str, "}}}" });
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Hovered element") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Hovered element") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1358,10 +1358,10 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const el = frame.document.getElementById("keyTarget", frame).?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"press\",\"arguments\":{\"key\":\"Enter\",\"backendNodeId\":", id_str, "}}}" });
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Pressed key") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Pressed key") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1369,10 +1369,10 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const el = frame.document.getElementById("sel2", frame).?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"selectOption\",\"arguments\":{\"backendNodeId\":", id_str, ",\"value\":\"b\"}}}" });
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Selected option") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Selected option") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1380,10 +1380,10 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const el = frame.document.getElementById("chk", frame).?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "checked") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1391,10 +1391,10 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const el = frame.document.getElementById("rad", frame).?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "checked") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1456,7 +1456,7 @@ test "MCP - click that navigates clears node registry" {
     try testing.expect(server.active_session.registry.lookup_by_id.contains(link_id));
 
     var id_buf: [12]u8 = undefined;
-    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{link_id}) catch unreachable;
+    const id_str = std.mem.print(&id_buf, "{d}", .{link_id}) catch unreachable;
     const click_msg = try std.mem.concat(aa, u8, &.{
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":",
         id_str,
@@ -1487,8 +1487,8 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
             \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hover","arguments":{"selector":"#hoverTarget"}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Hovered element") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #hoverTarget") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Hovered element") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "selector: #hoverTarget") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1497,8 +1497,8 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
             \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"selectOption","arguments":{"selector":"#sel2","value":"c"}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Selected option") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #sel2") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Selected option") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "selector: #sel2") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1507,8 +1507,8 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
             \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"setChecked","arguments":{"selector":"#chk","checked":true}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #chk") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "checked") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "selector: #chk") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1517,8 +1517,8 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
             \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"setChecked","arguments":{"selector":"#rad","checked":true}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #rad") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "checked") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "selector: #rad") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1552,7 +1552,7 @@ test "MCP - findElement" {
             \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"button"}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Click Me") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1561,7 +1561,7 @@ test "MCP - findElement" {
             \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"click"}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Click Me") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1570,7 +1570,7 @@ test "MCP - findElement" {
             \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"slider"}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "[]") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "[]") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1579,7 +1579,7 @@ test "MCP - findElement" {
             \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"findElement","arguments":{}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "error") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "error") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1588,8 +1588,8 @@ test "MCP - findElement" {
             \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/^PREVENT.*default$/i"}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Prevent Default") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") == null);
+        try testing.expect(std.mem.find(u8, out.written(), "Prevent Default") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Click Me") == null);
         out.clearRetainingCapacity();
     }
 
@@ -1598,8 +1598,8 @@ test "MCP - findElement" {
             \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/(/"}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "missing closing parenthesis at offset 1") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "missing closing parenthesis at offset 1") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1608,8 +1608,8 @@ test "MCP - findElement" {
             \\{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/prevent/g"}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "unsupported regex flag 'g' in '/prevent/g'") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "unsupported regex flag 'g' in '/prevent/g'") != null);
         out.clearRetainingCapacity();
     }
 }
@@ -1677,23 +1677,23 @@ test "MCP - markdown: full page, selector scope, maxBytes truncation" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"markdown"}}
     ;
     try router.handleMessage(server, testing.arena_allocator, full);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Hover Me") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Click Me") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Hover Me") != null);
 
     out.clearRetainingCapacity();
     const scoped =
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"markdown","arguments":{"selector":"#hoverTarget"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, scoped);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Hover Me") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "Hover Me") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Click Me") == null);
 
     out.clearRetainingCapacity();
     const capped =
         \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"markdown","arguments":{"maxBytes":4}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, capped);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "[truncated]") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "[truncated]") != null);
 }
 
 test "MCP - html: full document, selector subtree, backendNodeId subtree" {
@@ -1706,9 +1706,9 @@ test "MCP - html: full document, selector subtree, backendNodeId subtree" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"html"}}
     ;
     try router.handleMessage(server, testing.arena_allocator, full);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<!DOCTYPE html>") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<form id=\\\"f\\\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<input id=\\\"q\\\"") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<!DOCTYPE html>") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<form id=\\\"f\\\"") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<input id=\\\"q\\\"") != null);
 
     // selector → just that element's outerHTML, no doctype.
     out.clearRetainingCapacity();
@@ -1716,9 +1716,9 @@ test "MCP - html: full document, selector subtree, backendNodeId subtree" {
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"html","arguments":{"selector":"#q"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, sel);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<!DOCTYPE html>") == null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<input id=\\\"q\\\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<form") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "<!DOCTYPE html>") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "<input id=\\\"q\\\"") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<form") == null);
 }
 
 test "MCP - html: maxBytes truncation and strip" {
@@ -1730,27 +1730,27 @@ test "MCP - html: maxBytes truncation and strip" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"html"}}
     ;
     try router.handleMessage(server, testing.arena_allocator, full);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<script>") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<style>") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "[truncated]") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "<script>") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<style>") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "[truncated]") == null);
 
     out.clearRetainingCapacity();
     const stripped =
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"html","arguments":{"strip":{"js":true,"css":true}}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, stripped);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<script>") == null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<style>") == null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<h1>Title</h1>") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<script>") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "<style>") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "<h1>Title</h1>") != null);
 
     out.clearRetainingCapacity();
     const capped =
         \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"html","arguments":{"maxBytes":20}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, capped);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<!DOCTYPE html>") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<h1>") == null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "[truncated]") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<!DOCTYPE html>") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<h1>") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "[truncated]") != null);
 }
 
 test "MCP - screenshot: inline image, file, unsafe path" {
@@ -1762,13 +1762,13 @@ test "MCP - screenshot: inline image, file, unsafe path" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"screenshot"}}
     ;
     try router.handleMessage(server, testing.arena_allocator, inline_call);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\"type\":\"image\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\"mimeType\":\"image/png\"") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"type\":\"image\"") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"mimeType\":\"image/png\"") != null);
     // base64 of the PNG signature
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\"data\":\"iVBORw0KGgo") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":false") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"data\":\"iVBORw0KGgo") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":false") != null);
     // Inline images are narrowed to the model-facing limit.
-    try testing.expect(std.mem.indexOf(u8, out.written(), "PNG, 1280x") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "PNG, 1280x") != null);
 
     const path = "mcp-screenshot-test.png";
     std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
@@ -1777,8 +1777,8 @@ test "MCP - screenshot: inline image, file, unsafe path" {
     out.clearRetainingCapacity();
     const to_file = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"screenshot\",\"arguments\":{\"path\":\"" ++ path ++ "\",\"selector\":\"#hoverTarget\"}}}";
     try router.handleMessage(server, testing.arena_allocator, to_file);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Saved 1920x") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\"type\":\"image\"") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "Saved 1920x") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"type\":\"image\"") == null);
     const png = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(1024 * 1024));
     try testing.expect(std.mem.startsWith(u8, png, "\x89PNG\r\n\x1a\n"));
 
@@ -1787,7 +1787,7 @@ test "MCP - screenshot: inline image, file, unsafe path" {
         \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"screenshot","arguments":{"path":"../escape.png"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, unsafe);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
 }
 
 test "MCP - links: dedup, hidden, text fallback, limit" {
@@ -1800,8 +1800,8 @@ test "MCP - links: dedup, hidden, text fallback, limit" {
     ;
     try router.handleMessage(server, testing.arena_allocator, all);
     try testing.expectEqual(2, std.mem.count(u8, out.written(), "href"));
-    try testing.expect(std.mem.indexOf(u8, out.written(), "/second") == null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Third") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "/second") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "Third") != null);
 
     out.clearRetainingCapacity();
     const limited =
@@ -1809,7 +1809,7 @@ test "MCP - links: dedup, hidden, text fallback, limit" {
     ;
     try router.handleMessage(server, testing.arena_allocator, limited);
     try testing.expectEqual(1, std.mem.count(u8, out.written(), "href"));
-    try testing.expect(std.mem.indexOf(u8, out.written(), "/first") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "/first") != null);
 }
 
 test "MCP - waitForScript: truthy returns, falsy times out" {
@@ -1821,14 +1821,14 @@ test "MCP - waitForScript: truthy returns, falsy times out" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForScript","arguments":{"script":"document.readyState === 'complete'","timeout":2000}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, ok);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Script returned truthy") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Script returned truthy") != null);
 
     out.clearRetainingCapacity();
     const timeout =
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"waitForScript","arguments":{"script":"false","timeout":50}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, timeout);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Timeout") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Timeout") != null);
 }
 
 test "MCP - press Enter on form input triggers submit (lowercase alias)" {
@@ -1849,7 +1849,7 @@ test "MCP - press Enter on form input triggers submit (lowercase alias)" {
 
     const evaluate_msg = try aa.dupe(u8, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"evaluate\",\"arguments\":{\"script\":\"window.submitted === true && window.submittedValue === 'hello'\"}}}");
     try router.handleMessage(server, aa, evaluate_msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "true") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "true") != null);
 }
 
 test "MCP - getCookies: defaults to current page, url filter, all flag" {
@@ -1864,31 +1864,31 @@ test "MCP - getCookies: defaults to current page, url filter, all flag" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"getCookies"}}
     ;
     try router.handleMessage(server, testing.arena_allocator, default_msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "session=abc") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "tracking=xyz") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "session=abc") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "tracking=xyz") == null);
 
     out.clearRetainingCapacity();
     const url_msg =
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"getCookies","arguments":{"url":"http://other.test/"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, url_msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "tracking=xyz") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "session=abc") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "tracking=xyz") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "session=abc") == null);
 
     out.clearRetainingCapacity();
     const all_msg =
         \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getCookies","arguments":{"all":true}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, all_msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "session=abc") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "tracking=xyz") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "session=abc") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "tracking=xyz") != null);
 
     out.clearRetainingCapacity();
     const empty_msg =
         \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"getCookies","arguments":{"url":"http://nope.test/"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, empty_msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "No cookies for http://nope.test/") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "No cookies for http://nope.test/") != null);
 }
 
 test "MCP - getCookies without a loaded page refuses instead of dumping the jar" {
@@ -1903,8 +1903,8 @@ test "MCP - getCookies without a loaded page refuses instead of dumping the jar"
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     const written = out.written();
-    try testing.expect(std.mem.indexOf(u8, written, "session=abc") == null);
-    try testing.expect(std.mem.indexOf(u8, written, "No current page") != null);
+    try testing.expect(std.mem.find(u8, written, "session=abc") == null);
+    try testing.expect(std.mem.find(u8, written, "No current page") != null);
 }
 
 test "MCP - waitForState with bad state surfaces rich error" {
@@ -1917,9 +1917,9 @@ test "MCP - waitForState with bad state surfaces rich error" {
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     const written = out.written();
-    try testing.expect(std.mem.indexOf(u8, written, "invalid state 'x'") != null);
-    try testing.expect(std.mem.indexOf(u8, written, "load") != null);
-    try testing.expect(std.mem.indexOf(u8, written, "isError\":true") != null);
+    try testing.expect(std.mem.find(u8, written, "invalid state 'x'") != null);
+    try testing.expect(std.mem.find(u8, written, "load") != null);
+    try testing.expect(std.mem.find(u8, written, "isError\":true") != null);
 }
 
 test "MCP - sessions: new, list, attach isolation, close" {
@@ -1932,7 +1932,7 @@ test "MCP - sessions: new, list, attach isolation, close" {
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_new","arguments":{"name":"a"}}}
     );
-    try testing.expect(std.mem.indexOf(u8, out.written(), "session a") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "session a") != null);
     try testing.expect(server.sessions.contains("a"));
 
     out.clearRetainingCapacity();
@@ -1941,8 +1941,8 @@ test "MCP - sessions: new, list, attach isolation, close" {
     );
     // The listing is JSON nested in the tool-result text, so its quotes are
     // escaped (\"default\").
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\\\"default\\\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\\\"a\\\"") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\\\"default\\\"") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\\\"a\\\"") != null);
 
     // Routing a request to "a" (as the Mcp-Session-Id header does) and loading
     // a page there leaves the default untouched, proving the two are isolated.
@@ -1960,13 +1960,13 @@ test "MCP - sessions: new, list, attach isolation, close" {
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"default"}}}
     );
-    try testing.expect(std.mem.indexOf(u8, out.written(), "cannot be closed") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "cannot be closed") != null);
 
     out.clearRetainingCapacity();
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"a"}}}
     );
-    try testing.expect(std.mem.indexOf(u8, out.written(), "closed session a") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "closed session a") != null);
     try testing.expect(!server.sessions.contains("a"));
 }
 

@@ -36,7 +36,7 @@ pub const Status = enum(u32) {
 };
 
 pub fn getStatus(self: Module) Status {
-    return @enumFromInt(v8.v8__Module__GetStatus(self.handle));
+    return @fromBackingInt(@intCast(v8.v8__Module__GetStatus(self.handle)));
 }
 
 pub fn getException(self: Module) js.Value {

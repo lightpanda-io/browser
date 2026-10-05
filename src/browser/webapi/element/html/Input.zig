@@ -340,7 +340,7 @@ fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
     if (fl._files.len == 0) {
         return "";
     }
-    return try std.fmt.allocPrint(frame.local_arena, "C:\\fakepath\\{s}", .{fl._files[0]._name});
+    return try frame.local_arena.print("C:\\fakepath\\{s}", .{fl._files[0]._name});
 }
 
 fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {
@@ -437,7 +437,7 @@ pub fn suffersPatternMismatch(self: *const Input, frame: *Frame) bool {
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
-    const wrapped = std.fmt.allocPrint(frame.call_arena, "^(?:{s})$", .{pattern}) catch return false;
+    const wrapped = frame.call_arena.print("^(?:{s})$", .{pattern}) catch return false;
     const re = js.RegExp.init(&ls.local, wrapped, js.RegExp.Flag.unicode_sets) catch return false;
     const matched = re.match(value) catch return false;
 
@@ -552,12 +552,12 @@ fn sameFormOwner(self_form: ?*Form, other: *Input, frame: *Frame) bool {
 /// the WHATWG "valid e-mail address" production loosely — sufficient for most
 /// constraint-validation tests; HTML browsers themselves are permissive here.
 fn isValidEmail(value: []const u8) bool {
-    const at = std.mem.indexOfScalar(u8, value, '@') orelse return false;
+    const at = std.mem.findScalar(u8, value, '@') orelse return false;
     if (at == 0 or at == value.len - 1) return false;
     const local = value[0..at];
     const host = value[at + 1 ..];
     for (local) |c| if (!isEmailLocalChar(c)) return false;
-    if (std.mem.indexOfScalar(u8, host, '.') == null) return false;
+    if (std.mem.findScalar(u8, host, '.') == null) return false;
     for (host) |c| if (!isEmailHostChar(c)) return false;
     if (host[0] == '.' or host[host.len - 1] == '.') return false;
     return true;
@@ -578,7 +578,7 @@ fn isEmailHostChar(c: u8) bool {
 /// Absolute URL check per the WHATWG URL parser: must include a scheme followed
 /// by "://" and a non-empty authority. Relative URLs are typeMismatches per spec.
 fn isValidAbsoluteURL(value: []const u8) bool {
-    const scheme_end = std.mem.indexOfScalar(u8, value, ':') orelse return false;
+    const scheme_end = std.mem.findScalar(u8, value, ':') orelse return false;
     if (scheme_end == 0) return false;
     if (!std.ascii.isAlphabetic(value[0])) return false;
     for (value[1..scheme_end]) |c| {
@@ -756,7 +756,7 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
     switch (self._input_type) {
         .text, .search, .tel, .password, .url, .email => {
             const sanitized = blk: {
-                const first = std.mem.indexOfAny(u8, value, "\r\n") orelse {
+                const first = std.mem.findAny(u8, value, "\r\n") orelse {
                     break :blk if (comptime dupe) try frame.dupeString(value) else value;
                 };
 
@@ -953,7 +953,7 @@ fn valueToNumber(typ: Type, value: []const u8) ?f64 {
             return timeToMs(value);
         },
         .@"datetime-local" => {
-            const sep = std.mem.indexOfAny(u8, value, "T ") orelse return null;
+            const sep = std.mem.findAny(u8, value, "T ") orelse return null;
             const date = value[0..sep];
             const time = value[sep + 1 ..];
             if (!isValidDate(date) or !isValidTime(time)) return null;
@@ -966,7 +966,7 @@ fn valueToNumber(typ: Type, value: []const u8) ?f64 {
 fn numberToValue(typ: Type, number: f64, buf: []u8) ?[]const u8 {
     if (std.math.isNan(number) or @abs(number) > max_time_value) return null;
     switch (typ) {
-        .number, .range => return std.fmt.bufPrint(buf, "{d}", .{number}) catch null,
+        .number, .range => return std.mem.print(buf, "{d}", .{number}) catch null,
         .date => {
             const days: i64 = @floor(number / ms_per_day);
             return formatDate(civilFromDays(days), buf);
@@ -975,7 +975,7 @@ fn numberToValue(typ: Type, number: f64, buf: []u8) ?[]const u8 {
             const months: i64 = @floor(number);
             const year = 1970 + @divFloor(months, 12);
             if (year < 1) return null;
-            return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}", .{ @as(u64, @intCast(year)), @as(u64, @intCast(@mod(months, 12) + 1)) }) catch null;
+            return std.mem.print(buf, "{d:0>4}-{d:0>2}", .{ @as(u64, @intCast(year)), @as(u64, @intCast(@mod(months, 12) + 1)) }) catch null;
         },
         .week => {
             const days: i64 = @floor(number / ms_per_day);
@@ -984,7 +984,7 @@ fn numberToValue(typ: Type, number: f64, buf: []u8) ?[]const u8 {
             const year = civilFromDays(thursday).year;
             if (year < 1) return null;
             const week = @divFloor(thursday - isoWeekMonday(year, 1), 7) + 1;
-            return std.fmt.bufPrint(buf, "{d:0>4}-W{d:0>2}", .{ @as(u64, @intCast(year)), @as(u64, @intCast(week)) }) catch null;
+            return std.mem.print(buf, "{d:0>4}-W{d:0>2}", .{ @as(u64, @intCast(year)), @as(u64, @intCast(week)) }) catch null;
         },
         .time => return formatTime(@mod(number, ms_per_day), buf),
         .@"datetime-local" => {
@@ -1034,7 +1034,7 @@ const Civil = struct { year: i64, month: i64, day: i64 };
 
 fn formatDate(civil: Civil, buf: []u8) ?[]const u8 {
     if (civil.year < 1) return null;
-    return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ @as(u64, @intCast(civil.year)), @as(u64, @intCast(civil.month)), @as(u64, @intCast(civil.day)) }) catch null;
+    return std.mem.print(buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ @as(u64, @intCast(civil.year)), @as(u64, @intCast(civil.month)), @as(u64, @intCast(civil.day)) }) catch null;
 }
 
 /// Normalized time string: seconds only when needed, fraction always 3 digits.
@@ -1045,12 +1045,12 @@ fn formatTime(ms_in_day: f64, buf: []u8) ?[]const u8 {
     const second = (total / 1000) % 60;
     const millis = total % 1000;
     if (second == 0 and millis == 0) {
-        return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}", .{ hour, minute }) catch null;
+        return std.mem.print(buf, "{d:0>2}:{d:0>2}", .{ hour, minute }) catch null;
     }
     if (millis == 0) {
-        return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hour, minute, second }) catch null;
+        return std.mem.print(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hour, minute, second }) catch null;
     }
-    return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}", .{ hour, minute, second, millis }) catch null;
+    return std.mem.print(buf, "{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}", .{ hour, minute, second, millis }) catch null;
 }
 
 // Howard Hinnant's civil-from-days and days-from-civil.
@@ -1364,7 +1364,7 @@ fn snapToStep(value: f64, min: f64, max: f64, step_base: f64, step_attr: []const
 
 /// Format an f64 to its shortest decimal representation, arena-allocated.
 fn formatFloat(arena: std.mem.Allocator, value: f64) ![]const u8 {
-    return std.fmt.allocPrint(arena, "{d}", .{value});
+    return arena.print("{d}", .{value});
 }
 
 /// Parse a slice that must be ALL ASCII digits into a u32. Returns null if any non-digit or empty.

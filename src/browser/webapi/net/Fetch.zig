@@ -239,8 +239,8 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     res._status_text = if (transfer.statusText()) |st|
         try arena.allocator().dupe(u8, st)
     else
-        std.http.Status.phrase(@enumFromInt(status)) orelse "";
-    res._url = try arena.dupeZ(u8, transfer.req.url);
+        std.http.Status.phrase(@fromBackingInt(@intCast(status))) orelse "";
+    res._url = try arena.dupeSentinel(u8, transfer.req.url, 0);
     res._is_redirected = transfer.redirectCount().? > 0;
 
     // no-cors mode: regardless of what the server returned, JS only ever sees
