@@ -69,58 +69,45 @@ pub fn TextEntry(comptime T: type) type {
             try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
         }
 
-        pub fn innerInsert(self: *T, str: []const u8, frame: *Frame) !void {
-            const arena = frame.arena;
+        pub const Insertion = enum {
+            text,
+            line_break,
 
-            switch (howSelected(self)) {
-                .full => {
-                    // fully selected, replace the content.
-                    const new_value = try arena.dupe(u8, str);
-                    try self.setUserValue(new_value, frame);
-                    // the sanitized value can be shorter than what was inserted
-                    const new_len: u32 = @intCast(self.getValue().len);
-                    self._selection_start = new_len;
-                    self._selection_end = new_len;
-                    self._selection_direction = .none;
-                    try dispatchSelectionChangeEvent(self, frame);
-                },
-                .partial => |range| {
-                    // partially selected, replace the selected content.
-                    const current_value = self.getValue();
-                    const before = current_value[0..range[0]];
-                    const remaining = current_value[range[1]..];
-
-                    const new_value = try std.mem.concat(
-                        arena,
-                        u8,
-                        &.{ before, str, remaining },
-                    );
-                    try self.setUserValue(new_value, frame);
-
-                    const new_pos: u32 = @intCast(@min(range[0] + str.len, self.getValue().len));
-                    self._selection_start = new_pos;
-                    self._selection_end = new_pos;
-                    self._selection_direction = .none;
-                    try dispatchSelectionChangeEvent(self, frame);
-                },
-                .none => {
-                    // nothing selected, insert at the caret. Controls without
-                    // a caret (e.g. date) append.
-                    const current_value = self.getValue();
-                    const caret = if (tracksSelection(self)) @min(self._selection_start, current_value.len) else current_value.len;
-                    const new_value = try std.mem.concat(arena, u8, &.{ current_value[0..caret], str, current_value[caret..] });
-                    try self.setUserValue(new_value, frame);
-                    if (tracksSelection(self)) {
-                        // the sanitized value can be shorter than what was inserted
-                        const new_pos: u32 = @intCast(@min(caret + str.len, self.getValue().len));
-                        self._selection_start = new_pos;
-                        self._selection_end = new_pos;
-                        self._selection_direction = .none;
-                        try dispatchSelectionChangeEvent(self, frame);
-                    }
-                },
+            fn inputType(self: Insertion) []const u8 {
+                return switch (self) {
+                    .text => "insertText",
+                    .line_break => "insertLineBreak",
+                };
             }
-            try dispatchInputEvent(self, str, "insertText", frame);
+        };
+
+        pub fn innerInsert(self: *T, str: []const u8, kind: Insertion, frame: *Frame) !void {
+            const current_value = self.getValue();
+            const value_len: u32 = @intCast(current_value.len);
+            const start: u32, const end: u32 = switch (howSelected(self)) {
+                .full => .{ 0, value_len },
+                .partial => |range| range,
+                .none => blk: {
+                    // Controls without a caret (e.g. date) append.
+                    const caret = if (tracksSelection(self)) @min(self._selection_start, value_len) else value_len;
+                    break :blk .{ caret, caret };
+                },
+            };
+
+            const scratch = try frame.getArena(.small, "TextEntry.innerInsert");
+            defer scratch.release();
+            const new_value = try std.mem.concat(scratch.allocator(), u8, &.{ current_value[0..start], str, current_value[end..] });
+            try self.setUserValue(new_value, frame);
+
+            if (tracksSelection(self)) {
+                // the sanitized value can be shorter than what was inserted
+                const new_pos: u32 = @intCast(@min(start + str.len, self.getValue().len));
+                self._selection_start = new_pos;
+                self._selection_end = new_pos;
+                self._selection_direction = .none;
+                try dispatchSelectionChangeEvent(self, frame);
+            }
+            try dispatchInputEvent(self, if (kind == .text) str else null, kind.inputType(), frame);
         }
 
         // forward == delete
@@ -161,7 +148,9 @@ pub fn TextEntry(comptime T: type) type {
                 },
             }
 
-            const new_value = try std.mem.concat(frame.arena, u8, &.{
+            const scratch = try frame.getArena(.small, "TextEntry.innerDelete");
+            defer scratch.release();
+            const new_value = try std.mem.concat(scratch.allocator(), u8, &.{
                 current_value[0..start],
                 current_value[@min(end, value_len)..],
             });
