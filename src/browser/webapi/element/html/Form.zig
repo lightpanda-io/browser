@@ -167,6 +167,39 @@ pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
     return frame.submitForm(submitter_element, self, .{});
 }
 
+/// The form's first submit button in tree order.
+/// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#default-button
+pub fn getDefaultButton(self: *Form, frame: *Frame) ?*Element {
+    var it = self.iterator(frame);
+    while (it.next()) |element| {
+        if (isSubmitButton(element)) {
+            return element;
+        }
+    }
+    return null;
+}
+
+/// Implicit submission without a default button only submits when the form has
+/// at most one field that blocks it.
+/// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission
+pub fn hasMultipleImplicitSubmissionBlockers(self: *Form, frame: *Frame) bool {
+    var count: usize = 0;
+    var it = self.iterator(frame);
+    while (it.next()) |element| {
+        const input = element.is(Input) orelse continue;
+        switch (input._input_type) {
+            .text, .search, .url, .tel, .email, .password, .date, .month, .week, .time, .@"datetime-local", .number => {
+                count += 1;
+                if (count > 1) {
+                    return true;
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
 /// Returns true if the element is a submit button per the HTML spec:
 /// - <input type="submit"> or <input type="image">
 /// - <button type="submit"> (including default, since button's default type is "submit")

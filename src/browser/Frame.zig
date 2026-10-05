@@ -3783,8 +3783,6 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 
     const FormData = @import("webapi/net/FormData.zig");
 
-    // The submitter can be an input box (if enter was entered on the box)
-    // I don't think this is technically correct, but FormData handles it ok
     // Resolved before the entry list is built: a hidden `_charset_` field
     // takes the submission encoding's name as its value.
     const charset: []const u8 = blk: {
