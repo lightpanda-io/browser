@@ -193,21 +193,22 @@ pub fn fill(node: *DOMNode, text: []const u8, frame: *Frame) !void {
 /// its picker would. `change` fires right away: nothing commits it on blur.
 fn fillControl(ctl: anytype, text: []const u8, frame: *Frame) !void {
     const el = ctl.asElement();
-    if (ctl.tracksSelection()) {
-        const result = Frame.user_input.applyEdit(frame, ctl, .{ .replace = text }, .{}) catch |err| {
-            lp.log.debug(.app, "fill insert failed", .{ .err = err });
-            return error.ActionFailed;
-        };
-        return switch (result) {
-            .done => dispatchTrusted(el, "change", frame),
-            .refused => error.InvalidNodeType,
-            .cancelled => error.ActionFailed,
-        };
-    }
-
     if (!ctl.acceptsTextEntry() or !Frame.user_input.acceptsEdit(el)) {
         return error.InvalidNodeType;
     }
+
+    if (ctl.tracksSelection()) {
+        try ctl.select(frame);
+        const edited = Frame.user_input.applyEdit(frame, ctl, .{ .insert = text }, .{}) catch |err| {
+            lp.log.debug(.app, "fill insert failed", .{ .err = err });
+            return error.ActionFailed;
+        };
+        if (!edited) {
+            return error.ActionFailed;
+        }
+        return dispatchTrusted(el, "change", frame);
+    }
+
     ctl.setUserValue(text, frame) catch |err| {
         lp.log.debug(.app, "fill setValue failed", .{ .err = err });
         return error.ActionFailed;

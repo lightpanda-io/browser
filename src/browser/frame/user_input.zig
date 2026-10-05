@@ -984,51 +984,39 @@ fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: Key
 
 pub const Edit = union(enum) {
     insert: []const u8,
-    /// Selects the whole value first, as typing over a select-all does.
-    replace: []const u8,
     line_break,
     delete: enum { backward, forward },
 };
 
-pub const EditResult = enum { done, refused, cancelled };
-
-/// A text edit as the user makes it: refused on a readonly or disabled
-/// control, cancellable through beforeinput.
-pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit, opts: struct { beforeinput: bool = true }) !EditResult {
+/// A text edit as the user makes it: cancellable through beforeinput, and
+/// refused on a readonly or disabled control. Returns whether it happened.
+pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit, opts: struct { beforeinput: bool = true }) !bool {
     const el = ctl.asElement();
-    if (!ctl.acceptsTextEntry()) {
-        return .refused;
-    }
-    // Chrome lets text typed into any text control reach beforeinput and
-    // textInput, and only then finds it can't edit a readonly one. Its
-    // editing commands (delete, line break) are disabled there and fire
-    // nothing.
     const editable = acceptsEdit(el);
-    if (!editable and edit != .insert) {
-        return .refused;
+    // Chrome fires beforeinput and textInput for text typed into a readonly
+    // control and only then refuses it; its editing commands fire nothing.
+    if (!ctl.acceptsTextEntry() or (!editable and edit != .insert)) {
+        return false;
     }
-    if (edit == .replace) {
-        try ctl.select(frame);
-    }
-    if (opts.beforeinput) {
-        const allowed = switch (edit) {
-            .insert, .replace => |text| try allowEdit(frame, el, text, text, "insertText"),
-            .line_break => try allowEdit(frame, el, null, "\n", "insertLineBreak"),
-            .delete => |dir| try allowEdit(frame, el, null, null, if (dir == .forward) "deleteContentForward" else "deleteContentBackward"),
-        };
-        if (!allowed) {
-            return .cancelled;
-        }
+
+    const data: ?[]const u8, const text: ?[]const u8, const input_type: []const u8 = switch (edit) {
+        .insert => |t| .{ t, t, "insertText" },
+        .line_break => .{ null, "\n", "insertLineBreak" },
+        .delete => |dir| .{ null, null, if (dir == .forward) "deleteContentForward" else "deleteContentBackward" },
+    };
+    if (opts.beforeinput and !try allowEdit(frame, el, data, text, input_type)) {
+        return false;
     }
     if (!editable) {
-        return .refused;
+        return false;
     }
-    switch (edit) {
-        .insert, .replace => |text| try ctl.innerInsert(text, .text, frame),
-        .line_break => try ctl.innerInsert("\n", .line_break, frame),
-        .delete => |dir| try ctl.innerDelete(dir == .forward, frame),
+
+    if (text) |t| {
+        try ctl.innerInsert(t, data, input_type, frame);
+    } else {
+        try ctl.innerDelete(edit.delete == .forward, input_type, frame);
     }
-    return .done;
+    return true;
 }
 
 pub fn acceptsEdit(el: *Element) bool {

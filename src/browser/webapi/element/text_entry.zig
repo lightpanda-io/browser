@@ -69,19 +69,7 @@ pub fn TextEntry(comptime T: type) type {
             try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
         }
 
-        pub const Insertion = enum {
-            text,
-            line_break,
-
-            fn inputType(self: Insertion) []const u8 {
-                return switch (self) {
-                    .text => "insertText",
-                    .line_break => "insertLineBreak",
-                };
-            }
-        };
-
-        pub fn innerInsert(self: *T, str: []const u8, kind: Insertion, frame: *Frame) !void {
+        pub fn innerInsert(self: *T, str: []const u8, data: ?[]const u8, input_type: []const u8, frame: *Frame) !void {
             const current_value = self.getValue();
             const value_len: u32 = @intCast(current_value.len);
             const start: u32, const end: u32 = switch (howSelected(self)) {
@@ -94,10 +82,12 @@ pub fn TextEntry(comptime T: type) type {
                 },
             };
 
-            const scratch = try frame.getArena(.small, "TextEntry.innerInsert");
-            defer scratch.release();
-            const new_value = try std.mem.concat(scratch.allocator(), u8, &.{ current_value[0..start], str, current_value[end..] });
-            try self.setUserValue(new_value, frame);
+            {
+                const scratch = try frame.getArena(.small, "TextEntry.innerInsert");
+                defer scratch.release();
+                const new_value = try std.mem.concat(scratch.allocator(), u8, &.{ current_value[0..start], str, current_value[end..] });
+                try self.setUserValue(new_value, frame);
+            }
 
             if (tracksSelection(self)) {
                 // the sanitized value can be shorter than what was inserted
@@ -107,12 +97,12 @@ pub fn TextEntry(comptime T: type) type {
                 self._selection_direction = .none;
                 try dispatchSelectionChangeEvent(self, frame);
             }
-            try dispatchInputEvent(self, if (kind == .text) str else null, kind.inputType(), frame);
+            try dispatchInputEvent(self, data, input_type, frame);
         }
 
         // forward == delete
         // !forward == backspace
-        pub fn innerDelete(self: *T, forward: bool, frame: *Frame) !void {
+        pub fn innerDelete(self: *T, forward: bool, input_type: []const u8, frame: *Frame) !void {
             const current_value = self.getValue();
             const value_len: u32 = @intCast(current_value.len);
 
@@ -148,18 +138,20 @@ pub fn TextEntry(comptime T: type) type {
                 },
             }
 
-            const scratch = try frame.getArena(.small, "TextEntry.innerDelete");
-            defer scratch.release();
-            const new_value = try std.mem.concat(scratch.allocator(), u8, &.{
-                current_value[0..start],
-                current_value[@min(end, value_len)..],
-            });
-            try self.setUserValue(new_value, frame);
+            {
+                const scratch = try frame.getArena(.small, "TextEntry.innerDelete");
+                defer scratch.release();
+                const new_value = try std.mem.concat(scratch.allocator(), u8, &.{
+                    current_value[0..start],
+                    current_value[@min(end, value_len)..],
+                });
+                try self.setUserValue(new_value, frame);
+            }
             self._selection_start = start;
             self._selection_end = start;
             self._selection_direction = .none;
             try dispatchSelectionChangeEvent(self, frame);
-            try dispatchInputEvent(self, null, if (forward) "deleteContentForward" else "deleteContentBackward", frame);
+            try dispatchInputEvent(self, null, input_type, frame);
         }
 
         // Collapses the selection to the end of the value. Unlike
