@@ -52,8 +52,18 @@
   testing.expectEqual(form.elements.user, form.user);
   testing.expectEqual(form.elements.pass, form.pass);
 
-  // real properties still win
-  testing.expectEqual('function', typeof form.submit);
+  // more than one match: a live RadioNodeList
+  testing.expectTrue(form.choice instanceof RadioNodeList);
+  testing.expectEqual(2, form.choice.length);
+  testing.expectEqual('', form.choice.value);
+  form.choice[1].checked = true;
+  testing.expectEqual('2', form.choice.value);
+  form.choice[1].checked = false;
+
+  testing.expectEqual(undefined, form.nope);
+  testing.expectTrue('user' in form);
+  testing.expectFalse('nope' in form);
+  testing.expectFalse(Object.keys(form).includes('user'));
 }
 </script>
 
