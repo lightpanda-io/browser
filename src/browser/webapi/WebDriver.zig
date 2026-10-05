@@ -213,7 +213,9 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     }
     const actions = actions_val.toArray();
 
-    // A touch pointer dispatches touch events instead of mouse events.
+    // A touch pointer shares CDP's single-contact sequence (pointer boundary
+    // events, the touch event, then the compatibility mouse events and click).
+    // The element comes from the action origin: actions carry no viewport point.
     var is_touch = false;
     const params = try source.get("parameters");
     if (params.isObject()) {
@@ -226,7 +228,6 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     // whose origin resolved to an element.
     var target: ?*Element = null;
     var pointer: Frame.user_input.PointerButtons = .{};
-    var touch_target: ?*Element = null;
     var click_count: u32 = 0;
     var last_click_button: i32 = 0;
     var last_click_target: ?*Element = null;
@@ -253,12 +254,21 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             }
             const el = target orelse continue;
             if (is_touch) {
-                // Touch implicitly captures the original down target.
-                if (touch_target) |captured| {
-                    dispatchPointer(captured, "pointermove", 0, 1, "touch", frame);
-                    dispatchTouch(captured, .touchmove, frame);
+                if (frame.page.input_touch_contact) |contact| {
+                    // Touch implicitly captures the original down target.
+                    const captured = contact.target;
+                    const owner = captured.ownerFrame(frame) orelse continue;
+                    Frame.user_input.triggerTouch(owner, .touchmove, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
+                        log.debug(.app, "webdriver touch", .{ .err = err });
+                    };
+                    // No viewport distance, so a move whose origin element
+                    // changed is the drag that keeps the tap from clicking.
+                    if (el != captured) {
+                        if (frame.page.input_touch_contact) |*held| held.suppress_click = true;
+                    }
                 } else {
-                    dispatchPointer(el, "pointermove", 0, 0, "touch", frame);
+                    const owner = el.ownerFrame(frame) orelse continue;
+                    dispatchPointer(owner, el, "pointermove", -1, 0, "touch", frame.page.input_touch_next_pointer_id);
                 }
             } else {
                 Frame.user_input.moveSequence(frame, el, .{
@@ -275,9 +285,13 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                 click_count = 1;
             }
             if (is_touch) {
-                touch_target = el;
-                dispatchPointer(el, "pointerdown", button, 1, "touch", frame);
-                dispatchTouch(el, .touchstart, frame);
+                // One contact. A second pointerDown while it is still down would
+                // fire another touchstart for the same finger.
+                if (frame.page.input_touch_contact != null) continue;
+                const owner = el.ownerFrame(frame) orelse continue;
+                Frame.user_input.triggerTouchOn(owner, el, .touchstart, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
+                    log.debug(.app, "webdriver touch", .{ .err = err });
+                };
             } else {
                 pointer.press(frame, el, .{
                     .button = button,
@@ -289,10 +303,12 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
             if (is_touch) {
-                const captured = touch_target orelse continue;
-                touch_target = null;
-                dispatchPointer(captured, "pointerup", button, 0, "touch", frame);
-                dispatchTouch(captured, .touchend, frame);
+                const contact = frame.page.input_touch_contact orelse continue;
+                const captured = contact.target;
+                const owner = captured.ownerFrame(frame) orelse continue;
+                Frame.user_input.triggerTouchLiftOn(owner, .touchend, null, frame.page.input_modifiers, captured) catch |err| {
+                    log.debug(.app, "webdriver touch", .{ .err = err });
+                };
             } else {
                 // Ignore a bare or repeated release without an active press.
                 if (pointer.held == 0) continue;
@@ -495,7 +511,7 @@ fn readI32(obj: js.Object, key: []const u8, default: i32) i32 {
     return val.toI32() catch default;
 }
 
-fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, pointer_type: []const u8, frame: *Frame) void {
+fn dispatchPointer(frame: *Frame, el: *Element, comptime typ: []const u8, button: i32, buttons: u16, pointer_type: []const u8, pointer_id: i32) void {
     const modifiers = frame.page.input_modifiers;
     const event = PointerEvent.initTrusted(typ, .{
         .bubbles = true,
@@ -503,7 +519,7 @@ fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons:
         .composed = true,
         .button = button,
         .buttons = buttons,
-        .pointerId = 1,
+        .pointerId = pointer_id,
         .pointerType = pointer_type,
         .isPrimary = true,
         .ctrlKey = modifiers.ctrl,
@@ -529,16 +545,6 @@ fn dispatchWheel(el: *Element, x: i32, y: i32, delta_x: i32, delta_y: i32, frame
 fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8) void {
     frame._event_manager.dispatch(target, event) catch |err| {
         log.debug(.app, "webdriver dispatch", .{ .err = err, .type = typ });
-    };
-}
-
-/// Action sequences do not track viewport coordinates (same as dispatchMouse
-/// / dispatchPointer), so clientX/clientY are 0 here. WebDriver has no CDP-style
-/// client-chosen id, so this source's single contact is always identifier 0.
-fn dispatchTouch(el: *Element, typ: Frame.user_input.TouchType, frame: *Frame) void {
-    const owner = el.ownerFrame(frame) orelse return;
-    Frame.user_input.dispatchTouchEventOn(owner, el, typ, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
-        log.debug(.app, "webdriver touch event", .{ .err = err });
     };
 }
 
@@ -753,6 +759,55 @@ test "WebApi: WebDriver a second touch pointerUp dispatches no second touchend" 
     try testing.waitForFrame();
 
     const result = try ls.local.compileAndRun("window.touchendCount === 1", null);
+    try testing.expect(result.isTrue());
+}
+
+// The touch path has to activate, same as a CDP tap. A move to another element
+// is a drag: the finger stays captured and the release must not click.
+test "WebApi: WebDriver a touch tap activates and a drag does not" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const box = document.getElementById('chk');
+        \\const other = document.getElementById('btn');
+        \\window.clicked = false;
+        \\window.tapIds = [];
+        \\box.addEventListener('pointerdown', e => { if (e.pointerType === 'touch') window.tapIds.push(e.pointerId); });
+        \\box.addEventListener('pointerup', e => { if (e.pointerType === 'touch') window.tapIds.push(e.pointerId); });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: box },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\    { type: 'pointerMove', origin: box },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerMove', origin: other },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun(
+        \\box.checked === true && document.activeElement === box && window.clicked !== true &&
+        \\window.tapIds.length === 4 && window.tapIds[0] === window.tapIds[1] && window.tapIds[0] !== 1 &&
+        \\window.tapIds[2] === window.tapIds[3] && window.tapIds[2] !== window.tapIds[0]
+    , null);
     try testing.expect(result.isTrue());
 }
 

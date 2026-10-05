@@ -715,9 +715,20 @@ pub fn hasActiveTouch(frame: *Frame) bool {
 /// layout), fall back to the document element rather than dropping the
 /// contact silently, the same fallback WebDriver's pointerMove uses.
 pub fn triggerTouch(frame: *Frame, typ: TouchType, point: TouchPoint, modifiers: Modifiers) !void {
+    return dispatchTouchContact(frame, null, typ, point, modifiers);
+}
+
+/// `target` is the touchstart element. WebDriver actions name an element and
+/// have no viewport point, so they cannot hit-test. touchmove and later stay
+/// pinned to the contact either way.
+pub fn triggerTouchOn(frame: *Frame, target: *Element, typ: TouchType, point: TouchPoint, modifiers: Modifiers) !void {
+    return dispatchTouchContact(frame, target, typ, point, modifiers);
+}
+
+fn dispatchTouchContact(frame: *Frame, explicit: ?*Element, typ: TouchType, point: TouchPoint, modifiers: Modifiers) !void {
     const page = frame.page;
     const pinned = if (typ == .touchstart) null else if (page.input_touch_contact) |c| c.target else null;
-    const resolved = pinned orelse
+    const resolved = pinned orelse explicit orelse
         (try frame.window._document.elementFromPoint(point.x, point.y, frame)) orelse
         frame.window._document.getDocumentElement() orelse return;
     if (comptime lp.IS_DEBUG) {
@@ -752,12 +763,30 @@ pub fn triggerTouch(frame: *Frame, typ: TouchType, point: TouchPoint, modifiers:
     page.input_touch_contact = contact;
 }
 
+/// The element compatibility mouse events hit. A caller-supplied element wins;
+/// otherwise the release point is hit-tested, and a miss drops the click.
+fn touchCompatTarget(frame: *Frame, point: TouchPoint, pinned: ?*Element) !?*Element {
+    if (pinned) |el| return el;
+    return frame.window._document.elementFromPoint(point.x, point.y, frame);
+}
+
 /// Playwright sends an empty touchPoints list, so there's nowhere to read a
 /// release position from but the stored contact. Puppeteer sends the point
 /// being released, and Chrome dispatches at that wire position rather than
 /// the last-seen one, so `point` (when given) wins over the stored
 /// coordinates.
 pub fn triggerTouchLift(frame: *Frame, typ: TouchType, point: ?TouchPoint, modifiers: Modifiers) !void {
+    return triggerTouchLiftAt(frame, typ, point, modifiers, null);
+}
+
+/// Compatibility mouse events and the click land on `compat_target` instead
+/// of a hit-test. WebDriver actions name an element and have no viewport point;
+/// CDP uses `triggerTouchLift`, which hit-tests the release coordinate.
+pub fn triggerTouchLiftOn(frame: *Frame, typ: TouchType, point: ?TouchPoint, modifiers: Modifiers, compat_target: *Element) !void {
+    return triggerTouchLiftAt(frame, typ, point, modifiers, compat_target);
+}
+
+fn triggerTouchLiftAt(frame: *Frame, typ: TouchType, point: ?TouchPoint, modifiers: Modifiers, compat_target: ?*Element) !void {
     const contact = frame.page.input_touch_contact orelse return;
     // Consume the state before the fallible dispatch, so a dispatch that
     // fails partway through (e.g. a listener throws) can't leave a stale
@@ -779,14 +808,13 @@ pub fn triggerTouchLift(frame: *Frame, typ: TouchType, point: ?TouchPoint, modif
     // Compatibility mouse events use the release hit-test, after touchend
     // listeners have had a chance to change the DOM. Pointer/touch delivery
     // above remains pinned to the original contact target.
-    const document = frame.window._document;
-    var target = (try document.elementFromPoint(lift.x, lift.y, frame)) orelse return;
+    var target = (try touchCompatTarget(frame, lift, compat_target)) orelse return;
     updateHoverTarget(frame, target, .{ .x = lift.x, .y = lift.y, .modifiers = modifiers, .with_pointer = false });
     if (!contact.suppress_mouse) {
         // Hover and move listeners can replace the element before the press.
-        target = (try document.elementFromPoint(lift.x, lift.y, frame)) orelse return;
+        target = (try touchCompatTarget(frame, lift, compat_target)) orelse return;
         _ = try emitMouse(frame, target, "mousemove", .{ .x = lift.x, .y = lift.y, .modifiers = modifiers }, 0);
-        const down_target = (try document.elementFromPoint(lift.x, lift.y, frame)) orelse return;
+        const down_target = (try touchCompatTarget(frame, lift, compat_target)) orelse return;
         if (down_target.isDisabled()) return;
         const suppress_focus = try emitMouse(frame, down_target, "mousedown", .{ .x = lift.x, .y = lift.y, .buttons_down = 1, .modifiers = modifiers }, 1);
         if (!suppress_focus and down_target.asNode().isConnected() and !down_target.isDisabled()) {
@@ -796,7 +824,7 @@ pub fn triggerTouchLift(frame: *Frame, typ: TouchType, point: ?TouchPoint, modif
         // Mousedown and focus/blur handlers may have removed or moved the
         // pressed control. Release at the current hit-test, then click only
         // the common ancestor of the connected press and release targets.
-        const up_target = (try document.elementFromPoint(lift.x, lift.y, frame)) orelse return;
+        const up_target = (try touchCompatTarget(frame, lift, compat_target)) orelse return;
         if (up_target.isDisabled()) return;
         var click_target: ?*Element = null;
         if (down_target.asNode().isConnected()) {
