@@ -414,10 +414,10 @@ fn matchesPart(el: *Node.Element, part: Part, scope: *Node, nth: ?*NthCache, fra
             return element_tag == .unknown and std.ascii.eqlIgnoreCase(el.getLocalName(), @tagName(tag));
         },
         .tag_name => |tag_name| {
-              if (el._namespace == .html) {
-                  return std.mem.eql(u8, el.getTagNameLower(), tag_name);
-              }
-              return std.ascii.eqlIgnoreCase(el.getLocalName(), tag_name);
+            if (el._namespace == .html) {
+                return std.mem.eql(u8, el.getTagNameLower(), tag_name);
+            }
+            return std.ascii.eqlIgnoreCase(el.getLocalName(), tag_name);
         },
         .universal => return true,
         .pseudo_class => |pseudo| return matchesPseudoClass(el, pseudo, scope, nth, frame),
