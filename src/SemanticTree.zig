@@ -187,14 +187,9 @@ fn visitNode(
         // We handle options/optgroups natively inside their parents, skip them in the general walk
         if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
-        // Hidden subtrees are never entered, so below the root only the
-        // element's own display matters.
-        const style_manager = &self.frame._style_manager;
-        const hidden = if (current_depth == 0)
-            style_manager.isHidden(el, .{})
-        else
-            style_manager.hasDisplayNone(el);
-        if (hidden) {
+        // Not just the element's own display: a slotted element inherits
+        // from its slot, which this light-tree walk never visits.
+        if (self.frame._style_manager.isHidden(el, .{})) {
             return;
         }
 
@@ -804,6 +799,24 @@ test "SemanticTree max_depth" {
     const text_str = aw.written();
 
     try testing.expect(std.mem.find(u8, text_str, "other") == null);
+}
+
+test "SemanticTree: a slotted element inherits its slot's display" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/slotted_hidden.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false });
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try st.textStringify(&aw.writer);
+
+    try testing.expect(std.mem.find(u8, aw.written(), "slotted-shown") != null);
+    try testing.expect(std.mem.find(u8, aw.written(), "slotted-hidden") == null);
 }
 
 test "SemanticTree: deep nesting doesn't overflow the native stack" {

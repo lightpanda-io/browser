@@ -2255,10 +2255,13 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
 
 pub fn domChanged(self: *Frame) void {
     self.page.dom_version += 1;
-    self.styleChanged();
+    self.renderingChanged();
+}
 
-    // A DOM change is our "rendering opportunity": re-evaluate the layout
-    // observers. Both are no-ops unless something they track actually changed.
+/// A style change that is also our "rendering opportunity": re-evaluate the
+/// layout observers. Both are no-ops unless something they track changed.
+pub fn renderingChanged(self: *Frame) void {
+    self.styleChanged();
     observers.scheduleIntersectionChecks(self);
     observers.scheduleResizeChecks(self);
 }
