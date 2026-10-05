@@ -306,11 +306,13 @@ fn findPrebuiltV8(b: *Build, target: Build.ResolvedTarget, dev_fast: bool) ?[]co
             @tagName(target.result.cpu.arch),
         }) });
     };
-    b.dependOnFileMetadata(b.path(path));
     std.Io.Dir.cwd().access(io, rootPath(b, path), .{}) catch {
+        // Zig can't track a missing file as a configure dependency; the
+        // source-build path poisons the configure cache instead.
         std.debug.print("No prebuilt V8 at {s}; using the V8 source-build path. `make download-v8` fetches the prebuilt.\n", .{path});
         return null;
     };
+    b.dependOnFileMetadata(b.path(path));
     std.debug.print("Using prebuilt V8: {s}\n", .{path});
     return path;
 }

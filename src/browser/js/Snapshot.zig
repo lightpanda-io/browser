@@ -142,7 +142,7 @@ pub fn create() !Snapshot {
 
     var params: v8.CreateParams = undefined;
     v8.v8__Isolate__CreateParams__CONSTRUCT(&params);
-    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator();
+    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator(4 * 1024 * 1024 * 1024);
     defer v8.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
     params.external_references = @ptrCast(&external_references);
 

@@ -545,15 +545,15 @@ pub fn repeat(comptime s: []const u8, comptime n: usize) *const [s.len * n:0]u8 
 fn Repeated(comptime s: []const u8, comptime n: usize) type {
     return struct {
         const value: [s.len * n:0]u8 = blk: {
-            var buf: [s.len * n:0]u8 = undefined;
-            if (s.len == 1) {
-                buf = @splat(s[0]);
-            } else {
-                @setEvalBranchQuota(1000 + 10 * n);
-                for (0..n) |i| @memcpy(buf[i * s.len ..][0..s.len], s);
+            // Doubling: log2(n) concatenations instead of n comptime memcpys.
+            var acc: []const u8 = "";
+            var pow: []const u8 = s;
+            var k = n;
+            while (k > 0) : (k >>= 1) {
+                if (k & 1 == 1) acc = acc ++ pow;
+                if (k > 1) pow = pow ++ pow;
             }
-            buf[buf.len] = 0;
-            break :blk buf;
+            break :blk acc[0 .. s.len * n].* ++ [_:0]u8{};
         };
     };
 }
