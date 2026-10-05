@@ -277,5 +277,11 @@
     b_fs.addEventListener('click', () => clicks++);
     b_fs.click();
     testing.expectEqual(0, clicks);
+
+    // A disabled fieldset is not itself a disabled form control.
+    const fs = $('#fs_disabled');
+    fs.addEventListener('click', () => clicks++);
+    fs.click();
+    testing.expectEqual(1, clicks);
   }
 </script>

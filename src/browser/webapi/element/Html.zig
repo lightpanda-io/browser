@@ -401,8 +401,9 @@ pub fn insertAdjacentHTML(
 }
 
 pub fn click(self: *HtmlElement, frame: *Frame) !void {
-    if (self.asElement().isDisabled()) {
-        return;
+    switch (self._type) {
+        .button, .input, .textarea, .select, .option, .optgroup => if (self.asElement().isDisabled()) return,
+        else => {},
     }
 
     const flags = &self.asElement()._flags;
