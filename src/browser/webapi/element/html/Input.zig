@@ -80,12 +80,33 @@ pub const Type = enum {
     pub fn toString(self: Type) []const u8 {
         return @tagName(self);
     }
+
+    // https://html.spec.whatwg.org/multipage/input.html#dom-input-value
+    pub fn valueMode(self: Type) ValueMode {
+        return switch (self) {
+            .hidden, .submit, .image, .reset, .button => .default,
+            .checkbox, .radio => .default_on,
+            .file => .filename,
+            else => .value,
+        };
+    }
+};
+
+pub const ValueMode = enum {
+    // The IDL value is the current value (_value).
+    value,
+    // The IDL value is the value content attribute, or "".
+    default,
+    // The IDL value is the value content attribute, or "on".
+    default_on,
+    filename,
 };
 
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _default_value: ?[]const u8 = null,
 _default_checked: bool = false,
 _value: ?[]const u8 = null,
+_value_dirty: bool = false, // Once set _value no longer follows the value attribute
 _checked: bool = false,
 _checked_dirty: bool = false,
 // Only user edits count for tooLong/tooShort; script and attribute values don't.
@@ -135,10 +156,11 @@ fn setType(self: *Input, typ: []const u8, frame: *Frame) !void {
 }
 
 pub fn getValue(self: *const Input) []const u8 {
-    if (self._input_type == .file) return "";
-    return self._value orelse self._default_value orelse switch (self._input_type) {
-        .checkbox, .radio => "on",
-        else => "",
+    return switch (self._input_type.valueMode()) {
+        .value => self._value orelse "",
+        .default => self._default_value orelse "",
+        .default_on => self._default_value orelse "on",
+        .filename => "",
     };
 }
 
@@ -151,14 +173,24 @@ pub fn getRedactedValue(self: *const Input) []const u8 {
 }
 
 pub fn setValue(self: *Input, value: []const u8, frame: *Frame) !void {
-    // File inputs: setting to empty string is a no-op, anything else throws
-    if (self._input_type == .file) {
-        if (value.len == 0) return;
-        return error.InvalidStateError;
+    switch (self._input_type.valueMode()) {
+        .value => {},
+        // The value _is_ the content attribute (no sanitization for these types)
+        .default, .default_on => {
+            self._value = null;
+            self._user_edited = false;
+            return self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), frame);
+        },
+        // File inputs: setting to empty string is a no-op, anything else throws
+        .filename => {
+            if (value.len == 0) return;
+            return error.InvalidStateError;
+        },
     }
-    // This should _not_ call setAttribute. It updates the current state only
+    // In value mode, this should _not_ call setAttribute. It updates the current state only
     const sanitized = try self.sanitizeValue(false, value, frame);
     const changed = std.mem.eql(u8, self.getValue(), sanitized) == false;
+    self._value_dirty = true;
     if (changed == false and self._value != null) {
         // _value itself isn't changing (not to be mixed up with setValue
         // being called with the same as the default value, which would need
@@ -749,6 +781,43 @@ fn setFormNoValidate(self: *Input, value: bool, frame: *Frame) !void {
     } else {
         try self.asElement().removeAttribute(.wrap("formnovalidate"), frame);
     }
+}
+
+// https://html.spec.whatwg.org/multipage/input.html#input-type-change
+fn changeType(self: *Input, new_type: Type, frame: *Frame) !void {
+    const old_mode = self._input_type.valueMode();
+    const new_mode = new_type.valueMode();
+    // The current value, read with the old type
+    const old_value = self.getValue();
+    self._input_type = new_type;
+
+    switch (new_mode) {
+        .value => if (old_mode == .value) {
+            // Sanitize the current value according to the new type
+            if (self._value) |current_value| {
+                self._value = try self.sanitizeValue(false, current_value, frame);
+            }
+        } else {
+            self._value_dirty = false;
+            try self.syncValueFromAttribute(frame);
+        },
+        .default, .default_on => {
+            self._value = null;
+            if (old_mode == .value and old_value.len > 0) {
+                try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(old_value), frame);
+            }
+        },
+        .filename => self._value = null,
+    }
+}
+
+// The value of a non-dirty control in value mode is its sanitized value attribute
+fn syncValueFromAttribute(self: *Input, frame: *Frame) !void {
+    const default_value = self._default_value orelse {
+        self._value = null;
+        return;
+    };
+    self._value = try self.sanitizeValue(false, default_value, frame);
 }
 
 /// Sanitize the value according to the current input type
@@ -1541,8 +1610,9 @@ pub const Build = struct {
             .text;
 
         // Sanitize initial value per input type (e.g. date rejects "invalid-date").
-        if (self._default_value) |dv| {
-            self._value = try self.sanitizeValue(false, dv, frame);
+        // Outside the value mode, the value is read from the attribute.
+        if (self._input_type.valueMode() == .value) {
+            try self.syncValueFromAttribute(frame);
         } else {
             self._value = null;
         }
@@ -1557,18 +1627,13 @@ pub const Build = struct {
         const attribute = std.meta.stringToEnum(enum { type, value, checked }, name.str()) orelse return;
         const self = element.as(Input);
         switch (attribute) {
-            .type => {
-                self._input_type = Type.fromString(value.str());
-                // Sanitize the current value according to the new type
-                if (self._value) |current_value| {
-                    self._value = try self.sanitizeValue(false, current_value, frame);
-                    // Apply default value for checkbox/radio if value is now empty
-                    if (self._value.?.len == 0 and (self._input_type == .checkbox or self._input_type == .radio)) {
-                        self._value = "on";
-                    }
+            .type => try self.changeType(Type.fromString(value.str()), frame),
+            .value => {
+                self._default_value = try frame.arena.dupe(u8, value.str());
+                if (self._value_dirty == false and self._input_type.valueMode() == .value) {
+                    try self.syncValueFromAttribute(frame);
                 }
             },
-            .value => self._default_value = try frame.arena.dupe(u8, value.str()),
             .checked => {
                 self._default_checked = true;
                 // Only update checked state if it hasn't been manually modified
@@ -1583,12 +1648,17 @@ pub const Build = struct {
         }
     }
 
-    pub fn attributeRemove(element: *Element, name: String, _: *Frame) !void {
+    pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
         const attribute = std.meta.stringToEnum(enum { type, value, checked }, name.str()) orelse return;
         const self = element.as(Input);
         switch (attribute) {
-            .type => self._input_type = .text,
-            .value => self._default_value = null,
+            .type => try self.changeType(.text, frame),
+            .value => {
+                self._default_value = null;
+                if (self._value_dirty == false and self._input_type.valueMode() == .value) {
+                    self._value = null;
+                }
+            },
             .checked => {
                 self._default_checked = false;
                 // Only update checked state if it hasn't been manually modified
@@ -1606,6 +1676,7 @@ pub const Build = struct {
 
         // Copy runtime state from source to clone
         clone._value = source._value;
+        clone._value_dirty = source._value_dirty;
         clone._checked = source._checked;
         clone._checked_dirty = source._checked_dirty;
         clone._user_edited = source._user_edited;
@@ -1626,6 +1697,7 @@ test "WebApi: HTML.Input" {
     try testing.htmlRunner("element/html/input-validity.html", .{});
     try testing.htmlRunner("element/html/input_file.html", .{});
     try testing.htmlRunner("element/html/input-value-as.html", .{});
+    try testing.htmlRunner("element/html/input-value-mode.html", .{});
 }
 
 test "isValidFloatingPoint" {
