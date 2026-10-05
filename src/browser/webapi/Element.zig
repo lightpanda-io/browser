@@ -1298,34 +1298,43 @@ pub fn focus(self: *Element, frame: *Frame) !void {
     }
 
     const owner = self.ownerFrame(frame) orelse return;
+    const already_active = owner.document._active_element == self;
+    if (already_active == false and self.isFocusable(owner) == false) {
+        return;
+    }
+
+    // The focus chain runs through navigable containers: each <iframe> holding
+    // the focused document is the focused area of its parent document, so the
+    // parent's activeElement is that <iframe>. Like Chrome, ancestors blur
+    // their previous element first, and the <iframe> itself gets no focus events.
+    // https://html.spec.whatwg.org/multipage/interaction.html#focus-chain
+    var child = owner;
+    while (child.iframe) |container| {
+        const parent = child.parent orelse break;
+        const parent_doc = parent.document;
+        const old = parent_doc._active_element;
+        if (old == container.asElement()) {
+            break;
+        }
+        parent_doc.setActiveElement(container.asElement(), parent);
+        if (old) |o| {
+            _ = try blurFocusedArea(o, null, parent);
+        }
+        child = parent;
+    }
+
+    if (already_active) {
+        return;
+    }
+
     const doc = owner.document;
     const old_active = doc._active_element;
-    if (old_active == self) {
-        return;
-    }
-
-    if (self.isFocusable(owner) == false) {
-        return;
-    }
-
-    const FocusEvent = @import("event/FocusEvent.zig");
-
     const new_target = self.asEventTarget();
     doc.setActiveElement(self, owner);
 
-    if (old_active) |old| {
-        const old_target = old.asEventTarget();
+    const old_related: ?*EventTarget = if (old_active) |old| try blurFocusedArea(old, new_target, owner) else null;
 
-        // Dispatch blur on old element (no bubble, composed)
-        const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = new_target }, owner);
-        try owner._event_manager.dispatch(old_target, blur_event.asEvent());
-
-        // Dispatch focusout on old element (bubbles, composed)
-        const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = new_target }, owner);
-        try owner._event_manager.dispatch(old_target, focusout_event.asEvent());
-    }
-
-    const old_related: ?*EventTarget = if (old_active) |old| old.asEventTarget() else null;
+    const FocusEvent = @import("event/FocusEvent.zig");
 
     // Dispatch focus on new element (no bubble, composed)
     const focus_event = try FocusEvent.initTrusted(comptime .wrap("focus"), .{ .composed = true, .relatedTarget = old_related }, owner);
@@ -1336,6 +1345,41 @@ pub fn focus(self: *Element, frame: *Frame) !void {
     try owner._event_manager.dispatch(new_target, focusin_event.asEvent());
 }
 
+// `old` just lost focus in `frame`'s document. When it's an <iframe> holding
+// the focus chain, the element focused inside it is what blurs (and its
+// document's activeElement is cleared); the <iframe> itself gets no events.
+// Returns the relatedTarget for the element taking focus: the blurred element,
+// unless it was in another document.
+fn blurFocusedArea(old: *Element, related: ?*EventTarget, frame: *Frame) !?*EventTarget {
+    var el = old;
+    var el_frame = frame;
+    var el_related = related;
+    while (el.is(Html.IFrame)) |iframe| {
+        const window = iframe._window orelse break;
+        const child = window._frame;
+        const inner = child.document._active_element orelse return null;
+        child.document.setActiveElement(null, child);
+        el = inner;
+        el_frame = child;
+        // relatedTarget doesn't cross documents
+        el_related = null;
+    }
+    try dispatchBlur(el, el_related, el_frame);
+    return if (el_frame == frame) el.asEventTarget() else null;
+}
+
+// Dispatches blur (no bubble) then focusout (bubbles) on `old`, which just lost focus.
+fn dispatchBlur(old: *Element, related: ?*EventTarget, frame: *Frame) !void {
+    const FocusEvent = @import("event/FocusEvent.zig");
+    const old_target = old.asEventTarget();
+
+    const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = related }, frame);
+    try frame._event_manager.dispatch(old_target, blur_event.asEvent());
+
+    const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = related }, frame);
+    try frame._event_manager.dispatch(old_target, focusout_event.asEvent());
+}
+
 pub fn blur(self: *Element, frame: *Frame) !void {
     // A frameless document never has a focused element.
     const owner = self.ownerFrame(frame) orelse return;
@@ -1343,17 +1387,7 @@ pub fn blur(self: *Element, frame: *Frame) !void {
     if (doc._active_element != self) return;
 
     doc.setActiveElement(null, owner);
-
-    const FocusEvent = @import("event/FocusEvent.zig");
-    const old_target = self.asEventTarget();
-
-    // Dispatch blur (no bubble, composed)
-    const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true }, owner);
-    try owner._event_manager.dispatch(old_target, blur_event.asEvent());
-
-    // Dispatch focusout (bubbles, composed)
-    const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true }, owner);
-    try owner._event_manager.dispatch(old_target, focusout_event.asEvent());
+    _ = try blurFocusedArea(self, null, owner);
 }
 
 pub fn getChildren(self: *Element, frame: *Frame) !collections.NodeLive(.child_elements) {

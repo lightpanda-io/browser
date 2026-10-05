@@ -844,6 +844,19 @@ pub fn focusedElement(frame: *Frame) ?*Element {
     return frame.window._document.getActiveElement();
 }
 
+/// The frame keyboard input goes to. Starting from `frame`, descend while the
+/// focused element is an <iframe> with a loaded document: that iframe holds
+/// the focus chain, so its document's focused element is where keys land.
+pub fn focusedFrame(frame: *Frame) *Frame {
+    var current = frame;
+    while (current.document._active_element) |active| {
+        const iframe = active.is(Element.Html.IFrame) orelse break;
+        const window = iframe._window orelse break;
+        current = window._frame;
+    }
+    return current;
+}
+
 /// Dispatches a trusted keydown on `target` then, unless cancelled, types
 /// `text` (Chrome's WebKeyboardEvent.text; null when the client sends the
 /// char as its own event, as chromedp does). Returns whether the keydown was
