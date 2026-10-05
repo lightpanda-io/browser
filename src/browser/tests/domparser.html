@@ -433,6 +433,21 @@
 }
 </script>
 
+<script id=querySelector-xml>
+{
+  const doc = new DOMParser().parseFromString(
+    '<rss><channel><title>Feed</title><item><title>One</title><link>a</link><pubDate>Mon</pubDate></item><item><title>Two</title></item></channel></rss>',
+    'application/xml');
+
+  testing.expectEqual(2, doc.querySelectorAll('item').length);
+  testing.expectEqual('Feed', doc.querySelector('channel > title')?.textContent);
+  testing.expectEqual(['One', 'Two'], Array.from(doc.querySelectorAll('item title')).map(e => e.textContent));
+  testing.expectEqual(1, doc.querySelectorAll('link').length);
+  testing.expectEqual(1, doc.querySelectorAll('pubDate').length);
+  testing.expectEqual(true, doc.getElementsByTagName('title')[0].matches('title'));
+}
+</script>
+
 <script id=xml-namespaces>
 {
   const doc = new DOMParser().parseFromString(

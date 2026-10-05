@@ -406,18 +406,32 @@ fn matchesPart(el: *Node.Element, part: Part, scope: *Node, nth: ?*NthCache, fra
         },
         .tag => |tag| {
             // Optimized: compare enum directly
-            return el.getTag() == tag;
+            const element_tag = el.getTag();
+            if (element_tag == tag) {
+                return true;
+            }
+            // Elements without a dedicated Tag (XML, other namespaces) match by name
+            return element_tag == .unknown and std.ascii.eqlIgnoreCase(el.getLocalName(), @tagName(tag));
         },
         .tag_name => |tag_name| {
-            // Fallback for custom/unknown tags
-            // Both are lowercase, so we can use fast string comparison
-            const element_tag = el.getTagNameLower();
-            return std.mem.eql(u8, element_tag, tag_name);
+            if (el._namespace == .html) {
+                return std.mem.eql(u8, el.getTagNameLower(), tag_name);
+            }
+            return std.ascii.eqlIgnoreCase(el.getLocalName(), tag_name);
         },
         .universal => return true,
         .pseudo_class => |pseudo| return matchesPseudoClass(el, pseudo, scope, nth, frame),
         .attribute => |attr| return matchesAttribute(el, attr),
     }
+}
+
+// `lower` is the lowercased selector name. Foreign element names keep their
+// case (foreignObject, pubDate), so those compare case-insensitively.
+fn matchesTagName(el: *Node.Element, lower: []const u8) bool {
+    if (el._namespace == .html) {
+        return std.mem.eql(u8, el.getTagNameLower(), lower);
+    }
+    return std.ascii.eqlIgnoreCase(el.getLocalName(), lower);
 }
 
 fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
