@@ -285,3 +285,36 @@
     testing.expectEqual(1, clicks);
   }
 </script>
+
+<form id="fieldset_form">
+  <fieldset disabled>
+    <legend><button id="fs_legend_btn">legend</button></legend>
+    <button id="fs_btn">go</button>
+    <input id="fs_input" type="submit">
+    <input id="fs_image" type="image">
+  </fieldset>
+  <button id="fs_disabled_btn" disabled>off</button>
+  <button id="fs_enabled_btn">on</button>
+</form>
+
+<script id="synthetic_click_disabled_submitter">
+  {
+    // A disabled submit button has no activation behavior, so a synthetic
+    // click must not submit; an ancestor <fieldset disabled> disables it too,
+    // except inside the fieldset's first <legend>.
+    const submitted = []
+    const form = $('#fieldset_form')
+    form.addEventListener('submit', (e) => {
+      e.preventDefault()
+      submitted.push(e.submitter.id)
+    })
+    const click = (id) => $('#' + id).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+
+    for (const id of ['fs_btn', 'fs_input', 'fs_image', 'fs_disabled_btn']) click(id)
+    testing.expectEqual([], submitted)
+
+    click('fs_legend_btn')
+    click('fs_enabled_btn')
+    testing.expectEqual(['fs_legend_btn', 'fs_enabled_btn'], submitted)
+  }
+</script>
