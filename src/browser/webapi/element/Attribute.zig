@@ -71,9 +71,6 @@ pub fn setValue(self: *Attribute, data_: ?String, frame: *Frame) !void {
     };
     // this takes ownership of the data
     try el.setAttribute(self._name, data, frame);
-
-    // not the most efficient, but we don't expect this to be called often
-    self._value = (try el.getAttribute(self._name, frame)) orelse String.empty;
 }
 
 pub fn getNamespaceURI(_: *const Attribute) ?[]const u8 {
