@@ -292,7 +292,10 @@ fn setCookie(cmd: *CDP.Command) !void {
     )) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const stored = try CdpStorage.setCdpCookies(&bc.session.cookie_jar, &.{params});
+    const stored = CdpStorage.setCdpCookies(&bc.session.cookie_jar, &.{params}) catch |err| switch (err) {
+        error.InvalidCookie => return cmd.sendError(-32602, "Sanitizing cookie failed", .{}),
+        else => return err,
+    };
 
     try cmd.sendResult(.{ .success = stored == 1 }, .{});
 }
@@ -303,7 +306,10 @@ fn setCookies(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    _ = try CdpStorage.setCdpCookies(&bc.session.cookie_jar, params.cookies);
+    _ = CdpStorage.setCdpCookies(&bc.session.cookie_jar, params.cookies) catch |err| switch (err) {
+        error.InvalidCookie => return cmd.sendError(-32602, "Invalid cookie fields", .{}),
+        else => return err,
+    };
 
     try cmd.sendResult(null, .{});
 }
@@ -983,6 +989,49 @@ test "cdp.Network: cookies" {
         .params = .{ .browserContextId = "BID-S" },
     });
     try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{} }, .{ .id = 10 });
+}
+
+test "cdp.Network: invalid cookie fields are refused as Chrome does" {
+    const CdpCookie = CdpStorage.CdpCookie;
+    const ResCookie = CdpStorage.ResCookie;
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-INV" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.setCookie",
+        .params = CdpCookie{ .name = "a;b", .value = "v", .url = "https://example.com/" },
+    });
+    try ctx.expectSentError(-32602, "Sanitizing cookie failed", .{ .id = 1 });
+
+    // One bad cookie fails the whole batch, and nothing is stored.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Network.setCookies",
+        .params = .{ .cookies = &[_]CdpCookie{
+            .{ .name = "ok", .value = "v", .url = "https://example.com/" },
+            .{ .name = "a", .value = "x\ty", .url = "https://example.com/" },
+        } },
+    });
+    try ctx.expectSentError(-32602, "Invalid cookie fields", .{ .id = 2 });
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Storage.setCookies",
+        .params = .{ .cookies = &[_]CdpCookie{.{ .name = "a", .value = "v", .domain = "other.com", .url = "https://example.com/" }} },
+    });
+    try ctx.expectSentError(-32602, "Invalid cookie fields", .{ .id = 3 });
+
+    // An https url makes the cookie Secure even when `secure` says otherwise.
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Network.setCookie",
+        .params = CdpCookie{ .name = "a", .value = "v", .url = "https://example.com/", .secure = false },
+    });
+    try ctx.expectSentResult(.{ .success = true }, .{ .id = 4 });
+    try ctx.processMessage(.{ .id = 5, .method = "Storage.getCookies", .params = .{ .browserContextId = "BID-INV" } });
+    try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{.{ .name = "a", .value = "v", .domain = "example.com", .path = "/", .size = 2, .secure = true }} }, .{ .id = 5 });
 }
 
 test "cdp.Network: clearBrowserCookies accepts empty params object" {

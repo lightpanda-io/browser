@@ -253,6 +253,84 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
     };
 }
 
+pub const Fields = struct {
+    name: []const u8,
+    value: []const u8,
+    domain: ?[]const u8 = null,
+    path: ?[]const u8 = null,
+    expires: ?f64 = null,
+    secure: bool = false,
+    http_only: bool = false,
+    same_site: ?SameSite = null,
+};
+
+/// A cookie a protocol (CDP, BiDi, WebDriver) sets field by field rather than
+/// through a Set-Cookie line, with the character and size checks of Chrome's
+/// CanonicalCookie::CreateSanitizedCookie, which both its CDP and its BiDi go
+/// through.
+pub fn fromFields(allocator: Allocator, url: ?[:0]const u8, fields: Fields) error{ OutOfMemory, InvalidCookie, InvalidDomain }!Cookie {
+    if ((fields.name.len == 0 and fields.value.len == 0) or
+        fields.name.len + fields.value.len > max_cookie_size or
+        !isValidField(fields.name, ";=") or
+        !isValidField(fields.value, ";"))
+    {
+        return error.InvalidCookie;
+    }
+    if (fields.path) |path| {
+        // Chrome URL-encodes any other control character in a path.
+        if (std.mem.findAny(u8, path, ";\r\n\x00") != null or hasOuterWhitespace(path)) {
+            return error.InvalidCookie;
+        }
+    }
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+
+    // Allocate before the struct literal copies `arena` into the result.
+    const name = try a.dupe(u8, fields.name);
+    const value = try a.dupe(u8, fields.value);
+    const domain = parseDomain(a, url, fields.domain) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidDomain,
+    };
+    // Without a url there's nothing to encode: only the dupe can fail.
+    const path = parsePath(a, null, fields.path) catch return error.OutOfMemory;
+
+    return .{
+        .arena = arena,
+        .name = name,
+        .value = value,
+        .domain = domain,
+        .path = path,
+        .expires = fields.expires,
+        .secure = fields.secure,
+        .http_only = fields.http_only,
+        .same_site = fields.same_site orelse .lax,
+        .same_site_default = fields.same_site == null,
+    };
+}
+
+// Chrome's IsValidCookieName/Value: no control character (tab included) and
+// none of `separators`, but bytes above 0x7F are fine.
+fn isValidField(field: []const u8, comptime separators: []const u8) bool {
+    if (hasOuterWhitespace(field)) {
+        return false;
+    }
+    for (field) |c| {
+        if (std.ascii.isControl(c) or std.mem.findScalar(u8, separators, c) != null) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Chrome's ParseTokenString/ParseValueString trim it, and refuse a field
+// that doesn't survive the parse unchanged.
+fn hasOuterWhitespace(field: []const u8) bool {
+    return std.mem.trim(u8, field, " \t").len != field.len;
+}
+
 const ValidateCookieError = error{ Empty, InvalidByteSequence };
 
 /// Returns an error if cookie str length is 0
@@ -799,6 +877,38 @@ fn toLower(str: []u8) []u8 {
 
 const testing = @import("../../../testing.zig");
 const test_url = "http://lightpanda.io/";
+test "cookie: fromFields refuses what Chrome's CreateSanitizedCookie does" {
+    const url = "https://example.com/";
+    const too_long: [max_cookie_size]u8 = @splat('v');
+    const refused = [_]Fields{
+        .{ .name = "a;b", .value = "v" },
+        .{ .name = "a=b", .value = "v" },
+        .{ .name = " a", .value = "v" },
+        .{ .name = "a", .value = "x;y" },
+        .{ .name = "a", .value = "x\ty" },
+        .{ .name = "a", .value = "x\x7fy" },
+        .{ .name = "a", .value = "v " },
+        .{ .name = "", .value = "" },
+        .{ .name = "a", .value = &too_long },
+        .{ .name = "a", .value = "v", .path = "/a\nb" },
+    };
+    for (refused) |fields| {
+        try testing.expectError(error.InvalidCookie, fromFields(testing.allocator, url, fields));
+    }
+    try testing.expectError(error.InvalidDomain, fromFields(testing.allocator, url, .{ .name = "a", .value = "v", .domain = "other.com" }));
+
+    // Wider than RFC 6265bis's grammar, as in Chrome.
+    const accepted = [_]Fields{
+        .{ .name = "a b", .value = "caf\xc3\xa9" },
+        .{ .name = "a", .value = "" },
+        .{ .name = "a", .value = "v", .path = "/a\x01b" },
+    };
+    for (accepted) |fields| {
+        const cookie = try fromFields(testing.allocator, url, fields);
+        cookie.deinit();
+    }
+}
+
 test "cookie: findSecondLevelDomain" {
     const cases = [_]struct { []const u8, []const u8 }{
         .{ "", "" },

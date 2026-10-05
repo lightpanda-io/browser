@@ -878,21 +878,20 @@ fn addCookie(cmd: *BiDi.Command, p: AddCookie) !void {
     }
 
     const c = p.cookie;
-    const spec: storage.Spec = .{
+    storage.add(&cmd.bidi.user_context.session.cookie_jar, .{
         .name = c.name,
         .value = c.value,
         .domain = c.domain,
         .path = c.path,
         .secure = c.secure,
         .http_only = c.httpOnly,
-        .expiry = c.expiry,
+        .expires = if (c.expiry) |expiry| @floatFromInt(expiry) else null,
         .same_site = if (c.sameSite) |same_site| switch (same_site) {
             .Strict => .strict,
             .Lax => .lax,
             .None => .none,
         } else null,
-    };
-    storage.add(&cmd.bidi.user_context.session.cookie_jar, spec, frame.url) catch |err| switch (err) {
+    }, frame.url) catch |err| switch (err) {
         error.OutOfMemory => return err,
         error.InvalidDomain => return cmd.sendError("invalid cookie domain", "the domain doesn't match the current document"),
         error.UnableToSetCookie => return cmd.sendError("unable to set cookie", "the cookie was rejected"),
