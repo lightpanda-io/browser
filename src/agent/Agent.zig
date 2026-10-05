@@ -80,6 +80,26 @@ const default_system_prompt = browser_tools.driver_guidance ++
     \\
 ++ lp.skill.semantics_note;
 
+/// Without today's date the model guesses "now" from its training data and
+/// misreads relative dates.
+fn withCurrentDate(allocator: std.mem.Allocator, prompt: []const u8, tm: lp.datetime.LibcTm, locale: []const u8) ![]u8 {
+    const weekdays = [_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+    const offset_min = @divTrunc(tm.tm_gmtoff, 60);
+    return allocator.print("{s}\nToday is {s}, {d}-{d:0>2}-{d:0>2} (UTC{c}{d:0>2}:{d:0>2}{s}{s}); browser locale {s}. Resolve relative dates against it.\n", .{
+        prompt,
+        weekdays[@intCast(tm.tm_wday)],
+        tm.tm_year + 1900,
+        @as(u32, @intCast(tm.tm_mon + 1)),
+        @as(u32, @intCast(tm.tm_mday)),
+        @as(u8, if (offset_min < 0) '-' else '+'),
+        @abs(offset_min) / 60,
+        @abs(offset_min) % 60,
+        if (tm.tm_zone != null) ", " else "",
+        if (tm.tm_zone) |z| std.mem.span(z) else "",
+        locale,
+    });
+}
+
 // System prompt of the `/save` command: the save instructions plus the
 // script skill (`lp.skill`), whose primitives reference is rendered from
 // the tool schemas at first use — hence lazy rather than comptime.
@@ -305,6 +325,14 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         std.debug.print("\n", .{});
     }
 
+    const system_prompt = try withCurrentDate(
+        allocator,
+        opts.system_prompt orelse default_system_prompt,
+        try lp.datetime.localTime(@intCast(lp.datetime.timestamp(.real))),
+        opts.locale,
+    );
+    errdefer allocator.free(system_prompt);
+
     const self = try allocator.create(Agent);
     errdefer allocator.destroy(self);
 
@@ -326,7 +354,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .terminal = .init(allocator, history_paths, verbosity, will_repl),
         .save_buffer = .init(allocator),
         .save_path = null,
-        .conversation = .init(allocator, opts.system_prompt orelse default_system_prompt),
+        .conversation = .init(allocator, system_prompt),
         .model = model,
         .effort = effort,
         .stream_enabled = stream_enabled,
@@ -370,6 +398,7 @@ pub fn deinit(self: *Agent) void {
     self.save_selectors.deinit(self.allocator);
     if (self.save_path) |p| self.allocator.free(p);
     self.terminal.deinit();
+    self.allocator.free(self.conversation.system_prompt);
     self.conversation.deinit();
     self.model_completion_arena.deinit();
     self.ts.deinit();
@@ -2114,6 +2143,19 @@ test "savePrompt: save instructions followed by the rendered script skill" {
     const revision = savePrompt(true);
     try std.testing.expect(std.mem.find(u8, revision, save_revision_note) != null);
     try std.testing.expect(std.mem.endsWith(u8, revision, lp.skill.text()));
+}
+
+test "withCurrentDate: appends weekday, ISO date, UTC offset, zone and locale" {
+    var tm = std.mem.zeroes(lp.datetime.LibcTm);
+    tm.tm_year = 126;
+    tm.tm_mon = 9;
+    tm.tm_mday = 4;
+    tm.tm_wday = 0;
+    tm.tm_gmtoff = -7 * 3600;
+    tm.tm_zone = "PDT";
+    const prompt = try withCurrentDate(std.testing.allocator, "base", tm, "en-US");
+    defer std.testing.allocator.free(prompt);
+    try std.testing.expectEqualStrings("base\nToday is Sunday, 2026-10-04 (UTC-07:00, PDT); browser locale en-US. Resolve relative dates against it.\n", prompt);
 }
 
 test "capToolOutput: passes through when under cap" {
