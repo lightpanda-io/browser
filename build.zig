@@ -527,7 +527,7 @@ fn linkCurl(b: *Build, mod: *Build.Module, deps: Deps, is_tsan: bool, section: b
     mod.addImport("curl", translator.mod);
 
     const zlib = buildZlib(b, deps.target, deps.optimize, is_tsan, section);
-    // Link directly since curl is not the only dependent of it.
+    curl.root_module.linkLibrary(zlib);
     mod.linkLibrary(zlib);
 
     const brotli = buildBrotli(b, deps.target, deps.optimize, is_tsan, section);
