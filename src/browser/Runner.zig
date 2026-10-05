@@ -479,7 +479,9 @@ fn firstConditionError(conditions: []const WaitCondition) !void {
 fn hasRunnablePage(session: *Session) bool {
     for (session.pages.items) |page| {
         switch (page.frame._parse_state) {
-            .html, .complete => return true,
+            // A text or image document has a JS context too: its timers and
+            // animation frames run like an HTML document's.
+            .html, .complete, .text, .raw_done => return true,
             else => {},
         }
     }
@@ -517,6 +519,34 @@ test "Runner: waitForScript" {
 
     var runner = page.session.runner(.{});
     try runner.waitForScript(page.frame_id, "document.querySelector('#sel1')", 10);
+}
+
+fn expectTimersRun(url: [:0]const u8) !void {
+    const page = try testing.test_session.createPage();
+    defer page.close();
+    try page.navigate(url, .{});
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
+    {
+        var ls: js.Local.Scope = undefined;
+        page.frame().?.js.localScope(&ls);
+        defer ls.deinit();
+        try ls.local.eval(
+            \\window.__fired = [];
+            \\setTimeout(() => __fired.push('timeout'), 0);
+            \\requestAnimationFrame(() => __fired.push('raf'));
+        , null);
+    }
+    try runner.waitForScript(page.frame_id, "window.__fired.length === 2", 500);
+}
+
+test "Runner: runs timers in a text document" {
+    try expectTimersRun("http://127.0.0.1:9582/src/browser/tests/runner/plain.txt");
+}
+
+test "Runner: runs timers in an image document" {
+    try expectTimersRun("http://127.0.0.1:9582/images/ok.png");
 }
 
 test "Runner: networkidle notifies child frames" {
