@@ -845,7 +845,7 @@ pub const ToolResult = struct {
 };
 
 /// Where a call left the page. MCP serializes it as `structuredContent` so a
-/// client reads the status without regexing `Navigated successfully. HTTP 404
+/// client reads the status without regexing `Navigated. HTTP 404
 /// Not Found.` back apart. The transport drops null optionals rather than
 /// writing them, so the matching `outputSchema` requires `url` alone.
 pub const PageState = struct {
@@ -894,6 +894,8 @@ pub const CallOpts = struct {
     /// Fill in `ToolResult.selector`: a registry id means nothing in a later
     /// session, so `--save` cannot replay a call that used one.
     record: bool = false,
+    /// Scripts parse the text, so only model-facing callers set it.
+    nav_note: bool = false,
 };
 
 // An inline screenshot is re-sent on every turn; keep it within what models
@@ -935,6 +937,7 @@ pub fn call(
     else
         null;
 
+    const frame_before = if (session.currentFrame()) |f| f._frame_id else null;
     var result = dispatch(arena, session, registry, tool, substituted, opts) catch |err| {
         if (err == error.NavigationFailed) {
             if (formatNavigationError(arena, session)) |text|
@@ -943,6 +946,13 @@ pub fn call(
         return err;
     };
     result.selector = selector;
+    if (opts.nav_note) {
+        if (session.currentFrame()) |frame| {
+            if (frame._frame_id != frame_before) {
+                if (try navErrorNote(arena, frame)) |note| result.text = try arena.print("{s}\n\n{s}", .{ note, result.text });
+            }
+        }
+    }
     if (tool.reportsPageState()) {
         if (session.currentFrame()) |frame| result.page_state = pageState(frame);
     }
@@ -1114,12 +1124,22 @@ fn navStatus(arena: std.mem.Allocator, frame: *const lp.Frame) []const u8 {
     return arena.print("{d} {s}", .{ status, phrase }) catch "unknown";
 }
 
+/// Error and challenge pages would otherwise read as the requested content.
+fn navErrorNote(arena: std.mem.Allocator, frame: *const lp.Frame) !?[]const u8 {
+    if (frame._bot_challenge) |challenge| {
+        return try arena.print("Blocked by a {s} bot challenge (HTTP {s}): this is not the requested content.", .{ @tagName(challenge), navStatus(arena, frame) });
+    }
+    const status = frame._http_status orelse return null;
+    if (status < 400) return null;
+    return try arena.print("HTTP {s}: this is likely an error or rate-limit page, not the requested content.", .{navStatus(arena, frame)});
+}
+
 fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgs(GotoParams, arena, arguments);
     const result = try performGoto(session, registry, args.url, .{ .timeout = args.timeout, .wait_until = args.waitUntil });
     const status = if (session.currentFrame()) |frame| navStatus(arena, frame) else "unknown";
     return switch (result) {
-        .completed => arena.print("Navigated successfully. HTTP {s}.", .{status}),
+        .completed => arena.print("Navigated. HTTP {s}.", .{status}),
         .timeout => arena.print("Navigation started (HTTP {s}) but the page did not finish loading before the timeout.", .{status}),
     } catch ToolError.InternalError;
 }
@@ -2782,7 +2802,58 @@ test "goto: a navigation stuck waiting for a connection is an error" {
     held.clearRetainingCapacity();
 
     const r = try call(aa, session, &registry, "goto", args, .{});
-    try std.testing.expectEqualStrings("Navigated successfully. HTTP 200 OK.", r.text);
+    try std.testing.expectEqualStrings("Navigated. HTTP 200 OK.", r.text);
+}
+
+test "tools: goto flags an error status instead of reporting success" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/status/429"}
+    , .{});
+    const r = try call(aa, session, &registry, "goto", args, .{ .nav_note = true });
+    try std.testing.expectEqualStrings("HTTP 429 Too Many Requests: this is likely an error or rate-limit page, not the requested content.\n\nNavigated. HTTP 429 Too Many Requests.", r.text);
+}
+
+test "tools: a read tool navigating by url flags an error status" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/status/404"}
+    , .{});
+    const r = try call(aa, session, &registry, "markdown", args, .{ .nav_note = true });
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "HTTP 404 Not Found: this is likely an error"));
+
+    const reload = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/status/403"}
+    , .{});
+    const s = try call(aa, session, &registry, "markdown", reload, .{});
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "rate-limit") == null);
+}
+
+test "tools: a bot challenge is named" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/challenge/vercel"}
+    , .{});
+    const r = try call(aa, session, &registry, "tree", args, .{ .nav_note = true });
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "Blocked by a vercel bot challenge (HTTP 429 Too Many Requests)"));
 }
 
 test "tools: navStatus names the status, or says it has none" {

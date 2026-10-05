@@ -171,7 +171,7 @@ fn dispatchBrowserTool(
     };
 
     const active = server.active_session;
-    const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true }) catch |err| {
+    const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true }) catch |err| {
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
@@ -398,7 +398,7 @@ test "MCP - structuredContent on a navigation" {
     try router.handleMessage(server, testing.arena_allocator, goto);
     // The fixture has no <title>, so `title` is empty rather than absent.
     try testing.expectJson(.{ .id = 1, .result = .{
-        .content = &.{.{ .type = "text", .text = "Navigated successfully. HTTP 200 OK." }},
+        .content = &.{.{ .type = "text", .text = "Navigated. HTTP 200 OK." }},
         .structuredContent = .{
             .url = "http://localhost:9582/src/browser/tests/mcp_actions.html",
             .httpStatus = 200,
