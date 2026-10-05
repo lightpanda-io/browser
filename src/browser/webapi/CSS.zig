@@ -107,7 +107,7 @@ pub fn escape(value: []const u8, frame: *Frame) ![]const u8 {
         // Second char (i==0) is a digit and first is '-', needs hex escape
         if (i == 0 and first == '-' and c >= '0' and c <= '9') {
             result[pos] = '\\';
-            const hex_str = std.fmt.bufPrint(result[pos + 1 ..], "{x} ", .{c}) catch unreachable;
+            const hex_str = std.mem.print(result[pos + 1 ..], "{x} ", .{c}) catch unreachable;
             pos += 1 + hex_str.len;
         } else if (!needsEscape(false, c)) {
             result[pos] = c;
@@ -180,7 +180,7 @@ fn writeEscape(comptime is_first: bool, buf: []u8, c: u8) usize {
     var data = buf[1..];
 
     if (isHexEscape(c) or ((comptime is_first) and c >= '0' and c <= '9')) {
-        const hex_str = std.fmt.bufPrint(data, "{x} ", .{c}) catch unreachable;
+        const hex_str = std.mem.print(data, "{x} ", .{c}) catch unreachable;
         return 1 + hex_str.len;
     }
 

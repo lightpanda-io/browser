@@ -29,6 +29,7 @@ const Driver = @import("Driver.zig");
 const bidi_session = @import("bidi/session.zig");
 const http_command = @import("bidi/http_command.zig");
 const uuidv4 = @import("../id.zig").uuidv4;
+const repeat = @import("../string.zig").repeat;
 
 const log = lp.log;
 const posix = std.posix;
@@ -138,7 +139,7 @@ pub const Connection = struct {
         };
 
         fn parseHeader(self: *State, arena: Allocator, data: []u8) !Parsed {
-            const header_index = std.mem.indexOf(u8, data, "\r\n\r\n") orelse {
+            const header_index = std.mem.find(u8, data, "\r\n\r\n") orelse {
                 return .{ .need = 0 };
             };
 
@@ -176,15 +177,15 @@ pub const Connection = struct {
 
         fn contentLength(header: []const u8) !usize {
             const key = "\r\ncontent-length:";
-            const at = std.ascii.indexOfIgnoreCase(header, key) orelse return 0;
+            const at = std.ascii.findIgnoreCase(header, key) orelse return 0;
             const start = at + key.len;
-            const end = std.mem.indexOfPos(u8, header, start, "\r\n") orelse return error.InvalidHeader;
+            const end = std.mem.findPos(u8, header, start, "\r\n") orelse return error.InvalidHeader;
             const value = std.mem.trim(u8, header[start..end], " \t");
             return std.fmt.parseInt(usize, value, 10) catch error.InvalidHeader;
         }
 
         fn parseRequestLine(header: []const u8) !struct { Method, []const u8, bool, usize } {
-            const l1 = std.mem.indexOfScalar(u8, header, '\r') orelse return error.InvalidHeader;
+            const l1 = std.mem.findScalar(u8, header, '\r') orelse return error.InvalidHeader;
             if (l1 == header.len) {
                 return error.InvalidHeader;
             }
@@ -201,10 +202,10 @@ pub const Connection = struct {
             if (target[0] != '/') {
                 return error.InvalidHeader;
             }
-            const path = target[0 .. std.mem.indexOfScalar(u8, target, '?') orelse target.len];
+            const path = target[0 .. std.mem.findScalar(u8, target, '?') orelse target.len];
 
             const protocol = it.next() orelse return error.InvalidHeader;
-            const keepalive = std.mem.indexOf(u8, protocol, "1.0") == null;
+            const keepalive = std.mem.find(u8, protocol, "1.0") == null;
 
             return .{ method, path, keepalive, l1 };
         }
@@ -674,8 +675,8 @@ fn fillHeader(buf: []u8, status: std.http.Status, comptime content_type: []const
     comptime std.debug.assert(header_format.len + 3 + 31 + 20 <= HEADER_RESERVE);
 
     var header_buf: [HEADER_RESERVE]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, header_format, .{
-        @intFromEnum(status),
+    const header = std.mem.print(&header_buf, header_format, .{
+        @backingInt(status),
         status.phrase() orelse "",
         buf.len - HEADER_RESERVE,
     }) catch unreachable;
@@ -794,7 +795,7 @@ fn newSession(server: *Server, conn: *Connection, req: *Connection.Request) !Ser
 
     const url: ?[]const u8 = blk: {
         if (is_requesting_websocket_url) {
-            break :blk try std.fmt.allocPrint(req.arena, "{s}{s}", .{ server.bidi_session_url, &session_id });
+            break :blk try req.arena.print("{s}{s}", .{ server.bidi_session_url, &session_id });
         }
         break :blk null;
     };
@@ -1055,7 +1056,7 @@ pub fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
         "Content-Length: {d}\r\n" ++
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
         body_format;
-    return try std.fmt.allocPrint(app.allocator, response_format, .{ body_len, host, port });
+    return try app.allocator.print(response_format, .{ body_len, host, port });
 }
 
 // Where the upgraded socket goes: a new worker, or an existing session's.
@@ -1082,7 +1083,7 @@ fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target:
     // The 101 is ~129 bytes into an empty send buffer, so a single write
     // always completes; a partial write here means the peer is already gone.
     var response_buf: [160]u8 = undefined;
-    const response = std.fmt.bufPrint(&response_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
+    const response = std.mem.print(&response_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
         "Upgrade: websocket\r\n" ++
         "Connection: upgrade\r\n" ++
         "Sec-Websocket-Accept: {s}\r\n\r\n", .{accept_key}) catch unreachable;
@@ -1123,7 +1124,7 @@ fn webSocketAccept(head: []const u8, out: *[28]u8) ![]const u8 {
             if (h.value.len != 2 or h.value[0] != '1' or h.value[1] != '3') return error.MissingHeader;
             found |= FOUND_VERSION;
         } else if (std.ascii.eqlIgnoreCase(h.key, "connection")) {
-            if (std.ascii.indexOfIgnoreCase(h.value, "upgrade") == null) return error.MissingHeader;
+            if (std.ascii.findIgnoreCase(h.value, "upgrade") == null) return error.MissingHeader;
             found |= FOUND_CONNECTION;
         } else if (std.ascii.eqlIgnoreCase(h.key, "sec-websocket-key")) {
             key = h.value;
@@ -1177,7 +1178,7 @@ test "http: the read buffer grows with the request and gives the space back" {
     try testing.expectEqual(INITIAL_BUFFER_SIZE, buffer.buf.len);
 
     // a header declares no length, so the buffer doubles to take it
-    const filler = "a" ** max;
+    const filler = repeat("a", max);
     try sys_net.writeAll(pair[1], filler);
     while (buffer.len < filler.len) {
         _ = try buffer.read(pair[0]);
@@ -1208,7 +1209,7 @@ test "http: a declared body is sized upfront" {
     var state: Connection.State = .header;
     const body_len = INITIAL_BUFFER_SIZE * 4;
     var head_buf: [64]u8 = undefined;
-    const head = try std.fmt.bufPrint(&head_buf, "POST /session HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{body_len});
+    const head = try std.mem.print(&head_buf, "POST /session HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{body_len});
     try sys_net.writeAll(pair[1], head);
 
     // the header alone is enough to know how much room the body needs

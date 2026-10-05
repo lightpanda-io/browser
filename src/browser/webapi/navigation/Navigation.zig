@@ -214,7 +214,7 @@ pub fn pushEntry(
     should_dispatch: bool,
 ) !*NavigationHistoryEntry {
     const arena = frame._session.arena;
-    const url = try arena.dupeZ(u8, _url);
+    const url = try arena.dupeSentinel(u8, _url, 0);
 
     // truncates our history here.
     const retained_index = self._index + 1;
@@ -242,7 +242,7 @@ pub fn pushEntry(
     const id = self._next_entry_id;
     self._next_entry_id += 1;
 
-    const id_str = try std.fmt.allocPrint(arena.allocator(), "{d}", .{id});
+    const id_str = try arena.allocator().print("{d}", .{id});
 
     const entry = try Factory.chainedWithAllocator(arena.allocator(), .{
         EventTarget{ ._type = .navigation_history_entry },
@@ -277,13 +277,13 @@ pub fn replaceEntry(
     should_dispatch: bool,
 ) !*NavigationHistoryEntry {
     const arena = frame._session.arena;
-    const url = try arena.dupeZ(u8, _url);
+    const url = try arena.dupeSentinel(u8, _url, 0);
 
     const previous = self.getCurrentEntry();
 
     const id = self._next_entry_id;
     self._next_entry_id += 1;
-    const id_str = try std.fmt.allocPrint(arena.allocator(), "{d}", .{id});
+    const id_str = try arena.allocator().print("{d}", .{id});
 
     const entry = try Factory.chainedWithAllocator(arena.allocator(), .{
         EventTarget{ ._type = .navigation_history_entry },
@@ -403,7 +403,7 @@ pub fn navigateInner(
     // Keeping the same url generates a crash during WPT test navigate-history-push-same-url.html.
     // When building a script's src, script's base and frame url overlap.
     if (is_same_document) {
-        new_url = try arena.dupeZ(u8, new_url);
+        new_url = try arena.dupeSentinel(u8, new_url, 0);
     }
 
     // Captured before the switch overwrites frame.url in the same_document
@@ -442,6 +442,9 @@ pub fn navigateInner(
 
             if (is_same_document) {
                 frame.url = new_url;
+                try frame.window._location._url.setHref(new_url, &frame.js.execution);
+                // `:target` matches off the fragment, which might have just changed.
+                frame.styleChanged();
 
                 committed.resolve("navigation traverse", {});
                 // todo: Fire navigate event

@@ -26,6 +26,7 @@ const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
 const Element = @import("webapi/Element.zig");
+const popover = @import("webapi/element/popover.zig");
 
 const Selector = @import("webapi/selector/Selector.zig");
 const SelectorParser = @import("webapi/selector/Parser.zig");
@@ -191,7 +192,7 @@ fn applyLayerAtRule(self: *StyleManager, build_arena: Allocator, text: []const u
         // invalidates the whole statement. Validate everything before
         // registering anything.
         var names = text["@layer".len..];
-        if (std.mem.indexOfScalar(u8, names, ';')) |semi| {
+        if (std.mem.findScalar(u8, names, ';')) |semi| {
             names = names[0..semi];
         }
 
@@ -265,7 +266,7 @@ fn atRuleBlock(text: []const u8, keyword: []const u8) ?struct { prelude: []const
 
     // Search only past the opening brace — the matching `}` lives there, and
     // any returned position is naturally `> open` (since `rest[open] == '{'`).
-    const close = open + (std.mem.lastIndexOfScalar(u8, rest[open..], '}') orelse return null);
+    const close = open + (std.mem.findScalarLast(u8, rest[open..], '}') orelse return null);
     return .{ .prelude = rest[0..open], .body = rest[open + 1 .. close] };
 }
 
@@ -275,7 +276,7 @@ fn indexOfOpenBraceSkippingComments(s: []const u8) ?usize {
     var i: usize = 0;
     while (i < s.len) {
         if (i + 1 < s.len and s[i] == '/' and s[i + 1] == '*') {
-            const close = std.mem.indexOf(u8, s[i + 2 ..], "*/") orelse return null;
+            const close = std.mem.find(u8, s[i + 2 ..], "*/") orelse return null;
             i = i + 2 + close + 2;
             continue;
         }
@@ -312,7 +313,7 @@ fn registerLayerPath(self: *StyleManager, build_arena: Allocator, parent: u16, d
 fn internAnonymousLayer(self: *StyleManager, build_arena: Allocator, parent: u16) Allocator.Error!u16 {
     const id = self.next_anon_layer;
     // \x00{d} isn't a valid layer name, so this can't conflict
-    const name = try std.fmt.allocPrint(build_arena, "\x00{d}", .{id});
+    const name = try build_arena.print("\x00{d}", .{id});
     self.next_anon_layer = id + 1;
     return self.internLayer(build_arena, parent, name);
 }
@@ -321,7 +322,7 @@ fn internLayer(self: *StyleManager, build_arena: Allocator, parent: u16, name: [
     const path = if (parent == NO_LAYER)
         try build_arena.dupe(u8, name)
     else
-        try std.fmt.allocPrint(build_arena, "{s}.{s}", .{ self.layers.items[parent].path, name });
+        try build_arena.print("{s}.{s}", .{ self.layers.items[parent].path, name });
 
     const gop = try self.layer_ids.getOrPut(build_arena, path);
     if (gop.found_existing) {
@@ -727,7 +728,7 @@ fn Group(comptime Spec: type) type {
         // The element's own value, only used while resolving, never stored
         const Cascaded = if (@hasDecl(Spec, "Cascaded")) Spec.Cascaded else Computed;
         const Field = std.meta.FieldEnum(Declared);
-        const fields = std.meta.fieldNames(Declared);
+        const fields = @typeInfo(Declared).@"struct".field_names;
 
         comptime {
             // compute copies each declared value into its Cascaded namesake
@@ -892,7 +893,7 @@ fn Group(comptime Spec: type) type {
             self.applyRules(&p, &priorities, el, frame);
 
             if (@hasDecl(Spec, "finish")) {
-                Spec.finish(&p, el, &priorities);
+                Spec.finish(&p, el, frame, &priorities);
             }
             return p;
         }
@@ -975,7 +976,7 @@ fn Group(comptime Spec: type) type {
 /// Centralizes UA-stylesheet display:none truth so `getComputedStyle().display`
 /// (via `hasDisplayNone`) and `el.checkVisibility()` (via `isHidden`) agree.
 /// Spec: HTML Rendering §15.3.1 "Hidden elements".
-fn matchesUaDisplayNoneRule(el: *Element) bool {
+fn matchesUaDisplayNoneRule(el: *Element, frame: *Frame) bool {
     // Tag check first: O(1) switch, exits for the ~95% of elements with
     // ordinary tags before we touch the attribute list.
     const tag = el.getTag();
@@ -991,8 +992,14 @@ fn matchesUaDisplayNoneRule(el: *Element) bool {
         }
     }
 
-    // dialog:not([open]) { display: none }
-    if (tag == .dialog and !el.hasAttributeSafe(comptime .wrap("open"))) return true;
+    if (tag == .dialog) {
+        // dialog:not([open]) { display: none }
+        // dialog:popover-open { display: block }
+        if (!el.hasAttributeSafe(comptime .wrap("open")) and !popover.isOpen(el, frame)) return true;
+    } else if (el.hasAttributeInterned("popover") and !popover.isOpen(el, frame)) {
+        // [popover]:not(:popover-open):not(dialog[open]) { display: none }
+        return true;
+    }
 
     // details:not([open]) > *:not(summary) { display: none }
     if (tag != .summary) {
@@ -1051,7 +1058,7 @@ pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
 
 fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) bool {
     const rules = sheet._css_rules orelse return false;
-    if (rules._rules.getLastOrNull() != rule) {
+    if (rules._rules.last() != rule) {
         return false;
     }
     const sheets = self.frame.document._style_sheets orelse return false;
@@ -1282,7 +1289,7 @@ const Visibility = struct {
     };
 
     // The element's own values, from the cascade.
-    const Cascaded = struct {
+    pub const Cascaded = struct {
         // Author value (inline or sheet). Without `author_display` it's the UA
         // fallback: .none when matchesUaDisplayNoneRule, else .other.
         display: Display = .other,
@@ -1324,9 +1331,9 @@ const Visibility = struct {
     // element — per CSS Cascade §6.1 any normal-origin author rule beats UA
     // origin regardless of specificity, so `.x { display: flex }` on a
     // `<div class="x" hidden>` must report visible.
-    fn finish(p: *Cascaded, el: *Element, priorities: *const Priorities(Declared)) void {
+    pub fn finish(p: *Cascaded, el: *Element, frame: *Frame, priorities: *const Priorities(Declared)) void {
         p.author_display = priorities.get(.display) != 0;
-        if (!p.author_display and matchesUaDisplayNoneRule(el)) {
+        if (!p.author_display and matchesUaDisplayNoneRule(el, frame)) {
             p.display = .none;
         }
     }
@@ -1409,10 +1416,10 @@ const Declarations = struct {
     }
 };
 
-const group_fields = std.meta.fieldNames(Declarations);
+const group_fields = @typeInfo(Declarations).@"struct".field_names;
 
 fn declaresAny(declared: anytype) bool {
-    inline for (comptime std.meta.fieldNames(@TypeOf(declared))) |field| {
+    inline for (@typeInfo(@TypeOf(declared)).@"struct".field_names) |field| {
         if (@field(declared, field) != null) {
             return true;
         }

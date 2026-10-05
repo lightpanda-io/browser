@@ -853,7 +853,7 @@ const Inert = struct {
                 if (i != 0) {
                     try writer.writeByte(',');
                 }
-                const key = std.fmt.bufPrint(&key_buf, "{d}", .{i}) catch unreachable;
+                const key = std.mem.print(&key_buf, "{d}", .{i}) catch unreachable;
                 const element = self.ownDataProperty(@ptrCast(handle), key) orelse continue;
                 if (v8.v8__Value__IsNullOrUndefined(element)) {
                     continue;
@@ -1012,7 +1012,7 @@ test "Value: inert formatting runs no page JS" {
     };
     for (cases) |case| {
         const value = try ls.local.exec(case.expr, null);
-        const out = try std.fmt.allocPrint(testing.allocator, "{f}", .{value});
+        const out = try testing.allocator.print("{f}", .{value});
         defer testing.allocator.free(out);
         try testing.expectEqualSlices(u8, case.expected, out);
     }

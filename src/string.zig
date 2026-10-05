@@ -325,6 +325,7 @@ pub const String = extern struct {
                 asUint("charset") => return "charset",
                 asUint("checked") => return "checked",
                 asUint("loading") => return "loading",
+                asUint("popover") => return "popover",
                 else => {},
             },
             8 => switch (@as(u64, @bitCast(input[0..8].*))) {
@@ -389,6 +390,7 @@ pub const String = extern struct {
             },
             15 => switch (@as(u120, @bitCast(input[0..15].*))) {
                 asUint("text-decoration") => return "text-decoration",
+                asUint("contenteditable") => return "contenteditable",
                 asUint("justify-content") => return "justify-content",
                 asUint("aria-labelledby") => return "aria-labelledby",
                 else => {},
@@ -453,7 +455,7 @@ pub fn closest(name: []const u8, candidates: []const []const u8) ?[]const u8 {
     if (candidates.len == 0) return null;
     var shared = candidates[0];
     for (candidates[1..]) |cand| {
-        shared = shared[0 .. std.mem.indexOfDiff(u8, shared, cand) orelse shared.len];
+        shared = shared[0 .. std.mem.findDiff(u8, shared, cand) orelse shared.len];
     }
     const typed = if (std.mem.startsWith(u8, name, shared)) name.len - shared.len else name.len;
     const max_dist = @max(typed, 3) / 3;
@@ -524,7 +526,7 @@ pub const Global = struct {
     str: String,
 };
 
-fn asUint(comptime string: anytype) std.meta.Int(
+fn asUint(comptime string: anytype) @Int(
     .unsigned,
     @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
 ) {
@@ -535,6 +537,27 @@ fn asUint(comptime string: anytype) std.meta.Int(
     }
 
     return @bitCast(@as(*const [byteLength]u8, string).*);
+}
+
+/// `s` concatenated `n` times, the replacement for the removed `s ** n`.
+pub fn repeat(comptime s: []const u8, comptime n: usize) *const [s.len * n:0]u8 {
+    return &Repeated(s, n).value;
+}
+
+fn Repeated(comptime s: []const u8, comptime n: usize) type {
+    return struct {
+        const value: [s.len * n:0]u8 = blk: {
+            // Doubling: log2(n) concatenations instead of n comptime memcpys.
+            var acc: []const u8 = "";
+            var pow: []const u8 = s;
+            var k = n;
+            while (k > 0) : (k >>= 1) {
+                if (k & 1 == 1) acc = acc ++ pow;
+                if (k > 1) pow = pow ++ pow;
+            }
+            break :blk acc[0 .. s.len * n].* ++ [_:0]u8{};
+        };
+    };
 }
 
 const testing = @import("testing.zig");
@@ -576,7 +599,7 @@ test "editDistance" {
     try testing.expectEqual(@as(usize, 3), editDistance("", "abc"));
     try testing.expectEqual(@as(usize, 3), editDistance("abc", ""));
 
-    const long = "x" ** 64;
+    const long = repeat("x", 64);
     try testing.expectEqual(@as(usize, 0), editDistance(long, long));
     try testing.expectEqual(std.math.maxInt(usize), editDistance(long ++ "x", long));
 }
@@ -618,11 +641,11 @@ test "latin1ToUtf8" {
 
 test "String" {
     const other_short = try String.init(undefined, "other_short", .{});
-    const other_long = try String.init(testing.allocator, "other_long" ** 100, .{});
+    const other_long = try String.init(testing.allocator, repeat("other_long", 100), .{});
     defer other_long.deinit(testing.allocator);
 
     inline for (0..100) |i| {
-        const input = "a" ** i;
+        const input = repeat("a", i);
         const str = try String.init(testing.allocator, input, .{});
         defer str.deinit(testing.allocator);
 
@@ -634,7 +657,7 @@ test "String" {
         try testing.expectEqual(false, str.eqlSlice("other_short"));
 
         try testing.expectEqual(false, str.eql(other_long));
-        try testing.expectEqual(false, str.eqlSlice("other_long" ** 100));
+        try testing.expectEqual(false, str.eqlSlice(repeat("other_long", 100)));
     }
 }
 
@@ -651,8 +674,8 @@ test "String.trim" {
     try expect("hi", "  hi  ", " "); // SSO, both ends
     try expect("hello", "hello", " "); // nothing to trim (no allocation)
     try expect("", "   ", " "); // fully trimmed away
-    try expect("x" ** 20, "   " ++ ("x" ** 20) ++ "\t", &.{ ' ', '\t' }); // heap stays heap (view)
-    try expect("abc", "abc" ++ ("  " ** 6), " "); // heap trims down to SSO
+    try expect(repeat("x", 20), "   " ++ (repeat("x", 20)) ++ "\t", &.{ ' ', '\t' }); // heap stays heap (view)
+    try expect("abc", "abc" ++ (repeat("  ", 6)), " "); // heap trims down to SSO
 }
 
 test "String.concat" {

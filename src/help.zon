@@ -134,7 +134,8 @@
     \\                        (which may itself fall back to a full dump).
     \\              css       Includes style and link[rel=stylesheet].
     \\              js        Script and link[as=script, rel=preload].
-    \\              invisible Best-effort (e.g. display:none) hidden elements
+    \\              invisible Best-effort hidden elements (e.g. display:none,
+    \\                        <template>).
     \\              shell     Page chrome by markup: nav, aside, dialog,
     \\                        page-level header and footer. Full dump when
     \\                        `shell` would remove most of the text.

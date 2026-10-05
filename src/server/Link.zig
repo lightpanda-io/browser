@@ -27,6 +27,7 @@ const sys_net = @import("../sys/net.zig");
 const WS = @import("WS.zig");
 const CDP = @import("cdp/CDP.zig");
 const Driver = @import("Driver.zig");
+const repeat = @import("../string.zig").repeat;
 
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
@@ -196,13 +197,18 @@ pub fn sendPong(self: *Link, data: []const u8) !void {
 // Websocket frames have a variable-length header (2-10 bytes server->client).
 // We serialize into a buffer whose first 10 bytes are reserved, then
 // backfill the header right-aligned and send the slice.
-pub fn sendJSON(self: *Link, message: anytype, opts: std.json.Stringify.Options) !void {
+pub const SendOpts = struct {
+    stringify: std.json.Stringify.Options = .{},
+    size_hint: usize = 0,
+};
+pub fn sendJSON(self: *Link, message: anytype, opts: SendOpts) !void {
     const allocator = self.acquireSendArena();
     defer self.releaseSendArena();
 
-    var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 512);
-    try aw.writer.writeAll(&[_]u8{0} ** 10);
-    try std.json.Stringify.value(message, opts, &aw.writer);
+    // 512 covers the envelope (id, sessionId, field names) around the payload.
+    var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 512 + opts.size_hint);
+    try aw.writer.writeAll(&@as([10]u8, @splat(0)));
+    try std.json.Stringify.value(message, opts.stringify, &aw.writer);
     const framed = WS.fillHeader(aw.toArrayList());
     return self.send(framed);
 }
@@ -397,12 +403,12 @@ test "link: nested serialization preserves complete frames and recovers from err
             try w.beginObject();
             try w.objectField("head");
             try w.write("outer head");
-            self.link.sendJSON(.{ .nested = "x" ** 64 }, .{}) catch return error.WriteFailed;
+            self.link.sendJSON(.{ .nested = repeat("x", 64) }, .{}) catch return error.WriteFailed;
             self.link.sendPong("ping") catch return error.WriteFailed;
-            self.link.sendJSON(.{ .nested = "y" ** 64 }, .{}) catch return error.WriteFailed;
+            self.link.sendJSON(.{ .nested = repeat("y", 64) }, .{}) catch return error.WriteFailed;
             if (self.fail) return error.WriteFailed;
             try w.objectField("tail");
-            try w.write("outer tail" ** 128);
+            try w.write(repeat("outer tail", 128));
             try w.endObject();
         }
     };
@@ -412,16 +418,16 @@ test "link: nested serialization preserves complete frames and recovers from err
     const link = &ctx.cdp().link;
 
     try link.sendJSON(Nested{ .link = link, .fail = false }, .{});
-    try ctx.expectSent(.{ .nested = "x" ** 64 }, .{ .index = 0 });
-    try ctx.expectSent(.{ .nested = "y" ** 64 }, .{ .index = 1 });
-    try ctx.expectSent(.{ .head = "outer head", .tail = "outer tail" ** 128 }, .{ .index = 2 });
+    try ctx.expectSent(.{ .nested = repeat("x", 64) }, .{ .index = 0 });
+    try ctx.expectSent(.{ .nested = repeat("y", 64) }, .{ .index = 1 });
+    try ctx.expectSent(.{ .head = "outer head", .tail = repeat("outer tail", 128) }, .{ .index = 2 });
     try testing.expectEqual(0, link.send_depth);
 
     try testing.expectError(error.WriteFailed, link.sendJSON(Nested{ .link = link, .fail = true }, .{}));
     try testing.expectEqual(0, link.send_depth);
     try link.sendJSON(.{ .recovered = true }, .{});
-    try testing.expectJson(.{ .nested = "x" ** 64 }, (try ctx.getSentMessage(3)).?);
-    try testing.expectJson(.{ .nested = "y" ** 64 }, (try ctx.getSentMessage(4)).?);
+    try testing.expectJson(.{ .nested = repeat("x", 64) }, (try ctx.getSentMessage(3)).?);
+    try testing.expectJson(.{ .nested = repeat("y", 64) }, (try ctx.getSentMessage(4)).?);
     try ctx.expectSent(.{ .recovered = true }, .{ .index = 5 });
     try testing.expectEqual(6, ctx.received.items.len);
 }

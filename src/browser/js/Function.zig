@@ -196,12 +196,12 @@ fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args
 
     const js_args: []const *const v8.Value = switch (@typeInfo(@TypeOf(aargs))) {
         .@"struct" => |s| blk: {
-            const fields = s.fields;
-            var js_args: [fields.len]*const v8.Value = undefined;
-            inline for (fields, 0..) |f, i| {
-                js_args[i] = (try local.zigValueToJs(@field(aargs, f.name), .{})).handle;
+            const field_names = s.field_names;
+            var js_args: [field_names.len]*const v8.Value = undefined;
+            inline for (field_names, 0..) |field_name, i| {
+                js_args[i] = (try local.zigValueToJs(@field(aargs, field_name), .{})).handle;
             }
-            const cargs: [fields.len]*const v8.Value = js_args;
+            const cargs: [field_names.len]*const v8.Value = js_args;
             break :blk &cargs;
         },
         .pointer => blk: {

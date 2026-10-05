@@ -93,7 +93,7 @@ fn init(
     const arena = try session.getArena(.small, "ServiceWorker");
     errdefer arena.release();
 
-    const owned_url = try arena.dupeZ(u8, script_url);
+    const owned_url = try arena.dupeSentinel(u8, script_url, 0);
     const frame_id = session.nextFrameId();
     const loader_id = session.nextLoaderId();
 

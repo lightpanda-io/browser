@@ -123,7 +123,7 @@ fn rewriteArchive(gpa: Allocator, archive: []const u8, hot: *const HotSet, out: 
     out.appendSliceAssumeCapacity("!<arch>\n");
     for (members.items) |m| {
         var header = m.header.*;
-        _ = try std.fmt.bufPrint(header[48..58], "{d:<10}", .{m.body.len});
+        _ = try std.mem.print(header[48..58], "{d:<10}", .{m.body.len});
         out.appendSliceAssumeCapacity(&header);
         const start = out.items.len;
         out.appendSliceAssumeCapacity(m.body);

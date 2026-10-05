@@ -144,7 +144,7 @@ pub fn abort(self: *WasmStreaming, exception: ?*const v8.Value) void {
 fn release(self: *WasmStreaming) void {
     v8.std__shared_ptr__v8__WasmStreaming__reset(&self.handle);
     const streams = &self.ctx.wasm_streams;
-    if (std.mem.indexOfScalar(*WasmStreaming, streams.items, self)) |i| {
+    if (std.mem.findScalar(*WasmStreaming, streams.items, self)) |i| {
         _ = streams.swapRemove(i);
     }
 }

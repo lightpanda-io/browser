@@ -151,8 +151,8 @@ fn _write(self: *const Metrics, writer: *std.Io.Writer) !void {
             "# TYPE build_info gauge\nbuild_info{{version=\"{s}\"}} 1\n",
         .{lp.build_config.version},
     );
-    inline for (@typeInfo(Metrics).@"struct".fields) |f| {
-        try @field(self, f.name).write(f.name, @field(help, f.name), writer);
+    inline for (@typeInfo(Metrics).@"struct".field_names) |field_name| {
+        try @field(self, field_name).write(field_name, @field(help, field_name), writer);
     }
 }
 

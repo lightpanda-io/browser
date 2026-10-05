@@ -141,7 +141,7 @@ fn emitStderr(self: *Terminal, bytes: []const u8) void {
 
 fn formatBulletLine(arena: std.mem.Allocator, name: []const u8, args: []const u8, ok: bool) ![]const u8 {
     const bullet_color = if (ok) ansi.green else ansi.red;
-    return std.fmt.allocPrint(arena, bullet_line_fmt, .{ bullet_color, ansi.reset, ansi.dim, name, ansi.reset, args });
+    return arena.print(bullet_line_fmt, .{ bullet_color, ansi.reset, ansi.dim, name, ansi.reset, args });
 }
 
 pub fn setIdleCallback(fun: ?*const c.ic_idle_fun_t, arg: ?*anyopaque) void {
@@ -307,7 +307,7 @@ pub fn printToolOutcome(self: *Terminal, name: []const u8, text: []const u8, is_
 pub fn printScriptDone(self: *Terminal, name: []const u8, args: []const u8) void {
     if (!self.spinner.isEnabled()) return;
     var buf: [256]u8 = undefined;
-    const line = std.fmt.bufPrint(
+    const line = std.mem.print(
         &buf,
         ansi.green ++ "●" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s} {s}]" ++ ansi.reset ++ "\n",
         .{ name, args },
@@ -354,7 +354,7 @@ pub fn printWarning(self: *Terminal, comptime fmt: []const u8, args: anytype) vo
 fn printSeverity(self: *Terminal, color: []const u8, label: []const u8, comptime fmt: []const u8, args: anytype) void {
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
-        const bytes = std.fmt.allocPrint(a.allocator(), "{s}●{s} " ++ fmt ++ "\n", .{ color, ansi.reset } ++ args) catch return;
+        const bytes = a.allocator().print("{s}●{s} " ++ fmt ++ "\n", .{ color, ansi.reset } ++ args) catch return;
         return self.emitStderr(bytes);
     }
     std.debug.print("{s}{s}{s}: " ++ fmt ++ "{s}\n", .{ ansi.bold, color, label } ++ args ++ .{ansi.reset});

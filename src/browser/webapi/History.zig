@@ -56,7 +56,7 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
     const url = if (_url) |u|
         try @import("../URL.zig").resolve(arena.allocator(), frame.url, u, .{})
     else
-        try arena.dupeZ(u8, frame.url);
+        try arena.dupeSentinel(u8, frame.url, 0);
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
     _ = try session.navigation.pushEntry(url, .{ .source = .history, .value = json }, frame, true);
@@ -80,7 +80,7 @@ fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8,
     const url = if (_url) |u|
         try @import("../URL.zig").resolve(arena.allocator(), frame.url, u, .{})
     else
-        try arena.dupeZ(u8, frame.url);
+        try arena.dupeSentinel(u8, frame.url, 0);
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
     _ = try session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, frame, true);
@@ -110,18 +110,17 @@ fn goInner(delta: i32, frame: *Frame) !void {
     const index = @as(usize, @intCast(index_s));
     const entry = frame._session.navigation._entries.items[index];
 
-    if (entry._url) |url| {
-        if (frame.isSameOrigin(url)) {
-            const target = frame.window.asEventTarget();
-            if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
-                const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
-                try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
-            }
-            // hashchange is queued by navigateInner.
-        }
-    }
-
     _ = try frame._session.navigation.navigateInner(entry._url, .{ .traverse = index }, frame);
+
+    const url = entry._url orelse return;
+    if (frame.isSameOrigin(url)) {
+        const target = frame.window.asEventTarget();
+        if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
+            const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
+            try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
+        }
+        // hashchange is queued by navigateInner.
+    }
 }
 
 pub fn back(_: *History, frame: *Frame) !void {

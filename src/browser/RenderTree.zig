@@ -46,6 +46,12 @@ pub const State = struct {
 
 state: State,
 frame: *Frame,
+skipped: ?Skipped = null,
+
+pub const Skipped = struct {
+    allocator: std.mem.Allocator,
+    set: *PruneSet,
+};
 
 pub const Child = struct {
     node: *Node,
@@ -68,7 +74,10 @@ const Children = struct {
     pub fn next(self: *Children) ?Child {
         while (self.next_node) |node| {
             self.next_node = node.nextSibling();
-            var child = self.tree.classify(node, .{ .boxed = self.boxed }) orelse continue;
+            var child = self.tree.classify(node, .{ .boxed = self.boxed }) orelse {
+                self.tree.recordSkipped(node);
+                continue;
+            };
             child.separated = self.boxed and self.yielded;
             self.yielded = true;
             return child;
@@ -91,11 +100,24 @@ pub const Slotted = struct {
         while (self.assigned.len > 0) {
             const node = self.assigned[0];
             self.assigned = self.assigned[1..];
-            return self.tree.classify(node, .{ .slotted = true }) orelse continue;
+            return self.tree.classify(node, .{ .slotted = true }) orelse {
+                self.tree.recordSkipped(node);
+                continue;
+            };
         }
         return self.fallback.next();
     }
 };
+
+fn recordSkipped(self: *const RenderTree, node: *Node) void {
+    const skipped = self.skipped orelse return;
+    const el = node.is(Element) orelse return;
+    if (el.getTag() == .head) {
+        // <head> renders nothing, but we still need its title & base
+        return;
+    }
+    skipped.set.put(skipped.allocator, node, {}) catch {};
+}
 
 pub fn children(self: *const RenderTree, parent: *Node, boxed: bool) Children {
     return .{ .tree = self, .next_node = parent.firstChild(), .boxed = boxed };

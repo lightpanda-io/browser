@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 const SafeString = @import("../SafeString.zig");
+const Base64Writer = @import("../../../Base64Writer.zig");
 
 const Config = @import("../../../Config.zig");
 const URL = @import("../../../browser/URL.zig");
@@ -359,18 +360,29 @@ fn getResponseBody(cmd: *CDP.Command) !void {
         return cmd.sendResult(.{
             .body = data.items,
             .base64Encoded = false,
-        }, .{});
+        }, .{ .size_hint = data.items.len });
     }
 
-    const encoded_len = std.base64.standard.Encoder.calcSize(data.items.len);
-    const encoded = try cmd.arena.alloc(u8, encoded_len);
-    _ = std.base64.standard.Encoder.encode(encoded, data.items);
-
     return cmd.sendResult(.{
-        .body = encoded,
+        .body = Base64Body{ .data = data.items },
         .base64Encoded = true,
-    }, .{});
+    }, .{ .size_hint = std.base64.standard.Encoder.calcSize(data.items.len) });
 }
+
+// Encodes straight into the outgoing message, no intermediate buffer.
+const Base64Body = struct {
+    data: []const u8,
+
+    pub fn jsonStringify(self: Base64Body, jws: *std.json.Stringify) std.Io.Writer.Error!void {
+        try jws.beginWriteRaw();
+        try jws.writer.writeByte('"');
+        var b64 = Base64Writer.init(jws.writer, .standard);
+        try b64.writer.writeAll(self.data);
+        try b64.finish();
+        try jws.writer.writeByte('"');
+        jws.endWriteRaw();
+    }
+};
 
 fn getRequestPostData(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
@@ -609,7 +621,9 @@ const ResponseWriter = struct {
             try jws.write(status);
 
             try jws.objectField("statusText");
-            try jws.write(@as(std.http.Status, @enumFromInt(status)).phrase() orelse "Unknown");
+            // The server's own phrase, not a canonical one: Chrome reports the
+            // wire, empty included.
+            try jws.write(transfer.statusText() orelse "");
         }
 
         {
@@ -677,9 +691,8 @@ const ResponseWriter = struct {
             // common to get these from a server (e.g. for Cache-Control), but
             // Chrome joins these. So we have to too.
             const arena = self.arena;
-            var it = transfer.responseHeaderIterator();
             var map: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-            while (it.next()) |hdr| {
+            for (transfer.responseHeaders()) |hdr| {
                 const gop = try map.getOrPut(arena, hdr.name);
                 if (gop.found_existing) {
                     // yes, chrome joins multi-value headers with a \n
@@ -1194,7 +1207,7 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
     error_context.err = null;
 
     var redirect_request_id: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&redirect_request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+    _ = std.mem.print(&redirect_request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
 
     try client.request(.{
         .frame_id = page.frame_id,
@@ -1231,7 +1244,7 @@ test "cdp.Network: POST body exposed as postData" {
     try ctx.expectSentResult(null, .{ .id = 1 });
 
     var request_id: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+    _ = std.mem.print(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
 
     // \xE9 exercises the Latin-1 -> UTF-8 transcode in postData;
     // postDataEntries carry the raw bytes in base64.
@@ -1297,7 +1310,7 @@ const EchoDriver = struct {
     fn run(bc: *CDP.BrowserContext, frame_id: u32, body: []const u8, partial: ?u32) ![14]u8 {
         const client = &bc.cdp.browser.http_client;
         var request_id: [14]u8 = undefined;
-        _ = std.fmt.bufPrint(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+        _ = std.mem.print(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
 
         var driver: EchoDriver = .{};
         try client.request(.{
@@ -1394,6 +1407,25 @@ test "cdp.Network: getResponseBody omits a partial body" {
     });
     try ctx.expectSentResult(.{ .body = "", .base64Encoded = false }, .{ .id = 2 });
     try testing.expectEqual(0, bc.captured_responses_size);
+}
+
+test "cdp.Network: getResponseBody base64-encodes a non-UTF-8 body" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-B64", .session_id = "SID-B64" });
+    const page = try bc.session.createPage();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const request_id = try EchoDriver.run(bc, page.frame_id, "\xffab\xfe", null);
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Network.getResponseBody",
+        .params = .{ .requestId = &request_id },
+    });
+    try ctx.expectSentResult(.{ .body = "/2Fi/g==", .base64Encoded = true }, .{ .id = 2 });
 }
 
 test "cdp.Network: enable maxTotalBufferSize evicts oldest bodies first" {
@@ -1524,7 +1556,7 @@ test "cdp.Network: redirect hop precedes Fetch pause and carries redirectRespons
     const start_url = "http://127.0.0.1:9582/redirect-cross-origin-x-hop";
     const target_url = "http://localhost:9582/echo-x-hop";
     var request_id: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+    _ = std.mem.print(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
 
     try client.request(.{
         .frame_id = page.frame_id,

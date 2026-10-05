@@ -114,7 +114,7 @@ pub const Writer = struct {
     // be serialized as JSON strings even though we track them internally as u32.
     fn writeIdString(id: u32, w: anytype) !void {
         var buf: [10]u8 = undefined;
-        const s = try std.fmt.bufPrint(&buf, "{d}", .{id});
+        const s = try std.mem.print(&buf, "{d}", .{id});
         try w.write(s);
     }
 
@@ -200,7 +200,7 @@ pub const Writer = struct {
 
                 // Use a small stack buffer to format the number (max "9999. " = 6 chars)
                 var buf: [6]u8 = undefined;
-                const marker_text = try std.fmt.bufPrint(&buf, "{d}. ", .{count});
+                const marker_text = try std.mem.print(&buf, "{d}. ", .{count});
                 try w.write(marker_text);
             },
             else => unreachable,
@@ -293,7 +293,7 @@ pub const Writer = struct {
                 // CDP spec requires integer values to be serialized as strings.
                 // 20 bytes is enough for the decimal representation of a 64-bit integer.
                 var buf: [20]u8 = undefined;
-                const s = try std.fmt.bufPrint(&buf, "{d}", .{v});
+                const s = try std.mem.print(&buf, "{d}", .{v});
                 try w.write(s);
             },
             inline else => |v| try w.write(v),
@@ -1298,7 +1298,7 @@ fn hiddenState(node: *DOMNode, frame: *Frame) Hidden {
 fn hidesSubtree(node: *DOMNode) bool {
     const elt = node.is(DOMNode.Element) orelse return false;
     const aria_hidden = elt.getAttributeInterned("aria-hidden") orelse "";
-    return std.mem.eql(u8, aria_hidden, "true") or elt.hasAttributeSafe(comptime .wrap("inert"));
+    return std.ascii.eqlIgnoreCase(aria_hidden, "true") or elt.hasAttributeSafe(comptime .wrap("inert"));
 }
 
 /// The first flat-tree ancestor of `node` whose attributes hide its subtree.
@@ -1563,7 +1563,7 @@ fn findNode(nodes: []const std.json.Value, role: ?[]const u8, name_needle: []con
             if (!std.mem.eql(u8, role_val.string, r)) continue;
         }
         const name_val = (obj.get("name") orelse continue).object.get("value") orelse continue;
-        if (name_val == .string and std.mem.indexOf(u8, name_val.string, name_needle) != null) {
+        if (name_val == .string and std.mem.find(u8, name_val.string, name_needle) != null) {
             return obj;
         }
     }
@@ -1929,8 +1929,8 @@ test "AXNode: Writer query and subtree root see a hiding ancestor" {
         const tree = try std.json.Stringify.valueAlloc(testing.allocator, writer, .{});
         defer testing.allocator.free(tree);
 
-        try testing.expect(std.mem.indexOf(u8, tree, "\"ignored\":true") != null);
-        try testing.expect(std.mem.indexOf(u8, tree, "\"childIds\":[]") != null);
+        try testing.expect(std.mem.find(u8, tree, "\"ignored\":true") != null);
+        try testing.expect(std.mem.find(u8, tree, "\"childIds\":[]") != null);
     }
 }
 
@@ -2082,8 +2082,8 @@ test "AXNode: writer prunes children when root is hidden" {
     }, .{});
     defer testing.allocator.free(json);
 
-    try testing.expect(std.mem.indexOf(u8, json, "under-display-none") == null);
-    try testing.expect(std.mem.indexOf(u8, json, "\"childIds\":[]") != null);
+    try testing.expect(std.mem.find(u8, json, "under-display-none") == null);
+    try testing.expect(std.mem.find(u8, json, "\"childIds\":[]") != null);
 }
 
 test "AXNode: generic containers share memoized ignore answers" {
@@ -2110,4 +2110,45 @@ test "AXNode: generic containers share memoized ignore answers" {
         const el = (try root.querySelector(e[0], frame)).?;
         try testing.expectEqual(e[1], try AXNode.fromNode(el.asNode()).isIgnore(frame, &fresh));
     }
+}
+
+test "AXNode: aria-hidden is case-insensitive" {
+    const frame = try testing.base.createFrame();
+    defer testing.base.test_session.closeAllPages();
+
+    const root = try frame.window._document.createElement("div", null, frame);
+    try root.setInnerHTML(
+        \\<div id="hidden-upper" aria-hidden="TRUE"><p>hidden-upper</p></div>
+        \\<div id="hidden-mixed" aria-hidden="True"><p>hidden-mixed</p></div>
+        \\<div id="visible-false" aria-hidden="false"><p>visible-false</p></div>
+    , frame);
+
+    const hidden_upper = (try root.querySelector("#hidden-upper", frame)).?;
+    const hidden_mixed = (try root.querySelector("#hidden-mixed", frame)).?;
+    const visible_false = (try root.querySelector("#visible-false", frame)).?;
+
+    try testing.expect(hidesSubtree(hidden_upper.asNode()));
+    try testing.expect(hidesSubtree(hidden_mixed.asNode()));
+    try testing.expect(!hidesSubtree(visible_false.asNode()));
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const node = try registry.register(root.asNode());
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer temp_arena.release();
+
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = node,
+        .registry = &registry,
+        .frame = frame,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+    }, .{});
+    defer testing.allocator.free(json);
+
+    try testing.expect(std.mem.find(u8, json, "hidden-upper") == null);
+    try testing.expect(std.mem.find(u8, json, "hidden-mixed") == null);
+    try testing.expect(std.mem.find(u8, json, "visible-false") != null);
 }

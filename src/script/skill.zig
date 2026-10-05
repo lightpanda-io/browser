@@ -329,25 +329,25 @@ test "skill: every recorded tool is documented, no non-recorded one is" {
     const body = text();
     inline for (comptime std.meta.tags(browser_tools.Tool)) |tool| {
         const call = "page." ++ @tagName(tool) ++ "(";
-        const documented = std.mem.indexOf(u8, body, call) != null;
+        const documented = std.mem.find(u8, body, call) != null;
         try testing.expect(documented == tool.isRecorded());
     }
-    try testing.expect(std.mem.indexOf(u8, body, "await page.goto(") != null);
+    try testing.expect(std.mem.find(u8, body, "await page.goto(") != null);
 }
 
 test "skill: golden fragments track the schemas" {
     const body = text();
     // waitForState's enum list tracks Config.WaitUntil.
     inline for (comptime std.meta.tags(lp.Config.WaitUntil)) |state| {
-        try testing.expect(std.mem.indexOf(u8, body, "\"" ++ @tagName(state) ++ "\"") != null);
+        try testing.expect(std.mem.find(u8, body, "\"" ++ @tagName(state) ++ "\"") != null);
     }
-    try testing.expect(std.mem.indexOf(u8, body, "`checked` defaults to `true`.") != null);
+    try testing.expect(std.mem.find(u8, body, "`checked` defaults to `true`.") != null);
     // extract's script form takes the schema as its only argument.
-    try testing.expect(std.mem.indexOf(u8, body, "page.extract(schema)") != null);
-    try testing.expect(std.mem.indexOf(u8, body, "page.extract(schema[, ") == null);
-    try testing.expect(std.mem.indexOf(u8, body, "{ url, timeout, save }") != null);
+    try testing.expect(std.mem.find(u8, body, "page.extract(schema)") != null);
+    try testing.expect(std.mem.find(u8, body, "page.extract(schema[, ") == null);
+    try testing.expect(std.mem.find(u8, body, "{ url, timeout, save }") != null);
     // backendNodeId has no script form.
-    try testing.expect(std.mem.indexOf(u8, body, "backendNodeId }") == null);
+    try testing.expect(std.mem.find(u8, body, "backendNodeId }") == null);
 }
 
 test "skill: write emits frontmatter" {
@@ -355,5 +355,5 @@ test "skill: write emits frontmatter" {
     defer aw.deinit();
     try write(&aw.writer);
     try testing.expect(std.mem.startsWith(u8, aw.written(), "---\nname: pandascript\ndescription: "));
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "\n---\n\n# Writing Lightpanda agent scripts\n") != null);
+    try testing.expect(std.mem.find(u8, aw.written(), "\n---\n\n# Writing Lightpanda agent scripts\n") != null);
 }
