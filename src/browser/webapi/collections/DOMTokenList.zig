@@ -74,21 +74,20 @@ pub fn supports(self: *const DOMTokenList, token: []const u8, frame: *Frame) !bo
     const lower = try std.ascii.allocLowerString(frame.local_arena, token);
 
     if (std.ascii.eqlIgnoreCase(self._attribute_name.str(), "sandbox")) {
-      const supported = [_][]const u8{
-          "allow-downloads", "allow-forms", "allow-modals", "allow-orientation-lock",
-          "allow-pointer-lock", "allow-popups", "allow-popups-to-escape-sandbox",
-          "allow-presentation", "allow-same-origin", "allow-scripts",
-          "allow-storage-access-by-user-activation", "allow-top-navigation",
-          "allow-top-navigation-by-user-activation", "allow-top-navigation-to-custom-protocols",
-      };
-      for (supported) |s| {
-        if (std.mem.eql(u8, lower, s)) {
-            // we don't currently sandbox anything, so everything is allowed
-            // (except an unknown value)
-            return true;
+        const supported = [_][]const u8{
+            "allow-downloads",                         "allow-forms",                              "allow-modals",                            "allow-orientation-lock",
+            "allow-pointer-lock",                      "allow-popups",                             "allow-popups-to-escape-sandbox",          "allow-presentation",
+            "allow-same-origin",                       "allow-scripts",                            "allow-storage-access-by-user-activation", "allow-top-navigation",
+            "allow-top-navigation-by-user-activation", "allow-top-navigation-to-custom-protocols",
+        };
+        for (supported) |s| {
+            if (std.mem.eql(u8, lower, s)) {
+                // we don't currently sandbox anything, so everything is allowed
+                // (except an unknown value)
+                return true;
+            }
         }
-      }
-      return false;
+        return false;
     }
 
     if (!std.ascii.eqlIgnoreCase(self._attribute_name.str(), "rel")) {
