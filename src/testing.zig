@@ -923,6 +923,17 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/xhr/duplicate_headers")) {
+        return req.respond("", .{
+            .extra_headers = &.{
+                .{ .name = "X-B", .value = "1" },
+                .{ .name = "X-A", .value = "a" },
+                .{ .name = "X-B", .value = "2, 3" },
+                .{ .name = "X_C", .value = "c" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/xhr/401")) {
         return req.respond("No", .{
             .status = .unauthorized,
