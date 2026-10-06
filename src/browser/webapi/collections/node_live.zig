@@ -73,7 +73,7 @@ const Filters = union(Mode) {
     selected_options,
     links,
     anchors,
-    form: struct { form: *Form, form_id: ?[]const u8 },
+    form: struct { form: *Form, form_id: ?[]const u8, image_buttons: bool },
 
     fn TypeOf(comptime mode: Mode) type {
         @setEvalBranchQuota(10_000);
@@ -361,6 +361,13 @@ pub fn NodeLive(comptime mode: Mode) type {
                     const el = node.is(Element) orelse return false;
                     if (!isFormControl(el)) {
                         return false;
+                    }
+                    if (self._filter.image_buttons == false) {
+                        if (el.is(Element.Html.Input)) |input| {
+                            if (input._input_type == .image) {
+                                return false;
+                            }
+                        }
                     }
 
                     if (self._filter.form_id) |form_id| {

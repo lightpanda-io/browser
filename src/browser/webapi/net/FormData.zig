@@ -796,8 +796,7 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
     var list: std.ArrayList(Entry) = .empty;
     const form = form_ orelse return list;
 
-    var elements = try form.getElements(frame);
-    var it = try elements.iterator();
+    var it = form.iterator(.{}, frame);
     while (it.next()) |element| {
         if (element.isDisabled()) {
             continue;

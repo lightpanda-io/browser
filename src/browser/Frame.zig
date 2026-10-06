@@ -3727,12 +3727,6 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         return;
     }
 
-    if (submitter_) |submitter| {
-        if (submitter.getAttributeInterned("disabled") != null) {
-            return;
-        }
-    }
-
     if (self.canScheduleNavigation(.form) == false) {
         return;
     }

@@ -92,7 +92,7 @@ pub fn setMethod(self: *Form, method: []const u8, frame: *Frame) !void {
 }
 
 pub fn getElements(self: *Form, frame: *Frame) !*HTMLFormControlsCollection {
-    const node_live = self.iterator(frame);
+    const node_live = self.iterator(.{ .image_buttons = false }, frame);
     const elements = try frame._factory.chained(.{
         node_live.htmlCollectionValue(),
         HTMLFormControlsCollection{ ._proto = undefined },
@@ -101,14 +101,18 @@ pub fn getElements(self: *Form, frame: *Frame) !*HTMLFormControlsCollection {
     return elements;
 }
 
-pub fn iterator(self: *Form, frame: *Frame) NodeLive(.form) {
+const IteratorOpts = struct {
+    image_buttons: bool = true, // form.elements doesn't incude input type=image
+};
+
+pub fn iterator(self: *Form, opts: IteratorOpts, frame: *Frame) NodeLive(.form) {
     const form_id = self.asElement().getId();
     const root = if (form_id != null)
         self.asNode().getRootNode(.{}) // Has ID: walk entire document to find form=ID controls
     else
         self.asNode(); // No ID: walk only form subtree (no external controls possible)
 
-    return NodeLive(.form).init(root, .{ .form = self, .form_id = form_id }, frame);
+    return NodeLive(.form).init(root, .{ .form = self, .form_id = form_id, .image_buttons = opts.image_buttons }, frame);
 }
 
 fn getAction(self: *Form, frame: *Frame) ![]const u8 {
@@ -155,7 +159,9 @@ pub fn submit(self: *Form, frame: *Frame) !void {
 pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
     const submitter_element = if (submitter) |s| blk: {
         // The submitter must be a submit button.
-        if (!isSubmitButton(s)) return error.TypeError;
+        if (isSubmitButton(s) == false) {
+            return error.TypeError;
+        }
 
         // The submitter's form owner must be this form element.
         const submitter_form = getFormOwner(s, frame);
@@ -234,7 +240,7 @@ fn namedItem(self: *Form, name: []const u8, frame: *Frame) !?HTMLFormControlsCol
     }
 
     var first: ?*Element = null;
-    var it = self.iterator(frame);
+    var it = self.iterator(.{ .image_buttons = false }, frame);
     while (it.next()) |element| {
         if (HTMLFormControlsCollection.matchesName(element, name) == false) {
             continue;
@@ -256,7 +262,7 @@ fn namedItem(self: *Form, name: []const u8, frame: *Frame) !?HTMLFormControlsCol
 /// Returns true if every submittable element in the form is valid. Fires an
 /// `invalid` event on each failing element.
 pub fn checkValidity(self: *Form, frame: *Frame) !bool {
-    var iter = self.iterator(frame);
+    var iter = self.iterator(.{}, frame);
     var all_valid = true;
     while (iter.next()) |element| {
         const ok = try checkElementValidity(element, frame);
@@ -297,7 +303,7 @@ pub const JsApi = struct {
                 return error.NotHandled;
             }
 
-            var it = self.iterator(frame);
+            var it = self.iterator(.{ .image_buttons = false }, frame);
             while (it.next()) |element| {
                 if (HTMLFormControlsCollection.matchesName(element, field_name)) {
                     return js.v8.DontEnum;
