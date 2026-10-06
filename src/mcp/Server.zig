@@ -178,7 +178,7 @@ pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
 pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
     const id = req.id orelse return;
     if (protocol.clientName(req.params)) |name| {
-        self.app.telemetry.record(.{ .mcp_client = .{ .name = .init(name) } });
+        self.app.telemetry.record(.{ .mcp_client = .fromName(name) });
     }
     try self.sendResult(id, protocol.InitializeResult{
         .protocolVersion = @tagName(protocol.Version.negotiate(req.params)),

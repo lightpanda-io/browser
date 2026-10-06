@@ -126,11 +126,12 @@ const extra_tools = [_]McpTool{
 const all_tools = browser_tool_list ++ extra_tools;
 
 /// Tools that bypass the browser-tool dispatch and have their own handlers.
-const ExtraTool = enum {
-    save,
-    session_new,
-    session_list,
-    session_close,
+/// Values are telemetry wire ids, kept clear of `browser_tools.Tool`'s.
+const ExtraTool = enum(u8) {
+    save = 200,
+    session_new = 201,
+    session_list = 202,
+    session_close = 203,
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -155,12 +156,11 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
             .session_list => handleSessionList(server, arena),
             .session_close => handleSessionClose(server, arena, call_params.arguments),
         };
-        const outcome: [:0]const u8 = switch (result) {
-            .ok => "ok",
-            .fail => "is_error",
-            .invalid_params => "InvalidParams",
-        };
-        server.app.telemetry.recordTool(@tagName(tool), .mcp, outcome, start);
+        server.app.telemetry.recordTool(@backingInt(tool), .mcp, switch (result) {
+            .ok => .ok,
+            .fail => .is_error,
+            .invalid_params => .invalid_params,
+        }, start);
         return switch (result) {
             .ok => |text| sendToolResultText(server, id, text, false),
             .fail => |text| sendToolResultText(server, id, text, true),

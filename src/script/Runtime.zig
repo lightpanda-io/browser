@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const Schema = @import("Schema.zig");
 const NodeRegistry = @import("../NodeRegistry.zig");
+const TelemetryOutcome = @import("../telemetry/telemetry.zig").Event.Tool.Outcome;
 
 const v8 = lp.js.v8;
 const browser_tools = lp.tools;
@@ -510,7 +511,7 @@ fn invokeGoto(
         break :blk browser_tools.startGoto(arena, self.session, self.registry, args, receiver_frame_id);
     };
     const started = maybe_started catch |err| {
-        self.app.telemetry.recordTool("goto", .script, @errorName(err), started_ms);
+        self.app.telemetry.recordTool(BrowserTool.goto.telemetryId(), .script, browser_tools.errorOutcome(err), started_ms);
         return self.rejectResolver(context, resolver, "navigation failed");
     };
 
@@ -612,23 +613,23 @@ const Outcome = enum { loaded, failed, timed_out };
 /// Resolve or reject one pending goto's Promise and free its Globals.
 fn settlePending(self: *Runtime, context: *const v8.Context, pending: *PendingGoto, outcome: Outcome) void {
     const resolver: *const v8.PromiseResolver = @ptrCast(v8.v8__Global__Get(&pending.resolver, self.env.isolate.handle));
-    var result: [:0]const u8 = switch (outcome) {
-        .loaded => "ok",
-        .failed => "NavigationFailed",
-        .timed_out => "NavigationTimeout",
+    var result: TelemetryOutcome = switch (outcome) {
+        .loaded => .ok,
+        .failed => .navigation_failed,
+        .timed_out => .navigation_timeout,
     };
     switch (outcome) {
         .loaded => done: {
             const frame = self.session.findFrameByFrameId(pending.frame_id);
             if (frame == null or frame.?._last_navigate_error != null) {
                 self.rejectResolver(context, resolver, "navigation failed");
-                result = "NavigationFailed";
+                result = .navigation_failed;
                 break :done;
             }
             const this: *const v8.Object = @ptrCast(v8.v8__Global__Get(&pending.receiver, self.env.isolate.handle));
             self.bindFrameId(context, this, pending.frame_id) catch {
                 self.rejectResolver(context, resolver, "internal: page bind failed");
-                result = "InternalError";
+                result = .internal;
                 break :done;
             };
             self.resolveResolver(context, resolver, @ptrCast(this));
@@ -636,7 +637,7 @@ fn settlePending(self: *Runtime, context: *const v8.Context, pending: *PendingGo
         .failed => self.rejectResolver(context, resolver, "navigation failed"),
         .timed_out => self.rejectResolver(context, resolver, "navigation timed out"),
     }
-    self.app.telemetry.recordTool("goto", .script, result, pending.started_ms);
+    self.app.telemetry.recordTool(BrowserTool.goto.telemetryId(), .script, result, pending.started_ms);
     pending.reset();
 }
 
@@ -645,7 +646,7 @@ fn failAllPending(self: *Runtime, context: *const v8.Context, message: []const u
     for (self.pending_gotos.items) |*pending| {
         const resolver: *const v8.PromiseResolver = @ptrCast(v8.v8__Global__Get(&pending.resolver, self.env.isolate.handle));
         self.rejectResolver(context, resolver, message);
-        self.app.telemetry.recordTool("goto", .script, "Cancelled", pending.started_ms);
+        self.app.telemetry.recordTool(BrowserTool.goto.telemetryId(), .script, .cancelled, pending.started_ms);
         pending.reset();
     }
     self.pending_gotos.clearRetainingCapacity();

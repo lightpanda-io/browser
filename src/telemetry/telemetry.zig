@@ -60,26 +60,17 @@ fn TelemetryT(comptime P: type) type {
         }
 
         /// `start_ms` is a `datetime.milliTimestamp(.awake)` taken before the call.
-        pub fn recordTool(self: *Self, name: [:0]const u8, source: Event.Tool.Source, outcome: [:0]const u8, start_ms: u64) void {
+        pub fn recordTool(self: *Self, id: u8, source: Event.Tool.Source, outcome: Event.Tool.Outcome, start_ms: u64) void {
             if (self.disabled) {
                 return;
             }
             const elapsed = lp.datetime.milliTimestamp(.awake) -| start_ms;
             self.record(.{ .tool = .{
-                .name = name,
+                .id = id,
                 .source = source,
                 .outcome = outcome,
                 .duration_ms = std.math.lossyCast(u32, elapsed),
             } });
-        }
-
-        /// "ok", "is_error" for a `ToolResult` that failed in-band, or the error name.
-        pub fn recordToolResult(self: *Self, name: [:0]const u8, source: Event.Tool.Source, result: anytype, start_ms: u64) void {
-            const outcome: [:0]const u8 = if (result) |r| blk: {
-                if (@TypeOf(r) == void) break :blk "ok";
-                break :blk if (r.is_error) "is_error" else "ok";
-            } else |err| @errorName(err);
-            self.recordTool(name, source, outcome, start_ms);
         }
 
         pub fn llm_init(_: *Self, provider: [:0]const u8, model: ?[]const u8) Event.LLM {
@@ -139,50 +130,108 @@ pub const Event = union(enum) {
         pub const Context = enum { page, iframe, popup };
     };
 
+    /// The provider merges calls with the same id, source and outcome within
+    /// one batch, so a sent row carries a count and a total duration.
+    pub const Tool = struct {
+        /// `browser.tools.Tool.telemetryId()`, or an MCP-only tool's pinned value
+        /// (200+). 0 is a name that matched no tool.
+        id: u8,
+        source: Source,
+        outcome: Outcome,
+        count: u32 = 1,
+        duration_ms: u32,
+
+        pub const Source = enum { llm, user, script, mcp };
+
+        pub const Outcome = enum {
+            ok,
+            is_error,
+            frame_not_loaded,
+            invalid_params,
+            node_not_found,
+            navigation_failed,
+            navigation_timeout,
+            cancelled,
+            timeout,
+            internal,
+        };
+    };
+
+    /// The MCP client, from `clientInfo.name`. Values are wire ids: append,
+    /// never renumber.
+    pub const McpClient = enum(u8) {
+        other = 0,
+        claude_code = 1,
+        claude = 2,
+        cursor = 3,
+        vscode = 4,
+        codex = 5,
+        gemini = 6,
+        windsurf = 7,
+        cline = 8,
+        zed = 9,
+        goose = 10,
+
+        // Ordered: "claude-code" before "claude", "cursor" before the
+        // "vscode" in Cursor's "cursor-vscode".
+        const patterns = [_]struct { []const u8, McpClient }{
+            .{ "claude-code", .claude_code },
+            .{ "claude", .claude },
+            .{ "cursor", .cursor },
+            .{ "windsurf", .windsurf },
+            .{ "visual studio code", .vscode },
+            .{ "vscode", .vscode },
+            .{ "codex", .codex },
+            .{ "gemini", .gemini },
+            .{ "cline", .cline },
+            .{ "goose", .goose },
+        };
+
+        pub fn fromName(name: []const u8) McpClient {
+            // Exact: "zed" is a common substring.
+            if (std.ascii.eqlIgnoreCase(name, "zed")) return .zed;
+            for (patterns) |p| {
+                if (std.ascii.findIgnoreCase(name, p[0]) != null) return p[1];
+            }
+            return .other;
+        }
+    };
+
     const BufferOverflow = struct {
         dropped: u32,
     };
 
     const LLM = struct {
         provider: [:0]const u8,
-        model: ?InlineString,
+        model: ?Model,
+
+        const Model = struct {
+            len: u8,
+            buffer: [32]u8,
+
+            pub fn wrap(_s: ?[]const u8) ?Model {
+                if (_s == null) return null;
+
+                const l = @min(_s.?.len, 32);
+                var m: Model = .{
+                    .len = l,
+                    .buffer = undefined,
+                };
+                @memcpy(m.buffer[0..l], _s.?[0..l]);
+
+                return m;
+            }
+
+            pub fn jsonStringify(self: *const Model, writer: anytype) !void {
+                try writer.write(self.buffer[0..self.len]);
+            }
+        };
 
         pub fn init(provider: [:0]const u8, _model: ?[]const u8) LLM {
             return .{
                 .provider = provider,
-                .model = if (_model) |m| .init(m) else null,
+                .model = Model.wrap(_model),
             };
-        }
-    };
-
-    pub const Tool = struct {
-        // Only ever a @tagName or @errorName: static memory that outlives the
-        // queue, and never a caller-supplied string.
-        name: [:0]const u8,
-        source: Source,
-        outcome: [:0]const u8,
-        duration_ms: u32,
-
-        pub const Source = enum { llm, user, script, mcp, cdp };
-    };
-
-    pub const McpClient = struct {
-        name: InlineString,
-    };
-
-    pub const InlineString = struct {
-        len: u8,
-        buffer: [32]u8,
-
-        pub fn init(s: []const u8) InlineString {
-            const l = @min(s.len, 32);
-            var m: InlineString = .{ .len = l, .buffer = undefined };
-            @memcpy(m.buffer[0..l], s[0..l]);
-            return m;
-        }
-
-        pub fn jsonStringify(self: *const InlineString, writer: anytype) !void {
-            try writer.write(self.buffer[0..self.len]);
         }
     };
 };
@@ -191,6 +240,16 @@ extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
 extern fn unsetenv(name: [*:0]u8) c_int;
 
 const testing = @import("../testing.zig");
+test "telemetry: McpClient.fromName" {
+    try testing.expectEqual(.claude_code, Event.McpClient.fromName("claude-code"));
+    try testing.expectEqual(.claude, Event.McpClient.fromName("claude-ai"));
+    try testing.expectEqual(.cursor, Event.McpClient.fromName("cursor-vscode"));
+    try testing.expectEqual(.vscode, Event.McpClient.fromName("Visual Studio Code - Insiders"));
+    try testing.expectEqual(.zed, Event.McpClient.fromName("Zed"));
+    try testing.expectEqual(.other, Event.McpClient.fromName("customized-client"));
+    try testing.expectEqual(.other, Event.McpClient.fromName(""));
+}
+
 test "telemetry: always disabled in debug builds" {
     // Must be disabled regardless of environment variable.
     _ = unsetenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"));

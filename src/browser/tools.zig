@@ -268,6 +268,41 @@ pub const Tool = enum {
     getCookies,
     getEnv,
 
+    /// Telemetry wire id: append, never renumber. 0 is reserved for a name
+    /// that matched no tool.
+    pub fn telemetryId(self: Tool) u8 {
+        return switch (self) {
+            .goto => 1,
+            .search => 2,
+            .markdown => 3,
+            .html => 4,
+            .screenshot => 5,
+            .links => 6,
+            .evaluate => 7,
+            .extract => 8,
+            .tree => 9,
+            .nodeDetails => 10,
+            .interactiveElements => 11,
+            .structuredData => 12,
+            .detectForms => 13,
+            .click => 14,
+            .fill => 15,
+            .scroll => 16,
+            .waitForSelector => 17,
+            .waitForScript => 18,
+            .waitForState => 19,
+            .hover => 20,
+            .press => 21,
+            .selectOption => 22,
+            .setChecked => 23,
+            .findElement => 24,
+            .consoleLogs => 25,
+            .getUrl => 26,
+            .getCookies => 27,
+            .getEnv => 28,
+        };
+    }
+
     /// State-mutating: surfaces in JavaScript recordings. Read-only tools
     /// (queries, env probes) stay out so a replay doesn't bloat the script
     /// with noise.
@@ -916,9 +951,27 @@ pub fn call(
     const start = lp.datetime.milliTimestamp(.awake);
     const maybe_tool = std.meta.stringToEnum(Tool, tool_name);
     const result = callInner(arena, session, registry, maybe_tool, tool_name, arguments, opts);
-    const name = if (maybe_tool) |t| @tagName(t) else "?";
-    session.browser.app.telemetry.recordToolResult(name, opts.source, result, start);
+    const id: u8 = if (maybe_tool) |t| t.telemetryId() else 0;
+    session.browser.app.telemetry.recordTool(id, opts.source, telemetryOutcome(result), start);
     return result;
+}
+
+fn telemetryOutcome(result: ToolError!ToolResult) TelemetryEvent.Tool.Outcome {
+    const r = result catch |err| return errorOutcome(err);
+    return if (r.is_error) .is_error else .ok;
+}
+
+pub fn errorOutcome(err: ToolError) TelemetryEvent.Tool.Outcome {
+    return switch (err) {
+        error.FrameNotLoaded => .frame_not_loaded,
+        error.InvalidParams => .invalid_params,
+        error.NodeNotFound => .node_not_found,
+        error.NavigationFailed => .navigation_failed,
+        error.NavigationTimeout => .navigation_timeout,
+        error.Cancelled => .cancelled,
+        error.Timeout => .timeout,
+        error.InternalError, error.OutOfMemory => .internal,
+    };
 }
 
 fn callInner(

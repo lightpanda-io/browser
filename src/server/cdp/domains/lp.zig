@@ -51,27 +51,24 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         version,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
-    const start = lp.datetime.milliTimestamp(.awake);
-    const result = switch (action) {
-        .dump => dump(cmd),
-        .getMarkdown => getMarkdown(cmd),
-        .getSemanticTree => getSemanticTree(cmd),
-        .getInteractiveElements => getInteractiveElements(cmd),
-        .getNodeDetails => getNodeDetails(cmd),
-        .getStructuredData => getStructuredData(cmd),
-        .getContentSignal => getContentSignal(cmd),
-        .detectForms => detectForms(cmd),
-        .clickNode => clickNode(cmd),
-        .fillNode => fillNode(cmd),
-        .scrollNode => scrollNode(cmd),
-        .waitForSelector => waitForSelector(cmd),
-        .handleJavaScriptDialog => handleJavaScriptDialog(cmd),
-        .configureCDP => configureCDP(cmd),
-        .configureLoading => configureLoading(cmd),
-        .version => version(cmd),
-    };
-    cmd.cdp.app.telemetry.recordToolResult(@tagName(action), .cdp, result, start);
-    return result;
+    switch (action) {
+        .dump => return dump(cmd),
+        .getMarkdown => return getMarkdown(cmd),
+        .getSemanticTree => return getSemanticTree(cmd),
+        .getInteractiveElements => return getInteractiveElements(cmd),
+        .getNodeDetails => return getNodeDetails(cmd),
+        .getStructuredData => return getStructuredData(cmd),
+        .getContentSignal => return getContentSignal(cmd),
+        .detectForms => return detectForms(cmd),
+        .clickNode => return clickNode(cmd),
+        .fillNode => return fillNode(cmd),
+        .scrollNode => return scrollNode(cmd),
+        .waitForSelector => return waitForSelector(cmd),
+        .handleJavaScriptDialog => return handleJavaScriptDialog(cmd),
+        .configureCDP => return configureCDP(cmd),
+        .configureLoading => return configureLoading(cmd),
+        .version => return version(cmd),
+    }
 }
 
 fn version(cmd: *CDP.Command) !void {
