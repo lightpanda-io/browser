@@ -232,6 +232,11 @@ fn getFormOwner(element: *Element, frame: *Frame) ?*Form {
     return null;
 }
 
+fn getAtIndex(self: *Form, index: usize, frame: *Frame) ?*Element {
+    var it = self.iterator(frame);
+    return it.getAtIndex(index, frame);
+}
+
 // https://html.spec.whatwg.org/multipage/forms.html#dom-form-nameditem
 // One matching control is returned as is; more than one as a live RadioNodeList.
 fn namedItem(self: *Form, name: []const u8, frame: *Frame) !?HTMLFormControlsCollection.NamedItemResult {
@@ -297,6 +302,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const @"[int]" = bridge.indexed(Form.getAtIndex, null, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(Form.namedItem, null, null, null, struct {
         fn wrap(self: *Form, field_name: []const u8, frame: *Frame) !u32 {
             if (field_name.len == 0) {

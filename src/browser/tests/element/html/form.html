@@ -67,6 +67,20 @@
 }
 </script>
 
+<script id="direct_form_indexed_access">
+{
+  const form = $('#form_controls');
+  testing.expectEqual(4, form.length);
+  for (let i = 0; i < form.length; i++) {
+    testing.expectEqual(form.elements[i], form[i]);
+  }
+  testing.expectEqual('user', form[0].name);
+  testing.expectEqual(undefined, form[4]);
+  testing.expectTrue(0 in form);
+  testing.expectFalse(4 in form);
+}
+</script>
+
 <!-- Test fixtures for form.method -->
 <form id="form_get" method="get"></form>
 <form id="form_post" method="post"></form>
