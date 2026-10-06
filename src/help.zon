@@ -22,7 +22,9 @@
     \\options:
     \\  --advertise-host <HOST>
     \\          The host to advertise, e.g. in the /json/version response. Useful,
-    \\          for example, when --host is 0.0.0.0.
+    \\          for example, when --host is 0.0.0.0. CDP and BiDi WebSocket
+    \\          upgrades accept this name as the Host header, alongside IP
+    \\          literals and localhost.
     \\          Defaults to --host value.
     \\  --cdp-max-connections <INT>
     \\          Maximum number of simultaneous CDP connections.
