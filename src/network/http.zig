@@ -497,6 +497,10 @@ pub const Connection = struct {
             }
         }
 
+        if (config.httpCurves()) |list| {
+            try libcurl.curl_easy_setopt(self._easy, .ssl_ec_curves, list.ptr);
+        }
+
         if (config.httpDebug()) {
             try libcurl.curl_easy_setopt(self._easy, .verbose, true);
         }

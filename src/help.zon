@@ -454,6 +454,10 @@
     \\          Time in ms to establish an HTTP connection before timing out. 0 means
     \\          never.
     \\          Defaults to 8000.
+    \\  --http-curves
+    \\          Colon-separated key exchange groups offered in the TLS handshake,
+    \\          in preference order, e.g. "X25519:P-256:P-384". Passed to
+    \\          libcurl's CURLOPT_SSL_EC_CURVES.
     \\  --http-debug
     \\          Enables libcurl verbose output. Output written directly to stderr
     \\          by licurl and does not follow the configured log format.
