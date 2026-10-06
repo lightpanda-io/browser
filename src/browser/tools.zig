@@ -997,7 +997,7 @@ fn dispatch(
 ) ToolError!ToolResult {
     return switch (tool) {
         .goto => .{ .text = try execGoto(arena, session, registry, substituted) },
-        .search => execSearch(arena, substituted),
+        .search => execSearch(arena, session, substituted),
         .markdown => .{ .text = try execMarkdown(arena, session, registry, substituted) },
         .html => .{ .text = try execHtml(arena, session, registry, substituted) },
         .screenshot => try execScreenshot(arena, session, registry, substituted, opts.inline_image),
@@ -1284,7 +1284,7 @@ pub fn searchKeyStatus(engine: SearchEngine) ?KeyStatus {
     return null;
 }
 
-fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!ToolResult {
+fn execSearch(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError!ToolResult {
     const args = try parseArgs(SearchParams, arena, arguments);
     if (args.query.len == 0) return ToolError.InvalidParams;
 
@@ -1299,7 +1299,7 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
                     // Fall through on any failure so one outage doesn't kill
                     // a whole benchmark run.
                     var detail: Failure = .{};
-                    if (apiSearch(engine, arena, api_key, timeout_ms, args.query, &detail)) |markdown_| {
+                    if (session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, args.query, &detail })) |markdown_| {
                         return .{ .text = markdown_ };
                     } else |err| {
                         last_err = err;
@@ -1314,7 +1314,7 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
         },
         inline else => |tag| {
             inline for (api_engines) |engine| {
-                if (engine.tag == tag) return searchExplicit(arena, engine, timeout_ms, args.query);
+                if (engine.tag == tag) return searchExplicit(arena, session, engine, timeout_ms, args.query);
             }
             @compileError("engine missing from api_engines: " ++ @tagName(tag));
         },
@@ -1322,14 +1322,14 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
 }
 
 /// No fallback: a failed call or a missing key is an error result.
-fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, timeout_ms: u32, query: []const u8) ToolError!ToolResult {
+fn searchExplicit(arena: std.mem.Allocator, session: *lp.Session, comptime engine: anytype, timeout_ms: u32, query: []const u8) ToolError!ToolResult {
     const label = @tagName(engine.tag);
     const api_key = engineKey(engine) catch return .{
         .text = "web search engine is set to " ++ label ++ " but " ++ engine.env_var ++ " is not set in the environment",
         .is_error = true,
     };
     var detail: Failure = .{};
-    const markdown_ = apiSearch(engine, arena, api_key, timeout_ms, query, &detail) catch |err|
+    const markdown_ = session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, query, &detail }) catch |err|
         return searchFailed(arena, label, err, detail);
     return .{ .text = markdown_ };
 }
