@@ -1017,7 +1017,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         opts.kind != .reload and
         opts.method == .GET and
         opts.body == null and
-        std.mem.indexOfScalar(u8, resolved_url, '#') != null and
+        std.mem.findScalar(u8, resolved_url, '#') != null and
         URL.eqlDocument(target.url, resolved_url);
 
     if (is_fragment_navigation) {
