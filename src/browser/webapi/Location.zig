@@ -28,6 +28,7 @@ const Frame = @import("../Frame.zig");
 const Location = @This();
 
 _url: *URL,
+_frame: *Frame,
 _rc: lp.RC = .{},
 
 pub fn init(raw_url: []const u8, frame: *Frame) !*Location {
@@ -37,6 +38,7 @@ pub fn init(raw_url: []const u8, frame: *Frame) !*Location {
 
     return frame._factory.create(Location{
         ._url = url,
+        ._frame = frame,
     });
 }
 
@@ -84,24 +86,27 @@ pub fn getHash(self: *const Location) []const u8 {
     return self._url.getHash();
 }
 
-pub fn setPathname(_: *const Location, pathname: []const u8, frame: *Frame) !void {
-    const new_url = try U.setPathname(frame.url, pathname, frame.call_arena);
-    return frame.scheduleNavigation(new_url, .{
+pub fn setPathname(self: *const Location, pathname: []const u8, frame: *Frame) !void {
+    const target = self._frame;
+    const new_url = try U.setPathname(target.url, pathname, frame.call_arena);
+    return target.scheduleNavigation(new_url, .{
         .reason = .script,
         .kind = .{ .push = null },
-    }, .{ .script = frame });
+    }, .{ .script = target });
 }
 
-fn setSearch(_: *const Location, search: []const u8, frame: *Frame) !void {
-    const new_url = try U.setSearch(frame.url, search, frame.call_arena);
-    return frame.scheduleNavigation(new_url, .{
+fn setSearch(self: *const Location, search: []const u8, frame: *Frame) !void {
+    const target = self._frame;
+    const new_url = try U.setSearch(target.url, search, frame.call_arena);
+    return target.scheduleNavigation(new_url, .{
         .reason = .script,
         .kind = .{ .push = null },
-    }, .{ .script = frame });
+    }, .{ .script = target });
 }
 
-fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
-    const old_url = frame.url;
+fn setHash(self: *const Location, hash: []const u8, frame: *Frame) !void {
+    const target = self._frame;
+    const old_url = target.url;
     const base_end = std.mem.findScalar(u8, old_url, '#') orelse old_url.len;
     // Includes the leading '#'; empty when the URL has no fragment.
     const old_fragment = old_url[base_end..];
@@ -126,22 +131,38 @@ fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
 
     const target_url = if (normalized_hash.len == 0) old_url[0..base_end] else normalized_hash;
 
-    return frame.scheduleNavigation(target_url, .{
+    return target.scheduleNavigation(target_url, .{
         .reason = .script,
         .kind = .{ .replace = null },
-    }, .{ .script = frame });
+    }, .{ .script = target });
 }
 
-fn assign(_: *const Location, url: [:0]const u8, frame: *Frame) !void {
-    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
+// The href setter, assign() and replace() parse the URL relative to the entry
+// settings object: the calling script's document. It isn't this location's
+// document when a script navigates another same-origin window, as in
+// iframe.contentWindow.location.href = "page.html". V8 only exposes the
+// incumbent context, which is the entry one for a call made by a script.
+fn parseFromCaller(self: *const Location, url: [:0]const u8, frame: *Frame) ![]const u8 {
+    const caller = frame.js.getIncumbent();
+    if (caller == self._frame) {
+        return url;
+    }
+    return U.resolve(frame.call_arena, caller.navigationBase(), url, .{ .encoding = caller.charset });
 }
 
-pub fn replace(_: *const Location, url: [:0]const u8, frame: *Frame) !void {
-    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = frame });
+pub fn assign(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
+    const target_url = try self.parseFromCaller(url, frame);
+    return self._frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._frame });
 }
 
-pub fn reload(_: *const Location, frame: *Frame) !void {
-    return frame.scheduleNavigation(frame.url, .{ .reason = .script, .kind = .reload }, .{ .script = frame });
+pub fn replace(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
+    const target_url = try self.parseFromCaller(url, frame);
+    return self._frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = self._frame });
+}
+
+pub fn reload(self: *const Location) !void {
+    const target = self._frame;
+    return target.scheduleNavigation(target.url, .{ .reason = .script, .kind = .reload }, .{ .script = target });
 }
 
 pub fn toString(self: *const Location, exec: *const js.Execution) ![]const u8 {
