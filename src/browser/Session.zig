@@ -580,6 +580,34 @@ pub fn idleSlice(self: *Session) u31 {
     };
 }
 
+/// Pump until another thread sets `event`, so a blocking call made off this
+/// thread doesn't starve the page.
+pub fn pumpUntil(self: *Session, event: *std.Io.Event) void {
+    while (!event.isSet()) {
+        const idle_ms = self.idleSlice();
+        event.waitTimeout(lp.io, .{ .duration = .{ .raw = .fromMilliseconds(idle_ms), .clock = .awake } }) catch {};
+    }
+}
+
+/// `@call(.auto, func, args)` on a helper thread, pumping until it returns.
+/// Falls back to calling it here if the thread can't start.
+pub fn runPumped(self: *Session, comptime func: anytype, args: anytype) @TypeOf(@call(.auto, func, args)) {
+    const Call = struct {
+        result: @TypeOf(@call(.auto, func, args)) = undefined,
+        done: std.Io.Event = .unset,
+
+        fn run(call: *@This(), call_args: @TypeOf(args)) void {
+            call.result = @call(.auto, func, call_args);
+            call.done.set(lp.io);
+        }
+    };
+    var call: Call = .{};
+    const thread = std.Thread.spawn(.{}, Call.run, .{ &call, args }) catch return @call(.auto, func, args);
+    self.pumpUntil(&call.done);
+    thread.join();
+    return call.result;
+}
+
 pub fn scheduleNavigation(_: *Session, frame: *Frame) !void {
     return frame.page.scheduleNavigation(frame);
 }

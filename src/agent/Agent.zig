@@ -33,6 +33,7 @@ const Candidate = zenai.provider.Candidate;
 
 const App = @import("../App.zig");
 const Conversation = @import("Conversation.zig");
+const ModelCall = @import("ModelCall.zig");
 const Terminal = @import("Terminal.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const settings = @import("settings.zig");
@@ -1314,7 +1315,9 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
 
     self.http_interrupt.reset();
     self.terminal.spinner.start();
-    var result = provider_client.runTools(
+    var result = ModelCall.run(
+        self.ts.session,
+        provider_client,
         self.model,
         &self.conversation.messages,
         self.allocator,
@@ -1771,7 +1774,9 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     self.save_calls.clearRetainingCapacity();
 
     self.terminal.spinner.start();
-    var result = provider_client.runTools(
+    var result = ModelCall.run(
+        self.ts.session,
+        provider_client,
         self.model,
         &self.conversation.messages,
         self.allocator,
@@ -1864,7 +1869,9 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             .content = try ma.dupe(u8, synthesis_prompt),
         });
 
-        var synth = provider_client.runTools(
+        var synth = ModelCall.run(
+            self.ts.session,
+            provider_client,
             self.model,
             &self.conversation.messages,
             self.allocator,
