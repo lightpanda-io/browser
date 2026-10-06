@@ -120,6 +120,11 @@ stall_report_requested_at: std.atomic.Value(u64) = .init(0),
 // observes that as non-zero.
 stall_report_stalled_ms: std.atomic.Value(u64) = .init(0),
 
+// Set by the near-heap-limit callback, consumed on the worker by
+// terminateInterrupt so the script that ran out of heap is identified before
+// it is killed.
+heap_report_requested: std.atomic.Value(bool) = .init(false),
+
 // Set while a V8 context (or the isolate) is being disposed.
 tearing_down: bool = false,
 
@@ -689,6 +694,7 @@ fn onNearHeapLimit(self: *Env, current_limit: usize, initial_limit: usize) usize
 
     // Context disposal can trigger this after execution has ended.
     if (self.tearing_down == false) {
+        self.heap_report_requested.store(true, .release);
         self.requestTerminate();
     }
 
@@ -727,6 +733,9 @@ fn terminateInterrupt(_: ?*v8.Isolate, data: ?*anyopaque) callconv(.c) void {
         const requested_at = self.stall_report_requested_at.swap(0, .acq_rel);
         if (requested_at != 0) {
             self.logStall(requested_at);
+        }
+        if (self.heap_report_requested.swap(false, .acq_rel)) {
+            self.logHeapLimit();
         }
         v8.v8__Isolate__TerminateExecution(self.isolate.handle);
     }
@@ -783,6 +792,16 @@ fn logStall(self: *Env, requested_at: u64) void {
     });
 }
 
+fn logHeapLimit(self: *Env) void {
+    var stack_buf: [1536]u8 = undefined;
+    const report = self.stallReport(&stack_buf);
+    log.err(.app, "JS heap limit script", .{
+        .url = report.url,
+        .page_url = report.page_url,
+        .stack = report.stack,
+    });
+}
+
 /// Clears a pending termination so V8 calls (e.g. those made during cleanup)
 /// don't keep tripping over the terminating-state asserts. Safe to call
 /// unconditionally; a no-op if termination wasn't pending. Also clears the
@@ -792,6 +811,7 @@ pub fn cancelTerminate(self: *Env) void {
     defer self.terminate_mutex.unlock(lp.io);
     self.terminate_requested.store(false, .release);
     self.stall_report_requested_at.store(0, .release);
+    self.heap_report_requested.store(false, .release);
     v8.v8__Isolate__CancelTerminateExecution(self.isolate.handle);
 }
 
@@ -1000,6 +1020,38 @@ test "Env: watchdog termination logs the stalled script once" {
     var caught: js.TryCatch.Caught = .{};
     try testing.expectError(error.ExecutionTerminated, driver_fn.tryCall(void, .{local.newCallback(State.stall, &state)}, &caught));
     try testing.expectEqual(0, env.stall_report_requested_at.load(.acquire));
+}
+
+test "Env: heap limit termination logs the running script once" {
+    // Two "JS heap limit reached" lines, then one "JS heap limit script".
+    testing.expectLog(&.{ .app, .app, .app });
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const env = frame.js.env;
+    defer env.cancelTerminate();
+
+    const State = struct {
+        env: *Env,
+        fn exhaust(self: *@This()) void {
+            // V8 can call back again before the interrupt lands.
+            _ = self.env.onNearHeapLimit(1024, 1024);
+            _ = self.env.onNearHeapLimit(2048, 1024);
+        }
+    };
+    var state = State{ .env = env };
+
+    const driver = try local.exec("(function(exhaust) { exhaust(); for(;;){} })", null);
+    const driver_fn = js.Function{ .local = local, .handle = @ptrCast(driver.handle) };
+    var caught: js.TryCatch.Caught = .{};
+    try testing.expectError(error.ExecutionTerminated, driver_fn.tryCall(void, .{local.newCallback(State.exhaust, &state)}, &caught));
+    try testing.expectEqual(false, env.heap_report_requested.load(.acquire));
 }
 
 test "Env: canceling a termination drops its pending stall report" {
