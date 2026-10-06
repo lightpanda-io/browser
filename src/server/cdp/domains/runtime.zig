@@ -376,3 +376,28 @@ test "cdp.runtime: console notifications run no page JS" {
     try ctx.processMessage(.{ .id = 62, .method = "Runtime.evaluate", .params = .{ .expression = "6 * 7" } });
     try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 42 } }, .{ .id = 62 });
 }
+
+test "cdp.runtime: only nodes have the node subtype, DOMExceptions are errors" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-SUBT", .url = "hi.html", .target_id = "FID-000000SUBT".* });
+    try ctx.processMessage(.{ .id = 70, .method = "Runtime.enable" });
+
+    try ctx.processMessage(.{ .id = 71, .method = "Runtime.evaluate", .params = .{ .expression = "document.body" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object", .subtype = "node", .className = "HTMLBodyElement" } }, .{ .id = 71 });
+
+    try ctx.processMessage(.{ .id = 72, .method = "Runtime.evaluate", .params = .{ .expression = "new DOMException('custom', 'NotFoundError')" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object", .subtype = "error", .className = "DOMException", .description = "NotFoundError: custom" } }, .{ .id = 72 });
+
+    try ctx.processMessage(.{ .id = 73, .method = "Runtime.evaluate", .params = .{ .expression = "location" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object", .className = "Location", .description = "Location" } }, .{ .id = 73 });
+    try ctx.processMessage(.{ .id = 74, .method = "Runtime.evaluate", .params = .{ .expression = "window" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object", .className = "Window" } }, .{ .id = 74 });
+    for (ctx.received.items) |msg| {
+        const id = msg.object.get("id") orelse continue;
+        if (id.integer != 73 and id.integer != 74) continue;
+        const result = msg.object.get("result").?.object.get("result").?.object;
+        try testing.expectEqual(null, result.get("subtype"));
+    }
+}

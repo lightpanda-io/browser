@@ -349,7 +349,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .value = @ptrCast(global.window),
         .prototype_chain = (&Window.JsApi.Meta.prototype_chain).ptr,
         .prototype_len = @intCast(Window.JsApi.Meta.prototype_chain.len),
-        .subtype = .node,
+        .subtype = null,
     } else switch (global._type) {
         .dedicated => |scope| .{
             .value = @ptrCast(scope),

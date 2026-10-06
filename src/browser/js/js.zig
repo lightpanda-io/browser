@@ -487,7 +487,8 @@ pub export fn v8_inspector__Client__IMPL__valueSubtype(
 // Same as valueSubType above, but for the optional description field.
 // From what I can tell, some drivers _need_ the description field to be
 // present, even if it's empty. So if we have a subType for the value, we'll
-// put an empty description.
+// put an empty description. DOMExceptions get "name: message", which drivers
+// use as the error message.
 pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
     _: *v8.InspectorClientImpl,
     v8_context: *const v8.Context,
@@ -498,7 +499,20 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
     // We _must_ include a non-null description in order for the subtype value
     // to be included. Besides that, I don't know if the value has any meaning
     const external_entry = Inspector.getTaggedOpaque(c_value) orelse return null;
-    return if (external_entry.subtype == null) null else "";
+    const subtype = external_entry.subtype orelse return null;
+    if (subtype == .@"error") {
+        const DOMException = @import("../webapi/DOMException.zig");
+        if (external_entry.as(DOMException)) |ex| {
+            // copied by the caller before we're called again
+            const S = struct {
+                threadlocal var buf: [512]u8 = undefined;
+            };
+            const description = std.fmt.bufPrintSentinel(&S.buf, "{s}: {s}", .{ ex.getName(), ex.getMessage() }, 0) catch
+                std.fmt.bufPrintSentinel(&S.buf, "{s}", .{ex.getName()}, 0) catch return "";
+            return description.ptr;
+        }
+    }
+    return "";
 }
 
 test "TaggedAnyOpaque" {
