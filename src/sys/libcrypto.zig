@@ -176,6 +176,13 @@ pub extern fn X509_STORE_load_locations(store: *X509_STORE, file: ?[*:0]const u8
 const struct_ssl_ctx_st = opaque {};
 pub const SSL_CTX = struct_ssl_ctx_st;
 pub extern fn SSL_CTX_set1_verify_cert_store(ctx: ?*SSL_CTX, store: ?*X509_STORE) c_int;
+pub extern fn SSL_CTX_new(method: *const SSL_METHOD) ?*SSL_CTX;
+pub extern fn SSL_CTX_free(ctx: *SSL_CTX) void;
+pub extern fn SSL_CTX_set1_curves_list(ctx: *SSL_CTX, curves: [*:0]const u8) c_int;
+
+const struct_ssl_method_st = opaque {};
+pub const SSL_METHOD = struct_ssl_method_st;
+pub extern fn TLS_method() *const SSL_METHOD;
 
 /// Returns the desired digest by its name.
 pub fn findDigest(name: []const u8) error{Invalid}!*const EVP_MD {

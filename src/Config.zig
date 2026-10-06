@@ -273,6 +273,7 @@ const CommonOptions = .{
     .{ .name = "http_cache_dir", .type = ?[]const u8 },
     .{ .name = "http_cache_entry_limit", .type = ?u32, .default = 1000 },
     .{ .name = "http_debug", .type = bool },
+    .{ .name = "http_curves", .type = ?[:0]const u8, .validator = httpCurvesValidator },
     .{ .name = "render_font", .type = []const u8, .multiple = true },
     .{ .name = "web_bot_auth_key_file", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_keyid", .type = ?[]const u8 },
@@ -780,6 +781,13 @@ pub fn httpDebug(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_debug,
         else => false,
+    };
+}
+
+pub fn httpCurves(self: *const Config) ?[:0]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_curves,
+        else => null,
     };
 }
 
@@ -1680,6 +1688,21 @@ fn timezoneValidator(allocator: Allocator, args: *std.process.Args.Iterator, fie
         log.fatal(.app, "invalid option value", .{ .arg = "--timezone", .value = str, .err = err, .hint = "must be an IANA time zone such as Europe/Paris or UTC" });
         return error.InvalidArgument;
     };
+    field.* = try allocator.dupeSentinel(u8, str, 0);
+}
+
+// libcurl only stores the string; BoringSSL parses it at handshake time, so
+// a bad name would fail every request with a misleading SslCipher error.
+fn httpCurvesValidator(allocator: Allocator, args: *std.process.Args.Iterator, field: *?[:0]const u8) !void {
+    const str = args.next() orelse return error.MissingArgument;
+
+    const ctx = crypto.SSL_CTX_new(crypto.TLS_method()) orelse return error.OutOfMemory;
+    defer crypto.SSL_CTX_free(ctx);
+
+    if (crypto.SSL_CTX_set1_curves_list(ctx, str) != 1) {
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-curves", .value = str, .hint = "must be a colon-separated list such as X25519MLKEM768:X25519:P-256:P-384" });
+        return error.InvalidArgument;
+    }
     field.* = try allocator.dupeSentinel(u8, str, 0);
 }
 
