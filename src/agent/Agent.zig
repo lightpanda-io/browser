@@ -476,6 +476,11 @@ pub const SigBridge = struct {
     }
 };
 
+fn compactForRequest(ctx: *anyopaque) void {
+    const self: *Agent = @ptrCast(@alignCast(ctx));
+    self.conversation.compactForRequest();
+}
+
 fn checkCancel(ctx: *anyopaque) bool {
     const self: *Agent = @ptrCast(@alignCast(ctx));
     return self.cancel_requested.load(.acquire);
@@ -1784,6 +1789,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
             .tools = globalTools(),
+            .before_request = .{ .context = @ptrCast(self), .callFn = compactForRequest },
             .max_turns = 100,
             .max_tool_calls = 200,
             .max_tokens = 4096,
