@@ -511,7 +511,7 @@ fn invokeGoto(
         break :blk browser_tools.startGoto(arena, self.session, self.registry, args, receiver_frame_id);
     };
     const started = maybe_started catch |err| {
-        self.app.telemetry.recordTool(BrowserTool.goto.telemetryId(), .script, browser_tools.errorOutcome(err), started_ms);
+        self.recordGoto(browser_tools.errorOutcome(err), started_ms);
         return self.rejectResolver(context, resolver, "navigation failed");
     };
 
@@ -637,8 +637,12 @@ fn settlePending(self: *Runtime, context: *const v8.Context, pending: *PendingGo
         .failed => self.rejectResolver(context, resolver, "navigation failed"),
         .timed_out => self.rejectResolver(context, resolver, "navigation timed out"),
     }
-    self.app.telemetry.recordTool(BrowserTool.goto.telemetryId(), .script, result, pending.started_ms);
+    self.recordGoto(result, pending.started_ms);
     pending.reset();
+}
+
+fn recordGoto(self: *Runtime, outcome: TelemetryOutcome, started_ms: u64) void {
+    self.app.telemetry.recordTool(BrowserTool.goto.telemetryId(), .script, outcome, started_ms);
 }
 
 /// Reject every still-pending goto and clear the list, freeing all Globals.
@@ -646,7 +650,7 @@ fn failAllPending(self: *Runtime, context: *const v8.Context, message: []const u
     for (self.pending_gotos.items) |*pending| {
         const resolver: *const v8.PromiseResolver = @ptrCast(v8.v8__Global__Get(&pending.resolver, self.env.isolate.handle));
         self.rejectResolver(context, resolver, message);
-        self.app.telemetry.recordTool(BrowserTool.goto.telemetryId(), .script, .cancelled, pending.started_ms);
+        self.recordGoto(.cancelled, pending.started_ms);
         pending.reset();
     }
     self.pending_gotos.clearRetainingCapacity();

@@ -61,9 +61,6 @@ fn TelemetryT(comptime P: type) type {
 
         /// `start_ms` is a `datetime.milliTimestamp(.awake)` taken before the call.
         pub fn recordTool(self: *Self, id: u8, source: Event.Tool.Source, outcome: Event.Tool.Outcome, start_ms: u64) void {
-            if (self.disabled) {
-                return;
-            }
             const elapsed = lp.datetime.milliTimestamp(.awake) -| start_ms;
             self.record(.{ .tool = .{
                 .id = id,

@@ -333,6 +333,20 @@ fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_e
 const router = @import("router.zig");
 const testing = @import("../testing.zig");
 
+test "MCP - tool telemetry ids are distinct" {
+    var seen: std.StaticBitSet(256) = .empty;
+    for (std.enums.values(BrowserTool)) |t| {
+        const id = t.telemetryId();
+        try testing.expect(id != 0 and id < @backingInt(ExtraTool.save));
+        try testing.expect(!seen.isSet(id));
+        seen.set(id);
+    }
+    for (std.enums.values(ExtraTool)) |t| {
+        try testing.expect(!seen.isSet(@backingInt(t)));
+        seen.set(@backingInt(t));
+    }
+}
+
 test "MCP - tools/list carries titles and annotations" {
     const json = try std.json.Stringify.valueAlloc(testing.allocator, all_tools, .{});
     defer testing.allocator.free(json);

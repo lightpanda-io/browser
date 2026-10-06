@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 const zenai = @import("zenai");
 
 const NodeRegistry = @import("../NodeRegistry.zig");
-const TelemetryEvent = @import("../telemetry/telemetry.zig").Event;
+const TelemetryTool = @import("../telemetry/telemetry.zig").Event.Tool;
 
 const DOMNode = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
@@ -932,7 +932,7 @@ pub const CallOpts = struct {
     record: bool = false,
     /// Scripts parse the text, so only model-facing callers set it.
     nav_note: bool = false,
-    source: TelemetryEvent.Tool.Source,
+    source: TelemetryTool.Source,
 };
 
 // An inline screenshot is re-sent on every turn; keep it within what models
@@ -956,12 +956,12 @@ pub fn call(
     return result;
 }
 
-fn telemetryOutcome(result: ToolError!ToolResult) TelemetryEvent.Tool.Outcome {
+fn telemetryOutcome(result: ToolError!ToolResult) TelemetryTool.Outcome {
     const r = result catch |err| return errorOutcome(err);
     return if (r.is_error) .is_error else .ok;
 }
 
-pub fn errorOutcome(err: ToolError) TelemetryEvent.Tool.Outcome {
+pub fn errorOutcome(err: ToolError) TelemetryTool.Outcome {
     return switch (err) {
         error.FrameNotLoaded => .frame_not_loaded,
         error.InvalidParams => .invalid_params,
