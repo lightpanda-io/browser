@@ -391,12 +391,12 @@
 
   state.resolve();
   await state.done(() => {
-    // Byte-for-byte what `brotli -q 11 -w 22` (v1.2.0) gives, the encoder's
-    // defaults. 'hello' is too short to compress, so it's stored as is.
+    // Byte-for-byte what `brotli -q 5 -w 22` (v1.2.0) gives, the quality we
+    // use. 'hello' is too short to compress, so it's stored as is.
     testing.expectEqual([11, 2, 128, 104, 101, 108, 108, 111, 3], results.hello);
     testing.expectEqual([
-      27, 111, 0, 248, 29, 9, 54, 78, 116, 111, 36, 134, 215, 98, 101, 104, 114,
-      26, 132, 133, 141, 78, 178, 165, 189, 5, 130, 241, 0, 60, 51, 252, 18,
+      27, 111, 0, 0, 196, 113, 108, 221, 252, 238, 234, 69, 68, 170, 65, 112,
+      171, 199, 115, 122, 14, 173, 143, 9,
     ], results.repeated);
     testing.expectEqual([59], results.empty);
   });
@@ -432,7 +432,7 @@
   const state = await testing.async();
 
   // The encoder holds input back until it has a whole meta-block; for this
-  // noise that's after 1.25 MiB, so the write produces output by itself. It
+  // noise that's after 1 MiB, so the write produces output by itself. It
   // then stops taking input until that output is taken, so the rest of the
   // write needs another call into the encoder.
   const input = noise(1664 * 1024);

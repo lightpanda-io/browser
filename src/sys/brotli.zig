@@ -28,13 +28,6 @@ const brotli_free_func = ?*const fn (@"opaque": ?*anyopaque, address: ?*anyopaqu
 
 // Encoder.
 
-pub const BROTLI_MIN_QUALITY: u32 = 0;
-pub const BROTLI_MAX_QUALITY: u32 = 11;
-pub const BROTLI_DEFAULT_QUALITY: u32 = 11;
-pub const BROTLI_MIN_WINDOW_BITS: u32 = 10;
-pub const BROTLI_MAX_WINDOW_BITS: u32 = 24;
-pub const BROTLI_DEFAULT_WINDOW: u32 = 22;
-
 pub const BrotliEncoderState = opaque {};
 
 pub const BrotliEncoderOperation = enum(c_int) {

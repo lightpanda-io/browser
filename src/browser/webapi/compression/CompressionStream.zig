@@ -63,7 +63,5 @@ pub const JsApi = struct {
 
 const testing = @import("../../../testing.zig");
 test "WebApi: CompressionStream" {
-    // brotli_output_before_close compresses 1.3 MiB at quality 11; that's
-    // slow under TSAN.
-    try testing.htmlRunner("compression/compression_stream.html", .{ .timeout_ms = 8000 });
+    try testing.htmlRunner("compression/compression_stream.html", .{});
 }

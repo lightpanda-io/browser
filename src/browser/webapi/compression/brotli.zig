@@ -147,6 +147,13 @@ pub const EncodingStream = struct {
                 const stream = brotli.BrotliEncoderCreateInstance(alloc, free, @constCast(self.exec)) orelse {
                     return error.OutOfMemory;
                 };
+                // brotli defaults to its maximum quality (11), which is ~60x
+                // slower than deflate at level 6. Quality 5 is faster than
+                // deflate at level 6 and still compresses better. Same
+                // default as Apache's mod_brotli.
+                // https://httpd.apache.org/docs/2.4/mod/mod_brotli.html#brotlicompressionquality
+                const default_quality: u32 = 5;
+                _ = brotli.BrotliEncoderSetParameter(stream, .quality, default_quality);
                 self.stream = stream;
                 self.state = .active;
                 continue :state_machine self.state;
