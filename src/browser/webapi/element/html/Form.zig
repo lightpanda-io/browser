@@ -176,7 +176,7 @@ pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
 /// The form's first submit button in tree order.
 /// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#default-button
 pub fn getDefaultButton(self: *Form, frame: *Frame) ?*Element {
-    var it = self.iterator(frame);
+    var it = self.iterator(.{}, frame);
     while (it.next()) |element| {
         if (isSubmitButton(element)) {
             return element;
@@ -192,7 +192,7 @@ pub fn getDefaultButton(self: *Form, frame: *Frame) ?*Element {
 /// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission
 pub fn canSubmitImplicitly(self: *Form, trigger: *Input, frame: *Frame) bool {
     var blocker: ?*Input = null;
-    var it = self.iterator(frame);
+    var it = self.iterator(.{}, frame);
     while (it.next()) |element| {
         const input = element.is(Input) orelse continue;
         switch (input._input_type) {
@@ -233,7 +233,7 @@ fn getFormOwner(element: *Element, frame: *Frame) ?*Form {
 }
 
 fn getAtIndex(self: *Form, index: usize, frame: *Frame) ?*Element {
-    var it = self.iterator(frame);
+    var it = self.iterator(.{ .image_buttons = false }, frame);
     return it.getAtIndex(index, frame);
 }
 
