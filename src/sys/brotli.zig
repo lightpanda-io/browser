@@ -37,12 +37,6 @@ pub const BROTLI_DEFAULT_WINDOW: u32 = 22;
 
 pub const BrotliEncoderState = opaque {};
 
-pub const BrotliEncoderMode = enum(c_int) {
-    generic = 0,
-    text = 1,
-    font = 2,
-};
-
 pub const BrotliEncoderOperation = enum(c_int) {
     process = 0,
     flush = 1,
@@ -84,7 +78,6 @@ pub const BrotliDecoderResult = enum(c_int) {
 
 pub extern fn BrotliDecoderCreateInstance(alloc_func: brotli_alloc_func, free_func: brotli_free_func, @"opaque": ?*anyopaque) ?*BrotliDecoderState;
 pub extern fn BrotliDecoderDecompressStream(state: *BrotliDecoderState, available_in: *usize, next_in: *[*c]const u8, available_out: *usize, next_out: ?*[*c]u8, total_out: ?*usize) BrotliDecoderResult;
-pub extern fn BrotliDecoderIsFinished(state: *const BrotliDecoderState) BROTLI_BOOL;
 pub extern fn BrotliDecoderHasMoreOutput(state: *const BrotliDecoderState) BROTLI_BOOL;
 pub extern fn BrotliDecoderDestroyInstance(state: *BrotliDecoderState) void;
 pub extern fn BrotliDecoderTakeOutput(state: *BrotliDecoderState, size: *usize) [*c]const u8;

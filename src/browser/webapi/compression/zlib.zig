@@ -19,7 +19,6 @@
 const std = @import("std");
 
 const zlib = @import("../../../sys/zlib.zig");
-const brotli = @import("../../../sys/brotli.zig");
 
 const js = @import("../../js/js.zig");
 const TransformStream = @import("../streams/TransformStream.zig");
