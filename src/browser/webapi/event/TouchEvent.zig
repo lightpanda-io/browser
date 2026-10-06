@@ -31,9 +31,6 @@ const TouchList = @import("TouchList.zig");
 const String = lp.String;
 
 // https://w3c.github.io/touch-events/#touchevent-interface
-//
-// The lists are cached on first read, so repeated property reads don't grow
-// the event's arena.
 const TouchEvent = @This();
 
 pub const Proto = UIEvent;
@@ -44,7 +41,6 @@ _meta_key: bool = false,
 _ctrl_key: bool = false,
 _shift_key: bool = false,
 _touch: ?Touch = null,
-_touch_active: bool = false,
 _touches_list: ?*TouchList = null,
 _target_touches_list: ?*TouchList = null,
 _changed_list: ?*TouchList = null,
@@ -69,12 +65,9 @@ pub fn initTrusted(typ: []const u8, _opts: ?Options, frame: *Frame) !*TouchEvent
     return initWithTrusted(typ, _opts, true, frame);
 }
 
-/// Assigning the touch is a plain value write (no arena allocation), so
-/// nothing can fail between creating the event and returning it.
-pub fn initTrustedWithTouch(typ: []const u8, _opts: ?Options, target: *Element, point: Touch.Point, active: bool, frame: *Frame) !*TouchEvent {
+pub fn initTrustedWithTouch(typ: []const u8, _opts: ?Options, target: *Element, point: Touch.Point, frame: *Frame) !*TouchEvent {
     const event = try initWithTrusted(typ, _opts, true, frame);
     event._touch = .{ ._event = event, ._target = target.asEventTarget(), ._point = point };
-    event._touch_active = active;
     return event;
 }
 
@@ -104,44 +97,40 @@ pub fn asEvent(self: *TouchEvent) *Event {
     return self._proto.asEvent();
 }
 
-/// The live Touch's target, for EventManager's shadow-retargeting swap
-/// (mirrors Event.relatedTargetPtr).
 pub fn touchTargetPtr(self: *TouchEvent) ?*?*EventTarget {
-    if (self._touch == null) return null;
-    return &self._touch.?._target;
+    if (self._touch) |*t| return &t._target;
+    return null;
 }
 
-/// touches and targetTouches hold the same set here but keep separate cached
-/// lists: they are distinct objects in real browsers ([SameObject] only ties
-/// identity to repeated reads of one attribute).
+/// Cached, so repeated reads don't grow the event's arena. touches and
+/// targetTouches hold the same set here but keep separate lists: they are
+/// distinct objects in real browsers ([SameObject] only ties identity to
+/// repeated reads of one attribute).
 fn touchList(self: *TouchEvent, active_only: bool, cache: *?*TouchList) !*TouchList {
     if (cache.*) |list| {
         return list;
     }
 
-    const arena = self.asEvent()._arena;
-    var touch: ?*Touch = null;
-    if (self._touch) |*t| {
-        if (!active_only or self._touch_active) {
-            touch = t;
-        }
-    }
+    const event = self.asEvent();
+    // touchend and touchcancel report the lifted contact in changedTouches only.
+    const lifted = event._type_string.eql(comptime .wrap("touchend")) or event._type_string.eql(comptime .wrap("touchcancel"));
+    const touch: ?*Touch = if (self._touch) |*t| (if (active_only and lifted) null else t) else null;
 
-    const list = try arena.create(TouchList);
+    const list = try event._arena.create(TouchList);
     list.* = .{ ._event = self, ._touch = touch };
     cache.* = list;
     return list;
 }
 
-pub fn getTouches(self: *TouchEvent) !*TouchList {
+fn getTouches(self: *TouchEvent) !*TouchList {
     return self.touchList(true, &self._touches_list);
 }
 
-pub fn getTargetTouches(self: *TouchEvent) !*TouchList {
+fn getTargetTouches(self: *TouchEvent) !*TouchList {
     return self.touchList(true, &self._target_touches_list);
 }
 
-pub fn getChangedTouches(self: *TouchEvent) !*TouchList {
+fn getChangedTouches(self: *TouchEvent) !*TouchList {
     return self.touchList(false, &self._changed_list);
 }
 
@@ -179,3 +168,21 @@ pub const JsApi = struct {
     pub const ctrlKey = bridge.accessor(TouchEvent.getCtrlKey, null, .{});
     pub const shiftKey = bridge.accessor(TouchEvent.getShiftKey, null, .{});
 };
+
+const testing = @import("../../../testing.zig");
+
+test "WebApi: TouchEvent caches its touch lists" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    const target = frame.document.getDocumentElement().?;
+
+    const event = try initTrustedWithTouch("touchstart", null, target, .{ .x = 10, .y = 20 }, frame);
+    event.asEvent().acquireRef();
+    defer event.asEvent().releaseRef(frame.page);
+
+    try testing.expect(try event.getTouches() == try event.getTouches());
+    try testing.expect(try event.getTargetTouches() == try event.getTargetTouches());
+    try testing.expect(try event.getChangedTouches() == try event.getChangedTouches());
+    try testing.expect(try event.getTouches() != try event.getTargetTouches());
+}

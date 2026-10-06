@@ -211,9 +211,8 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     }
     const actions = actions_val.toArray();
 
-    // A touch pointer shares CDP's single-contact sequence (pointer boundary
-    // events, the touch event, then the compatibility mouse events and click).
-    // The element comes from the action origin: actions carry no viewport point.
+    // Touch actions carry no viewport point, so the element comes from the
+    // action origin.
     var is_touch = false;
     const params = try source.get("parameters");
     if (params.isObject()) {
@@ -254,71 +253,61 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             if (is_touch) {
                 if (frame.page.input_touch_contact) |contact| {
                     // Touch implicitly captures the original down target.
-                    const captured = contact.target;
-                    const owner = captured.ownerFrame(frame) orelse continue;
-                    Frame.user_input.triggerTouch(owner, null, .touchmove, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
+                    const owner = contact.target.ownerFrame(frame) orelse continue;
+                    Frame.user_input.touchMove(owner, el, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
                         log.debug(.app, "webdriver touch", .{ .err = err });
                     };
-                    // No viewport distance, so a move whose origin element
-                    // changed is the drag that keeps the tap from clicking.
-                    if (el != captured) {
-                        if (frame.page.input_touch_contact) |*held| held.suppress_click = true;
-                    }
                 } else {
                     const owner = el.ownerFrame(frame) orelse continue;
                     Frame.user_input.touchHover(owner, el, frame.page.input_modifiers) catch |err| {
                         log.debug(.app, "webdriver touch", .{ .err = err });
                     };
                 }
-            } else {
-                Frame.user_input.moveSequence(frame, el, .{
-                    .buttons_down = pointer.held,
-                    .modifiers = frame.page.input_modifiers,
-                }) catch {};
+                continue;
             }
+            Frame.user_input.moveSequence(frame, el, .{
+                .buttons_down = pointer.held,
+                .modifiers = frame.page.input_modifiers,
+            }) catch {};
         } else if (action_type.eql(comptime .wrap("pointerDown"))) {
             const el = target orelse continue;
+            if (is_touch) {
+                const owner = el.ownerFrame(frame) orelse continue;
+                Frame.user_input.touchStart(owner, el, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
+                    log.debug(.app, "webdriver touch", .{ .err = err });
+                };
+                continue;
+            }
             const button = readI32(action, "button", 0);
             if (last_click_target == el and last_click_button == button) {
                 click_count += 1;
             } else {
                 click_count = 1;
             }
-            if (is_touch) {
-                // One contact. A second pointerDown while it is still down would
-                // fire another touchstart for the same finger.
-                if (frame.page.input_touch_contact != null) continue;
-                const owner = el.ownerFrame(frame) orelse continue;
-                Frame.user_input.triggerTouch(owner, el, .touchstart, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
-                    log.debug(.app, "webdriver touch", .{ .err = err });
-                };
-            } else {
-                pointer.press(frame, el, .{
-                    .button = button,
-                    .click_count = click_count,
-                    .modifiers = frame.page.input_modifiers,
-                }) catch {};
-            }
+            pointer.press(frame, el, .{
+                .button = button,
+                .click_count = click_count,
+                .modifiers = frame.page.input_modifiers,
+            }) catch {};
         } else if (action_type.eql(comptime .wrap("pointerUp"))) {
-            const el = target orelse continue;
-            const button = readI32(action, "button", 0);
             if (is_touch) {
                 const contact = frame.page.input_touch_contact orelse continue;
-                const captured = contact.target;
-                const owner = captured.ownerFrame(frame) orelse continue;
-                Frame.user_input.triggerTouchLift(owner, .touchend, null, frame.page.input_modifiers, captured) catch |err| {
+                const owner = contact.target.ownerFrame(frame) orelse continue;
+                Frame.user_input.touchEnd(owner, null, frame.page.input_modifiers, contact.target) catch |err| {
                     log.debug(.app, "webdriver touch", .{ .err = err });
                 };
-            } else {
-                // Ignore a bare or repeated release without an active press.
-                if (pointer.held == 0) continue;
-                last_click_button = button;
-                last_click_target = pointer.release(frame, el, .{
-                    .button = button,
-                    .click_count = click_count,
-                    .modifiers = frame.page.input_modifiers,
-                }) catch null;
+                continue;
             }
+            const el = target orelse continue;
+            // WebDriver: releasing a button that isn't pressed is a no-op.
+            if (pointer.held == 0) continue;
+            const button = readI32(action, "button", 0);
+            last_click_button = button;
+            last_click_target = pointer.release(frame, el, .{
+                .button = button,
+                .click_count = click_count,
+                .modifiers = frame.page.input_modifiers,
+            }) catch null;
         }
         // "pause" carries timing only and is ignored. ("pointerCancel" is not
         // emitted by the testdriver Actions builder.)
@@ -526,9 +515,7 @@ test "WebApi: WebDriver touchmove/touchend stay on the touchstart target" {
         \\  window.endOnA = e.changedTouches.length === 1 && e.changedTouches[0].target === a;
         \\});
         \\b.addEventListener('touchend', () => { window.endOnB = true; });
-        \\// The initial unpressed pointerMove(origin: a) also lands on `a`,
-        \\// so the count (not just "did it fire on a") is what discriminates
-        \\// the captured second move from an uncaptured one landing on `b`.
+        \\// `a` also gets the initial unpressed move, hence the count.
         \\a.addEventListener('pointermove', e => { if (e.pointerType === 'touch') window.pointerMoveOnACount++; });
         \\b.addEventListener('pointermove', () => { window.pointerMoveOnBCount++; });
         \\a.addEventListener('pointerup', e => { window.pointerUpOnA = e.pointerType === 'touch'; });
@@ -547,9 +534,6 @@ test "WebApi: WebDriver touchmove/touchend stay on the touchstart target" {
 
     try testing.waitForFrame();
 
-    // Pointer Events implicitly capture to the pointerdown element for a
-    // touch source: the pressed pointermove and the pointerup must stay on
-    // `a`, never reach `b`, exactly like the Touch events above.
     const result = try ls.local.compileAndRun(
         "window.moveOnA === true && window.moveOnB !== true && window.endOnA === true && window.endOnB !== true" ++
             " && window.pointerMoveOnACount === 2 && window.pointerMoveOnBCount === 0" ++
@@ -559,9 +543,6 @@ test "WebApi: WebDriver touchmove/touchend stay on the touchstart target" {
     try testing.expect(result.isTrue());
 }
 
-// An unmatched touch release (no preceding pointerDown in the source) must
-// not fabricate a touchend: per the WebDriver spec, releasing a button
-// that isn't pressed is a no-op.
 test "WebApi: WebDriver a touch pointerUp with no preceding pointerDown dispatches no touchend" {
     if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
 
@@ -596,8 +577,6 @@ test "WebApi: WebDriver a touch pointerUp with no preceding pointerDown dispatch
     try testing.expect(result.isTrue());
 }
 
-// A second pointerUp for the same source (no intervening pointerDown) must
-// not fire a second touchend for a contact the first release already ended.
 test "WebApi: WebDriver a second touch pointerUp dispatches no second touchend" {
     if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
 
@@ -634,8 +613,6 @@ test "WebApi: WebDriver a second touch pointerUp dispatches no second touchend" 
     try testing.expect(result.isTrue());
 }
 
-// The touch path has to activate, same as a CDP tap. A move to another element
-// is a drag: the finger stays captured and the release must not click.
 test "WebApi: WebDriver a touch tap activates and a drag does not" {
     if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
 
@@ -683,9 +660,6 @@ test "WebApi: WebDriver a touch tap activates and a drag does not" {
     try testing.expect(result.isTrue());
 }
 
-// The WebDriver "release a button that isn't pressed is a no-op" rule
-// applies to every pointer type, not just touch: a bare mouse pointerUp
-// must not fabricate pointerup/mouseup/click either.
 test "WebApi: WebDriver a mouse pointerUp with no preceding pointerDown dispatches no click" {
     if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
 
@@ -728,8 +702,6 @@ test "WebApi: WebDriver a mouse pointerUp with no preceding pointerDown dispatch
     try testing.expect(result.isTrue());
 }
 
-// A second mouse pointerUp for the same source (no intervening pointerDown)
-// must not fire a second click for a press the first release already ended.
 test "WebApi: WebDriver a second mouse pointerUp dispatches no second click" {
     if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
 

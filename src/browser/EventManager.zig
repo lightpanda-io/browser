@@ -292,7 +292,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
     // DOM dispatch: decide up front — on the pre-dispatch tree, so listener
     // mutations can't affect it — whether target and relatedTarget must be
     // reset after dispatch because they would expose nodes inside a shadow
-    // tree.
+    // tree. The same goes for a Touch's target.
     if (node_path_len > 0) {
         const last = path_buffer[node_path_len - 1];
         if (event._needs_retargeting) {
@@ -307,12 +307,8 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
                 }
             }
         }
-        if (event.touchTargetPtr()) |touch_ptr| {
-            if (touch_ptr.*) |touch_target| {
-                if (rootIsShadowRoot(getAdjustedTarget(touch_target, last))) {
-                    clear_targets = true;
-                }
-            }
+        if (event._needs_retargeting and rootIsShadowRoot(getAdjustedTarget(original_touch, last))) {
+            clear_targets = true;
         }
     }
 

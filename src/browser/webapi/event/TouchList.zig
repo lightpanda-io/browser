@@ -24,8 +24,7 @@ const TouchEvent = @import("TouchEvent.zig");
 
 // https://w3c.github.io/touch-events/#idl-def-touchlist
 //
-// Holds the Touch directly rather than a slice, so the (up to) three lists a
-// TouchEvent caches never alias one backing array.
+// Single-touch: at most one Touch.
 const TouchList = @This();
 
 _event: *TouchEvent,
@@ -41,10 +40,6 @@ pub fn releaseRef(self: *TouchList, page: *Page) void {
 
 fn length(self: *const TouchList) u32 {
     return if (self._touch != null) 1 else 0;
-}
-
-pub fn indexedGet(self: *TouchList, index: usize, _: *Frame) !*Touch {
-    return self.item(index) orelse error.NotHandled;
 }
 
 pub fn item(self: *TouchList, index: usize) ?*Touch {
@@ -64,7 +59,7 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(TouchList.length, null, .{});
-    pub const @"[]" = bridge.indexed(TouchList.indexedGet, getIndexes, .{ .null_as_undefined = true });
+    pub const @"[]" = bridge.indexed(TouchList.item, getIndexes, .{ .null_as_undefined = true });
     pub const item = bridge.function(TouchList.item, .{});
 
     fn getIndexes(self: *TouchList, frame: *Frame) !js.Array {

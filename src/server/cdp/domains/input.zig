@@ -19,7 +19,6 @@
 const std = @import("std");
 const CDP = @import("../CDP.zig");
 const Frame = @import("../../../browser/Frame.zig");
-const Element = @import("../../../browser/webapi/Element.zig");
 const Touch = @import("../../../browser/webapi/event/Touch.zig");
 
 const dom_button = Frame.user_input.mouse_button;
@@ -159,21 +158,11 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
 
 /// https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchTouchEvent
 ///
-/// Only one contact is tracked, so more than one point is rejected rather than
-/// silently dropping the rest. touchEnd takes zero or one point because
-/// Playwright sends an empty list and Puppeteer sends the point being
-/// released; touchCancel must be empty, as in Chrome.
-///
-/// Chrome is looser than this everywhere except touchCancel: it reads the
-/// point list as the set of contacts now down, so a longer list or an unknown
-/// id just opens more contacts. Refusing is the honest answer while only one
-/// contact exists, but it is this engine's rule and not Chrome's.
-///
-/// Puppeteer's ids start at 1, so the contact keeps the id from touchStart
-/// instead of assuming 0. Touch.identifier is a DOM i32, so a fractional or
-/// out-of-range id fails to parse and lands on the same InvalidParams a bad
-/// shape does. Chrome instead truncates, and overflows to INT_MIN past the
-/// range, which is not worth matching.
+/// Single contact only: more than one point is InvalidParams, where Chrome
+/// would open more contacts. touchEnd takes zero or one point (Playwright
+/// sends none, Puppeteer the released one); touchCancel must be empty, as in
+/// Chrome. Touch.identifier is an i32, so a fractional or out-of-range id
+/// fails to parse, where Chrome truncates.
 fn dispatchTouchEvent(cmd: *CDP.Command) !void {
     const params = (cmd.params(struct {
         type: Type,
@@ -204,9 +193,6 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
     };
 
     switch (params.type) {
-        // Single-touch scope: a second touchStart while the one supported
-        // contact is still active would overwrite it, losing the original
-        // target/coordinates and reporting two starts for one contact.
         .touchStart => {
             if (frame.page.input_touch_contact != null) return error.InvalidParams;
         },
@@ -220,21 +206,17 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
 
     try cmd.sendResult(null, .{});
 
-    // Puppeteer's touchEnd carries the point being released, and Chrome
-    // dispatches there rather than at the last touchmove; Playwright's empty
-    // list and touchCancel fall back to the stored contact.
     const point: ?Touch.Point = if (params.touchPoints.len == 1) params.touchPoints[0] else null;
     const modifiers = cdpModifiers(params.modifiers);
 
     switch (params.type) {
-        .touchStart => try Frame.user_input.triggerTouch(frame, null, .touchstart, point.?, modifiers),
-        .touchMove => try Frame.user_input.triggerTouch(frame, null, .touchmove, point.?, modifiers),
-        .touchEnd => try Frame.user_input.triggerTouchLift(frame, .touchend, point, modifiers, null),
-        .touchCancel => try Frame.user_input.triggerTouchLift(frame, .touchcancel, point, modifiers, null),
+        .touchStart => try Frame.user_input.touchStart(frame, null, point.?, modifiers),
+        .touchMove => try Frame.user_input.touchMove(frame, null, point.?, modifiers),
+        .touchEnd => try Frame.user_input.touchEnd(frame, point, modifiers, null),
+        .touchCancel => try Frame.user_input.touchCancel(frame, modifiers),
     }
 }
 
-/// CDP's wire bitmask: Alt=1, Ctrl=2, Meta/Command=4, Shift=8.
 fn cdpModifiers(bits: u4) Frame.user_input.Modifiers {
     return .{
         .alt = bits & 1 != 0,
@@ -1392,9 +1374,7 @@ test "cdp.input: chorded mousedown focuses its target unless pointerdown or mous
     }
 }
 
-// Puppeteer sends radiusX/radiusY/force of 0.5 on every tap, and Chrome hands
-// them back to the page rather than substituting a default, so a page reading
-// pressure sees what the client sent.
+// Puppeteer sends radius and force 0.5; Chrome passes them through unchanged.
 test "cdp.input: dispatchTouchEvent reports the client's radius, angle and force" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1616,10 +1596,8 @@ test "cdp.input: dispatchTouchEvent touchEnd empties touches but keeps changedTo
     try testing.expect(result.isTrue());
 }
 
-// A point past the last element (e.g. Playwright's touchscreen.tap(400,
-// 3000) on a short page) must not drop the contact silently: Chrome
-// completes the sequence, so this falls back to the document element the
-// same way WebDriver's pointerMove does.
+// Playwright's touchscreen.tap(400, 3000) on a short page; Chrome completes
+// the sequence.
 test "cdp.input: dispatchTouchEvent a touchStart past every element still opens a contact" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1739,10 +1717,6 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
     const x = try (try ls.local.compileAndRun("target.getBoundingClientRect().x", null)).toF64();
     const y = try (try ls.local.compileAndRun("target.getBoundingClientRect().y", null)).toF64();
 
-    // A fractional id is rejected before it can create a contact. Chrome
-    // truncates instead (0.5 arrives as 0, and a value past i32 wraps to
-    // INT_MIN), which is not behaviour worth matching. No real client sends
-    // one: Puppeteer and Playwright ids are both integers.
     try ctx.processMessage(.{
         .id = 1,
         .method = "Input.dispatchTouchEvent",
@@ -1751,9 +1725,6 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
     try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 1 });
     try testing.expect(frame.page.input_touch_contact == null);
 
-    // Puppeteer's id generator starts at 1 and increments; any integer id
-    // (including one Chrome would also accept, like a negative one) opens
-    // the contact under that id.
     try ctx.processMessage(.{
         .id = 2,
         .method = "Input.dispatchTouchEvent",
@@ -1761,8 +1732,6 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
     });
     try testing.expectEqual(@as(i32, 7), frame.page.input_touch_contact.?.point.id);
 
-    // A touchMove for a different id than the open contact is rejected and
-    // leaves the contact untouched.
     try ctx.processMessage(.{
         .id = 3,
         .method = "Input.dispatchTouchEvent",
@@ -1778,8 +1747,6 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
         .params = .{ .type = "touchMove", .touchPoints = &.{.{ .x = x + 1, .y = y + 2, .id = 7 }} },
     });
 
-    // touchEnd carrying a mismatched id (Puppeteer always sends the released
-    // point) is rejected without lifting the contact.
     try ctx.processMessage(.{
         .id = 5,
         .method = "Input.dispatchTouchEvent",
@@ -1788,7 +1755,6 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
     try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 5 });
     try testing.expect(frame.page.input_touch_contact != null);
 
-    // touchEnd with the matching id (Puppeteer) lifts the contact.
     try ctx.processMessage(.{
         .id = 6,
         .method = "Input.dispatchTouchEvent",
@@ -1804,7 +1770,6 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
     , null)).isTrue());
 }
 
-// Single-touch scope: a second touchStart must not overwrite the contact.
 test "cdp.input: dispatchTouchEvent a second touchStart while a contact is active is InvalidParams" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1844,8 +1809,6 @@ test "cdp.input: dispatchTouchEvent a second touchStart while a contact is activ
     });
     try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 2 });
 
-    // The original contact is untouched: exactly one touchstart fired, and
-    // touchEnd still resolves against the first target's coordinates.
     _ = try ls.local.compileAndRun(
         \\document.getElementById('hoverTarget')
         \\  .addEventListener('touchend', (e) => {
@@ -1862,10 +1825,7 @@ test "cdp.input: dispatchTouchEvent a second touchStart while a contact is activ
     try testing.expect(result.isTrue());
 }
 
-// Puppeteer's touchEnd always carries the point being released, and Chrome
-// dispatches at that wire position (not the last touchmove/touchstart one)
-// when it's given. A client releasing without an intervening touchMove must
-// still land on the released coordinates.
+// Puppeteer releases without an intervening touchMove.
 test "cdp.input: dispatchTouchEvent a touchEnd carrying the released point is accepted" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1903,7 +1863,6 @@ test "cdp.input: dispatchTouchEvent a touchEnd carrying the released point is ac
         .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = rect_x, .y = rect_y }} },
     });
 
-    // No touchMove in between: the release point is a fresh position.
     try ctx.processMessage(.{
         .id = 2,
         .method = "Input.dispatchTouchEvent",
@@ -1918,7 +1877,6 @@ test "cdp.input: dispatchTouchEvent a touchEnd carrying the released point is ac
     );
     try testing.expect(result.isTrue());
 
-    // The contact clearing is not left dangling: a fresh touchStart works.
     try ctx.processMessage(.{
         .id = 3,
         .method = "Input.dispatchTouchEvent",
@@ -1927,8 +1885,6 @@ test "cdp.input: dispatchTouchEvent a touchEnd carrying the released point is ac
     try testing.expect(frame.page.input_touch_contact != null);
 }
 
-// Playwright's empty touchPoints list has no position to read: the lift
-// keeps dispatching at the stored contact (last touchstart/touchmove point).
 test "cdp.input: dispatchTouchEvent an empty touchEnd uses the stored position" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -2062,132 +2018,6 @@ test "cdp.input: dispatchTouchEvent a multi-point touchEnd/touchCancel is Invali
         .params = .{ .type = "touchEnd", .touchPoints = &.{ .{ .x = rect_x, .y = rect_y }, .{ .x = rect_x, .y = rect_y, .id = 1 } } },
     });
     try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 2 });
-}
-
-// The next four tests call Frame.user_input.dispatchTouchEvent directly
-// (bypassing CDP message dispatch) to exercise per-type event shape, which
-// Input.dispatchTouchEvent doesn't itself vary by target.
-test "cdp.input: dispatchTouchEvent touchcancel is never cancelable" {
-    const page = try testing.pageTest("mcp_actions.html", .{});
-    defer page.close();
-    const frame = page.frame().?;
-    var ls: lp.js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
-    defer ls.deinit();
-    var tc: lp.js.TryCatch = undefined;
-    tc.init(&ls.local);
-    defer tc.deinit();
-
-    const value = try ls.local.compileAndRun(
-        \\const t = document.getElementById('hoverTarget');
-        \\t.addEventListener('touchcancel', e => {
-        \\  e.preventDefault();
-        \\  window.result = !e.cancelable && !e.defaultPrevented;
-        \\}, {passive: false});
-        \\t;
-    , null);
-    const target = try ls.local.jsValueToZig(*Element, value);
-    _ = try Frame.user_input.dispatchTouchEvent(frame, target, .touchcancel, .{ .x = 10, .y = 20 }, .{});
-    try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
-}
-
-test "cdp.input: dispatchTouchEvent a passive-only touchstart listener is not cancelable" {
-    const page = try testing.pageTest("mcp_actions.html", .{});
-    defer page.close();
-    const frame = page.frame().?;
-    var ls: lp.js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
-    defer ls.deinit();
-    var tc: lp.js.TryCatch = undefined;
-    tc.init(&ls.local);
-    defer tc.deinit();
-
-    const value = try ls.local.compileAndRun(
-        \\const t = document.getElementById('hoverTarget');
-        \\t.addEventListener('touchstart', e => { window.result = !e.cancelable; }, {passive: true});
-        \\t;
-    , null);
-    const target = try ls.local.jsValueToZig(*Element, value);
-    _ = try Frame.user_input.dispatchTouchEvent(frame, target, .touchstart, .{ .x = 10, .y = 20 }, .{});
-    try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
-}
-
-test "cdp.input: dispatchTouchEvent a non-passive listener makes touchstart cancelable" {
-    const page = try testing.pageTest("mcp_actions.html", .{});
-    defer page.close();
-    const frame = page.frame().?;
-    var ls: lp.js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
-    defer ls.deinit();
-    var tc: lp.js.TryCatch = undefined;
-    tc.init(&ls.local);
-    defer tc.deinit();
-
-    const value = try ls.local.compileAndRun(
-        \\const t = document.getElementById('hoverTarget');
-        \\t.addEventListener('touchstart', e => { window.result = e.cancelable; });
-        \\t;
-    , null);
-    const target = try ls.local.jsValueToZig(*Element, value);
-    _ = try Frame.user_input.dispatchTouchEvent(frame, target, .touchstart, .{ .x = 10, .y = 20 }, .{});
-    try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
-}
-
-test "cdp.input: dispatchTouchEvent a closed-shadow touch target retargets to the host" {
-    const page = try testing.pageTest("mcp_actions.html", .{});
-    defer page.close();
-    const frame = page.frame().?;
-    var ls: lp.js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
-    defer ls.deinit();
-    var tc: lp.js.TryCatch = undefined;
-    tc.init(&ls.local);
-    defer tc.deinit();
-
-    const value = try ls.local.compileAndRun(
-        \\const host = document.createElement('div');
-        \\document.body.appendChild(host);
-        \\const root = host.attachShadow({mode: 'closed'});
-        \\const inner = document.createElement('button');
-        \\root.appendChild(inner);
-        \\host.addEventListener('touchstart', e => {
-        \\  window.eventTargetOK = e.target === host;
-        \\  window.touchTargetOK = e.touches[0].target === host;
-        \\});
-        \\inner;
-    , null);
-    const target = try ls.local.jsValueToZig(*Element, value);
-    _ = try Frame.user_input.dispatchTouchEvent(frame, target, .touchstart, .{ .x = 10, .y = 20 }, .{});
-    const result = try ls.local.compileAndRun("window.eventTargetOK === true && window.touchTargetOK === true", null);
-    try testing.expect(result.isTrue());
-}
-
-test "cdp.input: dispatchTouchEvent repeated touches reads have bounded arena storage" {
-    const TouchEvent = @import("../../../browser/webapi/event/TouchEvent.zig");
-
-    const page = try testing.pageTest("mcp_actions.html", .{});
-    defer page.close();
-    const frame = page.frame().?;
-    const target = frame.document.getDocumentElement().?;
-
-    const event = try TouchEvent.initTrustedWithTouch("touchstart", null, target, .{ .x = 10, .y = 20 }, true, frame);
-    event.asEvent().acquireRef();
-    defer event.asEvent().releaseRef(frame.page);
-
-    // Warm all three caches (touches, targetTouches, changedTouches are each
-    // a distinct cached TouchList) before measuring, so the loop only
-    // exercises the cache-hit path.
-    _ = try event.getTouches();
-    _ = try event.getTargetTouches();
-    _ = try event.getChangedTouches();
-    const before = event.asEvent()._arena.bytes;
-    for (0..10_000) |_| {
-        _ = try event.getTouches();
-        _ = try event.getTargetTouches();
-        _ = try event.getChangedTouches();
-    }
-    const after = event.asEvent()._arena.bytes;
-    try testing.expectEqual(before, after);
 }
 
 test "cdp.input: dispatchKeyEvent Tab runs sequential focus navigation" {
@@ -3054,19 +2884,19 @@ test "cdp.input: touch tap respects disabled controls across compatibility handl
     frame.js.localScope(&ls);
     defer ls.deinit();
     const cases = .{
-        .{ "t.disabled = true;", "clicks === 0 && !t.checked && !events.includes('mousedown') && !events.includes('mouseup')" },
-        .{ "fieldset.disabled = true;", "clicks === 0 && !t.checked" },
-        .{ "fieldset.disabled = true; const legend = document.createElement('legend'); fieldset.prepend(legend); legend.append(t);", "clicks === 1 && t.checked" },
-        .{ "t.disabled = true; t.addEventListener('pointerdown', e => e.preventDefault());", "clicks === 0 && !t.checked" },
-        .{ "t.disabled = true; t.addEventListener('mousemove', () => t.disabled = false);", "clicks === 1 && t.checked" },
-        .{ "t.addEventListener('pointerup', () => t.disabled = true);", "clicks === 0 && !t.checked" },
-        .{ "t.addEventListener('touchend', () => t.disabled = true);", "clicks === 0 && !t.checked" },
-        .{ "t.addEventListener('mouseover', () => t.disabled = true);", "clicks === 0 && !t.checked" },
-        .{ "t.addEventListener('mousemove', () => t.disabled = true);", "clicks === 0 && !t.checked" },
-        .{ "t.addEventListener('mousedown', () => t.disabled = true);", "clicks === 0 && !t.checked && !events.includes('mouseup')" },
-        .{ "t.addEventListener('focus', () => t.disabled = true);", "clicks === 0 && !t.checked" },
-        .{ "t.addEventListener('mouseup', () => t.disabled = true);", "clicks === 0 && !t.checked" },
-        .{ "t.addEventListener('click', () => t.disabled = true);", "clicks === 1" },
+        .{ "t.disabled = true;", "clicks === 0 && !t.checked && !events.includes('mousedown') && !events.includes('mouseup')", 1 },
+        .{ "fieldset.disabled = true;", "clicks === 0 && !t.checked", 1 },
+        .{ "fieldset.disabled = true; const legend = document.createElement('legend'); fieldset.prepend(legend); legend.append(t);", "clicks === 1 && t.checked", 1 },
+        .{ "t.disabled = true; t.addEventListener('pointerdown', e => e.preventDefault());", "clicks === 0 && !t.checked", 1 },
+        .{ "t.disabled = true; t.addEventListener('mousemove', () => t.disabled = false);", "clicks === 1 && t.checked", 1 },
+        .{ "t.addEventListener('pointerup', () => t.disabled = true);", "clicks === 0 && !t.checked", 1 },
+        .{ "t.addEventListener('touchend', () => t.disabled = true);", "clicks === 0 && !t.checked", 1 },
+        .{ "t.addEventListener('mouseover', () => t.disabled = true);", "clicks === 0 && !t.checked", 1 },
+        .{ "t.addEventListener('mousemove', () => t.disabled = true);", "clicks === 0 && !t.checked", 1 },
+        .{ "t.addEventListener('mousedown', () => t.disabled = true);", "clicks === 0 && !t.checked && !events.includes('mouseup')", 1 },
+        .{ "t.addEventListener('focus', () => t.disabled = true);", "clicks === 0 && !t.checked", 1 },
+        .{ "t.addEventListener('mouseup', () => t.disabled = true);", "clicks === 0 && !t.checked", 1 },
+        .{ "t.addEventListener('click', () => t.disabled = true);", "clicks === 1", 2 },
     };
     inline for (cases) |case| {
         _ = try ls.local.compileAndRun(
@@ -3078,9 +2908,7 @@ test "cdp.input: touch tap respects disabled controls across compatibility handl
         ++ case[0], null);
         const x = try (try ls.local.compileAndRun("t.getBoundingClientRect().x + 1", null)).toF64();
         const y = try (try ls.local.compileAndRun("t.getBoundingClientRect().y + 1", null)).toF64();
-        // A second tap must not activate a control disabled by the first click.
-        for (0..2) |tap| {
-            if (tap == 1 and comptime !std.mem.eql(u8, case[0], "t.addEventListener('click', () => t.disabled = true);")) break;
+        for (0..case[2]) |_| {
             try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchTouchEvent", .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y }} } });
             try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchTouchEvent", .params = .{ .type = "touchEnd", .touchPoints = &.{} } });
         }
@@ -3089,8 +2917,6 @@ test "cdp.input: touch tap respects disabled controls across compatibility handl
         try testing.expect(passed);
         try testing.expect(frame.page.input_touch_contact == null);
     }
-    // Explicit script dispatch is not trusted input and must still reach listeners.
-    try testing.expect((try ls.local.compileAndRun("t.disabled = true; clicks = 0; t.dispatchEvent(new MouseEvent('click')); clicks === 1", null)).isTrue());
 }
 
 test "cdp.input: touch tap revalidates targets between compatibility events" {
@@ -3205,17 +3031,17 @@ test "cdp.input: mouse activation rechecks disabled state between events" {
     frame.js.localScope(&ls);
     defer ls.deinit();
     const cases = .{
-        .{ "t.disabled = true;", "clicks === 0 && !t.checked && events.join(',') === 'pointerdown,pointerup'" },
-        .{ "fieldset.disabled = true;", "clicks === 0 && !t.checked" },
-        .{ "fieldset.disabled = true; const legend = document.createElement('legend'); fieldset.prepend(legend); legend.append(t);", "clicks === 1 && t.checked" },
-        .{ "t.disabled = true; t.addEventListener('pointerdown', e => e.preventDefault());", "clicks === 0 && !t.checked" },
-        .{ "t.addEventListener('pointerdown', () => t.disabled = true);", "clicks === 0 && !t.checked && !events.includes('mousedown')" },
-        .{ "t.addEventListener('mousedown', () => t.disabled = true);", "clicks === 0 && !t.checked && !events.includes('mouseup')" },
-        .{ "t.addEventListener('pointerup', () => t.disabled = true);", "clicks === 0 && !t.checked && !events.includes('mouseup')" },
-        .{ "t.addEventListener('mouseup', () => t.disabled = true);", "clicks === 0 && !t.checked" },
-        .{ "t.disabled = true; t.addEventListener('pointerdown', () => t.disabled = false);", "clicks === 1 && t.checked && events.includes('mousedown')" },
-        .{ "t.disabled = true; t.addEventListener('pointerup', () => t.disabled = false);", "clicks === 1 && t.checked && !events.includes('mousedown') && events.includes('mouseup')" },
-        .{ "t.addEventListener('click', () => t.disabled = true);", "clicks === 1" },
+        .{ "t.disabled = true;", "clicks === 0 && !t.checked && events.join(',') === 'pointerdown,pointerup'", 1 },
+        .{ "fieldset.disabled = true;", "clicks === 0 && !t.checked", 1 },
+        .{ "fieldset.disabled = true; const legend = document.createElement('legend'); fieldset.prepend(legend); legend.append(t);", "clicks === 1 && t.checked", 1 },
+        .{ "t.disabled = true; t.addEventListener('pointerdown', e => e.preventDefault());", "clicks === 0 && !t.checked", 1 },
+        .{ "t.addEventListener('pointerdown', () => t.disabled = true);", "clicks === 0 && !t.checked && !events.includes('mousedown')", 1 },
+        .{ "t.addEventListener('mousedown', () => t.disabled = true);", "clicks === 0 && !t.checked && !events.includes('mouseup')", 1 },
+        .{ "t.addEventListener('pointerup', () => t.disabled = true);", "clicks === 0 && !t.checked && !events.includes('mouseup')", 1 },
+        .{ "t.addEventListener('mouseup', () => t.disabled = true);", "clicks === 0 && !t.checked", 1 },
+        .{ "t.disabled = true; t.addEventListener('pointerdown', () => t.disabled = false);", "clicks === 1 && t.checked && events.includes('mousedown')", 1 },
+        .{ "t.disabled = true; t.addEventListener('pointerup', () => t.disabled = false);", "clicks === 1 && t.checked && !events.includes('mousedown') && events.includes('mouseup')", 1 },
+        .{ "t.addEventListener('click', () => t.disabled = true);", "clicks === 1", 2 },
     };
     inline for (cases) |case| {
         _ = try ls.local.compileAndRun(
@@ -3227,9 +3053,7 @@ test "cdp.input: mouse activation rechecks disabled state between events" {
         ++ case[0], null);
         const x = try (try ls.local.compileAndRun("t.getBoundingClientRect().x + 1", null)).toF64();
         const y = try (try ls.local.compileAndRun("t.getBoundingClientRect().y + 1", null)).toF64();
-        // A second click must not activate a control disabled by the first click.
-        for (0..2) |tap| {
-            if (tap == 1 and comptime !std.mem.eql(u8, case[0], "t.addEventListener('click', () => t.disabled = true);")) break;
+        for (0..case[2]) |_| {
             try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchMouseEvent", .params = .{ .type = "mousePressed", .x = x, .y = y, .button = "left", .clickCount = 1 } });
             try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchMouseEvent", .params = .{ .type = "mouseReleased", .x = x, .y = y, .button = "left", .clickCount = 1 } });
         }

@@ -190,10 +190,9 @@ input_modifiers: if (lp.build_config.wpt_extensions) @import("frame/user_input.z
 // The element the synthetic pointer is currently over
 input_hover_target: ?*Element = null,
 
-// Last CDP touch contact. Empty TouchEnd/TouchCancel reuse this instead of
-// re-hit-testing at (0, 0).
+// The active touch contact; single-touch, so at most one.
 input_touch_contact: ?@import("frame/user_input.zig").TouchContact = null,
-input_touch_next_pointer_id: i32 = 2,
+input_touch_next_pointer_id: i32 = @import("frame/user_input.zig").first_touch_pointer_id,
 
 // Per-gesture button state for the synthetic mouse pointer; see
 // user_input.PointerButtons.

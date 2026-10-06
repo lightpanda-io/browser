@@ -468,6 +468,11 @@ pub fn deinit(self: *Frame) void {
             page.input_pointer.reset();
         }
     }
+    if (page.input_touch_contact) |contact| {
+        if (contact.target.ownerFrame(self) == self) {
+            page.input_touch_contact = null;
+        }
+    }
 
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame.deinit", .{ .url = self.url, .type = self._type });
