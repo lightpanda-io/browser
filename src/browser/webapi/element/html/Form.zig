@@ -167,6 +167,41 @@ pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
     return frame.submitForm(submitter_element, self, .{});
 }
 
+/// The form's first submit button in tree order.
+/// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#default-button
+pub fn getDefaultButton(self: *Form, frame: *Frame) ?*Element {
+    var it = self.iterator(frame);
+    while (it.next()) |element| {
+        if (isSubmitButton(element)) {
+            return element;
+        }
+    }
+    return null;
+}
+
+/// Implicit submission without a default button only submits when the form has
+/// at most one field that blocks it. Like Chrome, it also requires `trigger`,
+/// the field that got the Enter key, to be that field: Enter on a checkbox or
+/// a radio does not submit.
+/// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission
+pub fn canSubmitImplicitly(self: *Form, trigger: *Input, frame: *Frame) bool {
+    var blocker: ?*Input = null;
+    var it = self.iterator(frame);
+    while (it.next()) |element| {
+        const input = element.is(Input) orelse continue;
+        switch (input._input_type) {
+            .text, .search, .url, .tel, .email, .password, .date, .month, .week, .time, .@"datetime-local", .number => {
+                if (blocker != null) {
+                    return false;
+                }
+                blocker = input;
+            },
+            else => {},
+        }
+    }
+    return blocker == trigger;
+}
+
 /// Returns true if the element is a submit button per the HTML spec:
 /// - <input type="submit"> or <input type="image">
 /// - <button type="submit"> (including default, since button's default type is "submit")

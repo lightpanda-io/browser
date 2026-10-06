@@ -737,13 +737,22 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
             // image button submits its form. The form-data set already gets the
             // submitter's coordinate fields appended via FormData.collectForm
             // (see src/browser/webapi/net/FormData.zig).
+            // A disabled submit button has no activation behavior; isDisabled
+            // also covers an ancestor <fieldset disabled>, which a synthetic
+            // dispatchEvent click does not otherwise check.
             if (input._input_type == .submit or input._input_type == .image) {
+                if (element.isDisabled()) {
+                    return;
+                }
                 return frame.submitForm(element, input.getForm(frame), .{});
             }
         },
         .button => {
             const button = html_element.subtype(Element.Html.Button);
             if (std.mem.eql(u8, button.getType(), "submit")) {
+                if (element.isDisabled()) {
+                    return;
+                }
                 return frame.submitForm(element, button.getForm(frame), .{});
             }
         },
@@ -914,7 +923,7 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
 
     if (target.is(Element.Html.Input)) |input| {
         if (is_enter) {
-            return frame.submitForm(input.asElement(), input.getForm(frame), .{});
+            return implicitFormSubmission(frame, input);
         }
         return insertInto(frame, input, text);
     }
@@ -928,6 +937,24 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
         }
         return insertInto(frame, textarea, text);
     }
+}
+
+/// Enter in a form field. The default button, when there is one, is clicked and
+/// its activation submits the form with it as the submitter; otherwise the
+/// form submits itself (SubmitEvent.submitter is null).
+/// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission
+fn implicitFormSubmission(frame: *Frame, input: *Element.Html.Input) !void {
+    const form = input.getForm(frame) orelse return;
+    if (form.getDefaultButton(frame)) |button| {
+        if (button.isDisabled()) {
+            return;
+        }
+        return dispatchKeyboardClick(frame, button);
+    }
+    if (!form.canSubmitImplicitly(input, frame)) {
+        return;
+    }
+    return frame.submitForm(form.asElement(), form, .{});
 }
 
 fn keypressFor(frame: *Frame, keydown: *const KeyboardEvent) !*KeyboardEvent {
