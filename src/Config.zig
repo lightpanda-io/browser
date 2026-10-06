@@ -469,6 +469,7 @@ const Commands = cli.Builder(.{
             .{ .name = "base_url", .type = ?[:0]const u8 },
             .{ .name = "system_prompt", .type = ?[:0]const u8 },
             .{ .name = "task", .type = ?[]const u8 },
+            .{ .name = "trace", .type = ?[]const u8 },
             .{ .name = "save", .type = ?[]const u8 },
             .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true },
             .{ .name = "verbosity", .type = ?AgentVerbosity },

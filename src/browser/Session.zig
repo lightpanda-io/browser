@@ -118,6 +118,7 @@ experimental_features: Config.ExperimentalFeatures,
 /// (goto, search, waitForSelector, …) without sitting through the full
 /// timeout.
 cancel_hook: ?CancelHook = null,
+tool_observer: ?@import("tools.zig").Observer = null,
 
 // Download handling configured via the `Browser.setDownloadBehavior` CDP
 // method (see issue #2701). When `download_behavior` is `.allow` or
