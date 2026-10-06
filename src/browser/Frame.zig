@@ -1883,6 +1883,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
         .text => |*buf| {
             try buf.appendSlice(self.arena, "</pre></body></html>");
             parser.parse(buf.items);
+            self._parse_state = .complete;
             self.documentIsComplete();
         },
         .image => |buf| {
@@ -2648,7 +2649,7 @@ pub fn scheduleCustomElementBackupDrain(self: *Frame) !void {
 // emits them, not just on the root frame.
 pub fn checkIdleNotifications(self: *Frame, total_http_activity: usize) void {
     switch (self._parse_state) {
-        .html, .complete => {
+        .html, .complete, .raw_done => {
             if (self._notified_network_almost_idle.check(total_http_activity <= 2)) {
                 self.notifyNetworkAlmostIdle();
             }

@@ -479,9 +479,9 @@ fn firstConditionError(conditions: []const WaitCondition) !void {
 fn hasRunnablePage(session: *Session) bool {
     for (session.pages.items) |page| {
         switch (page.frame._parse_state) {
-            // A text or image document has a JS context too: its timers and
+            // An image or raw document has a JS context too: its timers and
             // animation frames run like an HTML document's.
-            .html, .complete, .text, .raw_done => return true,
+            .html, .complete, .raw_done => return true,
             else => {},
         }
     }
@@ -521,7 +521,7 @@ test "Runner: waitForScript" {
     try runner.waitForScript(page.frame_id, "document.querySelector('#sel1')", 10);
 }
 
-fn expectTimersRun(url: [:0]const u8) !void {
+fn expectRunsLikeHtml(url: [:0]const u8) !void {
     const page = try testing.test_session.createPage();
     defer page.close();
     try page.navigate(url, .{});
@@ -539,14 +539,25 @@ fn expectTimersRun(url: [:0]const u8) !void {
         , null);
     }
     try runner.waitForScript(page.frame_id, "window.__fired.length === 2", 500);
+
+    // Seeded past the 500ms hold so the test doesn't spend it.
+    const frame = page.frame().?;
+    frame._notified_network_idle = .{ .triggered = lp.datetime.milliTimestamp(.boot) -| 600 };
+    var conditions = [_]WaitCondition{.{
+        .frame_id = page.frame_id,
+        .until = .done,
+        .status = .complete,
+    }};
+    _ = try runner._wait(true, 50, &conditions);
+    try testing.expectEqual(true, frame._notified_network_idle == .done);
 }
 
-test "Runner: runs timers in a text document" {
-    try expectTimersRun("http://127.0.0.1:9582/src/browser/tests/runner/plain.txt");
+test "Runner: text document runs timers and notifies idle" {
+    try expectRunsLikeHtml("http://127.0.0.1:9582/src/browser/tests/runner/plain.txt");
 }
 
-test "Runner: runs timers in an image document" {
-    try expectTimersRun("http://127.0.0.1:9582/images/ok.png");
+test "Runner: image document runs timers and notifies idle" {
+    try expectRunsLikeHtml("http://127.0.0.1:9582/images/ok.png");
 }
 
 test "Runner: networkidle notifies child frames" {
