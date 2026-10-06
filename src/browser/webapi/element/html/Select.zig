@@ -342,8 +342,10 @@ pub fn getLength(self: *Select) u32 {
 }
 
 // remove() is ChildNode's; remove(index) removes the option at index.
-pub fn remove(self: *Select, index_: ?js.Value, frame: *Frame) !void {
-    const index = try (index_ orelse return self.asElement().remove(frame)).toI32();
+fn remove(self: *Select, index_: ?js.Value, frame: *Frame) !void {
+    const value = index_ orelse return self.asElement().remove(frame);
+    const index = try value.toI32();
+
     if (index < 0) {
         return;
     }
