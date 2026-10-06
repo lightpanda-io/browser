@@ -28,6 +28,7 @@ const Element = @import("../../Element.zig");
 
 const HtmlElement = @import("../Html.zig");
 
+const String = lp.String;
 const Base = @This();
 
 pub const Proto = HtmlElement;
@@ -56,16 +57,16 @@ pub fn setHref(self: *Base, value: []const u8, frame: *Frame) !void {
     const element = self.asElement();
     try element.setAttributeSafe(comptime .wrap("href"), .wrap(value), frame);
 
+    if (element.asNode().isConnected() == false) return;
+    try self.baseAddedCallback(frame);
+}
+
+fn baseAddedCallback(self: *Base, frame: *Frame) !void {
     // Per HTML spec, the document's base URL is the href of the FIRST <base>
     // element in tree order that has an href attribute — not necessarily this
     // one. Re-derive from scratch so that setting href on a non-authoritative
     // <base>, or clearing href on the authoritative one, both work correctly.
-    const node = element.asNode();
-    if (!node.isConnected()) {
-        return;
-    }
-
-    const owner = node.ownerFrame(frame) orelse return;
+    const owner = self.asNode().ownerFrame(frame) orelse return;
     const first = (try owner.document.querySelector(comptime .wrap("base[href]"), owner)) orelse {
         owner.base_url = null;
         return;
@@ -94,6 +95,28 @@ pub const JsApi = struct {
 
     pub const href = bridge.accessor(Base.getHref, Base.setHref, .{ .ce_reactions = true });
     pub const target = reflect.string("target");
+};
+
+pub const Build = struct {
+    pub const parser_created_on_insert = true;
+
+    pub fn created(node: *Node, frame: *Frame) !void {
+        if (node.isConnected() == false) return;
+
+        const self = node.as(Base);
+        try self.baseAddedCallback(frame);
+    }
+
+    pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("href"))) {
+            return;
+        }
+        if (element.asNode().isConnected() == false) return;
+
+        try element.as(Base).baseAddedCallback(frame);
+    }
+
+    // TODO handle attribute remove?
 };
 
 const testing = @import("../../../../testing.zig");
