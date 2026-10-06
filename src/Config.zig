@@ -819,6 +819,16 @@ pub fn advertiseHost(self: *const Config) []const u8 {
     };
 }
 
+// The --advertise-host value when the operator set one. Unlike
+// advertiseHost() there is no fallback: only an explicit choice may widen the
+// WebSocket Host check (see isAllowedHost in server/http.zig).
+pub fn explicitAdvertiseHost(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        .serve => |opts| opts.advertise_host,
+        else => null,
+    };
+}
+
 // Wildcard bind addresses (0.0.0.0, ::) are not routable for clients
 // resolving /json/version. Fall back to a loopback address so the
 // advertised webSocketDebuggerUrl is at least connectable from the same

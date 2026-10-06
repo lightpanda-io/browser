@@ -69,6 +69,8 @@ listener_paused: bool,
 // keepalive and hits to /json/version,  /metrics, etc.
 max_connections: usize,
 
+advertise_host: ?[]const u8,
+
 // the protocols (cdp/bidi) we support
 protocols: Protocols,
 
@@ -224,6 +226,7 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
         .worker_drain = worker_drain,
         .shutdown_begun = false,
         .worker_wg = .{},
+        .advertise_host = config.explicitAdvertiseHost(),
     };
     return self;
 }
