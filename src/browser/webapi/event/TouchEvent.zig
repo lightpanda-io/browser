@@ -49,7 +49,7 @@ _touches_list: ?*TouchList = null,
 _target_touches_list: ?*TouchList = null,
 _changed_list: ?*TouchList = null,
 
-pub const TouchEventOptions = struct {
+const TouchEventOptions = struct {
     altKey: bool = false,
     ctrlKey: bool = false,
     metaKey: bool = false,
@@ -61,17 +61,6 @@ pub const Options = Event.inheritOptions(
     TouchEventOptions,
 );
 
-pub const TouchInit = struct {
-    identifier: i32 = 0,
-    target: *Element,
-    clientX: f64,
-    clientY: f64,
-    radiusX: f64 = 1,
-    radiusY: f64 = 1,
-    rotationAngle: f64 = 0,
-    force: f64 = 1,
-};
-
 pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*TouchEvent {
     return initWithTrusted(typ, _opts, false, frame);
 }
@@ -82,19 +71,9 @@ pub fn initTrusted(typ: []const u8, _opts: ?Options, frame: *Frame) !*TouchEvent
 
 /// Assigning the touch is a plain value write (no arena allocation), so
 /// nothing can fail between creating the event and returning it.
-pub fn initTrustedWithTouch(typ: []const u8, _opts: ?Options, touch_init: TouchInit, active: bool, frame: *Frame) !*TouchEvent {
+pub fn initTrustedWithTouch(typ: []const u8, _opts: ?Options, target: *Element, point: Touch.Point, active: bool, frame: *Frame) !*TouchEvent {
     const event = try initWithTrusted(typ, _opts, true, frame);
-    event._touch = .{
-        ._event = event,
-        ._identifier = touch_init.identifier,
-        ._target = touch_init.target.asEventTarget(),
-        ._client_x = touch_init.clientX,
-        ._client_y = touch_init.clientY,
-        ._radius_x = touch_init.radiusX,
-        ._radius_y = touch_init.radiusY,
-        ._rotation_angle = touch_init.rotationAngle,
-        ._force = touch_init.force,
-    };
+    event._touch = .{ ._event = event, ._target = target.asEventTarget(), ._point = point };
     event._touch_active = active;
     return event;
 }

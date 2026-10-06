@@ -20,6 +20,7 @@ const std = @import("std");
 const CDP = @import("../CDP.zig");
 const Frame = @import("../../../browser/Frame.zig");
 const Element = @import("../../../browser/webapi/Element.zig");
+const Touch = @import("../../../browser/webapi/event/Touch.zig");
 
 const dom_button = Frame.user_input.mouse_button;
 
@@ -169,26 +170,15 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
 /// contact exists, but it is this engine's rule and not Chrome's.
 ///
 /// Puppeteer's ids start at 1, so the contact keeps the id from touchStart
-/// instead of assuming 0.
+/// instead of assuming 0. Touch.identifier is a DOM i32, so a fractional or
+/// out-of-range id fails to parse and lands on the same InvalidParams a bad
+/// shape does. Chrome instead truncates, and overflows to INT_MIN past the
+/// range, which is not worth matching.
 fn dispatchTouchEvent(cmd: *CDP.Command) !void {
     const params = (cmd.params(struct {
         type: Type,
         modifiers: u4 = 0,
-        touchPoints: []const struct {
-            x: f64,
-            y: f64,
-            // Touch.identifier is a DOM i32, so a fractional or out-of-range
-            // id fails to parse and lands on the same InvalidParams a bad
-            // shape does. Chrome instead truncates, and overflows to
-            // INT_MIN past the range, which is not worth matching.
-            id: i32 = 0,
-            // Puppeteer sends 0.5 for all three on every tap, so a page
-            // reading pressure sees the client's value and not a default.
-            radiusX: f64 = 1,
-            radiusY: f64 = 1,
-            rotationAngle: f64 = 0,
-            force: f64 = 1,
-        },
+        touchPoints: []const Touch.Point,
 
         const Type = enum {
             touchStart,
@@ -218,11 +208,11 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
         // contact is still active would overwrite it, losing the original
         // target/coordinates and reporting two starts for one contact.
         .touchStart => {
-            if (Frame.user_input.hasActiveTouch(frame)) return error.InvalidParams;
+            if (frame.page.input_touch_contact != null) return error.InvalidParams;
         },
         .touchMove, .touchEnd, .touchCancel => {
             const contact = frame.page.input_touch_contact orelse return error.InvalidParams;
-            if (params.touchPoints.len == 1 and params.touchPoints[0].id != contact.point.identifier) {
+            if (params.touchPoints.len == 1 and params.touchPoints[0].id != contact.point.id) {
                 return error.InvalidParams;
             }
         },
@@ -233,26 +223,14 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
     // Puppeteer's touchEnd carries the point being released, and Chrome
     // dispatches there rather than at the last touchmove; Playwright's empty
     // list and touchCancel fall back to the stored contact.
-    const lift_point: ?Frame.user_input.TouchPoint = if (params.touchPoints.len == 1) p: {
-        const wire = params.touchPoints[0];
-        break :p .{
-            .x = wire.x,
-            .y = wire.y,
-            .identifier = wire.id,
-            .radius_x = wire.radiusX,
-            .radius_y = wire.radiusY,
-            .rotation_angle = wire.rotationAngle,
-            .force = wire.force,
-        };
-    } else null;
-
+    const point: ?Touch.Point = if (params.touchPoints.len == 1) params.touchPoints[0] else null;
     const modifiers = cdpModifiers(params.modifiers);
 
     switch (params.type) {
-        .touchStart => try Frame.user_input.triggerTouch(frame, .touchstart, lift_point.?, modifiers),
-        .touchMove => try Frame.user_input.triggerTouch(frame, .touchmove, lift_point.?, modifiers),
-        .touchEnd => try Frame.user_input.triggerTouchLift(frame, .touchend, lift_point, modifiers),
-        .touchCancel => try Frame.user_input.triggerTouchLift(frame, .touchcancel, lift_point, modifiers),
+        .touchStart => try Frame.user_input.triggerTouch(frame, null, .touchstart, point.?, modifiers),
+        .touchMove => try Frame.user_input.triggerTouch(frame, null, .touchmove, point.?, modifiers),
+        .touchEnd => try Frame.user_input.triggerTouchLift(frame, .touchend, point, modifiers, null),
+        .touchCancel => try Frame.user_input.triggerTouchLift(frame, .touchcancel, point, modifiers, null),
     }
 }
 
@@ -1659,14 +1637,14 @@ test "cdp.input: dispatchTouchEvent a touchStart past every element still opens 
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = 0, .y = 3000 }} },
     });
-    try testing.expect(Frame.user_input.hasActiveTouch(frame));
+    try testing.expect(frame.page.input_touch_contact != null);
 
     try ctx.processMessage(.{
         .id = 2,
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchEnd", .touchPoints = &.{} },
     });
-    try testing.expect(!Frame.user_input.hasActiveTouch(frame));
+    try testing.expect(frame.page.input_touch_contact == null);
 }
 
 test "cdp.input: dispatchTouchEvent empty touchStart is InvalidParams" {
@@ -1771,7 +1749,7 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
         .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y, .id = 0.5 }} },
     });
     try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 1 });
-    try testing.expect(!Frame.user_input.hasActiveTouch(frame));
+    try testing.expect(frame.page.input_touch_contact == null);
 
     // Puppeteer's id generator starts at 1 and increments; any integer id
     // (including one Chrome would also accept, like a negative one) opens
@@ -1781,7 +1759,7 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y, .id = 7 }} },
     });
-    try testing.expectEqual(@as(i32, 7), frame.page.input_touch_contact.?.point.identifier);
+    try testing.expectEqual(@as(i32, 7), frame.page.input_touch_contact.?.point.id);
 
     // A touchMove for a different id than the open contact is rejected and
     // leaves the contact untouched.
@@ -1808,7 +1786,7 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
         .params = .{ .type = "touchEnd", .touchPoints = &.{.{ .x = x + 1, .y = y + 2, .id = 8 }} },
     });
     try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 5 });
-    try testing.expect(Frame.user_input.hasActiveTouch(frame));
+    try testing.expect(frame.page.input_touch_contact != null);
 
     // touchEnd with the matching id (Puppeteer) lifts the contact.
     try ctx.processMessage(.{
@@ -1816,7 +1794,7 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchEnd", .touchPoints = &.{.{ .x = x + 1, .y = y + 2, .id = 7 }} },
     });
-    try testing.expect(!Frame.user_input.hasActiveTouch(frame));
+    try testing.expect(frame.page.input_touch_contact == null);
     try testing.expect((try ls.local.compileAndRun(
         \\JSON.stringify(touchEvents) === JSON.stringify([
         \\  ['touchstart', 7, target.getBoundingClientRect().x, target.getBoundingClientRect().y],
@@ -1931,7 +1909,7 @@ test "cdp.input: dispatchTouchEvent a touchEnd carrying the released point is ac
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchEnd", .touchPoints = &.{.{ .x = end_x, .y = end_y }} },
     });
-    try testing.expect(!Frame.user_input.hasActiveTouch(frame));
+    try testing.expect(frame.page.input_touch_contact == null);
 
     const result = try ls.local.compileAndRun(
         "window.endTarget === true && window.endX === " ++ "document.getElementById('hoverTarget').getBoundingClientRect().x + 5" ++
@@ -1946,7 +1924,7 @@ test "cdp.input: dispatchTouchEvent a touchEnd carrying the released point is ac
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = rect_x, .y = rect_y }} },
     });
-    try testing.expect(Frame.user_input.hasActiveTouch(frame));
+    try testing.expect(frame.page.input_touch_contact != null);
 }
 
 // Playwright's empty touchPoints list has no position to read: the lift
@@ -2036,14 +2014,14 @@ test "cdp.input: dispatchTouchEvent rejects populated touchCancel without liftin
         .params = .{ .type = "touchCancel", .touchPoints = &.{.{ .x = cancel_x, .y = cancel_y }} },
     });
     try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 2 });
-    try testing.expect(Frame.user_input.hasActiveTouch(frame));
+    try testing.expect(frame.page.input_touch_contact != null);
 
     try ctx.processMessage(.{
         .id = 3,
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchCancel", .touchPoints = &.{} },
     });
-    try testing.expect(!Frame.user_input.hasActiveTouch(frame));
+    try testing.expect(frame.page.input_touch_contact == null);
 
     const result = try ls.local.compileAndRun(
         "window.cancelable === false && window.cancelX === " ++ "document.getElementById('hoverTarget').getBoundingClientRect().x" ++
@@ -2086,7 +2064,7 @@ test "cdp.input: dispatchTouchEvent a multi-point touchEnd/touchCancel is Invali
     try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 2 });
 }
 
-// The next four tests call Frame.user_input.dispatchTouchEventOn directly
+// The next four tests call Frame.user_input.dispatchTouchEvent directly
 // (bypassing CDP message dispatch) to exercise per-type event shape, which
 // Input.dispatchTouchEvent doesn't itself vary by target.
 test "cdp.input: dispatchTouchEvent touchcancel is never cancelable" {
@@ -2109,7 +2087,7 @@ test "cdp.input: dispatchTouchEvent touchcancel is never cancelable" {
         \\t;
     , null);
     const target = try ls.local.jsValueToZig(*Element, value);
-    try Frame.user_input.dispatchTouchEventOn(frame, target, .touchcancel, .{ .x = 10, .y = 20 }, .{});
+    _ = try Frame.user_input.dispatchTouchEvent(frame, target, .touchcancel, .{ .x = 10, .y = 20 }, .{});
     try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
 }
 
@@ -2130,7 +2108,7 @@ test "cdp.input: dispatchTouchEvent a passive-only touchstart listener is not ca
         \\t;
     , null);
     const target = try ls.local.jsValueToZig(*Element, value);
-    try Frame.user_input.dispatchTouchEventOn(frame, target, .touchstart, .{ .x = 10, .y = 20 }, .{});
+    _ = try Frame.user_input.dispatchTouchEvent(frame, target, .touchstart, .{ .x = 10, .y = 20 }, .{});
     try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
 }
 
@@ -2151,7 +2129,7 @@ test "cdp.input: dispatchTouchEvent a non-passive listener makes touchstart canc
         \\t;
     , null);
     const target = try ls.local.jsValueToZig(*Element, value);
-    try Frame.user_input.dispatchTouchEventOn(frame, target, .touchstart, .{ .x = 10, .y = 20 }, .{});
+    _ = try Frame.user_input.dispatchTouchEvent(frame, target, .touchstart, .{ .x = 10, .y = 20 }, .{});
     try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
 }
 
@@ -2179,7 +2157,7 @@ test "cdp.input: dispatchTouchEvent a closed-shadow touch target retargets to th
         \\inner;
     , null);
     const target = try ls.local.jsValueToZig(*Element, value);
-    try Frame.user_input.dispatchTouchEventOn(frame, target, .touchstart, .{ .x = 10, .y = 20 }, .{});
+    _ = try Frame.user_input.dispatchTouchEvent(frame, target, .touchstart, .{ .x = 10, .y = 20 }, .{});
     const result = try ls.local.compileAndRun("window.eventTargetOK === true && window.touchTargetOK === true", null);
     try testing.expect(result.isTrue());
 }
@@ -2192,11 +2170,7 @@ test "cdp.input: dispatchTouchEvent repeated touches reads have bounded arena st
     const frame = page.frame().?;
     const target = frame.document.getDocumentElement().?;
 
-    const event = try TouchEvent.initTrustedWithTouch("touchstart", null, .{
-        .target = target,
-        .clientX = 10,
-        .clientY = 20,
-    }, true, frame);
+    const event = try TouchEvent.initTrustedWithTouch("touchstart", null, target, .{ .x = 10, .y = 20 }, true, frame);
     event.asEvent().acquireRef();
     defer event.asEvent().releaseRef(frame.page);
 

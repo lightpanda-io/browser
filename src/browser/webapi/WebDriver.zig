@@ -29,7 +29,6 @@ const Element = @import("Element.zig");
 const EventTarget = @import("EventTarget.zig");
 
 const Cookie = @import("storage/Cookie.zig");
-const PointerEvent = @import("event/PointerEvent.zig");
 const Label = @import("element/html/Label.zig");
 
 const log = lp.log;
@@ -257,7 +256,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                     // Touch implicitly captures the original down target.
                     const captured = contact.target;
                     const owner = captured.ownerFrame(frame) orelse continue;
-                    Frame.user_input.triggerTouch(owner, .touchmove, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
+                    Frame.user_input.triggerTouch(owner, null, .touchmove, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
                         log.debug(.app, "webdriver touch", .{ .err = err });
                     };
                     // No viewport distance, so a move whose origin element
@@ -267,7 +266,9 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                     }
                 } else {
                     const owner = el.ownerFrame(frame) orelse continue;
-                    dispatchPointer(owner, el, "pointermove", -1, 0, "touch", frame.page.input_touch_next_pointer_id);
+                    Frame.user_input.touchHover(owner, el, frame.page.input_modifiers) catch |err| {
+                        log.debug(.app, "webdriver touch", .{ .err = err });
+                    };
                 }
             } else {
                 Frame.user_input.moveSequence(frame, el, .{
@@ -288,7 +289,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                 // fire another touchstart for the same finger.
                 if (frame.page.input_touch_contact != null) continue;
                 const owner = el.ownerFrame(frame) orelse continue;
-                Frame.user_input.triggerTouchOn(owner, el, .touchstart, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
+                Frame.user_input.triggerTouch(owner, el, .touchstart, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
                     log.debug(.app, "webdriver touch", .{ .err = err });
                 };
             } else {
@@ -305,7 +306,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                 const contact = frame.page.input_touch_contact orelse continue;
                 const captured = contact.target;
                 const owner = captured.ownerFrame(frame) orelse continue;
-                Frame.user_input.triggerTouchLiftOn(owner, .touchend, null, frame.page.input_modifiers, captured) catch |err| {
+                Frame.user_input.triggerTouchLift(owner, .touchend, null, frame.page.input_modifiers, captured) catch |err| {
                     log.debug(.app, "webdriver touch", .{ .err = err });
                 };
             } else {
@@ -402,28 +403,6 @@ fn readI32(obj: js.Object, key: []const u8, default: i32) i32 {
         return default;
     }
     return val.toI32() catch default;
-}
-
-fn dispatchPointer(frame: *Frame, el: *Element, comptime typ: []const u8, button: i32, buttons: u16, pointer_type: []const u8, pointer_id: i32) void {
-    const modifiers = frame.page.input_modifiers;
-    const event = PointerEvent.initTrusted(typ, .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .button = button,
-        .buttons = buttons,
-        .pointerId = pointer_id,
-        .pointerType = pointer_type,
-        .isPrimary = true,
-        .ctrlKey = modifiers.ctrl,
-        .shiftKey = modifiers.shift,
-        .altKey = modifiers.alt,
-        .metaKey = modifiers.meta,
-    }, frame) catch |err| {
-        log.debug(.app, "webdriver pointer event", .{ .err = err, .type = typ });
-        return;
-    };
-    dispatch(el.asEventTarget(), event.asEvent(), frame, typ);
 }
 
 // The action's x/y, which the caller already resolved the target from. An

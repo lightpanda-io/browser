@@ -28,17 +28,24 @@ const TouchEvent = @import("TouchEvent.zig");
 const Touch = @This();
 
 _event: *TouchEvent,
-_identifier: i32,
 // EventTarget, not Element, per spec, and because dispatch retargets it
 // across shadow boundaries the same way it retargets Event.target (see
 // TouchEvent.touchTargetPtr / EventManager's AdjustedTargets).
 _target: ?*EventTarget,
-_client_x: f64,
-_client_y: f64,
-_radius_x: f64,
-_radius_y: f64,
-_rotation_angle: f64,
-_force: f64,
+_point: Point,
+
+/// One contact as the client describes it. The names and defaults are CDP's
+/// Input.TouchPoint, so the protocol handler parses straight into it; the
+/// defaults are Chrome's for a point that leaves them out.
+pub const Point = struct {
+    x: f64,
+    y: f64,
+    id: i32 = 0,
+    radiusX: f64 = 1,
+    radiusY: f64 = 1,
+    rotationAngle: f64 = 0,
+    force: f64 = 1,
+};
 
 pub fn acquireRef(self: *Touch) void {
     self._event.asEvent().acquireRef();
@@ -49,7 +56,7 @@ pub fn releaseRef(self: *Touch, page: *Page) void {
 }
 
 fn getIdentifier(self: *const Touch) i32 {
-    return self._identifier;
+    return self._point.id;
 }
 
 fn getTarget(self: *const Touch) ?*EventTarget {
@@ -57,45 +64,27 @@ fn getTarget(self: *const Touch) ?*EventTarget {
 }
 
 fn getClientX(self: *const Touch) f64 {
-    return self._client_x;
+    return self._point.x;
 }
 
 fn getClientY(self: *const Touch) f64 {
-    return self._client_y;
-}
-
-/// This engine has no layout, so screenX/screenY and pageX/pageY alias
-/// clientX/clientY, the same simplification MouseEvent.compatCoordinate makes.
-fn getPageX(self: *const Touch) f64 {
-    return self._client_x;
-}
-
-fn getPageY(self: *const Touch) f64 {
-    return self._client_y;
-}
-
-fn getScreenX(self: *const Touch) f64 {
-    return self._client_x;
-}
-
-fn getScreenY(self: *const Touch) f64 {
-    return self._client_y;
+    return self._point.y;
 }
 
 fn getRadiusX(self: *const Touch) f64 {
-    return self._radius_x;
+    return self._point.radiusX;
 }
 
 fn getRadiusY(self: *const Touch) f64 {
-    return self._radius_y;
+    return self._point.radiusY;
 }
 
 fn getRotationAngle(self: *const Touch) f64 {
-    return self._rotation_angle;
+    return self._point.rotationAngle;
 }
 
 fn getForce(self: *const Touch) f64 {
-    return self._force;
+    return self._point.force;
 }
 
 pub const JsApi = struct {
@@ -111,10 +100,12 @@ pub const JsApi = struct {
     pub const target = bridge.accessor(Touch.getTarget, null, .{});
     pub const clientX = bridge.accessor(Touch.getClientX, null, .{});
     pub const clientY = bridge.accessor(Touch.getClientY, null, .{});
-    pub const pageX = bridge.accessor(Touch.getPageX, null, .{});
-    pub const pageY = bridge.accessor(Touch.getPageY, null, .{});
-    pub const screenX = bridge.accessor(Touch.getScreenX, null, .{});
-    pub const screenY = bridge.accessor(Touch.getScreenY, null, .{});
+    // This engine has no layout, so page and screen coordinates alias the
+    // client ones, the same simplification MouseEvent.compatCoordinate makes.
+    pub const pageX = bridge.accessor(Touch.getClientX, null, .{});
+    pub const pageY = bridge.accessor(Touch.getClientY, null, .{});
+    pub const screenX = bridge.accessor(Touch.getClientX, null, .{});
+    pub const screenY = bridge.accessor(Touch.getClientY, null, .{});
     pub const radiusX = bridge.accessor(Touch.getRadiusX, null, .{});
     pub const radiusY = bridge.accessor(Touch.getRadiusY, null, .{});
     pub const rotationAngle = bridge.accessor(Touch.getRotationAngle, null, .{});
