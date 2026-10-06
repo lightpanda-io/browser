@@ -40,8 +40,8 @@
             .hash = "N-V-__8AALc_rgC04POe18O0LKFRm4ouQpLtL3riscEmWp-Q",
         },
         .zenai = .{
-            .url = "git+https://github.com/lightpanda-io/zenai.git#97c9c6f3eb931bb7ea214109ec0f77c7aaef5dda",
-            .hash = "zenai-0.0.0-iOY_VICSBwBlxpiWKvrd3T3n4q3w_jCvEaMIn2J1Gg-H",
+            .url = "git+https://github.com/lightpanda-io/zenai.git#86fba8b0b599a54f2f097d73b275e0021800284d",
+            .hash = "zenai-0.0.0-iOY_VGuXBwDHAq5cYdXH7gvlLFFheL5hwLB6FGXT1-c7",
         },
         .isocline = .{
             .url = "git+https://github.com/arrufat/isocline#4a99434bee4a5ed04c1639514224d48cd55e1405",
