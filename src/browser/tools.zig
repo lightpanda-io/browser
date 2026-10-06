@@ -397,7 +397,7 @@ pub const Tool = enum {
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. Render markdown for just that node's subtree. 0 is treated as omitted." },
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
                     \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output; same groups as the html tool's strip. `shell` (page chrome by markup) and `clutter` (keep only the main content, in the manner of reader modes) are the ones that matter for reading; `ui` also drops images.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -414,7 +414,7 @@ pub const Tool = enum {
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, dump only that node's outerHTML. 0 is treated as omitted." },
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
                     \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output: `js` (script, noscript, script preloads), `css` (style, stylesheet links), `ui` (css plus img, picture, video, audio, svg, canvas, iframe), `invisible` (elements an author rule or inline style sets to display:none), `shell` (nav, aside, dialog, page-level header/footer and the matching landmark roles; skipped when that would drop most of the text), `clutter` (keep only the main content, in the manner of reader modes; includes `shell` and `invisible`, and falls back to `shell` when it finds too little). {\"js\":true,\"css\":true} keeps a page dump small.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -432,7 +432,7 @@ pub const Tool = enum {
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, render only that node. 0 is treated as omitted." },
                     \\    "fullPage": { "type": "boolean", "description": "Render the whole content height instead of one viewport. Defaults to false." },
                     \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the render; same groups as the html tool's strip (`js`, `css`, `ui`, `invisible`, `shell`, `clutter`).", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -446,7 +446,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "limit": { "type": "integer", "description": "Optional. Return at most this many links, in document order." },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -460,7 +460,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "script": { "type": "string", "description": "JavaScript run in the page context. A bare trailing expression, or `return` with top-level `await`, is the result." },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
                     \\    "save": { "type": "string", "description": "Optional bridge-store key. The evaluate's return value is stored under this name and re-exposed as `lp.<name>` to subsequent evaluates. Objects, arrays, and strings are serialized automatically — no JSON.stringify needed." }
                     \\  },
@@ -506,7 +506,7 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root. 0 is treated as omitted." },
                     \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
@@ -721,7 +721,7 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "url": { "type": "string", "description": "Restrict output to cookies matching this URL's host. Defaults to the current page." },
+                    \\    "url": { "type": "string", "description": "Restrict output to cookies matching this URL's host. Defaults to the current page. An empty string is treated as omitted." },
                     \\    "all": { "type": "boolean", "default": false, "description": "If true, dump every cookie regardless of host. Overrides `url`." }
                     \\  }
                     \\}
@@ -777,7 +777,7 @@ const url_params_schema = minify(
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing." },
+    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing. An empty string is treated as omitted." },
     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
     \\  }
     \\}
@@ -835,6 +835,9 @@ pub fn errorMessage(err: ToolError) []const u8 {
 pub const ToolResult = struct {
     text: []const u8,
     is_error: bool = false,
+    /// The call left a different frame current, so `--save` records the
+    /// navigation a read tool's `url` made rather than one it skipped.
+    navigated: bool = false,
     /// Only set when the caller passed `CallOpts.inline_image`.
     image: ?lp.screenshot.Prepared = null,
     /// Resolved before the action runs, because a navigation takes the node
@@ -946,9 +949,10 @@ pub fn call(
         return err;
     };
     result.selector = selector;
+    if (session.currentFrame()) |frame| result.navigated = frame._frame_id != frame_before;
     if (opts.nav_note) {
         if (session.currentFrame()) |frame| {
-            const note = if (frame._frame_id != frame_before)
+            const note = if (result.navigated)
                 try navErrorNote(arena, frame)
             else if (tool.navigatesToUrl())
                 try movedNote(arena, substituted, frame)
@@ -1136,7 +1140,7 @@ fn movedNote(arena: std.mem.Allocator, arguments: ?std.json.Value, frame: *const
         .string => |s| s,
         else => return null,
     };
-    if (std.mem.eql(u8, url, frame.url)) return null;
+    if (url.len == 0 or std.mem.eql(u8, url, frame.url)) return null;
     return try arena.print("The page is at {s}, not {s}: a redirect or an in-page navigation moved it, and this reads it as it is. Use goto to reload {s}.", .{ frame.url, url, url });
 }
 
@@ -2604,13 +2608,21 @@ pub fn parseValue(comptime T: type, arena: std.mem.Allocator, value: std.json.Va
             return error.InvalidParams;
         },
     };
-    // Schema contract: backendNodeId 0 means omitted — registry ids start at 1,
-    // and zero-filling models (gpt-5.x) send 0 for "unset".
+    // Schema contract: backendNodeId 0 and url "" mean omitted. Registry ids
+    // start at 1 and "" is no URL; zero-filling models (gpt-5.x) send them for
+    // "unset", and navigating to "" would tear the page down.
     if (comptime @typeInfo(T) == .@"struct" and @hasField(T, "backendNodeId") and
         @typeInfo(@FieldType(T, "backendNodeId")) == .optional)
     {
         if (parsed.backendNodeId) |nid| {
             if (nid == 0) parsed.backendNodeId = null;
+        }
+    }
+    if (comptime @typeInfo(T) == .@"struct" and @hasField(T, "url") and
+        @typeInfo(@FieldType(T, "url")) == .optional)
+    {
+        if (parsed.url) |u| {
+            if (u.len == 0) parsed.url = null;
         }
     }
     return parsed;
@@ -2875,6 +2887,12 @@ test "tools: a read tool keeps a page that moved within the document" {
 
     const r = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ url ++ "\"}", .{}), .{ .nav_note = true });
     try std.testing.expect(std.mem.startsWith(u8, r.text, "The page is at " ++ url ++ "?moved, not " ++ url ++ ":"));
+    try std.testing.expect(!r.navigated);
+
+    const empty = try call(aa, session, &registry, "tree", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":""}
+    , .{}), .{ .nav_note = true });
+    try std.testing.expect(!empty.is_error and !empty.navigated);
 
     const mark = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"script":"document.body.dataset.mark"}
@@ -2972,6 +2990,23 @@ test "parseValue: zero-filled optional backendNodeId treated as omitted" {
         \\{"backendNodeId":0}
     , .{});
     try std.testing.expectEqual(@as(NodeRegistry.Id, 0), (try parseValue(Required, aa, zero_required)).backendNodeId);
+}
+
+test "parseValue: empty optional url treated as omitted" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const Params = struct { url: ?[:0]const u8 = null };
+    const empty = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":""}
+    , .{});
+    try std.testing.expect((try parseValue(Params, aa, empty)).url == null);
+
+    const real = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"https://example.com"}
+    , .{});
+    try std.testing.expectEqualStrings("https://example.com", (try parseValue(Params, aa, real)).url.?);
 }
 
 test "substituteEnvVars resolves LP_* vars" {
