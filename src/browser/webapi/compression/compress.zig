@@ -44,9 +44,15 @@ pub const Compressor = union(enum(u1)) {
         };
     }
 
-    pub fn transformer(self: *Compressor) TransformStream.ZigTransformer {
+    pub fn transform(self: *Compressor, controller: *TransformStream.DefaultController, chunk: js.Value) !void {
         return switch (self.*) {
-            inline else => |*compressor| compressor.transformer(),
+            inline else => |*compressor| compressor.transform(controller, chunk),
+        };
+    }
+
+    pub fn flush(self: *Compressor, controller: *TransformStream.DefaultController) !void {
+        return switch (self.*) {
+            inline else => |*compressor| compressor.flush(controller),
         };
     }
 };
@@ -62,9 +68,15 @@ pub const Decompressor = union(enum(u1)) {
         };
     }
 
-    pub fn transformer(self: *Decompressor) TransformStream.ZigTransformer {
+    pub fn transform(self: *Decompressor, controller: *TransformStream.DefaultController, chunk: js.Value) !void {
         return switch (self.*) {
-            inline else => |*decompressor| decompressor.transformer(),
+            inline else => |*decompressor| decompressor.transform(controller, chunk),
+        };
+    }
+
+    pub fn flush(self: *Decompressor, controller: *TransformStream.DefaultController) !void {
+        return switch (self.*) {
+            inline else => |*decompressor| decompressor.flush(controller),
         };
     }
 };

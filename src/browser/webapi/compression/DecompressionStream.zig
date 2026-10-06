@@ -38,7 +38,7 @@ pub fn init(format: compress.Format, exec: *const Execution) !*DecompressionStre
         ._transform = undefined,
         ._decompressor = .init(exec, format),
     });
-    self._transform = try TransformStream.initWithZigTransformer(self._decompressor.transformer(), exec);
+    self._transform = try TransformStream.initWithZigTransformer(.{ .decompressor = &self._decompressor }, exec);
     return self;
 }
 

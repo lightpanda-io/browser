@@ -21,6 +21,9 @@ const js = @import("../../js/js.zig");
 const ReadableStream = @import("ReadableStream.zig");
 const ReadableStreamDefaultController = @import("ReadableStreamDefaultController.zig");
 const WritableStream = @import("WritableStream.zig");
+const TextEncoderStream = @import("../encoding/TextEncoderStream.zig");
+const TextDecoderStream = @import("../encoding/TextDecoderStream.zig");
+const compress = @import("../compression/compress.zig");
 
 const Execution = js.Execution;
 
@@ -28,18 +31,27 @@ const TransformStream = @This();
 
 pub const DefaultController = TransformStreamDefaultController;
 
-/// A transformer implemented in Zig; `ctx` is passed back to every `vtable` callback.
-pub const ZigTransformer = struct {
-    ctx: ?*anyopaque = null,
-    vtable: *const VTable,
+/// The transformers implemented in Zig.
+pub const ZigTransformer = union(enum) {
+    text_encoder,
+    text_decoder: struct { ignore_bom: bool },
+    compressor: *compress.Compressor,
+    decompressor: *compress.Decompressor,
 
-    pub const VTable = struct {
-        transform: *const fn (ctx: ?*anyopaque, *TransformStreamDefaultController, js.Value) anyerror!void,
-        flush: *const fn (ctx: ?*anyopaque, *TransformStreamDefaultController) anyerror!void,
-    };
+    fn transform(self: ZigTransformer, controller: *TransformStreamDefaultController, chunk: js.Value) !void {
+        return switch (self) {
+            .text_encoder => TextEncoderStream.encodeTransform(controller, chunk),
+            .text_decoder => |opts| TextDecoderStream.decodeTransform(controller, chunk, opts.ignore_bom),
+            inline .compressor, .decompressor => |t| t.transform(controller, chunk),
+        };
+    }
 
-    /// Use this when flush is not needed.
-    pub fn noopFlush(_: ?*anyopaque, _: *TransformStreamDefaultController) !void {}
+    fn flush(self: ZigTransformer, controller: *TransformStreamDefaultController) !void {
+        return switch (self) {
+            .text_encoder, .text_decoder => {},
+            inline .compressor, .decompressor => |t| t.flush(controller),
+        };
+    }
 };
 
 _readable: *ReadableStream,
@@ -104,7 +116,7 @@ pub fn initWithZigTransformer(zig_transformer: ZigTransformer, exec: *const Exec
 pub fn transformWrite(self: *TransformStream, chunk: js.Value, exec: *const Execution) !void {
     if (self._controller._zig_transformer) |zig| {
         // Zig-level transform (used by TextEncoderStream etc.)
-        return zig.vtable.transform(zig.ctx, self._controller, chunk);
+        return zig.transform(self._controller, chunk);
     }
 
     if (self._controller._transform_fn) |transform_fn| {
@@ -120,7 +132,7 @@ pub fn transformWrite(self: *TransformStream, chunk: js.Value, exec: *const Exec
 
 pub fn transformClose(self: *TransformStream, exec: *const Execution) !void {
     if (self._controller._zig_transformer) |zig| {
-        try zig.vtable.flush(zig.ctx, self._controller);
+        try zig.flush(self._controller);
     } else if (self._controller._flush_fn) |flush_fn| {
         var ls: js.Local.Scope = undefined;
         exec.js.localScope(&ls);

@@ -29,16 +29,13 @@ const TextEncoderStream = @This();
 _transform: *TransformStream,
 
 pub fn init(exec: *const Execution) !TextEncoderStream {
-    const transform = try TransformStream.initWithZigTransformer(.{ .vtable = &.{
-        .transform = &encodeTransform,
-        .flush = TransformStream.ZigTransformer.noopFlush,
-    } }, exec);
+    const transform = try TransformStream.initWithZigTransformer(.text_encoder, exec);
     return .{
         ._transform = transform,
     };
 }
 
-fn encodeTransform(_: ?*anyopaque, controller: *TransformStream.DefaultController, chunk: js.Value) !void {
+pub fn encodeTransform(controller: *TransformStream.DefaultController, chunk: js.Value) !void {
     // chunk should be a JS string; encode it as UTF-8 bytes (Uint8Array)
     const str = chunk.isString() orelse return error.InvalidChunk;
     const slice = try str.toSlice();

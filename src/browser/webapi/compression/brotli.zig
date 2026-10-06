@@ -24,7 +24,6 @@ const js = @import("../../js/js.zig");
 const Execution = js.Execution;
 
 const TransformStream = @import("../streams/TransformStream.zig");
-const ZigTransformer = TransformStream.ZigTransformer;
 
 const State = enum {
     /// Stream is dormant. Nothing is allocated at this state.
@@ -46,19 +45,9 @@ pub const EncodingStream = struct {
         return .{ .exec = exec };
     }
 
-    pub fn transformer(self: *EncodingStream) ZigTransformer {
-        return .{ .ctx = self, .vtable = vtable };
-    }
-
     // Transformer API.
 
-    const vtable: *const ZigTransformer.VTable = &.{
-        .transform = transform,
-        .flush = flush,
-    };
-
-    fn transform(ctx: ?*anyopaque, controller: *TransformStream.TransformStreamDefaultController, chunk: js.Value) !void {
-        const self: *EncodingStream = @ptrCast(@alignCast(ctx));
+    pub fn transform(self: *EncodingStream, controller: *TransformStream.TransformStreamDefaultController, chunk: js.Value) !void {
         const input = chunk.toZig(js.BufferSource) catch {
             return self.fail(controller, "Chunk is not an ArrayBuffer or ArrayBufferView");
         };
@@ -67,9 +56,8 @@ pub const EncodingStream = struct {
         return self.process(controller, input.bytes, false);
     }
 
-    fn flush(ctx: ?*anyopaque, controller: *TransformStream.TransformStreamDefaultController) !void {
-        const encoding_stream: *EncodingStream = @ptrCast(@alignCast(ctx));
-        return encoding_stream.process(controller, "", true);
+    pub fn flush(self: *EncodingStream, controller: *TransformStream.TransformStreamDefaultController) !void {
+        return self.process(controller, "", true);
     }
 
     // Implementation.
@@ -188,19 +176,9 @@ pub const DecodingStream = struct {
         return .{ .exec = exec };
     }
 
-    pub fn transformer(self: *DecodingStream) ZigTransformer {
-        return .{ .ctx = self, .vtable = vtable };
-    }
-
     // Transformer API.
 
-    const vtable: *const ZigTransformer.VTable = &.{
-        .transform = transform,
-        .flush = flush,
-    };
-
-    fn transform(ctx: ?*anyopaque, controller: *TransformStream.TransformStreamDefaultController, chunk: js.Value) !void {
-        const self: *DecodingStream = @ptrCast(@alignCast(ctx));
+    pub fn transform(self: *DecodingStream, controller: *TransformStream.TransformStreamDefaultController, chunk: js.Value) !void {
         const input = chunk.toZig(js.BufferSource) catch {
             return self.fail(controller, "Chunk is not an ArrayBuffer or ArrayBufferView");
         };
@@ -218,8 +196,7 @@ pub const DecodingStream = struct {
         return self.process(controller, input.bytes);
     }
 
-    fn flush(ctx: ?*anyopaque, controller: *TransformStream.TransformStreamDefaultController) !void {
-        const self: *DecodingStream = @ptrCast(@alignCast(ctx));
+    pub fn flush(self: *DecodingStream, controller: *TransformStream.TransformStreamDefaultController) !void {
         // Each chunk is fully decoded as it's written, so by now the
         // compressed data must have ended.
         if (self.state != .ended) {

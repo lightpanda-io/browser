@@ -35,7 +35,7 @@ pub fn init(format: compress.Format, exec: *const Execution) !*CompressionStream
         ._transform = undefined,
         ._compressor = .init(exec, format),
     });
-    self._transform = try TransformStream.initWithZigTransformer(self._compressor.transformer(), exec);
+    self._transform = try TransformStream.initWithZigTransformer(.{ .compressor = &self._compressor }, exec);
     return self;
 }
 

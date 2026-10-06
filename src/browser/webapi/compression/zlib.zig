@@ -22,7 +22,6 @@ const zlib = @import("../../../sys/zlib.zig");
 
 const js = @import("../../js/js.zig");
 const TransformStream = @import("../streams/TransformStream.zig");
-const ZigTransformer = TransformStream.ZigTransformer;
 
 const Execution = js.Execution;
 
@@ -46,17 +45,8 @@ pub fn Deflate(comptime mode: enum(u1) { compress, decompress }) type {
         /// Internal zlib stream; lazily initialized. Valid if `state` is `active`.
         stream: zlib.z_stream = undefined,
 
-        const vtable: *const ZigTransformer.VTable = &.{
-            .transform = transform,
-            .flush = flush,
-        };
-
         pub fn init(exec: *const Execution, format: Format) Deflate(mode) {
             return .{ .format = format, .exec = exec };
-        }
-
-        pub fn transformer(self: *Deflate(mode)) ZigTransformer {
-            return .{ .ctx = self, .vtable = vtable };
         }
 
         /// Initializes internal `stream`.
@@ -214,8 +204,7 @@ pub fn Deflate(comptime mode: enum(u1) { compress, decompress }) type {
             }
         }
 
-        fn transform(ctx: ?*anyopaque, controller: *TransformStream.DefaultController, chunk: js.Value) !void {
-            const self: *Deflate(mode) = @ptrCast(@alignCast(ctx.?));
+        pub fn transform(self: *Deflate(mode), controller: *TransformStream.DefaultController, chunk: js.Value) !void {
             const input = chunk.toZig(js.BufferSource) catch {
                 return self.fail(controller, "Chunk is not an ArrayBuffer or ArrayBufferView");
             };
@@ -235,8 +224,7 @@ pub fn Deflate(comptime mode: enum(u1) { compress, decompress }) type {
             return self.process(controller, input.bytes, false);
         }
 
-        fn flush(ctx: ?*anyopaque, controller: *TransformStream.DefaultController) !void {
-            const self: *Deflate(mode) = @ptrCast(@alignCast(ctx.?));
+        pub fn flush(self: *Deflate(mode), controller: *TransformStream.DefaultController) !void {
             switch (comptime mode) {
                 .compress => return self.process(controller, "", true),
                 // Each chunk is fully inflated as it's written, so by now the
