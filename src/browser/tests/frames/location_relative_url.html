@@ -78,6 +78,19 @@
   });
 </script>
 
+<script id=foreign_realm_method type=module>
+  // This realm's assign() called on the frame's Location: the navigation
+  // targets the Location's own window, not the realm the method came from.
+  const state = await testing.async();
+  const text = await navigateFrame('foreign_frame', (frame) => {
+    location.assign.call(frame.contentWindow.location, 'support/page.html');
+  });
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('a-page', text);
+  });
+</script>
+
 <script id=own_script type=module>
   // The frame's own script is the entry: its document's base applies.
   const state = await testing.async();
