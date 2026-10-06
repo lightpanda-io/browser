@@ -542,8 +542,13 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .modal => return false,
         .popover_open => return @import("../element/popover.zig").isOpen(el, frame),
         .checked => {
-            const input = el.is(Node.Element.Html.Input) orelse return false;
-            return input.getChecked();
+            if (el.is(Node.Element.Html.Input)) |input| {
+                return input.getChecked();
+            }
+            if (el.is(Node.Element.Html.Option)) |option| {
+                return option.getSelected();
+            }
+            return false;
         },
         .disabled => {
             return el.isDisabled();
