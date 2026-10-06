@@ -232,6 +232,9 @@ fn visitNode(
         } else if (el.is(Element.Html.Select)) |select| {
             value = select.getValue(self.frame);
             options = try extractSelectOptions(el.asNode(), self.frame, self.arena);
+        } else if (el.is(Element.Html.IFrame)) |iframe| {
+            // The tree doesn't enter frames; the URL lets the agent open one.
+            value = try iframe.getSrc(self.frame);
         }
 
         if (el.is(Element.Html)) |html_el| {
