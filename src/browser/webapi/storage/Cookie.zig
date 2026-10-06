@@ -220,11 +220,18 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         if (expires) |expires_| {
             var exp_dt = DateTime.parse(expires_, .rfc822) catch null;
             if (exp_dt == null) {
-                if ((expires_.len > 11 and expires_[7] == '-' and expires_[11] == '-')) {
-                    // Replace dashes and try again
+                const dashed = expires_.len > 11 and expires_[7] == '-' and expires_[11] == '-';
+                const utc = std.mem.endsWith(u8, expires_, " UTC");
+                if (dashed or utc) {
+                    // Replace dashes and a "UTC" zone, and try again
                     const output = try aa.dupe(u8, expires_);
-                    output[7] = ' ';
-                    output[11] = ' ';
+                    if (dashed) {
+                        output[7] = ' ';
+                        output[11] = ' ';
+                    }
+                    if (utc) {
+                        @memcpy(output[output.len - 3 ..], "GMT");
+                    }
                     exp_dt = DateTime.parse(output, .rfc822) catch null;
                 }
             }
@@ -1435,6 +1442,9 @@ test "Cookie: parse expires" {
 
     try expectAttribute(.{ .expires = 1918798080 }, null, "b;expires=Wed, 21 Oct 2030 07:28:00 GMT");
     try expectAttribute(.{ .expires = 1784275395 }, null, "b;expires=Fri, 17-Jul-2026 08:03:15 GMT");
+    try expectAttribute(.{ .expires = 1918798080 }, null, "b;expires=Wed, 21 Oct 2030 07:28:00 UTC");
+    try expectAttribute(.{ .expires = 1784275395 }, null, "b;expires=Fri, 17-Jul-2026 08:03:15 UTC");
+    try expectAttribute(.{ .expires = 0 }, null, "b;expires=Thu, 01 Jan 1970 00:00:00 UTC");
     // max-age has priority over expires
     try expectAttribute(.{ .expires = lp.datetime.timestamp(.real) + 10 }, null, "b;Max-Age=10; expires=Wed, 21 Oct 2030 07:28:00 GMT");
 }
