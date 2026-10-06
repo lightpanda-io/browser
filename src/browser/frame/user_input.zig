@@ -951,7 +951,7 @@ fn implicitFormSubmission(frame: *Frame, input: *Element.Html.Input) !void {
         }
         return dispatchKeyboardClick(frame, button);
     }
-    if (form.hasMultipleImplicitSubmissionBlockers(frame)) {
+    if (!form.canSubmitImplicitly(input, frame)) {
         return;
     }
     return frame.submitForm(form.asElement(), form, .{});
