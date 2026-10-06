@@ -111,9 +111,14 @@ fn setHash(self: *const Location, hash: []const u8, frame: *Frame) !void {
     // Includes the leading '#'; empty when the URL has no fragment.
     const old_fragment = old_url[base_end..];
 
+    // Clearing the hash on an URL w/ no fragment does nothing.
+    if (old_fragment.len == 0 and (hash.len == 0 or std.mem.eql(u8, hash, "#"))) {
+        return;
+    }
+
     const normalized_hash: []const u8 = blk: {
         if (hash.len == 0) {
-            break :blk "";
+            break :blk "#";
         } else if (hash[0] == '#') {
             break :blk hash;
         }
@@ -122,14 +127,12 @@ fn setHash(self: *const Location, hash: []const u8, frame: *Frame) !void {
         break :blk try frame.local_arena.print("#{s}", .{hash});
     };
 
-    // Per the Location hash setter, when the fragment doesn't change no
-    // navigation happens at all — in particular `location.hash = ""` on a
-    // fragment-less URL must not turn into a same-URL reload.
+    // No navigation when the fragment doesn't change.
     if (std.mem.eql(u8, old_fragment, normalized_hash)) {
         return;
     }
 
-    const target_url = if (normalized_hash.len == 0) old_url[0..base_end] else normalized_hash;
+    const target_url = try frame.local_arena.print("{s}{s}", .{ old_url[0..base_end], normalized_hash });
 
     return target.scheduleNavigation(target_url, .{
         .reason = .script,
