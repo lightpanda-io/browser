@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!-- The Location hash setter changes the fragment of a copy of the current
+     URL. The document base URL plays no part: a <base> element must not turn
+     `location.hash = x` into a navigation to another document.
+     https://html.spec.whatwg.org/multipage/nav-history-apis.html#dom-location-hash -->
+
+<script id=location_hash_ignores_base type=module>
+  {
+    const state = await testing.async();
+    // Built from the current URL, so the test works whatever the server root.
+    const page_url = location.href.split('#')[0];
+    testing.expectEqual('', location.hash);
+
+    // Same origin, other path: if the setter resolved against the base, the
+    // fragment navigation would become a real navigation to this directory.
+    const base_url = new URL('support/', page_url).href;
+    // Insert first, then set href: Lightpanda only updates the base URL from
+    // the href setter of a connected <base>.
+    const base = document.createElement('base');
+    document.head.appendChild(base);
+    base.href = base_url;
+    testing.expectEqual(base_url, document.baseURI);
+
+    // Each change below is a fragment navigation, so each one fires its own
+    // hashchange. A real navigation would fire none.
+    const new_urls = [];
+    window.onhashchange = (e) => {
+      new_urls.push(e.newURL);
+      if (new_urls.length === 3) state.resolve();
+    };
+
+    location.hash = 'foo';
+    testing.expectEqual(page_url + '#foo', location.href);
+    testing.expectEqual('#foo', location.hash);
+
+    location.hash = '#bar';
+    testing.expectEqual(page_url + '#bar', location.href);
+
+    location.hash = '';
+    testing.expectEqual(page_url + '#', location.href);
+
+    await state.done(() => {
+      testing.expectEqual([page_url + '#foo', page_url + '#bar', page_url + '#'], new_urls);
+      window.onhashchange = null;
+    });
+  }
+</script>
