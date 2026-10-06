@@ -857,7 +857,7 @@ pub const PageState = struct {
     title: ?[]const u8,
 };
 
-fn pageState(frame: *lp.Frame) PageState {
+pub fn pageState(frame: *lp.Frame) PageState {
     return .{
         .url = frame.url,
         .httpStatus = frame._http_status,
@@ -901,12 +901,34 @@ pub const CallOpts = struct {
     nav_note: bool = false,
 };
 
+/// Told about every call once it returns, failures included.
+pub const Observer = struct {
+    context: *anyopaque,
+    onCall: *const fn (context: *anyopaque, tool_name: []const u8, arguments: ?std.json.Value, result: *const ToolResult, ms: u64, frame: ?*lp.Frame) void,
+};
+
 // An inline screenshot is re-sent on every turn; keep it within what models
 // consume. Files written to `path` are full size.
 const inline_image_max_width = 1280;
 const inline_image_max_height = 4096;
 
 pub fn call(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    tool_name: []const u8,
+    arguments: ?std.json.Value,
+    opts: CallOpts,
+) ToolError!ToolResult {
+    const observer = session.tool_observer orelse return callUnobserved(arena, session, registry, tool_name, arguments, opts);
+    const started = lp.datetime.milliTimestamp(.boot);
+    const result = callUnobserved(arena, session, registry, tool_name, arguments, opts);
+    const reported: ToolResult = result catch |err| .{ .text = errorMessage(err), .is_error = true };
+    observer.onCall(observer.context, tool_name, arguments, &reported, lp.datetime.milliTimestamp(.boot) - started, session.currentFrame());
+    return result;
+}
+
+fn callUnobserved(
     arena: std.mem.Allocator,
     session: *lp.Session,
     registry: *NodeRegistry,
@@ -2777,10 +2799,10 @@ pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) err
 test "call: unknown tool name surfaces in-band" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
 
-    // Session/registry are never touched on this branch; the name check is
-    // the first thing `call` does.
-    const r = try call(arena.allocator(), undefined, undefined, "multi_tool_use.parallel", null, .{});
+    const r = try call(arena.allocator(), testing.test_session, &registry, "multi_tool_use.parallel", null, .{});
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
 }

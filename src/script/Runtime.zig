@@ -74,6 +74,7 @@ const PendingGoto = struct {
     receiver: v8.Global,
     /// `run_timer` reading (ms) past which the navigation is abandoned.
     deadline_ms: u64,
+    started_ms: u64,
     until: lp.Config.WaitUntil,
 
     fn reset(self: *PendingGoto) void {
@@ -501,6 +502,7 @@ fn invokeGoto(
     // startGoto is browser-side work; run it under the browser's isolate.
     // Settle the resolver only after the block: a `return` inside it runs
     // script-isolate work before the deferred exit.
+    const started_ms = lp.datetime.milliTimestamp(.boot);
     const maybe_started: ?browser_tools.StartedGoto = blk: {
         self.session.browser.env.isolate.enter();
         defer self.session.browser.env.isolate.exit();
@@ -514,6 +516,7 @@ fn invokeGoto(
         .resolver = undefined,
         .receiver = undefined,
         .deadline_ms = @as(u64, @intCast(self.run_timer.untilNow(lp.io, .boot).toMilliseconds())) + started.timeout_ms,
+        .started_ms = started_ms,
         .until = started.until,
     };
     v8.v8__Global__New(self.env.isolate.handle, resolver, &pending.resolver);
@@ -622,6 +625,11 @@ fn settlePending(self: *Runtime, context: *const v8.Context, pending: *PendingGo
         },
         .failed => self.rejectResolver(context, resolver, "navigation failed"),
         .timed_out => self.rejectResolver(context, resolver, "navigation timed out"),
+    }
+    // Async gotos settle here, outside `browser_tools.call`.
+    if (self.session.tool_observer) |observer| {
+        const reported: browser_tools.ToolResult = .{ .text = @tagName(outcome), .is_error = outcome != .loaded, .navigated = true };
+        observer.onCall(observer.context, "goto", null, &reported, lp.datetime.milliTimestamp(.boot) - pending.started_ms, self.session.findFrameByFrameId(pending.frame_id));
     }
     pending.reset();
 }
