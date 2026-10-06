@@ -120,6 +120,7 @@
 </script>
 
 <script id="constructor_self_insert_foster_parent">
+testing.expectUncaughtErrors();
 {
     // Regression: custom element constructor inserting itself (via appendChild) during
     // innerHTML parsing. When the element is not valid table content, the HTML5 parser

@@ -11,6 +11,34 @@
   // runner will wait until this is empty (or timeout)
   let async_pending = new Set();
 
+  // tests that throw uncaught errors on purpose, see expectUncaughtErrors
+  let uncaught_errors_page = false;
+  let uncaught_errors_scripts = new Set();
+
+  // A script that throws after an expect* passed would otherwise count as ok.
+  window.addEventListener('error', (e) => {
+    const script_id = _currentScriptId();
+    if (uncaught_errors_page || uncaught_errors_scripts.has(script_id)) {
+      return;
+    }
+    failed = true;
+    if (script_id) {
+      observed_ids[script_id] = 'fail';
+    }
+    console.error(`uncaught error: ${e.message}\n  script_id: ${script_id}`);
+  });
+
+  // Allows uncaught errors from the calling <script id=...>, or from the whole
+  // page when called from a script without an id.
+  function expectUncaughtErrors() {
+    const script_id = _currentScriptId();
+    if (script_id) {
+      uncaught_errors_scripts.add(script_id);
+    } else {
+      uncaught_errors_page = true;
+    }
+  }
+
   function expectTrue(actual) {
      expectEqual(true, actual);
   }
@@ -159,6 +187,7 @@
     expectEqual: expectEqual,
     expectError: expectError,
     withError: withError,
+    expectUncaughtErrors: expectUncaughtErrors,
     printTimeoutState: printTimeoutState,
     onload: onload,
     IS_TEST_RUNNER: IS_TEST_RUNNER,
@@ -231,15 +260,6 @@
     }
 
     observed_ids[script_id] = status;
-
-    if (document.currentScript != null) {
-      if (document.currentScript.onerror === null) {
-        document.currentScript.onerror = function() {
-          observed_ids[document.currentScript.id] = 'fail';
-          failed = true;
-        }
-      }
-    }
   }
 
   function _currentScriptId() {

@@ -91,6 +91,7 @@
 <div id=clone_container></div>
 
 <script id=clone>
+    testing.expectUncaughtErrors();
     {
         let calls = 0;
         class MyCloneElementA extends HTMLElement {
@@ -110,6 +111,7 @@
 <div id=clone_siblings_container></div>
 
 <script id=clone_self_appending_siblings>
+    testing.expectUncaughtErrors();
     {
         // Two trailing constructors append into the list being cloned.
         let calls = 0;
@@ -134,6 +136,7 @@
 <div id=fragment_clone_container></div>
 
 <script id=clone_fragment>
+    testing.expectUncaughtErrors();
     {
         let calls = 0;
         class MyFragmentCloneElement extends HTMLElement {
@@ -160,6 +163,7 @@
 <div id=range_clone_container></div>
 
 <script id=clone_range>
+    testing.expectUncaughtErrors();
     {
         let calls = 0;
         class MyRangeCloneElement extends HTMLElement {

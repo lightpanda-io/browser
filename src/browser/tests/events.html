@@ -811,6 +811,7 @@
 
 <div id=throw_host><div id=throw_mid><span id=throw_leaf></span></div></div>
 <script id=listenerThrowDoesNotHaltDispatch>
+  testing.expectUncaughtErrors();
   // Per DOM §2.9 step 4 substep 8 "Inner invoke", a listener callback that
   // throws must have its exception reported, not propagated — subsequent
   // listeners on the same target and the rest of the propagation path must
@@ -846,6 +847,7 @@
 
 <div id=throw_capture_host><div id=throw_capture_mid><span id=throw_capture_leaf></span></div></div>
 <script id=listenerThrowDuringCapturePhase>
+  testing.expectUncaughtErrors();
   // Capture-phase variant: a throwing capture listener on an ancestor must
   // not skip the rest of the capture walk, the at-target listener, or the
   // bubble walk.
@@ -876,6 +878,7 @@
 </script>
 
 <script id=listenerThrowOnWindowTarget>
+  testing.expectUncaughtErrors();
   // Direct-dispatch variant (non-DOM target — Window). Same contract: a
   // throwing listener must not stop later listeners from running.
   {

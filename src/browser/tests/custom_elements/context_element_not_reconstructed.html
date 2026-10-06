@@ -2,6 +2,7 @@
 <script src="../testing.js"></script>
 
 <script id="constructor_sets_innerhtml">
+    testing.expectUncaughtErrors();
     {
         // A custom element whose constructor sets innerHTML. The innerHTML
         // setter fragment-parses with this element as the parsing context.
