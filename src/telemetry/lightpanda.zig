@@ -312,6 +312,23 @@ const EventRow = struct {
                 try writer.write(l.provider);
                 try writer.write(l.model);
             },
+            .tool => |t| {
+                try writer.write("T");
+                try writer.write(t.name);
+                try writer.write(switch (t.source) {
+                    .llm => "L",
+                    .user => "U",
+                    .script => "S",
+                    .mcp => "M",
+                    .cdp => "C",
+                });
+                try writer.write(t.outcome);
+                try writer.write(t.duration_ms);
+            },
+            .mcp_client => |c| {
+                try writer.write("C");
+                try writer.write(c.name);
+            },
         }
         try writer.endArray();
     }
@@ -363,12 +380,24 @@ test "Telemetry: event row wire format" {
             .expected = "[\"B\",42]",
         },
         .{
-            .event = .{ .llm = .{ .provider = "anthropic", .model = .wrap("claude") } },
+            .event = .{ .llm = .{ .provider = "anthropic", .model = .init("claude") } },
             .expected = "[\"L\",\"anthropic\",\"claude\"]",
         },
         .{
             .event = .{ .llm = .{ .provider = "nollm", .model = null } },
             .expected = "[\"L\",\"nollm\",null]",
+        },
+        .{
+            .event = .{ .tool = .{ .name = "click", .source = .llm, .outcome = "ok", .duration_ms = 12 } },
+            .expected = "[\"T\",\"click\",\"L\",\"ok\",12]",
+        },
+        .{
+            .event = .{ .tool = .{ .name = "goto", .source = .script, .outcome = "NavigationTimeout", .duration_ms = 0 } },
+            .expected = "[\"T\",\"goto\",\"S\",\"NavigationTimeout\",0]",
+        },
+        .{
+            .event = .{ .mcp_client = .{ .name = .init("a-very-long-mcp-client-name-over-32-bytes") } },
+            .expected = "[\"C\",\"a-very-long-mcp-client-name-over\"]",
         },
     };
 

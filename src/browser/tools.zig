@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const zenai = @import("zenai");
 
 const NodeRegistry = @import("../NodeRegistry.zig");
+const TelemetryEvent = @import("../telemetry/telemetry.zig").Event;
 
 const DOMNode = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
@@ -896,6 +897,7 @@ pub const CallOpts = struct {
     record: bool = false,
     /// Scripts parse the text, so only model-facing callers set it.
     nav_note: bool = false,
+    source: TelemetryEvent.Tool.Source,
 };
 
 // An inline screenshot is re-sent on every turn; keep it within what models
@@ -911,10 +913,27 @@ pub fn call(
     arguments: ?std.json.Value,
     opts: CallOpts,
 ) ToolError!ToolResult {
+    const start = lp.datetime.milliTimestamp(.awake);
+    const maybe_tool = std.meta.stringToEnum(Tool, tool_name);
+    const result = callInner(arena, session, registry, maybe_tool, tool_name, arguments, opts);
+    const name = if (maybe_tool) |t| @tagName(t) else "?";
+    session.browser.app.telemetry.recordToolResult(name, opts.source, result, start);
+    return result;
+}
+
+fn callInner(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    maybe_tool: ?Tool,
+    tool_name: []const u8,
+    arguments: ?std.json.Value,
+    opts: CallOpts,
+) ToolError!ToolResult {
     // In-band so an LLM that invented a tool name (e.g. OpenAI's internal
     // `multi_tool_use.parallel` wrapper) learns the name is wrong instead of
     // retrying it with different arguments.
-    const tool = std.meta.stringToEnum(Tool, tool_name) orelse return .{
+    const tool = maybe_tool orelse return .{
         .text = try arena.print("Unknown tool: {s}", .{tool_name}),
         .is_error = true,
     };
@@ -2748,9 +2767,9 @@ test "call: unknown tool name surfaces in-band" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
-    // Session/registry are never touched on this branch; the name check is
-    // the first thing `call` does.
-    const r = try call(arena.allocator(), undefined, undefined, "multi_tool_use.parallel", null, .{});
+    // The registry is never touched on this branch; the name check is the
+    // first thing `call` does.
+    const r = try call(arena.allocator(), testing.test_session, undefined, "multi_tool_use.parallel", null, .{ .source = .user });
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
 }
@@ -2770,12 +2789,12 @@ test "tree and nodeDetails read the node's own frame" {
 
     const aa = testing.arena_allocator;
     const tree_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{html_id}), .{});
-    const tree = try call(aa, page.session, &registry, "tree", tree_args, .{});
+    const tree = try call(aa, page.session, &registry, "tree", tree_args, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, tree.text, "child-label") != null);
     try std.testing.expect(std.mem.find(u8, tree.text, "parent-") == null);
 
     const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{input_id}), .{});
-    const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{});
+    const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, details.text, "child-label") != null);
 }
 
@@ -2796,12 +2815,12 @@ test "goto: a navigation stuck waiting for a connection is an error" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":300}
     , .{});
-    try std.testing.expectError(error.NavigationTimeout, call(aa, session, &registry, "goto", args, .{}));
+    try std.testing.expectError(error.NavigationTimeout, call(aa, session, &registry, "goto", args, .{ .source = .user }));
 
     for (held.items) |conn| network.releaseConnection(conn);
     held.clearRetainingCapacity();
 
-    const r = try call(aa, session, &registry, "goto", args, .{});
+    const r = try call(aa, session, &registry, "goto", args, .{ .source = .user });
     try std.testing.expectEqualStrings("Navigated. HTTP 200 OK.", r.text);
 }
 
@@ -2816,7 +2835,7 @@ test "tools: goto flags an error status instead of reporting success" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:9582/status/429"}
     , .{});
-    const r = try call(aa, session, &registry, "goto", args, .{ .nav_note = true });
+    const r = try call(aa, session, &registry, "goto", args, .{ .nav_note = true, .source = .user });
     try std.testing.expectEqualStrings("HTTP 429 Too Many Requests: this is likely an error or rate-limit page, not the requested content.\n\nNavigated. HTTP 429 Too Many Requests.", r.text);
 }
 
@@ -2831,13 +2850,13 @@ test "tools: a read tool navigating by url flags an error status" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:9582/status/404"}
     , .{});
-    const r = try call(aa, session, &registry, "markdown", args, .{ .nav_note = true });
+    const r = try call(aa, session, &registry, "markdown", args, .{ .nav_note = true, .source = .user });
     try std.testing.expect(std.mem.startsWith(u8, r.text, "HTTP 404 Not Found: this is likely an error"));
 
     const reload = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:9582/status/403"}
     , .{});
-    const s = try call(aa, session, &registry, "markdown", reload, .{});
+    const s = try call(aa, session, &registry, "markdown", reload, .{ .source = .user });
     try std.testing.expect(std.mem.indexOf(u8, s.text, "rate-limit") == null);
 }
 
@@ -2852,7 +2871,7 @@ test "tools: a bot challenge is named" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:9582/challenge/vercel"}
     , .{});
-    const r = try call(aa, session, &registry, "tree", args, .{ .nav_note = true });
+    const r = try call(aa, session, &registry, "tree", args, .{ .nav_note = true, .source = .user });
     try std.testing.expect(std.mem.startsWith(u8, r.text, "Blocked by a vercel bot challenge (HTTP 429 Too Many Requests)"));
 }
 
@@ -3185,6 +3204,6 @@ test "markdown: a same-url page whose navigation failed is navigated again" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:1/"}
     , .{});
-    try std.testing.expect((try call(aa, session, &registry, "goto", args, .{})).is_error);
-    try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{})).is_error);
+    try std.testing.expect((try call(aa, session, &registry, "goto", args, .{ .source = .user })).is_error);
+    try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{ .source = .user })).is_error);
 }

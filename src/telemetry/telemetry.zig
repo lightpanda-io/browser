@@ -59,6 +59,29 @@ fn TelemetryT(comptime P: type) type {
             };
         }
 
+        /// `start_ms` is a `datetime.milliTimestamp(.awake)` taken before the call.
+        pub fn recordTool(self: *Self, name: [:0]const u8, source: Event.Tool.Source, outcome: [:0]const u8, start_ms: u64) void {
+            if (self.disabled) {
+                return;
+            }
+            const elapsed = lp.datetime.milliTimestamp(.awake) -| start_ms;
+            self.record(.{ .tool = .{
+                .name = name,
+                .source = source,
+                .outcome = outcome,
+                .duration_ms = std.math.lossyCast(u32, elapsed),
+            } });
+        }
+
+        /// "ok", "is_error" for a `ToolResult` that failed in-band, or the error name.
+        pub fn recordToolResult(self: *Self, name: [:0]const u8, source: Event.Tool.Source, result: anytype, start_ms: u64) void {
+            const outcome: [:0]const u8 = if (result) |r| blk: {
+                if (@TypeOf(r) == void) break :blk "ok";
+                break :blk if (r.is_error) "is_error" else "ok";
+            } else |err| @errorName(err);
+            self.recordTool(name, source, outcome, start_ms);
+        }
+
         pub fn llm_init(_: *Self, provider: [:0]const u8, model: ?[]const u8) Event.LLM {
             return Event.LLM.init(provider, model);
         }
@@ -106,6 +129,8 @@ pub const Event = union(enum) {
     navigate: Navigate,
     buffer_overflow: BufferOverflow,
     llm: LLM,
+    tool: Tool,
+    mcp_client: McpClient,
 
     pub const Navigate = struct {
         tls: bool,
@@ -120,35 +145,44 @@ pub const Event = union(enum) {
 
     const LLM = struct {
         provider: [:0]const u8,
-        model: ?Model,
-
-        const Model = struct {
-            len: u8,
-            buffer: [32]u8,
-
-            pub fn wrap(_s: ?[]const u8) ?Model {
-                if (_s == null) return null;
-
-                const l = @min(_s.?.len, 32);
-                var m: Model = .{
-                    .len = l,
-                    .buffer = undefined,
-                };
-                @memcpy(m.buffer[0..l], _s.?[0..l]);
-
-                return m;
-            }
-
-            pub fn jsonStringify(self: *const Model, writer: anytype) !void {
-                try writer.write(self.buffer[0..self.len]);
-            }
-        };
+        model: ?InlineString,
 
         pub fn init(provider: [:0]const u8, _model: ?[]const u8) LLM {
             return .{
                 .provider = provider,
-                .model = Model.wrap(_model),
+                .model = if (_model) |m| .init(m) else null,
             };
+        }
+    };
+
+    pub const Tool = struct {
+        // Only ever a @tagName or @errorName: static memory that outlives the
+        // queue, and never a caller-supplied string.
+        name: [:0]const u8,
+        source: Source,
+        outcome: [:0]const u8,
+        duration_ms: u32,
+
+        pub const Source = enum { llm, user, script, mcp, cdp };
+    };
+
+    pub const McpClient = struct {
+        name: InlineString,
+    };
+
+    pub const InlineString = struct {
+        len: u8,
+        buffer: [32]u8,
+
+        pub fn init(s: []const u8) InlineString {
+            const l = @min(s.len, 32);
+            var m: InlineString = .{ .len = l, .buffer = undefined };
+            @memcpy(m.buffer[0..l], s[0..l]);
+            return m;
+        }
+
+        pub fn jsonStringify(self: *const InlineString, writer: anytype) !void {
+            try writer.write(self.buffer[0..self.len]);
         }
     };
 };

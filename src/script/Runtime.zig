@@ -75,6 +75,8 @@ const PendingGoto = struct {
     /// `run_timer` reading (ms) past which the navigation is abandoned.
     deadline_ms: u64,
     until: lp.Config.WaitUntil,
+    /// `datetime.milliTimestamp(.awake)` at start, for telemetry.
+    started_ms: u64,
 
     fn reset(self: *PendingGoto) void {
         v8.v8__Global__Reset(&self.resolver);
@@ -501,13 +503,16 @@ fn invokeGoto(
     // startGoto is browser-side work; run it under the browser's isolate.
     // Settle the resolver only after the block: a `return` inside it runs
     // script-isolate work before the deferred exit.
-    const maybe_started: ?browser_tools.StartedGoto = blk: {
+    const started_ms = lp.datetime.milliTimestamp(.awake);
+    const maybe_started: browser_tools.ToolError!browser_tools.StartedGoto = blk: {
         self.session.browser.env.isolate.enter();
         defer self.session.browser.env.isolate.exit();
-        break :blk browser_tools.startGoto(arena, self.session, self.registry, args, receiver_frame_id) catch null;
+        break :blk browser_tools.startGoto(arena, self.session, self.registry, args, receiver_frame_id);
     };
-    const started = maybe_started orelse
+    const started = maybe_started catch |err| {
+        self.app.telemetry.recordTool("goto", .script, @errorName(err), started_ms);
         return self.rejectResolver(context, resolver, "navigation failed");
+    };
 
     var pending: PendingGoto = .{
         .frame_id = started.frame_id,
@@ -515,6 +520,7 @@ fn invokeGoto(
         .receiver = undefined,
         .deadline_ms = @as(u64, @intCast(self.run_timer.untilNow(lp.io, .boot).toMilliseconds())) + started.timeout_ms,
         .until = started.until,
+        .started_ms = started_ms,
     };
     v8.v8__Global__New(self.env.isolate.handle, resolver, &pending.resolver);
     v8.v8__Global__New(self.env.isolate.handle, this, &pending.receiver);
@@ -606,16 +612,23 @@ const Outcome = enum { loaded, failed, timed_out };
 /// Resolve or reject one pending goto's Promise and free its Globals.
 fn settlePending(self: *Runtime, context: *const v8.Context, pending: *PendingGoto, outcome: Outcome) void {
     const resolver: *const v8.PromiseResolver = @ptrCast(v8.v8__Global__Get(&pending.resolver, self.env.isolate.handle));
+    var result: [:0]const u8 = switch (outcome) {
+        .loaded => "ok",
+        .failed => "NavigationFailed",
+        .timed_out => "NavigationTimeout",
+    };
     switch (outcome) {
         .loaded => done: {
             const frame = self.session.findFrameByFrameId(pending.frame_id);
             if (frame == null or frame.?._last_navigate_error != null) {
                 self.rejectResolver(context, resolver, "navigation failed");
+                result = "NavigationFailed";
                 break :done;
             }
             const this: *const v8.Object = @ptrCast(v8.v8__Global__Get(&pending.receiver, self.env.isolate.handle));
             self.bindFrameId(context, this, pending.frame_id) catch {
                 self.rejectResolver(context, resolver, "internal: page bind failed");
+                result = "InternalError";
                 break :done;
             };
             self.resolveResolver(context, resolver, @ptrCast(this));
@@ -623,6 +636,7 @@ fn settlePending(self: *Runtime, context: *const v8.Context, pending: *PendingGo
         .failed => self.rejectResolver(context, resolver, "navigation failed"),
         .timed_out => self.rejectResolver(context, resolver, "navigation timed out"),
     }
+    self.app.telemetry.recordTool("goto", .script, result, pending.started_ms);
     pending.reset();
 }
 
@@ -631,6 +645,7 @@ fn failAllPending(self: *Runtime, context: *const v8.Context, message: []const u
     for (self.pending_gotos.items) |*pending| {
         const resolver: *const v8.PromiseResolver = @ptrCast(v8.v8__Global__Get(&pending.resolver, self.env.isolate.handle));
         self.rejectResolver(context, resolver, message);
+        self.app.telemetry.recordTool("goto", .script, "Cancelled", pending.started_ms);
         pending.reset();
     }
     self.pending_gotos.clearRetainingCapacity();
@@ -714,7 +729,7 @@ fn callTool(
     self.session.browser.env.isolate.enter();
     defer self.session.browser.env.isolate.exit();
 
-    const result = browser_tools.call(arena, self.session, self.registry, @tagName(tool), args, .{}) catch |err| switch (err) {
+    const result = browser_tools.call(arena, self.session, self.registry, @tagName(tool), args, .{ .source = .script }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.FrameNotLoaded => return .{ .fail = "no page loaded - run page.goto(url) first" },
         else => return .{ .fail = arena.print("{s} failed: {s}", .{ @tagName(tool), @errorName(err) }) catch return error.OutOfMemory },

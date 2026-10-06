@@ -148,12 +148,15 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
     };
 
     if (std.meta.stringToEnum(ExtraTool, call_params.name)) |tool| {
-        return switch (tool) {
+        const start = lp.datetime.milliTimestamp(.awake);
+        const result = switch (tool) {
             .save => handleSave(server, arena, id, call_params.arguments),
             .session_new => handleSessionNew(server, arena, id, call_params.arguments),
             .session_list => handleSessionList(server, arena, id),
             .session_close => handleSessionClose(server, arena, id, call_params.arguments),
         };
+        server.app.telemetry.recordToolResult(@tagName(tool), .mcp, result, start);
+        return result;
     }
 
     return dispatchBrowserTool(server, arena, id, call_params.name, call_params.arguments);
@@ -171,7 +174,7 @@ fn dispatchBrowserTool(
     };
 
     const active = server.active_session;
-    const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true }) catch |err| {
+    const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true, .source = .mcp }) catch |err| {
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
