@@ -163,16 +163,17 @@ pub const State = struct {
         return null;
     }
 
-    fn findOrCreate(self: *State, allocator: Allocator, id: []const u8, kind: Source.Kind) !usize {
+    fn findOrCreate(self: *State, allocator: Allocator, id: []const u8, kind: Source.Kind, touch: bool) !usize {
         if (self.find(id)) |i| {
-            if (self.sources.items[i].kind != kind) {
+            const source = &self.sources.items[i];
+            if (source.kind != kind or source.pointer.touch != touch) {
                 return error.SourceKindMismatch;
             }
             return i;
         }
         const owned = try allocator.dupe(u8, id);
         errdefer allocator.free(owned);
-        try self.sources.append(allocator, .{ .id = owned, .kind = kind });
+        try self.sources.append(allocator, .{ .id = owned, .kind = kind, .pointer = .{ .touch = touch } });
         return self.sources.items.len - 1;
     }
 };
@@ -194,6 +195,9 @@ const Source = struct {
     };
 
     const PointerState = struct {
+        // pointerType "touch": a single contact, through the same touch
+        // sequence as CDP and testdriver. "pen" is treated as a mouse.
+        touch: bool = false,
         x: f64 = 0,
         y: f64 = 0,
         // DOM button numbers, in press order
@@ -378,7 +382,7 @@ fn parseTicks(bidi: *BiDi, arena: Allocator, actions: []const std.json.Value) Pa
         const sa = std.json.parseFromValueLeaky(SourceActions, arena, value, .{ .ignore_unknown_fields = true }) catch {
             return error.InvalidActions;
         };
-        const source = try state.findOrCreate(allocator, sa.id, sa.type);
+        const source = try state.findOrCreate(allocator, sa.id, sa.type, isTouch(sa.parameters));
 
         const parsed = try arena.alloc(Action, sa.actions.len);
         for (sa.actions, parsed) |raw, *action| {
@@ -401,6 +405,13 @@ fn parseTicks(bidi: *BiDi, arena: Allocator, actions: []const std.json.Value) Pa
         tick.* = row.items;
     }
     return ticks;
+}
+
+fn isTouch(parameters: ?std.json.Value) bool {
+    const params = parameters orelse return false;
+    if (params != .object) return false;
+    const pointer_type = params.object.get("pointerType") orelse return false;
+    return pointer_type == .string and std.mem.eql(u8, pointer_type.string, "touch");
 }
 
 // `arena` outlives the command: an action can run after its json is gone.
@@ -562,6 +573,9 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
                 return; // already down; the spec makes this a no-op
             }
             try pointer.pressed.append(allocator, button);
+            if (pointer.touch) {
+                return user_input.touchStart(frame, null, .{ .x = pointer.x, .y = pointer.y }, .{});
+            }
 
             // A press of the same button near the last click, soon enough
             // after it, counts up
@@ -580,6 +594,9 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
             const pointer = &source.pointer;
             const i = std.mem.findScalar(u8, pointer.pressed.items, button) orelse return;
             _ = pointer.pressed.orderedRemove(i);
+            if (pointer.touch) {
+                return user_input.touchEnd(frame, .{ .x = pointer.x, .y = pointer.y }, .{}, null);
+            }
             try user_input.triggerMouseRelease(frame, pointer.x, pointer.y, button, pointer.click_count);
         },
         .pointer_move => |move| {
@@ -587,6 +604,10 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
             const target = try resolveOrigin(bidi, frame, source, move.origin, move.x, move.y);
             pointer.x = target.x;
             pointer.y = target.y;
+            if (pointer.touch) {
+                // A finger that isn't down has nothing to move.
+                return user_input.touchMove(frame, null, .{ .x = target.x, .y = target.y }, .{});
+            }
             try user_input.triggerMouseMove(frame, target.x, target.y);
         },
         .scroll => |scroll| {
@@ -779,6 +800,82 @@ test "bidi.input: click via element origin" {
         .type = "string",
         .value = "mousedown@btn mouseup@btn click@btn",
     } }, .{ .id = 9 });
+}
+
+test "bidi.input: touch tap" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const context_id = try ctx.createContext(.{ .url = "bidi/input.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = context_id, .locator = .{ .type = "css", .value = "#btn" } },
+    });
+    try ctx.expectSentResult(.{ .nodes = .{.{ .sharedId = "1" }} }, .{ .id = 1 });
+
+    try evaluate(&ctx, 2, context_id,
+        \\for (const t of ['pointerdown', 'pointerup', 'touchstart', 'touchmove', 'touchend']) {
+        \\  document.addEventListener(t, (e) => window.events.push(t + ':' + (e.pointerType ?? e.changedTouches[0].target.id)));
+        \\}
+        \\'ok'
+    );
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "string", .value = "ok" } }, .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "finger",
+            .parameters = .{ .pointerType = "touch" },
+            .actions = .{
+                .{ .type = "pointerMove", .x = 0, .y = 0, .origin = .{ .type = "element", .element = .{ .sharedId = "1" } } },
+                .{ .type = "pointerDown", .button = 0 },
+                .{ .type = "pointerUp", .button = 0 },
+            },
+        }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try evaluate(&ctx, 4, context_id, "window.events.join(' ')");
+    try ctx.expectSentResult(.{ .type = "success", .result = .{
+        .type = "string",
+        .value = "pointerdown:touch touchstart:btn pointerup:touch touchend:btn mousemove@btn mousedown@btn mouseup@btn click@btn",
+    } }, .{ .id = 4 });
+
+    // A drag past the slop delivers the touch events but doesn't click.
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "finger",
+            .parameters = .{ .pointerType = "touch" },
+            .actions = .{
+                .{ .type = "pointerDown", .button = 0 },
+                .{ .type = "pointerMove", .x = 40, .y = 0, .origin = "pointer" },
+                .{ .type = "pointerUp", .button = 0 },
+            },
+        }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try evaluate(&ctx, 6, context_id, "window.events.slice(8).join(' ')");
+    try ctx.expectSentResult(.{ .type = "success", .result = .{
+        .type = "string",
+        .value = "pointerdown:touch touchstart:btn touchmove:btn pointerup:touch touchend:btn",
+    } }, .{ .id = 6 });
+
+    // The source's pointerType is fixed once it exists.
+    try ctx.processMessage(.{
+        .id = 7,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "finger",
+            .actions = .{.{ .type = "pointerDown", .button = 0 }},
+        }} },
+    });
+    try ctx.expectSentError("invalid argument", "input source id already used with a different type", .{ .id = 7 });
 }
 
 test "bidi.input: keys and modifiers" {
