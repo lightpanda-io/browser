@@ -646,6 +646,10 @@ fn origin(req: *std.http.Server.Request) ?[]const u8 {
 }
 
 fn testHTTPHandler(req: *std.http.Server.Request) !void {
+    var arena: std.heap.ArenaAllocator = .init(std.heap.c_allocator);
+    defer arena.deinit();
+    const req_allocator = arena.allocator();
+
     const path = req.head.target;
 
     if (std.mem.eql(u8, path, "/")) {
@@ -1112,7 +1116,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         // CSS parse failure.
         const chunk = ".pad { color: #abcdef; } "; // 25 bytes
         const repeats = (2 * 1024 * 1024 / chunk.len) + 1024;
-        var body = try std.ArrayList(u8).initCapacity(arena_allocator, chunk.len * repeats);
+        var body = try std.ArrayList(u8).initCapacity(req_allocator, chunk.len * repeats);
         for (0..repeats) |_| body.appendSliceAssumeCapacity(chunk);
         return req.respond(body.items, .{
             .extra_headers = &.{
@@ -1128,7 +1132,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     if (std.mem.eql(u8, path, "/images/ok.png")) {
         // > HttpClient.Request.PARTIAL_DRAIN_MAX. The synthetic PNG
         // header advertises 1000 x 750 pixels; no bitmap is decoded.
-        const body = try arena_allocator.alloc(u8, 16 * 1024 + 1);
+        const body = try req_allocator.alloc(u8, 16 * 1024 + 1);
         @memset(body, 'x');
         @memcpy(body[0..24], "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x03\xe8\x00\x00\x02\xee");
         return req.respond(body, .{
@@ -1141,7 +1145,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     // startsWith, not eql: a caller can append a query string to get distinct
     // URLs (and so distinct transfers) off this one route.
     if (std.mem.startsWith(u8, path, "/images/small.png")) {
-        const body = try arena_allocator.alloc(u8, 1024);
+        const body = try req_allocator.alloc(u8, 1024);
         @memset(body, 'x');
         @memcpy(body[0..24], "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x01\x40\x00\x00\x00\xf0");
         return req.respond(body, .{
@@ -1255,7 +1259,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         // a request actually sent rather than just on its status.
         var body_buf: [4096]u8 = undefined;
         const body = if (req.head.method.requestHasBody())
-            try req.readerExpectNone(&body_buf).allocRemaining(arena_allocator, .limited(body_buf.len))
+            try req.readerExpectNone(&body_buf).allocRemaining(req_allocator, .limited(body_buf.len))
         else
             "";
         return req.respond(body, .{
