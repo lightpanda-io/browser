@@ -245,6 +245,9 @@ _maybe_meta_refresh: bool = false,
 // The URL of the current frame
 url: [:0]const u8 = "about:blank",
 
+// Unlike `url`, redirects and the History API don't change it.
+_requested_url: [:0]const u8 = "about:blank",
+
 origin: ?[]const u8 = null,
 
 // The base url specifies the base URL used to resolve the relative urls.
@@ -725,6 +728,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             "about:srcdoc"
         else
             try self.arena.dupeSentinel(u8, request_url, 0);
+        self._requested_url = self.url;
 
         // even though about:blank navigations may share the same _data_, we
         // have to do this to make sure window.location is at a unique _address_.
@@ -857,6 +861,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         }
         break :blk try std.mem.concatWithSentinel(self.arena, u8, &.{ "http://", request_url }, 0);
     };
+    self._requested_url = self.url;
     self.origin = try URL.getOrigin(self.arena, self.url);
 
     self._navigated_options = .{

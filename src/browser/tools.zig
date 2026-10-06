@@ -948,9 +948,13 @@ pub fn call(
     result.selector = selector;
     if (opts.nav_note) {
         if (session.currentFrame()) |frame| {
-            if (frame._frame_id != frame_before) {
-                if (try navErrorNote(arena, frame)) |note| result.text = try arena.print("{s}\n\n{s}", .{ note, result.text });
-            }
+            const note = if (frame._frame_id != frame_before)
+                try navErrorNote(arena, frame)
+            else if (tool.navigatesToUrl())
+                try movedNote(arena, substituted, frame)
+            else
+                null;
+            if (note) |n| result.text = try arena.print("{s}\n\n{s}", .{ n, result.text });
         }
     }
     if (tool.reportsPageState()) {
@@ -1122,6 +1126,18 @@ fn navStatus(arena: std.mem.Allocator, frame: *const lp.Frame) []const u8 {
     const phrase = if (status > 599) "" else @as(std.http.Status, @fromBackingInt(@intCast(status))).phrase() orelse "";
     if (phrase.len == 0) return arena.print("{d}", .{status}) catch "unknown";
     return arena.print("{d} {s}", .{ status, phrase }) catch "unknown";
+}
+
+/// Otherwise the model takes the current page for the URL it asked for.
+fn movedNote(arena: std.mem.Allocator, arguments: ?std.json.Value, frame: *const lp.Frame) !?[]const u8 {
+    const args = arguments orelse return null;
+    if (args != .object) return null;
+    const url = switch (args.object.get("url") orelse return null) {
+        .string => |s| s,
+        else => return null,
+    };
+    if (std.mem.eql(u8, url, frame.url)) return null;
+    return try arena.print("The page is at {s}, not {s}: a redirect or an in-page navigation moved it, and this reads it as it is. Use goto to reload {s}.", .{ frame.url, url, url });
 }
 
 /// Error and challenge pages would otherwise read as the requested content.
@@ -2447,7 +2463,9 @@ fn ensurePage(session: *lp.Session, registry: *NodeRegistry, url: ?[:0]const u8,
     if (url) |u| {
         if (session.currentFrame()) |frame| {
             const is_loaded = frame._parse_state != .pre and frame._last_navigate_error == null;
-            if (is_loaded and std.mem.eql(u8, frame.url, u)) {
+            // Reloading would discard what a redirect or in-page navigation did.
+            const is_here = std.mem.eql(u8, frame.url, u) or std.mem.eql(u8, frame._requested_url, u);
+            if (is_loaded and is_here) {
                 return frame;
             }
         }
@@ -2839,6 +2857,52 @@ test "tools: a read tool navigating by url flags an error status" {
     , .{});
     const s = try call(aa, session, &registry, "markdown", reload, .{});
     try std.testing.expect(std.mem.indexOf(u8, s.text, "rate-limit") == null);
+}
+
+test "tools: a read tool keeps a page that moved within the document" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    _ = try call(aa, session, &registry, "goto", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ url ++ "\"}", .{}), .{});
+    _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.body.dataset.mark = 'kept'; history.pushState(null, '', '?moved')"}
+    , .{}), .{});
+
+    const r = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ url ++ "\"}", .{}), .{ .nav_note = true });
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "The page is at " ++ url ++ "?moved, not " ++ url ++ ":"));
+
+    const mark = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.body.dataset.mark"}
+    , .{}), .{});
+    try std.testing.expectEqualStrings("kept", mark.text);
+}
+
+test "tools: a read tool keeps a page reached through a redirect" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/xhr/redirect"}
+    , .{});
+    _ = try call(aa, session, &registry, "goto", args, .{});
+    _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.body.dataset.mark = 'kept'"}
+    , .{}), .{});
+
+    _ = try call(aa, session, &registry, "markdown", args, .{});
+    const mark = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.body.dataset.mark"}
+    , .{}), .{});
+    try std.testing.expectEqualStrings("kept", mark.text);
 }
 
 test "tools: a bot challenge is named" {
