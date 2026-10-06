@@ -2386,6 +2386,7 @@ pub fn trackFileList(self: *Frame, file_list: *FileList) !void {
 pub const QueuedEvent = struct {
     kind: Kind,
     element: *Element.Html,
+    generation: u32 = 0, // used by Image now, could be used by others though
 
     pub const Kind = enum { load, @"error" };
 };
@@ -2395,7 +2396,15 @@ pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
 }
 
 pub fn queueElementEvent(self: *Frame, element: *Element.Html, kind: QueuedEvent.Kind) !void {
-    try self._queued_events.append(self.arena, .{ .element = element, .kind = kind });
+    try self.queueEvent(.{ .element = element, .kind = kind });
+}
+
+pub fn queueImageEvent(self: *Frame, image: *Element.Html.Image, kind: QueuedEvent.Kind) !void {
+    try self.queueEvent(.{ .element = Factory.protoOf(image), .kind = kind, .generation = image._generation });
+}
+
+fn queueEvent(self: *Frame, event: QueuedEvent) !void {
+    try self._queued_events.append(self.arena, event);
     if (self._queued_events.items.len == 1) {
         try self.js.scheduler.add(self, struct {
             fn cleanup(ctx: *anyopaque) !?u32 {
@@ -2615,6 +2624,12 @@ fn dispatchQueuedEvents(self: *Frame) !void {
 
     for (to_process.items) |queued| {
         const html_element = queued.element;
+        if (html_element.is(Element.Html.Image)) |image| {
+            if (image._generation != queued.generation) {
+                continue;
+            }
+        }
+
         const element = html_element.asElement();
         switch (queued.kind) {
             // hasAttributeFunction only sees handlers compiled via property
