@@ -233,7 +233,7 @@ fn getFormOwner(element: *Element, frame: *Frame) ?*Form {
 }
 
 fn getAtIndex(self: *Form, index: usize, frame: *Frame) ?*Element {
-    var it = self.iterator(frame);
+    var it = self.iterator(.{ .image_buttons = false }, frame);
     return it.getAtIndex(index, frame);
 }
 
