@@ -454,6 +454,10 @@
     \\          Time in ms to establish an HTTP connection before timing out. 0 means
     \\          never.
     \\          Defaults to 8000.
+    \\  --http-debug
+    \\          Enables libcurl verbose output. Output written directly to stderr
+    \\          by licurl and does not follow the configured log format.
+    \\          Defaults to off (not set).
     \\  --http-header <HEADER>
     \\          Extra custom header added to every outgoing HTTP request, including redirections,
     \\          in "Name: Value" form. Can be passed multiple times. The last one is used.
