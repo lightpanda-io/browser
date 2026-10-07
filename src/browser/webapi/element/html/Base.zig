@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
@@ -76,6 +77,12 @@ fn updateBaseURL(self: *Base, frame: *Frame) !void {
         owner.base_url = null;
         return;
     }
+
+    if (std.mem.startsWith(u8, href, "data:") or std.mem.startsWith(u8, href, "javascript:")) {
+        owner.base_url = null;
+        return;
+    }
+
     owner.base_url = try URL.resolve(owner.arena, owner.url, href, .{});
 }
 
