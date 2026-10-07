@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<head>
+<script src="../../testing.js"></script>
+</head>
+<a id=a href=spice></a>
+
+<script id=no_base>
+  {
+    // No <base>: the base URL is the document URL.
+    testing.expectEqual(document.URL, document.baseURI);
+  }
+</script>
+
+<script id=append_after_set_attribute>
+  {
+    // WPT html/infrastructure/urls/terminology-0/document-base-url.html:
+    // href set while detached, then the base is inserted.
+    const b = document.createElement('base');
+    b.setAttribute('href', 'https://www.example.com/1/');
+    testing.expectEqual(document.URL, document.baseURI);
+
+    document.head.appendChild(b);
+    testing.expectEqual('https://www.example.com/1/', document.baseURI);
+    testing.expectEqual('https://www.example.com/1/spice', $('#a').href);
+
+    // Removing it must restore the document URL.
+    b.remove();
+    testing.expectEqual(document.URL, document.baseURI);
+  }
+</script>
+
+<script id=append_after_href_setter>
+  {
+    const b = document.createElement('base');
+    b.href = 'https://www.example.com/2/';
+    document.head.appendChild(b);
+    testing.expectEqual('https://www.example.com/2/', document.baseURI);
+    b.remove();
+    testing.expectEqual(document.URL, document.baseURI);
+  }
+</script>
+
+<script id=set_attribute_connected>
+  {
+    // WPT html/infrastructure/urls/dynamic-changes-to-base-urls/dynamic-urls.sub.html
+    const b = document.createElement('base');
+    document.head.appendChild(b);
+    testing.expectEqual(document.URL, document.baseURI);
+
+    b.setAttribute('href', 'https://www.example.com/3/');
+    testing.expectEqual('https://www.example.com/3/', document.baseURI);
+
+    b.setAttribute('href', '');
+    testing.expectEqual(document.URL, document.baseURI);
+
+    b.setAttribute('href', 'https://www.example.com/3/');
+    b.removeAttribute('href');
+    testing.expectEqual(document.URL, document.baseURI);
+    b.remove();
+  }
+</script>
+
+<script id=remove_href_variants>
+  {
+    const b1 = document.createElement('base');
+    b1.setAttribute('href', 'https://www.example.com/r1/');
+    const b2 = document.createElement('base');
+    b2.setAttribute('href', 'https://www.example.com/r2/');
+    document.head.append(b1, b2);
+    testing.expectEqual('https://www.example.com/r1/', document.baseURI);
+
+    // Removing href on the first one falls back to the next base[href].
+    b1.toggleAttribute('href');
+    testing.expectEqual('https://www.example.com/r2/', document.baseURI);
+
+    // Removing href on a base that isn't the first one changes nothing.
+    b1.setAttribute('href', 'https://www.example.com/r1/');
+    b2.removeAttributeNode(b2.getAttributeNode('href'));
+    testing.expectEqual('https://www.example.com/r1/', document.baseURI);
+
+    b1.attributes.removeNamedItem('HREF');
+    testing.expectEqual(document.URL, document.baseURI);
+
+    // A detached base keeps its href change to itself.
+    b1.remove();
+    b1.setAttribute('href', 'https://www.example.com/r1/');
+    b1.removeAttribute('href');
+    testing.expectEqual(document.URL, document.baseURI);
+    b2.remove();
+  }
+</script>
+
+<script id=first_in_tree_order>
+  {
+    // WPT html/infrastructure/urls/terminology-0/multiple-base.sub.html
+    const b1 = document.createElement('base');
+    b1.setAttribute('href', 'https://www.example.com/b1/');
+    const b2 = document.createElement('base');
+    b2.setAttribute('href', 'https://www.example.com/b2/');
+
+    document.head.appendChild(b2);
+    testing.expectEqual('https://www.example.com/b2/', document.baseURI);
+
+    document.head.insertBefore(b1, b2);
+    testing.expectEqual('https://www.example.com/b1/', document.baseURI);
+    testing.expectEqual(document.querySelector('base[href]').href, document.baseURI);
+
+    // Removing the first one falls back to the next one.
+    b1.remove();
+    testing.expectEqual('https://www.example.com/b2/', document.baseURI);
+    b2.remove();
+    testing.expectEqual(document.URL, document.baseURI);
+  }
+</script>
+
+<script id=move>
+  {
+    // A move inside the document doesn't disconnect the base, but it
+    // changes the tree order.
+    const b1 = document.createElement('base');
+    b1.setAttribute('href', 'https://www.example.com/m1/');
+    const b2 = document.createElement('base');
+    b2.setAttribute('href', 'https://www.example.com/m2/');
+    document.head.append(b1, b2);
+    testing.expectEqual('https://www.example.com/m1/', document.baseURI);
+
+    document.head.insertBefore(b2, b1);
+    testing.expectEqual('https://www.example.com/m2/', document.baseURI);
+
+    // The body comes after the head: b1 is first again.
+    document.body.append(b2);
+    testing.expectEqual('https://www.example.com/m1/', document.baseURI);
+
+    b1.remove();
+    b2.remove();
+    testing.expectEqual(document.URL, document.baseURI);
+  }
+</script>
+
+<script id=inner_html_connected>
+  {
+    const div = document.createElement('div');
+    document.body.appendChild(div);
+    div.innerHTML = '<base href="https://www.example.com/4/">';
+    testing.expectEqual('https://www.example.com/4/', document.baseURI);
+    div.remove();
+    testing.expectEqual(document.URL, document.baseURI);
+  }
+</script>
+
+<script id=inner_html_detached>
+  {
+    // A <base> parsed into a detached element is not in the document.
+    const div = document.createElement('div');
+    div.innerHTML = '<base href="https://www.example.com/5/">';
+    testing.expectEqual(document.URL, document.baseURI);
+
+    document.body.appendChild(div);
+    testing.expectEqual('https://www.example.com/5/', document.baseURI);
+    div.remove();
+    testing.expectEqual(document.URL, document.baseURI);
+  }
+</script>
+
+<script id=clone>
+  {
+    const b = document.createElement('base');
+    b.setAttribute('href', 'https://www.example.com/6/');
+    const c = b.cloneNode();
+    testing.expectEqual(document.URL, document.baseURI);
+    document.head.appendChild(c);
+    testing.expectEqual('https://www.example.com/6/', document.baseURI);
+    c.remove();
+  }
+</script>
+
+<script id=template_and_domparser>
+  {
+    const t = document.createElement('template');
+    t.innerHTML = '<base href="https://www.example.com/7/">';
+    document.body.appendChild(t);
+    testing.expectEqual(document.URL, document.baseURI);
+    t.remove();
+
+    const doc = new DOMParser().parseFromString(
+      '<base href="https://www.example.com/8/">', 'text/html');
+    testing.expectEqual(document.URL, document.baseURI);
+  }
+</script>
+
+<script id=data_and_javascript_urls>
+  {
+    // WPT html/semantics/document-metadata/the-base-element/base-data.html
+    // and base-javascript.html: a data: or javascript: frozen base URL
+    // falls back to the document's fallback base URL.
+    for (const href of ['data:/,more-test', 'javascript:/,more-test']) {
+      const b = document.createElement('base');
+      b.href = href;
+      document.head.prepend(b);
+      const a = document.createElement('a');
+      a.href = 'blah';
+      testing.expectEqual(new URL('blah', document.URL).href, a.href);
+      b.remove();
+    }
+  }
+</script>
+
+<script id=shadow_tree>
+  {
+    // A <base> in a shadow tree is connected but isn't in the document tree.
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = host.attachShadow({mode: 'open'});
+    const b = document.createElement('base');
+    b.setAttribute('href', 'https://www.example.com/9/');
+    root.appendChild(b);
+    testing.expectEqual(document.URL, document.baseURI);
+    host.remove();
+  }
+</script>

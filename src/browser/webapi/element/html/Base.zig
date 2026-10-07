@@ -126,3 +126,7 @@ const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Base" {
     try testing.htmlRunner("element/html/base.html", .{});
 }
+
+test "WebApi: HTML.Base dynamic" {
+    try testing.htmlRunner("element/html/base_dynamic.html", .{});
+}

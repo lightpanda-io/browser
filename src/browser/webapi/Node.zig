@@ -1218,7 +1218,7 @@ pub fn cloneNodeInto(self: *Node, deep: bool, document: *const Document, frame: 
                 .processing_instruction => Frame.node_factory.createProcessingInstruction(document, cd.subtype(CData.ProcessingInstruction)._target, data),
             };
         },
-        .element => return self.subtype(Element).clone(deep, document, frame) catch return error.CloneError,
+        .element => return self.subtype(Element).clone(deep, document, frame),
         .document => {
             const doc = self.subtype(Document);
             const cloned = switch (doc._type) {

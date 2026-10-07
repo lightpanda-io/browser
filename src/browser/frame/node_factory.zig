@@ -402,27 +402,13 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                         attribute_iterator,
                         .{},
                     ),
-                    asUint("base") => {
-                        const n = try createHtmlElementT(
-                            document,
-                            Element.Html.Base,
-                            namespace,
-                            attribute_iterator,
-                            .{},
-                        );
-
-                        // If the frame's base url is not already set, fill it
-                        // with the base tag.
-                        if (document._frame) |realm| {
-                            if (realm.base_url == null) {
-                                if (n.as(Element).getAttributeInterned("href")) |href| {
-                                    realm.base_url = try URL.resolve(realm.arena, realm.url, href, .{});
-                                }
-                            }
-                        }
-
-                        return n;
-                    },
+                    asUint("base") => return createHtmlElementT(
+                        document,
+                        Element.Html.Base,
+                        namespace,
+                        attribute_iterator,
+                        .{},
+                    ),
                     asUint("menu") => return createHtmlElementT(
                         document,
                         Element.Html.Generic,
