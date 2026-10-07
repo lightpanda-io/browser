@@ -58,7 +58,7 @@ pub fn setHref(self: *Base, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("href"), .wrap(value), frame);
 }
 
-fn baseAddedCallback(self: *Base, frame: *Frame) !void {
+fn updateBaseURL(self: *Base, frame: *Frame) !void {
     // Per HTML spec, the document's base URL is the href of the FIRST <base>
     // element in tree order that has an href attribute — not necessarily this
     // one. Re-derive from scratch so that setting href on a non-authoritative
@@ -96,7 +96,11 @@ pub const JsApi = struct {
 
 pub const Build = struct {
     pub fn connected(element: *Element, frame: *Frame) !void {
-        return element.as(Base).baseAddedCallback(frame);
+        return element.as(Base).updateBaseURL(frame);
+    }
+
+    pub fn disconnected(element: *Element, frame: *Frame) !void {
+        return element.as(Base).updateBaseURL(frame);
     }
 
     pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
@@ -105,10 +109,17 @@ pub const Build = struct {
         }
         if (element.asNode().isConnected() == false) return;
 
-        try element.as(Base).baseAddedCallback(frame);
+        try element.as(Base).updateBaseURL(frame);
     }
 
-    // TODO handle attribute remove?
+    pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("href"))) {
+            return;
+        }
+        if (element.asNode().isConnected() == false) return;
+
+        return element.as(Base).updateBaseURL(frame);
+    }
 };
 
 const testing = @import("../../../../testing.zig");

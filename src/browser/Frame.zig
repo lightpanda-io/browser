@@ -2879,6 +2879,10 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
 
         popover.removeFromOpen(el, self);
 
+        _ = Element.Build.call(el, "disconnected", .{ el, self }) catch |err| {
+            log.err(.bug, "build.disconnected", .{ .tag = el.getTag(), .err = err, .type = self._type, .url = self.url });
+        };
+
         // If a <style> element is being removed, remove its sheet from the list.
         // `self` is the calling frame — Node.removeChild passes its own — so
         // both the list and the rebuild belong to the element's frame, which is
