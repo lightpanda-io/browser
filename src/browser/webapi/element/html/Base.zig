@@ -79,7 +79,14 @@ fn updateBaseURL(self: *Base, frame: *Frame) !void {
     }
 
     const fallback = owner.inherited_base_url orelse owner.url;
-    const resolved = try URL.resolve(frame.local_arena, fallback, href, .{});
+    const resolved = URL.resolve(frame.local_arena, fallback, href, .{}) catch |err| {
+        if (err == error.TypeError) {
+            owner.base_url = null;
+            return;
+        }
+
+        return err;
+    };
 
     const protocol = URL.getProtocol(resolved);
     if (std.mem.eql(u8, protocol, "data:") or std.mem.eql(u8, protocol, "javascript:")) {
