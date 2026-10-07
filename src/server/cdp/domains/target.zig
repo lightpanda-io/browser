@@ -420,28 +420,21 @@ fn setDiscoverTargets(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-// One entry of Target.setAutoAttach's `filter` (a TargetFilter in
-// the protocol): `type` selects the target type it matches (an
-// absent type matches any type) and `exclude` turns the entry
-// into an exclusion instead of an inclusion.
+/// One entry of Target.setAutoAttach's `filter`: `type`
+/// selects the target type it matches (absent matches any
+/// type), `exclude` turns the entry into an exclusion.
 const TargetFilter = struct {
     type: ?[]const u8 = null,
     exclude: bool = false,
 };
 
-// Does the client's auto-attach filter rule out page targets? An
-// entry with `exclude` set rules out every target matching its
-// `type`; an absent `type` rules out every type.
-fn filterExcludesPage(filter: ?[]const TargetFilter) bool {
-    for (filter orelse return false) |f| {
-        if (f.exclude) {
-            if (f.type) |target_type| {
-                if (std.mem.eql(u8, target_type, "page")) return true;
-            } else {
-                // an untyped exclude rules out every type
-                return true;
-            }
-        }
+/// Does the client's auto-attach filter include page targets?
+/// Entries are checked in order: the first entry matching the
+/// target type decides; an absent type matches any type.
+fn filterIncludesPage(filter: ?[]const TargetFilter) bool {
+    for (filter orelse return true) |f| {
+        const t = f.type orelse return !f.exclude;
+        if (std.mem.eql(u8, t, "page")) return !f.exclude;
     }
     return false;
 }
@@ -494,13 +487,10 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     // This hack requires the main cdp dispatch handler to special case
     // messages from this "STARTUP" session.
     //
-    // A client that excluded page targets from auto-attach (puppeteer
-    // does: it only wants the targets it creates itself) must not be
-    // told about this placeholder. It would surface as a page, and
-    // navigating it lands on the STARTUP session, which has no page
-    // behind it (see dispatchStartupCommand), so the navigation would
-    // never happen. Stay quiet for those clients.
-    if (!filterExcludesPage(params.filter)) {
+    // A client that excluded page targets from auto-attach
+    // (puppeteer does) must not hear about this placeholder:
+    // navigating it would land on the page-less STARTUP session.
+    if (filterIncludesPage(params.filter)) {
         try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
             .sessionId = "STARTUP",
             .targetInfo = TargetInfo{
@@ -1162,4 +1152,50 @@ test "cdp.target: setAutoAttach false sends detachedFromTarget" {
     try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = session_id }, .{});
     try testing.expectEqual(null, bc.session_id);
     try ctx.expectSentResult(null, .{ .id = 12 });
+}
+
+test "cdp.target: setAutoAttach with page-exclude filter sends no attachedToTarget" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // Puppeteer's filter: exclude page targets, include the rest.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Target.setAutoAttach",
+        .params = .{
+            .autoAttach = true,
+            .waitForDebuggerOnStart = false,
+            .filter = [_]TargetFilter{
+                .{ .type = "page", .exclude = true },
+                .{},
+            },
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    // The STARTUP placeholder is a page target: with pages
+    // excluded, only the result may be sent.
+    try ctx.expectSentCount(1);
+}
+
+test "cdp.target: setAutoAttach without filter still sends startup attachedToTarget" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Target.setAutoAttach",
+        .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false },
+    });
+    try ctx.expectSentEvent("Target.attachedToTarget", .{
+        .sessionId = "STARTUP",
+        .targetInfo = .{
+            .targetId = "TID-STARTUP",
+            .type = "page",
+            .title = "",
+            .url = "about:blank",
+            .browserContextId = "BID-STARTUP",
+        },
+    }, .{ .index = 0 });
+    try ctx.expectSentResult(null, .{ .id = 1, .index = 1 });
+    try ctx.expectSentCount(2);
 }

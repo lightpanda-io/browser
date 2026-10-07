@@ -262,12 +262,9 @@ fn dispatchStartupCommand(command: *Command, method: []const u8) !void {
         return dispatchCommand(command, method);
     }
 
-    // Navigating the placeholder session has no page behind it: an
-    // empty result here would look like success while nothing
-    // happened, leaving the client waiting for lifecycle events
-    // that never come. Say so, and point at the way to get a real
-    // target. (Clients that filter pages out of auto-attach never
-    // see this session at all; see Target.setAutoAttach.)
+    // The placeholder session has no page behind it: an empty
+    // result would look like success while nothing happened.
+    // Say so, and point at the way to get a real target.
     if (std.mem.eql(u8, method, "Page.navigate")) {
         return command.sendError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{});
     }
@@ -1655,6 +1652,19 @@ test "cdp: STARTUP sessionId" {
         try ctx.processMessage(.{ .id = 4, .method = "Hi", .sessionId = "STARTUP" });
         try ctx.expectSentResult(null, .{ .id = 4, .index = 2, .session_id = "STARTUP" });
     }
+}
+
+test "cdp: Page.navigate on the STARTUP session returns -32000" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Page.navigate",
+        .sessionId = "STARTUP",
+        .params = .{ .url = "https://example.com" },
+    });
+    try ctx.expectSentError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{ .id = 1, .session_id = "STARTUP" });
 }
 
 test "cdp: disconnect latches so the worker keeps exiting" {
