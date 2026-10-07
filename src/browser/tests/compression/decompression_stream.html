@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script>
+  const FORMATS = ['gzip', 'deflate', 'deflate-raw', 'brotli'];
+
+  // 'hello', compressed by Python's zlib/gzip modules and the brotli CLI
+  // (v1.2.0).
+  const HELLO = {
+    'gzip': [31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 203, 72, 205, 201, 201, 7, 0, 134, 166, 16, 54, 5, 0, 0, 0],
+    'deflate': [120, 156, 203, 72, 205, 201, 201, 7, 0, 6, 44, 2, 21],
+    'deflate-raw': [203, 72, 205, 201, 201, 7, 0],
+    'brotli': [15, 2, 128, 104, 101, 108, 108, 111, 3],
+  };
+
+  // '', compressed.
+  const EMPTY = {
+    'gzip': [31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'deflate': [120, 156, 3, 0, 0, 0, 0, 1],
+    'deflate-raw': [3, 0],
+    'brotli': [63],
+  };
+
+  async function readAll(readable) {
+    return readRest(readable.getReader(), []);
+  }
+
+  // Reads `reader` to the end, after the `chunks` already read from it.
+  async function readRest(reader, chunks) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    return concat(chunks);
+  }
+
+  function concat(chunks) {
+    let length = 0;
+    for (const chunk of chunks) {
+      if (!(chunk instanceof Uint8Array)) throw new Error('chunk is not a Uint8Array');
+      // The spec only enqueues non-empty pieces.
+      if (chunk.length === 0) throw new Error('chunk is empty');
+      length += chunk.length;
+    }
+    const out = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return out;
+  }
+
+  function equal(a, b) {
+    return a.length === b.length && a.every((byte, i) => byte === b[i]);
+  }
+
+  async function compress(format, bytes) {
+    const cs = new CompressionStream(format);
+    const writer = cs.writable.getWriter();
+    const output = readAll(cs.readable);
+    writer.write(bytes);
+    writer.close();
+    return output;
+  }
+
+  async function decompress(format, chunks) {
+    const ds = new DecompressionStream(format);
+    const writer = ds.writable.getWriter();
+    const output = readAll(ds.readable);
+    for (const chunk of chunks) writer.write(new Uint8Array(chunk));
+    writer.close();
+    return new TextDecoder().decode(await output);
+  }
+
+  async function rejection(promise) {
+    try {
+      await promise;
+    } catch (e) {
+      return e.name;
+    }
+    return 'resolved';
+  }
+
+  // Writes each chunk and closes. Returns how each write, the close, and a
+  // read after all of them settled.
+  async function outcome(format, chunks) {
+    const ds = new DecompressionStream(format);
+    const writer = ds.writable.getWriter();
+    const writes = [];
+    for (const chunk of chunks) writes.push(rejection(writer.write(new Uint8Array(chunk))));
+    const close = rejection(writer.close());
+    return {
+      writes: await Promise.all(writes),
+      close: await close,
+      read: await rejection(ds.readable.getReader().read()),
+    };
+  }
+</script>
+
+<script id=constructor>
+  {
+    for (const format of FORMATS) {
+      const ds = new DecompressionStream(format);
+      testing.expectTrue(ds.readable instanceof ReadableStream);
+      testing.expectTrue(ds.writable instanceof WritableStream);
+    }
+
+    for (const format of ['GZIP', 'zlib', 'BROTLI', 'br', '', undefined]) {
+      testing.withError((err) => testing.expectEqual('TypeError', err.name), () => new DecompressionStream(format));
+    }
+    testing.withError((err) => testing.expectEqual('TypeError', err.name), () => new DecompressionStream());
+  }
+</script>
+
+<script id=decompress type=module>
+  const state = await testing.async();
+
+  const results = {};
+  for (const format of FORMATS) {
+    results[format] = {
+      whole: await decompress(format, [HELLO[format]]),
+      // one byte per chunk
+      split: await decompress(format, HELLO[format].map((b) => [b])),
+      // empty chunks are fine anywhere, including after the end
+      padded: await decompress(format, [[], HELLO[format], [], []]),
+      empty: await decompress(format, [EMPTY[format]]),
+    };
+  }
+
+  state.resolve();
+  await state.done(() => {
+    for (const format of FORMATS) {
+      testing.expectEqual({ whole: 'hello', split: 'hello', padded: 'hello', empty: '' }, results[format]);
+    }
+  });
+</script>
+
+<script id=no_input type=module>
+  const state = await testing.async();
+
+  const results = {};
+  for (const format of FORMATS) {
+    results[format] = await outcome(format, []);
+  }
+
+  state.resolve();
+  await state.done(() => {
+    for (const format of FORMATS) {
+      testing.expectEqual({ writes: [], close: 'TypeError', read: 'TypeError' }, results[format]);
+    }
+  });
+</script>
+
+<script id=truncated type=module>
+  const state = await testing.async();
+
+  const results = {};
+  for (const format of FORMATS) {
+    results[format] = await outcome(format, [HELLO[format].slice(0, -1)]);
+  }
+
+  state.resolve();
+  await state.done(() => {
+    for (const format of FORMATS) {
+      testing.expectEqual({ writes: ['resolved'], close: 'TypeError', read: 'TypeError' }, results[format]);
+    }
+  });
+</script>
+
+<script id=corrupt type=module>
+  const state = await testing.async();
+
+  const results = {};
+  for (const format of ['gzip', 'deflate']) {
+    results[format] = await outcome(format, [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]);
+  }
+
+  // Flip a byte of the deflate data: the CRC32 / ADLER32 check fails.
+  const bad_gzip = HELLO['gzip'].slice();
+  bad_gzip[17] ^= 1;
+  results['gzip crc'] = await outcome('gzip', [bad_gzip]);
+  const bad_deflate = HELLO['deflate'].slice();
+  bad_deflate[12] ^= 1;
+  results['deflate adler'] = await outcome('deflate', [bad_deflate]);
+
+  // FDICT (a preset dictionary) isn't supported.
+  results['fdict'] = await outcome('deflate', [[120, 187, 6, 44, 2, 21, 203, 0, 17, 0, 6, 44, 2, 21]]);
+
+  // A reserved block type
+  results['deflate-raw'] = await outcome('deflate-raw', [[7, 0]]);
+
+  // A reserved window size (RFC 7932, section 9.1). brotli has no checksum, so
+  // flipped bytes often go unnoticed.
+  results['brotli'] = await outcome('brotli', [[17, 0, 0, 0]]);
+
+  state.resolve();
+  await state.done(() => {
+    for (const result of Object.values(results)) {
+      testing.expectEqual({ writes: ['TypeError'], close: 'TypeError', read: 'TypeError' }, result);
+    }
+  });
+</script>
+
+<script id=trailing_data type=module>
+  const state = await testing.async();
+
+  const results = {};
+  for (const format of FORMATS) {
+    results[format] = await outcome(format, [HELLO[format].concat([0])]);
+    results[format + ' later write'] = await outcome(format, [HELLO[format], [0]]);
+  }
+
+  // A second gzip member is trailing data too.
+  results['gzip members'] = await outcome('gzip', [HELLO['gzip'].concat(HELLO['gzip'])]);
+
+  state.resolve();
+  await state.done(() => {
+    for (const format of FORMATS) {
+      testing.expectEqual({ writes: ['TypeError'], close: 'TypeError', read: 'TypeError' }, results[format]);
+      const later = results[format + ' later write'];
+      testing.expectEqual({ writes: ['resolved', 'TypeError'], close: 'TypeError', read: 'TypeError' }, later);
+    }
+    testing.expectEqual({ writes: ['TypeError'], close: 'TypeError', read: 'TypeError' }, results['gzip members']);
+  });
+</script>
+
+<script id=bad_chunks type=module>
+  const state = await testing.async();
+
+  const results = [];
+  for (const format of ['gzip', 'brotli']) {
+    for (const chunk of ['hello', undefined, null, 42, {}, [1, 2, 3]]) {
+      const ds = new DecompressionStream(format);
+      const writer = ds.writable.getWriter();
+      const reader = ds.readable.getReader();
+      const pending_read = rejection(reader.read());
+      results.push([await rejection(writer.write(chunk)), await pending_read, await rejection(reader.read())]);
+    }
+  }
+
+  state.resolve();
+  await state.done(() => {
+    for (const result of results) {
+      testing.expectEqual(['TypeError', 'TypeError', 'TypeError'], result);
+    }
+  });
+</script>
+
+<script id=large_output type=module>
+  const state = await testing.async();
+
+  // A few hundred bytes that inflate to 1 MiB within a single write.
+  const zeros = new Uint8Array(1024 * 1024);
+  const results = {};
+  for (const format of FORMATS) {
+    const compressed = await compress(format, zeros);
+    const ds = new DecompressionStream(format);
+    const writer = ds.writable.getWriter();
+    const output = readAll(ds.readable);
+    const write = rejection(writer.write(compressed));
+    writer.close();
+    results[format] = { small: compressed.length < 4096, write: await write, same: equal(await output, zeros) };
+  }
+
+  state.resolve();
+  await state.done(() => {
+    for (const format of FORMATS) {
+      testing.expectEqual({ small: true, write: 'resolved', same: true }, results[format]);
+    }
+  });
+</script>
+
+<script id=pending_reads type=module>
+  const state = await testing.async();
+
+  // Reads waiting before a write that produces many chunks get the first
+  // ones, in order; the rest stay queued for later reads.
+  const input = new Uint8Array(256 * 1024).map((_, i) => i % 251);
+  const compressed = await compress('deflate', input);
+
+  const ds = new DecompressionStream('deflate');
+  const writer = ds.writable.getWriter();
+  const reader = ds.readable.getReader();
+  const reads = [reader.read(), reader.read(), reader.read()];
+  writer.write(compressed);
+  writer.close();
+
+  const first = await Promise.all(reads);
+  const output = await readRest(reader, first.map((r) => r.value));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([false, false, false], first.map((r) => r.done));
+    testing.expectEqual(true, equal(output, input));
+  });
+</script>
+
+<script id=extra_input_output type=module>
+  const state = await testing.async();
+
+  // What was inflated before the trailing junk still reaches a waiting read;
+  // only then does the stream error.
+  const results = {};
+  for (const format of FORMATS) {
+    const ds = new DecompressionStream(format);
+    const writer = ds.writable.getWriter();
+    const reader = ds.readable.getReader();
+    const read = reader.read();
+    const write = rejection(writer.write(new Uint8Array(HELLO[format].concat([0]))));
+    const { value } = await read;
+    results[format] = {
+      value: new TextDecoder().decode(value),
+      write: await write,
+      next: await rejection(reader.read()),
+    };
+  }
+
+  state.resolve();
+  await state.done(() => {
+    for (const format of FORMATS) {
+      testing.expectEqual({ value: 'hello', write: 'TypeError', next: 'TypeError' }, results[format]);
+    }
+  });
+</script>
+
+<script id=format_mismatch type=module>
+  const state = await testing.async();
+
+  // Each format only accepts its own framing; nothing is auto-detected.
+  const results = {};
+  for (const [format, data] of [
+    ['deflate', 'gzip'],
+    ['gzip', 'deflate'],
+    ['deflate', 'deflate-raw'],
+    ['gzip', 'deflate-raw'],
+    ['deflate-raw', 'gzip'],
+    ['deflate-raw', 'deflate'],
+    ['brotli', 'gzip'],
+    ['brotli', 'deflate'],
+    ['gzip', 'brotli'],
+    ['deflate', 'brotli'],
+    ['deflate-raw', 'brotli'],
+  ]) {
+    results[`${data} as ${format}`] = await outcome(format, [HELLO[data]]);
+  }
+
+  // brotli has no magic number: these bytes start a valid-looking stream that
+  // never ends, so only close() notices.
+  const raw_as_brotli = await outcome('brotli', [HELLO['deflate-raw']]);
+
+  state.resolve();
+  await state.done(() => {
+    for (const result of Object.values(results)) {
+      testing.expectEqual({ writes: ['TypeError'], close: 'TypeError', read: 'TypeError' }, result);
+    }
+    testing.expectEqual({ writes: ['resolved'], close: 'TypeError', read: 'TypeError' }, raw_as_brotli);
+  });
+</script>
+
+<script id=brotli_small_window type=module>
+  const state = await testing.async();
+
+  // `brotli -q 11 -w 10` (v1.2.0) of 'hello world ' x 1000: with a 1 KiB
+  // window the decoder's ring buffer fills a dozen times within one write.
+  const compressed = [
+    161, 248, 118, 193, 111, 164, 116, 243, 38, 170, 50, 180, 4, 97, 123, 171, 89, 30, 171, 5, 50, 160, 218, 142, 38, 0,
+    0,
+  ];
+  const expected = 'hello world '.repeat(1000);
+  const results = {
+    whole: (await decompress('brotli', [compressed])) === expected,
+    split: (await decompress('brotli', compressed.map((b) => [b]))) === expected,
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual({ whole: true, split: true }, results);
+  });
+</script>
