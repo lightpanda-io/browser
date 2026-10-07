@@ -83,7 +83,7 @@ pub fn TextEntry(comptime T: type) type {
             };
 
             {
-                const scratch = try frame.getArena(.small, "TextEntry.innerInsert");
+                const scratch = try frame.getArena(current_value.len + str.len, "TextEntry.innerInsert");
                 defer scratch.release();
                 const new_value = try std.mem.concat(scratch.allocator(), u8, &.{ current_value[0..start], str, current_value[end..] });
                 try self.setUserValue(new_value, frame);
@@ -139,7 +139,7 @@ pub fn TextEntry(comptime T: type) type {
             }
 
             {
-                const scratch = try frame.getArena(.small, "TextEntry.innerDelete");
+                const scratch = try frame.getArena(current_value.len, "TextEntry.innerDelete");
                 defer scratch.release();
                 const new_value = try std.mem.concat(scratch.allocator(), u8, &.{
                     current_value[0..start],
