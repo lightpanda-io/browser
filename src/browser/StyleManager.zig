@@ -55,6 +55,7 @@ arena: *lp.Arena,
 
 visibility: Group(Visibility) = .{},
 geometry: Group(Geometry) = .{},
+touch_action: Group(TouchAction) = .{},
 
 // Keyed by property name, pruning to what is (hopefully) one or few rules
 custom_rules: std.StringHashMapUnmanaged(CustomProperty) = .empty,
@@ -682,12 +683,13 @@ pub fn overscrollContainAxes(self: *StyleManager, el: *Element) Element.ScrollAx
     return .{ .x = p.overscroll_x_contains, .y = p.overscroll_y_contains };
 }
 
-/// The axes along which `el`'s own computed touch-action forbids a touch from
-/// panning. No ancestor walk.
+/// The axes along which the effective touch-action of `el`, its own
+/// intersected with its ancestors', forbids a touch from panning.
 pub fn touchPanBlockedAxes(self: *StyleManager, el: *Element) Element.ScrollAxes {
+    self.assertOwns(el);
     self.rebuildIfDirty() catch return .{};
-    const p = self.geometryProps(el);
-    return .{ .x = p.touch_pan_x_blocked, .y = p.touch_pan_y_blocked };
+    const p = self.touch_action.inheritedProps(self.arena.allocator(), el, self.frame);
+    return .{ .x = p.pan_x_blocked, .y = p.pan_y_blocked };
 }
 
 /// Own computed width or height in px, from inline style or a sheet rule.
@@ -1354,14 +1356,12 @@ const Visibility = struct {
 /// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "touch-action", "width", "height" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height" };
 
         overflow_x_scrolls: ?bool = null,
         overflow_y_scrolls: ?bool = null,
         overscroll_x_contains: ?bool = null,
         overscroll_y_contains: ?bool = null,
-        touch_pan_x_blocked: ?bool = null,
-        touch_pan_y_blocked: ?bool = null,
         width: ?Length = null,
         height: ?Length = null,
 
@@ -1374,10 +1374,6 @@ const Geometry = struct {
                 self.overscroll_x_contains = overscrollContains(value);
             } else if (std.ascii.eqlIgnoreCase(name, "overscroll-behavior-y")) {
                 self.overscroll_y_contains = overscrollContains(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "touch-action")) {
-                const pans = touchActionPans(value) orelse return;
-                self.touch_pan_x_blocked = !pans.x;
-                self.touch_pan_y_blocked = !pans.y;
             } else if (std.ascii.eqlIgnoreCase(name, "width")) {
                 self.width = Length.parse(value);
             } else if (std.ascii.eqlIgnoreCase(name, "height")) {
@@ -1398,10 +1394,37 @@ const Geometry = struct {
             return std.ascii.eqlIgnoreCase(value, "contain") or
                 std.ascii.eqlIgnoreCase(value, "none");
         }
+    };
+
+    const Computed = packed struct(u72) {
+        overflow_x_scrolls: bool = false,
+        overflow_y_scrolls: bool = false,
+        overscroll_x_contains: bool = false,
+        overscroll_y_contains: bool = false,
+        width: Length = .{},
+        height: Length = .{},
+    };
+};
+
+/// The axes a touch may not pan along: touch-action, intersected with the
+/// ancestors' (an ancestor's `none` stops the pan too).
+const TouchAction = struct {
+    const Declared = struct {
+        const names = [_][]const u8{"touch-action"};
+
+        pan_x_blocked: ?bool = null,
+        pan_y_blocked: ?bool = null,
+
+        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
+            if (!std.ascii.eqlIgnoreCase(name, "touch-action")) return;
+            const pans = parse(value) orelse return;
+            self.pan_x_blocked = !pans.x;
+            self.pan_y_blocked = !pans.y;
+        }
 
         // The axes a touch may pan along; null for an invalid value. The
         // directional keywords count for their whole axis.
-        fn touchActionPans(value: []const u8) ?Element.ScrollAxes {
+        fn parse(value: []const u8) ?Element.ScrollAxes {
             if (std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "manipulation")) {
                 return .{ .x = true, .y = true };
             }
@@ -1409,7 +1432,7 @@ const Geometry = struct {
                 return .{};
             }
             var pans: Element.ScrollAxes = .{};
-            var it = std.mem.tokenizeAny(u8, value, " \t\n");
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
             while (it.next()) |token| {
                 if (std.ascii.eqlIgnoreCase(token, "pan-x") or std.ascii.eqlIgnoreCase(token, "pan-left") or std.ascii.eqlIgnoreCase(token, "pan-right")) {
                     pans.x = true;
@@ -1423,25 +1446,32 @@ const Geometry = struct {
         }
     };
 
-    const Computed = packed struct(u74) {
-        overflow_x_scrolls: bool = false,
-        overflow_y_scrolls: bool = false,
-        overscroll_x_contains: bool = false,
-        overscroll_y_contains: bool = false,
-        touch_pan_x_blocked: bool = false,
-        touch_pan_y_blocked: bool = false,
-        width: Length = .{},
-        height: Length = .{},
+    pub const Cascaded = struct {
+        pan_x_blocked: bool = false,
+        pan_y_blocked: bool = false,
+    };
+
+    const Computed = packed struct(u2) {
+        pan_x_blocked: bool = false,
+        pan_y_blocked: bool = false,
+
+        fn resolve(own: Cascaded, parent: Computed) Computed {
+            return .{
+                .pan_x_blocked = own.pan_x_blocked or parent.pan_x_blocked,
+                .pan_y_blocked = own.pan_y_blocked or parent.pan_y_blocked,
+            };
+        }
     };
 };
 
 /// Every group's share of one declaration block, so a sheet's block is folded
 /// once. Field names match the StyleManager's group fields.
 const Declarations = struct {
-    const names = Visibility.Declared.names ++ Geometry.Declared.names;
+    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names;
 
     visibility: Visibility.Declared = .{},
     geometry: Geometry.Declared = .{},
+    touch_action: TouchAction.Declared = .{},
 
     fn apply(self: *Declarations, name: []const u8, value: []const u8) void {
         inline for (group_fields) |field| {
@@ -2156,6 +2186,9 @@ test "StyleManager: memo: reuse and invalidation" {
     try b.setStyle("touch-action: manipulation", frame);
     try testing.expectEqual(Element.ScrollAxes{}, sm.touchPanBlockedAxes(b));
     try testing.expectEqual(Element.ScrollAxes{}, sm.touchPanBlockedAxes(p));
+    // An ancestor's touch-action narrows its descendants'.
+    try p.setStyle("touch-action: pan-x", frame);
+    try testing.expectEqual(Element.ScrollAxes{ .x = false, .y = true }, sm.touchPanBlockedAxes(b));
 
     // A stylesheet change resets the memo
     sm.sheetModified();

@@ -1514,18 +1514,18 @@ test "cdp.input: dispatchTouchEvent preserves each event's modifier keys" {
 
     // The move leaves the slop, or no touchmove would fire.
     const steps = .{
-        .{ "touchStart", 1 },
-        .{ "touchMove", 2 },
-        .{ "touchEnd", 4 },
-        .{ "touchStart", 15 },
-        .{ "touchCancel", 8 },
+        .{ "touchStart", 1, 0 },
+        .{ "touchMove", 2, 20 },
+        .{ "touchEnd", 4, 0 },
+        .{ "touchStart", 15, 0 },
+        .{ "touchCancel", 8, 0 },
     };
     inline for (steps, 1..) |step, id| {
         const is_lift = comptime std.mem.eql(u8, step[0], "touchEnd") or std.mem.eql(u8, step[0], "touchCancel");
         try ctx.processMessage(.{
             .id = id,
             .method = "Input.dispatchTouchEvent",
-            .params = .{ .type = step[0], .modifiers = step[1], .touchPoints = if (is_lift) &.{} else &.{.{ .x = 0, .y = if (comptime std.mem.eql(u8, step[0], "touchMove")) 20 else 0 }} },
+            .params = .{ .type = step[0], .modifiers = step[1], .touchPoints = if (is_lift) &.{} else &.{.{ .x = 0, .y = step[2] }} },
         });
     }
     // Omitted modifiers reset to false, even after a modified gesture.

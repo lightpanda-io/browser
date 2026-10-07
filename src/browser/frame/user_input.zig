@@ -615,14 +615,24 @@ pub const TouchContact = struct {
     pointer_id: i32,
     tap_count: u32 = 1,
     suppress_mouse: bool = false,
-    suppress_click: bool = false,
     start_prevented: bool = false,
-    // Moved past the slop, so touchmove is no longer suppressed.
-    dragging: bool = false,
-    // The drag became a scroll: the touch events left are not cancelable.
-    scrolling: bool = false,
-    // A scroll the touch-action allows: the pointer was cancelled.
-    panning: bool = false,
+    phase: Phase = .slop,
+
+    const Phase = enum {
+        // Still a tap: only the pointer moves.
+        slop,
+        // Moved past the slop, so touchmove fires and nothing activates.
+        drag,
+        // The page didn't cancel the drag: the touch events left aren't
+        // cancelable.
+        scroll,
+        // A scroll the touch-action allows: the pointer was cancelled.
+        pan,
+    };
+
+    fn dispatch(self: TouchContact, modifiers: Modifiers) TouchDispatch {
+        return .{ .modifiers = modifiers, .scrolling = self.phase == .scroll or self.phase == .pan };
+    }
 
     /// A released contact reports a 1x1 point; a cancelled one keeps its
     /// geometry.
@@ -674,8 +684,8 @@ pub const LastTap = struct {
 
 const TouchDispatch = struct {
     modifiers: Modifiers = .{},
-    // Event.cancelable: false for touchcancel, and once a drag scrolls.
-    cancelable: bool = true,
+    // A scrolling contact's touch events aren't cancelable.
+    scrolling: bool = false,
 };
 
 /// Fires the touch event on `target` (no hit-test); returns whether
@@ -690,9 +700,9 @@ fn dispatchTouchEvent(frame: *Frame, target: *Element, typ: TouchType, point: To
         .shiftKey = opts.modifiers.shift,
     }, target, point, frame);
 
-    // A cancelable touch event follows the same passive-listener-dependent
-    // rule as wheel (see EventManager).
-    if (opts.cancelable) {
+    // touchcancel is never cancelable per spec; the others follow the same
+    // passive-listener-dependent rule as wheel (see EventManager).
+    if (typ != .touchcancel and !opts.scrolling) {
         event.asEvent()._cancelable_unless_passive = true;
     }
 
@@ -732,7 +742,6 @@ pub fn touchStart(frame: *Frame, target: ?*Element, point: Touch.Point, modifier
     dispatchBoundaryEvents(frame, null, resolved, TouchBoundary{ .g = g });
     contact.suppress_mouse = try emitPointer(frame, resolved, "pointerdown", g, 0);
     contact.start_prevented = try dispatchTouchEvent(frame, resolved, .touchstart, point, .{ .modifiers = modifiers });
-    contact.suppress_click = contact.start_prevented;
     page.input_touch_contact = contact;
 }
 
@@ -759,25 +768,24 @@ pub fn touchMove(frame: *Frame, over: ?*Element, point: Touch.Point, modifiers: 
     const dx = point.x - contact.start.x;
     const dy = point.y - contact.start.y;
     const moved_off = if (over) |el| el != contact.target else false;
-    const leaves_slop = !contact.dragging and (moved_off or dx * dx + dy * dy > tap_slop_px * tap_slop_px);
+    const leaves_slop = contact.phase == .slop and (moved_off or dx * dx + dy * dy > tap_slop_px * tap_slop_px);
     if (leaves_slop) {
-        contact.dragging = true;
-        contact.suppress_click = true;
+        contact.phase = .drag;
     }
     var g = contact.gesture(point, .down, modifiers);
     g.button = -1;
-    if (!contact.panning) {
+    if (contact.phase != .pan) {
         _ = try emitPointer(frame, contact.target, "pointermove", g, 0);
     }
-    if (!contact.dragging) {
+    if (contact.phase == .slop) {
         page.input_touch_contact = contact;
         return;
     }
-    const prevented = try dispatchTouchEvent(frame, contact.target, .touchmove, point, .{ .modifiers = modifiers, .cancelable = !contact.scrolling });
+    const prevented = try dispatchTouchEvent(frame, contact.target, .touchmove, point, contact.dispatch(modifiers));
     if (leaves_slop and !prevented and !contact.start_prevented) {
-        contact.scrolling = true;
-        if (touchActionPans(frame, contact.target, dx, dy)) {
-            contact.panning = true;
+        contact.phase = .scroll;
+        if (allowsPan(frame, contact.target, dx, dy)) {
+            contact.phase = .pan;
             const cg = contact.gesture(point, .cancel, modifiers);
             _ = try emitPointer(frame, contact.target, "pointercancel", cg, 0);
             dispatchBoundaryEvents(frame, contact.target, null, TouchBoundary{ .g = cg });
@@ -786,18 +794,12 @@ pub fn touchMove(frame: *Frame, over: ?*Element, point: Touch.Point, modifiers: 
     page.input_touch_contact = contact;
 }
 
-/// Whether the effective touch-action of `target`, which intersects its
-/// ancestors', allows a pan in the drag's dominant direction. A drag with no
-/// dominant direction, as WebDriver's, needs either axis.
-fn touchActionPans(frame: *Frame, target: *Element, dx: f64, dy: f64) bool {
+/// Whether `target`'s effective touch-action allows a pan in the drag's
+/// dominant direction. A drag with no dominant direction, as WebDriver's,
+/// needs either axis.
+fn allowsPan(frame: *Frame, target: *Element, dx: f64, dy: f64) bool {
     const owner = target.ownerFrame(frame) orelse frame;
-    var blocked: Element.ScrollAxes = .{};
-    var current: ?*Element = target;
-    while (current) |el| : (current = el.parentElement()) {
-        const own = owner._style_manager.touchPanBlockedAxes(el);
-        blocked.x = blocked.x or own.x;
-        blocked.y = blocked.y or own.y;
-    }
+    const blocked = owner._style_manager.touchPanBlockedAxes(target);
     if (@abs(dx) > @abs(dy)) return !blocked.x;
     if (@abs(dy) > @abs(dx)) return !blocked.y;
     return !blocked.x or !blocked.y;
@@ -824,12 +826,12 @@ pub fn touchEnd(frame: *Frame, point: ?Touch.Point, modifiers: Modifiers, compat
     const lift = point orelse contact.point;
 
     const g = contact.gesture(lift, .up, modifiers);
-    if (!contact.panning) {
+    if (contact.phase != .pan) {
         _ = try emitPointer(frame, contact.target, "pointerup", g, 0);
         dispatchBoundaryEvents(frame, contact.target, null, TouchBoundary{ .g = g });
     }
-    const prevented = try dispatchTouchEvent(frame, contact.target, .touchend, lift, .{ .modifiers = modifiers, .cancelable = !contact.scrolling });
-    if (contact.suppress_click or prevented) return;
+    const prevented = try dispatchTouchEvent(frame, contact.target, .touchend, lift, contact.dispatch(modifiers));
+    if (contact.start_prevented or contact.phase != .slop or prevented) return;
     frame.page.input_last_tap = .{
         .count = contact.tap_count,
         .x = contact.start.x,
@@ -862,12 +864,12 @@ pub fn touchEnd(frame: *Frame, point: ?Touch.Point, modifiers: Modifiers, compat
 pub fn touchCancel(frame: *Frame, modifiers: Modifiers) !void {
     const contact = frame.page.input_touch_contact orelse return;
     frame.page.input_touch_contact = null;
-    if (!contact.panning) {
+    if (contact.phase != .pan) {
         const g = contact.gesture(contact.point, .cancel, modifiers);
         _ = try emitPointer(frame, contact.target, "pointercancel", g, 0);
         dispatchBoundaryEvents(frame, contact.target, null, TouchBoundary{ .g = g });
     }
-    _ = try dispatchTouchEvent(frame, contact.target, .touchcancel, contact.point, .{ .modifiers = modifiers, .cancelable = false });
+    _ = try dispatchTouchEvent(frame, contact.target, .touchcancel, contact.point, .{ .modifiers = modifiers });
 }
 
 fn touchCompatTarget(frame: *Frame, point: Touch.Point, pinned: ?*Element) !?*Element {
