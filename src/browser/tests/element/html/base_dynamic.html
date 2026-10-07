@@ -193,7 +193,11 @@
     // WPT html/semantics/document-metadata/the-base-element/base-data.html
     // and base-javascript.html: a data: or javascript: frozen base URL
     // falls back to the document's fallback base URL.
-    for (const href of ['data:/,more-test', 'javascript:/,more-test']) {
+    // The URL parser lowercases the scheme and strips spaces, tabs and
+    // newlines: these are data: and javascript: URLs too.
+    for (const href of ['data:/,more-test', 'javascript:/,more-test',
+                        'DATA:/,more-test', 'JavaScript:/,more-test',
+                        ' data:/,more-test', 'java\tscript:/,more-test']) {
       const b = document.createElement('base');
       b.href = href;
       document.head.prepend(b);

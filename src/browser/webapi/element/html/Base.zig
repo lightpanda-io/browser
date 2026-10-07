@@ -83,7 +83,8 @@ fn updateBaseURL(self: *Base, frame: *Frame) !void {
         return;
     }
 
-    owner.base_url = try URL.resolve(owner.arena, owner.url, href, .{});
+    const fallback = owner.inherited_base_url orelse owner.url;
+    owner.base_url = try URL.resolve(owner.arena, fallback, href, .{});
 }
 
 pub const JsApi = struct {
