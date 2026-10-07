@@ -350,11 +350,24 @@
 
     const pre_aborted = await rejection(fetch('http://127.0.0.1:9582/xhr', { signal: AbortSignal.abort(custom) }));
 
-    // a completed fetch must detach from its signal
+    // aborting after the body was read is a no-op
     const c4 = new AbortController();
     const response = await fetch('http://127.0.0.1:9582/xhr', { signal: c4.signal });
-    c4.abort();
     const text = await response.text();
+    c4.abort();
+
+    // aborting after resolve errors an unread body, with the signal's reason
+    const c5 = new AbortController();
+    const unread = await fetch('http://127.0.0.1:9582/xhr', { signal: c5.signal });
+    const unread_clone = unread.clone();
+    c5.abort(custom);
+    const unread_text = await rejection(unread.text());
+    const unread_clone_json = await rejection(unread_clone.json());
+
+    const c6 = new AbortController();
+    const streamed = await fetch('http://127.0.0.1:9582/xhr', { signal: c6.signal });
+    c6.abort();
+    const stream_read = await rejection(streamed.body.getReader().read());
 
     state.resolve();
     await state.done(() => {
@@ -365,6 +378,9 @@
       testing.expectEqual('any', any);
       testing.expectEqual(custom, pre_aborted);
       testing.expectEqual(100, text.length);
+      testing.expectEqual(custom, unread_text);
+      testing.expectEqual(custom, unread_clone_json);
+      testing.expectTrue(stream_read !== 'resolved', 'aborted body stream read resolved');
     });
   }
 </script>

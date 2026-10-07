@@ -304,6 +304,7 @@ fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
 
 fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
+    const signal = self._signal;
     self.detachSignal();
 
     var response = self._response;
@@ -330,6 +331,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     self._exec.js.localScope(&ls);
     defer ls.deinit();
 
+    response._signal = signal;
     const js_val = try ls.local.zigValueToJs(self._response, .{});
     self._owns_response = false;
     response._arena.report();
