@@ -261,8 +261,11 @@ origin: ?[]const u8 = null,
 
 // The base url specifies the base URL used to resolve the relative urls.
 // It is set by a <base> tag.
-// If null the url must be used.
+// If null, inherited_base_url is used, then url.
 base_url: ?[:0]const u8 = null,
+
+// Set for about:blank and about:srcdoc documents: their creator's base URL.
+inherited_base_url: ?[:0]const u8 = null,
 
 // Document charset (canonical name from encoding_rs, static lifetime)
 charset: []const u8 = "UTF-8",
@@ -591,7 +594,7 @@ pub fn removeWorker(self: *Frame, worker: *Worker) void {
 }
 
 pub fn base(self: *const Frame) [:0]const u8 {
-    return self.base_url orelse self.url;
+    return self.base_url orelse self.inherited_base_url orelse self.url;
 }
 
 // The base a relative navigation URL resolves against: this frame's base,
@@ -757,7 +760,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         } else if (self.parent) |parent| {
             self.origin = parent.origin;
             if (is_about_blank or is_srcdoc) {
-                self.base_url = parent.base();
+                self.inherited_base_url = parent.base();
                 // about:blank and about:srcdoc documents inherit their
                 // creator's policy container, including the referrer policy
                 self.referrer_policy = parent.referrer_policy;
@@ -765,7 +768,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         } else if (self.window._opener) |opener| {
             self.origin = opener._frame.origin;
             if (is_about_blank) {
-                self.base_url = opener._frame.base();
+                self.inherited_base_url = opener._frame.base();
                 self.referrer_policy = opener._frame.referrer_policy;
             }
         } else {
@@ -2895,6 +2898,10 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
 
         popover.removeFromOpen(el, self);
 
+        _ = Element.Build.call(el, "disconnected", .{ el, self }) catch |err| {
+            log.err(.bug, "build.disconnected", .{ .tag = el.getTag(), .err = err, .type = self._type, .url = self.url });
+        };
+
         // If a <style> element is being removed, remove its sheet from the list.
         // `self` is the calling frame — Node.removeChild passes its own — so
         // both the list and the rebuild belong to the element's frame, which is
@@ -3125,6 +3132,12 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
                     try self.addElementIdWithMaps(id_maps, el, id);
                 }
                 if (rootIsConnected(root)) {
+                    // Build.connected, parser side (JS side is in nodeIsReady).
+                    // Called here, not on pop, so void elements get it too.
+                    // The document may have no frame (DOMParser).
+                    _ = Element.Build.call(el, "connected", .{ el, self }) catch |err| {
+                        log.err(.bug, "build.connected", .{ .tag = el.getTag(), .err = err, .type = self._type, .url = self.url });
+                    };
                     try Element.Html.Custom.enqueueConnectedCallbackOnElement(true, el, self);
                 }
             }
@@ -3401,6 +3414,15 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
             }
         } else if (!node.isConnected()) {
             return;
+        }
+    }
+
+    // Build.connected, JS side. The parser calls it in _insertNodeRelative.
+    if (comptime from_parser == false) {
+        if (node.is(Element)) |el| {
+            _ = Element.Build.call(el, "connected", .{ el, self }) catch |err| {
+                log.err(.bug, "build.connected", .{ .tag = el.getTag(), .err = err, .type = self._type, .url = self.url });
+            };
         }
     }
 
