@@ -315,6 +315,60 @@
   }
 </script>
 
+<script id=abort_reasons type=module>
+  {
+    const state = await testing.async();
+
+    async function rejection(promise) {
+      try {
+        await promise;
+        return 'resolved';
+      } catch (e) {
+        return e;
+      }
+    }
+
+    // /xhr/slow takes 100ms: the abort must not wait for it
+    const c1 = new AbortController();
+    setTimeout(() => c1.abort(), 10);
+    const start = Date.now();
+    const inflight = await rejection(fetch('http://127.0.0.1:9582/xhr/slow', { signal: c1.signal }));
+    const elapsed = Date.now() - start;
+
+    const c2 = new AbortController();
+    const custom = new Error('mine');
+    setTimeout(() => c2.abort(custom), 10);
+    const custom_reason = await rejection(fetch('http://127.0.0.1:9582/xhr/slow', { signal: c2.signal }));
+
+    const timeout = await rejection(fetch('http://127.0.0.1:9582/xhr/slow', { signal: AbortSignal.timeout(10) }));
+
+    const c3 = new AbortController();
+    setTimeout(() => c3.abort('any'), 10);
+    const any = await rejection(fetch('http://127.0.0.1:9582/xhr/slow', {
+      signal: AbortSignal.any([new AbortController().signal, c3.signal]),
+    }));
+
+    const pre_aborted = await rejection(fetch('http://127.0.0.1:9582/xhr', { signal: AbortSignal.abort(custom) }));
+
+    // a completed fetch must detach from its signal
+    const c4 = new AbortController();
+    const response = await fetch('http://127.0.0.1:9582/xhr', { signal: c4.signal });
+    c4.abort();
+    const text = await response.text();
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('AbortError', inflight.name);
+      testing.expectTrue(elapsed < 100, 'abort waited for the response: ' + elapsed);
+      testing.expectEqual(custom, custom_reason);
+      testing.expectEqual('TimeoutError', timeout.name);
+      testing.expectEqual('any', any);
+      testing.expectEqual(custom, pre_aborted);
+      testing.expectEqual(100, text.length);
+    });
+  }
+</script>
+
 <script id=fetch_in_worker type=module>
   {
     const state = await testing.async();
