@@ -53,12 +53,9 @@ pub fn getHref(self: *Base, frame: *Frame) ![]const u8 {
     return URL.resolve(frame.local_arena, doc.getURL(frame), href, .{});
 }
 
+// Build.attributeChange updates the document base URL.
 pub fn setHref(self: *Base, value: []const u8, frame: *Frame) !void {
-    const element = self.asElement();
-    try element.setAttributeSafe(comptime .wrap("href"), .wrap(value), frame);
-
-    if (element.asNode().isConnected() == false) return;
-    try self.baseAddedCallback(frame);
+    try self.asElement().setAttributeSafe(comptime .wrap("href"), .wrap(value), frame);
 }
 
 fn baseAddedCallback(self: *Base, frame: *Frame) !void {
@@ -98,13 +95,8 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
-    pub const parser_created_on_insert = true;
-
-    pub fn created(node: *Node, frame: *Frame) !void {
-        if (node.isConnected() == false) return;
-
-        const self = node.as(Base);
-        try self.baseAddedCallback(frame);
+    pub fn connected(element: *Element, frame: *Frame) !void {
+        return element.as(Base).baseAddedCallback(frame);
     }
 
     pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
