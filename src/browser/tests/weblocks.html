@@ -334,6 +334,35 @@
 }
 </script>
 
+<script id=abortImmediatelyAfterQueueingBehindNeverReleasedLock type=module>
+{
+  const state = await testing.async();
+
+  navigator.locks.request('never-released', () => new Promise(() => {}));
+
+  const controller = new AbortController();
+  let ran = false;
+  const queued = navigator.locks.request('never-released', { signal: controller.signal }, () => {
+    ran = true;
+  });
+  controller.abort();
+
+  let errName = null;
+  try {
+    await queued;
+  } catch (e) {
+    errName = e.name;
+  }
+
+  state.resolve(JSON.stringify({ errName, ran }));
+  await state.done((v) => {
+    const parsed = JSON.parse(v);
+    testing.expectEqual('AbortError', parsed.errName);
+    testing.expectEqual(false, parsed.ran);
+  });
+}
+</script>
+
 <script id=abortAfterCallbackAlreadyRanIsNoop type=module>
 {
   const state = await testing.async();
