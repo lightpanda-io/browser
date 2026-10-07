@@ -96,6 +96,7 @@ const LockRequest = struct {
     }
 
     fn fireCallbackWith(self: *LockRequest, lock: ?Lock) void {
+        if (self.finished) return;
         self.granted = lock != null;
 
         const exec = self.exec;
@@ -155,6 +156,39 @@ const LockRequest = struct {
             ._mode = self.options.mode,
             ._name = self.name,
         });
+    }
+
+    fn scheduleFireCallback(self: *LockRequest) void {
+        self.exec.js.scheduler.add(self, runFireCallback, 0, .{
+            .name = "weblocks.fireCallback",
+            .finalizer = cancelled,
+        }) catch self.fireCallback();
+    }
+
+    fn runFireCallback(ctx: *anyopaque) anyerror!?u32 {
+        const self: *LockRequest = @ptrCast(@alignCast(ctx));
+        self.fireCallback();
+        return null;
+    }
+
+    fn scheduleFireCallbackWithNull(self: *LockRequest) void {
+        self.exec.js.scheduler.add(self, runFireCallbackWithNull, 0, .{
+            .name = "weblocks.fireCallbackWithNull",
+            .finalizer = cancelled,
+        }) catch self.fireCallbackWith(null);
+    }
+
+    fn runFireCallbackWithNull(ctx: *anyopaque) anyerror!?u32 {
+        const self: *LockRequest = @ptrCast(@alignCast(ctx));
+        self.fireCallbackWith(null);
+        return null;
+    }
+
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *LockRequest = @ptrCast(@alignCast(ctx));
+        if (self.finished) return;
+        self.finished = true;
+        self.deinit();
     }
 };
 
@@ -274,7 +308,7 @@ pub fn request(
 
         lock_request.state = .held;
         try self._locks.append(exec.arena, lock_request);
-        lock_request.fireCallback();
+        lock_request.scheduleFireCallback();
         return promise;
     }
 
@@ -282,7 +316,7 @@ pub fn request(
 
     // ifAvailable and held means we fire the callback with null.
     if (options.ifAvailable and must_queue_request) {
-        lock_request.fireCallbackWith(null);
+        lock_request.scheduleFireCallbackWithNull();
         return promise;
     }
 
@@ -293,7 +327,7 @@ pub fn request(
 
     lock_request.state = .held;
     try self._locks.append(exec.arena, lock_request);
-    lock_request.fireCallback();
+    lock_request.scheduleFireCallback();
     return promise;
 }
 
@@ -357,7 +391,7 @@ fn releaseLock(self: *LockManager, lock_request: *LockRequest) void {
     }
 
     for (to_grant.items) |lr| {
-        lr.fireCallback();
+        lr.scheduleFireCallback();
     }
 }
 

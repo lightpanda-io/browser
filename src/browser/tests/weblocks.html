@@ -24,6 +24,16 @@
 }
 </script>
 
+<script id=requestCallbackRunsAsynchronously>
+{
+  // Per spec (and Chrome), request() must return before the callback runs -
+  // granting happens as a separate task, never synchronously inline.
+  let x = 0;
+  navigator.locks.request('callback-async', () => { x = 1 });
+  testing.expectEqual(0, x);
+}
+</script>
+
 <script id=requestAdoptsAsyncCallback type=module>
 {
   const state = await testing.async();
@@ -67,8 +77,7 @@
   });
 
   // give the first request a tick to be granted before releasing it
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
   release1();
 
   await Promise.all([first, second]);
@@ -110,8 +119,7 @@
     order.push('exclusive-start');
   });
 
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
   releaseShared();
 
   await Promise.all([shared, exclusive]);
@@ -130,8 +138,7 @@
     releaseHeld = resolve;
   }));
 
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
 
   const result = await navigator.locks.request('avail', { ifAvailable: true }, (lock) => {
     return lock === null ? 'unavailable' : 'should-not-happen';
@@ -158,8 +165,7 @@
     // never resolves on its own - it should be aborted by the steal
   })).catch((e) => { heldRejection = e.name; });
 
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
 
   const stolen = await navigator.locks.request('steal-me', { steal: true }, (lock) => {
     order.push('stolen-start');
@@ -190,8 +196,7 @@
     releaseStolen = resolve;
   }));
 
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
 
   // queued behind the current holder
   const waiter = navigator.locks.request('steal-queue', (lock) => {
@@ -199,7 +204,7 @@
     return 'waiter-done';
   });
 
-  await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
 
   // someone else steals the lock out from under the holder
   const stealer = navigator.locks.request('steal-queue', { steal: true }, (lock) => {
@@ -282,8 +287,7 @@
     release = resolve;
   }));
 
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
 
   const pending = navigator.locks.request('query-test', () => {});
 
