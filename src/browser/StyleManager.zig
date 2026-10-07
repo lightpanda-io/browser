@@ -682,6 +682,14 @@ pub fn overscrollContainAxes(self: *StyleManager, el: *Element) Element.ScrollAx
     return .{ .x = p.overscroll_x_contains, .y = p.overscroll_y_contains };
 }
 
+/// The axes along which `el`'s own computed touch-action forbids a touch from
+/// panning. No ancestor walk.
+pub fn touchPanBlockedAxes(self: *StyleManager, el: *Element) Element.ScrollAxes {
+    self.rebuildIfDirty() catch return .{};
+    const p = self.geometryProps(el);
+    return .{ .x = p.touch_pan_x_blocked, .y = p.touch_pan_y_blocked };
+}
+
 /// Own computed width or height in px, from inline style or a sheet rule.
 /// Null when undeclared or when it needs layout to resolve.
 pub fn declaredSize(self: *StyleManager, el: *Element, comptime axis: Element.Axis) ?f64 {
@@ -1346,12 +1354,14 @@ const Visibility = struct {
 /// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "touch-action", "width", "height" };
 
         overflow_x_scrolls: ?bool = null,
         overflow_y_scrolls: ?bool = null,
         overscroll_x_contains: ?bool = null,
         overscroll_y_contains: ?bool = null,
+        touch_pan_x_blocked: ?bool = null,
+        touch_pan_y_blocked: ?bool = null,
         width: ?Length = null,
         height: ?Length = null,
 
@@ -1364,6 +1374,10 @@ const Geometry = struct {
                 self.overscroll_x_contains = overscrollContains(value);
             } else if (std.ascii.eqlIgnoreCase(name, "overscroll-behavior-y")) {
                 self.overscroll_y_contains = overscrollContains(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "touch-action")) {
+                const pans = touchActionPans(value) orelse return;
+                self.touch_pan_x_blocked = !pans.x;
+                self.touch_pan_y_blocked = !pans.y;
             } else if (std.ascii.eqlIgnoreCase(name, "width")) {
                 self.width = Length.parse(value);
             } else if (std.ascii.eqlIgnoreCase(name, "height")) {
@@ -1384,13 +1398,38 @@ const Geometry = struct {
             return std.ascii.eqlIgnoreCase(value, "contain") or
                 std.ascii.eqlIgnoreCase(value, "none");
         }
+
+        // The axes a touch may pan along; null for an invalid value. The
+        // directional keywords count for their whole axis.
+        fn touchActionPans(value: []const u8) ?Element.ScrollAxes {
+            if (std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "manipulation")) {
+                return .{ .x = true, .y = true };
+            }
+            if (std.ascii.eqlIgnoreCase(value, "none")) {
+                return .{};
+            }
+            var pans: Element.ScrollAxes = .{};
+            var it = std.mem.tokenizeAny(u8, value, " \t\n");
+            while (it.next()) |token| {
+                if (std.ascii.eqlIgnoreCase(token, "pan-x") or std.ascii.eqlIgnoreCase(token, "pan-left") or std.ascii.eqlIgnoreCase(token, "pan-right")) {
+                    pans.x = true;
+                } else if (std.ascii.eqlIgnoreCase(token, "pan-y") or std.ascii.eqlIgnoreCase(token, "pan-up") or std.ascii.eqlIgnoreCase(token, "pan-down")) {
+                    pans.y = true;
+                } else if (!std.ascii.eqlIgnoreCase(token, "pinch-zoom")) {
+                    return null;
+                }
+            }
+            return pans;
+        }
     };
 
-    const Computed = packed struct(u72) {
+    const Computed = packed struct(u74) {
         overflow_x_scrolls: bool = false,
         overflow_y_scrolls: bool = false,
         overscroll_x_contains: bool = false,
         overscroll_y_contains: bool = false,
+        touch_pan_x_blocked: bool = false,
+        touch_pan_y_blocked: bool = false,
         width: Length = .{},
         height: Length = .{},
     };
@@ -2109,6 +2148,14 @@ test "StyleManager: memo: reuse and invalidation" {
     try testing.expectEqual(Element.ScrollAxes{ .x = false, .y = true }, sm.overscrollContainAxes(b));
     try b.setStyle("overscroll-behavior: contain; overscroll-behavior-x: auto", frame);
     try testing.expectEqual(Element.ScrollAxes{ .x = false, .y = true }, sm.overscrollContainAxes(b));
+
+    try b.setStyle("touch-action: pan-y pinch-zoom", frame);
+    try testing.expectEqual(Element.ScrollAxes{ .x = true, .y = false }, sm.touchPanBlockedAxes(b));
+    try b.setStyle("touch-action: none", frame);
+    try testing.expectEqual(Element.ScrollAxes{ .x = true, .y = true }, sm.touchPanBlockedAxes(b));
+    try b.setStyle("touch-action: manipulation", frame);
+    try testing.expectEqual(Element.ScrollAxes{}, sm.touchPanBlockedAxes(b));
+    try testing.expectEqual(Element.ScrollAxes{}, sm.touchPanBlockedAxes(p));
 
     // A stylesheet change resets the memo
     sm.sheetModified();

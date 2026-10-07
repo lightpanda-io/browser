@@ -815,7 +815,7 @@ test "bidi.input: touch tap" {
     try ctx.expectSentResult(.{ .nodes = .{.{ .sharedId = "1" }} }, .{ .id = 1 });
 
     try evaluate(&ctx, 2, context_id,
-        \\for (const t of ['pointerdown', 'pointerup', 'touchstart', 'touchmove', 'touchend']) {
+        \\for (const t of ['pointerdown', 'pointerup', 'pointercancel', 'touchstart', 'touchmove', 'touchend']) {
         \\  document.addEventListener(t, (e) => window.events.push(t + ':' + (e.pointerType ?? e.changedTouches[0].target.id)));
         \\}
         \\'ok'
@@ -843,7 +843,8 @@ test "bidi.input: touch tap" {
         .value = "pointerdown:touch touchstart:btn pointerup:touch touchend:btn mousemove@btn mousedown@btn mouseup@btn click@btn",
     } }, .{ .id = 4 });
 
-    // A drag past the slop delivers the touch events but doesn't click.
+    // A drag past the slop scrolls: the touch events go on, but the pointer is
+    // cancelled and nothing clicks.
     try ctx.processMessage(.{
         .id = 5,
         .method = "input.performActions",
@@ -862,7 +863,7 @@ test "bidi.input: touch tap" {
     try evaluate(&ctx, 6, context_id, "window.events.slice(8).join(' ')");
     try ctx.expectSentResult(.{ .type = "success", .result = .{
         .type = "string",
-        .value = "pointerdown:touch touchstart:btn touchmove:btn pointerup:touch touchend:btn",
+        .value = "pointerdown:touch touchstart:btn touchmove:btn pointercancel:touch touchend:btn",
     } }, .{ .id = 6 });
 
     // The source's pointerType is fixed once it exists.

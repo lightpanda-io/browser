@@ -193,6 +193,8 @@ input_hover_target: ?*Element = null,
 // The active touch contact; single-touch, so at most one.
 input_touch_contact: ?@import("frame/user_input.zig").TouchContact = null,
 input_touch_next_pointer_id: i32 = @import("frame/user_input.zig").first_touch_pointer_id,
+// The last tap that activated, for counting the next one.
+input_last_tap: ?@import("frame/user_input.zig").LastTap = null,
 
 // Per-gesture button state for the synthetic mouse pointer; see
 // user_input.PointerButtons.

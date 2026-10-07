@@ -473,6 +473,11 @@ pub fn deinit(self: *Frame) void {
             page.input_touch_contact = null;
         }
     }
+    if (page.input_last_tap) |tap| {
+        if (tap.pinned) |el| if (el.ownerFrame(self) == self) {
+            page.input_last_tap = null;
+        };
+    }
 
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame.deinit", .{ .url = self.url, .type = self._type });

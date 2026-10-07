@@ -499,6 +499,8 @@ test "WebApi: WebDriver touchmove/touchend stay on the touchstart target" {
     _ = try ls.local.compileAndRun(
         \\const a = document.getElementById('hoverTarget');
         \\const b = document.getElementById('btn');
+        \\// Without it the drag scrolls and cancels the pointer before the pointerup.
+        \\a.style.touchAction = 'none';
         \\window.moveOnA = false;
         \\window.moveOnB = false;
         \\window.endOnA = false;
@@ -635,6 +637,7 @@ test "WebApi: WebDriver a touch tap activates and a drag does not" {
         \\window.tapIds = [];
         \\box.addEventListener('pointerdown', e => { if (e.pointerType === 'touch') window.tapIds.push(e.pointerId); });
         \\box.addEventListener('pointerup', e => { if (e.pointerType === 'touch') window.tapIds.push(e.pointerId); });
+        \\box.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') window.tapIds.push(e.pointerId); });
         \\window.webdriver.actionSequence([{
         \\  type: 'pointer',
         \\  parameters: { pointerType: 'touch' },
