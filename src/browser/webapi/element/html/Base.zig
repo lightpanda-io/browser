@@ -78,13 +78,21 @@ fn updateBaseURL(self: *Base, frame: *Frame) !void {
         return;
     }
 
-    if (std.mem.startsWith(u8, href, "data:") or std.mem.startsWith(u8, href, "javascript:")) {
+    const fallback = owner.inherited_base_url orelse owner.url;
+    const resolved = try URL.resolve(frame.local_arena, fallback, href, .{});
+
+    const protocol = URL.getProtocol(resolved);
+    if (std.mem.eql(u8, protocol, "data:") or std.mem.eql(u8, protocol, "javascript:")) {
         owner.base_url = null;
         return;
     }
 
-    const fallback = owner.inherited_base_url orelse owner.url;
-    owner.base_url = try URL.resolve(owner.arena, fallback, href, .{});
+    if (owner.base_url) |current| {
+        if (std.mem.eql(u8, current, resolved)) {
+            return;
+        }
+    }
+    owner.base_url = try owner.arena.dupeSentinel(u8, resolved, 0);
 }
 
 pub const JsApi = struct {
