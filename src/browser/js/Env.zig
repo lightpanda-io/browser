@@ -741,10 +741,10 @@ fn terminateInterrupt(_: ?*v8.Isolate, data: ?*anyopaque) callconv(.c) void {
     }
 }
 
-const STALL_STACK_FRAMES = 12;
-const STALL_URL_MAX = 512;
+const SCRIPT_STACK_FRAMES = 12;
+const SCRIPT_URL_MAX = 512;
 
-const StallReport = struct {
+const ScriptReport = struct {
     url: []const u8 = "",
     page_url: []const u8 = "",
     stack: []const u8 = "",
@@ -753,24 +753,24 @@ const StallReport = struct {
 // Runs on the worker thread, inside a V8 interrupt: reads the current stack
 // but never runs JavaScript. Everything returned is either in `stack_buf` or
 // owned by the frame, so it's only valid until the caller returns.
-fn stallReport(self: *Env, stack_buf: []u8) StallReport {
+fn scriptReport(self: *Env, stack_buf: []u8) ScriptReport {
     const isolate = self.isolate.handle;
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, isolate);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
-    var report: StallReport = .{};
+    var report: ScriptReport = .{};
     if (Context.fromIsolate(self.isolate)) |entry| {
         const ctx, _ = entry;
-        report.url = string.truncateUtf8(ctx.global.url(), STALL_URL_MAX);
+        report.url = string.truncateUtf8(ctx.global.url(), SCRIPT_URL_MAX);
         report.page_url = string.truncateUtf8(switch (ctx.global) {
             .frame => |frame| frame.page.frame.url,
             .worker => |worker| worker.page.frame.url,
-        }, STALL_URL_MAX);
+        }, SCRIPT_URL_MAX);
     }
 
     var writer: std.Io.Writer = .fixed(stack_buf);
-    if (v8.v8__StackTrace__CurrentStackTrace__STATIC(isolate, STALL_STACK_FRAMES)) |stack| {
+    if (v8.v8__StackTrace__CurrentStackTrace__STATIC(isolate, SCRIPT_STACK_FRAMES)) |stack| {
         // A full buffer truncates the stack; the frames written are kept.
         js.writeStackTrace(isolate, stack, &writer) catch {};
     }
@@ -780,7 +780,7 @@ fn stallReport(self: *Env, stack_buf: []u8) StallReport {
 
 fn logStall(self: *Env, requested_at: u64) void {
     var stack_buf: [1536]u8 = undefined;
-    const report = self.stallReport(&stack_buf);
+    const report = self.scriptReport(&stack_buf);
     log.warn(.watchdog, "watchdog stall script", .{
         .stalled_ms = self.stall_report_stalled_ms.load(.monotonic),
         .url = report.url,
@@ -792,9 +792,12 @@ fn logStall(self: *Env, requested_at: u64) void {
     });
 }
 
+// The stack is whatever runs when the interrupt lands. That's usually the
+// allocating script, but not necessarily the one holding the memory, and if
+// the limit was hit from native code it's the next script to run.
 fn logHeapLimit(self: *Env) void {
     var stack_buf: [1536]u8 = undefined;
-    const report = self.stallReport(&stack_buf);
+    const report = self.scriptReport(&stack_buf);
     log.err(.app, "JS heap limit script", .{
         .url = report.url,
         .page_url = report.page_url,
@@ -944,7 +947,7 @@ test "Env: a heap limit reached during teardown does not arm a termination" {
     try testing.expect(granted > limit);
 }
 
-test "Env: stall report names the running frame and script stack" {
+test "Env: script report names the running frame and script stack" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
@@ -963,7 +966,7 @@ test "Env: stall report names the running frame and script stack" {
 
         fn capture(self: *@This()) void {
             var buf: [1536]u8 = undefined;
-            const report = self.env.stallReport(&buf);
+            const report = self.env.scriptReport(&buf);
             self.url_len = @min(report.url.len, self.url.len);
             @memcpy(self.url[0..self.url_len], report.url[0..self.url_len]);
             self.page_url_matches = std.mem.eql(u8, report.url, report.page_url);
