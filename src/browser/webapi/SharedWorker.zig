@@ -77,7 +77,7 @@ pub fn init(url: []const u8, name_or_options: ?NameOrOpts, frame: *Frame) !*Shar
         errdefer s.deinit();
 
         const page = frame.page;
-        try page.shared_workers.append(page.frame_arena, s);
+        try page.shared_workers.append(page.arena, s);
         errdefer _ = page.shared_workers.pop();
 
         try s.register(lookup_key);

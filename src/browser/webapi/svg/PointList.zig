@@ -62,7 +62,7 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*PointList {
         .kind = kind,
     };
     const page = frame.page;
-    const gop = try page._svg_point_lists.getOrPut(page.frame_arena, key);
+    const gop = try page._svg_point_lists.getOrPut(page.arena, key);
     if (!gop.found_existing) {
         errdefer _ = page._svg_point_lists.remove(key);
         gop.value_ptr.* = try frame._factory.create(PointList{

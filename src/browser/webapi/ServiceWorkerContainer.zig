@@ -52,7 +52,7 @@ const RegisterOptions = struct {
 };
 
 pub fn init(frame: *Frame) !*ServiceWorkerContainer {
-    const self = try frame._factory.eventTargetWithAllocator(frame.arena, ServiceWorkerContainer{
+    const self = try frame._factory.eventTargetWithAllocator(frame.page_arena, ServiceWorkerContainer{
         ._proto = undefined,
         ._frame = frame,
     });
@@ -159,7 +159,7 @@ fn track(self: *ServiceWorkerContainer, scope: *ServiceWorkerGlobalScope) !*Serv
     const frame = self._frame;
     const registration = try ServiceWorkerRegistration.init(scope, self, &frame.js.execution);
     errdefer registration.detach();
-    try self._registrations.append(frame.arena, registration);
+    try self._registrations.append(frame.page_arena, registration);
 
     if (scope.hasActiveWorker()) {
         self.workerActivated();

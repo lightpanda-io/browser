@@ -121,7 +121,7 @@ pub fn schedule(
         persisted_params = try arena.dupe(js.Value.Global, opts.params);
     }
 
-    const gop = try self._callbacks.getOrPut(exec.arena, timer_id);
+    const gop = try self._callbacks.getOrPut(exec.page_arena, timer_id);
     if (gop.found_existing) {
         // 2^31 would have to wrap for this to happen.
         return error.TooManyTimeout;

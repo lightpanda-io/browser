@@ -48,23 +48,23 @@ fn create(exec: *Execution, lower: ?[]const u8, upper: ?[]const u8, lower_open: 
 }
 
 pub fn only(value: js.Value, exec: *Execution) !*IDBKeyRange {
-    const encoded = try Key.encodeValue(exec.arena, value);
+    const encoded = try Key.encodeValue(exec.page_arena, value);
     return create(exec, encoded, encoded, false, false);
 }
 
 fn lowerBound(value: js.Value, open: ?bool, exec: *Execution) !*IDBKeyRange {
-    const encoded = try Key.encodeValue(exec.arena, value);
+    const encoded = try Key.encodeValue(exec.page_arena, value);
     return create(exec, encoded, null, open orelse false, false);
 }
 
 fn upperBound(value: js.Value, open: ?bool, exec: *Execution) !*IDBKeyRange {
-    const encoded = try Key.encodeValue(exec.arena, value);
+    const encoded = try Key.encodeValue(exec.page_arena, value);
     return create(exec, null, encoded, false, open orelse false);
 }
 
 fn bound(lower: js.Value, upper: js.Value, lower_open: ?bool, upper_open: ?bool, exec: *Execution) !*IDBKeyRange {
-    const lo = try Key.encodeValue(exec.arena, lower);
-    const up = try Key.encodeValue(exec.arena, upper);
+    const lo = try Key.encodeValue(exec.page_arena, lower);
+    const up = try Key.encodeValue(exec.page_arena, upper);
     if (std.mem.order(u8, lo, up) == .gt) {
         return error.DataError;
     }

@@ -405,7 +405,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .url = &global.url,
         .buf = &global.buf,
         .charset = &global.charset,
-        .arena = global.arena,
+        .page_arena = if (comptime is_frame) global.page_arena else global.arena,
         .page = context.page,
         .session = page.session,
         .call_arena = params.call_arena,

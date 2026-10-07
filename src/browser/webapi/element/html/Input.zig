@@ -335,7 +335,7 @@ fn replaceFiles(self: *Input, files: []const *File, frame: *Frame) !void {
     }
 
     const fl = try self.ensureFileList(frame);
-    const dupe = try frame.arena.dupe(*File, files);
+    const dupe = try frame.page_arena.dupe(*File, files);
 
     for (dupe) |file| {
         file._proto.acquireRef();
@@ -838,7 +838,7 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
                     break :blk if (comptime dupe) try frame.dupeString(value) else value;
                 };
 
-                var result = try frame.arena.alloc(u8, value.len);
+                var result = try frame.page_arena.alloc(u8, value.len);
                 @memcpy(result[0..first], value[0..first]);
 
                 var i: usize = first;
@@ -860,7 +860,7 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
         .month => return if (isValidMonth(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
         .week => return if (isValidWeek(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
         .time => return if (isValidTime(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
-        .@"datetime-local" => return try sanitizeDatetimeLocal(dupe, value, frame.arena),
+        .@"datetime-local" => return try sanitizeDatetimeLocal(dupe, value, frame.page_arena),
         .number => return if (isValidFloatingPoint(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
         .range => {
             const value_attr = self.asConstElement().getAttributeInterned("value") orelse "";
@@ -882,7 +882,7 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
                 }
 
                 // Normalize to lowercase per spec
-                const result = try frame.arena.alloc(u8, 7);
+                const result = try frame.page_arena.alloc(u8, 7);
                 result[0] = '#';
                 for (value[1..], 1..) |c, j| {
                     result[j] = std.ascii.toLower(c);
@@ -1391,7 +1391,7 @@ fn sanitizeRange(
         0;
 
     if (!isValidFloatingPoint(value)) {
-        return try formatFloat(frame.arena, snapToStep(min + (max - min) / 2, min, max, step_base, step_attr));
+        return try formatFloat(frame.page_arena, snapToStep(min + (max - min) / 2, min, max, step_base, step_attr));
     }
 
     const v0 = std.fmt.parseFloat(f64, value) catch unreachable; // grammar already validated
@@ -1404,7 +1404,7 @@ fn sanitizeRange(
         // assignments like `el.value = "1.0"` round-trip without canonicalizing.
         return if (comptime dupe) try frame.dupeString(value) else value;
     }
-    return try formatFloat(frame.arena, snapped);
+    return try formatFloat(frame.page_arena, snapped);
 }
 
 /// Snap `value` (already clamped to `[min, max]`) to the nearest value on the
@@ -1638,7 +1638,7 @@ pub const Build = struct {
         switch (attribute) {
             .type => try self.changeType(Type.fromString(value.str()), frame),
             .value => {
-                self._default_value = try frame.arena.dupe(u8, value.str());
+                self._default_value = try frame.page_arena.dupe(u8, value.str());
                 if (self._value_dirty == false and self._input_type.valueMode() == .value) {
                     try self.syncValueFromAttribute(frame);
                 }

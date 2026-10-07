@@ -90,7 +90,7 @@ pub fn setValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
         self._user_edited = false;
         return;
     }
-    const owned = try frame.arena.dupe(u8, value);
+    const owned = try frame.page_arena.dupe(u8, value);
     self._value = owned;
     self._user_edited = false;
 

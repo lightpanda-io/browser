@@ -171,7 +171,7 @@ pub fn getName(self: *const Window) []const u8 {
 
 pub fn setName(self: *Window, name: []const u8, frame: *Frame) !void {
     // Store in the Page's frame arena so the slice outlives any call_arena.
-    self._name = try frame.arena.dupe(u8, name);
+    self._name = try frame.page_arena.dupe(u8, name);
 }
 
 pub fn getTop(self: *Window, frame: *Frame) Access {
@@ -459,7 +459,7 @@ fn getOnClick(self: *Window) ?js.Function.Global {
 
 fn setOnClick(self: *Window, setter: ?FunctionSetter) !void {
     if (getFunctionFromSetter(setter)) |cb| {
-        try self._frame._event_target_attr_listeners.put(self._frame.arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
+        try self._frame._event_target_attr_listeners.put(self._frame.page_arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
     } else {
         _ = self._frame._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onclick });
     }
@@ -672,7 +672,7 @@ pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]
     // common probes
     const pseudo = Element.PseudoElement.parse(pseudo_element orelse "");
     const page = frame.page;
-    const gop = try page.element_computed_styles.getOrPut(page.frame_arena, .{ .element = element, .pseudo = pseudo });
+    const gop = try page.element_computed_styles.getOrPut(page.arena, .{ .element = element, .pseudo = pseudo });
     if (!gop.found_existing) {
         if (pseudo == .other) {
             log.debug(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pseudo_element.? });
@@ -813,7 +813,7 @@ pub fn close(self: *Window) void {
     // freeing workers and iframes), but, for now, we don't have the
     // infrastructure to do this safely so doing it on page tear down is our
     // only option.
-    page.closed_frames.append(page.frame_arena, frame) catch @panic("OOM");
+    page.closed_frames.append(page.arena, frame) catch @panic("OOM");
 }
 
 pub fn focus(_: *Window) void {}

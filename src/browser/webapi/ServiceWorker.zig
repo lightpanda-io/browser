@@ -64,7 +64,7 @@ pub const State = enum {
 };
 
 pub fn init(scope: *ServiceWorkerGlobalScope, exec: *Execution) !*ServiceWorker {
-    return exec._factory.eventTargetWithAllocator(exec.arena, ServiceWorker{
+    return exec._factory.eventTargetWithAllocator(exec.page_arena, ServiceWorker{
         ._proto = undefined,
         ._exec = exec,
         ._scope = scope,

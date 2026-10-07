@@ -89,8 +89,8 @@ factory: Factory,
 
 // The arena for this Page's lifetime. Document / Frame / Factory / DOM
 // objects allocate out of this.
-_frame_arena: *lp.Arena,
-frame_arena: Allocator,
+_arena: *lp.Arena,
+arena: Allocator,
 
 // Lazily-created per-node state, kept out of the nodes themselves because
 // few nodes ever need it. Keyed by node pointer and held by the Page, not a
@@ -251,15 +251,15 @@ pub fn viewportChanged(self: *Page) void {
 
 // Initialize a Page and its root Frame.
 pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
-    const frame_arena = try session.arena_pool.acquire(.large, "Page.frame_arena");
-    errdefer frame_arena.release();
+    const arena = try session.arena_pool.acquire(.large, "Page.arena");
+    errdefer arena.release();
 
     self.* = .{
         .session = session,
         .frame = undefined,
-        ._frame_arena = frame_arena,
-        .frame_arena = frame_arena.allocator(),
-        .factory = Factory.init(self, frame_arena.allocator(), &session.browser.documents),
+        ._arena = arena,
+        .arena = arena.allocator(),
+        .factory = Factory.init(self, arena.allocator(), &session.browser.documents),
         .globals = .init(session.browser.app.allocator),
         .log_context = .{ .id = log.nextPageId(), .url = &self.frame.url },
     };
@@ -360,7 +360,7 @@ pub fn deinit(self: *Page) void {
     }
 
     self.factory.deinit();
-    self._frame_arena.release();
+    self._arena.release();
 }
 
 pub fn recordJsError(self: *Page, err: anyerror) void {
@@ -406,8 +406,8 @@ pub fn createBlobUrl(self: *Page, blob: *Blob, origin: ?[]const u8, creator_fram
     var uuid: [36]u8 = undefined;
     @import("../id.zig").uuidv4(&uuid);
 
-    const url = try self.frame_arena.print("blob:{s}/{s}", .{ origin orelse "null", uuid });
-    try self.blob_urls.put(self.frame_arena, url, .{ .blob = blob, .creator = creator_frame_id });
+    const url = try self.arena.print("blob:{s}/{s}", .{ origin orelse "null", uuid });
+    try self.blob_urls.put(self.arena, url, .{ .blob = blob, .creator = creator_frame_id });
     blob.acquireRef();
     return url;
 }

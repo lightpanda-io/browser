@@ -486,15 +486,15 @@ const StreamConsumer = struct {
 
         const reader = try stream.getReader(exec);
 
-        const state = try exec.arena.create(StreamConsumer);
+        const state = try exec.page_arena.create(StreamConsumer);
         state.* = .{
             .execution = exec,
             .kind = kind,
-            .content_type = if (content_type) |ct| try exec.arena.dupe(u8, ct) else null,
+            .content_type = if (content_type) |ct| try exec.page_arena.dupe(u8, ct) else null,
             .reader = reader,
             .chunks = .empty,
             .total_len = 0,
-            .arena = exec.arena,
+            .arena = exec.page_arena,
             .resolver = try resolver.persist(),
         };
 
