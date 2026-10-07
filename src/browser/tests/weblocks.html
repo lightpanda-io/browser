@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=weblocksSurface>
+{
+  testing.expectEqual('function', typeof navigator.locks.request);
+  testing.expectEqual('function', typeof navigator.locks.query);
+  testing.expectEqual(true, navigator.locks instanceof LockManager);
+}
+</script>
+
+<script id=requestGrantsExclusiveLock type=module>
+{
+  const state = await testing.async();
+  const result = await navigator.locks.request('a', (lock) => {
+    testing.expectEqual('a', lock.name);
+    testing.expectEqual('exclusive', lock.mode);
+    return 'granted';
+  });
+  state.resolve(result);
+  await state.done((v) => {
+    testing.expectEqual('granted', v);
+  });
+}
+</script>
+
+<script id=requestAdoptsAsyncCallback type=module>
+{
+  const state = await testing.async();
+  const result = await navigator.locks.request('b', async (lock) => {
+    testing.expectEqual('b', lock.name);
+    return 'async-granted';
+  });
+  state.resolve(result);
+  await state.done((v) => {
+    testing.expectEqual('async-granted', v);
+  });
+}
+</script>
+
+<script id=requestRejectsOnThrow type=module>
+{
+  const state = await testing.async();
+  try {
+    await navigator.locks.request('c', () => { throw new Error('boom'); });
+    state.resolve('resolved');
+  } catch (e) {
+    state.resolve(e.message);
+  }
+  await state.done((v) => {
+    testing.expectEqual('boom', v);
+  });
+}
+</script>
+
+<script id=exclusiveLocksSerialize type=module>
+{
+  const state = await testing.async();
+  const order = [];
+  let release1;
+  const first = navigator.locks.request('serial', () => new Promise((resolve) => {
+    order.push('first-start');
+    release1 = resolve;
+  }));
+  const second = navigator.locks.request('serial', () => {
+    order.push('second-start');
+  });
+
+  // give the first request a tick to be granted before releasing it
+  await Promise.resolve();
+  await Promise.resolve();
+  release1();
+
+  await Promise.all([first, second]);
+  state.resolve(order.join(','));
+  await state.done((v) => {
+    testing.expectEqual('first-start,second-start', v);
+  });
+}
+</script>
+
+<script id=sharedLocksCoexist type=module>
+{
+  const state = await testing.async();
+  const order = [];
+  const a = navigator.locks.request('shared', { mode: 'shared' }, () => {
+    order.push('a');
+  });
+  const b = navigator.locks.request('shared', { mode: 'shared' }, () => {
+    order.push('b');
+  });
+  await Promise.all([a, b]);
+  state.resolve(order.sort().join(','));
+  await state.done((v) => {
+    testing.expectEqual('a,b', v);
+  });
+}
+</script>
+
+<script id=sharedBlocksExclusive type=module>
+{
+  const state = await testing.async();
+  const order = [];
+  let releaseShared;
+  const shared = navigator.locks.request('mix', { mode: 'shared' }, () => new Promise((resolve) => {
+    order.push('shared-start');
+    releaseShared = resolve;
+  }));
+  const exclusive = navigator.locks.request('mix', () => {
+    order.push('exclusive-start');
+  });
+
+  await Promise.resolve();
+  await Promise.resolve();
+  releaseShared();
+
+  await Promise.all([shared, exclusive]);
+  state.resolve(order.join(','));
+  await state.done((v) => {
+    testing.expectEqual('shared-start,exclusive-start', v);
+  });
+}
+</script>
+
+<script id=ifAvailableFiresNullWhenHeld type=module>
+{
+  const state = await testing.async();
+  let releaseHeld;
+  const held = navigator.locks.request('avail', () => new Promise((resolve) => {
+    releaseHeld = resolve;
+  }));
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const result = await navigator.locks.request('avail', { ifAvailable: true }, (lock) => {
+    return lock === null ? 'unavailable' : 'should-not-happen';
+  });
+
+  releaseHeld();
+  await held;
+
+  state.resolve(result);
+  await state.done((v) => {
+    testing.expectEqual('unavailable', v);
+  });
+}
+</script>
+
+<script id=stealAbortsHeldLockAndGrantsNewOne type=module>
+{
+  const state = await testing.async();
+  const order = [];
+  let heldRejection = null;
+
+  const held = navigator.locks.request('steal-me', (lock) => new Promise((_resolve, reject) => {
+    order.push('held-start');
+    // never resolves on its own - it should be aborted by the steal
+  })).catch((e) => { heldRejection = e.name; });
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const stolen = await navigator.locks.request('steal-me', { steal: true }, (lock) => {
+    order.push('stolen-start');
+    return 'stolen-ok';
+  });
+
+  await held;
+
+  state.resolve(JSON.stringify({ order, heldRejection, stolen }));
+  await state.done((v) => {
+    const parsed = JSON.parse(v);
+    testing.expectEqual('AbortError', parsed.heldRejection);
+    testing.expectEqual('stolen-ok', parsed.stolen);
+  });
+}
+</script>
+
+<script id=stealThenPendingRequestStillGetsGranted type=module>
+{
+  // A request queued behind a lock that later gets stolen (by a third
+  // party) must still eventually be granted once the stolen lock finishes.
+  const state = await testing.async();
+  const order = [];
+  let releaseStolen;
+
+  const holder = navigator.locks.request('steal-queue', (lock) => new Promise((resolve) => {
+    order.push('holder-start');
+    releaseStolen = resolve;
+  }));
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  // queued behind the current holder
+  const waiter = navigator.locks.request('steal-queue', (lock) => {
+    order.push('waiter-start');
+    return 'waiter-done';
+  });
+
+  await Promise.resolve();
+
+  // someone else steals the lock out from under the holder
+  const stealer = navigator.locks.request('steal-queue', { steal: true }, (lock) => {
+    order.push('stealer-start');
+    return 'stealer-done';
+  });
+
+  const result = await Promise.race([
+    waiter.then(() => 'waiter-settled'),
+    new Promise((resolve) => setTimeout(() => resolve('timed-out'), 50)),
+  ]);
+
+  state.resolve(JSON.stringify({ order, result }));
+  await state.done((v) => {
+    const parsed = JSON.parse(v);
+    // the waiter must eventually be granted the lock once it's free, even
+    // though it was the *stealer* (not the original holder) that released it.
+    testing.expectEqual(true, parsed.order.includes('waiter-start'));
+    testing.expectEqual('waiter-settled', parsed.result);
+  });
+}
+</script>
+
+<script id=stealRejectsOnInvalidOptionCombos type=module>
+{
+  const state = await testing.async();
+  const errors = [];
+  try {
+    await navigator.locks.request('x', { steal: true, ifAvailable: true }, () => {});
+  } catch (e) { errors.push(e.name); }
+  try {
+    await navigator.locks.request('x', { steal: true, mode: 'shared' }, () => {});
+  } catch (e) { errors.push(e.name); }
+  state.resolve(errors.join(','));
+  await state.done((v) => {
+    testing.expectEqual('NotSupportedError,NotSupportedError', v);
+  });
+}
+</script>
+
+<script id=abortedSignalRejectsImmediately type=module>
+{
+  const state = await testing.async();
+  const controller = new AbortController();
+  controller.abort('nope');
+  let ran = false;
+  try {
+    await navigator.locks.request('abort-pre', { signal: controller.signal }, () => { ran = true; });
+    state.resolve('resolved');
+  } catch (e) {
+    state.resolve(e);
+  }
+  await state.done((v) => {
+    testing.expectEqual('nope', v);
+    testing.expectEqual(false, ran);
+  });
+}
+</script>
+
+<script id=nameStartingWithDashIsRejected type=module>
+{
+  const state = await testing.async();
+  try {
+    await navigator.locks.request('-reserved', () => {});
+    state.resolve('resolved');
+  } catch (e) {
+    state.resolve(e.name);
+  }
+  await state.done((v) => {
+    testing.expectEqual('NotSupportedError', v);
+  });
+}
+</script>
+
+<script id=queryReportsHeldAndPending type=module>
+{
+  const state = await testing.async();
+  let release;
+  const held = navigator.locks.request('query-test', () => new Promise((resolve) => {
+    release = resolve;
+  }));
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const pending = navigator.locks.request('query-test', () => {});
+
+  const snapshot = await navigator.locks.query();
+  release();
+  await Promise.all([held, pending]);
+
+  const heldEntry = snapshot.held.find((l) => l.name === 'query-test');
+  const pendingEntry = snapshot.pending.find((l) => l.name === 'query-test');
+
+  state.resolve(JSON.stringify({ heldFound: !!heldEntry, pendingFound: !!pendingEntry }));
+  await state.done((v) => {
+    const parsed = JSON.parse(v);
+    testing.expectEqual(true, parsed.heldFound);
+    testing.expectEqual(true, parsed.pendingFound);
+  });
+}
+</script>

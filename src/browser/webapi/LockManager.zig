@@ -373,3 +373,8 @@ pub const JsApi = struct {
     pub const request = bridge.function(LockManager.request, .{});
     pub const query = bridge.function(LockManager.query, .{});
 };
+
+const testing = @import("../../testing.zig");
+test "WebApi: LockManager" {
+    try testing.htmlRunner("weblocks.html", .{});
+}
