@@ -86,7 +86,10 @@ fn setCookies(cmd: *CDP.Command) !void {
         }
     }
 
-    _ = try setCdpCookies(&bc.session.cookie_jar, params.cookies);
+    _ = setCdpCookies(&bc.session.cookie_jar, params.cookies) catch |err| switch (err) {
+        error.InvalidCookie, error.MissingUrlOrDomain => return cmd.sendError(-32602, "Invalid cookie fields", .{}),
+        else => return err,
+    };
 
     try cmd.sendResult(null, .{});
 }
@@ -170,32 +173,36 @@ fn buildCdpCookie(allocator: Allocator, param: CdpCookie) !Cookie {
         return error.NotImplemented;
     }
 
-    // NOTE: The param.url can affect the default domain, (NOT path), secure, source port, and source scheme.
-    const secure = if (param.secure) |s| s else if (param.url) |url| URL.isSecure(url) else false;
+    // Chrome's MakeCookieFromProtocolValues: an https url makes the cookie
+    // Secure whatever `secure` says, and a `domain` overrides the url's host.
+    // Only a domain with a leading dot is a Domain attribute; without one,
+    // the cookie is host-only on that host.
+    const url = param.url orelse "";
+    const domain = param.domain orelse "";
+    const secure = (param.secure orelse false) or URL.isSecure(url);
+    const dotted = std.mem.startsWith(u8, domain, ".");
+    const host = if (domain.len > 0)
+        domain[@intFromBool(dotted)..]
+    else if (url.len > 0)
+        URL.getHostname(url)
+    else
+        return error.MissingUrlOrDomain;
+    const cookie_url = try std.fmt.allocPrintSentinel(allocator, "{s}://{s}/", .{ if (secure) "https" else "http", host }, 0);
+    defer allocator.free(cookie_url);
 
-    const same_site = parseSameSite(param.sameSite);
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
-    const a = arena.allocator();
-
-    // Allocate before the struct literal copies `arena` into the result.
-    const name = try a.dupe(u8, param.name);
-    const value = try a.dupe(u8, param.value);
-    const domain = try Cookie.parseDomain(a, param.url, param.domain);
-    const path = if (param.path == null) "/" else try Cookie.parsePath(a, null, param.path);
-
-    return .{
-        .arena = arena,
-        .name = name,
-        .value = value,
-        .path = path,
-        .domain = domain,
+    return Cookie.fromFields(allocator, cookie_url, .{
+        .name = param.name,
+        .value = param.value,
+        .domain = if (dotted) domain else null,
+        .path = param.path,
         .expires = param.expires,
         .secure = secure,
         .http_only = param.httpOnly,
-        .same_site = same_site orelse .lax,
-        .same_site_default = same_site == null,
+        .same_site = parseSameSite(param.sameSite),
+    }) catch |err| switch (err) {
+        // Chrome refuses a cookie for a bad domain like any other bad field.
+        error.InvalidDomain => error.InvalidCookie,
+        else => |e| e,
     };
 }
 
@@ -326,7 +333,7 @@ test "cdp.Storage: cookies" {
     });
     try ctx.expectSentResult(.{
         .cookies = &[_]ResCookie{
-            .{ .name = "test", .value = "value", .domain = ".example.com", .path = "/mango", .size = 9 },
+            .{ .name = "test", .value = "value", .domain = "example.com", .path = "/mango", .size = 9 },
             .{ .name = "test2", .value = "value2", .domain = "car.example.com", .path = "/", .size = 11, .secure = true }, // No Pancakes!
             .{ .name = "test3", .value = "value3", .domain = "gov.uk", .path = "/", .size = 11 },
         },
