@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
-<script>testing.expectUncaughtErrors();</script>
 
 <script id=onerrorFiveArguments>
   let called = false;
@@ -56,6 +55,7 @@
       if (typeof msg === 'string' && msg.startsWith('cb-')) {
         seen.push(msg);
         thrown[msg] = e.error instanceof Error;
+        e.preventDefault();
       }
     };
     window.addEventListener('error', onError);

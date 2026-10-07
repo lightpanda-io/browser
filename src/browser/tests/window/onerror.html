@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
-<script>testing.expectUncaughtErrors();</script>
 
 <script id=onerrorBasicCallback>
 {
@@ -10,6 +9,7 @@
   window.onerror = function(message, source, lineno, colno, error) {
     callbackCalled = true;
     receivedArgs = { message, source, lineno, colno, error };
+    return true;
   };
 
   const err = new Error('Test error');
@@ -29,6 +29,7 @@
 
   window.onerror = function() {
     argCount = arguments.length;
+    return true;
   };
 
   window.reportError(new Error('Five args test'));
@@ -71,6 +72,7 @@
 
   window.onerror = function() {
     onerrorCalled = true;
+    return true;
   };
 
   const listener = function() {
@@ -94,6 +96,7 @@
 
   window.onerror = function() {
     callOrder.push('onerror');
+    return true;
   };
 
   const listener = function() {
@@ -153,6 +156,7 @@
       colno: typeof colno,
       error: typeof error
     };
+    return true;
   };
 
   window.reportError(new Error('Type check'));
@@ -177,6 +181,7 @@
 
   const listener = function(e) {
     eventDefaultPrevented = e.defaultPrevented;
+    e.preventDefault();
   };
   window.addEventListener('error', listener);
 

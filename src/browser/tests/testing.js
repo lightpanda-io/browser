@@ -11,32 +11,28 @@
   // runner will wait until this is empty (or timeout)
   let async_pending = new Set();
 
-  // tests that throw uncaught errors on purpose, see expectUncaughtErrors
-  let uncaught_errors_page = false;
-  let uncaught_errors_scripts = new Set();
-
   // A script that throws after an expect* passed would otherwise count as ok.
+  // Checked in assertOk, once dispatch is over: a test that expects the error
+  // cancels it (window.onerror returning true, or preventDefault()).
+  let reported_errors = [];
   window.addEventListener('error', (e) => {
-    const script_id = _currentScriptId();
-    if (uncaught_errors_page || uncaught_errors_scripts.has(script_id)) {
-      return;
-    }
-    failed = true;
-    if (script_id) {
-      observed_ids[script_id] = 'fail';
-    }
-    console.error(`uncaught error: ${e.message}\n  script_id: ${script_id}`);
+    reported_errors.push({event: e, script_id: _currentScriptId()});
   });
 
-  // Allows uncaught errors from the calling <script id=...>, or from the whole
-  // page when called from a script without an id.
-  function expectUncaughtErrors() {
-    const script_id = _currentScriptId();
-    if (script_id) {
-      uncaught_errors_scripts.add(script_id);
-    } else {
-      uncaught_errors_page = true;
+  // Runs fn, cancelling the errors it reports to window, and returns them.
+  function withReportedErrors(fn) {
+    const errors = [];
+    const onError = (e) => {
+      errors.push(e.error);
+      e.preventDefault();
+    };
+    window.addEventListener('error', onError);
+    try {
+      fn();
+    } finally {
+      window.removeEventListener('error', onError);
     }
+    return errors;
   }
 
   function expectTrue(actual) {
@@ -141,6 +137,12 @@
       throw new Error('Failed');
     }
 
+    for (let {event, script_id} of reported_errors) {
+      if (event.defaultPrevented === false) {
+        throw new Error(`script id: '${script_id}' uncaught error: ${event.message}`);
+      }
+    }
+
     if (async_pending.size > 0) {
       return false;
     }
@@ -187,7 +189,7 @@
     expectEqual: expectEqual,
     expectError: expectError,
     withError: withError,
-    expectUncaughtErrors: expectUncaughtErrors,
+    withReportedErrors: withReportedErrors,
     printTimeoutState: printTimeoutState,
     onload: onload,
     IS_TEST_RUNNER: IS_TEST_RUNNER,

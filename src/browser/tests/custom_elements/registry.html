@@ -120,7 +120,6 @@
 </script>
 
 <script id="constructor_self_insert_foster_parent">
-testing.expectUncaughtErrors();
 {
     // Regression: custom element constructor inserting itself (via appendChild) during
     // innerHTML parsing. When the element is not valid table content, the HTML5 parser
@@ -145,7 +144,13 @@ testing.expectUncaughtErrors();
     // ctor-self-insert is not valid table content; the parser foster-parents it
     // before the <table>, calling appendBeforeSiblingCallback(sibling=table, node=element).
     // At that point the element already has _parent=container from the constructor.
-    container.innerHTML = '<table><ctor-self-insert></ctor-self-insert></table>';
+    // TODO: we construct synchronously during fragment parsing, so the parent
+    // fails the create-an-element post-conditions. Per spec (and Firefox) the
+    // element is upgraded after insertion instead, and nothing is reported.
+    const errors = testing.withReportedErrors(() => {
+        container.innerHTML = '<table><ctor-self-insert></ctor-self-insert></table>';
+    });
+    testing.expectEqual(['NotSupportedError'], errors.map((e) => e.name));
 
     testing.expectEqual(1, constructorCalled);
 }
