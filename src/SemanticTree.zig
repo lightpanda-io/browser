@@ -232,6 +232,9 @@ fn visitNode(
         } else if (el.is(Element.Html.Select)) |select| {
             value = select.getValue(self.frame);
             options = try extractSelectOptions(el.asNode(), self.frame, self.arena);
+        } else if (el.is(Element.Html.IFrame)) |iframe| {
+            // The tree doesn't enter frames; the URL lets the agent open one.
+            value = try iframe.currentURL(self.frame);
         }
 
         if (el.is(Element.Html)) |html_el| {
@@ -735,6 +738,8 @@ pub fn nodeDetails(self: Self) !NodeDetails {
         } else if (el.is(Element.Html.Select)) |select| {
             value = select.getValue(frame);
             options = try extractSelectOptions(el.asNode(), frame, arena);
+        } else if (el.is(Element.Html.IFrame)) |iframe| {
+            value = try iframe.currentURL(frame);
         }
 
         if (el.is(Element.Html)) |html_el| {

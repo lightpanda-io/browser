@@ -712,7 +712,7 @@ const AXRole = enum(u8) {
     paragraph, presentation, progressbar, radio, region, row, rowgroup,
     rowheader, searchbox, separator, slider, spinbutton, status, strong,
     subscript, superscript, @"switch", table, term, textbox, time, RootWebArea, LineBreak,
-    StaticText,
+    StaticText, Iframe,
     // zig fmt: on
 
     fn fromNode(node: *DOMNode) !AXRole {
@@ -813,6 +813,7 @@ const AXRole = enum(u8) {
 
                     // Media
                     .img => .image,
+                    .iframe => .Iframe,
                     .figure => .figure,
 
                     // Tables
