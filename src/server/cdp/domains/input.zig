@@ -1643,7 +1643,7 @@ test "cdp.input: dispatchKeyEvent text-less keyDown then char types once" {
     try testing.expect((try ls.local.compileAndRun("ta.value === 'one\\n' && window.taInput === 'insertLineBreak:null'", null)).isTrue());
 }
 
-test "cdp.input: a readonly textarea fires beforeinput for typed text only" {
+test "cdp.input: a readonly textarea fires beforeinput for typed text only, a disabled one nothing" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -1672,6 +1672,11 @@ test "cdp.input: a readonly textarea fires beforeinput for typed text only" {
     try testing.expect((try ls.local.compileAndRun(
         \\ta.value === 'ro' && window.edits.join() === 'beforeinput:insertText,beforeinput:insertText'
     , null)).isTrue());
+
+    // A disabled control fires nothing, not even for typed text.
+    _ = try ls.local.compileAndRun("ta.readOnly = false; ta.disabled = true; window.edits = [];", null);
+    try ctx.processMessage(.{ .id = 5, .method = "Input.insertText", .params = .{ .text = "z" } });
+    try testing.expect((try ls.local.compileAndRun("ta.value === 'ro' && window.edits.length === 0", null)).isTrue());
 }
 
 test "cdp.input: dispatchKeyEvent char honors keypress and beforeinput vetoes" {

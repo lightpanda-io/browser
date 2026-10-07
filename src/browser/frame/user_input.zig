@@ -992,10 +992,13 @@ pub const Edit = union(enum) {
 /// refused on a readonly or disabled control. Returns whether it happened.
 pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit, opts: struct { beforeinput: bool = true }) !bool {
     const el = ctl.asElement();
+    if (!ctl.acceptsTextEntry() or el.isDisabled()) {
+        return false;
+    }
     const editable = acceptsEdit(el);
     // Chrome fires beforeinput and textInput for text typed into a readonly
     // control and only then refuses it; its editing commands fire nothing.
-    if (!ctl.acceptsTextEntry() or (!editable and edit != .insert)) {
+    if (!editable and edit != .insert) {
         return false;
     }
 
