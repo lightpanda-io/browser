@@ -96,6 +96,11 @@ _frame_id: u32,
 // navigate.
 _loader_id: u32,
 
+// The session-history document this frame shows: its own _loader_id, unless a
+// traversal or reload recreated an earlier document, whose id it then takes
+// over so that document's other history entries stay same-document with it.
+_history_document_id: u32,
+
 page: *Page,
 
 _session: *Session,
@@ -348,6 +353,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     })).asDocument();
 
     const arena = page.frame_arena;
+    const loader_id = session.nextLoaderId();
 
     self.* = .{
         .js = undefined,
@@ -362,7 +368,8 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         .local_arena = local_arena.allocator(),
         ._frame_id = frame_id,
         ._session = session,
-        ._loader_id = session.nextLoaderId(),
+        ._loader_id = loader_id,
+        ._history_document_id = loader_id,
         ._factory = factory,
         ._pending_loads = 1, // always 1 for the ScriptManager
         ._type = if (parent == null) .root else .frame,
@@ -1325,9 +1332,9 @@ fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void
         .html => true,
         else => false,
     };
-    if (parsing_html and (iframe._src.len > 0 or iframe.hasSrcdoc())) {
+    if (parsing_html and (iframe.srcAttribute().len > 0 or iframe.hasSrcdoc())) {
         self.queueElementEvent(Factory.protoOf(iframe), .load) catch |err| {
-            log.err(.frame, "iframe queue load", .{ .err = err, .url = iframe._src });
+            log.err(.frame, "iframe queue load", .{ .err = err, .url = iframe.srcAttribute() });
         };
         if (delays_load) {
             self.pendingLoadCompleted();
@@ -1341,11 +1348,11 @@ fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void
 
     blk: {
         const event = Event.initTrusted(comptime .wrap("load"), .{}, self.page) catch |err| {
-            log.err(.frame, "iframe event init", .{ .err = err, .url = iframe._src });
+            log.err(.frame, "iframe event init", .{ .err = err, .url = iframe.srcAttribute() });
             break :blk;
         };
         self._event_manager.dispatch(iframe.asNode().asEventTarget(), event) catch |err| {
-            log.debug(.js, "iframe onload", .{ .err = err, .url = iframe._src });
+            log.debug(.js, "iframe onload", .{ .err = err, .url = iframe.srcAttribute() });
         };
     }
 

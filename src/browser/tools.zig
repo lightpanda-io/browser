@@ -893,7 +893,7 @@ pub const PageState = struct {
     title: ?[]const u8,
 };
 
-fn pageState(frame: *lp.Frame) PageState {
+pub fn pageState(frame: *lp.Frame) PageState {
     return .{
         .url = frame.url,
         .httpStatus = frame._http_status,
@@ -938,6 +938,12 @@ pub const CallOpts = struct {
     source: TelemetryTool.Source,
 };
 
+/// Told about every call once it returns, failures included.
+pub const Observer = struct {
+    context: *anyopaque,
+    onCall: *const fn (context: *anyopaque, tool_name: []const u8, arguments: ?std.json.Value, result: *const ToolResult, ms: u64, frame: ?*lp.Frame) void,
+};
+
 // An inline screenshot is re-sent on every turn; keep it within what models
 // consume. Files written to `path` are full size.
 const inline_image_max_width = 1280;
@@ -956,6 +962,10 @@ pub fn call(
     const result = callInner(arena, session, registry, maybe_tool, tool_name, arguments, opts);
     const id: u8 = if (maybe_tool) |t| t.telemetryId() else 0;
     session.browser.app.telemetry.recordTool(id, opts.source, telemetryOutcome(result), start);
+    if (session.tool_observer) |observer| {
+        const reported: ToolResult = result catch |err| .{ .text = errorMessage(err), .is_error = true };
+        observer.onCall(observer.context, tool_name, arguments, &reported, lp.datetime.milliTimestamp(.awake) -| start, session.currentFrame());
+    }
     return result;
 }
 
@@ -2849,10 +2859,10 @@ pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) err
 test "call: unknown tool name surfaces in-band" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
 
-    // The registry is never touched on this branch; the name check is the
-    // first thing `call` does.
-    const r = try call(arena.allocator(), testing.test_session, undefined, "multi_tool_use.parallel", null, .{ .source = .user });
+    const r = try call(arena.allocator(), testing.test_session, &registry, "multi_tool_use.parallel", null, .{ .source = .user });
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
 }
@@ -2879,6 +2889,28 @@ test "tree and nodeDetails read the node's own frame" {
     const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{input_id}), .{});
     const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, details.text, "child-label") != null);
+}
+
+test "tree and nodeDetails list iframes with their URL" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/semantic_tree_iframe.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    _ = try call(aa, page.session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.querySelector('iframe').contentWindow.history.replaceState(null, '', '?moved'); const f = document.createElement('iframe'); f.setAttribute('src', 'semantic_tree_iframe_child.html?scripted'); document.body.appendChild(f)"}
+    , .{}), .{ .source = .user });
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "Iframe value='http://127.0.0.1:9582/src/browser/tests/cdp/semantic_tree_iframe_child.html?moved'") != null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "Iframe value='http://127.0.0.1:9582/src/browser/tests/cdp/semantic_tree_iframe_child.html?scripted'") != null);
+
+    const iframe = (try page.frame().?.document.querySelector(.wrap("iframe"), page.frame().?)).?.asNode();
+    const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{(try registry.register(iframe)).id}), .{});
+    const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, details.text, "\"value\":\"http://127.0.0.1:9582/src/browser/tests/cdp/semantic_tree_iframe_child.html?moved\"") != null);
 }
 
 test "goto: a navigation stuck waiting for a connection is an error" {

@@ -144,6 +144,7 @@ const entry = text_entry.TextEntry(TextArea);
 pub const select = entry.select;
 pub const innerInsert = entry.innerInsert;
 pub const acceptsTextEntry = entry.acceptsTextEntry;
+pub const tracksSelection = entry.tracksSelection;
 pub const innerDelete = entry.innerDelete;
 pub const moveCaret = entry.moveCaret;
 pub const caretToEnd = entry.caretToEnd;

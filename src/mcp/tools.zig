@@ -1444,7 +1444,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         \\ document.getElementById('plain').scrollTop === 7 &&
         \\ window.scrollX === 5 && window.scrollY === 20 &&
         \\ window.hovered === true &&
-        \\ window.keyPressed === 'Enter' && window.keyReleased === 'Enter' &&
+        \\ window.keyPressed === 'Enter' && window.keyCode === 'Enter' && window.keyReleased === 'Enter' &&
         \\ window.sel2Changed === 'b' &&
         \\ window.chkClicked === true && window.chkChanged === true &&
         \\ window.radClicked === true && window.radChanged === true
@@ -1540,6 +1540,21 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
         out.clearRetainingCapacity();
     }
 
+    const fills = [_]struct { []const u8, []const u8, bool }{
+        .{ "#fillPre", "new", true },
+        .{ "#fillCancel", "new", false },
+        .{ "#fillRo", "new", false },
+        .{ "#fillDate", "2024-05-06", true },
+    };
+    for (fills) |f| {
+        const selector, const value, const ok = f;
+        try router.handleMessage(server, aa, try aa.print(
+            \\{{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{{"name":"fill","arguments":{{"selector":"{s}","value":"{s}"}}}}}}
+        , .{ selector, value }));
+        try testing.expectEqual(ok, std.mem.find(u8, out.written(), "Filled element") != null);
+        out.clearRetainingCapacity();
+    }
+
     var ls: js.Local.Scope = undefined;
     page.frame.js.localScope(&ls);
     defer ls.deinit();
@@ -1551,10 +1566,60 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     const result = try ls.local.exec(
         \\ window.hovered === true &&
         \\ window.sel2Changed === 'c' &&
+        \\ document.getElementById('fillPre').value === 'new' &&
+        \\ fillLog.join(' ') === 'beforeinput:insertText input:insertText change' &&
+        \\ document.getElementById('fillCancel').value === '' &&
+        \\ document.getElementById('fillRo').value === 'ro' &&
+        \\ document.getElementById('fillDate').value === '2024-05-06' &&
         \\ window.chkClicked === true && window.chkChanged === true &&
         \\ window.radClicked === true && window.radChanged === true
     , null);
 
+    try testing.expect(result.isTrue());
+}
+
+test "MCP - hover moves the pointer between elements" {
+    const aa = testing.arena_allocator;
+
+    var out: std.Io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+    server.active_session.enterIsolate();
+    defer server.active_session.exitIsolate();
+
+    const page = server.active_session.session.pages.items[0];
+
+    var ls: js.Local.Scope = undefined;
+    page.frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.exec(
+        \\ window.hoverLog = [];
+        \\ for (const t of ['mouseover', 'mouseenter', 'mouseout', 'mouseleave', 'mousemove']) {
+        \\   document.addEventListener(t, (e) => window.hoverLog.push(t + ':' + (e.target.id || e.target.localName)), true);
+        \\ }
+    , null);
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hover","arguments":{"selector":"#hoverTarget"}}}
+    );
+    _ = try ls.local.exec("window.hoverLog.push('|')", null);
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"hover","arguments":{"selector":"#keyTarget"}}}
+    );
+
+    // The second hover leaves the first target, and <body>, their common
+    // ancestor, is neither left nor re-entered.
+    const result = try ls.local.exec(
+        \\ window.hoverLog.join(' ') === [
+        \\   'mouseover:hoverTarget', 'mouseenter:html', 'mouseenter:body', 'mouseenter:hoverTarget', 'mousemove:hoverTarget', '|',
+        \\   'mouseout:hoverTarget', 'mouseleave:hoverTarget', 'mouseover:keyTarget', 'mouseenter:keyTarget', 'mousemove:keyTarget',
+        \\ ].join(' ')
+    , null);
     try testing.expect(result.isTrue());
 }
 

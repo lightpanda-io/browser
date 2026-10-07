@@ -34,6 +34,7 @@ const Candidate = zenai.provider.Candidate;
 const App = @import("../App.zig");
 const Conversation = @import("Conversation.zig");
 const ModelCall = @import("ModelCall.zig");
+const Trace = @import("Trace.zig");
 const Terminal = @import("Terminal.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const settings = @import("settings.zig");
@@ -196,6 +197,8 @@ capturing_for_save: bool = false,
 /// Printed as a structured `$usage ...` line on stderr at the end of `--task`
 /// (one-shot) mode so wrappers can capture per-task cost.
 total_usage: zenai.provider.Usage = .{},
+trace: ?Trace = null,
+trace_phase: []const u8 = "turn",
 /// Set when the last turn ended in a model refusal (safety stop).
 last_turn_refused: bool = false,
 /// Whether assistant text streams to the terminal as the model produces it.
@@ -374,10 +377,19 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     try self.ts.init(app);
     errdefer self.ts.deinit();
-    self.installCancelHook();
 
     self.ai_client = if (self.credential) |*c| try zenai.provider.Client.init(lp.io, allocator, c.provider, c.keySlice(), .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(c.provider), .environ = lp.environ(), .account_id = c.accountId() }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
+
+    if (opts.trace) |path| {
+        self.trace = Trace.create(allocator, path) catch |err| {
+            log.fatal(.app, "cannot write trace", .{ .path = path, .err = err });
+            return err;
+        };
+        self.trace.?.run(if (self.credential) |c| @tagName(c.provider) else "none", self.model, opts.task);
+    }
+    errdefer if (self.trace) |*t| t.deinit();
+    self.installSessionHooks();
     if (self.ai_client) |c| c.setInterrupt(&self.http_interrupt);
 
     if (will_repl) {
@@ -395,6 +407,10 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 }
 
 pub fn deinit(self: *Agent) void {
+    if (self.trace) |*t| {
+        t.end(self.total_usage);
+        t.deinit();
+    }
     self.terminal.uninstallLogSink();
     self.save_buffer.deinit();
     self.save_calls.deinit(self.allocator);
@@ -419,8 +435,9 @@ fn idlePump(arg: ?*anyopaque) callconv(.c) c_long {
 
 /// Wire the session's cancel hook back to this agent so Ctrl-C aborts
 /// in-flight page work. Startup and `/reset`.
-fn installCancelHook(self: *Agent) void {
+fn installSessionHooks(self: *Agent) void {
     self.ts.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
+    if (self.trace != null) self.ts.session.tool_observer = .{ .context = @ptrCast(self), .onCall = traceToolCall };
 }
 
 // Compile-time constant; projected once per process to avoid rebuilding per call.
@@ -475,6 +492,27 @@ pub const SigBridge = struct {
         a.requestCancel();
     }
 };
+
+fn beforeTurnRequest(ctx: *anyopaque) void {
+    const self: *Agent = @ptrCast(@alignCast(ctx));
+    self.conversation.compactForRequest();
+    beforeRequest(ctx);
+}
+
+fn beforeRequest(ctx: *anyopaque) void {
+    const self: *Agent = @ptrCast(@alignCast(ctx));
+    if (self.trace) |*t| t.modelStarted();
+}
+
+fn afterResponse(ctx: *anyopaque, result: *const zenai.provider.GenerateResult) void {
+    const self: *Agent = @ptrCast(@alignCast(ctx));
+    if (self.trace) |*t| t.modelCall(self.trace_phase, result);
+}
+
+fn traceToolCall(ctx: *anyopaque, tool_name: []const u8, arguments: ?std.json.Value, result: *const browser_tools.ToolResult, ms: u64, frame: ?*lp.Frame) void {
+    const self: *Agent = @ptrCast(@alignCast(ctx));
+    self.trace.?.toolCall(tool_name, arguments, result, ms, frame);
+}
 
 fn checkCancel(ctx: *anyopaque) bool {
     const self: *Agent = @ptrCast(@alignCast(ctx));
@@ -597,17 +635,8 @@ fn gotoStart(self: *Agent, url: [:0]const u8) bool {
 ///   $usage prompt=N completion=N total=N cached=N cache_creation=N
 /// Fields emit 0 when the provider didn't report them.
 fn printUsageSummary(self: *Agent) void {
-    const u = self.total_usage;
-    std.debug.print(
-        "$usage prompt={d} completion={d} total={d} cached={d} cache_creation={d}\n",
-        .{
-            u.prompt_tokens orelse 0,
-            u.completion_tokens orelse 0,
-            u.total_tokens orelse 0,
-            u.cached_tokens orelse 0,
-            u.cache_creation_tokens orelse 0,
-        },
-    );
+    const t = Trace.Tokens.of(self.total_usage);
+    std.debug.print("$usage input={d} cached={d} cache_creation={d} output={d}\n", .{ t.input, t.cached, t.cache_creation, t.output });
 }
 
 fn runTurn(self: *Agent, input: TurnInput) bool {
@@ -868,7 +897,7 @@ fn handleReset(self: *Agent) void {
         self.terminal.printError("reset failed: {s}", .{@errorName(err)});
         return;
     };
-    self.installCancelHook();
+    self.installSessionHooks();
     self.clearConversation();
     self.terminal.printInfo("Reset conversation and browser session. Page, cookies, and storage cleared.", .{});
 }
@@ -1315,6 +1344,8 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
 
     self.http_interrupt.reset();
     self.terminal.spinner.start();
+    self.trace_phase = "save";
+    defer self.trace_phase = "turn";
     var result = ModelCall.run(
         self.ts.session,
         provider_client,
@@ -1330,6 +1361,8 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
             .tool_choice = .none,
             .effort = bumpedEffort(self.effort),
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
+            .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
+            .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
         },
     ) catch |err| {
         self.terminal.spinner.cancel();
@@ -1784,6 +1817,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
             .tools = globalTools(),
+            .before_request = .{ .context = @ptrCast(self), .callFn = beforeTurnRequest },
+            .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
             .max_turns = 100,
             .max_tool_calls = 200,
             .max_tokens = 4096,
@@ -1869,6 +1904,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             .content = try ma.dupe(u8, synthesis_prompt),
         });
 
+        self.trace_phase = "synthesis";
+        defer self.trace_phase = "turn";
         var synth = ModelCall.run(
             self.ts.session,
             provider_client,
@@ -1886,6 +1923,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 // `.none` stays off to opt out on models that reject it.
                 .effort = if (self.effort == .none) .none else .low,
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
+                .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
+                .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
                 .stream = if (input.suppress_answer) null else self.streamHook(),
             },
         ) catch |err| {
@@ -2149,6 +2188,7 @@ test {
     _ = picker;
     _ = Conversation;
     _ = Terminal;
+    _ = Trace;
 }
 
 test "savePrompt: save instructions followed by the rendered script skill" {

@@ -1102,6 +1102,11 @@ pub fn setClassList(self: *Element, value: String, frame: *Frame) !void {
     try class_list.setValue(value, frame);
 }
 
+pub fn setPartList(self: *Element, value: String, frame: *Frame) !void {
+    const part_list = try self.getPartList(frame);
+    try part_list.setValue(value, frame);
+}
+
 pub fn getPartList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     const page = frame.page;
     const gop = try page.element_part_lists.getOrPut(page.frame_arena, self);
@@ -2743,7 +2748,7 @@ pub const JsApi = struct {
         }
     }.wrap, Element.setClassName, .{ .ce_reactions = true });
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{ .ce_reactions = true });
-    pub const part = bridge.accessor(Element.getPartList, null, .{});
+    pub const part = bridge.accessor(Element.getPartList, Element.setPartList, .{ .ce_reactions = true });
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});
     pub const style = bridge.accessor(Element.getOrCreateStyle, Element.setStyle, .{});
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});

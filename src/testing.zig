@@ -923,6 +923,17 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/xhr/duplicate_headers")) {
+        return req.respond("", .{
+            .extra_headers = &.{
+                .{ .name = "X-B", .value = "1" },
+                .{ .name = "X-A", .value = "a" },
+                .{ .name = "X-B", .value = "2, 3" },
+                .{ .name = "X_C", .value = "c" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/xhr/401")) {
         return req.respond("No", .{
             .status = .unauthorized,
@@ -1265,6 +1276,20 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(body, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/echo_brotli")) {
+        // Echo the request body back as `Content-Encoding: br`, so the HTTP
+        // client decodes it; checks CompressionStream('brotli') output with a
+        // decoder that isn't ours.
+        var body_buf: [4096]u8 = undefined;
+        const body = try req.readerExpectNone(&body_buf).allocRemaining(arena_allocator, .limited(4 * 1024 * 1024));
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/octet-stream" },
+                .{ .name = "Content-Encoding", .value = "br" },
             },
         });
     }

@@ -526,11 +526,17 @@ fn linkCurl(b: *Build, mod: *Build.Module, deps: Deps, is_tsan: bool, section: b
     translator.addIncludePath(dep.path("include"));
     mod.addImport("curl", translator.mod);
 
+    // zlib and brotli are linked to curl for their installed headers, and to
+    // mod since Compression Streams call them directly.
     const zlib = buildZlib(b, deps.target, deps.optimize, is_tsan, section);
     curl.root_module.linkLibrary(zlib);
+    mod.linkLibrary(zlib);
 
     const brotli = buildBrotli(b, deps.target, deps.optimize, is_tsan, section);
-    for (brotli) |lib| curl.root_module.linkLibrary(lib);
+    inline for (brotli) |lib| {
+        curl.root_module.linkLibrary(lib);
+        mod.linkLibrary(lib);
+    }
 
     const zstd = buildZstd(b, deps.target, deps.optimize, is_tsan, section);
     curl.root_module.linkLibrary(zstd);

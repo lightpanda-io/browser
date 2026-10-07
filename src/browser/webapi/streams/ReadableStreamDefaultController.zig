@@ -68,6 +68,48 @@ pub fn addPendingRead(self: *ReadableStreamDefaultController, local: *const js.L
     return resolver.promise();
 }
 
+/// Enqueues `chunk` to internal queue but doesn't resolve pending reads.
+/// This function solely exists to give no window for page JS to run when
+/// running it may introduce data races. Can still fail if stream is not readable.
+///
+/// TODO: Come up with a better name.
+pub fn enqueueNoSideEffects(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
+    if (self._stream._state != .readable) {
+        return error.StreamNotReadable;
+    }
+    const chunk_copy = try chunk.dupe(self._arena);
+    return self._queue.append(self._arena, chunk_copy);
+}
+
+/// Resolves pending reads with queued chunks. Pairs with `enqueueNoSideEffects`.
+/// Call it once the producer no longer holds state that page JS could invalidate.
+pub fn fulfillPendingReads(self: *ReadableStreamDefaultController) void {
+    const exec = self._execution;
+    if (comptime lp.IS_DEBUG) {
+        if (exec.js.local == null) {
+            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.fulfillPendingReads", .url = exec.url.* });
+            std.debug.assert(exec.js.local != null);
+        }
+    }
+
+    // Each resolve runs microtasks, so page JS can read, cancel or error the
+    // stream (or re-enter the producer) between iterations; both lists are
+    // re-checked every time.
+    while (self._pending_reads.items.len > 0 and self._queue.items.len > 0) {
+        const resolver = self._pending_reads.orderedRemove(0);
+        const chunk = self._queue.orderedRemove(0);
+        const result = ReadableStreamDefaultReader.ReadResult{
+            .done = false,
+            .value = .fromChunk(chunk),
+        };
+
+        var ls: js.Local.Scope = undefined;
+        exec.js.localScope(&ls);
+        defer ls.deinit();
+        ls.toLocal(resolver).resolve("stream fulfill pending read", result);
+    }
+}
+
 pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
     if (self._stream._state != .readable) {
         return error.StreamNotReadable;
@@ -168,6 +210,16 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
 }
 
 pub fn doError(self: *ReadableStreamDefaultController, err: []const u8) !void {
+    return self.fail(err, false);
+}
+
+/// Like doError, but pending reads reject with a TypeError instead of the
+/// bare message, which is what native transforms (e.g. CompressionStream) throw.
+pub fn typeError(self: *ReadableStreamDefaultController, message: []const u8) !void {
+    return self.fail(message, true);
+}
+
+fn fail(self: *ReadableStreamDefaultController, err: []const u8, type_error: bool) !void {
     if (self._stream._state != .readable) {
         return;
     }
@@ -177,7 +229,12 @@ pub fn doError(self: *ReadableStreamDefaultController, err: []const u8) !void {
 
     // Reject all pending reads
     for (self._pending_reads.items) |resolver| {
-        self._execution.js.toLocal(resolver).reject("stream error", err);
+        const local_resolver = self._execution.js.toLocal(resolver);
+        if (type_error) {
+            local_resolver.rejectError("stream error", .{ .type_error = err });
+        } else {
+            local_resolver.reject("stream error", err);
+        }
     }
     self._pending_reads.clearRetainingCapacity();
 }

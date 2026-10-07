@@ -638,6 +638,11 @@ fn settlePending(self: *Runtime, context: *const v8.Context, pending: *PendingGo
         .timed_out => self.rejectResolver(context, resolver, "navigation timed out"),
     }
     self.recordGoto(result, pending.started_ms);
+    // Async gotos settle here, outside `browser_tools.call`.
+    if (self.session.tool_observer) |observer| {
+        const reported: browser_tools.ToolResult = .{ .text = @tagName(outcome), .is_error = outcome != .loaded, .navigated = true };
+        observer.onCall(observer.context, "goto", null, &reported, lp.datetime.milliTimestamp(.awake) -| pending.started_ms, self.session.findFrameByFrameId(pending.frame_id));
+    }
     pending.reset();
 }
 

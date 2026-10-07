@@ -18,54 +18,53 @@
 
 const js = @import("../../js/js.zig");
 
+const brotli = @import("brotli.zig");
+const zlib = @import("zlib.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
 const WritableStream = @import("../streams/WritableStream.zig");
 const TransformStream = @import("../streams/TransformStream.zig");
 
 const Execution = js.Execution;
 
-const TextEncoderStream = @This();
+const compress = @import("compress.zig");
+
+const DecompressionStream = @This();
 
 _transform: *TransformStream,
+_decompressor: compress.Decompressor,
 
-pub fn init(exec: *const Execution) !TextEncoderStream {
-    const transform = try TransformStream.initWithZigTransformer(.text_encoder, exec);
-    return .{
-        ._transform = transform,
-    };
+pub fn init(format: compress.Format, exec: *const Execution) !*DecompressionStream {
+    const self = try exec._factory.create(DecompressionStream{
+        ._transform = undefined,
+        ._decompressor = .init(exec, format),
+    });
+    self._transform = try TransformStream.initWithZigTransformer(.{ .decompressor = &self._decompressor }, exec);
+    return self;
 }
 
-pub fn encodeTransform(controller: *TransformStream.DefaultController, chunk: js.Value) !void {
-    // chunk should be a JS string; encode it as UTF-8 bytes (Uint8Array)
-    const str = chunk.isString() orelse return error.InvalidChunk;
-    const slice = try str.toSlice();
-    try controller.enqueue(.{ .uint8array = .{ .values = slice } });
-}
-
-pub fn getReadable(self: *const TextEncoderStream) *ReadableStream {
+pub fn getReadable(self: *const DecompressionStream) *ReadableStream {
     return self._transform.getReadable();
 }
 
-pub fn getWritable(self: *const TextEncoderStream) *WritableStream {
+pub fn getWritable(self: *const DecompressionStream) *WritableStream {
     return self._transform.getWritable();
 }
 
 pub const JsApi = struct {
-    pub const bridge = js.Bridge(TextEncoderStream);
+    pub const bridge = js.Bridge(DecompressionStream);
 
     pub const Meta = struct {
-        pub const name = "TextEncoderStream";
+        pub const name = "DecompressionStream";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(TextEncoderStream.init, .{});
-    pub const encoding = bridge.property("utf-8", .{ .template = false });
-    pub const readable = bridge.accessor(TextEncoderStream.getReadable, null, .{});
-    pub const writable = bridge.accessor(TextEncoderStream.getWritable, null, .{});
+    pub const constructor = bridge.constructor(DecompressionStream.init, .{});
+    pub const readable = bridge.accessor(DecompressionStream.getReadable, null, .{});
+    pub const writable = bridge.accessor(DecompressionStream.getWritable, null, .{});
 };
 
 const testing = @import("../../../testing.zig");
-test "WebApi: TextEncoderStream" {
-    try testing.htmlRunner("streams/transform_stream.html", .{});
+test "WebApi: DecompressionStream" {
+    try testing.htmlRunner("compression/decompression_stream.html", .{});
 }

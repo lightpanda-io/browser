@@ -522,12 +522,7 @@ fn attributeContainsWord(value: []const u8, word: []const u8) bool {
 // https://html.spec.whatwg.org/multipage/semantics-other.html#selector-read-write
 fn isReadWrite(el: *Node.Element) bool {
     if (el.is(Node.Element.Html.Input)) |input| {
-        const readonly_applies = switch (input._input_type) {
-            .text, .password, .email, .url, .tel, .search, .number => true,
-            .date, .time, .@"datetime-local", .month, .week => true,
-            else => false,
-        };
-        return readonly_applies and !el.hasAttributeInterned("readonly") and !el.isDisabled();
+        return input.readonlyApplies() and !el.hasAttributeInterned("readonly") and !el.isDisabled();
     }
     if (el.is(Node.Element.Html.TextArea) != null) {
         return !el.hasAttributeInterned("readonly") and !el.isDisabled();
