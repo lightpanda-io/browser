@@ -42,7 +42,7 @@ pub const Options = struct {
 const LockState = enum { pending, held };
 
 // A pending or in-flight lock request
-const LockRequest = struct {
+pub const LockRequest = struct {
     manager: *LockManager,
     name: lp.String,
     options: Options,
@@ -190,6 +190,24 @@ const LockRequest = struct {
         self.finished = true;
         self.deinit();
     }
+
+    pub fn onAbort(self: *LockRequest, reason: AbortSignal.Reason, exec: *const Execution) void {
+        if (self.finished or self.granted) return;
+        self.finished = true;
+
+        var ls: js.Local.Scope = undefined;
+        exec.js.localScope(&ls);
+        defer ls.deinit();
+
+        const resolver = self.resolver.local(&ls.local);
+        const value = AbortSignal.reasonJsValue(reason, &ls.local) catch {
+            resolver.rejectError("LockManager.signal.aborted", .{ .dom_exception = .{ .err = error.AbortError } });
+            self.manager.releaseLock(self);
+            return;
+        };
+        resolver.reject("LockManager.signal.aborted", value);
+        self.manager.releaseLock(self);
+    }
 };
 
 fn heldConflicts(self: *const LockManager, name: lp.String, mode: Lock.LockMode) bool {
@@ -322,11 +340,17 @@ pub fn request(
 
     if (must_queue_request) {
         try self._locks.append(exec.arena, lock_request);
+        if (options.signal) |signal| {
+            try signal._dependents.append(exec.arena, .{ .lock_request = lock_request });
+        }
         return promise;
     }
 
     lock_request.state = .held;
     try self._locks.append(exec.arena, lock_request);
+    if (options.signal) |signal| {
+        try signal._dependents.append(exec.arena, .{ .lock_request = lock_request });
+    }
     lock_request.scheduleFireCallback();
     return promise;
 }

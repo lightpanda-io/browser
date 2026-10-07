@@ -28,6 +28,7 @@ const Scheduler = @import("Scheduler.zig");
 const EventTarget = @import("EventTarget.zig");
 const DOMException = @import("DOMException.zig");
 const ModelContextTool = @import("ModelContext.zig").Tool;
+const LockRequest = @import("LockManager.zig").LockRequest;
 
 const log = lp.log;
 const Execution = js.Execution;
@@ -43,6 +44,7 @@ const Dependend = union(enum) {
     // signals too, unlike this union's markAborted).
     scheduler_task: *Scheduler.Task,
     fetch: *Fetch, // The fetch removes itself when it completes.
+    lock_request: *LockRequest,
 
     // Returns false if the dependent was already aborted, in which case no
     // abort event must be dispatched for it.
@@ -57,7 +59,7 @@ const Dependend = union(enum) {
                 try dep.markAborted(exec);
                 return true;
             },
-            .scheduler_task, .fetch => return false,
+            .scheduler_task, .fetch, .lock_request => return false,
         }
     }
 
@@ -65,6 +67,7 @@ const Dependend = union(enum) {
         switch (self) {
             .signal => |dep| try dep.dispatchAbortEvent(exec),
             .model_context_tool, .scheduler_task, .fetch => {},
+            .model_context_tool, .scheduler_task, .fetch, .lock_request => {},
         }
     }
 };
@@ -157,6 +160,7 @@ fn markAborted(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !vo
         switch (dep) {
             .scheduler_task => |task| task.onAbort(self._reason, exec),
             .fetch => |fetch| fetch.abort(self._reason),
+            .lock_request => |lr| lr.onAbort(self._reason, exec),
             else => {},
         }
     }

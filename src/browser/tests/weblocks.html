@@ -264,6 +264,101 @@
 }
 </script>
 
+<script id=abortBeforeGrantRunsRejectsAndDoesNotRunCallback type=module>
+{
+  const state = await testing.async();
+  const controller = new AbortController();
+  let ran = false;
+  const p = navigator.locks.request('abort-before-grant', { signal: controller.signal }, () => { ran = true; });
+  controller.abort();
+
+  let errName = null;
+  try {
+    await p;
+  } catch (e) {
+    errName = e.name;
+  }
+
+  const next = await navigator.locks.request('abort-before-grant', () => 'next-ok');
+
+  state.resolve(JSON.stringify({ errName, ran, next }));
+  await state.done((v) => {
+    const parsed = JSON.parse(v);
+    testing.expectEqual('AbortError', parsed.errName);
+    testing.expectEqual(false, parsed.ran);
+    testing.expectEqual('next-ok', parsed.next);
+  });
+}
+</script>
+
+<script id=abortWhilePendingRejectsAndPromotesNext type=module>
+{
+  const state = await testing.async();
+  const order = [];
+  let releaseHeld;
+  const held = navigator.locks.request('abort-pending', () => new Promise((resolve) => {
+    releaseHeld = resolve;
+  }));
+
+  await new Promise((r) => setTimeout(r, 0));
+
+  const controller = new AbortController();
+  const aborted = navigator.locks.request('abort-pending', { signal: controller.signal }, () => {
+    order.push('aborted-ran');
+  });
+  const next = navigator.locks.request('abort-pending', () => {
+    order.push('next-ran');
+    return 'next-done';
+  });
+
+  controller.abort('bye');
+
+  let abortedReason = null;
+  try {
+    await aborted;
+  } catch (e) {
+    abortedReason = e;
+  }
+
+  releaseHeld();
+  await held;
+  const nextResult = await next;
+
+  state.resolve(JSON.stringify({ order, abortedReason, nextResult }));
+  await state.done((v) => {
+    const parsed = JSON.parse(v);
+    testing.expectEqual('bye', parsed.abortedReason);
+    testing.expectEqual(false, parsed.order.includes('aborted-ran'));
+    testing.expectEqual('next-done', parsed.nextResult);
+  });
+}
+</script>
+
+<script id=abortAfterCallbackAlreadyRanIsNoop type=module>
+{
+  const state = await testing.async();
+  let acquiredResolve;
+  const acquired = new Promise((r) => { acquiredResolve = r; });
+  let releaseFn;
+
+  const controller = new AbortController();
+  const p = navigator.locks.request('abort-after-grant', { signal: controller.signal }, () => {
+    acquiredResolve();
+    return new Promise((resolve) => { releaseFn = resolve; });
+  });
+
+  await acquired;
+  controller.abort();
+  releaseFn('resolved-ok');
+
+  const result = await p;
+  state.resolve(result);
+  await state.done((v) => {
+    testing.expectEqual('resolved-ok', v);
+  });
+}
+</script>
+
 <script id=nameStartingWithDashIsRejected type=module>
 {
   const state = await testing.async();
