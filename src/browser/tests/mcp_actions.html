@@ -18,7 +18,7 @@
         <div style="height: 500px;"><p id="sheetleaf">Sheet leaf</p></div>
     </div>
     <div id="hoverTarget" onmouseover="window.hovered = true;">Hover Me</div>
-    <input id="keyTarget" onkeydown="window.keyPressed = event.key;" onkeyup="window.keyReleased = event.key;">
+    <input id="keyTarget" onkeydown="window.keyPressed = event.key; window.keyCode = event.code;" onkeyup="window.keyReleased = event.key;">
     <select id="sel2" onchange="window.sel2Changed = this.value">
         <option value="a">Alpha</option>
         <option value="b">Beta</option>

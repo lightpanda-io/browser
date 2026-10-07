@@ -21,8 +21,8 @@ const lp = @import("../lightpanda.zig");
 const DOMNode = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const Event = @import("webapi/Event.zig");
-const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const Frame = @import("Frame.zig");
+const keyboard = @import("frame/keyboard.zig");
 const Session = @import("Session.zig");
 
 pub fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
@@ -60,56 +60,36 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
         (n.is(Element) orelse return error.InvalidNodeType)
     else
         Frame.user_input.focusedElement(frame) orelse return error.ActionFailed;
-    const canonical = canonicalKey(key);
+    const info = keyboard.named(alias(key));
 
-    const keydown_event: *KeyboardEvent = try .initTrusted(comptime .wrap("keydown"), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .key = canonical,
-    }, frame);
-
-    _ = Frame.user_input.pressKey(frame, target, keydown_event, Frame.user_input.textForKey(keydown_event)) catch |err| {
-        lp.log.debug(.app, "press keydown failed", .{ .err = err });
-        return error.ActionFailed;
-    };
-
-    const keyup_event: *KeyboardEvent = try .initTrusted(comptime .wrap("keyup"), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .key = canonical,
-    }, frame);
-
-    frame._event_manager.dispatch(target.asEventTarget(), keyup_event.asEvent()) catch |err| {
-        lp.log.debug(.app, "press keyup failed", .{ .err = err });
-        return error.ActionFailed;
-    };
+    for ([_]keyboard.Direction{ .down, .up }) |direction| {
+        keyboard.dispatch(frame, target, direction, &info, &.{}) catch |err| {
+            lp.log.debug(.app, "press failed", .{ .err = err, .direction = direction });
+            return error.ActionFailed;
+        };
+    }
 }
 
-/// Map common shorthand to the canonical KeyboardEvent.key string so users
-/// can type "enter" instead of "Enter" without surprises.
-fn canonicalKey(key: []const u8) []const u8 {
-    const aliases = [_]struct { in: []const u8, out: []const u8 }{
-        .{ .in = "enter", .out = "Enter" },
-        .{ .in = "return", .out = "Enter" },
-        .{ .in = "\n", .out = "Enter" },
-        .{ .in = "\\n", .out = "Enter" },
-        .{ .in = "esc", .out = "Escape" },
-        .{ .in = "escape", .out = "Escape" },
-        .{ .in = "tab", .out = "Tab" },
-        .{ .in = "\t", .out = "Tab" },
-        .{ .in = "space", .out = " " },
-        .{ .in = "backspace", .out = "Backspace" },
-        .{ .in = "delete", .out = "Delete" },
-        .{ .in = "del", .out = "Delete" },
-        .{ .in = "up", .out = "ArrowUp" },
-        .{ .in = "down", .out = "ArrowDown" },
-        .{ .in = "left", .out = "ArrowLeft" },
-        .{ .in = "right", .out = "ArrowRight" },
+/// `keyboard.named` takes WebDriver's own key names, in any case.
+fn alias(key: []const u8) []const u8 {
+    const aliases = [_]struct { []const u8, []const u8 }{
+        .{ "return", "Enter" },
+        .{ "\n", "Enter" },
+        .{ "\\n", "Enter" },
+        .{ "esc", "Escape" },
+        .{ "\t", "Tab" },
+        .{ "space", " " },
+        .{ "del", "Delete" },
+        .{ "up", "ArrowUp" },
+        .{ "down", "ArrowDown" },
+        .{ "left", "ArrowLeft" },
+        .{ "right", "ArrowRight" },
     };
-    for (aliases) |a| {
-        if (std.ascii.eqlIgnoreCase(key, a.in)) return a.out;
+    for (aliases) |entry| {
+        const from, const to = entry;
+        if (std.ascii.eqlIgnoreCase(key, from)) {
+            return to;
+        }
     }
     return key;
 }

@@ -952,6 +952,8 @@ fn implicitFormSubmission(frame: *Frame, input: *Element.Html.Input) !void {
 fn keypressFor(frame: *Frame, keydown: *const KeyboardEvent) !*KeyboardEvent {
     return KeyboardEvent.initTrusted(comptime .wrap("keypress"), .{
         .key = keydown.getKey().asString(),
+        .code = keydown._code,
+        .location = keydown._location,
         .ctrlKey = keydown.getCtrlKey(),
         .shiftKey = keydown.getShiftKey(),
         .altKey = keydown.getAltKey(),
