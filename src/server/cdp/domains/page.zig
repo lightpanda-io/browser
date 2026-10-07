@@ -2402,15 +2402,58 @@ test "cdp.frame: navigate answers with errorText when the navigation fails" {
     });
     try testing.waitForPage(bc);
 
-    // The pending page was discarded; the active document is untouched.
-    const frame = bc.mainFrame() orelse unreachable;
-    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/hi.html", frame.url);
-
     try ctx.expectSentResult(.{
         .frameId = "FID-0000000001",
         .loaderId = "LID-0000000002",
         .errorText = "CouldntConnect",
     }, .{ .id = 52 });
+
+    // As in Chrome, an error document replaces the active one, and committing
+    // it doesn't answer the command a second time.
+    try ctx.expectSentEvent("Page.frameNavigated", .{ .frame = .{ .url = "http://127.0.0.1:1/unreachable", .loaderId = "LID-0000000002" } }, .{});
+    const frame = bc.mainFrame() orelse unreachable;
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:1/unreachable", frame.url);
+
+    var answers: usize = 0;
+    for (ctx.received.items) |msg| {
+        const msg_id = msg.object.get("id") orelse continue;
+        if (msg_id == .integer and msg_id.integer == 52) answers += 1;
+    }
+    try testing.expectEqual(1, answers);
+}
+
+test "cdp.frame: a failed script navigation commits an error document" {
+    testing.silenceLog(&.{.frame});
+
+    // A script navigation supersedes the current document, which then never
+    // fires DOMContentLoaded or load. If the navigation fails, clients waiting
+    // on lifecycle events only see them from the error document.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-SNF", .session_id = "SID-SNF", .url = "hi.html", .target_id = "FID-0000000SNF".* });
+    try ctx.processMessage(.{ .id = 1, .method = "Page.setLifecycleEventsEnabled", .sessionId = "SID-SNF", .params = .{ .enabled = true } });
+
+    {
+        const frame = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("location.assign('http://127.0.0.1:1/unreachable')", null);
+    }
+    // Outside the scope: the navigation destroys the page it's entered on.
+    try testing.waitForPage(bc);
+
+    try ctx.expectSentEvent("Page.frameNavigated", .{ .frame = .{ .url = "http://127.0.0.1:1/unreachable", .loaderId = "LID-0000000002" } }, .{ .session_id = "SID-SNF" });
+    try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "DOMContentLoaded", .loaderId = "LID-0000000002" }, .{ .session_id = "SID-SNF" });
+    try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "load", .loaderId = "LID-0000000002" }, .{ .session_id = "SID-SNF" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const v = try ls.local.exec("document.readyState === 'complete' && document.querySelector('h1')?.textContent === 'Navigation failed' && location.href === 'http://127.0.0.1:1/unreachable'", null);
+    try testing.expect(v.toBool());
 }
 
 test "cdp.frame: navigate to about:blank replaces a non-blank document" {
