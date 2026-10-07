@@ -74,7 +74,7 @@ _response_mime: ?Mime = null,
 _override_mime_raw: ?[]const u8 = null,
 _response_mime_raw: ?[]const u8 = null,
 _response_xml: ?*Node.Document = null,
-_response_headers: std.ArrayList([]const u8) = .empty,
+_response_headers: std.ArrayList(http.Header) = .empty,
 _response_type: ResponseType = .default,
 
 _ready_state: ReadyState = .unsent,
@@ -457,22 +457,35 @@ fn getReadyState(self: *const XMLHttpRequest) u32 {
     return @backingInt(self._ready_state);
 }
 
-pub fn getResponseHeader(self: *const XMLHttpRequest, name: []const u8) ?[]const u8 {
-    for (self._response_headers.items) |entry| {
-        if (entry.len <= name.len) {
-            continue;
+// Headers are sorted by name, so all values for `name` are contiguous.
+fn getResponseHeader(self: *const XMLHttpRequest, name: []const u8, exec: *const Execution) !?[]const u8 {
+    const items = self._response_headers.items;
+    const start = for (items, 0..) |hdr, i| {
+        if (std.ascii.eqlIgnoreCase(name, hdr.name)) {
+            break i;
         }
-        if (std.ascii.eqlIgnoreCase(name, entry[0..name.len]) == false) {
-            continue;
-        }
-        if (entry[name.len] != ':') {
-            continue;
-        }
-        return std.mem.trimStart(u8, entry[name.len + 1 ..], " ");
+    } else return null;
+
+    var end = start + 1;
+    while (end < items.len and std.mem.eql(u8, items[end].name, items[start].name)) {
+        end += 1;
     }
-    return null;
+    if (end - start == 1) {
+        return items[start].value;
+    }
+
+    var buf: std.Io.Writer.Allocating = .init(exec.local_arena);
+    for (items[start..end], 0..) |hdr, i| {
+        if (i > 0) {
+            try buf.writer.writeAll(", ");
+        }
+        try buf.writer.writeAll(hdr.value);
+    }
+    return buf.written();
 }
 
+// Should return sorted and combined. They are already sorted, so combining
+// is easy.
 fn getAllResponseHeaders(self: *const XMLHttpRequest, exec: *const Execution) ![]const u8 {
     if (self._ready_state != .done) {
         // MDN says this should return null, but it seems to return an empty string
@@ -480,9 +493,18 @@ fn getAllResponseHeaders(self: *const XMLHttpRequest, exec: *const Execution) ![
         return "";
     }
 
-    var buf = std.Io.Writer.Allocating.init(exec.local_arena);
-    for (self._response_headers.items) |entry| {
-        try buf.writer.writeAll(entry);
+    var buf: std.Io.Writer.Allocating = .init(exec.local_arena);
+    for (self._response_headers.items, 0..) |hdr, i| {
+        if (i > 0 and std.mem.eql(u8, hdr.name, self._response_headers.items[i - 1].name)) {
+            try buf.writer.print(", {s}", .{hdr.value});
+            continue;
+        }
+        if (i > 0) {
+            try buf.writer.writeAll("\r\n");
+        }
+        try buf.writer.print("{s}: {s}", .{ hdr.name, hdr.value });
+    }
+    if (self._response_headers.items.len > 0) {
         try buf.writer.writeAll("\r\n");
     }
     return buf.written();
@@ -655,13 +677,31 @@ fn applyContentType(self: *XMLHttpRequest, content_type: []const u8) !void {
 }
 
 fn applyResponseHeaders(self: *XMLHttpRequest, headers: []const http.Header) !void {
+    const allocator = self._arena.allocator();
     for (headers) |hdr| {
         if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
             continue;
         }
-        const joined = try self._arena.allocator().print("{s}: {s}", .{ hdr.name, hdr.value });
-        try self._response_headers.append(self._arena.allocator(), joined);
+        try self._response_headers.append(allocator, .{
+            .name = try allocator.dupe(u8, hdr.name),
+            .value = try allocator.dupe(u8, hdr.value),
+        });
     }
+
+    // Comparison is by uppercased name...so things like _ sort after letters.
+    std.mem.sort(http.Header, self._response_headers.items, {}, struct {
+        fn lessThan(_: void, a: http.Header, b: http.Header) bool {
+            const len = @min(a.name.len, b.name.len);
+            for (a.name[0..len], b.name[0..len]) |ca, cb| {
+                const ua = std.ascii.toUpper(ca);
+                const ub = std.ascii.toUpper(cb);
+                if (ua != ub) {
+                    return ua < ub;
+                }
+            }
+            return a.name.len < b.name.len;
+        }
+    }.lessThan);
 }
 
 fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {

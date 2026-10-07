@@ -31,7 +31,12 @@
     <button id="btnDisabled" disabled>Disabled</button>
     <div id="focusTarget" tabindex="0" onclick="window.focusTargetFocused = document.activeElement === this;">Focus me</div>
     <div id="plain" onclick="window.plainBlurred = document.activeElement === document.body;">Not focusable</div>
+    <input id="fillPre" value="old" onbeforeinput="fillLog.push(event.type + ':' + event.inputType)" oninput="fillLog.push(event.type + ':' + event.inputType)" onchange="fillLog.push(event.type)">
+    <input id="fillCancel" onbeforeinput="event.preventDefault()">
+    <input id="fillRo" readonly value="ro">
+    <input id="fillDate" type="date" value="2020-01-01">
     <script>
+        window.fillLog = [];
         window.seq = [];
         const btn = document.getElementById('btn');
         for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {

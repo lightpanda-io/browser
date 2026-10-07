@@ -36,7 +36,6 @@ const IFrame = @This();
 
 pub const Proto = HtmlElement;
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
-_src: []const u8 = "",
 _executed: bool = false,
 _window: ?*Window = null,
 
@@ -63,21 +62,18 @@ pub fn isLazyLoading(self: *IFrame) bool {
     return std.ascii.eqlIgnoreCase(loading, "lazy");
 }
 
+pub fn srcAttribute(self: *IFrame) []const u8 {
+    return self.asElement().getAttributeInterned("src") orelse "";
+}
+
 pub fn getSrc(self: *IFrame, frame: *Frame) ![]const u8 {
-    if (self._src.len == 0) return "";
-    return self.asNode().resolveURLReflect(self._src, frame, .{});
+    const src = self.srcAttribute();
+    if (src.len == 0) return "";
+    return self.asNode().resolveURLReflect(src, frame, .{});
 }
 
 fn setSrc(self: *IFrame, src: []const u8, frame: *Frame) !void {
-    const element = self.asElement();
-    try element.setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
-    self._src = element.getAttributeInterned("src") orelse unreachable;
-    if (element.asNode().isConnected()) {
-        // unlike script, an iframe is reloaded every time the src is set
-        // even if it's set to the same URL.
-        self._executed = false;
-        try frame.iframeAddedCallback(self);
-    }
+    try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
 }
 
 pub fn hasSrcdoc(self: *IFrame) bool {
@@ -145,33 +141,27 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
-    pub fn complete(node: *Node, _: *Frame) !void {
-        const self = node.as(IFrame);
-        const element = self.asElement();
-        self._src = element.getAttributeInterned("src") orelse "";
-    }
-
+    /// Setting src or srcdoc reloads the frame even if the value didn't
+    /// change; src is ignored while srcdoc is present.
     pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
-        if (!name.eql(comptime .wrap("srcdoc"))) {
-            return;
-        }
-        if (element.asNode().isConnected()) {
-            // like src, setting srcdoc reloads the frame even if the value didn't change
-            const self = element.as(IFrame);
-            self._executed = false;
-            try frame.iframeAddedCallback(self);
-        }
+        if (reprocesses(element, name)) try reload(element, frame);
     }
 
+    /// Removing srcdoc falls back to src, removing src to about:blank.
     pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
-        if (!name.eql(comptime .wrap("srcdoc"))) {
-            return;
-        }
-        if (element.asNode().isConnected()) {
-            const self = element.as(IFrame);
-            // removing srcdoc falls back to src (or about:blank)
-            self._executed = false;
-            try frame.iframeAddedCallback(self);
-        }
+        if (reprocesses(element, name)) try reload(element, frame);
+    }
+
+    fn reprocesses(element: *Element, name: String) bool {
+        if (name.eql(comptime .wrap("srcdoc"))) return true;
+        return name.eql(comptime .wrap("src")) and !element.as(IFrame).hasSrcdoc();
+    }
+
+    fn reload(element: *Element, frame: *Frame) !void {
+        if (!element.asNode().isConnected()) return;
+        const owner = element.ownerFrame(frame) orelse return;
+        const self = element.as(IFrame);
+        self._executed = false;
+        try owner.iframeAddedCallback(self);
     }
 };

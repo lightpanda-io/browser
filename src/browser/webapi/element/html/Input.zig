@@ -660,7 +660,7 @@ const entry = text_entry.TextEntry(Input);
 pub const select = entry.select;
 pub const innerInsert = entry.innerInsert;
 pub const acceptsTextEntry = entry.acceptsTextEntry;
-const tracksSelection = entry.tracksSelection;
+pub const tracksSelection = entry.tracksSelection;
 pub const innerDelete = entry.innerDelete;
 pub const moveCaret = entry.moveCaret;
 pub const caretToEnd = entry.caretToEnd;
@@ -669,6 +669,15 @@ pub const getSelectionDirection = entry.getSelectionDirection;
 pub const setSelectionStart = entry.setSelectionStart;
 pub const setSelectionEnd = entry.setSelectionEnd;
 pub const setSelectionRange = entry.setSelectionRange;
+
+/// https://html.spec.whatwg.org/multipage/input.html#attr-input-readonly
+pub fn readonlyApplies(self: *const Input) bool {
+    return switch (self._input_type) {
+        .text, .password, .email, .url, .tel, .search, .number => true,
+        .date, .time, .@"datetime-local", .month, .week => true,
+        else => false,
+    };
+}
 
 pub fn selectionAvailable(self: *const Input) bool {
     switch (self._input_type) {

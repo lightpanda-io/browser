@@ -31,8 +31,6 @@ const repeat = @import("../string.zig").repeat;
 const log = lp.log;
 const posix = std.posix;
 
-const ENABLE_DEBUG = false;
-
 pub const readfunc_pause = libcurl.curl_readfunc_pause;
 pub const writefunc_error = libcurl.curl_writefunc_error;
 pub const WsFrameType = libcurl.WsFrameType;
@@ -499,17 +497,19 @@ pub const Connection = struct {
             }
         }
 
-        // debug
-        if (comptime ENABLE_DEBUG) {
-            try libcurl.curl_easy_setopt(self._easy, .verbose, true);
-
-            // Sometimes the default debug output hides some useful data. You can
-            // uncomment the following line (BUT KEEP THE LIVE ABOVE AS-IS), to
-            // get more control over the data (specifically, the `CURLINFO_TEXT`
-            // can include useful data).
-
-            // try libcurl.curl_easy_setopt(easy, .debug_function, debugCallback);
+        if (config.httpCurves()) |list| {
+            try libcurl.curl_easy_setopt(self._easy, .ssl_ec_curves, list.ptr);
         }
+
+        if (config.httpDebug()) {
+            try libcurl.curl_easy_setopt(self._easy, .verbose, true);
+        }
+
+        // Sometimes the default debug output hides some useful data. You can
+        // uncomment the following line (BUT KEEP THE LINE ABOVE AS-IS), to
+        // get more control over the data (specifically, the `CURLINFO_TEXT`
+        // can include useful data).
+        // try libcurl.curl_easy_setopt(easy, .debug_function, debugCallback);
 
         // default write callback to prevent libcurl from writing to stdout
         try self.setWriteCallback(discardBody);

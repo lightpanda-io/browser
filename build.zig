@@ -526,11 +526,20 @@ fn linkCurl(b: *Build, mod: *Build.Module, deps: Deps, is_tsan: bool, section: b
     translator.addIncludePath(dep.path("include"));
     mod.addImport("curl", translator.mod);
 
+    // zlib and brotli are linked to curl for their installed headers, and to
+    // mod since Compression Streams call them directly.
     const zlib = buildZlib(b, deps.target, deps.optimize, is_tsan, section);
     curl.root_module.linkLibrary(zlib);
+    mod.linkLibrary(zlib);
 
     const brotli = buildBrotli(b, deps.target, deps.optimize, is_tsan, section);
-    for (brotli) |lib| curl.root_module.linkLibrary(lib);
+    inline for (brotli) |lib| {
+        curl.root_module.linkLibrary(lib);
+        mod.linkLibrary(lib);
+    }
+
+    const zstd = buildZstd(b, deps.target, deps.optimize, is_tsan, section);
+    curl.root_module.linkLibrary(zstd);
 
     const nghttp2 = buildNghttp2(b, deps.target, deps.optimize, is_tsan, section);
     curl.root_module.linkLibrary(nghttp2);
@@ -627,6 +636,34 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optim
     return .{ brotlicmn, brotlidec, brotlienc };
 }
 
+fn buildZstd(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimize, is_tsan: bool, section: bool) *Build.Step.Compile {
+    const dep = b.dependency("zstd", .{});
+
+    const mod = cLibModule(b, target, optimize, is_tsan);
+    const lib = sectionize(b.addLibrary(.{ .name = "zstd", .root_module = mod }), section);
+    lib.installHeader(dep.path("lib/zstd.h"), "zstd.h");
+    lib.installHeader(dep.path("lib/zstd_errors.h"), "zstd_errors.h");
+    // curl only decodes, so the compressor is left out.
+    mod.addCSourceFiles(.{
+        .root = dep.path("lib"),
+        .flags = &.{
+            // RFC 9659 caps the zstd content coding's window at 8MB, as Chrome does.
+            "-DZSTD_MAXWINDOWSIZE_DEFAULT=(1<<23)",
+        },
+        .files = &.{
+            "common/debug.c",                    "common/entropy_common.c",
+            "common/error_private.c",            "common/fse_decompress.c",
+            "common/xxhash.c",                   "common/zstd_common.c",
+            "decompress/huf_decompress.c",       "decompress/zstd_ddict.c",
+            "decompress/zstd_decompress.c",      "decompress/zstd_decompress_block.c",
+            // Empty unless the x86_64 BMI2 fast path is enabled.
+            "decompress/huf_decompress_amd64.S",
+        },
+    });
+
+    return lib;
+}
+
 fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimize, section: bool) [2]*Build.Step.Compile {
     const dep = b.dependency("boringssl-zig", .{
         .target = target,
@@ -721,6 +758,7 @@ fn buildCurl(
     const config = .{
         .HAVE_LIBZ = true,
         .HAVE_BROTLI = true,
+        .HAVE_ZSTD = true,
         .USE_NGHTTP2 = true,
 
         .USE_OPENSSL = true,

@@ -58,9 +58,69 @@ pub const Opts = struct {
     }
 };
 
+// The --render-font files, mapped read-only for the life of the App.
+pub const Fonts = struct {
+    maps: []std.Io.File.MemoryMap,
+    files: []LpFontFile,
+
+    pub fn load(allocator: Allocator, paths: []const []const u8) !Fonts {
+        if (paths.len == 0) {
+            return .{ .maps = &.{}, .files = &.{} };
+        }
+        const maps = try allocator.alloc(std.Io.File.MemoryMap, paths.len);
+        errdefer allocator.free(maps);
+
+        const files = try allocator.alloc(LpFontFile, paths.len);
+        errdefer allocator.free(files);
+
+        var loaded: usize = 0;
+        errdefer for (maps[0..loaded]) |*m| unmap(m);
+
+        for (paths, maps, files) |path, *m, *f| {
+            m.* = mapFile(path) catch |err| {
+                log.fatal(.app, "failed to load font", .{ .arg = "--render-font", .path = path, .err = err });
+                return error.InvalidArgument;
+            };
+            loaded += 1;
+            f.* = .{ .data = m.memory.ptr, .data_len = m.memory.len };
+        }
+        return .{ .maps = maps, .files = files };
+    }
+
+    pub fn deinit(self: *Fonts, allocator: Allocator) void {
+        for (self.maps) |*m| unmap(m);
+        allocator.free(self.maps);
+        allocator.free(self.files);
+    }
+
+    fn mapFile(path: []const u8) !std.Io.File.MemoryMap {
+        const file = try std.Io.Dir.cwd().openFile(lp.io, path, .{});
+        errdefer file.close(lp.io);
+        const len = try file.length(lp.io);
+        if (len == 0) {
+            return error.EmptyFile;
+        }
+        return file.createMemoryMap(lp.io, .{
+            .len = @intCast(len),
+            .populate = false,
+            .protection = .{ .read = true },
+        });
+    }
+
+    fn unmap(m: *std.Io.File.MemoryMap) void {
+        const file = m.file;
+        m.destroy(lp.io);
+        file.close(lp.io);
+    }
+};
+
 // Parsed fonts, shaping scratch and the glyph cache, on the Rust side. One
 // per Browser, created on the first screenshot.
 pub const Renderer = opaque {
+    pub fn init(fonts: []const LpFontFile) !*Renderer {
+        return lp_render_new(fonts.ptr, fonts.len) orelse error.RendererInit;
+    }
+
     pub fn deinit(self: *Renderer) void {
         lp_render_free(self);
     }
@@ -111,7 +171,7 @@ pub fn rendererFor(frame: *Frame) !*Renderer {
     if (browser.renderer) |r| {
         return r;
     }
-    const r = lp_render_new() orelse return error.RendererInit;
+    const r = try Renderer.init(browser.app.render_fonts.files);
     browser.renderer = r;
     return r;
 }
@@ -372,7 +432,7 @@ const LpGlyph = extern struct {
     advance: f32,
 };
 
-const LpCluster = extern struct {
+pub const LpCluster = extern struct {
     font: u32,
     glyph: u32,
     text_start: u32,
@@ -392,6 +452,12 @@ pub const LpFont = extern struct {
     name: [*]const u8,
     name_len: usize,
     mono: u8,
+};
+
+/// A --render-font file; the bytes outlive every Renderer.
+pub const LpFontFile = extern struct {
+    data: [*]const u8,
+    data_len: usize,
 };
 
 const RC_OK: i32 = 0;
@@ -545,7 +611,7 @@ const LpAbi = extern struct {
 const LINK_COLOR: u32 = 0x1a0dab;
 const MUTED_COLOR: u32 = 0x6b6b6b;
 
-extern "c" fn lp_render_new() ?*Renderer;
+extern "c" fn lp_render_new(fonts: [*]const LpFontFile, fonts_len: usize) ?*Renderer;
 extern "c" fn lp_render_free(r: *Renderer) void;
 extern "c" fn lp_render_png(
     r: *Renderer,
@@ -1608,4 +1674,171 @@ test "browser.screenshot: deep nesting doesn't overflow the native stack" {
     try testing.expectEqual(1, blocks.len);
     try testing.expectEqual(1, blocks[0].spans_len);
     try testing.expectEqual("deep", blocks[0].spans[0].text[0..blocks[0].spans[0].len]);
+}
+
+test "browser.screenshot: --render-font faces fill what DejaVu lacks" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>A日</p>");
+
+    const font = try testFallbackFont(testing.arena_allocator);
+    const files = [_]LpFontFile{.{ .data = font.ptr, .data_len = font.len }};
+    const r = try Renderer.init(&files);
+    defer r.deinit();
+
+    const blocks = try collect(testing.arena_allocator, .{ .root = div.asNode() }, frame);
+    var l = try layout(r, blocks, 400, 0);
+    defer l.deinit();
+
+    // "A" stays DejaVu; 日 goes to the fallback, named for the PDF.
+    const clusters = l.clusters();
+    try testing.expectEqual(2, clusters.len);
+    const fonts = l.fonts();
+    const dejavu = fonts[clusters[0].font];
+    try testing.expectEqual("DejaVuSans", dejavu.name[0..dejavu.name_len]);
+    const fallback = fonts[clusters[1].font];
+    try testing.expectEqual("LPTest-Regular", fallback.name[0..fallback.name_len]);
+    try testing.expectEqual(@intFromPtr(font.ptr), @intFromPtr(fallback.data));
+    try testing.expectEqual(1, clusters[1].glyph);
+}
+
+test "browser.screenshot: Fonts maps --render-font files" {
+    testing.silenceLog(&.{.app});
+    try testing.expectError(error.InvalidArgument, Fonts.load(testing.allocator, &.{"src/rust/render/fonts/missing.ttf"}));
+
+    var fonts: Fonts = try .load(testing.allocator, &.{ "src/rust/render/fonts/DejaVuSans.ttf", "src/rust/render/fonts/DejaVuSansMono.ttf" });
+    defer fonts.deinit(testing.allocator);
+    try testing.expectEqual(2, fonts.files.len);
+    const data = fonts.files[0].data[0..fonts.files[0].data_len];
+    try testing.expectEqual(759720, data.len);
+    try testing.expectEqual(0x00010000, std.mem.readInt(u32, data[0..4], .big));
+}
+
+/// A minimal TrueType font: one square glyph, mapped from U+65E5 (日),
+/// which DejaVu doesn't cover. Family "LPTest", PostScript "LPTest-Regular".
+pub fn testFallbackFont(arena: Allocator) ![]const u8 {
+    const Table = struct { tag: *const [4]u8, data: []const u8 };
+    const B = struct {
+        fn build(a: Allocator, comptime f: fn (*std.Io.Writer) anyerror!void) ![]const u8 {
+            var aw: std.Io.Writer.Allocating = .init(a);
+            try f(&aw.writer);
+            return aw.written();
+        }
+        fn u16s(w: *std.Io.Writer, values: []const u16) !void {
+            for (values) |v| try w.writeInt(u16, v, .big);
+        }
+    };
+
+    const os2 = try B.build(arena, struct {
+        fn f(w: *std.Io.Writer) !void {
+            // version 4: avg width, weight 400, width 5, then zeros up to the
+            // typo/win metrics and the cap height.
+            try B.u16s(w, &.{ 4, 1000, 400, 5 });
+            try w.splatByteAll(0, 68 - 8);
+            try B.u16s(w, &.{ 800, @bitCast(@as(i16, -200)), 0, 800, 200 });
+            try w.splatByteAll(0, 88 - 78);
+            try B.u16s(w, &.{ 800, 0, 0, 0 });
+        }
+    }.f);
+    const cmap = try B.build(arena, struct {
+        fn f(w: *std.Io.Writer) !void {
+            // One (3, 1) format 4 subtable: 0x65E5 → gid 1, then the 0xFFFF
+            // terminator segment.
+            try B.u16s(w, &.{ 0, 1, 3, 1, 0, 12 });
+            try B.u16s(w, &.{ 4, 32, 0, 4, 4, 1, 0 });
+            try B.u16s(w, &.{ 0x65E5, 0xFFFF, 0, 0x65E5, 0xFFFF });
+            try B.u16s(w, &.{ 1 -% @as(u16, 0x65E5), 1, 0, 0 });
+        }
+    }.f);
+    const glyf = try B.build(arena, struct {
+        fn f(w: *std.Io.Writer) !void {
+            // gid 0 is empty; gid 1 a 800x800 square, four on-curve points
+            // as 16-bit deltas, padded to 36.
+            try B.u16s(w, &.{ 1, 100, 0, 900, 800, 3, 0 });
+            try w.splatByteAll(1, 4);
+            try B.u16s(w, &.{ 100, 0, 800, 0 });
+            try B.u16s(w, &.{ 0, 800, 0, @bitCast(@as(i16, -800)) });
+            try w.splatByteAll(0, 2);
+        }
+    }.f);
+    const head = try B.build(arena, struct {
+        fn f(w: *std.Io.Writer) !void {
+            try B.u16s(w, &.{ 1, 0, 1, 0, 0, 0, 0x5F0F, 0x3CF5, 0x000B, 1000 });
+            try w.splatByteAll(0, 16);
+            // bbox, macStyle, lowestRecPPEM, direction hint, long loca, format
+            try B.u16s(w, &.{ 0, 0, 1000, 800, 0, 8, 2, 1, 0 });
+        }
+    }.f);
+    const hhea = try B.build(arena, struct {
+        fn f(w: *std.Io.Writer) !void {
+            try B.u16s(w, &.{ 1, 0, 800, @bitCast(@as(i16, -200)), 0, 1000, 0, 0, 1000, 1, 0, 0 });
+            try w.splatByteAll(0, 10);
+            try B.u16s(w, &.{2});
+        }
+    }.f);
+    const hmtx = try B.build(arena, struct {
+        fn f(w: *std.Io.Writer) !void {
+            try B.u16s(w, &.{ 500, 0, 1000, 100 });
+        }
+    }.f);
+    const loca = try B.build(arena, struct {
+        fn f(w: *std.Io.Writer) !void {
+            for ([_]u32{ 0, 0, 36 }) |o| try w.writeInt(u32, o, .big);
+        }
+    }.f);
+    const maxp = try B.build(arena, struct {
+        fn f(w: *std.Io.Writer) !void {
+            try B.u16s(w, &.{ 1, 0, 2, 4, 1, 0, 0, 2 });
+            try w.splatByteAll(0, 16);
+        }
+    }.f);
+    const name = try B.build(arena, struct {
+        fn f(w: *std.Io.Writer) !void {
+            // Family (1) and PostScript (6) names, UTF-16BE.
+            const family = "LPTest";
+            const ps = "LPTest-Regular";
+            try B.u16s(w, &.{ 0, 2, 6 + 2 * 12 });
+            try B.u16s(w, &.{ 3, 1, 0x409, 1, family.len * 2, 0 });
+            try B.u16s(w, &.{ 3, 1, 0x409, 6, ps.len * 2, family.len * 2 });
+            for (family ++ ps) |c| try w.writeInt(u16, c, .big);
+        }
+    }.f);
+    const post = try B.build(arena, struct {
+        fn f(w: *std.Io.Writer) !void {
+            try B.u16s(w, &.{ 3, 0, 0, 0, @bitCast(@as(i16, -100)), 50 });
+            try w.splatByteAll(0, 20);
+        }
+    }.f);
+
+    // Sorted by tag, as the directory requires.
+    const tables = [_]Table{
+        .{ .tag = "OS/2", .data = os2 },
+        .{ .tag = "cmap", .data = cmap },
+        .{ .tag = "glyf", .data = glyf },
+        .{ .tag = "head", .data = head },
+        .{ .tag = "hhea", .data = hhea },
+        .{ .tag = "hmtx", .data = hmtx },
+        .{ .tag = "loca", .data = loca },
+        .{ .tag = "maxp", .data = maxp },
+        .{ .tag = "name", .data = name },
+        .{ .tag = "post", .data = post },
+    };
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    const w = &aw.writer;
+    try B.u16s(w, &.{ 1, 0, tables.len, 128, 3, tables.len * 16 - 128 });
+    var offset: u32 = 12 + tables.len * 16;
+    for (tables) |t| {
+        try w.writeAll(t.tag);
+        try w.writeInt(u32, 0, .big);
+        try w.writeInt(u32, offset, .big);
+        try w.writeInt(u32, @intCast(t.data.len), .big);
+        offset += @intCast(std.mem.alignForward(usize, t.data.len, 4));
+    }
+    for (tables) |t| {
+        try w.writeAll(t.data);
+        try w.splatByteAll(0, std.mem.alignForward(usize, t.data.len, 4) - t.data.len);
+    }
+    return aw.written();
 }

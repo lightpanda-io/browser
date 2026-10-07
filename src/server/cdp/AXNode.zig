@@ -26,6 +26,7 @@ const TreeWalker = @import("../../browser/webapi/TreeWalker.zig");
 const interactive = @import("../../browser/interactive.zig");
 
 const NodeRegistry = @import("../../NodeRegistry.zig");
+const isAllWhitespace = @import("../../string.zig").isAllWhitespace;
 
 const log = lp.log;
 const jsonStringify = std.json.Stringify;
@@ -983,7 +984,10 @@ fn writeName(
                 }
             }
 
-            if (el.getAttributeInterned("aria-label")) |aria_label| {
+            // A blank aria-label is ignored (accname 2D), so the name comes
+            // from content instead.
+            const aria_label = el.getAttributeInterned("aria-label") orelse "";
+            if (!isAllWhitespace(aria_label)) {
                 try w.write(aria_label);
                 return .aria_label;
             }
@@ -2038,6 +2042,9 @@ test "AXNode: getName name-from-content honors explicit role" {
         .{ .selector = "#button", .expected = "Click me" },
         // Recurses through child elements; the space here is real source whitespace.
         .{ .selector = "#nested", .expected = "Read more" },
+        .{ .selector = "#empty_label", .expected = "Sat 10" },
+        .{ .selector = "#blank_label", .expected = "Pick" },
+        .{ .selector = "#set_label", .expected = "Saturday" },
         // No role, or a non-name-from-content role: no name from contents.
         .{ .selector = "#plain", .expected = null },
         .{ .selector = "#pres", .expected = null },

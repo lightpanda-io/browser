@@ -36,7 +36,9 @@
         }
         customElements.define('ce-adds-child', AddsChild);
 
-        const el = document.createElement('ce-adds-child');
+        let el;
+        const errors = testing.withReportedErrors(() => el = document.createElement('ce-adds-child'));
+        testing.expectEqual(['NotSupportedError'], errors.map((e) => e.name));
         testing.expectEqual(true, el instanceof HTMLUnknownElement);
         testing.expectEqual('ce-adds-child', el.localName);
     }
@@ -70,7 +72,10 @@
         }
         customElements.define('ce-adds-attribute', AddsAttribute);
 
-        testing.expectEqual(true, document.createElement('ce-adds-attribute') instanceof HTMLUnknownElement);
+        let el;
+        const errors = testing.withReportedErrors(() => el = document.createElement('ce-adds-attribute'));
+        testing.expectEqual(['NotSupportedError'], errors.map((e) => e.name));
+        testing.expectEqual(true, el instanceof HTMLUnknownElement);
     }
 </script>
 
@@ -88,7 +93,9 @@
         }
         customElements.define('ce-attaches-self', AttachesSelf);
 
-        const el = document.createElement('ce-attaches-self');
+        let el;
+        const errors = testing.withReportedErrors(() => el = document.createElement('ce-attaches-self'));
+        testing.expectEqual(['NotSupportedError'], errors.map((e) => e.name));
         testing.expectEqual(true, el instanceof HTMLUnknownElement);
         testing.expectEqual(null, el.parentNode);
     }
@@ -108,7 +115,10 @@
         customElements.define('ce-parser-attaches-self', ParserAttachesSelf);
 
         const container = document.createElement('div');
-        container.innerHTML = '<ce-parser-attaches-self></ce-parser-attaches-self>';
+        const errors = testing.withReportedErrors(() => {
+            container.innerHTML = '<ce-parser-attaches-self></ce-parser-attaches-self>';
+        });
+        testing.expectEqual(['NotSupportedError'], errors.map((e) => e.name));
         testing.expectEqual(1, container.children.length);
         testing.expectEqual(true, container.firstElementChild instanceof HTMLUnknownElement);
     }

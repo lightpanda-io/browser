@@ -1632,6 +1632,7 @@ test "cdp.input: dispatchKeyEvent text-less keyDown then char types once" {
         \\document.body.appendChild(ta);
         \\ta.value = 'one';
         \\ta.focus();
+        \\ta.addEventListener('input', (e) => window.taInput = e.inputType + ':' + e.data);
     , null);
     try ctx.processMessage(.{ .id = 6, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter" } });
     try ctx.expectSentResult(null, .{ .id = 6 });
@@ -1639,7 +1640,43 @@ test "cdp.input: dispatchKeyEvent text-less keyDown then char types once" {
     try ctx.expectSentResult(null, .{ .id = 7 });
     try ctx.processMessage(.{ .id = 8, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyUp", .key = "Enter", .code = "Enter" } });
     try ctx.expectSentResult(null, .{ .id = 8 });
-    try testing.expect((try ls.local.compileAndRun("ta.value === 'one\\n'", null)).isTrue());
+    try testing.expect((try ls.local.compileAndRun("ta.value === 'one\\n' && window.taInput === 'insertLineBreak:null'", null)).isTrue());
+}
+
+test "cdp.input: a readonly textarea fires beforeinput for typed text only, a disabled one nothing" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // As in Chrome, typed text reaches beforeinput before the readonly
+    // control refuses it; Backspace and Enter fire no edit event.
+    _ = try ls.local.compileAndRun(
+        \\const ta = document.createElement('textarea');
+        \\document.body.appendChild(ta);
+        \\ta.value = 'ro';
+        \\ta.readOnly = true;
+        \\ta.focus();
+        \\window.edits = [];
+        \\for (const t of ['beforeinput', 'input']) ta.addEventListener(t, (e) => window.edits.push(t + ':' + e.inputType));
+    , null);
+    try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "x", .text = "x" } });
+    try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Backspace", .code = "Backspace" } });
+    try ctx.processMessage(.{ .id = 3, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter", .text = "\r" } });
+    try ctx.processMessage(.{ .id = 4, .method = "Input.insertText", .params = .{ .text = "y" } });
+    try testing.expect((try ls.local.compileAndRun(
+        \\ta.value === 'ro' && window.edits.join() === 'beforeinput:insertText,beforeinput:insertText'
+    , null)).isTrue());
+
+    // A disabled control fires nothing, not even for typed text.
+    _ = try ls.local.compileAndRun("ta.readOnly = false; ta.disabled = true; window.edits = [];", null);
+    try ctx.processMessage(.{ .id = 5, .method = "Input.insertText", .params = .{ .text = "z" } });
+    try testing.expect((try ls.local.compileAndRun("ta.value === 'ro' && window.edits.length === 0", null)).isTrue());
 }
 
 test "cdp.input: dispatchKeyEvent char honors keypress and beforeinput vetoes" {
@@ -1761,6 +1798,142 @@ test "cdp.input: dispatchKeyEvent Enter clicks buttons and submits once" {
         .{ .id = "button", .expect = "keypress click submit" },
         .{ .id = "ibutton", .expect = "keypress click" },
         .{ .id = "reset", .expect = "keypress click" },
+    };
+
+    var id: u32 = 1;
+    for (cases) |c| {
+        var buf: [32]u8 = undefined;
+        _ = try ls.local.compileAndRun(try std.mem.print(&buf, "arm('{s}')", .{c.id}), null);
+
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "char", .key = "Enter", .text = "\r" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyUp", .key = "Enter", .code = "Enter" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+
+        const got = try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSlice();
+        try testing.expectEqualSlices(u8, c.expect, got);
+    }
+}
+
+// Enter in a text field clicks the form's default button (its first submit
+// button in tree order), which then submits with itself as the submitter.
+// Without a default button the form submits itself, unless more than one
+// field blocks implicit submission.
+test "cdp.input: dispatchKeyEvent Enter in a field submits through the default button" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.body.insertAdjacentHTML('beforeend',
+        \\  '<form id=a><input id=a_text name=q><input id=a_go type=submit name=search value=Go><button id=a_go2>2</button></form>' +
+        \\  '<form id=b><input id=b_text><button id=b_go disabled>go</button></form>' +
+        \\  '<form id=c><fieldset disabled><button id=c_go>go</button></fieldset><input id=c_text></form>' +
+        \\  '<form id=d><input id=d_text name=q><input type=checkbox><input type=hidden></form>' +
+        \\  '<form id=e><input id=e_text><input type=email></form>' +
+        \\  '<input id=f_go type=submit form=f name=out value=1><form id=f><input id=f_text><button id=f_go2>2</button></form>');
+        \\window.events = [];
+        \\document.addEventListener('click', (e) => window.events.push('click:' + e.target.id), true);
+        \\document.addEventListener('submit', (e) => {
+        \\  e.preventDefault();
+        \\  const s = e.submitter;
+        \\  const entries = Array.from(new FormData(e.target, s)).map(([k, v]) => k + '=' + v).join('&');
+        \\  window.events.push('submit:' + (s ? s.id : 'null') + ':' + entries);
+        \\}, true);
+        \\window.arm = (id) => {
+        \\  window.events = [];
+        \\  document.getElementById(id).focus();
+        \\};
+    , null);
+
+    const cases = [_]struct { id: []const u8, expect: []const u8 }{
+        .{ .id = "a_text", .expect = "click:a_go submit:a_go:q=&search=Go" },
+        .{ .id = "b_text", .expect = "" },
+        .{ .id = "c_text", .expect = "" },
+        .{ .id = "d_text", .expect = "submit:null:q=" },
+        .{ .id = "e_text", .expect = "" },
+        .{ .id = "f_text", .expect = "click:f_go submit:f_go:out=1" },
+    };
+
+    var id: u32 = 1;
+    for (cases) |c| {
+        var buf: [32]u8 = undefined;
+        _ = try ls.local.compileAndRun(try std.mem.print(&buf, "arm('{s}')", .{c.id}), null);
+
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "char", .key = "Enter", .text = "\r" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyUp", .key = "Enter", .code = "Enter" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+
+        const got = try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSlice();
+        try testing.expectEqualSlices(u8, c.expect, got);
+    }
+}
+
+// Enter on a checkbox or a radio clicks the form's default button like a text
+// field does, but without a default button it never submits the form: only a
+// text field can trigger the submission. Enter on a select never submits.
+// Expectations match Chrome.
+test "cdp.input: dispatchKeyEvent Enter on a checkbox, radio or select" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.body.insertAdjacentHTML('beforeend',
+        \\  '<form id=g><input id=g_text name=q><input id=g_cb type=checkbox name=c checked><input id=g_radio type=radio name=r value=1 checked><select id=g_sel name=s><option>x</option></select></form>' +
+        \\  '<form id=h><input id=h_cb type=checkbox name=c checked><input id=h_radio type=radio name=r value=1 checked><select id=h_sel name=s><option>x</option></select><button id=h_go name=go value=1>go</button></form>' +
+        \\  '<form id=i><input id=i_cb type=checkbox name=c checked><input id=i_radio type=radio name=r value=1 checked><select id=i_sel name=s><option>x</option></select></form>');
+        \\window.events = [];
+        \\document.addEventListener('click', (e) => window.events.push('click:' + e.target.id), true);
+        \\document.addEventListener('submit', (e) => {
+        \\  e.preventDefault();
+        \\  const s = e.submitter;
+        \\  const entries = Array.from(new FormData(e.target, s)).map(([k, v]) => k + '=' + v).join('&');
+        \\  window.events.push('submit:' + (s ? s.id : 'null') + ':' + entries);
+        \\}, true);
+        \\window.arm = (id) => {
+        \\  window.events = [];
+        \\  document.getElementById(id).focus();
+        \\};
+    , null);
+
+    const cases = [_]struct { id: []const u8, expect: []const u8 }{
+        // no default button, one text field
+        .{ .id = "g_text", .expect = "submit:null:q=&c=on&r=1&s=x" },
+        .{ .id = "g_cb", .expect = "" },
+        .{ .id = "g_radio", .expect = "" },
+        .{ .id = "g_sel", .expect = "" },
+        // a default button
+        .{ .id = "h_cb", .expect = "click:h_go submit:h_go:c=on&r=1&s=x&go=1" },
+        .{ .id = "h_radio", .expect = "click:h_go submit:h_go:c=on&r=1&s=x&go=1" },
+        .{ .id = "h_sel", .expect = "" },
+        // no default button, no text field
+        .{ .id = "i_cb", .expect = "" },
+        .{ .id = "i_radio", .expect = "" },
+        .{ .id = "i_sel", .expect = "" },
     };
 
     var id: u32 = 1;

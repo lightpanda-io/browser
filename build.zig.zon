@@ -18,6 +18,10 @@
             .url = "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz",
             .hash = "N-V-__8AAJ2cNgAgfBtAw33Bxfu1IWISDeKKSr3DAqoAysIJ",
         },
+        .zstd = .{
+            .url = "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz",
+            .hash = "N-V-__8AAPZ7fwBg4JoCzM_0o2A8wxH2hsUUeiU1iuZv53L5",
+        },
         .nghttp2 = .{
             .url = "https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.gz",
             .hash = "N-V-__8AACay2gDbHrByjNGWvyH8G9Gp30uRgZqobYOF1nhb",
@@ -36,8 +40,8 @@
             .hash = "N-V-__8AALc_rgC04POe18O0LKFRm4ouQpLtL3riscEmWp-Q",
         },
         .zenai = .{
-            .url = "git+https://github.com/lightpanda-io/zenai.git#63df800afc438c0e90603270a4696689eb339ccc",
-            .hash = "zenai-0.0.0-iOY_VEuBBwAanO_h2hbjC9Up37-a4pjYlViKeOYJLQjS",
+            .url = "git+https://github.com/lightpanda-io/zenai.git#85f9e359096a82732d59d2f1d96777cb31615daf",
+            .hash = "zenai-0.0.0-iOY_VASbBwCT391IzMrstG7bV8ExUlIhqMDEtcs4dc4N",
         },
         .isocline = .{
             .url = "git+https://github.com/arrufat/isocline#4a99434bee4a5ed04c1639514224d48cd55e1405",

@@ -33,6 +33,8 @@ const Candidate = zenai.provider.Candidate;
 
 const App = @import("../App.zig");
 const Conversation = @import("Conversation.zig");
+const ModelCall = @import("ModelCall.zig");
+const Trace = @import("Trace.zig");
 const Terminal = @import("Terminal.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const settings = @import("settings.zig");
@@ -79,6 +81,26 @@ const default_system_prompt = browser_tools.driver_guidance ++
     \\  the Credentials section above) before reporting unavailable.
     \\
 ++ lp.skill.semantics_note;
+
+/// Without today's date the model guesses "now" from its training data and
+/// misreads relative dates.
+fn withCurrentDate(allocator: std.mem.Allocator, prompt: []const u8, tm: lp.datetime.LibcTm, locale: []const u8) ![]u8 {
+    const weekdays = [_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+    const offset_min = @divTrunc(tm.tm_gmtoff, 60);
+    return allocator.print("{s}\nToday is {s}, {d}-{d:0>2}-{d:0>2} (UTC{c}{d:0>2}:{d:0>2}{s}{s}); browser locale {s}. Resolve relative dates against it.\n", .{
+        prompt,
+        weekdays[@intCast(tm.tm_wday)],
+        tm.tm_year + 1900,
+        @as(u32, @intCast(tm.tm_mon + 1)),
+        @as(u32, @intCast(tm.tm_mday)),
+        @as(u8, if (offset_min < 0) '-' else '+'),
+        @abs(offset_min) / 60,
+        @abs(offset_min) % 60,
+        if (tm.tm_zone != null) ", " else "",
+        if (tm.tm_zone) |z| std.mem.span(z) else "",
+        locale,
+    });
+}
 
 // System prompt of the `/save` command: the save instructions plus the
 // script skill (`lp.skill`), whose primitives reference is rendered from
@@ -166,14 +188,17 @@ cancel_requested: std.atomic.Value(bool) = .init(false),
 /// mid-request instead of blocking until the model's full response arrives.
 http_interrupt: zenai.http.Interrupt = .{},
 synthetic_tool_call_id: u32 = 0,
-/// Per-turn CSS selector for each tool call the model made, in call order, so
-/// `--save` can record a call that addressed its element by `backendNodeId`.
-save_selectors: std.ArrayListUnmanaged(?[]const u8) = .empty,
+/// Per-turn record of each tool call the model made, in call order, so
+/// `--save` can record a call that addressed its element by `backendNodeId`
+/// and the navigation a read tool's `url` made.
+save_calls: std.ArrayList(SavedCall) = .empty,
 capturing_for_save: bool = false,
 /// Aggregate Anthropic/OpenAI/Gemini token usage across every model call.
 /// Printed as a structured `$usage ...` line on stderr at the end of `--task`
 /// (one-shot) mode so wrappers can capture per-task cost.
 total_usage: zenai.provider.Usage = .{},
+trace: ?Trace = null,
+trace_phase: []const u8 = "turn",
 /// Set when the last turn ended in a model refusal (safety stop).
 last_turn_refused: bool = false,
 /// Whether assistant text streams to the terminal as the model produces it.
@@ -305,6 +330,14 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         std.debug.print("\n", .{});
     }
 
+    const system_prompt = try withCurrentDate(
+        allocator,
+        opts.system_prompt orelse default_system_prompt,
+        try lp.datetime.localTime(@intCast(lp.datetime.timestamp(.real))),
+        opts.locale,
+    );
+    errdefer allocator.free(system_prompt);
+
     const self = try allocator.create(Agent);
     errdefer allocator.destroy(self);
 
@@ -326,7 +359,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .terminal = .init(allocator, history_paths, verbosity, will_repl),
         .save_buffer = .init(allocator),
         .save_path = null,
-        .conversation = .init(allocator, opts.system_prompt orelse default_system_prompt),
+        .conversation = .init(allocator, system_prompt),
         .model = model,
         .effort = effort,
         .stream_enabled = stream_enabled,
@@ -344,10 +377,19 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     try self.ts.init(app);
     errdefer self.ts.deinit();
-    self.installCancelHook();
 
     self.ai_client = if (self.credential) |*c| try zenai.provider.Client.init(lp.io, allocator, c.provider, c.keySlice(), .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(c.provider), .environ = lp.environ(), .account_id = c.accountId() }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
+
+    if (opts.trace) |path| {
+        self.trace = Trace.create(allocator, path) catch |err| {
+            log.fatal(.app, "cannot write trace", .{ .path = path, .err = err });
+            return err;
+        };
+        self.trace.?.run(if (self.credential) |c| @tagName(c.provider) else "none", self.model, opts.task);
+    }
+    errdefer if (self.trace) |*t| t.deinit();
+    self.installSessionHooks();
     if (self.ai_client) |c| c.setInterrupt(&self.http_interrupt);
 
     if (will_repl) {
@@ -365,11 +407,16 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 }
 
 pub fn deinit(self: *Agent) void {
+    if (self.trace) |*t| {
+        t.end(self.total_usage);
+        t.deinit();
+    }
     self.terminal.uninstallLogSink();
     self.save_buffer.deinit();
-    self.save_selectors.deinit(self.allocator);
+    self.save_calls.deinit(self.allocator);
     if (self.save_path) |p| self.allocator.free(p);
     self.terminal.deinit();
+    self.allocator.free(self.conversation.system_prompt);
     self.conversation.deinit();
     self.model_completion_arena.deinit();
     self.ts.deinit();
@@ -388,8 +435,9 @@ fn idlePump(arg: ?*anyopaque) callconv(.c) c_long {
 
 /// Wire the session's cancel hook back to this agent so Ctrl-C aborts
 /// in-flight page work. Startup and `/reset`.
-fn installCancelHook(self: *Agent) void {
+fn installSessionHooks(self: *Agent) void {
     self.ts.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
+    if (self.trace != null) self.ts.session.tool_observer = .{ .context = @ptrCast(self), .onCall = traceToolCall };
 }
 
 // Compile-time constant; projected once per process to avoid rebuilding per call.
@@ -444,6 +492,27 @@ pub const SigBridge = struct {
         a.requestCancel();
     }
 };
+
+fn beforeTurnRequest(ctx: *anyopaque) void {
+    const self: *Agent = @ptrCast(@alignCast(ctx));
+    self.conversation.compactForRequest();
+    beforeRequest(ctx);
+}
+
+fn beforeRequest(ctx: *anyopaque) void {
+    const self: *Agent = @ptrCast(@alignCast(ctx));
+    if (self.trace) |*t| t.modelStarted();
+}
+
+fn afterResponse(ctx: *anyopaque, result: *const zenai.provider.GenerateResult) void {
+    const self: *Agent = @ptrCast(@alignCast(ctx));
+    if (self.trace) |*t| t.modelCall(self.trace_phase, result);
+}
+
+fn traceToolCall(ctx: *anyopaque, tool_name: []const u8, arguments: ?std.json.Value, result: *const browser_tools.ToolResult, ms: u64, frame: ?*lp.Frame) void {
+    const self: *Agent = @ptrCast(@alignCast(ctx));
+    self.trace.?.toolCall(tool_name, arguments, result, ms, frame);
+}
 
 fn checkCancel(ctx: *anyopaque) bool {
     const self: *Agent = @ptrCast(@alignCast(ctx));
@@ -566,17 +635,8 @@ fn gotoStart(self: *Agent, url: [:0]const u8) bool {
 ///   $usage prompt=N completion=N total=N cached=N cache_creation=N
 /// Fields emit 0 when the provider didn't report them.
 fn printUsageSummary(self: *Agent) void {
-    const u = self.total_usage;
-    std.debug.print(
-        "$usage prompt={d} completion={d} total={d} cached={d} cache_creation={d}\n",
-        .{
-            u.prompt_tokens orelse 0,
-            u.completion_tokens orelse 0,
-            u.total_tokens orelse 0,
-            u.cached_tokens orelse 0,
-            u.cache_creation_tokens orelse 0,
-        },
-    );
+    const t = Trace.Tokens.of(self.total_usage);
+    std.debug.print("$usage input={d} cached={d} cache_creation={d} output={d}\n", .{ t.input, t.cached, t.cache_creation, t.output });
 }
 
 fn runTurn(self: *Agent, input: TurnInput) bool {
@@ -711,7 +771,7 @@ fn runRepl(self: *Agent) void {
                 self.printCommandResult(tc, result);
                 if (!result.is_error) {
                     const replayable = Command.fromToolCall(tc.tool, withSelector(aa, tc.args, result.selector));
-                    self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args) orelse replayable);
+                    self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args, result.navigated) orelse replayable);
                 }
                 self.recordSlashToolCall(command_text, tc.name(), tc.args, result) catch |err| {
                     self.terminal.printWarning("LLM conversation out of sync (/{s}: {s}); next prompt may not see this action", .{ tc.name(), @errorName(err) });
@@ -837,7 +897,7 @@ fn handleReset(self: *Agent) void {
         self.terminal.printError("reset failed: {s}", .{@errorName(err)});
         return;
     };
-    self.installCancelHook();
+    self.installSessionHooks();
     self.clearConversation();
     self.terminal.printInfo("Reset conversation and browser session. Page, cookies, and storage cleared.", .{});
 }
@@ -1102,6 +1162,11 @@ fn refreshAuthIfNeeded(self: *Agent) void {
 
 const PathAndMode = struct { path: []const u8, mode: save.Mode };
 
+const SavedCall = struct {
+    selector: ?[]const u8 = null,
+    navigated: bool = false,
+};
+
 fn resolveSavePathAndMode(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8) ?PathAndMode {
     if (self.save_path) |saved| {
         if (filename) |name| {
@@ -1279,7 +1344,11 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
 
     self.http_interrupt.reset();
     self.terminal.spinner.start();
-    var result = provider_client.runTools(
+    self.trace_phase = "save";
+    defer self.trace_phase = "turn";
+    var result = ModelCall.run(
+        self.ts.session,
+        provider_client,
         self.model,
         &self.conversation.messages,
         self.allocator,
@@ -1292,6 +1361,8 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
             .tool_choice = .none,
             .effort = bumpedEffort(self.effort),
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
+            .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
+            .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
         },
     ) catch |err| {
         self.terminal.spinner.cancel();
@@ -1395,8 +1466,8 @@ fn recordSaveCommand(self: *Agent, cmd: Command) void {
 /// Synthesize the `goto` a navigating read tool performed (`markdown {url}`, …)
 /// so `/save` can replay it; null when it didn't navigate. The result borrows
 /// `args`/`arena` — record it before either is freed.
-fn navigationGoto(arena: std.mem.Allocator, tool: BrowserTool, args: ?std.json.Value) ?Command {
-    if (!tool.navigatesToUrl()) return null;
+fn navigationGoto(arena: std.mem.Allocator, tool: BrowserTool, args: ?std.json.Value, navigated: bool) ?Command {
+    if (!navigated or !tool.navigatesToUrl()) return null;
     const a = args orelse return null;
     if (a != .object) return null;
     const url = a.object.get("url") orelse return null;
@@ -1504,7 +1575,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
 
 fn runCommand(self: *Agent, arena: std.mem.Allocator, tc: Command.ToolCall) browser_tools.ToolResult {
     // The terminal can't show an image, but the conversation can.
-    return browser_tools.call(arena, self.ts.session, &self.ts.registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null, .record = true }) catch |err| .{
+    return browser_tools.call(arena, self.ts.session, &self.ts.registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null, .record = true, .nav_note = true }) catch |err| .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
@@ -1733,10 +1804,12 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
 
     self.capturing_for_save = input.capture_for_save;
     defer self.capturing_for_save = false;
-    self.save_selectors.clearRetainingCapacity();
+    self.save_calls.clearRetainingCapacity();
 
     self.terminal.spinner.start();
-    var result = provider_client.runTools(
+    var result = ModelCall.run(
+        self.ts.session,
+        provider_client,
         self.model,
         &self.conversation.messages,
         self.allocator,
@@ -1744,6 +1817,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
             .tools = globalTools(),
+            .before_request = .{ .context = @ptrCast(self), .callFn = beforeTurnRequest },
+            .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
             .max_turns = 100,
             .max_tool_calls = 200,
             .max_tokens = 4096,
@@ -1795,12 +1870,13 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             const args = browser_tools.normalizeArgKeys(ca, tool, tc.arguments) catch tc.arguments;
             // Fall back to the navigation a read tool performed, so a
             // markdown/tree-driven turn isn't lost from `/save`.
-            const replayable = withSelector(ca, args, if (i < self.save_selectors.items.len) self.save_selectors.items[i] else null);
+            const saved: SavedCall = if (i < self.save_calls.items.len) self.save_calls.items[i] else .{};
+            const replayable = withSelector(ca, args, saved.selector);
             const cmd = Command.fromToolCall(tool, replayable);
             const to_record = if (cmd.isRecorded())
                 cmd
             else
-                navigationGoto(ca, tool, replayable) orelse continue;
+                navigationGoto(ca, tool, replayable, saved.navigated) orelse continue;
             if (!recorded_any) {
                 if (input.record_comment) |c| self.recordSaveComment(c);
                 recorded_any = true;
@@ -1828,7 +1904,11 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             .content = try ma.dupe(u8, synthesis_prompt),
         });
 
-        var synth = provider_client.runTools(
+        self.trace_phase = "synthesis";
+        defer self.trace_phase = "turn";
+        var synth = ModelCall.run(
+            self.ts.session,
+            provider_client,
             self.model,
             &self.conversation.messages,
             self.allocator,
@@ -1843,6 +1923,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 // `.none` stays off to opt out on models that reject it.
                 .effort = if (self.effort == .none) .none else .low,
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
+                .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
+                .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
                 .stream = if (input.suppress_answer) null else self.streamHook(),
             },
         ) catch |err| {
@@ -1953,8 +2035,8 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    var selector: ?[]const u8 = null;
-    const outcome = self.toolOutcome(allocator, tool_name, arguments, &selector) catch |err| zenai.provider.Client.ToolHandler.Result{
+    var saved: SavedCall = .{};
+    const outcome = self.toolOutcome(allocator, tool_name, arguments, &saved) catch |err| zenai.provider.Client.ToolHandler.Result{
         .content = allocator.print("Error: {s}", .{browser_tools.errorMessage(err)}) catch "Error: tool execution failed",
         .is_error = true,
     };
@@ -1963,8 +2045,8 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
         // `RunToolsResult.tool_calls_made`. The conversation arena outlives the
         // turn that reads them; `allocator` here is zenai's per-call arena.
         const ca = self.conversation.arena.allocator();
-        const kept = if (selector) |sel| ca.dupe(u8, sel) catch null else null;
-        self.save_selectors.append(self.allocator, kept) catch {};
+        const kept = if (saved.selector) |sel| ca.dupe(u8, sel) catch null else null;
+        self.save_calls.append(self.allocator, .{ .selector = kept, .navigated = saved.navigated }) catch {};
     }
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
@@ -1973,12 +2055,13 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
 }
 
 /// The text plus the rendered PNG, for backends that can show the model an image.
-fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value, selector: *?[]const u8) browser_tools.ToolError!zenai.provider.Client.ToolHandler.Result {
+fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value, saved: *SavedCall) browser_tools.ToolError!zenai.provider.Client.ToolHandler.Result {
     const result = try browser_tools.call(allocator, self.ts.session, &self.ts.registry, tool_name, arguments, .{
         .inline_image = true,
         .record = self.capturing_for_save,
+        .nav_note = true,
     });
-    selector.* = result.selector;
+    saved.* = .{ .selector = result.selector, .navigated = result.navigated };
     const content = capToolOutput(allocator, tool_name, result.text);
     return .{
         .content = content,
@@ -2104,6 +2187,7 @@ test {
     _ = picker;
     _ = Conversation;
     _ = Terminal;
+    _ = Trace;
 }
 
 test "savePrompt: save instructions followed by the rendered script skill" {
@@ -2114,6 +2198,19 @@ test "savePrompt: save instructions followed by the rendered script skill" {
     const revision = savePrompt(true);
     try std.testing.expect(std.mem.find(u8, revision, save_revision_note) != null);
     try std.testing.expect(std.mem.endsWith(u8, revision, lp.skill.text()));
+}
+
+test "withCurrentDate: appends weekday, ISO date, UTC offset, zone and locale" {
+    var tm = std.mem.zeroes(lp.datetime.LibcTm);
+    tm.tm_year = 126;
+    tm.tm_mon = 9;
+    tm.tm_mday = 4;
+    tm.tm_wday = 0;
+    tm.tm_gmtoff = -7 * 3600;
+    tm.tm_zone = "PDT";
+    const prompt = try withCurrentDate(std.testing.allocator, "base", tm, "en-US");
+    defer std.testing.allocator.free(prompt);
+    try std.testing.expectEqualStrings("base\nToday is Sunday, 2026-10-04 (UTC-07:00, PDT); browser locale en-US. Resolve relative dates against it.\n", prompt);
 }
 
 test "capToolOutput: passes through when under cap" {

@@ -446,6 +446,9 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
         if (std.mem.findScalar(u8, init.value, '=') != null) {
             return error.InvalidCookieName;
         }
+        if (Cookie.hasHiddenPrefix(init.value)) {
+            return error.InvalidCookieName;
+        }
     }
 
     // Reject inputs the cookie model can't represent. `=` is allowed in
@@ -495,31 +498,10 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
     // marks any cookie written from a trustworthy origin as Secure.
     const secure = trustworthy or init.sameSite == .none;
 
-    // The `__Http-` and `__Host-Http-` prefixes are reserved for HTTP-state
-    // cookies; the (script) CookieStore API can never set them, on any origin.
-    if (std.ascii.startsWithIgnoreCase(init.name, "__Http-") or std.ascii.startsWithIgnoreCase(init.name, "__Host-Http-")) {
-        return error.InvalidPrefixedCookie;
-    }
-
-    // Cookie-name-prefix rules — match Cookie.parse, case-insensitive to
-    // catch impersonation attempts (e.g. "__HoSt-").
-    // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-cookie-name-prefixes
-    if (std.ascii.startsWithIgnoreCase(init.name, "__Host-")) {
-        if (!trustworthy) {
-            return error.InvalidPrefixedCookie;
-        }
-        if (init.domain) |d| {
-            if (d.len > 0) {
-                return error.InvalidPrefixedCookie;
-            }
-        }
-
+    // Script can't set HttpOnly, so __Http- and __Host-Http- never pass.
+    if (Cookie.prefixOf(init.name)) |prefix| {
         const resolved_path = try Cookie.parsePath(exec.local_arena, url, init.path);
-        if (std.mem.eql(u8, resolved_path, "/") == false) {
-            return error.InvalidPrefixedCookie;
-        }
-    } else if (std.ascii.startsWithIgnoreCase(init.name, "__Secure-")) {
-        if (!trustworthy) {
+        if (!prefix.allows(trustworthy, false, if (init.domain) |d| d.len > 0 else false, resolved_path)) {
             return error.InvalidPrefixedCookie;
         }
     }

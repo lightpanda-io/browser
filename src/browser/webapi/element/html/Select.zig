@@ -341,6 +341,23 @@ pub fn getLength(self: *Select) u32 {
     return i;
 }
 
+// remove() is ChildNode's; remove(index) removes the option at index.
+fn remove(self: *Select, index_: ?js.Value, frame: *Frame) !void {
+    const value = index_ orelse return self.asElement().remove(frame);
+    const index = try value.toI32();
+
+    if (index < 0) {
+        return;
+    }
+    var i: u32 = 0;
+    var it = OptionIterator.init(self);
+    while (it.next()) |option| : (i += 1) {
+        if (i == index) {
+            return option.asElement().remove(frame);
+        }
+    }
+}
+
 const AddBeforeOption = union(enum) {
     option: *Option,
     index: u32,
@@ -501,6 +518,7 @@ pub const JsApi = struct {
     pub const validity = bridge.accessor(Select.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(Select.getValidationMessage, null, .{});
     pub const add = bridge.function(Select.add, .{ .ce_reactions = true });
+    pub const remove = bridge.function(Select.remove, .{ .ce_reactions = true });
     pub const checkValidity = bridge.function(Select.checkValidity, .{});
     pub const reportValidity = bridge.function(Select.reportValidity, .{});
     pub const setCustomValidity = bridge.function(Select.setCustomValidity, .{});
