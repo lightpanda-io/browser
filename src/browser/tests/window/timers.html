@@ -79,15 +79,20 @@
   testing.onload(() => testing.expectEqual(true, window.__si_string_ran >= 1));
 </script>
 
-<script id=setTimeout-invalid-handler>
-  // Non-function, non-string handlers must throw a TypeError.
-  let threw = false;
-  try {
-    window.setTimeout(123, 1);
-  } catch (e) {
-    threw = true;
-  }
-  testing.expectEqual(true, threw);
+<script id=setTimeout-non-string-handler>
+  // A handler that isn't callable is converted to a string and compiled.
+  testing.expectEqual('number', typeof window.setTimeout(undefined));
+  testing.expectEqual('number', typeof window.setTimeout(null));
+  testing.expectEqual('number', typeof window.setTimeout(123, 1));
+  const ui_id = window.setInterval(undefined, 1000);
+  testing.expectEqual('number', typeof ui_id);
+  window.clearInterval(ui_id);
+
+  window.__st_obj_ran = 0;
+  window.setTimeout({ toString: () => 'window.__st_obj_ran = 7' }, 1);
+  testing.onload(() => testing.expectEqual(7, window.__st_obj_ran));
+
+  testing.expectError('TypeError', () => window.setTimeout(Symbol('x')));
 </script>
 
 
