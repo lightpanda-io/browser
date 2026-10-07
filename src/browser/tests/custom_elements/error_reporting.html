@@ -164,8 +164,9 @@
 
 <script id="parser_reports_constructor_exception">
     {
-        // The parser's create-element path must report too, and still insert
-        // the HTMLUnknownElement fallback.
+        // The fragment parser upgrades rather than constructs, so a throwing
+        // constructor is reported and leaves a failed (not unknown) element,
+        // whose prototype super() had already set.
         const thrown = new Error('from parser constructor');
         class ParserThrows extends HTMLElement {
             constructor() {
@@ -183,7 +184,8 @@
 
         testing.expectEqual(true, reported === thrown);
         testing.expectEqual(1, container.children.length);
-        testing.expectEqual(true, container.firstElementChild instanceof HTMLUnknownElement);
+        testing.expectEqual(false, container.firstElementChild instanceof HTMLUnknownElement);
+        testing.expectEqual(true, container.firstElementChild instanceof ParserThrows);
     }
 </script>
 

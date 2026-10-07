@@ -109,6 +109,9 @@ allow_declarative_shadow: bool = false,
 // behavior.
 context: ?*Element = null,
 
+// // Fragment parsing doesn't run custom element constructor synchronously
+fragment: bool = false,
+
 xml_error: bool = false,
 terminated: bool = false,
 appends_until_terminate_check: u16 = TERMINATE_CHECK_INTERVAL,
@@ -311,6 +314,7 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
 }
 
 pub fn parseFragment(self: *Parser, html: []const u8) void {
+    self.fragment = true;
     const context_name: []const u8 = if (self.context orelse self.container.node.is(Element)) |el|
         el.getLocalName()
     else
@@ -532,6 +536,17 @@ fn createContextElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.Qu
 
 fn _createElementCallbackWithDefaultnamespace(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator, default_namespace: Element.Namespace) ?*anyopaque {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    if (self.fragment) {
+        const frame = self.document._frame orelse self.frame;
+        const previous_creation = frame._custom_element_creation;
+        frame._custom_element_creation = .{ .upgrade = self.frame };
+        defer frame._custom_element_creation = previous_creation;
+        return self._createElementCallback(data, qname, attributes, default_namespace) catch |err| {
+            self.err = .{ .err = err, .source = .create_element };
+            return null;
+        };
+    }
+
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     return self._createElementCallback(data, qname, attributes, default_namespace) catch |err| {

@@ -195,7 +195,7 @@ _upgrading_element: ?*Node = null,
 _upgrading_consumed: bool = false,
 
 // How node_factory creates an element with a hyphenated HTML tag name.
-_custom_element_creation: enum {
+_custom_element_creation: union(enum) {
     // Look the definition up in this frame's registry and run the
     // constructor synchronously.
     construct,
@@ -203,6 +203,10 @@ _custom_element_creation: enum {
     // constructor must not run (you end up in an endless loop if the constructor
     // does this.innerHTML = '...', which happens).
     bare_context,
+    // During fragment parsing (e.g., innerHTML = '...'), the upgrade is queued
+    // on the caller's CEReaction scope. (The constructor has to be run _after_
+    // the fragment is inserted).
+    upgrade: *Frame,
 } = .construct,
 
 // List of custom elements that were created before their definition was registered
