@@ -11,6 +11,30 @@
   // runner will wait until this is empty (or timeout)
   let async_pending = new Set();
 
+  // A script that throws after an expect* passed would otherwise count as ok.
+  // Checked in assertOk, once dispatch is over: a test that expects the error
+  // cancels it (window.onerror returning true, or preventDefault()).
+  let reported_errors = [];
+  window.addEventListener('error', (e) => {
+    reported_errors.push({event: e, script_id: _currentScriptId()});
+  });
+
+  // Runs fn, cancelling the errors it reports to window, and returns them.
+  function withReportedErrors(fn) {
+    const errors = [];
+    const onError = (e) => {
+      errors.push(e.error);
+      e.preventDefault();
+    };
+    window.addEventListener('error', onError);
+    try {
+      fn();
+    } finally {
+      window.removeEventListener('error', onError);
+    }
+    return errors;
+  }
+
   function expectTrue(actual) {
      expectEqual(true, actual);
   }
@@ -113,6 +137,12 @@
       throw new Error('Failed');
     }
 
+    for (let {event, script_id} of reported_errors) {
+      if (event.defaultPrevented === false) {
+        throw new Error(`script id: '${script_id}' uncaught error: ${event.message}`);
+      }
+    }
+
     if (async_pending.size > 0) {
       return false;
     }
@@ -159,6 +189,7 @@
     expectEqual: expectEqual,
     expectError: expectError,
     withError: withError,
+    withReportedErrors: withReportedErrors,
     printTimeoutState: printTimeoutState,
     onload: onload,
     IS_TEST_RUNNER: IS_TEST_RUNNER,
@@ -231,15 +262,6 @@
     }
 
     observed_ids[script_id] = status;
-
-    if (document.currentScript != null) {
-      if (document.currentScript.onerror === null) {
-        document.currentScript.onerror = function() {
-          observed_ids[document.currentScript.id] = 'fail';
-          failed = true;
-        }
-      }
-    }
   }
 
   function _currentScriptId() {
