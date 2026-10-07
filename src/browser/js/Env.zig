@@ -1126,3 +1126,7 @@ test "Env: Frame context" {
     try testing.expectEqual(true, (try ls.local.exec("typeof WorkerGlobalScope === 'undefined'", null)).isTrue());
     try testing.expectEqual(true, (try ls.local.exec("typeof DedicatedWorkerGlobalScope === 'undefined'", null)).isTrue());
 }
+
+test "WebApi: Temporal" {
+    try testing.htmlRunner("temporal", .{});
+}

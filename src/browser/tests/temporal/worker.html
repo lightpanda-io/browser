@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=worker type=module>
+  const state = await testing.async();
+  const worker = new Worker('worker.js');
+  worker.onmessage = (e) => {
+    if (e.data && e.data.ready) {
+      worker.postMessage(null);
+      return;
+    }
+    state.resolve(e.data);
+  };
+
+  await state.done((data) => {
+    testing.expectEqual(undefined, data.error);
+    testing.expectTrue(data.ok);
+    testing.expectEqual('object', data.type);
+    testing.expectEqual(Temporal.Now.timeZoneId(), data.now_tz);
+    testing.expectEqual(data.intl_tz, data.now_tz);
+    testing.expectTrue(data.clock_skew < 1000);
+    testing.expectEqual('2024-03-10T03:30:00-04:00[America/New_York]', data.zoned);
+    testing.expectEqual('M07', data.hebrew);
+    testing.expectEqual('January 15, 2024', data.formatted);
+  });
+</script>

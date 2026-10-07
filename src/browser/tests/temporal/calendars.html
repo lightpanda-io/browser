@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=hebrew>
+  {
+    // First day of Passover 5784, a leap year with 13 months.
+    const iso = Temporal.PlainDate.from('2024-04-23');
+    const hebrew = iso.withCalendar('hebrew');
+    testing.expectEqual('hebrew', hebrew.calendarId);
+    testing.expectEqual(5784, hebrew.year);
+    testing.expectEqual('M07', hebrew.monthCode);
+    testing.expectEqual(8, hebrew.month);
+    testing.expectEqual(15, hebrew.day);
+    testing.expectEqual(true, hebrew.inLeapYear);
+    testing.expectEqual(13, hebrew.monthsInYear);
+    testing.expectEqual('2024-04-23[u-ca=hebrew]', hebrew.toString());
+    testing.expectTrue(hebrew.withCalendar('iso8601').equals(iso));
+
+    // Adar I only exists in leap years.
+    const adarI = Temporal.PlainDate.from({ calendar: 'hebrew', year: 5784, monthCode: 'M05L', day: 1 });
+    testing.expectEqual(6, adarI.month);
+    testing.expectEqual('2024-02-10', adarI.withCalendar('iso8601').toString());
+    testing.expectEqual('M06', adarI.add({ years: 1 }).monthCode);
+    testing.expectError('RangeError', () => adarI.add({ years: 1 }, { overflow: 'reject' }));
+  }
+</script>
+
+<script id=japanese>
+  {
+    const reiwa = Temporal.PlainDate.from('2019-05-01').withCalendar('japanese');
+    testing.expectEqual('reiwa', reiwa.era);
+    testing.expectEqual(1, reiwa.eraYear);
+    testing.expectEqual(2019, reiwa.year);
+
+    const heisei = reiwa.subtract({ days: 1 });
+    testing.expectEqual('heisei', heisei.era);
+    testing.expectEqual(31, heisei.eraYear);
+
+    const fromEra = Temporal.PlainDate.from({ calendar: 'japanese', era: 'showa', eraYear: 64, month: 1, day: 7 });
+    testing.expectEqual('1989-01-07', fromEra.withCalendar('iso8601').toString());
+  }
+</script>
+
+<script id=lunar>
+  {
+    // Ramadan 1445 started on 2024-03-11 in the Umm al-Qura calendar.
+    const ramadan = Temporal.PlainDate.from({ calendar: 'islamic-umalqura', year: 1445, month: 9, day: 1 });
+    testing.expectEqual('2024-03-11', ramadan.withCalendar('iso8601').toString());
+    testing.expectEqual(30, ramadan.daysInMonth);
+    testing.expectEqual(354, ramadan.daysInYear);
+
+    // Chinese New Year 2024.
+    const newYear = Temporal.PlainDate.from('2024-02-10').withCalendar('chinese');
+    testing.expectEqual('M01', newYear.monthCode);
+    testing.expectEqual(1, newYear.day);
+    testing.expectEqual('2024-02-09', newYear.subtract({ days: 1 }).withCalendar('iso8601').toString());
+    testing.expectEqual('M12', newYear.subtract({ days: 1 }).monthCode);
+    // 2023 repeated its second month.
+    testing.expectEqual('M02L', Temporal.PlainDate.from('2023-04-01').withCalendar('chinese').monthCode);
+  }
+</script>
+
+<script id=calendar_ids>
+  {
+    testing.expectEqual('iso8601', Temporal.PlainDate.from('2024-01-01').calendarId);
+    testing.expectEqual('japanese', Temporal.PlainDate.from('2024-01-01[u-ca=japanese]').calendarId);
+    testing.expectEqual('gregory', Temporal.PlainDate.from('2024-01-01').withCalendar('GREGORY').calendarId);
+    testing.expectEqual('ce', Temporal.PlainDate.from('2024-01-01').withCalendar('gregory').era);
+    testing.expectEqual(undefined, Temporal.PlainDate.from('2024-01-01').era);
+
+    const calendars = ['buddhist', 'chinese', 'coptic', 'dangi', 'ethioaa', 'ethiopic', 'gregory',
+      'hebrew', 'indian', 'islamic-civil', 'islamic-tbla', 'islamic-umalqura', 'iso8601',
+      'japanese', 'persian', 'roc'];
+    for (const id of calendars) {
+      const date = Temporal.PlainDate.from('2024-06-15').withCalendar(id);
+      testing.expectEqual(id, date.calendarId);
+      testing.expectEqual('2024-06-15', date.withCalendar('iso8601').toString());
+    }
+
+    testing.expectError('RangeError', () => Temporal.PlainDate.from('2024-01-01').withCalendar('martian'));
+    testing.expectError('RangeError', () => Temporal.PlainDate.from('2024-01-01[u-ca=martian]'));
+  }
+</script>
+
+<script id=calendar_mismatch>
+  {
+    const iso = Temporal.PlainDate.from('2024-04-23');
+    const hebrew = iso.withCalendar('hebrew');
+    // Dates in different calendars aren't equal, but compare by their ISO date.
+    testing.expectFalse(iso.equals(hebrew));
+    testing.expectEqual(0, Temporal.PlainDate.compare(iso, hebrew));
+    testing.expectError('RangeError', () => iso.until(hebrew));
+  }
+</script>

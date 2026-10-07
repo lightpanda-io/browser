@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=plain_types>
+  {
+    const date = Temporal.PlainDate.from('2024-01-15');
+    testing.expectEqual('1/15/2024', date.toLocaleString('en-US'));
+    testing.expectEqual('January 15, 2024', date.toLocaleString('en-US', { dateStyle: 'long' }));
+    testing.expectEqual('15.1.2024', date.toLocaleString('de-DE'));
+    testing.expectEqual('15 Ocak 2024 Pazartesi', date.toLocaleString('tr-TR', { dateStyle: 'full' }));
+    testing.expectEqual('January 15, 2024', new Intl.DateTimeFormat('en-US', { dateStyle: 'long' }).format(date));
+
+    // Only the fields the type has are formatted.
+    testing.expectEqual('1:05:09 PM', Temporal.PlainTime.from('13:05:09').toLocaleString('en-US'));
+    testing.expectEqual('1/15/2024, 1:05:09 PM', Temporal.PlainDateTime.from('2024-01-15T13:05:09').toLocaleString('en-US'));
+    testing.expectEqual('Jan 15, 2024', date.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric' }));
+    testing.expectError('TypeError', () => date.toLocaleString('en-US', { timeStyle: 'short' }));
+
+    // Wall-clock types ignore the formatter's time zone.
+    testing.expectEqual(
+      '1/15/2024, 1:05:09 PM',
+      Temporal.PlainDateTime.from('2024-01-15T13:05:09').toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }),
+    );
+  }
+</script>
+
+<script id=exact_time>
+  {
+    const instant = Temporal.Instant.from('2024-01-15T12:00Z');
+    testing.expectEqual('1/15/2024, 12:00:00 PM', instant.toLocaleString('en-US', { timeZone: 'UTC' }));
+    testing.expectEqual('1/15/2024, 9:00:00 PM', instant.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+    testing.expectEqual(
+      new Date(instant.epochMilliseconds).toLocaleString('en-US'),
+      instant.toLocaleString('en-US'),
+    );
+
+    // A ZonedDateTime is formatted in its own time zone.
+    const zdt = instant.toZonedDateTimeISO('Asia/Tokyo');
+    testing.expectEqual('1/15/2024, 9:00:00 PM GMT+9', zdt.toLocaleString('en-US', { timeZoneName: 'short' }));
+    testing.expectError('TypeError', () => zdt.toLocaleString('en-US', { timeZone: 'UTC' }));
+    // Intl.DateTimeFormat has a time zone of its own, so it refuses one.
+    testing.expectError('TypeError', () => new Intl.DateTimeFormat('en-US').format(zdt));
+  }
+</script>
+
+<script id=calendars>
+  {
+    // A non-ISO date only formats with a formatter in the same calendar.
+    const hebrew = Temporal.PlainDate.from('2024-04-23[u-ca=hebrew]');
+    testing.expectEqual('15 Nisan 5784', hebrew.toLocaleString('en-US', { calendar: 'hebrew', dateStyle: 'long' }));
+    testing.expectEqual('15 Nisan 5784', new Intl.DateTimeFormat('en-US-u-ca-hebrew', { dateStyle: 'long' }).format(hebrew));
+    testing.expectError('RangeError', () => hebrew.toLocaleString('en-US'));
+    testing.expectError('RangeError', () => new Intl.DateTimeFormat('en-US-u-ca-gregory').format(hebrew));
+
+    // An ISO date is formatted in the formatter's calendar.
+    testing.expectEqual(
+      'May 1, 1 Reiwa',
+      new Intl.DateTimeFormat('en-US-u-ca-japanese', { dateStyle: 'long' }).format(Temporal.PlainDate.from('2019-05-01')),
+    );
+
+    // Year-month and month-day have no meaning outside their calendar.
+    testing.expectError('RangeError', () => Temporal.PlainYearMonth.from('2024-01').toLocaleString('en-US'));
+    testing.expectEqual(
+      'January 2024',
+      Temporal.PlainYearMonth.from({ calendar: 'gregory', year: 2024, month: 1 }).toLocaleString('en-US', { year: 'numeric', month: 'long' }),
+    );
+  }
+</script>
+
+<script id=ranges_and_parts>
+  {
+    const dtf = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' });
+    const start = Temporal.PlainDate.from('2024-01-15');
+    const end = Temporal.PlainDate.from('2024-01-20');
+    testing.expectEqual('Jan 15 \u2013 20, 2024', dtf.formatRange(start, end));
+    testing.expectError('TypeError', () => dtf.formatRange(start, Temporal.PlainDateTime.from('2024-01-20T00:00')));
+
+    const parts = dtf.formatToParts(start).map((p) => p.type);
+    testing.expectEqual(['month', 'literal', 'day', 'literal', 'year'], parts);
+  }
+</script>
+
+<script id=duration>
+  {
+    const duration = Temporal.Duration.from({ hours: 1, minutes: 30 });
+    testing.expectEqual('1 hr, 30 min', duration.toLocaleString('en-US'));
+    testing.expectEqual('1 hour, 30 minutes', duration.toLocaleString('en-US', { style: 'long' }));
+    testing.expectEqual('1:30:00', duration.toLocaleString('en-US', { style: 'digital' }));
+    testing.expectEqual('1 Std., 30 Min.', duration.toLocaleString('de-DE'));
+    testing.expectEqual('1 hour, 30 minutes', new Intl.DurationFormat('en-US', { style: 'long' }).format(duration));
+  }
+</script>

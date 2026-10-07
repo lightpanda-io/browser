@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<body>
+<script src="../testing.js"></script>
+
+<iframe id=realm></iframe>
+
+<script id=global>
+  {
+    testing.expectEqual('object', typeof Temporal);
+    testing.expectEqual('[object Temporal]', Object.prototype.toString.call(Temporal));
+
+    const desc = Object.getOwnPropertyDescriptor(globalThis, 'Temporal');
+    testing.expectEqual(true, desc.writable);
+    testing.expectEqual(false, desc.enumerable);
+    testing.expectEqual(true, desc.configurable);
+
+    const types = [
+      'Duration', 'Instant', 'PlainDate', 'PlainDateTime',
+      'PlainMonthDay', 'PlainTime', 'PlainYearMonth', 'ZonedDateTime',
+    ];
+    for (const name of types) {
+      testing.expectEqual('function', typeof Temporal[name]);
+      testing.expectEqual(`Temporal.${name}`, Temporal[name].prototype[Symbol.toStringTag]);
+    }
+    testing.expectEqual('[object Temporal.Now]', Object.prototype.toString.call(Temporal.Now));
+    testing.expectEqual('function', typeof Date.prototype.toTemporalInstant);
+  }
+</script>
+
+<script id=now>
+  {
+    const instant = Temporal.Now.instant();
+    testing.expectTrue(instant instanceof Temporal.Instant);
+    testing.expectEqual('bigint', typeof instant.epochNanoseconds);
+    // Temporal and Date read the same clock.
+    testing.expectTrue(Math.abs(instant.epochMilliseconds - Date.now()) < 1000);
+
+    // Temporal, Intl and Date agree on the host time zone.
+    const tz = Temporal.Now.timeZoneId();
+    testing.expectEqual(Intl.DateTimeFormat().resolvedOptions().timeZone, tz);
+
+    const zdt = Temporal.Now.zonedDateTimeISO();
+    testing.expectEqual(tz, zdt.timeZoneId);
+    const date = new Date(zdt.epochMilliseconds);
+    testing.expectEqual(date.getFullYear(), zdt.year);
+    testing.expectEqual(date.getMonth() + 1, zdt.month);
+    testing.expectEqual(date.getDate(), zdt.day);
+    testing.expectEqual(date.getHours(), zdt.hour);
+    testing.expectEqual(date.getMinutes(), zdt.minute);
+    testing.expectEqual(-date.getTimezoneOffset() * 60e9, zdt.offsetNanoseconds);
+
+    testing.expectEqual('iso8601', Temporal.Now.plainDateISO().calendarId);
+    testing.expectEqual('iso8601', Temporal.Now.plainDateTimeISO('UTC').calendarId);
+    testing.expectTrue(Temporal.Now.plainTimeISO() instanceof Temporal.PlainTime);
+  }
+</script>
+
+<script id=plain_date>
+  {
+    const date = Temporal.PlainDate.from('2024-02-29');
+    testing.expectEqual('2024-02-29', date.toString());
+    testing.expectEqual(2024, date.year);
+    testing.expectEqual(2, date.month);
+    testing.expectEqual('M02', date.monthCode);
+    testing.expectEqual(29, date.day);
+    testing.expectEqual(4, date.dayOfWeek);
+    testing.expectEqual(60, date.dayOfYear);
+    testing.expectEqual(29, date.daysInMonth);
+    testing.expectEqual(366, date.daysInYear);
+    testing.expectEqual(true, date.inLeapYear);
+
+    // Overflow is constrained unless asked to reject.
+    testing.expectEqual('2025-02-28', date.add({ years: 1 }).toString());
+    testing.expectError('RangeError', () => date.add({ years: 1 }, { overflow: 'reject' }));
+    testing.expectEqual('2024-03-31', date.with({ month: 3, day: 31 }).toString());
+    testing.expectEqual('2024-02-01', date.subtract({ days: 28 }).toString());
+
+    const start = Temporal.PlainDate.from('2024-01-15');
+    testing.expectEqual('P65D', start.until('2024-03-20').toString());
+    testing.expectEqual('P2M5D', start.until('2024-03-20', { largestUnit: 'months' }).toString());
+    testing.expectEqual('-P2M5D', start.since('2024-03-20', { largestUnit: 'months' }).toString());
+
+    testing.expectEqual(1, Temporal.PlainDate.compare('2024-01-01', '2023-12-31'));
+    testing.expectEqual(0, Temporal.PlainDate.compare(start, '2024-01-15'));
+    testing.expectTrue(start.equals({ year: 2024, month: 1, day: 15 }));
+
+    const sorted = ['2024-03-01', '2023-12-31', '2024-01-15']
+      .map((s) => Temporal.PlainDate.from(s))
+      .sort(Temporal.PlainDate.compare)
+      .map(String);
+    testing.expectEqual(['2023-12-31', '2024-01-15', '2024-03-01'], sorted);
+  }
+</script>
+
+<script id=plain_time_and_date_time>
+  {
+    const time = Temporal.PlainTime.from('23:30');
+    testing.expectEqual('00:15:00', time.add({ minutes: 45 }).toString());
+    testing.expectEqual('23:30', time.toString({ smallestUnit: 'minute' }));
+    testing.expectEqual('23:00:00', time.round({ smallestUnit: 'hour', roundingMode: 'floor' }).toString());
+
+    const dt = Temporal.PlainDateTime.from('2024-12-31T23:59:59.999999999');
+    testing.expectEqual(999, dt.millisecond);
+    testing.expectEqual(999, dt.microsecond);
+    testing.expectEqual(999, dt.nanosecond);
+    testing.expectEqual('2025-01-01T00:00:00', dt.add({ nanoseconds: 1 }).toString());
+    testing.expectEqual('2024-12-31', dt.toPlainDate().toString());
+    testing.expectEqual('23:59:59.999999999', dt.toPlainTime().toString());
+
+    const ym = Temporal.PlainYearMonth.from('2024-02');
+    testing.expectEqual(29, ym.daysInMonth);
+    testing.expectEqual('2024-03', ym.add({ months: 1 }).toString());
+    testing.expectEqual('2024-02-10', ym.toPlainDate({ day: 10 }).toString());
+
+    const md = Temporal.PlainMonthDay.from('02-29');
+    testing.expectEqual('02-29', md.toString());
+    testing.expectEqual('2023-02-28', md.toPlainDate({ year: 2023 }).toString());
+    testing.expectEqual('2024-02-29', md.toPlainDate({ year: 2024 }).toString());
+  }
+</script>
+
+<script id=duration>
+  {
+    const d = Temporal.Duration.from('P1Y2M3DT4H5M6.789S');
+    testing.expectEqual(1, d.years);
+    testing.expectEqual(2, d.months);
+    testing.expectEqual(3, d.days);
+    testing.expectEqual(4, d.hours);
+    testing.expectEqual(5, d.minutes);
+    testing.expectEqual(6, d.seconds);
+    testing.expectEqual(789, d.milliseconds);
+    testing.expectEqual('P1Y2M3DT4H5M6.789S', d.toString());
+    testing.expectEqual(1, d.sign);
+    testing.expectEqual('-P1Y2M3DT4H5M6.789S', d.negated().toString());
+    testing.expectEqual(false, d.blank);
+    testing.expectEqual(true, new Temporal.Duration().blank);
+
+    const minutes = Temporal.Duration.from({ minutes: 90 });
+    testing.expectEqual('PT1H30M', minutes.round({ largestUnit: 'hours' }).toString());
+    testing.expectEqual(1.5, minutes.total('hours'));
+
+    // Calendar units need a reference point.
+    const month = Temporal.Duration.from({ months: 1 });
+    testing.expectError('RangeError', () => month.total('days'));
+    testing.expectEqual(29, month.total({ unit: 'days', relativeTo: '2024-02-01' }));
+    testing.expectEqual(31, month.total({ unit: 'days', relativeTo: '2024-03-01' }));
+
+    testing.expectEqual(-1, Temporal.Duration.compare({ hours: 1 }, { minutes: 61 }));
+    testing.expectError('RangeError', () => Temporal.Duration.from({ hours: 1, minutes: -1 }));
+  }
+</script>
+
+<script id=instant>
+  {
+    const instant = Temporal.Instant.from('2024-03-10T07:00:00Z');
+    testing.expectEqual(1710054000000, instant.epochMilliseconds);
+    testing.expectEqual(1710054000000000000n, instant.epochNanoseconds);
+    testing.expectEqual('2024-03-10T07:00:00Z', instant.toString());
+    testing.expectEqual('2024-03-10T16:00:00+09:00', instant.toString({ timeZone: 'Asia/Tokyo' }));
+
+    testing.expectEqual('2023-12-31T18:30:00Z', Temporal.Instant.from('2024-01-01T00:00+05:30').toString());
+    testing.expectEqual('1970-01-01T00:00:00Z', Temporal.Instant.fromEpochMilliseconds(0).toString());
+    testing.expectEqual('1970-01-01T00:00:00.000000001Z', Temporal.Instant.fromEpochNanoseconds(1n).toString());
+
+    const later = instant.add({ hours: 1, nanoseconds: 1 });
+    testing.expectEqual('PT1H0.000000001S', instant.until(later, { largestUnit: 'hours' }).toString());
+    // An Instant has no calendar, so calendar units can't be added.
+    testing.expectError('RangeError', () => instant.add({ days: 1 }));
+  }
+</script>
+
+<script id=date_interop>
+  {
+    const ms = Date.UTC(2024, 0, 15, 12);
+    const date = new Date(ms);
+    const instant = date.toTemporalInstant();
+    testing.expectEqual('2024-01-15T12:00:00Z', instant.toString());
+    testing.expectEqual(ms, instant.epochMilliseconds);
+    testing.expectEqual(ms, new Date(instant.epochMilliseconds).getTime());
+
+    // Temporal objects refuse implicit conversion to a primitive number, so
+    // they can't be fed to Date or compared with relational operators.
+    testing.expectError('TypeError', () => new Date(instant));
+    testing.expectError('TypeError', () => instant < Temporal.Now.instant());
+    testing.expectError('TypeError', () => +Temporal.PlainDate.from('2024-01-15'));
+  }
+</script>
+
+<script id=json>
+  {
+    testing.expectEqual('"2024-01-15"', JSON.stringify(Temporal.PlainDate.from('2024-01-15')));
+    testing.expectEqual(
+      '{"at":"2024-01-15T12:00:00Z","for":"PT1H30M"}',
+      JSON.stringify({ at: Temporal.Instant.from('2024-01-15T12:00Z'), for: Temporal.Duration.from({ hours: 1, minutes: 30 }) }),
+    );
+    testing.expectEqual(
+      '"2024-01-15T12:00:00+09:00[Asia/Tokyo]"',
+      JSON.stringify(Temporal.ZonedDateTime.from('2024-01-15T12:00[Asia/Tokyo]')),
+    );
+  }
+</script>
+
+<script id=invalid_input>
+  {
+    testing.expectError('RangeError', () => Temporal.PlainDate.from('2024-13-01'));
+    testing.expectError('RangeError', () => Temporal.PlainDate.from('2023-02-29'));
+    testing.expectError('RangeError', () => Temporal.PlainTime.from('24:00:01'));
+    testing.expectError('RangeError', () => Temporal.Instant.from('2024-01-01T00:00'));
+    testing.expectError('TypeError', () => Temporal.PlainDate.from(20240115));
+    testing.expectError('TypeError', () => Temporal.PlainDate.from({ year: 2024 }));
+    testing.expectError('TypeError', () => Temporal.PlainDate());
+    testing.expectError('TypeError', () => new Temporal.Now());
+  }
+</script>
+
+<script id=structured_clone>
+  {
+    // Temporal objects aren't serializable (yet), structuredClone must not
+    // silently turn them into plain objects.
+    for (const value of [
+      Temporal.PlainDate.from('2024-01-15'),
+      Temporal.Instant.from('2024-01-15T12:00Z'),
+      Temporal.Duration.from({ hours: 1 }),
+    ]) {
+      testing.withError((err) => {
+        testing.expectEqual('DataCloneError', err.name);
+        testing.expectTrue(err instanceof DOMException);
+      }, () => structuredClone(value));
+    }
+  }
+</script>
+
+<script id=realms>
+  {
+    // V8 installs Temporal lazily, from the realm that first reads it: going
+    // through other.Temporal here would hand the frame this realm's
+    // constructors (Chrome does the same). Let the frame read it itself.
+    const other = $('#realm').contentWindow;
+    const foreign = other.eval("Temporal.PlainDate.from('2024-01-15')");
+    testing.expectEqual('object', typeof other.Temporal);
+    testing.expectTrue(other.Temporal !== Temporal);
+    testing.expectTrue(other.Temporal.PlainDate !== Temporal.PlainDate);
+    testing.expectFalse(foreign instanceof Temporal.PlainDate);
+    // Brand checks are realm independent.
+    testing.expectTrue(Temporal.PlainDate.from('2024-01-15').equals(foreign));
+    testing.expectEqual(-1, Temporal.PlainDate.compare(foreign, '2024-01-16'));
+    testing.expectEqual('2024-01-16', Temporal.PlainDate.prototype.add.call(foreign, { days: 1 }).toString());
+  }
+</script>
+</body>

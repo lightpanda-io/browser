@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=offsets>
+  {
+    const tokyo = Temporal.ZonedDateTime.from('2024-01-15T09:00[Asia/Tokyo]');
+    testing.expectEqual('+09:00', tokyo.offset);
+    testing.expectEqual(9 * 3600e9, tokyo.offsetNanoseconds);
+    testing.expectEqual('2024-01-15T00:00:00Z', tokyo.toInstant().toString());
+    testing.expectEqual('2024-01-15T05:30:00+05:30[Asia/Kolkata]', tokyo.withTimeZone('Asia/Kolkata').toString());
+    testing.expectEqual('2024-01-15T05:45:00+05:45[Asia/Kathmandu]', tokyo.withTimeZone('Asia/Kathmandu').toString());
+    testing.expectEqual('2024-01-14T19:00:00-05:00[America/New_York]', tokyo.withTimeZone('America/New_York').toString());
+    testing.expectTrue(tokyo.equals(tokyo.withTimeZone('Asia/Tokyo')));
+    testing.expectFalse(tokyo.equals(tokyo.withTimeZone('Asia/Seoul')));
+    testing.expectEqual(0, Temporal.ZonedDateTime.compare(tokyo, tokyo.withTimeZone('Asia/Seoul')));
+  }
+</script>
+
+<script id=history>
+  {
+    // Turkey moved from EET/EEST to permanent +03:00 in September 2016.
+    testing.expectEqual('+02:00', Temporal.ZonedDateTime.from('2015-01-01T12:00[Europe/Istanbul]').offset);
+    testing.expectEqual('+03:00', Temporal.ZonedDateTime.from('2015-07-01T12:00[Europe/Istanbul]').offset);
+    testing.expectEqual('+03:00', Temporal.ZonedDateTime.from('2017-01-01T12:00[Europe/Istanbul]').offset);
+
+    // Samoa skipped December 30, 2011 when it crossed the date line.
+    const samoa = Temporal.ZonedDateTime.from('2011-12-29T12:00[Pacific/Apia]');
+    testing.expectEqual('-10:00', samoa.offset);
+    testing.expectEqual('2011-12-31T12:00:00+14:00[Pacific/Apia]', samoa.add({ days: 1 }).toString());
+    testing.expectEqual(24, samoa.until(samoa.add({ days: 1 }), { largestUnit: 'hours' }).hours);
+  }
+</script>
+
+<script id=spring_forward>
+  {
+    // 02:00-03:00 doesn't exist in New York on 2024-03-10.
+    const gap = Temporal.PlainDateTime.from('2024-03-10T02:30');
+    testing.expectEqual('2024-03-10T03:30:00-04:00[America/New_York]', gap.toZonedDateTime('America/New_York').toString());
+    testing.expectEqual('2024-03-10T01:30:00-05:00[America/New_York]', gap.toZonedDateTime('America/New_York', { disambiguation: 'earlier' }).toString());
+    testing.expectError('RangeError', () => gap.toZonedDateTime('America/New_York', { disambiguation: 'reject' }));
+    testing.expectEqual(23, Temporal.ZonedDateTime.from('2024-03-10[America/New_York]').hoursInDay);
+
+    // Exact-time units ignore the wall clock, calendar units follow it.
+    const noon = Temporal.ZonedDateTime.from('2024-03-09T12:00[America/New_York]');
+    testing.expectEqual('2024-03-10T13:00:00-04:00[America/New_York]', noon.add({ hours: 24 }).toString());
+    testing.expectEqual('2024-03-10T12:00:00-04:00[America/New_York]', noon.add({ days: 1 }).toString());
+    testing.expectEqual('PT23H', noon.until(noon.add({ days: 1 }), { largestUnit: 'hours' }).toString());
+    testing.expectEqual('P1D', noon.until(noon.add({ days: 1 }), { largestUnit: 'days' }).toString());
+
+    // Lord Howe Island moves its clocks by 30 minutes.
+    testing.expectEqual(23.5, Temporal.ZonedDateTime.from('2024-10-06[Australia/Lord_Howe]').hoursInDay);
+  }
+</script>
+
+<script id=fall_back>
+  {
+    // 01:00-02:00 happens twice in New York on 2024-11-03.
+    const overlap = Temporal.PlainDateTime.from('2024-11-03T01:30');
+    testing.expectEqual('-04:00', overlap.toZonedDateTime('America/New_York').offset);
+    testing.expectEqual('-04:00', overlap.toZonedDateTime('America/New_York', { disambiguation: 'earlier' }).offset);
+    testing.expectEqual('-05:00', overlap.toZonedDateTime('America/New_York', { disambiguation: 'later' }).offset);
+    testing.expectError('RangeError', () => overlap.toZonedDateTime('America/New_York', { disambiguation: 'reject' }));
+    testing.expectEqual(25, Temporal.ZonedDateTime.from('2024-11-03[America/New_York]').hoursInDay);
+
+    // An explicit offset picks one of the two.
+    testing.expectEqual('2024-11-03T06:30:00Z', Temporal.ZonedDateTime.from('2024-11-03T01:30-05:00[America/New_York]').toInstant().toString());
+    testing.expectError('RangeError', () => Temporal.ZonedDateTime.from('2024-11-03T01:30-06:00[America/New_York]'));
+    testing.expectEqual(
+      '2024-11-03T01:30:00-05:00[America/New_York]',
+      Temporal.ZonedDateTime.from('2024-11-03T01:30-06:00[America/New_York]', { offset: 'ignore', disambiguation: 'later' }).toString(),
+    );
+  }
+</script>
+
+<script id=transitions>
+  {
+    const start = Temporal.ZonedDateTime.from('2024-01-01T00:00[America/New_York]');
+    const next = start.getTimeZoneTransition('next');
+    testing.expectEqual('2024-03-10T03:00:00-04:00[America/New_York]', next.toString());
+    testing.expectEqual('2024-11-03T01:00:00-05:00[America/New_York]', next.getTimeZoneTransition('next').toString());
+    testing.expectEqual('2023-11-05T01:00:00-05:00[America/New_York]', start.getTimeZoneTransition('previous').toString());
+
+    // Fixed offsets have no transitions.
+    testing.expectEqual(null, Temporal.ZonedDateTime.from('2024-01-01T00:00[UTC]').getTimeZoneTransition('next'));
+    testing.expectEqual(null, Temporal.ZonedDateTime.from('2024-01-01T00:00+05:30[+05:30]').getTimeZoneTransition('next'));
+
+    testing.expectEqual('2024-03-10T00:00:00-05:00[America/New_York]', next.startOfDay().toString());
+    testing.expectEqual(
+      '2018-11-04T01:00:00-02:00[America/Sao_Paulo]',
+      Temporal.ZonedDateTime.from('2018-11-04T12:00[America/Sao_Paulo]').startOfDay().toString(),
+    );
+  }
+</script>
+
+<script id=identifiers>
+  {
+    testing.expectEqual('UTC', Temporal.ZonedDateTime.from('2024-01-01T00:00[utc]').timeZoneId);
+    testing.expectEqual('Europe/Istanbul', Temporal.ZonedDateTime.from('2024-01-01T00:00[europe/istanbul]').timeZoneId);
+    testing.expectEqual('+05:30', Temporal.ZonedDateTime.from('2024-01-01T00:00+05:30[+05:30]').timeZoneId);
+    testing.expectEqual('-08:00', Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO('-08:00').timeZoneId);
+
+    // Link names are kept, but compare equal to their primary zone.
+    const calcutta = Temporal.ZonedDateTime.from('2024-01-01T00:00[Asia/Calcutta]');
+    testing.expectEqual('Asia/Calcutta', calcutta.timeZoneId);
+    testing.expectTrue(calcutta.equals(Temporal.ZonedDateTime.from('2024-01-01T00:00[Asia/Kolkata]')));
+
+    testing.expectError('RangeError', () => Temporal.ZonedDateTime.from('2024-01-01T00:00[Mars/Olympus_Mons]'));
+    testing.expectError('RangeError', () => Temporal.Now.zonedDateTimeISO('Mars/Olympus_Mons'));
+    // Sub-minute offsets aren't valid time zone identifiers.
+    testing.expectError('RangeError', () => Temporal.Now.zonedDateTimeISO('+05:30:01'));
+  }
+</script>
