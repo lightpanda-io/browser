@@ -81,3 +81,15 @@
     });
   }
 </script>
+
+<script id=frameless_document_does_not_load>
+  {
+    const before = window.length;
+    const doc = new DOMParser().parseFromString('<iframe></iframe>', 'text/html');
+    const f = doc.querySelector('iframe');
+    f.setAttribute('src', 'support/page.html');
+    f.srcdoc = 'x';
+    testing.expectEqual(before, window.length);
+    testing.expectEqual(null, f.contentWindow);
+  }
+</script>

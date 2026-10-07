@@ -159,8 +159,9 @@ pub const Build = struct {
 
     fn reload(element: *Element, frame: *Frame) !void {
         if (!element.asNode().isConnected()) return;
+        const owner = element.ownerFrame(frame) orelse return;
         const self = element.as(IFrame);
         self._executed = false;
-        try frame.iframeAddedCallback(self);
+        try owner.iframeAddedCallback(self);
     }
 };
