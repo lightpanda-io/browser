@@ -71,11 +71,21 @@
       results.setInterval_string_ran = (self.__si_string_ran >= 1);
     }
 
-    // Non-function, non-string handlers must throw.
+    // A handler that isn't callable is converted to a string and scheduled.
     {
-      let threw = false;
-      try { setTimeout(123, 1); } catch (_) { threw = true; }
-      results.setTimeout_invalid_throws = threw;
+      self.__st_object_ran = 0;
+      const ids = [
+        setTimeout(undefined),
+        setTimeout(null, 1),
+        setTimeout(123, 1),
+        setTimeout({ toString() { return 'self.__st_object_ran = 7;' } }, 1),
+      ];
+      const si = setInterval(undefined, 1000);
+      clearInterval(si);
+      ids.push(si);
+      results.setTimeout_non_callable_ids_are_numbers = ids.every((id) => typeof id === 'number');
+      await sleep(5);
+      results.setTimeout_object_ran = self.__st_object_ran;
     }
 
     postMessage({ ok: true, results });

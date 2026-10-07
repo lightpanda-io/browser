@@ -383,7 +383,8 @@
       testing.expectEqual(42, r.setTimeout_string_ran);
       testing.expectEqual(true, r.setInterval_string_ran);
 
-      testing.expectEqual(true, r.setTimeout_invalid_throws);
+      testing.expectEqual(true, r.setTimeout_non_callable_ids_are_numbers);
+      testing.expectEqual(7, r.setTimeout_object_ran);
     });
   }
 </script>

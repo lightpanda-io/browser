@@ -168,15 +168,17 @@ pub fn clear(self: *Timers, id: u32) void {
 // TimerHandler = Function or DOMString. When a string is passed, it is
 // compiled into an anonymous function body, matching how legacy browsers
 // (and all current UAs) interpret `setTimeout("foo()", 100)`.
+// Per the WebIDL union conversion, any value that isn't callable is converted
+// to a string, so `setTimeout(undefined)` schedules the script "undefined".
 pub const LegacyHandler = union(enum) {
     function: js.Function.Global,
-    string: js.String,
+    string: js.Value,
 
     pub fn resolve(handler: LegacyHandler, exec: *js.Execution) !js.Function.Global {
         switch (handler) {
             .function => |fun| return fun,
-            .string => |str| {
-                const fun = try exec.js.local.?.compileFunction(str, &.{}, &.{});
+            .string => |value| {
+                const fun = try exec.js.local.?.compileFunction(try value.toString(), &.{}, &.{});
                 return fun.persist();
             },
         }
