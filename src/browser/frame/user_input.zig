@@ -262,6 +262,9 @@ pub const PointerButtons = struct {
     /// Where the gesture's pointerdown landed, until its first release fires
     /// the gesture's one click.
     down_target: ?*Element = null,
+    /// Whether another button was held when a button pressed, at any point
+    /// in the gesture.
+    chorded: bool = false,
 
     /// `g.buttons_down` is ignored: the held mask supplies it.
     pub fn press(self: *PointerButtons, frame: *Frame, target: *Element, g: Gesture) !void {
@@ -269,6 +272,9 @@ pub const PointerButtons = struct {
         const starts_gesture = self.held & ~bit == 0;
         if (starts_gesture) {
             self.down_target = target;
+            self.chorded = false;
+        } else {
+            self.chorded = true;
         }
         self.held |= bit;
 
@@ -286,10 +292,14 @@ pub const PointerButtons = struct {
         const click_target = if (self.down_target) |down| commonClickTarget(down, target) else null;
         const was_suppressed = self.mousedown_suppressed;
         self.down_target = null;
+        const was_chorded = self.chorded;
         self.releaseButton(g.button);
 
         var rg = g;
         rg.buttons_down = self.held;
+        // Chrome reports the release that ends a chorded gesture with a click
+        // count of 0, whatever the client sent.
+        if (self.held == 0 and was_chorded) rg.click_count = 0;
         try releaseSequence(frame, target, rg, was_suppressed, click_target);
         return click_target;
     }
@@ -300,6 +310,7 @@ pub const PointerButtons = struct {
         if (self.held == 0) {
             self.mousedown_suppressed = false;
             self.down_target = null;
+            self.chorded = false;
         }
     }
 
