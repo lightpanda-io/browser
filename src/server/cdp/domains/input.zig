@@ -1632,6 +1632,7 @@ test "cdp.input: dispatchKeyEvent text-less keyDown then char types once" {
         \\document.body.appendChild(ta);
         \\ta.value = 'one';
         \\ta.focus();
+        \\ta.addEventListener('input', (e) => window.taInput = e.inputType + ':' + e.data);
     , null);
     try ctx.processMessage(.{ .id = 6, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter" } });
     try ctx.expectSentResult(null, .{ .id = 6 });
@@ -1639,7 +1640,43 @@ test "cdp.input: dispatchKeyEvent text-less keyDown then char types once" {
     try ctx.expectSentResult(null, .{ .id = 7 });
     try ctx.processMessage(.{ .id = 8, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyUp", .key = "Enter", .code = "Enter" } });
     try ctx.expectSentResult(null, .{ .id = 8 });
-    try testing.expect((try ls.local.compileAndRun("ta.value === 'one\\n'", null)).isTrue());
+    try testing.expect((try ls.local.compileAndRun("ta.value === 'one\\n' && window.taInput === 'insertLineBreak:null'", null)).isTrue());
+}
+
+test "cdp.input: a readonly textarea fires beforeinput for typed text only, a disabled one nothing" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // As in Chrome, typed text reaches beforeinput before the readonly
+    // control refuses it; Backspace and Enter fire no edit event.
+    _ = try ls.local.compileAndRun(
+        \\const ta = document.createElement('textarea');
+        \\document.body.appendChild(ta);
+        \\ta.value = 'ro';
+        \\ta.readOnly = true;
+        \\ta.focus();
+        \\window.edits = [];
+        \\for (const t of ['beforeinput', 'input']) ta.addEventListener(t, (e) => window.edits.push(t + ':' + e.inputType));
+    , null);
+    try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "x", .text = "x" } });
+    try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Backspace", .code = "Backspace" } });
+    try ctx.processMessage(.{ .id = 3, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter", .text = "\r" } });
+    try ctx.processMessage(.{ .id = 4, .method = "Input.insertText", .params = .{ .text = "y" } });
+    try testing.expect((try ls.local.compileAndRun(
+        \\ta.value === 'ro' && window.edits.join() === 'beforeinput:insertText,beforeinput:insertText'
+    , null)).isTrue());
+
+    // A disabled control fires nothing, not even for typed text.
+    _ = try ls.local.compileAndRun("ta.readOnly = false; ta.disabled = true; window.edits = [];", null);
+    try ctx.processMessage(.{ .id = 5, .method = "Input.insertText", .params = .{ .text = "z" } });
+    try testing.expect((try ls.local.compileAndRun("ta.value === 'ro' && window.edits.length === 0", null)).isTrue());
 }
 
 test "cdp.input: dispatchKeyEvent char honors keypress and beforeinput vetoes" {

@@ -925,19 +925,9 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
         if (is_enter) {
             return implicitFormSubmission(frame, input);
         }
-        _ = try insertInto(frame, input, text);
-        return;
-    }
-
-    if (target.is(Element.Html.TextArea)) |textarea| {
-        if (is_enter) {
-            if (acceptsEdit(textarea.asElement()) and try allowEdit(frame, textarea.asElement(), null, "\n", "insertLineBreak")) {
-                try textarea.innerInsert("\n", frame);
-            }
-            return;
-        }
-        _ = try insertInto(frame, textarea, text);
-        return;
+        _ = try applyEdit(frame, input, .{ .insert = text }, .{});
+    } else if (target.is(Element.Html.TextArea)) |textarea| {
+        _ = try applyEdit(frame, textarea, if (is_enter) .line_break else .{ .insert = text }, .{});
     }
 }
 
@@ -1013,23 +1003,49 @@ fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: Key
         return ctl.moveCaret(move, keyboard_event.getShiftKey(), frame);
     }
 
-    if ((key == .Backspace or key == .Delete) and acceptsEdit(ctl.asElement())) {
-        const forward = key == .Delete;
-        if (!keyboard_event.asEvent().getIsTrusted() or try allowEdit(frame, ctl.asElement(), null, null, deleteInputType(forward))) {
-            try ctl.innerDelete(forward, frame);
-        }
+    if (key == .Backspace or key == .Delete) {
+        const edit: Edit = .{ .delete = if (key == .Delete) .forward else .backward };
+        _ = try applyEdit(frame, ctl, edit, .{ .beforeinput = keyboard_event.asEvent().getIsTrusted() });
     }
 }
 
-/// Returns whether the edit happened.
-pub fn insertInto(frame: *Frame, ctl: anytype, text: []const u8) !bool {
-    if (!ctl.acceptsTextEntry() or !acceptsEdit(ctl.asElement())) {
+pub const Edit = union(enum) {
+    insert: []const u8,
+    line_break,
+    delete: enum { backward, forward },
+};
+
+/// A text edit as the user makes it: cancellable through beforeinput, and
+/// refused on a readonly or disabled control. Returns whether it happened.
+pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit, opts: struct { beforeinput: bool = true }) !bool {
+    const el = ctl.asElement();
+    if (!ctl.acceptsTextEntry() or el.isDisabled()) {
         return false;
     }
-    if (!try allowEdit(frame, ctl.asElement(), text, text, "insertText")) {
+    const editable = acceptsEdit(el);
+    // Chrome fires beforeinput and textInput for text typed into a readonly
+    // control and only then refuses it; its editing commands fire nothing.
+    if (!editable and edit != .insert) {
         return false;
     }
-    try ctl.innerInsert(text, frame);
+
+    const data: ?[]const u8, const text: ?[]const u8, const input_type: []const u8 = switch (edit) {
+        .insert => |t| .{ t, t, "insertText" },
+        .line_break => .{ null, "\n", "insertLineBreak" },
+        .delete => |dir| .{ null, null, if (dir == .forward) "deleteContentForward" else "deleteContentBackward" },
+    };
+    if (opts.beforeinput and !try allowEdit(frame, el, data, text, input_type)) {
+        return false;
+    }
+    if (!editable) {
+        return false;
+    }
+
+    if (text) |t| {
+        try ctl.innerInsert(t, data, input_type, frame);
+    } else {
+        try ctl.innerDelete(edit.delete == .forward, input_type, frame);
+    }
     return true;
 }
 
@@ -1058,10 +1074,6 @@ fn caretMove(key: KeyboardEvent.Key, ctl: anytype) ?@TypeOf(ctl.*).CaretMove {
         .ArrowDown => if (@TypeOf(ctl) == *Element.Html.Input) .line_end else null,
         else => null,
     };
-}
-
-fn deleteInputType(forward: bool) []const u8 {
-    return if (forward) "deleteContentForward" else "deleteContentBackward";
 }
 
 // pre-edit events for a trusted key's default action, can cancel the edit
@@ -1238,9 +1250,9 @@ pub fn insertText(frame: *Frame, v: []const u8) !void {
     const html_element = frame.document._active_element orelse return;
 
     if (html_element.is(Element.Html.Input)) |input| {
-        _ = try insertInto(frame, input, v);
+        _ = try applyEdit(frame, input, .{ .insert = v }, .{});
     } else if (html_element.is(Element.Html.TextArea)) |textarea| {
-        _ = try insertInto(frame, textarea, v);
+        _ = try applyEdit(frame, textarea, .{ .insert = v }, .{});
     }
 }
 

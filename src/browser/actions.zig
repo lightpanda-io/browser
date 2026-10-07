@@ -183,21 +183,21 @@ fn fillControl(ctl: anytype, text: []const u8, frame: *Frame) !void {
 
     if (ctl.tracksSelection()) {
         try ctl.select(frame);
-        const edited = Frame.user_input.insertInto(frame, ctl, text) catch |err| {
+        const edited = Frame.user_input.applyEdit(frame, ctl, .{ .insert = text }, .{}) catch |err| {
             lp.log.debug(.app, "fill insert failed", .{ .err = err });
             return error.ActionFailed;
         };
         if (!edited) {
             return error.ActionFailed;
         }
-    } else {
-        ctl.setUserValue(text, frame) catch |err| {
-            lp.log.debug(.app, "fill setValue failed", .{ .err = err });
-            return error.ActionFailed;
-        };
-        try dispatchTrusted(el, "input", frame);
+        return dispatchTrusted(el, "change", frame);
     }
-    try dispatchTrusted(el, "change", frame);
+
+    ctl.setUserValue(text, frame) catch |err| {
+        lp.log.debug(.app, "fill setValue failed", .{ .err = err });
+        return error.ActionFailed;
+    };
+    return dispatchInputAndChangeEvents(el, frame);
 }
 
 pub const ScrollResult = struct {
