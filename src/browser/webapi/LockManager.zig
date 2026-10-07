@@ -366,8 +366,8 @@ pub fn query(self: *const LockManager, exec: *Execution) !js.Promise {
             .clientId = lr.client_id,
         };
         switch (lr.state) {
-            .held => try held.append(exec.arena, info),
-            .pending => try pending.append(exec.arena, info),
+            .held => try held.append(exec.call_arena, info),
+            .pending => try pending.append(exec.call_arena, info),
         }
     }
 
@@ -408,7 +408,7 @@ fn releaseLock(self: *LockManager, lock_request: *LockRequest) void {
         if (self.heldConflicts(lr.name, lr.options.mode)) break;
 
         lr.state = .held;
-        to_grant.append(lock_request.exec.arena, lr) catch {
+        to_grant.append(lock_request.exec.call_arena, lr) catch {
             lr.state = .pending;
             break;
         };
