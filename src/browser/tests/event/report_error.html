@@ -40,8 +40,9 @@
 <!--
   An exception a callback doesn't catch is reported to the global — window's
   "error" event fires with the thrown value — whatever kind of callback threw:
-  timers, animation frames, inline on* handlers (attribute or property), and
-  property handlers dispatched directly (window.onmessage).
+  timers, animation frames, inline on* handlers (attribute or property),
+  property handlers dispatched directly (window.onmessage), microtasks and
+  observers.
   https://html.spec.whatwg.org/multipage/webappapis.html#report-the-exception
 -->
 <button id=inlineAttrThrower onclick="throw new Error('cb-inline-attribute')"></button>
@@ -65,6 +66,18 @@
     requestAnimationFrame(() => { throw new Error('cb-requestAnimationFrame'); });
     document.getElementById('inlinePropThrower').onclick = () => { throw new Error('cb-inline-property'); };
     window.onmessage = () => { throw new Error('cb-onmessage'); };
+    queueMicrotask(() => { throw new Error('cb-queueMicrotask'); });
+
+    const observed = document.createElement('div');
+    document.body.appendChild(observed);
+    new MutationObserver(() => { throw new Error('cb-MutationObserver'); })
+      .observe(observed, { attributes: true });
+    observed.setAttribute('x', '1');
+    new IntersectionObserver(() => { throw new Error('cb-IntersectionObserver'); }).observe(observed);
+    new ResizeObserver(() => { throw new Error('cb-ResizeObserver'); }).observe(observed);
+    new PerformanceObserver(() => { throw new Error('cb-PerformanceObserver'); })
+      .observe({ entryTypes: ['mark'] });
+    performance.mark('report-error');
     setTimeout(() => {
       document.getElementById('inlineAttrThrower').click();
       document.getElementById('inlinePropThrower').click();
@@ -77,7 +90,7 @@
       window.removeEventListener('error', onError);
       window.onmessage = null;
       testing.expectEqual(
-        'cb-inline-attribute,cb-inline-property,cb-onmessage,cb-requestAnimationFrame,cb-setInterval,cb-setTimeout',
+        'cb-IntersectionObserver,cb-MutationObserver,cb-PerformanceObserver,cb-ResizeObserver,cb-inline-attribute,cb-inline-property,cb-onmessage,cb-queueMicrotask,cb-requestAnimationFrame,cb-setInterval,cb-setTimeout',
         seen.slice().sort().join(','),
       );
       for (const msg of seen) testing.expectEqual(true, thrown[msg]);

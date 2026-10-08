@@ -362,9 +362,8 @@ pub fn deliverRecords(self: *MutationObserver, frame: *Frame) !void {
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    var caught: js.TryCatch.Caught = .{};
-    ls.toLocal(self._callback).tryCallWithThis(void, self, .{ records, self }, &caught) catch |err| {
-        log.debug(.frame, "MutObserver.deliverRecords", .{ .err = err, .caught = caught });
+    ls.toLocal(self._callback).callWithThisReport(self, .{ records, self }) catch |err| {
+        log.debug(.frame, "MutObserver.deliverRecords", .{ .err = err });
         return err;
     };
 }

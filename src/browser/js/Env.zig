@@ -190,6 +190,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     isolate.enter();
     errdefer isolate.exit();
 
+    _ = v8.v8__Isolate__AddMessageListener(isolate_handle, messageCallback);
     v8.v8__Isolate__SetHostInitializeImportMetaObjectCallback(isolate_handle, Context.metaObjectCallback);
 
     // Allocate arrays dynamically to avoid comptime dependency on JsApis.len
@@ -865,6 +866,27 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
             };
         },
     }
+}
+
+// V8 reports an exception that escapes to the top without a TryCatch. We
+// *should* have a TryCatch at every Zig-initiated call, so this is almost
+// certainly from a queueMicrotask callback. report it.
+// If you remove this, V8 will print errors to stdout on its own.
+fn messageCallback(_: ?*const v8.Message, data: ?*const v8.Value) callconv(.c) void {
+    const v8_isolate = v8.v8__Isolate__GetCurrent().?;
+    const isolate = js.Isolate{ .handle = v8_isolate };
+    const ctx, const v8_context = Context.fromIsolate(isolate) orelse return;
+
+    const local = js.Local{
+        .ctx = ctx,
+        .isolate = isolate,
+        .handle = v8_context,
+        .call_arena = ctx.call_arena,
+    };
+
+    ctx.global.reportError(.{ .local = &local, .handle = data orelse return }) catch |err| {
+        log.debug(.js, "report uncaught exception", .{ .err = err });
+    };
 }
 
 fn fatalCallback(c_location: [*c]const u8, c_message: [*c]const u8) callconv(.c) void {

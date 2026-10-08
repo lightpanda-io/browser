@@ -29,6 +29,7 @@ target.addEventListener('ping', () => { throw new Error('listener'); });
 target.dispatchEvent(new Event('ping'));
 
 setTimeout(() => { throw new Error('setTimeout'); }, 0);
+queueMicrotask(() => { throw new Error('queueMicrotask'); });
 setTimeout(() => { throw new Error('reentrant'); }, 5);
 
 setTimeout(() => postMessage({ seen: seen.slice().sort(), reentrant }), 20);

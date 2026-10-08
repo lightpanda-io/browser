@@ -584,7 +584,7 @@
     worker.postMessage('throw');
 
     await state.done((data) => {
-      testing.expectEqual('listener,onmessage,reentrant,setTimeout', data.seen.join(','));
+      testing.expectEqual('listener,onmessage,queueMicrotask,reentrant,setTimeout', data.seen.join(','));
       testing.expectEqual(1, data.reentrant);
       worker.terminate();
     });
