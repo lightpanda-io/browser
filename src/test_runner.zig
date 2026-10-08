@@ -362,11 +362,15 @@ fn runShards(io: Io, arena: Allocator, environ_map: *const std.process.Environ.M
     const claim_path = try arena.print("{s}/claim", .{dir});
 
     const children = try arena.alloc(std.process.Child, jobs);
+    var spawned: usize = 0;
+    // a no-op on the ones already waited for
+    errdefer for (children[0..spawned]) |*child| child.kill(io);
     for (children, 0..) |*child, i| {
         var child_env = try environ_map.clone(arena);
         try child_env.put("TEST_CLAIM", claim_path);
         try child_env.put("TEST_REPORT", try arena.print("{s}/{d}.json", .{ dir, i }));
         child.* = try std.process.spawn(io, .{ .argv = &.{exe}, .environ_map = &child_env });
+        spawned += 1;
     }
 
     var total: Report = .{};
