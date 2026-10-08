@@ -637,9 +637,6 @@ test "tests:afterAll" {
         thread.join();
     }
 
-    libcurl.curl_slist_free_all(http.test_connect_to);
-    http.test_connect_to = null;
-
     @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
 
     // Browser must be deinit'd before the notification — Session/Frame
@@ -648,6 +645,9 @@ test "tests:afterAll" {
     test_browser.deinit();
     test_notification.deinit();
     test_app.deinit();
+    // curl keeps the list, not a copy: free it once no handle is left
+    libcurl.curl_slist_free_all(http.test_connect_to);
+    http.test_connect_to = null;
     test_config.deinit(@import("root").tracking_allocator);
 }
 
