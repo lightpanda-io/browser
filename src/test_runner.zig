@@ -528,11 +528,13 @@ const SlowTracker = struct {
         slowest.push(self.allocator, .{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
     }
 
-    /// Empties the tracker into a slice, fastest first.
+    /// Empties the tracker into a slice, slowest first.
     fn drain(self: *SlowTracker, allocator: Allocator) []const TestInfo {
         const out = allocator.alloc(TestInfo, self.slowest.count()) catch @panic("OOM");
-        for (out) |*info| {
-            info.* = self.slowest.popMin().?;
+        var i = out.len;
+        while (i > 0) {
+            i -= 1;
+            out[i] = self.slowest.popMin().?;
         }
         return out;
     }
