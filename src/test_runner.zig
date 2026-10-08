@@ -381,6 +381,11 @@ fn runShards(io: Io, arena: Allocator, environ_map: *const std.process.Environ.M
             continue;
         };
         const report = try std.json.parseFromSliceLeaky(Report, arena, data, .{});
+        // the report is written before exit, so a crash on the way out only shows here
+        if (term.success() != (report.fail == 0)) {
+            Printer.status(.fail, "\nshard {d}/{d} reported {d} failures but ended with {any}\n", .{ i, jobs, report.fail, term });
+            crashed = true;
+        }
         total.pass += report.pass;
         total.fail += report.fail;
         total.skip += report.skip;
