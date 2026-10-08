@@ -420,19 +420,26 @@ const Printer = struct {
     }
 
     fn status(s: Status, comptime format: []const u8, args: anytype) void {
-        switch (s) {
-            .pass => std.debug.print("\x1b[32m", .{}),
-            .fail => std.debug.print("\x1b[31m", .{}),
-            .skip => std.debug.print("\x1b[33m", .{}),
-            else => {},
-        }
         // Reset before a trailing newline so the escape never starts the next line.
         const reset = "\x1b[0m";
-        if (comptime std.mem.endsWith(u8, format, "\n")) {
-            std.debug.print(format[0 .. format.len - 1] ++ reset ++ "\n", args);
-        } else {
-            std.debug.print(format ++ reset, args);
+        const body = comptime if (std.mem.endsWith(u8, format, "\n"))
+            format[0 .. format.len - 1] ++ reset ++ "\n"
+        else
+            format ++ reset;
+        // One print, so one write: shards share the terminal, and a color sent
+        // apart from its text can land after another shard's reset.
+        switch (s) {
+            inline else => |c| std.debug.print(comptime color(c) ++ body, args),
         }
+    }
+
+    fn color(s: Status) []const u8 {
+        return switch (s) {
+            .pass => "\x1b[32m",
+            .fail => "\x1b[31m",
+            .skip => "\x1b[33m",
+            .text => "",
+        };
     }
 };
 
