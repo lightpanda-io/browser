@@ -1813,6 +1813,7 @@ test "server: HTTP session bootstrap" {
     // What Selenium does before it speaks BiDi: a POST /session
     // that hands back the websocket URL, then a DELETE on quit.
     const session_id = try createHTTPSession("{\"capabilities\":{\"firstMatch\":[{}],\"alwaysMatch\":{\"browserName\":\"firefox\",\"webSocketUrl\":true}}}", true);
+    errdefer deleteHTTPSession(&session_id, true) catch {};
 
     var c = try createTestClient();
     defer c.deinit();
@@ -1944,6 +1945,7 @@ test "server: HTTP session idle timeout disabled" {
     server.session_timeout_ms = null;
 
     const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    errdefer deleteHTTPSession(&session_id, true) catch {};
 
     // never idle-listed, so nothing reaps it: it's still there to DELETE
     lp.io.sleep(.fromMilliseconds(50), .awake) catch {};
@@ -2744,6 +2746,7 @@ test "server: HTTP command errors" {
     }
 
     const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    errdefer deleteHTTPSession(&session_id, true) catch {};
 
     // routing errors are the loop's, in W3C form. A known path with the wrong
     // method is an unknown command like any other.
