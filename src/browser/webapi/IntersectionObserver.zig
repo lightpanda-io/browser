@@ -319,14 +319,12 @@ pub fn deliverEntries(self: *IntersectionObserver, frame: *Frame) !void {
     // whether we safely deliver these to v8 or not, we're done with these
     defer releaseAll(entries, frame.page);
 
-    var caught: js.TryCatch.Caught = .{};
-
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    ls.toLocal(self._callback).tryCall(void, .{ entries, self }, &caught) catch |err| {
-        log.debug(.frame, "IntsctObserver.deliverEntries", .{ .err = err, .caught = caught });
+    ls.toLocal(self._callback).callWithThisReport(self, .{ entries, self }) catch |err| {
+        log.debug(.frame, "IntsctObserver.deliverEntries", .{ .err = err });
         return err;
     };
 }

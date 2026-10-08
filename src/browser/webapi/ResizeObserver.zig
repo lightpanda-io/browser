@@ -182,14 +182,12 @@ pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
         return;
     }
 
-    var caught: js.TryCatch.Caught = .{};
-
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    ls.toLocal(self._callback).tryCall(void, .{ entries.items, self }, &caught) catch |err| {
-        log.debug(.frame, "ResizeObserver.deliverEntries", .{ .err = err, .caught = caught });
+    ls.toLocal(self._callback).callWithThisReport(self, .{ entries.items, self }) catch |err| {
+        log.debug(.frame, "ResizeObserver.deliverEntries", .{ .err = err });
         return err;
     };
 }

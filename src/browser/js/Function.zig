@@ -136,6 +136,22 @@ pub fn callWithThisRethrow(self: *const Function, comptime T: type, this: anytyp
     return self._tryCallWithThis(T, this, args, &caught, .{ .rethrow = true });
 }
 
+// An exception is reported on the global (e.g. window.reportError, which also
+// dispatches the "error" event).
+pub fn callWithThisReport(self: *const Function, this: anytype, args: anytype) !void {
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(self.local);
+    defer try_catch.deinit();
+
+    self.callWithThisRethrow(void, this, args) catch |err| {
+        if (err != error.TryCatchRethrow) {
+            return err;
+        }
+        const exc = try_catch.exceptionValue() orelse return;
+        try self.local.ctx.global.reportError(exc);
+    };
+}
+
 pub fn tryCall(self: *const Function, comptime T: type, args: anytype, caught: *js.TryCatch.Caught) !T {
     return self._tryCallWithThis(T, self.getThis(), args, caught, .{});
 }
