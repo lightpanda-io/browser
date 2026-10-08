@@ -66,8 +66,8 @@ jobs:
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
 
-      # Debug info is over half the binary. Ship it stripped and keep the
-      # debug info on s3 to symbolize crash reports
+      # Debug info is over half the binary. Ship it stripped, with the debug
+      # info as a separate release asset (and on s3) to symbolize crash reports
       # (addr2line -e lightpanda-ARCH-linux.debug ADDR...).
       - name: Split debug info
         run: |
@@ -89,7 +89,7 @@ jobs:
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           allowUpdates: true
-          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }},lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug
           tag: ${{ env.RELEASE }}
           makeLatest: true
 
