@@ -59,79 +59,108 @@ fn deleteRow(self: *Table, index: i32, frame: *Frame) !void {
     _ = try row.parentNode().?.removeChild(row, frame);
 }
 
-// Finds the index-th row (or the last row for -1) in spec order: thead, tr,
-// tbody then tfoot
+// Finds the index-th row (or the last row for -1) in spec order
 fn findRow(self: *Table, index: i32) ?*Node {
-    var scan: RowScan = .{ .index = index };
-
-    if (self.scanSectionRows(.thead, &scan)) |row| {
-        return row;
-    }
-
-    var it = self.asNode().childrenIterator();
-    while (it.next()) |child| {
-        const el = child.is(Element) orelse continue;
-        switch (el.getTag()) {
-            .tr => if (scan.check(child)) |row| {
-                return row;
-            },
-            .tbody => if (scanChildRows(child, &scan)) |row| {
-                return row;
-            },
-            else => {},
-        }
-    }
-
-    if (self.scanSectionRows(.tfoot, &scan)) |row| {
-        return row;
-    }
-    if (index == -1) {
-        return scan.last;
-    }
-    return null;
-}
-
-const RowScan = struct {
-    index: i32,
-    count: i32 = 0,
-    last: ?*Node = null,
-
-    fn check(self: *RowScan, row: *Node) ?*Node {
-        if (self.count == self.index) {
+    var it = RowWalker.init(self.asNode(), .{});
+    var count: i32 = 0;
+    var last: ?*Node = null;
+    while (it.next()) |row| {
+        if (count == index) {
             return row;
         }
-        self.count += 1;
-        self.last = row;
-        return null;
+        count += 1;
+        last = row;
     }
-};
-
-fn scanSectionRows(self: *Table, tag: Element.Tag, scan: *RowScan) ?*Node {
-    var it = self.asNode().childrenIterator();
-    while (it.next()) |child| {
-        const el = child.is(Element) orelse continue;
-        if (el.getTag() != tag) {
-            continue;
-        }
-        if (scanChildRows(child, scan)) |row| {
-            return row;
-        }
-    }
-    return null;
+    return if (index == -1) last else null;
 }
 
-fn scanChildRows(section: *Node, scan: *RowScan) ?*Node {
-    var it = section.childrenIterator();
-    while (it.next()) |child| {
-        const el = child.is(Element) orelse continue;
-        if (el.getTag() == .tr) {
-            if (scan.check(child)) |row| {
-                return row;
+fn getRows(self: *Table, frame: *Frame) collections.NodeLive(.table_rows) {
+    return collections.NodeLive(.table_rows).init(self.asNode(), {}, frame);
+}
+
+// Walks a table's rows in spec order: thead rows, then tr children of the
+// table and tbody rows, then tfoot rows, each group in tree order.
+pub const RowWalker = struct {
+    _root: *Node,
+    _phase: Phase = .head,
+    // the next child of the table to look at
+    _child: ?*Node,
+    // the next candidate row inside the current section
+    _row: ?*Node = null,
+
+    const Phase = enum { head, body, foot };
+    const Opts = struct {};
+
+    pub fn init(root: *Node, _: Opts) RowWalker {
+        return .{
+            ._root = root,
+            ._child = root.firstChild(),
+        };
+    }
+
+    pub fn next(self: *RowWalker) ?*Node {
+        while (true) {
+            while (self._row) |node| {
+                self._row = node.nextSibling();
+                if (tagOf(node) == .tr) {
+                    return node;
+                }
+            }
+
+            const child = self._child orelse {
+                self._phase = switch (self._phase) {
+                    .head => .body,
+                    .body => .foot,
+                    .foot => return null,
+                };
+                self._child = self._root.firstChild();
+                continue;
+            };
+            self._child = child.nextSibling();
+
+            switch (self._phase) {
+                .head => if (tagOf(child) == .thead) {
+                    self._row = child.firstChild();
+                },
+                .body => switch (tagOf(child) orelse continue) {
+                    .tr => return child,
+                    .tbody => self._row = child.firstChild(),
+                    else => {},
+                },
+                .foot => if (tagOf(child) == .tfoot) {
+                    self._row = child.firstChild();
+                },
             }
         }
     }
-    return null;
-}
+
+    pub fn reset(self: *RowWalker) void {
+        self.* = init(self._root, .{});
+    }
+
+    pub fn clone(self: *const RowWalker) RowWalker {
+        return init(self._root, .{});
+    }
+
+    pub fn contains(self: *const RowWalker, target: *Node) bool {
+        if (tagOf(target) != .tr) {
+            return false;
+        }
+        const parent = target._parent orelse return false;
+        if (parent == self._root) {
+            return true;
+        }
+        return switch (tagOf(parent) orelse return false) {
+            .thead, .tbody, .tfoot => parent._parent == self._root,
+            else => false,
+        };
+    }
+
+    fn tagOf(node: *Node) ?Element.Tag {
+        const el = node.is(Element) orelse return null;
+        return el.getTag();
+    }
+};
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Table);
@@ -154,6 +183,7 @@ pub const JsApi = struct {
     pub const @"align" = reflect.string("align");
 
     pub const tBodies = bridge.accessor(Table.getTBodies, null, .{});
+    pub const rows = bridge.accessor(Table.getRows, null, .{});
     pub const deleteRow = bridge.function(Table.deleteRow, .{ .ce_reactions = true });
 };
 

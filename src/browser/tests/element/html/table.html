@@ -79,3 +79,44 @@
     testing.expectEqual('b2', bodies[0].id);
   }
 </script>
+
+<script id="rows">
+  {
+    // Built by hand, like the deleteRow test, so the tree order differs from
+    // the spec's row order.
+    const table = document.createElement('table');
+    const add = (parent, tag, id) => {
+      const el = document.createElement(tag);
+      if (id) el.id = id;
+      parent.appendChild(el);
+      return el;
+    };
+    add(add(table, 'tfoot'), 'tr', 'foot1');
+    add(table, 'tr', 'top1');
+    add(add(table, 'thead'), 'tr', 'head1');
+    const tbody = add(table, 'tbody');
+    add(tbody, 'tr', 'body1');
+    add(tbody, 'td');
+    // Not rows of this table: a tr inside a caption, a nested table's row.
+    add(add(table, 'caption'), 'tr', 'nested1');
+    add(add(add(tbody.firstChild, 'td'), 'table'), 'tr', 'nested2');
+
+    const ids = () => Array.from(table.rows ?? [], (row) => row.id).join(',');
+
+    // thead rows first, then table-level and tbody rows, then tfoot rows.
+    testing.expectEqual('head1,top1,body1,foot1', ids());
+    testing.expectEqual('HTMLCollection', table.rows?.constructor.name);
+    testing.expectEqual(4, table.rows?.length);
+    testing.expectEqual('body1', table.rows?.[2].id);
+    testing.expectEqual('foot1', table.rows?.namedItem('foot1')?.id);
+    testing.expectEqual(null, table.rows?.namedItem('nested1'));
+
+    // The collection is live.
+    const rows = table.rows;
+    add(tbody, 'tr', 'body2');
+    testing.expectEqual(5, rows?.length);
+    testing.expectEqual('head1,top1,body1,body2,foot1', ids());
+
+    testing.expectEqual(0, document.createElement('table').rows?.length);
+  }
+</script>

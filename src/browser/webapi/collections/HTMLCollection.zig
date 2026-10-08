@@ -26,6 +26,7 @@ const Frame = @import("../../Frame.zig");
 const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
 const NodeLive = @import("node_live.zig").NodeLive;
+const Table = @import("../element/html/Table.zig");
 const Execution = js.Execution;
 
 const Mode = enum {
@@ -37,6 +38,7 @@ const Mode = enum {
     child_elements,
     child_tag,
     cells,
+    table_rows,
     select_options,
     selected_options,
     links,
@@ -59,6 +61,7 @@ _data: union(Mode) {
     child_elements: NodeLive(.child_elements),
     child_tag: NodeLive(.child_tag),
     cells: NodeLive(.cells),
+    table_rows: NodeLive(.table_rows),
     select_options: NodeLive(.select_options),
     selected_options: NodeLive(.selected_options),
     links: NodeLive(.links),
@@ -131,6 +134,7 @@ pub fn iterator(self: *HTMLCollection, exec: *const Execution) !*Iterator {
             .child_elements => |*impl| .{ .child_elements = impl._tw.clone() },
             .child_tag => |*impl| .{ .child_tag = impl._tw.clone() },
             .cells => |*impl| .{ .cells = impl._tw.clone() },
+            .table_rows => |*impl| .{ .table_rows = impl._tw.clone() },
             .select_options => |*impl| .{ .select_options = impl._tw.clone() },
             .selected_options => |*impl| .{ .selected_options = impl._tw.clone() },
             .links => |*impl| .{ .links = impl._tw.clone() },
@@ -154,6 +158,7 @@ pub const Iterator = GenericIterator(struct {
         child_elements: TreeWalker.Children,
         child_tag: TreeWalker.Children,
         cells: TreeWalker.Children,
+        table_rows: Table.RowWalker,
         select_options: TreeWalker.FullExcludeSelf,
         selected_options: TreeWalker.FullExcludeSelf,
         links: TreeWalker.FullExcludeSelf,
@@ -181,6 +186,7 @@ pub const Iterator = GenericIterator(struct {
             .child_elements => |*impl| impl.nextTw(&self.tw.child_elements),
             .child_tag => |*impl| impl.nextTw(&self.tw.child_tag),
             .cells => |*impl| impl.nextTw(&self.tw.cells),
+            .table_rows => |*impl| impl.nextTw(&self.tw.table_rows),
             .select_options => |*impl| impl.nextTw(&self.tw.select_options),
             .selected_options => |*impl| impl.nextTw(&self.tw.selected_options),
             .links => |*impl| impl.nextTw(&self.tw.links),
