@@ -125,7 +125,7 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
 
     // Like Chrome, report the initial about:blank as loaded. Its state is left
     // as is, since the first navigation reuses it (see canNavigateInPlace).
-    if (frame._load_state == .waiting) {
+    if (URL.isAboutBlank(frame.url)) {
         const frame_id = &id.toFrameId(frame._frame_id);
         const loader_id = &id.toLoaderId(frame._loader_id);
 

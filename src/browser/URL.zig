@@ -138,6 +138,10 @@ fn shouldPercentEncode(c: u8, comptime encode_set: EncodeSet) bool {
     };
 }
 
+pub fn isAboutBlank(url: []const u8) bool {
+    return std.mem.eql(u8, url, "about:blank");
+}
+
 pub fn isCompleteHTTPUrl(url: []const u8) bool {
     if (url.len < 3) { // Minimum is "x://"
         return false;
@@ -724,6 +728,16 @@ test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(false, isCompleteHTTPUrl("/example.com"));
     try testing.expectEqual(false, isCompleteHTTPUrl("../../about"));
     try testing.expectEqual(false, isCompleteHTTPUrl("about"));
+}
+
+test "URL: isAboutBlank" {
+    try testing.expectEqual(true, isAboutBlank("about:blank"));
+    try testing.expectEqual(false, isAboutBlank("about:srcdoc"));
+    try testing.expectEqual(false, isAboutBlank("about:"));
+    try testing.expectEqual(false, isAboutBlank(""));
+    try testing.expectEqual(false, isAboutBlank("about"));
+    try testing.expectEqual(false, isAboutBlank("http://example.com/about:blank"));
+    try testing.expectEqual(false, isAboutBlank("https://example.com/blob:x"));
 }
 
 test "URL: resolve regression (#1093)" {
