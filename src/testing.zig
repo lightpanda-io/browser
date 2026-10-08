@@ -44,6 +44,12 @@ pub fn reset() void {
     _ = arena_instance.reset(.retain_capacity);
 }
 
+/// Path of `name` inside a std.testing.tmpDir, relative to the cwd like the
+/// tmpDir itself, since some tools refuse absolute paths.
+pub fn tmpPath(tmp: *const std.testing.TmpDir, name: []const u8) ![:0]const u8 {
+    return std.Io.Dir.path.joinZ(arena_allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, name });
+}
+
 const App = @import("App.zig");
 const js = @import("browser/js/js.zig");
 const Config = @import("Config.zig");
@@ -539,6 +545,21 @@ test "tests:beforeAll" {
 
     const test_allocator = @import("root").tracking_allocator;
 
+    // Before App.init: its connection pool picks up the routes as it's built.
+    {
+        var wg: lp.WaitGroup = .{};
+        wg.startMany(2);
+
+        test_http_server = TestHTTPServer.init(testHTTPHandler);
+        test_http_server_thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
+
+        test_ws_server = TestWSServer.init();
+        test_ws_server_thread = try std.Thread.spawn(.{}, TestWSServer.run, .{ &test_ws_server.?, &wg });
+
+        wg.wait();
+        try routeTestPorts();
+    }
+
     test_config = try Config.init(test_allocator, "test", .{
         .serve = .{
             .insecure_disable_tls_host_verification = true,
@@ -561,41 +582,28 @@ test "tests:beforeAll" {
 
     test_session = try test_browser.newSession(test_notification);
 
-    var wg: lp.WaitGroup = .{};
-    wg.startMany(3);
-
-    test_cdp_server_thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
-
-    test_http_server = TestHTTPServer.init(testHTTPHandler);
-    test_http_server_thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
-
-    test_ws_server = TestWSServer.init();
-    test_ws_server_thread = try std.Thread.spawn(.{}, TestWSServer.run, .{ &test_ws_server.?, &wg });
-
-    // need to wait for the servers to be listening, else tests will fail because
+    // need to wait for the server to be listening, else tests will fail because
     // they aren't able to connect.
+    var wg: lp.WaitGroup = .{};
+    wg.startMany(1);
+    test_cdp_server_thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
     wg.wait();
-
-    try routeTestPorts();
 }
 
-// Fixtures address the test servers by fixed ports, but each test process binds
-// ephemeral ones so that several can run at once.
+/// Fixtures address the test servers by fixed ports, but each test process
+/// binds ephemeral ones so that several can run at once.
 fn routeTestPorts() !void {
-    const http_port = test_http_server.?.port;
-    const ws_port = test_ws_server.?.port;
-    const routes = [_]struct { []const u8, u16, u16 }{
-        .{ "127.0.0.1", 9582, http_port },
-        .{ "localhost", 9582, http_port },
-        .{ "127.0.0.1", 9584, ws_port },
-        .{ "localhost", 9584, ws_port },
+    const routes = [_]struct { u16, u16 }{
+        .{ 9582, test_http_server.?.listener.?.socket.address.getPort() },
+        .{ 9584, test_ws_server.?.port },
     };
 
     var list: ?*libcurl.CurlSList = null;
     errdefer libcurl.curl_slist_free_all(list);
     for (routes) |route| {
-        const host, const port, const real_port = route;
-        const entry = try arena_allocator.printSentinel("{s}:{d}:127.0.0.1:{d}", .{ host, port, real_port }, 0);
+        const port, const real_port = route;
+        // an empty host matches any, so both 127.0.0.1 and localhost
+        const entry = try arena_allocator.printSentinel(":{d}:127.0.0.1:{d}", .{ port, real_port }, 0);
         list = libcurl.curl_slist_append(list, entry) orelse return error.OutOfMemory;
     }
     http.test_connect_to = list;
@@ -651,10 +659,7 @@ fn serveCDP(wg: *lp.WaitGroup) !void {
         return err;
     };
 
-    var bound: std.posix.sockaddr.storage = undefined;
-    var bound_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.storage);
-    try sys_net.getsockname(test_cdp_server.?.listener, @ptrCast(&bound), &bound_len);
-    test_cdp_port = sys_net.addressFromSockaddr(@ptrCast(&bound)).getPort();
+    test_cdp_port = (try sys_net.boundAddress(test_cdp_server.?.listener)).getPort();
     test_cdp_server.?.protocols = .{ .cdp = true, .webdriver = true };
     wg.finish();
 

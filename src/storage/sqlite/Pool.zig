@@ -103,8 +103,7 @@ test "Sqlite: Pool" {
     // that useful for testing. So we create a temp file.
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.arena_allocator);
-    const path = try testing.arena_allocator.printSentinel("{s}/pool.sqlite", .{dir}, 0);
+    const path = try testing.tmpPath(&tmp, "pool.sqlite");
 
     var pool = try Pool.init(testing.allocator, path);
     defer pool.deinit(testing.allocator);

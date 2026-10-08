@@ -52,7 +52,7 @@ pub fn main(init: std.process.Init) !void {
 
     const env = Env.init(init.environ_map);
     if (env.shard == null and env.jobs > 1) {
-        return runShards(std.testing.io_instance.io(), arena.allocator(), init.environ_map, env.jobs);
+        try runShards(std.testing.io_instance.io(), arena.allocator(), init.environ_map, env.jobs);
     }
 
     var runner = Runner.init(allocator, arena.allocator(), &ta, env);
@@ -249,10 +249,15 @@ const Runner = struct {
         if (self.env.report) |path| {
             const json = try std.json.Stringify.valueAlloc(self.arena, report, .{});
             try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = json });
-            std.process.exit(if (fail == 0) 0 else 1);
+        } else {
+            try self.printReport(io, report, ns_duration);
         }
 
-        report.print(&slowest);
+        std.process.exit(if (fail == 0) 0 else 1);
+    }
+
+    fn printReport(self: *Runner, io: Io, report: Report, ns_duration: u64) !void {
+        report.print();
         // stats
         if (self.env.metrics) {
             Printer.fmt("\n", .{});
@@ -277,12 +282,10 @@ const Runner = struct {
         }
 
         report.printFailed();
-
-        std.process.exit(if (fail == 0) 0 else 1);
     }
 };
 
-// What a shard hands back to the process that spawned it.
+// A run's outcome. Shards send it to their parent as JSON.
 const Report = struct {
     pass: usize = 0,
     fail: usize = 0,
@@ -291,7 +294,7 @@ const Report = struct {
     failed: []const []const u8 = &.{},
     slowest: []const SlowTracker.TestInfo = &.{},
 
-    fn print(self: *const Report, slowest: *SlowTracker) void {
+    fn print(self: *const Report) void {
         const total_tests = self.pass + self.fail;
         const status = if (total_tests > 0 and self.fail == 0) Status.pass else Status.fail;
         Printer.status(status, "\n{d} of {d} test{s} passed\n", .{ self.pass, total_tests, if (total_tests != 1) "s" else "" });
@@ -301,10 +304,13 @@ const Report = struct {
         if (self.leak > 0) {
             Printer.status(.fail, "{d} test{s} leaked\n", .{ self.leak, if (self.leak != 1) "s" else "" });
         }
-        for (self.slowest) |info| {
-            slowest.track(info.name, info.ns);
+        if (self.slowest.len > 0) {
+            Printer.fmt("\nSlowest {d} test{s}: \n", .{ self.slowest.len, if (self.slowest.len != 1) "s" else "" });
+            for (self.slowest) |info| {
+                const ms = @as(f64, @floatFromInt(info.ns)) / 1_000_000.0;
+                Printer.fmt("  {d:.2}ms\t{s}\n", .{ ms, info.name });
+            }
         }
-        slowest.display();
     }
 
     fn printFailed(self: *const Report) void {
@@ -318,26 +324,26 @@ const Report = struct {
 };
 
 /// Runs the suite as `jobs` copies of this binary, each taking every jobs-th
-/// test, and merges what they report. Never returns.
-fn runShards(io: Io, arena: Allocator, environ_map: *const std.process.Environ.Map, jobs: usize) !void {
+/// test, and merges what they report.
+fn runShards(io: Io, arena: Allocator, environ_map: *const std.process.Environ.Map, jobs: usize) !noreturn {
     const exe = try std.process.executablePathAlloc(io, arena);
-    const dir = try std.fmt.allocPrint(arena, ".zig-cache/tmp/test-shards-{d}", .{std.c.getpid()});
+    const dir = try arena.print(".zig-cache/tmp/test-shards-{d}", .{std.c.getpid()});
     try Io.Dir.cwd().createDirPath(io, dir);
     defer Io.Dir.cwd().deleteTree(io, dir) catch {};
 
     const children = try arena.alloc(std.process.Child, jobs);
     const report_paths = try arena.alloc([]const u8, jobs);
     for (children, report_paths, 0..) |*child, *report_path, i| {
-        report_path.* = try std.fmt.allocPrint(arena, "{s}/{d}.json", .{ dir, i });
+        report_path.* = try arena.print("{s}/{d}.json", .{ dir, i });
         var child_env = try environ_map.clone(arena);
-        try child_env.put("TEST_SHARD", try std.fmt.allocPrint(arena, "{d}/{d}", .{ i, jobs }));
+        try child_env.put("TEST_SHARD", try arena.print("{d}/{d}", .{ i, jobs }));
         try child_env.put("TEST_REPORT", report_path.*);
         child.* = try std.process.spawn(io, .{ .argv = &.{exe}, .environ_map = &child_env });
     }
 
     var total: Report = .{};
     var failed: std.ArrayList([]const u8) = .empty;
-    var slowest = SlowTracker.init(io, arena, 5);
+    var slowest: SlowTracker = .init(io, arena, 5);
     var crashed = false;
     for (children, report_paths, 0..) |*child, report_path, i| {
         const term = try child.wait(io);
@@ -357,8 +363,9 @@ fn runShards(io: Io, arena: Allocator, environ_map: *const std.process.Environ.M
         }
     }
     total.failed = failed.items;
+    total.slowest = slowest.drain(arena);
 
-    total.print(&slowest);
+    total.print();
     total.printFailed();
     std.process.exit(if (total.fail == 0 and !crashed) 0 else 1);
 }
@@ -478,24 +485,11 @@ const SlowTracker = struct {
 
     /// Empties the tracker into a slice, fastest first.
     fn drain(self: *SlowTracker, allocator: Allocator) []const TestInfo {
-        var list: std.ArrayList(TestInfo) = .empty;
-        while (self.slowest.popMin()) |info| {
-            list.append(allocator, info) catch @panic("OOM");
+        const out = allocator.alloc(TestInfo, self.slowest.count()) catch @panic("OOM");
+        for (out) |*info| {
+            info.* = self.slowest.popMin().?;
         }
-        return list.items;
-    }
-
-    fn display(self: *SlowTracker) void {
-        var slowest = self.slowest;
-        const count = slowest.count();
-        if (count == 0) {
-            return;
-        }
-        Printer.fmt("\nSlowest {d} test{s}: \n", .{ count, if (count != 1) "s" else "" });
-        while (slowest.popMin()) |info| {
-            const ms = @as(f64, @floatFromInt(info.ns)) / 1_000_000.0;
-            Printer.fmt("  {d:.2}ms\t{s}\n", .{ ms, info.name });
-        }
+        return out;
     }
 
     fn compareTiming(context: void, a: TestInfo, b: TestInfo) std.math.Order {
@@ -552,9 +546,9 @@ const Env = struct {
 
     fn parseShard(value: ?[]const u8) ?Shard {
         const v = value orelse return null;
-        const split = std.mem.findScalar(u8, v, '/') orelse return null;
-        const index = std.fmt.parseInt(usize, v[0..split], 10) catch return null;
-        const count = std.fmt.parseInt(usize, v[split + 1 ..], 10) catch return null;
+        const index_str, const count_str = std.mem.cutScalar(u8, v, '/') orelse return null;
+        const index = std.fmt.parseInt(usize, index_str, 10) catch return null;
+        const count = std.fmt.parseInt(usize, count_str, 10) catch return null;
         if (index >= count) return null;
         return .{ .index = index, .count = count };
     }

@@ -39,6 +39,7 @@ pub const pageTest = base.pageTest;
 pub const newString = base.newString;
 pub const expectLog = base.expectLog;
 pub const silenceLog = base.silenceLog;
+pub const tmpPath = base.tmpPath;
 pub const arena_allocator = base.arena_allocator;
 
 pub const TestContext = struct {

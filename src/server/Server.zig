@@ -151,10 +151,7 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
         try sys_net.bind(l, sa.ptr(), sa.len);
         {
             // look this up incase --port 0 was used
-            var bound: posix.sockaddr.storage = undefined;
-            var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
-            try sys_net.getsockname(l, @ptrCast(&bound), &bound_len);
-            const bound_address = sys_net.addressFromSockaddr(@ptrCast(&bound));
+            const bound_address = try sys_net.boundAddress(l);
 
             json_version_response = try http.buildJSONVersionResponse(app, bound_address.getPort());
             errdefer allocator.free(json_version_response);
@@ -3396,11 +3393,7 @@ const LoopTest = struct {
         // run() does this; runOnce() on its own would never see an accept
         try server.io_engine.monitorListener(server.listener);
 
-        var bound: posix.sockaddr.storage = undefined;
-        var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
-        try sys_net.getsockname(server.listener, @ptrCast(&bound), &bound_len);
-
-        return .{ .server = server, .address = sys_net.addressFromSockaddr(@ptrCast(&bound)) };
+        return .{ .server = server, .address = try sys_net.boundAddress(server.listener) };
     }
 
     fn deinit(self: *LoopTest) void {

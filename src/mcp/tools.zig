@@ -1172,7 +1172,7 @@ test "MCP - save writes the script to disk" {
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const path = try testing.arena_allocator.print(".zig-cache/tmp/{s}/script.js", .{&tmp.sub_path});
+    const path = try testing.tmpPath(&tmp, "script.js");
 
     const msg = try testing.arena_allocator.print(
         \\{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"save","arguments":{{"path":"{s}","script":"const page = new Page();\nawait page.goto(\"https://example.com\");"}}}}}}
@@ -1841,7 +1841,7 @@ test "MCP - screenshot: inline image, file, unsafe path" {
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const path = try testing.arena_allocator.print(".zig-cache/tmp/{s}/screenshot.png", .{&tmp.sub_path});
+    const path = try testing.tmpPath(&tmp, "screenshot.png");
 
     out.clearRetainingCapacity();
     const to_file = try testing.arena_allocator.print("{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"screenshot\",\"arguments\":{{\"path\":\"{s}\",\"selector\":\"#hoverTarget\"}}}}}}", .{path});

@@ -64,10 +64,7 @@ fn runImpl(self: *TestWSServer, wg: *lp.WaitGroup) !void {
     try sys_net.bind(socket, sa.ptr(), sa.len);
     try sys_net.listen(socket, 8);
 
-    var bound: posix.sockaddr.storage = undefined;
-    var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
-    try sys_net.getsockname(socket, @ptrCast(&bound), &bound_len);
-    self.port = sys_net.addressFromSockaddr(@ptrCast(&bound)).getPort();
+    self.port = (try sys_net.boundAddress(socket)).getPort();
 
     self.listener = socket;
     self.shutdown.store(false, .release);

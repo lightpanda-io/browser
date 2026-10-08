@@ -958,10 +958,6 @@ test "cdp.dom: focus errors on an element that can't take focus" {
     try testing.expect(result.isTrue());
 }
 
-fn tmpPath(tmp: *const std.testing.TmpDir, name: []const u8) ![]const u8 {
-    return testing.arena_allocator.print(".zig-cache/tmp/{s}/{s}", .{ &tmp.sub_path, name });
-}
-
 test "cdp.dom: setFileInputFiles on file input" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -986,9 +982,8 @@ test "cdp.dom: setFileInputFiles on file input" {
     // Drop a temp file we can upload.
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_dir = tmp.dir;
     {
-        const f = try tmp_dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
+        const f = try tmp.dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
         defer f.close(lp.io);
         try f.writeStreamingAll(lp.io, "hello upload");
     }
@@ -998,7 +993,7 @@ test "cdp.dom: setFileInputFiles on file input" {
         .method = "DOM.setFileInputFiles",
         .params = .{
             .nodeId = 1,
-            .files = &[_][]const u8{try tmpPath(&tmp, "upload.txt")},
+            .files = &[_][]const u8{try testing.tmpPath(&tmp, "upload.txt")},
         },
     });
     try ctx.expectSentResult(null, .{ .id = 3 });
@@ -1022,12 +1017,11 @@ test "cdp.dom: setFileInputFiles exposes files to JS" {
     // Two files, so we can assert ordering as well as identity and iteration.
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_dir = tmp.dir;
     {
-        const a = try tmp_dir.createFile(lp.io, "a.txt", .{ .truncate = true });
+        const a = try tmp.dir.createFile(lp.io, "a.txt", .{ .truncate = true });
         defer a.close(lp.io);
         try a.writeStreamingAll(lp.io, "aaa");
-        const b = try tmp_dir.createFile(lp.io, "b.txt", .{ .truncate = true });
+        const b = try tmp.dir.createFile(lp.io, "b.txt", .{ .truncate = true });
         defer b.close(lp.io);
         try b.writeStreamingAll(lp.io, "bbbb");
     }
@@ -1052,7 +1046,7 @@ test "cdp.dom: setFileInputFiles exposes files to JS" {
         .method = "DOM.setFileInputFiles",
         .params = .{
             .nodeId = 1,
-            .files = &[_][]const u8{ try tmpPath(&tmp, "a.txt"), try tmpPath(&tmp, "b.txt") },
+            .files = &[_][]const u8{ try testing.tmpPath(&tmp, "a.txt"), try testing.tmpPath(&tmp, "b.txt") },
         },
     });
     try ctx.expectSentResult(null, .{ .id = 3 });
@@ -1144,9 +1138,8 @@ test "cdp.dom: setFileInputFiles errors when a path is missing" {
     // freed when the second read fails (the test runner panics on a leak).
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_dir = tmp.dir;
     {
-        const f = try tmp_dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
+        const f = try tmp.dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
         defer f.close(lp.io);
         try f.writeStreamingAll(lp.io, "hello upload");
     }
@@ -1156,7 +1149,7 @@ test "cdp.dom: setFileInputFiles errors when a path is missing" {
         .method = "DOM.setFileInputFiles",
         .params = .{
             .nodeId = 1,
-            .files = &[_][]const u8{ try tmpPath(&tmp, "upload.txt"), try tmpPath(&tmp, "does-not-exist.txt") },
+            .files = &[_][]const u8{ try testing.tmpPath(&tmp, "upload.txt"), try testing.tmpPath(&tmp, "does-not-exist.txt") },
         },
     });
     try ctx.expectSentError(-31998, "FileNotFound", .{ .id = 3 });
@@ -1176,9 +1169,8 @@ test "cdp.dom: focus and setFileInputFiles fire in the node's own frame" {
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_dir = tmp.dir;
     {
-        const f = try tmp_dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
+        const f = try tmp.dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
         defer f.close(lp.io);
         try f.writeStreamingAll(lp.io, "hello upload");
     }
@@ -1190,7 +1182,7 @@ test "cdp.dom: focus and setFileInputFiles fire in the node's own frame" {
         .method = "DOM.setFileInputFiles",
         .params = .{
             .nodeId = upload_node.id,
-            .files = &[_][]const u8{try tmpPath(&tmp, "upload.txt")},
+            .files = &[_][]const u8{try testing.tmpPath(&tmp, "upload.txt")},
         },
     });
     try ctx.expectSentResult(null, .{ .id = 2 });

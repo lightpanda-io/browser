@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const Config = @import("../Config.zig");
 const sys_net = @import("../sys/net.zig");
@@ -289,9 +288,6 @@ pub const Connection = struct {
 
     pub fn setURL(self: *const Connection, url: [:0]const u8) !void {
         try libcurl.curl_easy_setopt(self._easy, .url, url.ptr);
-        if (comptime builtin.is_test) {
-            try libcurl.curl_easy_setopt(self._easy, .connect_to, test_connect_to);
-        }
     }
 
     pub fn setTimeout(self: *const Connection, timeout_ms: u32) !void {
@@ -465,6 +461,10 @@ pub const Connection = struct {
         // even if we don't support it, and then it won't be decompressed.
         // empty string means: use whatever's available
         try libcurl.curl_easy_setopt(self._easy, .accept_encoding, "");
+
+        if (comptime lp.IS_TEST) {
+            try libcurl.curl_easy_setopt(self._easy, .connect_to, test_connect_to);
+        }
 
         // proxy
         const http_proxy = config.httpProxy();

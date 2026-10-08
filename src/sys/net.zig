@@ -180,6 +180,14 @@ pub fn getsockname(sock: socket_t, addr: *posix.sockaddr, len: *posix.socklen_t)
     }
 }
 
+/// The address a socket is bound to, e.g. the ephemeral port picked for port 0.
+pub fn boundAddress(sock: socket_t) !IpAddress {
+    var bound: posix.sockaddr.storage = undefined;
+    var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
+    try getsockname(sock, @ptrCast(&bound), &bound_len);
+    return addressFromSockaddr(@ptrCast(&bound));
+}
+
 pub fn connect(addr: *const IpAddress) !socket_t {
     const sock = try socket(family(addr), posix.SOCK.STREAM, posix.IPPROTO.TCP);
     errdefer _ = c.close(sock);
