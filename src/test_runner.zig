@@ -210,11 +210,11 @@ const Runner = struct {
                     if (@errorReturnTrace()) |trace| {
                         std.debug.dumpErrorReturnTrace(trace);
                     }
+                    try fail_list.append(self.allocator, try self.allocator.dupe(u8, friendly_name));
                     if (self.env.fail_first) {
                         if (claim) |*c| c.stop();
                         break;
                     }
-                    try fail_list.append(self.allocator, try self.allocator.dupe(u8, friendly_name));
                 },
             }
 
