@@ -92,6 +92,7 @@ fn pageTargetInfo(bc: *const CDP.BrowserContext) ?TargetInfo {
 /// Clients such as Browser Use track a tab's URL and title only through this
 /// event, as Chrome sends it whenever either changes.
 pub fn sendTargetInfoChanged(bc: *const CDP.BrowserContext, frame_id: u32) !void {
+    if (!bc.cdp.target_discover) return;
     const main = bc.mainFrame() orelse return;
     if (main._frame_id != frame_id) return;
     const info = pageTargetInfo(bc) orelse return;
@@ -414,8 +415,13 @@ fn detachFromTarget(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-// TODO: noop method
 fn setDiscoverTargets(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        discover: bool,
+        filter: ?[]const TargetFilter = null,
+    })) orelse return error.InvalidParams;
+
+    cmd.cdp.target_discover = params.discover and filterIncludesPage(params.filter);
     return cmd.sendResult(null, .{});
 }
 
@@ -427,7 +433,7 @@ const TargetFilter = struct {
     exclude: bool = false,
 };
 
-/// Does the client's auto-attach filter include page targets?
+/// Does the client's target filter include page targets?
 /// Entries are checked in order: the first entry matching the
 /// target type decides; an absent type matches any type.
 fn filterIncludesPage(filter: ?[]const TargetFilter) bool {
@@ -1157,6 +1163,9 @@ test "cdp.target: targetInfoChanged reports the page's URL and title" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
+    try ctx.processMessage(.{ .id = 1, .method = "Target.setDiscoverTargets", .params = .{ .discover = true } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-TIC", .url = "cdp/accname.html", .target_id = "FID-000000000I".* });
     try ctx.expectSentEvent("Target.targetInfoChanged", .{ .targetInfo = .{
         .targetId = &bc.target_id.?,
@@ -1164,6 +1173,19 @@ test "cdp.target: targetInfoChanged reports the page's URL and title" {
         .title = "AccName Fixture",
         .browserContextId = "BID-TIC",
     } }, .{});
+}
+
+test "cdp.target: targetInfoChanged requires setDiscoverTargets" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .url = "cdp/accname.html" });
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
+        const method = msg.object.get("method") orelse continue;
+        try testing.expect(!std.mem.eql(u8, method.string, "Target.targetInfoChanged"));
+    }
+    try testing.expect(i > 0);
 }
 
 test "cdp.target: setAutoAttach with page-exclude filter sends no attachedToTarget" {

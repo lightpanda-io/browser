@@ -67,6 +67,10 @@ allocator: Allocator,
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
 
+// Target.setDiscoverTargets: when true, page target changes are reported
+// via Target.targetInfoChanged.
+target_discover: bool = false,
+
 session_id_gen: SessionIdGen = .{},
 browser_session_id_gen: BrowserSessionIdGen = .{},
 browser_context_id_gen: BrowserContextIdGen = .{},
