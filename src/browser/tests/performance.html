@@ -537,7 +537,7 @@
     const state = await testing.async();
     const worker = new Worker('./performance-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'basic' }), 100);
+    worker.postMessage({ kind: 'basic' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker error: ' + data.err);
@@ -556,7 +556,7 @@
     const state = await testing.async();
     const worker = new Worker('./performance-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'marks_and_measures' }), 100);
+    worker.postMessage({ kind: 'marks_and_measures' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker error: ' + data.err);
@@ -576,7 +576,7 @@
     const state = await testing.async();
     const worker = new Worker('./performance-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'window_only_partials_hidden' }), 100);
+    worker.postMessage({ kind: 'window_only_partials_hidden' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker error: ' + data.err);
@@ -592,7 +592,7 @@
     const state = await testing.async();
     const worker = new Worker('./performance-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'observer' }), 100);
+    worker.postMessage({ kind: 'observer' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker error: ' + data.err);

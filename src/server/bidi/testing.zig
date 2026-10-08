@@ -24,6 +24,7 @@ const Frame = @import("../../browser/Frame.zig");
 const BiDi = @import("BiDi.zig");
 const Inbox = @import("../../Inbox.zig");
 const Driver = @import("../Driver.zig");
+const sys_net = @import("../../sys/net.zig");
 
 const json = std.json;
 const posix = std.posix;
@@ -292,11 +293,16 @@ pub fn context() !TestContext {
         _ = std.c.close(pair[1]);
     }
 
+    // Replies are written synchronously, so reads never need to wait for data.
+    const flags = try sys_net.fcntl(pair[0], posix.F.GETFL, 0);
+    _ = try sys_net.fcntl(pair[0], posix.F.SETFL, flags | @as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
+
     const timeout = std.mem.toBytes(posix.timeval{ .sec = 0, .usec = 5_000 });
+    try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
+    try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
+
     const buffer_size = std.mem.toBytes(@as(c_int, 32_768));
     for (pair) |socket| {
-        try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
-        try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
         try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.RCVBUF, &buffer_size);
         try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.SNDBUF, &buffer_size);
     }

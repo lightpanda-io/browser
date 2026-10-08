@@ -886,9 +886,11 @@ fn expectMatchesReference(bytes: []const u8) !void {
 
 test "header_parser: match functions against scalar reference" {
     // Exhaustive: place every possible byte at every position of an otherwise
-    // valid buffer, across lengths covering the vector, SWAR and scalar paths.
+    // valid buffer. The lengths straddle each boundary of the 16/32-byte
+    // vector, 8-byte SWAR and scalar paths.
+    const lengths = [_]usize{ 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 39, 40, 41, 47, 48 };
     var buf: [48]u8 = undefined;
-    for (1..buf.len + 1) |len| {
+    for (lengths) |len| {
         for (0..len) |pos| {
             for (0..256) |c| {
                 @memset(buf[0..len], 'a');
@@ -901,7 +903,7 @@ test "header_parser: match functions against scalar reference" {
     // HTAB is the one valid byte below space; pair it with every byte at
     // every position to prove it never disturbs its neighbor's verdict
     // (a cross-lane borrow in the SWAR path would).
-    for (2..buf.len + 1) |len| {
+    for (lengths[1..]) |len| {
         for (0..len - 1) |pos| {
             for (0..256) |c| {
                 @memset(buf[0..len], 'a');

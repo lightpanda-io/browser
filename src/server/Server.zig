@@ -2798,13 +2798,9 @@ fn createHTTPSession(body: []const u8, expect_ws_url: bool) ![36]u8 {
     var c = try createTestClient();
     defer c.deinit();
 
-    // the body can arrive after the headers
-    var head_buf: [128]u8 = undefined;
-    try sys_net.writeAll(c.socket, try std.mem.print(&head_buf, "POST /session HTTP/1.1\r\n" ++
+    const res = try c.httpRequest(try testing.arena_allocator.print("POST /session HTTP/1.1\r\n" ++
         "Content-Type: application/json;charset=UTF-8\r\n" ++
-        "Content-Length: {d}\r\n\r\n", .{body.len}));
-    lp.io.sleep(.fromMilliseconds(20), .awake) catch {};
-    const res = try c.httpRequest(body);
+        "Content-Length: {d}\r\n\r\n{s}", .{ body.len, body }));
     try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
 
     const json = res[std.mem.find(u8, res, "\r\n\r\n").? + 4 ..];

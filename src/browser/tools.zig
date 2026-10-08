@@ -2927,14 +2927,19 @@ test "goto: a navigation stuck waiting for a connection is an error" {
     defer if (session.primaryPage()) |page| page.close();
 
     const aa = testing.arena_allocator;
-    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
-        \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":300}
+    const stuck = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":50}
     , .{});
-    try std.testing.expectError(error.NavigationTimeout, call(aa, session, &registry, "goto", args, .{ .source = .user }));
+    try std.testing.expectError(error.NavigationTimeout, call(aa, session, &registry, "goto", stuck, .{ .source = .user }));
 
     for (held.items) |conn| network.releaseConnection(conn);
     held.clearRetainingCapacity();
 
+    // Short timeouts are for the stuck case only: slow builds (tsan) need
+    // longer than that to actually load the page.
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":5000}
+    , .{});
     const r = try call(aa, session, &registry, "goto", args, .{ .source = .user });
     try std.testing.expectEqualStrings("Navigated. HTTP 200 OK.", r.text);
 }
