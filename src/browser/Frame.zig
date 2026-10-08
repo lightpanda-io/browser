@@ -385,7 +385,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         ._style_manager = undefined,
         ._script_manager = undefined,
         ._ce_reactions = .{ .allocator = page_arena },
-        ._event_manager = EventManager.init(page_arena, self),
+        ._event_manager = EventManager.init(&page.event_listeners, self),
         ._http_owner = undefined,
     };
     self._queued_events = &self._queued_events_1;
@@ -542,6 +542,7 @@ pub fn deinit(self: *Frame) void {
 
         // Release our reference to location.
         self.window._location.releaseRef(page);
+        page.event_listeners.removeTarget(self.window.asEventTarget());
     }
 
     const browser = page.session.browser;

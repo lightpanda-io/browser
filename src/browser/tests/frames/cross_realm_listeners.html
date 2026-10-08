@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<script src="../testing.js"></script>
+
+<iframe id=f1 src="support/win_a.html"></iframe>
+
+<script id=parent_listener_on_child_node>
+  testing.onload(() => {
+    const cw = $('#f1').contentWindow;
+    const child_body = cw.document.body;
+
+    // The parent's function, dispatched from the child's realm.
+    let fired = 0;
+    child_body.addEventListener('ping', () => fired += 1);
+    cw.EventTarget.prototype.dispatchEvent.call(child_body, new cw.Event('ping'));
+    testing.expectEqual(1, fired);
+  });
+</script>
+
+<script id=child_realm_add_on_parent_node>
+  testing.onload(() => {
+    const cw = $('#f1').contentWindow;
+
+    // The child realm's addEventListener, on a parent node.
+    let fired = 0;
+    const listener = () => fired += 1;
+    cw.EventTarget.prototype.addEventListener.call(document.body, 'pong', listener);
+    document.body.dispatchEvent(new Event('pong'));
+    testing.expectEqual(1, fired);
+
+    // And removable from either realm.
+    document.body.removeEventListener('pong', listener);
+    document.body.dispatchEvent(new Event('pong'));
+    testing.expectEqual(1, fired);
+  });
+</script>
+
+<script id=dispatch_bubbles_to_owner_window>
+  testing.onload(() => {
+    const cw = $('#f1').contentWindow;
+    const child_body = cw.document.body;
+
+    let child_window = 0;
+    let parent_window = 0;
+    const on_child = () => child_window += 1;
+    const on_parent = () => parent_window += 1;
+    cw.addEventListener('bubble', on_child);
+    window.addEventListener('bubble', on_parent);
+
+    // The parent's dispatchEvent on a child node: the path ends at the
+    // child's window.
+    child_body.dispatchEvent(new Event('bubble', {bubbles: true}));
+    testing.expectEqual(1, child_window);
+    testing.expectEqual(0, parent_window);
+
+    cw.removeEventListener('bubble', on_child);
+    window.removeEventListener('bubble', on_parent);
+  });
+</script>
+
+<script id=window_listeners_dropped_on_navigation type=module>
+  const state = await testing.async();
+
+  const iframe = document.createElement('iframe');
+  const onceLoad = () => new Promise((r) => { iframe.onload = () => r(); });
+
+  let loaded = onceLoad();
+  iframe.src = 'support/win_a.html';
+  document.body.appendChild(iframe);
+  await loaded;
+
+  const w = iframe.contentWindow;
+  let fired = 0;
+  w.addEventListener('stale', () => fired += 1);
+
+  loaded = onceLoad();
+  iframe.src = 'support/win_b.html';   // in-place re-init; Window is reused
+  await loaded;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, w === iframe.contentWindow);
+    w.dispatchEvent(new Event('stale'));
+    testing.expectEqual(0, fired);
+  });
+</script>
+</body>

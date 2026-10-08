@@ -190,7 +190,13 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
     event._is_trusted = false;
 
     switch (exec.js.global) {
-        .frame => |frame| {
+        .frame => |caller| {
+            // a Node's event disaptches in its own frame. It doens't matter
+            // where dispatchEvent was called.
+            const frame = blk: {
+                const node = self.is(Node) orelse break :blk caller;
+                break :blk node.ownerFrame(caller) orelse caller;
+            };
             event.acquireRef();
             defer _ = event.releaseRef(frame.page);
             try frame._event_manager.dispatch(self, event);
