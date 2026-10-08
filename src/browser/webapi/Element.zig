@@ -926,7 +926,7 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
 
     const shadow_root = try ShadowRoot.init(self, opts, frame);
     const page = frame.page;
-    try page.element_shadow_roots.put(page.frame_arena, self, shadow_root);
+    try page.element_shadow_roots.put(page.arena, self, shadow_root);
     self._flags.shadow_host = true;
     return shadow_root;
 }
@@ -1026,7 +1026,7 @@ pub fn getAttributeNames(self: *const Element, frame: *Frame) ![][]const u8 {
 
 pub fn getAttributeNamedNodeMap(self: *Element, frame: *Frame) !*Attribute.NamedNodeMap {
     const page = frame.page;
-    const gop = try page.attribute_named_node_map_lookup.getOrPut(page.frame_arena, @intFromPtr(self));
+    const gop = try page.attribute_named_node_map_lookup.getOrPut(page.arena, @intFromPtr(self));
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(Attribute.NamedNodeMap{ ._element = self });
     }
@@ -1038,7 +1038,7 @@ pub fn getAttributeNamedNodeMap(self: *Element, frame: *Frame) !*Attribute.Named
 pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
     const owner = self.ownerFrame(frame) orelse frame;
     const page = frame.page;
-    const gop = try page.element_styles.getOrPut(page.frame_arena, self);
+    const gop = try page.element_styles.getOrPut(page.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try CSSStyleProperties.init(self, false, owner);
     }
@@ -1087,7 +1087,7 @@ pub fn setStyle(self: *Element, value: []const u8, frame: *Frame) !void {
 
 pub fn getClassList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     const page = frame.page;
-    const gop = try page.element_class_lists.getOrPut(page.frame_arena, self);
+    const gop = try page.element_class_lists.getOrPut(page.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1109,7 +1109,7 @@ pub fn setPartList(self: *Element, value: String, frame: *Frame) !void {
 
 pub fn getPartList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     const page = frame.page;
-    const gop = try page.element_part_lists.getOrPut(page.frame_arena, self);
+    const gop = try page.element_part_lists.getOrPut(page.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1121,7 +1121,7 @@ pub fn getPartList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
 
 pub fn getRelList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     const page = frame.page;
-    const gop = try page.element_rel_lists.getOrPut(page.frame_arena, self);
+    const gop = try page.element_rel_lists.getOrPut(page.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1139,7 +1139,7 @@ pub const TokenListLookup = std.AutoHashMapUnmanaged(TokenListKey, *collections.
 
 pub fn getTokenList(self: *Element, comptime attribute: TokenListAttribute, frame: *Frame) !*collections.DOMTokenList {
     const page = frame.page;
-    const gop = try page.element_token_lists.getOrPut(page.frame_arena, .{ .element = self, .attribute = attribute });
+    const gop = try page.element_token_lists.getOrPut(page.arena, .{ .element = self, .attribute = attribute });
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1151,7 +1151,7 @@ pub fn getTokenList(self: *Element, comptime attribute: TokenListAttribute, fram
 
 pub fn getDataset(self: *Element, frame: *Frame) !*DOMStringMap {
     const page = frame.page;
-    const gop = try page.element_datasets.getOrPut(page.frame_arena, self);
+    const gop = try page.element_datasets.getOrPut(page.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(DOMStringMap{
             ._element = self,
@@ -2069,7 +2069,7 @@ pub fn clone(self: *Element, deep: bool, document: *const Node.Document, frame: 
     if (self._namespace == .unknown) {
         const page = document._page;
         if (page.element_namespace_uris.get(self)) |uri| {
-            try page.element_namespace_uris.put(page.frame_arena, node.as(Element), uri);
+            try page.element_namespace_uris.put(page.arena, node.as(Element), uri);
         }
     }
 
@@ -2207,7 +2207,7 @@ fn writeScroll(self: *Element, write: ScrollWrite, frame: *Frame) !bool {
         return false;
     }
 
-    const gop = try owner.page.element_scroll_positions.getOrPut(owner.page.frame_arena, self);
+    const gop = try owner.page.element_scroll_positions.getOrPut(owner.page.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }

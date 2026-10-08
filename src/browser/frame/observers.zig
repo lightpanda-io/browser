@@ -106,7 +106,7 @@ pub fn unregisterMutationObserver(frame: *Frame, observer: *MutationObserver) vo
 
 pub fn registerIntersectionObserver(frame: *Frame, observer: *IntersectionObserver) !void {
     observer.acquireRef();
-    try frame._intersection.observers.append(frame.arena, observer);
+    try frame._intersection.observers.append(frame.page_arena, observer);
 }
 
 pub fn unregisterIntersectionObserver(frame: *Frame, observer: *IntersectionObserver) void {
@@ -121,7 +121,7 @@ pub fn unregisterIntersectionObserver(frame: *Frame, observer: *IntersectionObse
 
 pub fn registerResizeObserver(frame: *Frame, observer: *ResizeObserver) !void {
     observer.acquireRef();
-    try frame._resize.observers.append(frame.arena, observer);
+    try frame._resize.observers.append(frame.page_arena, observer);
 }
 
 pub fn unregisterResizeObserver(frame: *Frame, observer: *ResizeObserver) void {

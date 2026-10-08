@@ -94,7 +94,7 @@ fn consolidate(self: *TransformList, frame: *Frame) !?*Transform {
     errdefer consolidated.releaseRef(frame.page);
 
     try M.retireAll(self, frame);
-    try self._items.ensureTotalCapacity(frame.arena, 1);
+    try self._items.ensureTotalCapacity(frame.page_arena, 1);
     try M.setAttribute(self, &.{consolidated}, frame);
     self._items.appendAssumeCapacity(consolidated);
     attach(self, consolidated);

@@ -277,8 +277,10 @@ buf: [BUF_SIZE]u8 = undefined,
 // access to the JavaScript engine
 js: *JS.Context,
 
-// An arena for the lifetime of the frame.
-arena: Allocator,
+// The Page's arena (page.arena), NOT one tied to this Frame. An iframe or
+// popup that re-navigates is torn down and re-initialized in place while the
+// Page lives on, and much of what's allocated here must survive.
+page_arena: Allocator,
 
 // An arena with a lifetime for at least the scope of one Zig invocation from
 // JS. Prefer local_arena where possible. Use call_arena when allocations may
@@ -359,13 +361,13 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         ._proto = undefined,
     })).asDocument();
 
-    const arena = page.frame_arena;
+    const page_arena = page.arena;
     const loader_id = session.nextLoaderId();
 
     self.* = .{
         .js = undefined,
         .page = page,
-        .arena = arena,
+        .page_arena = page_arena,
         .parent = parent,
         .document = document,
         .window = undefined,
@@ -382,8 +384,8 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         ._type = if (parent == null) .root else .frame,
         ._style_manager = undefined,
         ._script_manager = undefined,
-        ._ce_reactions = .{ .allocator = arena },
-        ._event_manager = EventManager.init(arena, self),
+        ._ce_reactions = .{ .allocator = page_arena },
+        ._event_manager = EventManager.init(page_arena, self),
         ._http_owner = undefined,
     };
     self._queued_events = &self._queued_events_1;
@@ -408,7 +410,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         ._proto = undefined,
         ._document = self.document,
         ._location = undefined,
-        ._performance = try .init(factory, arena),
+        ._performance = try .init(factory, page_arena),
         ._screen = screen,
         ._visual_viewport = visual_viewport,
         ._cross_origin_wrapper = undefined,
@@ -435,7 +437,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
 
     self.js = try browser.env.createContext(self, .{
         .identity = &page.identity,
-        .identity_arena = arena,
+        .identity_arena = page_arena,
         .call_arena = self.call_arena,
         .local_arena = self.local_arena,
     });
@@ -581,7 +583,7 @@ pub fn viewportChanged(self: *Frame) void {
 }
 
 pub fn trackWorker(self: *Frame, worker: *Worker) !void {
-    try self.workers.append(self.arena, worker);
+    try self.workers.append(self.page_arena, worker);
 }
 
 pub fn removeWorker(self: *Frame, worker: *Worker) void {
@@ -741,7 +743,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         else if (is_srcdoc)
             "about:srcdoc"
         else
-            try self.arena.dupeSentinel(u8, request_url, 0);
+            try self.page_arena.dupeSentinel(u8, request_url, 0);
         self._requested_url = self.url;
 
         // even though about:blank navigations may share the same _data_, we
@@ -756,7 +758,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
         if (is_blob) {
             // strip out blob:
-            self.origin = try URL.getOrigin(self.arena, request_url[5.. :0]);
+            self.origin = try URL.getOrigin(self.page_arena, request_url[5.. :0]);
         } else if (self.parent) |parent| {
             self.origin = parent.origin;
             if (is_about_blank or is_srcdoc) {
@@ -871,19 +873,19 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     self.url = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
-            break :blk try self.arena.dupeSentinel(u8, request_url, 0);
+            break :blk try self.page_arena.dupeSentinel(u8, request_url, 0);
         }
-        break :blk try std.mem.concatWithSentinel(self.arena, u8, &.{ "http://", request_url }, 0);
+        break :blk try std.mem.concatWithSentinel(self.page_arena, u8, &.{ "http://", request_url }, 0);
     };
     self._requested_url = self.url;
-    self.origin = try URL.getOrigin(self.arena, self.url);
+    self.origin = try URL.getOrigin(self.page_arena, self.url);
 
     self._navigated_options = .{
         .cdp_id = opts.cdp_id,
         .reason = opts.reason,
         .method = opts.method,
-        .body = if (opts.body) |b| try self.arena.dupe(u8, b) else null,
-        .header = if (opts.header) |h| try self.arena.dupeSentinel(u8, h, 0) else null,
+        .body = if (opts.body) |b| try self.page_arena.dupe(u8, b) else null,
+        .header = if (opts.header) |h| try self.page_arena.dupeSentinel(u8, h, 0) else null,
     };
 
     const transfer = try http_client.newRequest(.{
@@ -924,7 +926,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         }
         if (opts.referer) |ref| {
             try transfer.setHeader("Referer", ref, .{});
-            self._referrer = try self.arena.dupe(u8, ref);
+            self._referrer = try self.page_arena.dupe(u8, ref);
             transfer.req.referrer_policy = opts.referrer_policy;
         }
     }
@@ -1048,7 +1050,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         }
 
         const old_url = target.url;
-        target.url = try target.arena.dupeSentinel(u8, resolved_url, 0);
+        target.url = try target.page_arena.dupeSentinel(u8, resolved_url, 0);
 
         const location = try Location.init(target.url, target);
         location.acquireRef();
@@ -1504,8 +1506,8 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     const response_url = transfer.req.url;
     if (std.mem.eql(u8, response_url, self.url) == false) {
         // would be different than self.url in the case of a redirect
-        self.url = try self.arena.dupeSentinel(u8, response_url, 0);
-        self.origin = try URL.getOrigin(self.arena, self.url);
+        self.url = try self.page_arena.dupeSentinel(u8, response_url, 0);
+        self.origin = try URL.getOrigin(self.page_arena, self.url);
     }
 
     if (self.parent != null and framing.allowed(self, transfer) == false) {
@@ -1532,7 +1534,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
         // The Referer may have been recomputed at each hop; document.referrer
         // reports what the final request actually sent.
         self._referrer = if (transfer.findRequestHeader("referer")) |ref|
-            try self.arena.dupe(u8, ref)
+            try self.page_arena.dupe(u8, ref)
         else
             null;
     }
@@ -1555,9 +1557,9 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     self._http_status = transfer.responseStatus();
     self._bot_challenge = transfer.botChallenge();
     for (transfer.responseHeaders()) |hdr| {
-        try self._http_headers.append(self.arena, .{
-            .name = try self.arena.dupe(u8, hdr.name),
-            .value = try self.arena.dupe(u8, hdr.value),
+        try self._http_headers.append(self.page_arena, .{
+            .name = try self.page_arena.dupe(u8, hdr.name),
+            .value = try self.page_arena.dupe(u8, hdr.value),
         });
         if (std.mem.eql(u8, hdr.name, "referrer-policy")) {
             if (referrer.parseHeader(hdr.value)) |rp| {
@@ -1623,15 +1625,15 @@ fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
     // downloadWillBegin / downloadProgress events to one download.
     var guid_buf: [36]u8 = undefined;
     uuidv4(&guid_buf);
-    const guid = try self.arena.dupe(u8, &guid_buf);
+    const guid = try self.page_arena.dupe(u8, &guid_buf);
 
     // Content-Disposition filenames can be in a legacy encoding (e.g.
     // Shift_JIS) but must yield valid UTF-8
-    const suggested = dispositionFilename(disposition) orelse (try urlBasename(self.arena, self.url)) orelse guid;
+    const suggested = dispositionFilename(disposition) orelse (try urlBasename(self.page_arena, self.url)) orelse guid;
     const suggested_filename = if (std.unicode.utf8ValidateSlice(suggested))
-        try self.arena.dupe(u8, suggested)
+        try self.page_arena.dupe(u8, suggested)
     else
-        try latin1ToUtf8(self.arena, suggested);
+        try latin1ToUtf8(self.page_arena, suggested);
 
     // allowAndName stores the file under its guid; allow uses the suggested name.
     const on_disk_name = switch (session.download_behavior) {
@@ -1785,7 +1787,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
                 const end = std.mem.findScalarPos(u8, ct, 0, ';') orelse ct.len;
                 const essence = std.mem.trim(u8, ct[0..end], " \t");
                 if (essence.len > 0) {
-                    self._pending_content_type = try std.ascii.allocLowerString(self.arena, essence);
+                    self._pending_content_type = try std.ascii.allocLowerString(self.page_arena, essence);
                 }
             }
         }
@@ -1806,7 +1808,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
             },
             .application_json, .text_javascript, .text_css, .text_plain, .text_markdown => {
                 var arr: std.ArrayList(u8) = .empty;
-                try arr.appendSlice(self.arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>");
+                try arr.appendSlice(self.page_arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>");
                 self._parse_state = .{ .text = arr };
             },
             .image_jpeg, .image_gif, .image_png, .image_webp => {
@@ -1824,19 +1826,19 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
             var v = data;
             while (v.len > 0) {
                 const index = std.mem.findAnyPos(u8, v, 0, &.{ '<', '>', '&' }) orelse {
-                    return buf.appendSlice(self.arena, v);
+                    return buf.appendSlice(self.page_arena, v);
                 };
-                try buf.appendSlice(self.arena, v[0..index]);
+                try buf.appendSlice(self.page_arena, v[0..index]);
                 switch (v[index]) {
-                    '<' => try buf.appendSlice(self.arena, "&lt;"),
-                    '>' => try buf.appendSlice(self.arena, "&gt;"),
-                    '&' => try buf.appendSlice(self.arena, "&amp;"),
+                    '<' => try buf.appendSlice(self.page_arena, "&lt;"),
+                    '>' => try buf.appendSlice(self.page_arena, "&gt;"),
+                    '&' => try buf.appendSlice(self.page_arena, "&amp;"),
                     else => unreachable,
                 }
                 v = v[index + 1 ..];
             }
         },
-        .raw, .image => |*buf| try buf.appendSlice(self.arena, data),
+        .raw, .image => |*buf| try buf.appendSlice(self.page_arena, data),
         .download => |*download| {
             download.file.writeStreamingAll(lp.io, data) catch |err| {
                 // TODO(#2701 follow-up): surface the write failure properly. We
@@ -1905,7 +1907,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
             self._script_manager.staticScriptsDone();
         },
         .text => |*buf| {
-            try buf.appendSlice(self.arena, "</pre></body></html>");
+            try buf.appendSlice(self.page_arena, "</pre></body></html>");
             parser.parse(buf.items);
             self._parse_state = .complete;
             self.documentIsComplete();
@@ -2152,7 +2154,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     iframe._executed = true;
     const session = self._session;
 
-    const new_frame = try self.arena.create(Frame);
+    const new_frame = try self.page_arena.create(Frame);
     const frame_id = session.nextFrameId();
 
     try Frame.init(new_frame, frame_id, self.page, .{ .parent = self });
@@ -2196,7 +2198,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     // Append the new frame before navigate() so synchronous navigation paths
     // (about:blank, blob:) and the notifications they dispatch can see this
     // frame in self.child_frames.
-    try self.child_frames.append(self.arena, new_frame);
+    try self.child_frames.append(self.page_arena, new_frame);
 
     // navigate() may run JS that reads window[N]; flag the list unsorted until
     // we've verified ordering post-navigate.
@@ -2287,8 +2289,8 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
         break :blk try URL.resolve(self.call_arena, frame_base, opts.url, .{ .encoding = self.charset });
     };
 
-    const popup = try page.frame_arena.create(Frame);
-    errdefer page.frame_arena.destroy(popup);
+    const popup = try page.arena.create(Frame);
+    errdefer page.arena.destroy(popup);
 
     const frame_id = session.nextFrameId();
     try Frame.init(popup, frame_id, page, .{});
@@ -2302,11 +2304,11 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
         !std.ascii.eqlIgnoreCase(opts.name, "_parent") and
         !std.ascii.eqlIgnoreCase(opts.name, "_top"))
     {
-        popup.window._name = try page.frame_arena.dupe(u8, opts.name);
+        popup.window._name = try page.arena.dupe(u8, opts.name);
     }
 
     const popup_index = page.popups.items.len;
-    try page.popups.append(page.frame_arena, popup);
+    try page.popups.append(page.arena, popup);
     // not impossible that navigate adds popups, so remove by index
     errdefer _ = page.popups.swapRemove(popup_index);
 
@@ -2393,7 +2395,7 @@ pub fn addElementId(self: *Frame, parent: *Node, element: *Element, id: []const 
 }
 
 fn addElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, element: *Element, id: []const u8) !void {
-    const gop = try id_maps.lookup.getOrPut(self.arena, id);
+    const gop = try id_maps.lookup.getOrPut(self.page_arena, id);
     if (!gop.found_existing) {
         gop.value_ptr.* = element;
         return;
@@ -2413,7 +2415,7 @@ pub fn removeElementId(self: *Frame, element: *Element, id: []const u8) void {
 
 pub fn removeElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, id: []const u8) void {
     if (id_maps.lookup.remove(id)) {
-        const gop = id_maps.removed_ids.getOrPut(self.arena, id) catch |err| {
+        const gop = id_maps.removed_ids.getOrPut(self.page_arena, id) catch |err| {
             log.warn(.frame, "removeElementIdWithMaps", .{ .err = err });
             return;
         };
@@ -2452,7 +2454,7 @@ pub fn performance(self: *Frame) *Performance {
 
 // Tracks a file input's FileList so its File refs are released at teardown.
 pub fn trackFileList(self: *Frame, file_list: *FileList) !void {
-    try self._file_lists.append(self.arena, file_list);
+    try self._file_lists.append(self.page_arena, file_list);
 }
 
 pub const QueuedEvent = struct {
@@ -2476,7 +2478,7 @@ pub fn queueImageEvent(self: *Frame, image: *Element.Html.Image, kind: QueuedEve
 }
 
 fn queueEvent(self: *Frame, event: QueuedEvent) !void {
-    try self._queued_events.append(self.arena, event);
+    try self._queued_events.append(self.page_arena, event);
     if (self._queued_events.items.len == 1) {
         try self.js.scheduler.add(self, struct {
             fn cleanup(ctx: *anyopaque) !?u32 {
@@ -2674,7 +2676,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
-    sheet._href = try self.arena.dupe(u8, resolved);
+    sheet._href = try self.page_arena.dupe(u8, resolved);
 
     try self.fireElementEvent(element, comptime .wrap("load"));
 }
@@ -2812,7 +2814,7 @@ pub fn dupeString(self: *Frame, value: []const u8) ![]const u8 {
     if (String.intern(value)) |v| {
         return v;
     }
-    return self.arena.dupe(u8, value);
+    return self.page_arena.dupe(u8, value);
 }
 
 // Direct (non-propagating) dispatch of an event. Mirrors WorkerGlobalScope.dispatch
@@ -2833,7 +2835,7 @@ pub fn hasDirectListeners(self: *Frame, target: *EventTarget, typ: []const u8, h
 }
 
 pub fn dupeSSO(self: *Frame, value: []const u8) !String {
-    return String.init(self.arena, value, .{ .dupe = true });
+    return String.init(self.page_arena, value, .{ .dupe = true });
 }
 
 const RemoveNodeOpts = struct {
@@ -3341,7 +3343,7 @@ fn styleAttributeChanged(self: *Frame, element: *Element, value: ?[]const u8) vo
 }
 
 pub fn signalSlotChange(self: *Frame, slot: *Element.Html.Slot) void {
-    self._slots_pending_slotchange.put(self.arena, slot, {}) catch |err| {
+    self._slots_pending_slotchange.put(self.page_arena, slot, {}) catch |err| {
         log.err(.frame, "signalSlotChange.put", .{ .err = err, .type = self._type, .url = self.url });
         return;
     };
@@ -3358,7 +3360,7 @@ pub fn getCustomizedBuiltInDefinition(self: *Frame, element: *Element) ?*CustomE
 }
 
 pub fn setCustomizedBuiltInDefinition(self: *Frame, element: *Element, definition: *CustomElementDefinition) !void {
-    try self._customized_builtin_definitions.put(self.arena, element, definition);
+    try self._customized_builtin_definitions.put(self.page_arena, element, definition);
     element._flags.customized_builtin = true;
 }
 

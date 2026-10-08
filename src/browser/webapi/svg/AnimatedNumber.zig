@@ -58,7 +58,7 @@ pub const Lookup = std.AutoHashMapUnmanaged(Key, *AnimatedNumber);
 pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedNumber {
     const key: Key = .{ .element = element, .kind = kind };
     const page = frame.page;
-    const gop = try page.svg_animated_numbers.getOrPut(page.frame_arena, key);
+    const gop = try page.svg_animated_numbers.getOrPut(page.arena, key);
     if (!gop.found_existing) {
         errdefer _ = page.svg_animated_numbers.remove(key);
         gop.value_ptr.* = try frame._factory.create(AnimatedNumber{

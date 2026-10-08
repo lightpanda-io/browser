@@ -66,7 +66,7 @@ pub fn getValue(self: *const Attribute) String {
 pub fn setValue(self: *Attribute, data_: ?String, frame: *Frame) !void {
     const data = data_ orelse String.empty;
     const el = self._element orelse {
-        self._value = try data.dupe(frame.arena);
+        self._value = try data.dupe(frame.page_arena);
         return;
     };
     // this takes ownership of the data
@@ -210,7 +210,7 @@ pub const List = struct {
     // *Attribute until the attribute is removed.
     pub fn getOrCreateAttribute(self: *const List, entry: *const Entry, element: *Element, frame: *Frame) !*Attribute {
         const page = frame.page;
-        const gop = try page.attribute_lookup.getOrPut(page.frame_arena, .{ .list = self, .name = entry._name_ptr });
+        const gop = try page.attribute_lookup.getOrPut(page.arena, .{ .list = self, .name = entry._name_ptr });
         if (!gop.found_existing) {
             gop.value_ptr.* = try entry.toAttribute(element, element.ownerFrame(frame) orelse frame);
         }
@@ -311,7 +311,7 @@ pub const List = struct {
         const name = try self.put(attribute._name, attribute._value, element, frame);
         attribute._element = element;
         const page = frame.page;
-        try page.attribute_lookup.put(page.frame_arena, .{ .list = self, .name = name.ptr }, attribute);
+        try page.attribute_lookup.put(page.arena, .{ .list = self, .name = name.ptr }, attribute);
         return existing_attribute;
     }
 
@@ -403,9 +403,9 @@ pub const List = struct {
             return;
         }
         if (self._cap == 0) {
-            self._entries = (try frame.arena.alloc(Entry, new_cap)).ptr;
+            self._entries = (try frame.page_arena.alloc(Entry, new_cap)).ptr;
         } else {
-            self._entries = (try frame.arena.realloc(self._entries[0..self._cap], new_cap)).ptr;
+            self._entries = (try frame.page_arena.realloc(self._entries[0..self._cap], new_cap)).ptr;
         }
         self._cap = new_cap;
     }
@@ -552,9 +552,9 @@ fn canonicalizeName(name: []const u8, frame: *Frame) ![]const u8 {
         return static;
     }
     const page = frame.page;
-    const gop = try page.attribute_names.getOrPut(page.frame_arena, name);
+    const gop = try page.attribute_names.getOrPut(page.arena, name);
     if (!gop.found_existing) {
-        gop.key_ptr.* = try page.frame_arena.dupe(u8, name);
+        gop.key_ptr.* = try page.arena.dupe(u8, name);
     }
     return gop.key_ptr.*;
 }

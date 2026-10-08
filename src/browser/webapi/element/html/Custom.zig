@@ -89,7 +89,7 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
 
             if (!custom._upgrade_candidate) {
                 custom._upgrade_candidate = true;
-                try frame._undefined_custom_elements.append(frame.arena, custom);
+                try frame._undefined_custom_elements.append(frame.page_arena, custom);
             }
             return;
         }
@@ -110,13 +110,13 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
     if (comptime from_parser) {
         // From parser, we know the element is brand new; skip the dedup check.
         try frame._customized_builtin_connected_callback_invoked.put(
-            frame.arena,
+            frame.page_arena,
             element,
             {},
         );
     } else {
         const gop = try frame._customized_builtin_connected_callback_invoked.getOrPut(
-            frame.arena,
+            frame.page_arena,
             element,
         );
         if (gop.found_existing) {
@@ -146,7 +146,7 @@ pub fn enqueueDisconnectedCallbackOnElement(element: *Element, frame: *Frame) vo
     }
 
     const gop = frame._customized_builtin_disconnected_callback_invoked.getOrPut(
-        frame.arena,
+        frame.page_arena,
         element,
     ) catch return;
     if (gop.found_existing) return;

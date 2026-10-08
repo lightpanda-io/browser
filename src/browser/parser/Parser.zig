@@ -91,7 +91,7 @@ pending_text: ?PendingText,
 // on flush keeps the largest capacity ever needed, so total dead memory on the
 // parser arena is bounded to one peak-run-sized allocation regardless of how
 // many text runs the parse contains. Matters for Streaming, whose arena is the
-// page-lifetime frame.arena (individual frees are no-ops there).
+// page-lifetime frame.page_arena (individual frees are no-ops there).
 //
 // Single-chunk text runs leave this buf empty: the chunk lives only in
 // CData._data via createTextNode. The buf is seeded from _data.str() on the
@@ -150,7 +150,7 @@ pub fn flushPendingText(self: *Parser) !void {
     if (self.buf.items.len == 0) return;
     defer self.buf.clearRetainingCapacity();
     pt.text_node._data = try lp.String.init(
-        self.frame.arena,
+        self.frame.page_arena,
         self.buf.items,
         .{ .dupe = true },
     );
@@ -570,7 +570,7 @@ fn _createElementCallback(self: *Parser, data: *anyopaque, qname: h5e.QualName, 
         // Same as Document.createElementNS: keep the URI so namespaceURI and
         // lookupNamespaceURI can return it.
         const page = self.document._page;
-        try page.element_namespace_uris.put(page.frame_arena, node.as(Element), try frame.dupeString(namespace_string));
+        try page.element_namespace_uris.put(page.arena, node.as(Element), try frame.dupeString(namespace_string));
     }
 
     const pn = try self.arena.create(ParsedNode);
@@ -832,7 +832,7 @@ fn rebuildIn(self: *Parser, node: *Node, document: *Node.Document) !*Node {
         // The URI lives in a side table, see _createElementCallback.
         const page = self.document._page;
         if (page.element_namespace_uris.fetchRemove(element)) |entry| {
-            try page.element_namespace_uris.put(page.frame_arena, copy.as(Element), entry.value);
+            try page.element_namespace_uris.put(page.arena, copy.as(Element), entry.value);
         }
     }
     return copy;

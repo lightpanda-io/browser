@@ -341,7 +341,7 @@ const PipeState = struct {
         exec: *const Execution,
     ) !void {
         const reader = try stream.getReader(exec);
-        const state = try exec.arena.create(PipeState);
+        const state = try exec.page_arena.create(PipeState);
         state.* = .{
             .execution = exec,
             .reader = reader,

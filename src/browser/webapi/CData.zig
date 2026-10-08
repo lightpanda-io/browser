@@ -384,7 +384,7 @@ fn deleteData(self: *CData, offset: usize, count: usize, frame: *Frame) !void {
         self._data = try frame.dupeSSO(old_value[0..range.start]);
     } else {
         // Deleting from middle - concat prefix and suffix
-        self._data = try String.concat(frame.arena, &.{
+        self._data = try String.concat(frame.page_arena, &.{
             old_value[0..range.start],
             old_value[range.end..],
         });
@@ -400,7 +400,7 @@ fn insertData(self: *CData, offset: usize, data: []const u8, frame: *Frame) !voi
 
     const old_value = self._data;
     const existing = old_value.str();
-    self._data = try String.concat(frame.arena, &.{
+    self._data = try String.concat(frame.page_arena, &.{
         existing[0..byte_offset],
         data,
         existing[byte_offset..],
@@ -419,7 +419,7 @@ pub fn replaceData(self: *CData, offset: usize, count: usize, data: []const u8, 
 
     const old_value = self._data;
     const existing = old_value.str();
-    self._data = try String.concat(frame.arena, &.{
+    self._data = try String.concat(frame.page_arena, &.{
         existing[0..range.start],
         data,
         existing[range.end..],

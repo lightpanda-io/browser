@@ -129,7 +129,7 @@ fn getOnSlotChange(self: *ShadowRoot, frame: *Frame) ?js.Function.Global {
 
 fn setOnSlotChange(self: *ShadowRoot, callback: ?js.Function.Global, frame: *Frame) !void {
     if (callback) |cb| {
-        try frame._event_target_attr_listeners.put(frame.arena, .{ .target = self.asEventTarget(), .handler = .onslotchange }, cb);
+        try frame._event_target_attr_listeners.put(frame.page_arena, .{ .target = self.asEventTarget(), .handler = .onslotchange }, cb);
     } else {
         _ = frame._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onslotchange });
     }
@@ -173,7 +173,7 @@ pub fn getElementById(self: *ShadowRoot, id: []const u8, frame: *Frame) ?*Elemen
                 // if it really failed, then we're out of memory and nothing's
                 // going to work like it should anyways.
                 const owned_id = frame.dupeString(id) catch return null;
-                self._elements_by_id.put(frame.arena, owned_id, el) catch return null;
+                self._elements_by_id.put(frame.page_arena, owned_id, el) catch return null;
                 return el;
             }
         }

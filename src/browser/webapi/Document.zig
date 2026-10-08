@@ -122,7 +122,7 @@ fn getOnClick(self: *Document, frame: *Frame) ?js.Function.Global {
 fn setOnClick(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
     const owner = self._frame orelse frame;
     if (Window.getFunctionFromSetter(setter)) |cb| {
-        try owner._event_target_attr_listeners.put(owner.arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
+        try owner._event_target_attr_listeners.put(owner.page_arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
     } else {
         _ = owner._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onclick });
     }
@@ -410,7 +410,7 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
     if (ns == .unknown) {
         if (namespace) |uri| {
             const duped = try frame.dupeString(uri);
-            try self._page.element_namespace_uris.put(self._page.frame_arena, node.as(Element), duped);
+            try self._page.element_namespace_uris.put(self._page.arena, node.as(Element), duped);
         }
     }
     return node.as(Element);
@@ -461,7 +461,7 @@ pub fn getElementById(self: *Document, id: []const u8, frame: *Frame) ?*Element 
                 // if it really failed, then we're out of memory and nothing's
                 // going to work like it should anyways.
                 const owned_id = frame.dupeString(id) catch return null;
-                self._elements_by_id.put(frame.arena, owned_id, el) catch return null;
+                self._elements_by_id.put(frame.page_arena, owned_id, el) catch return null;
                 return el;
             }
         }
@@ -483,7 +483,7 @@ pub fn getElementsByClassName(self: *Document, class_name: []const u8, frame: *F
 }
 
 fn getElementsByName(self: *Document, name: []const u8, frame: *Frame) !collections.NodeLive(.name) {
-    const arena = frame.arena;
+    const arena = frame.page_arena;
     const filter = try arena.dupe(u8, name);
     return collections.NodeLive(.name).init(self.asNode(), filter, frame);
 }
@@ -1257,7 +1257,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     }
 
     // reset the document
-    self._elements_by_id.clearAndFree(frame.arena);
+    self._elements_by_id.clearAndFree(frame.page_arena);
     self.setActiveElement(null, frame);
     self._open_popovers = .empty;
     self._style_sheets = null;
@@ -1270,9 +1270,9 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     if (std.mem.findScalar(*Document, frame._script_created_parser_docs.items, self) == null) {
         // have the page track this document (if it isn't already)
         // so that, on shutdown, it can close the parser if needed.
-        try frame._script_created_parser_docs.append(frame.arena, self);
+        try frame._script_created_parser_docs.append(frame.page_arena, self);
     }
-    self._script_created_parser = Parser.Streaming.init(frame.arena, doc_node, frame, .{ .allow_declarative_shadow = true });
+    self._script_created_parser = Parser.Streaming.init(frame.page_arena, doc_node, frame, .{ .allow_declarative_shadow = true });
     // on start() failure the internal `handle` isn't yet create. So we can't
     // call done() and we don't want any subsequent cleanup to call done().
     errdefer self._script_created_parser = null;
@@ -1758,7 +1758,7 @@ pub const JsApi = struct {
             pub fn set(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
                 const owner = self._frame orelse frame;
                 if (Window.getFunctionFromSetter(setter)) |cb| {
-                    try owner._event_target_attr_listeners.put(owner.arena, .{ .target = self.asEventTarget(), .handler = handler }, cb);
+                    try owner._event_target_attr_listeners.put(owner.page_arena, .{ .target = self.asEventTarget(), .handler = handler }, cb);
                 } else {
                     _ = owner._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = handler });
                 }

@@ -56,7 +56,7 @@ pub fn init(stream: *ReadableStream, high_water_mark: u32, exec: *const Executio
         ._queue = .empty,
         ._stream = stream,
         ._execution = exec,
-        ._arena = exec.arena,
+        ._arena = exec.page_arena,
         ._pending_reads = .empty,
         ._high_water_mark = high_water_mark,
     });
