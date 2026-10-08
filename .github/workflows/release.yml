@@ -91,7 +91,7 @@ jobs:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }},lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug
           tag: ${{ env.RELEASE }}
-          makeLatest: true
+          makeLatest: ${{ github.ref_type == 'tag' }}
 
       - name: Share binary with packaging jobs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -151,7 +151,7 @@ jobs:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           tag: ${{ env.RELEASE }}
-          makeLatest: true
+          makeLatest: ${{ github.ref_type == 'tag' }}
 
   package-debian:
     if: github.ref_type == 'tag'
