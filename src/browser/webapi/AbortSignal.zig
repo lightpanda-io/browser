@@ -143,7 +143,7 @@ fn markAborted(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !vo
     } else {
         // Allocate the DOMException so the reason keeps a single JS identity:
         // dependent signals must expose the very same DOMException instance.
-        const dom = try exec.arena.create(DOMException);
+        const dom = try exec.page_arena.create(DOMException);
         dom.* = DOMException.fromError(error.AbortError).?;
         self._reason = .{ .dom = dom };
     }
@@ -203,12 +203,12 @@ fn createAny(signals_value: js.Value, exec: *const Execution) !*AbortSignal {
 
     for (signals) |source| {
         if (!source._is_dependent) {
-            try source._dependents.append(exec.arena, .{ .signal = result });
-            try result._source_signals.append(exec.arena, source);
+            try source._dependents.append(exec.page_arena, .{ .signal = result });
+            try result._source_signals.append(exec.page_arena, source);
         } else {
             for (source._source_signals.items) |s| {
-                try s._dependents.append(exec.arena, .{ .signal = result });
-                try result._source_signals.append(exec.arena, s);
+                try s._dependents.append(exec.page_arena, .{ .signal = result });
+                try result._source_signals.append(exec.page_arena, s);
             }
         }
     }
@@ -225,7 +225,7 @@ fn createTimeout(milliseconds: f64, exec: *const Execution) !*AbortSignal {
     }
     const delay: u32 = @intFromFloat(@min(truncated, std.math.maxInt(u32)));
 
-    const callback = try exec.arena.create(TimeoutCallback);
+    const callback = try exec.page_arena.create(TimeoutCallback);
     callback.* = .{
         .exec = exec,
         .signal = try init(exec),
@@ -303,7 +303,7 @@ const TimeoutCallback = struct {
             .worker => {},
         }
 
-        const dom = try self.exec.arena.create(DOMException);
+        const dom = try self.exec.page_arena.create(DOMException);
         dom.* = DOMException.fromError(error.TimeoutError).?;
         try self.signal.abort(.{ .dom = dom }, self.exec);
     }

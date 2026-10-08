@@ -1458,7 +1458,7 @@ pub fn getElementsByTagName(self: *Node, tag_name: []const u8, frame: *Frame) !G
         };
     }
 
-    const arena = frame.arena;
+    const arena = frame.page_arena;
     const filter = try String.init(arena, tag_name, .{});
     return .{ .tag_name = collections.NodeLive(.tag_name).init(self, filter, frame) };
 }
@@ -1477,13 +1477,13 @@ pub fn getElementsByTagNameNS(self: *Node, namespace: ?[]const u8, local_name: [
 
     return collections.NodeLive(.tag_name_ns).init(self, .{
         .namespace = ns,
-        .local_name = try String.init(frame.arena, local_name, .{}),
+        .local_name = try String.init(frame.page_arena, local_name, .{}),
     }, frame);
 }
 
 // Not exposed in the WebAPI, but used by both Element and Document
 pub fn getElementsByClassName(self: *Node, class_name: []const u8, frame: *Frame) !collections.NodeLive(.class_name) {
-    const arena = frame.arena;
+    const arena = frame.page_arena;
 
     // Parse space-separated class names
     var class_names: std.ArrayList([]const u8) = .empty;

@@ -80,7 +80,7 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
             errdefer hooks.releaseItem(prepared, frame.page);
 
             try retireAll(self, frame);
-            try self._items.ensureTotalCapacity(frame.arena, 1);
+            try self._items.ensureTotalCapacity(frame.page_arena, 1);
             try setAttribute(self, &.{prepared}, frame);
             self._items.appendAssumeCapacity(prepared);
             hooks.attach(self, prepared);
@@ -105,7 +105,7 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
             next[at] = prepared;
             @memcpy(next[at + 1 ..], self._items.items[at..]);
 
-            try self._items.ensureUnusedCapacity(frame.arena, 1);
+            try self._items.ensureUnusedCapacity(frame.page_arena, 1);
             try setAttribute(self, next, frame);
             self._items.insertAssumeCapacity(at, prepared);
             hooks.attach(self, prepared);
@@ -122,7 +122,7 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
             const next = try frame.local_arena.dupe(*Item, self._items.items);
             next[index] = prepared;
 
-            try self._retired.ensureUnusedCapacity(frame.arena, 1);
+            try self._retired.ensureUnusedCapacity(frame.page_arena, 1);
             try setAttribute(self, next, frame);
             const replaced = self._items.items[index];
             hooks.detachItem(replaced, self);
@@ -141,7 +141,7 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
             @memcpy(next[0..index], self._items.items[0..index]);
             @memcpy(next[index..], self._items.items[index + 1 ..]);
 
-            try self._retired.ensureUnusedCapacity(frame.arena, 1);
+            try self._retired.ensureUnusedCapacity(frame.page_arena, 1);
             try setAttribute(self, next, frame);
             const removed = self._items.orderedRemove(index);
             hooks.detachItem(removed, self);
@@ -173,9 +173,9 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
             errdefer for (parsed.items) |item| hooks.releaseItem(item, frame.page);
 
             self._snapshot.clearRetainingCapacity();
-            try self._snapshot.appendSlice(frame.arena, raw);
+            try self._snapshot.appendSlice(frame.page_arena, raw);
             try retireAll(self, frame);
-            try self._items.ensureTotalCapacityPrecise(frame.arena, parsed.items.len);
+            try self._items.ensureTotalCapacityPrecise(frame.page_arena, parsed.items.len);
             for (parsed.items) |item| {
                 self._items.appendAssumeCapacity(item);
                 hooks.attach(self, item);
@@ -197,7 +197,7 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
 
         pub fn retireAll(self: *List, frame: *Frame) !void {
             self._synced = false;
-            try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
+            try self._retired.ensureUnusedCapacity(frame.page_arena, self._items.items.len);
             for (self._items.items) |item| {
                 hooks.detachItem(item, self);
                 self._retired.appendAssumeCapacity(item);
@@ -219,7 +219,7 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
             self._synced = false;
             try self._element.setAttributeSafe(hooks.attrName(self), .wrap(serialized), frame);
             self._snapshot.clearRetainingCapacity();
-            try self._snapshot.appendSlice(frame.arena, serialized);
+            try self._snapshot.appendSlice(frame.page_arena, serialized);
             self._synced = true;
         }
     };

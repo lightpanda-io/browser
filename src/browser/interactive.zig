@@ -286,11 +286,12 @@ pub fn buildListenerTargetMap(frame: *Frame, arena: Allocator) !ListenerTargetMa
     // addEventListener registrations
     var it = frame._event_manager.base.lookup.iterator();
     while (it.next()) |entry| {
-        const list = entry.value_ptr.*;
-        if (list.first != null) {
-            const gop = try map.getOrPut(arena, entry.key_ptr.event_target);
-            if (!gop.found_existing) gop.value_ptr.* = .empty;
-            try gop.value_ptr.append(arena, entry.key_ptr.type_string.str());
+        for (entry.value_ptr.items) |*type_listeners| {
+            if (type_listeners.list.first != null) {
+                const gop = try map.getOrPut(arena, entry.key_ptr.*);
+                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                try gop.value_ptr.append(arena, type_listeners.typ.str());
+            }
         }
     }
 

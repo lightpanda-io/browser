@@ -66,18 +66,30 @@ jobs:
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
 
+      # Debug info is over half the binary. Ship it stripped, with the debug
+      # info as a separate release asset (and on s3) to symbolize crash reports
+      # (addr2line -e lightpanda-ARCH-linux.debug ADDR...).
+      - name: Split debug info
+        run: |
+          BIN=lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          objcopy --only-keep-debug --compress-debug-sections=zlib $BIN $BIN.debug
+          objcopy --strip-all --add-gnu-debuglink=$BIN.debug $BIN
+          ls -l $BIN $BIN.debug
+
       - name: upload on s3
         run: |
           export DIR=`git show --no-patch --no-notes --pretty='%cs_%h'`
           aws s3 cp --storage-class=GLACIER_IR lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          aws s3 cp --storage-class=GLACIER_IR lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug
           aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${RELEASE}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug s3://lpd-nightly-build/${RELEASE}/lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug
           aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/agent-${RELEASE}/lightpanda-agent-${{ env.ARCH }}-${{ env.OS }}
 
       - name: Upload the build
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           allowUpdates: true
-          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }},lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug
           tag: ${{ env.RELEASE }}
           makeLatest: true
 

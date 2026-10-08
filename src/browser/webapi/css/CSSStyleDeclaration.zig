@@ -288,7 +288,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     // Create new property
     const prop = try frame._factory.create(Property{
         ._node = .{},
-        ._name = try String.init(frame.arena, normalized, .{}),
+        ._name = try String.init(frame.page_arena, normalized, .{}),
         ._value = try initOwnedString(frame._factory.storageAllocator(), normalized_value),
         ._important = important,
     });

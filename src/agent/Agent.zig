@@ -616,7 +616,7 @@ fn gotoStart(self: *Agent, url: [:0]const u8) bool {
     var object: std.json.ObjectMap = .empty;
     object.put(a, "url", .{ .string = url }) catch return false;
     const args: std.json.Value = .{ .object = object };
-    const result = browser_tools.call(a, self.ts.session, &self.ts.registry, "goto", args, .{}) catch |err| {
+    const result = browser_tools.call(a, self.ts.session, &self.ts.registry, "goto", args, .{ .source = .user }) catch |err| {
         self.terminal.printError("could not open {s}: {s}", .{ url, browser_tools.errorMessage(err) });
         return false;
     };
@@ -1575,7 +1575,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
 
 fn runCommand(self: *Agent, arena: std.mem.Allocator, tc: Command.ToolCall) browser_tools.ToolResult {
     // The terminal can't show an image, but the conversation can.
-    return browser_tools.call(arena, self.ts.session, &self.ts.registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null, .record = true, .nav_note = true }) catch |err| .{
+    return browser_tools.call(arena, self.ts.session, &self.ts.registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null, .record = true, .nav_note = true, .source = .user }) catch |err| .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
@@ -2060,6 +2060,7 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
         .inline_image = true,
         .record = self.capturing_for_save,
         .nav_note = true,
+        .source = .llm,
     });
     saved.* = .{ .selector = result.selector, .navigated = result.navigated };
     const content = capToolOutput(allocator, tool_name, result.text);

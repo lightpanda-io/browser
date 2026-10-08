@@ -60,7 +60,7 @@ pub fn moduleHint(frame: *Frame, element: ?*Element.Html, href: []const u8) bool
 
     // The url becomes the imported_modules key, which must outlive the fetch
     // so it lives on the frame arena
-    const resolved = URL.resolve(frame.arena, frame.base(), href, .{ .encoding = frame.charset }) catch return false;
+    const resolved = URL.resolve(frame.page_arena, frame.base(), href, .{ .encoding = frame.charset }) catch return false;
     if (!isRemoteScheme(resolved)) {
         return false;
     }
@@ -117,7 +117,7 @@ const Prescan = struct {
                 }
                 // The url becomes the imported_modules key, which must
                 // outlive the fetch so it lives on the frame arena.
-                const resolved = URL.resolve(frame.arena, self.base, href, .{ .encoding = frame.charset }) catch return;
+                const resolved = URL.resolve(frame.page_arena, self.base, href, .{ .encoding = frame.charset }) catch return;
                 if (isRemoteScheme(resolved) == false) {
                     return;
                 }

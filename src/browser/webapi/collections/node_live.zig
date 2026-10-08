@@ -495,7 +495,7 @@ test "NodeLive: indexed reads stay linear" {
 
 fn buildSpans(frame: *Frame, count: usize) !*Node {
     const div = try frame.window._document.createElement("div", null, frame);
-    const html = try frame.arena.alloc(u8, count * "<span></span>".len);
+    const html = try frame.page_arena.alloc(u8, count * "<span></span>".len);
     var i: usize = 0;
     while (i < html.len) : (i += "<span></span>".len) {
         @memcpy(html[i..][0.."<span></span>".len], "<span></span>");

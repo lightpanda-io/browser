@@ -330,7 +330,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
 
                 const page = ctx.page;
                 const session = page.session;
-                const finalizer_gop = try page.finalizer_callbacks.getOrPut(page.frame_arena, finalizer_ptr_id);
+                const finalizer_gop = try page.finalizer_callbacks.getOrPut(page.arena, finalizer_ptr_id);
                 if (finalizer_gop.found_existing == false) {
                     // This is the first context (and very likely only one) to
                     // see this Zig instance. We need to create the FinalizerCallback

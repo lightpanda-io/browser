@@ -688,7 +688,7 @@ fn setAttributeListener(
     }
 
     if (listener_callback) |cb| {
-        try frame._event_target_attr_listeners.put(frame.arena, .{
+        try frame._event_target_attr_listeners.put(frame.page_arena, .{
             .target = self.asEventTarget(),
             .handler = listener_type,
         }, cb);
