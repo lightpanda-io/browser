@@ -19,6 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const log = lp.log;
+
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const Execution = @import("../js/Execution.zig");
@@ -162,7 +164,9 @@ pub const LockRequest = struct {
         self.exec.js.scheduler.add(self, runFireCallback, 0, .{
             .name = "weblocks.fireCallback",
             .finalizer = cancelled,
-        }) catch self.fireCallback();
+        }) catch |err| {
+            log.debug(.dom, "weblocks schedule cb", .{ .err = err });
+        };
     }
 
     fn runFireCallback(ctx: *anyopaque) anyerror!?u32 {
@@ -175,7 +179,9 @@ pub const LockRequest = struct {
         self.exec.js.scheduler.add(self, runFireCallbackWithNull, 0, .{
             .name = "weblocks.fireCallbackWithNull",
             .finalizer = cancelled,
-        }) catch self.fireCallbackWith(null);
+        }) catch |err| {
+            log.debug(.dom, "weblocks schedule fireCallbackWithNull", .{ .err = err });
+        };
     }
 
     fn runFireCallbackWithNull(ctx: *anyopaque) anyerror!?u32 {
