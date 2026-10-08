@@ -812,7 +812,14 @@ fn whatToShow(value_: ?js.Value) !u32 {
     return value.toZig(u32);
 }
 
-fn getReadyState(self: *const Document) []const u8 {
+fn getReadyState(self: *const Document, frame: *const Frame) []const u8 {
+    // special case: protocols like CDP or webdriver use a fastpath for the default about:blank page.
+    // the page is considered immediately loaded **but** the _ready_state stay waiting for internal navigation reasons.
+    // So if the page is about:blank, shortcut ready_state to return complete.
+    if (URL.isAboutBlank(self.getURL(frame))) {
+        return "complete";
+    }
+
     return @tagName(self._ready_state);
 }
 
