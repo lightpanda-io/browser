@@ -51,6 +51,10 @@ pub fn main(init: std.process.Init) !void {
     defer std.testing.io_instance.deinit();
 
     const env = Env.init(init.environ_map);
+    if (env.shard == null and env.jobs > 1) {
+        return runShards(std.testing.io_instance.io(), arena.allocator(), init.environ_map, env.jobs);
+    }
+
     var runner = Runner.init(allocator, arena.allocator(), &ta, env);
     RUNNER = &runner;
     try runner.run(std.testing.io_instance.io());
@@ -107,9 +111,17 @@ const Runner = struct {
         // Then we have a special check to make sure _some_ test was run. This
         const webapi_html_test_mode = self.env.filter == null and self.env.subfilter != null;
 
+        var index: usize = 0;
         for (builtin.test_functions) |t| {
             if (isSetup(t) or isTeardown(t) or isAfterEach(t)) {
                 continue;
+            }
+
+            if (self.env.shard) |shard| {
+                defer index += 1;
+                if (index % shard.count != shard.index) {
+                    continue;
+                }
             }
 
             var status = Status.pass;
@@ -225,17 +237,22 @@ const Runner = struct {
             }
         }
 
-        const total_tests = pass + fail;
-        const status = if (total_tests > 0 and fail == 0) Status.pass else Status.fail;
-        Printer.status(status, "\n{d} of {d} test{s} passed\n", .{ pass, total_tests, if (total_tests != 1) "s" else "" });
-        if (skip > 0) {
-            Printer.status(.skip, "{d} test{s} skipped\n", .{ skip, if (skip != 1) "s" else "" });
-        }
-        if (leak > 0) {
-            Printer.status(.fail, "{d} test{s} leaked\n", .{ leak, if (leak != 1) "s" else "" });
+        const report: Report = .{
+            .pass = pass,
+            .fail = fail,
+            .skip = skip,
+            .leak = leak,
+            .failed = fail_list.items,
+            .slowest = slowest.drain(self.arena),
+        };
+
+        if (self.env.report) |path| {
+            const json = try std.json.Stringify.valueAlloc(self.arena, report, .{});
+            try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = json });
+            std.process.exit(if (fail == 0) 0 else 1);
         }
 
-        slowest.display();
+        report.print(&slowest);
         // stats
         if (self.env.metrics) {
             Printer.fmt("\n", .{});
@@ -259,16 +276,92 @@ const Runner = struct {
             Printer.fmt("\n", .{});
         }
 
-        if (fail_list.items.len > 0) {
-            Printer.status(.fail, "\nFailed Test Summary: \n", .{});
-            for (fail_list.items) |name| {
-                Printer.status(.fail, "- {s}\n", .{name});
-            }
-        }
+        report.printFailed();
 
         std.process.exit(if (fail == 0) 0 else 1);
     }
 };
+
+// What a shard hands back to the process that spawned it.
+const Report = struct {
+    pass: usize = 0,
+    fail: usize = 0,
+    skip: usize = 0,
+    leak: usize = 0,
+    failed: []const []const u8 = &.{},
+    slowest: []const SlowTracker.TestInfo = &.{},
+
+    fn print(self: *const Report, slowest: *SlowTracker) void {
+        const total_tests = self.pass + self.fail;
+        const status = if (total_tests > 0 and self.fail == 0) Status.pass else Status.fail;
+        Printer.status(status, "\n{d} of {d} test{s} passed\n", .{ self.pass, total_tests, if (total_tests != 1) "s" else "" });
+        if (self.skip > 0) {
+            Printer.status(.skip, "{d} test{s} skipped\n", .{ self.skip, if (self.skip != 1) "s" else "" });
+        }
+        if (self.leak > 0) {
+            Printer.status(.fail, "{d} test{s} leaked\n", .{ self.leak, if (self.leak != 1) "s" else "" });
+        }
+        for (self.slowest) |info| {
+            slowest.track(info.name, info.ns);
+        }
+        slowest.display();
+    }
+
+    fn printFailed(self: *const Report) void {
+        if (self.failed.len > 0) {
+            Printer.status(.fail, "\nFailed Test Summary: \n", .{});
+            for (self.failed) |name| {
+                Printer.status(.fail, "- {s}\n", .{name});
+            }
+        }
+    }
+};
+
+/// Runs the suite as `jobs` copies of this binary, each taking every jobs-th
+/// test, and merges what they report. Never returns.
+fn runShards(io: Io, arena: Allocator, environ_map: *const std.process.Environ.Map, jobs: usize) !void {
+    const exe = try std.process.executablePathAlloc(io, arena);
+    const dir = try std.fmt.allocPrint(arena, ".zig-cache/tmp/test-shards-{d}", .{std.c.getpid()});
+    try Io.Dir.cwd().createDirPath(io, dir);
+    defer Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    const children = try arena.alloc(std.process.Child, jobs);
+    const report_paths = try arena.alloc([]const u8, jobs);
+    for (children, report_paths, 0..) |*child, *report_path, i| {
+        report_path.* = try std.fmt.allocPrint(arena, "{s}/{d}.json", .{ dir, i });
+        var child_env = try environ_map.clone(arena);
+        try child_env.put("TEST_SHARD", try std.fmt.allocPrint(arena, "{d}/{d}", .{ i, jobs }));
+        try child_env.put("TEST_REPORT", report_path.*);
+        child.* = try std.process.spawn(io, .{ .argv = &.{exe}, .environ_map = &child_env });
+    }
+
+    var total: Report = .{};
+    var failed: std.ArrayList([]const u8) = .empty;
+    var slowest = SlowTracker.init(io, arena, 5);
+    var crashed = false;
+    for (children, report_paths, 0..) |*child, report_path, i| {
+        const term = try child.wait(io);
+        const data = Io.Dir.cwd().readFileAlloc(io, report_path, arena, .limited(1024 * 1024)) catch {
+            Printer.status(.fail, "\nshard {d}/{d} exited without a report: {any}\n", .{ i, jobs, term });
+            crashed = true;
+            continue;
+        };
+        const report = try std.json.parseFromSliceLeaky(Report, arena, data, .{});
+        total.pass += report.pass;
+        total.fail += report.fail;
+        total.skip += report.skip;
+        total.leak += report.leak;
+        try failed.appendSlice(arena, report.failed);
+        for (report.slowest) |info| {
+            slowest.track(info.name, info.ns);
+        }
+    }
+    total.failed = failed.items;
+
+    total.print(&slowest);
+    total.printFailed();
+    std.process.exit(if (total.fail == 0 and !crashed) 0 else 1);
+}
 
 // When only part of a test runs, expectations about what the whole test logs
 // can't be enforced.
@@ -352,17 +445,20 @@ const SlowTracker = struct {
         const start = self.start;
         self.start = timestamp;
         const ns: u64 = @intCast(start.durationTo(timestamp).toNanoseconds());
-        if (is_unnamed_test) {
-            return ns;
+        if (!is_unnamed_test) {
+            self.track(test_name, ns);
         }
+        return ns;
+    }
 
+    fn track(self: *SlowTracker, test_name: []const u8, ns: u64) void {
         var slowest = &self.slowest;
 
         if (slowest.count() < self.max) {
             // Capacity is fixed to the # of slow tests we want to track
             // If we've tracked fewer tests than this capacity, than always add
             slowest.push(self.allocator, TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
-            return ns;
+            return;
         }
 
         {
@@ -371,14 +467,22 @@ const SlowTracker = struct {
             const fastest_of_the_slow = slowest.peekMin() orelse unreachable;
             if (fastest_of_the_slow.ns > ns) {
                 // the test was faster than our fastest slow test, don't add
-                return ns;
+                return;
             }
         }
 
         // the previous fastest of our slow tests, has been pushed off.
         _ = slowest.popMin();
         slowest.push(self.allocator, TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
-        return ns;
+    }
+
+    /// Empties the tracker into a slice, fastest first.
+    fn drain(self: *SlowTracker, allocator: Allocator) []const TestInfo {
+        var list: std.ArrayList(TestInfo) = .empty;
+        while (self.slowest.popMin()) |info| {
+            list.append(allocator, info) catch @panic("OOM");
+        }
+        return list.items;
     }
 
     fn display(self: *SlowTracker) void {
@@ -406,18 +510,53 @@ const Env = struct {
     filter: ?[]const u8,
     subfilter: ?[]const u8,
     metrics: bool,
+    // number of processes to split the suite across
+    jobs: usize,
+    // set in a process spawned to run one share of the suite
+    shard: ?Shard,
+    // where a shard writes its Report
+    report: ?[]const u8,
+
+    const Shard = struct {
+        index: usize,
+        count: usize,
+    };
 
     fn init(map: *const std.process.Environ.Map) Env {
         const full_filter = readEnv(map, "TEST_FILTER");
         const filter, const subfilter = parseFilter(full_filter);
+        const metrics = readEnvBool(map, "METRICS", false);
 
         return .{
             .filter = filter,
             .subfilter = subfilter,
-            .metrics = readEnvBool(map, "METRICS", false),
+            .metrics = metrics,
             .verbose = readEnvBool(map, "TEST_VERBOSE", false),
             .fail_first = readEnvBool(map, "TEST_FAIL_FIRST", false),
+            // metrics are compared across runs, so keep them to one process
+            .jobs = if (metrics) 1 else readEnvInt(map, "TEST_JOBS") orelse defaultJobs(),
+            .shard = parseShard(readEnv(map, "TEST_SHARD")),
+            .report = readEnv(map, "TEST_REPORT"),
         };
+    }
+
+    fn defaultJobs() usize {
+        const cpus = std.Thread.getCpuCount() catch 1;
+        return @min(cpus, 4);
+    }
+
+    fn readEnvInt(map: *const std.process.Environ.Map, key: []const u8) ?usize {
+        const value = readEnv(map, key) orelse return null;
+        return std.fmt.parseInt(usize, value, 10) catch null;
+    }
+
+    fn parseShard(value: ?[]const u8) ?Shard {
+        const v = value orelse return null;
+        const split = std.mem.findScalar(u8, v, '/') orelse return null;
+        const index = std.fmt.parseInt(usize, v[0..split], 10) catch return null;
+        const count = std.fmt.parseInt(usize, v[split + 1 ..], 10) catch return null;
+        if (index >= count) return null;
+        return .{ .index = index, .count = count };
     }
 
     fn readEnv(map: *const std.process.Environ.Map, key: []const u8) ?[]const u8 {
