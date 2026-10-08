@@ -1582,6 +1582,67 @@ test "cdp.input: dispatchKeyEvent caret movement keys move the text entry cursor
     }
 }
 
+test "cdp.input: dispatchKeyEvent Ctrl+A selects the whole value" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.body.innerHTML = '<input id="t" type="text"><textarea id="ta"></textarea>';
+        \\const t = document.getElementById('t');
+        \\const ta = document.getElementById('ta');
+        \\const sel = (e) => [e.selectionStart, e.selectionEnd].join(',');
+    , null);
+
+    const alt = 1;
+    const ctrl = 2;
+    const meta = 4;
+    const shift = 8;
+    const Step = struct { setup: [:0]const u8, key: []const u8, modifiers: u4, expect: [:0]const u8 };
+    const steps = [_]Step{
+        // the Puppeteer/Playwright way to clear a field: select all, then delete
+        .{ .setup = "t.focus(); t.value = 'hello'; t.setSelectionRange(2, 2)", .key = "a", .modifiers = ctrl, .expect = "sel(t) === '0,5'" },
+        .{ .setup = "t.focus(); t.value = 'hello'; t.setSelectionRange(2, 2)", .key = "A", .modifiers = ctrl, .expect = "sel(t) === '0,5'" },
+        .{ .setup = "ta.focus(); ta.value = 'ab\\ncd'; ta.setSelectionRange(1, 1)", .key = "a", .modifiers = ctrl, .expect = "sel(ta) === '0,5'" },
+        // Meta+A, Ctrl+Alt+A and Ctrl+Shift+A do nothing in Chrome on Linux
+        .{ .setup = "t.focus(); t.value = 'hello'; t.setSelectionRange(2, 2)", .key = "a", .modifiers = meta, .expect = "sel(t) === '2,2'" },
+        .{ .setup = "t.focus(); t.value = 'hello'; t.setSelectionRange(2, 2)", .key = "a", .modifiers = ctrl | alt, .expect = "sel(t) === '2,2'" },
+        .{ .setup = "t.focus(); t.value = 'hello'; t.setSelectionRange(2, 2)", .key = "A", .modifiers = ctrl | shift, .expect = "sel(t) === '2,2'" },
+    };
+
+    var id: u32 = 1;
+    for (steps) |step| {
+        _ = try ls.local.compileAndRun(step.setup, null);
+        try ctx.processMessage(.{
+            .id = id,
+            .method = "Input.dispatchKeyEvent",
+            .params = .{ .type = "keyDown", .key = step.key, .code = "KeyA", .modifiers = step.modifiers },
+        });
+        id += 1;
+        try testing.expect((try ls.local.compileAndRun(step.expect, null)).isTrue());
+    }
+
+    _ = try ls.local.compileAndRun("t.focus(); t.value = 'hello'; t.setSelectionRange(5, 5)", null);
+    try ctx.processMessage(.{
+        .id = id,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "a", .code = "KeyA", .modifiers = ctrl },
+    });
+    id += 1;
+    try ctx.processMessage(.{
+        .id = id,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "Backspace", .code = "Backspace" },
+    });
+    try testing.expect((try ls.local.compileAndRun("t.value === ''", null)).isTrue());
+}
+
 // chromedp's SendKeys shape: a text-less keyDown, the char with the text, keyUp.
 test "cdp.input: dispatchKeyEvent text-less keyDown then char types once" {
     var ctx = try testing.context();
