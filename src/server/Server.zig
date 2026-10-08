@@ -2518,9 +2518,9 @@ test "server: HTTP execute script" {
 
     // a script that never completes is answered by the script timeout
     {
-        try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/timeouts", "{\"script\":20}")));
+        try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/timeouts", "{\"script\":50}")));
         try testing.expectEqual(
-            "{\"value\":{\"script\":20,\"pageLoad\":300000,\"implicit\":0}}",
+            "{\"value\":{\"script\":50,\"pageLoad\":300000,\"implicit\":0}}",
             responseBody(try sessionCommand(&c, "GET", &session_id, "/timeouts", "")),
         );
 
@@ -2539,7 +2539,7 @@ test "server: HTTP execute script" {
         // release build segfaults on, but the debug allocator here does not
         // trap, so this covers the path rather than proving the invariant.
         // selenium/http/demo.js in ../demo is what actually catches it.
-        const late = try executeRaw(&c, &session_id, "async", "var cb = arguments[0]; setTimeout(function() { window.__late = true; cb('way late'); }, 60);", "[]");
+        const late = try executeRaw(&c, &session_id, "async", "var cb = arguments[0]; setTimeout(function() { window.__late = true; cb('way late'); }, 150);", "[]");
         try testing.expect(std.mem.find(u8, late, "\"error\":\"script timeout\"") != null);
         // the assertion only means anything if the stale resolve actually ran
         var ran = false;
