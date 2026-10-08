@@ -194,7 +194,7 @@ fn submit(request: *Request, body: ?[]const u8, sink: Sink, exec: *const Executi
         }
 
         if (fetch._signal) |signal| {
-            try signal._dependents.append(exec.arena, .{ .fetch = fetch });
+            try signal._dependents.append(exec.page_arena, .{ .fetch = fetch });
         }
     }
 
