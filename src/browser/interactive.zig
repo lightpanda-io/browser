@@ -286,7 +286,7 @@ pub fn buildListenerTargetMap(frame: *Frame, arena: Allocator) !ListenerTargetMa
     // addEventListener registrations
     var it = frame._event_manager.base.lookup.iterator();
     while (it.next()) |entry| {
-        for (entry.value_ptr.items) |type_listeners| {
+        for (entry.value_ptr.items) |*type_listeners| {
             if (type_listeners.list.first != null) {
                 const gop = try map.getOrPut(arena, entry.key_ptr.*);
                 if (!gop.found_existing) gop.value_ptr.* = .empty;

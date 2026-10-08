@@ -1630,71 +1630,57 @@ test "MCP - findElement" {
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"button"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "Click Me") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"button"}}}
+    );
+    try testing.expectJson(.{
+        .{ .name = "Click Me", .listeners = &.{ "pointerdown", "mousedown", "pointerup", "mouseup", "click" } },
+        .{ .name = "Prevent Default" },
+        .{ .name = "Chord" },
+        .{ .name = "Disabled", .disabled = true },
+    }, try testToolText(aa, out.written()));
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"click"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "Click Me") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"click"}}}
+    );
+    try testing.expectJson(.{.{ .name = "Click Me", .id = "btn" }}, try testToolText(aa, out.written()));
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"slider"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "[]") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"slider"}}}
+    );
+    try testing.expectEqual("[]", try testToolText(aa, out.written()));
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"findElement","arguments":{}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "error") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"findElement","arguments":{}}}
+    );
+    try testing.expectJson(.{ .id = 4, .@"error" = .{ .code = -32602, .message = "InvalidParams" } }, out.written());
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/^PREVENT.*default$/i"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "Prevent Default") != null);
-        try testing.expect(std.mem.find(u8, out.written(), "Click Me") == null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/^PREVENT.*default$/i"}}}
+    );
+    try testing.expectJson(.{.{ .name = "Prevent Default", .id = "btnPreventDefault" }}, try testToolText(aa, out.written()));
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/(/"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
-        try testing.expect(std.mem.find(u8, out.written(), "missing closing parenthesis at offset 1") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/(/"}}}
+    );
+    try testing.expectJson(.{ .id = 6, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "findElement: invalid name regex '(': missing closing parenthesis at offset 1" }},
+    } }, out.written());
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/prevent/g"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
-        try testing.expect(std.mem.find(u8, out.written(), "unsupported regex flag 'g' in '/prevent/g'") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/prevent/g"}}}
+    );
+    try testing.expectJson(.{ .id = 7, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "findElement: unsupported regex flag 'g' in '/prevent/g'" }},
+    } }, out.written());
 }
 
 test "MCP - waitForSelector: existing element" {
@@ -2051,6 +2037,14 @@ test "MCP - sessions: new, list, attach isolation, close" {
     );
     try testing.expect(std.mem.find(u8, out.written(), "closed session a") != null);
     try testing.expect(!server.sessions.contains("a"));
+}
+
+/// The text of a tools/call result, which tools like findElement fill with JSON.
+fn testToolText(arena: std.mem.Allocator, response: []const u8) ![]const u8 {
+    const Response = struct { result: struct { content: []const struct { text: []const u8 } } };
+    const parsed = try std.json.parseFromSliceLeaky(Response, arena, response, .{ .ignore_unknown_fields = true });
+    try testing.expectEqual(1, parsed.result.content.len);
+    return parsed.result.content[0].text;
 }
 
 fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {
