@@ -448,6 +448,11 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
     var wait_ms: u32 = timeout_ms;
     var timer: std.Io.Timestamp = .now(lp.io, .boot);
     while (true) {
+        const sleep_ms: usize = switch (try runner.tickForFrame(page.frame_id, 20, .{ .until = .done })) {
+            .done => @min(test_session.browser.msToNextTask() orelse 20, 20), // could be at BLOCKING_NESTING, so wait a bit more
+            .ok => |next_ms| @min(next_ms, 20),
+        };
+
         var try_catch: js.TryCatch = undefined;
         try_catch.init(&ls.local);
         defer try_catch.deinit();
@@ -464,10 +469,6 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
         if (js_val.isTrue()) {
             return;
         }
-        const sleep_ms: usize = switch (try runner.tickForFrame(page.frame_id, 20, .{ .until = .done })) {
-            .done => @min(test_session.browser.msToNextTask() orelse 20, 20), // could be at BLOCKING_NESTING, so wait a bit more
-            .ok => |next_ms| @min(next_ms, 20),
-        };
 
         const lap: std.Io.Timestamp = .now(lp.io, .boot);
         const ms_elapsed: u64 = @intCast(timer.durationTo(lap).toMilliseconds());
