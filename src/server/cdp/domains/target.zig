@@ -71,22 +71,31 @@ fn getTargets(cmd: *CDP.Command) !void {
         }, .{});
     };
 
-    const target_id = &(bc.target_id orelse {
+    const info = pageTargetInfo(bc) orelse {
         return cmd.sendResult(.{
             .targetInfos = [_]TargetInfo{},
         }, .{});
-    });
+    };
+    return cmd.sendResult(.{ .targetInfos = [_]TargetInfo{info} }, .{});
+}
 
-    return cmd.sendResult(.{
-        .targetInfos = [_]TargetInfo{.{
-            .targetId = target_id,
-            .type = "page",
-            .title = bc.getTitle() orelse "",
-            .url = bc.getURL() orelse "about:blank",
-            .attached = true,
-            .canAccessOpener = false,
-        }},
-    }, .{});
+fn pageTargetInfo(bc: *const CDP.BrowserContext) ?TargetInfo {
+    const target_id = if (bc.target_id) |*tid| tid else return null;
+    return .{
+        .targetId = target_id,
+        .title = bc.getTitle() orelse "",
+        .url = bc.getURL() orelse "about:blank",
+        .browserContextId = bc.id,
+    };
+}
+
+/// Clients such as Browser Use track a tab's URL and title only through this
+/// event, as Chrome sends it whenever either changes.
+pub fn sendTargetInfoChanged(bc: *const CDP.BrowserContext, frame_id: u32) !void {
+    const main = bc.mainFrame() orelse return;
+    if (main._frame_id != frame_id) return;
+    const info = pageTargetInfo(bc) orelse return;
+    try bc.cdp.sendEvent("Target.targetInfoChanged", .{ .targetInfo = info }, .{});
 }
 
 fn getBrowserContexts(cmd: *CDP.Command) !void {
@@ -331,21 +340,11 @@ fn getTargetInfo(cmd: *CDP.Command) !void {
 
     if (params.targetId) |param_target_id| {
         const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-        const target_id = &(bc.target_id orelse return error.TargetNotLoaded);
-        if (std.mem.eql(u8, target_id, param_target_id) == false) {
+        const info = pageTargetInfo(bc) orelse return error.TargetNotLoaded;
+        if (std.mem.eql(u8, info.targetId, param_target_id) == false) {
             return error.UnknownTargetId;
         }
-
-        return cmd.sendResult(.{
-            .targetInfo = TargetInfo{
-                .targetId = target_id,
-                .type = "page",
-                .title = bc.getTitle() orelse "",
-                .url = bc.getURL() orelse "about:blank",
-                .attached = true,
-                .canAccessOpener = false,
-            },
-        }, .{});
+        return cmd.sendResult(.{ .targetInfo = info }, .{});
     }
 
     return cmd.sendResult(.{
@@ -1127,4 +1126,17 @@ test "cdp.target: setAutoAttach false sends detachedFromTarget" {
     try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = session_id }, .{});
     try testing.expectEqual(null, bc.session_id);
     try ctx.expectSentResult(null, .{ .id = 12 });
+}
+
+test "cdp.target: targetInfoChanged reports the page's URL and title" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-TIC", .url = "cdp/accname.html", .target_id = "FID-000000000I".* });
+    try ctx.expectSentEvent("Target.targetInfoChanged", .{ .targetInfo = .{
+        .targetId = &bc.target_id.?,
+        .url = bc.getURL().?,
+        .title = "AccName Fixture",
+        .browserContextId = "BID-TIC",
+    } }, .{});
 }
