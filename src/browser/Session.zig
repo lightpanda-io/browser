@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const App = @import("../App.zig");
 const Config = @import("../Config.zig");
 
-const History = @import("webapi/History.zig");
 const storage = @import("webapi/storage/storage.zig");
 const IdbManager = @import("webapi/storage/idb/idb.zig").Manager;
 const CacheStore = @import("webapi/cache/Store.zig");
@@ -51,7 +50,6 @@ const Session = @This();
 
 browser: *Browser,
 arena: *lp.Arena,
-history: History,
 navigation: *Navigation,
 storage_shed: storage.Shed,
 idb: IdbManager, // Per-origin IndexedDB engines
@@ -120,6 +118,7 @@ experimental_features: Config.ExperimentalFeatures,
 /// (goto, search, waitForSelector, …) without sitting through the full
 /// timeout.
 cancel_hook: ?CancelHook = null,
+tool_observer: ?@import("tools.zig").Observer = null,
 
 // Download handling configured via the `Browser.setDownloadBehavior` CDP
 // method (see issue #2701). When `download_behavior` is `.allow` or
@@ -167,7 +166,6 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     self.* = .{
         .arena = arena,
         .arena_pool = arena_pool,
-        .history = .{},
         .navigation = navigation,
         .storage_shed = .{},
         .idb = IdbManager.init(allocator),
@@ -583,6 +581,34 @@ pub fn idleSlice(self: *Session) u31 {
     };
 }
 
+/// Pump until another thread sets `event`, so a blocking call made off this
+/// thread doesn't starve the page.
+pub fn pumpUntil(self: *Session, event: *std.Io.Event) void {
+    while (!event.isSet()) {
+        const idle_ms = self.idleSlice();
+        event.waitTimeout(lp.io, .{ .duration = .{ .raw = .fromMilliseconds(idle_ms), .clock = .awake } }) catch {};
+    }
+}
+
+/// `@call(.auto, func, args)` on a helper thread, pumping until it returns.
+/// Falls back to calling it here if the thread can't start.
+pub fn runPumped(self: *Session, comptime func: anytype, args: anytype) @TypeOf(@call(.auto, func, args)) {
+    const Call = struct {
+        result: @TypeOf(@call(.auto, func, args)) = undefined,
+        done: std.Io.Event = .unset,
+
+        fn run(call: *@This(), call_args: @TypeOf(args)) void {
+            call.result = @call(.auto, func, call_args);
+            call.done.set(lp.io);
+        }
+    };
+    var call: Call = .{};
+    const thread = std.Thread.spawn(.{}, Call.run, .{ &call, args }) catch return @call(.auto, func, args);
+    self.pumpUntil(&call.done);
+    thread.join();
+    return call.result;
+}
+
 pub fn scheduleNavigation(_: *Session, frame: *Frame) !void {
     return frame.page.scheduleNavigation(frame);
 }
@@ -915,6 +941,12 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
 
     page.frame.navigate(url, opts) catch |err| {
         log.debug(.browser, "pending navigation start", .{ .err = err, .url = url });
+        // A transfer that fails inside submit() runs its error_callback before
+        // returning, which commits an error document: `page` is live now, the
+        // errdefers must not destroy it.
+        if (page.replaces == null and page.destroying == false) {
+            return;
+        }
         return err;
     };
 
@@ -1070,6 +1102,34 @@ test "Session: retiring a pending page destroys it once" {
 
     // Would deinit `pending` twice if it had been queued twice.
     session.processDestroyQueues();
+}
+
+test "Session: a root navigation whose submit fails commits an error document" {
+    const session = testing.test_session;
+    defer session.closeAllPages();
+
+    const handle = try session.createPage();
+    const live = handle.page().?;
+
+    const client = &session.browser.http_client;
+    client.test_fail_submit = error.TestSubmitFailure;
+    defer client.test_fail_submit = null;
+
+    try session.initiateRootNavigation(live.frame._frame_id, "http://127.0.0.1:9582/src/browser/tests/hi.html", .{});
+
+    const committed = handle.page().?;
+    try testing.expect(committed != live);
+    try testing.expectEqual(false, committed.destroying);
+    try testing.expectEqual(null, committed.replaces);
+    try testing.expectEqual(1, session.pages.items.len);
+    try testing.expectEqual(committed, session.pages.items[0]);
+
+    const js = @import("js/js.zig");
+    var ls: js.Local.Scope = undefined;
+    committed.frame.js.localScope(&ls);
+    defer ls.deinit();
+    const text = try ls.local.exec("document.querySelector('p')?.textContent", null);
+    try testing.expectEqual("Reason: TestSubmitFailure", try text.toStringSlice());
 }
 
 test "Session: console capture runs no page JS" {

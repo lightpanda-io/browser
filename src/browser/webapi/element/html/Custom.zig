@@ -228,7 +228,10 @@ pub fn fireReaction(reaction: Reaction, frame: *Frame) void {
         .upgrade => |u| {
             if (u.element._definition != null or u.element._upgrade_failed) return;
             const CustomElementRegistry = @import("../../CustomElementRegistry.zig");
-            CustomElementRegistry.upgradeCustomElement(u.element, u.definition, frame) catch {};
+            // queue on the caller's frame, which might not be the element's
+            // (e.g. iframe.contentDocument.body.innerHTML = '....')
+            const owner = u.element.asNode().ownerFrame(frame) orelse frame;
+            CustomElementRegistry.upgradeCustomElement(u.element, u.definition, owner) catch {};
         },
         .connected => |el| {
             if (el.is(Custom)) |custom| {

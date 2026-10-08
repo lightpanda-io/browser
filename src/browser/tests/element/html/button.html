@@ -5,6 +5,10 @@
 <button id="button1">Click me</button>
 <button id="button2" disabled>Disabled button</button>
 
+<fieldset id="fs_disabled" disabled>
+  <button id="btn_in_disabled_fs">Inside disabled fieldset</button>
+</fieldset>
+
 <!-- Form association tests -->
 <form id="form1">
   <button id="button_in_form">In form</button>
@@ -257,5 +261,60 @@
     b.formNoValidate = false
     testing.expectEqual(false, b.formNoValidate)
     testing.expectEqual(null, b.getAttribute('formnovalidate'))
+  }
+</script>
+
+<script id="click_disabled_button_no_event">
+  {
+    let clicks = 0;
+    const b = document.createElement('button');
+    b.disabled = true;
+    b.addEventListener('click', () => clicks++);
+    b.click();
+    testing.expectEqual(0, clicks);
+
+    const b_fs = $('#btn_in_disabled_fs');
+    b_fs.addEventListener('click', () => clicks++);
+    b_fs.click();
+    testing.expectEqual(0, clicks);
+
+    // A disabled fieldset is not itself a disabled form control.
+    const fs = $('#fs_disabled');
+    fs.addEventListener('click', () => clicks++);
+    fs.click();
+    testing.expectEqual(1, clicks);
+  }
+</script>
+
+<form id="fieldset_form">
+  <fieldset disabled>
+    <legend><button id="fs_legend_btn">legend</button></legend>
+    <button id="fs_btn">go</button>
+    <input id="fs_input" type="submit">
+    <input id="fs_image" type="image">
+  </fieldset>
+  <button id="fs_disabled_btn" disabled>off</button>
+  <button id="fs_enabled_btn">on</button>
+</form>
+
+<script id="synthetic_click_disabled_submitter">
+  {
+    // A disabled submit button has no activation behavior, so a synthetic
+    // click must not submit; an ancestor <fieldset disabled> disables it too,
+    // except inside the fieldset's first <legend>.
+    const submitted = []
+    const form = $('#fieldset_form')
+    form.addEventListener('submit', (e) => {
+      e.preventDefault()
+      submitted.push(e.submitter.id)
+    })
+    const click = (id) => $('#' + id).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+
+    for (const id of ['fs_btn', 'fs_input', 'fs_image', 'fs_disabled_btn']) click(id)
+    testing.expectEqual([], submitted)
+
+    click('fs_legend_btn')
+    click('fs_enabled_btn')
+    testing.expectEqual(['fs_legend_btn', 'fs_enabled_btn'], submitted)
   }
 </script>

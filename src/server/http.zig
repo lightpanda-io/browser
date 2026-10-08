@@ -1069,7 +1069,7 @@ const Upgrade = union(enum) {
 // hand the fd to its worker (spawning one for a new connection).
 fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target: Upgrade) !Served {
     var accept_buf: [28]u8 = undefined;
-    const accept_key = webSocketAccept(req.head, &accept_buf) catch |err| {
+    const accept_key = webSocketAccept(req.head, &accept_buf, server.advertise_host) catch |err| {
         const response: []const u8 = switch (err) {
             error.ForbiddenOrigin => forbidden_origin_response,
             error.ForbiddenHost => forbidden_host_response,
@@ -1101,8 +1101,9 @@ fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target:
 
 // Validate an incoming WebSocket upgrade request head and, on success, write
 // the Sec-WebSocket-Accept value into `out`. Mirrors the origin/host defenses
-// from the old Handshake path.
-fn webSocketAccept(head: []const u8, out: *[28]u8) ![]const u8 {
+// from the old Handshake path. `advertise_host` is the explicit
+// --advertise-host, if any.
+fn webSocketAccept(head: []const u8, out: *[28]u8, advertise_host: ?[]const u8) ![]const u8 {
     const FOUND_UPGRADE: u8 = 1 << 0;
     const FOUND_VERSION: u8 = 1 << 1;
     const FOUND_CONNECTION: u8 = 1 << 2;
@@ -1135,15 +1136,9 @@ fn webSocketAccept(head: []const u8, out: *[28]u8) ![]const u8 {
             log.warn(.serve, "rejected websocket origin", .{ .origin = h.value[0..@min(h.value.len, 64)] });
             return error.ForbiddenOrigin;
         } else if (std.ascii.eqlIgnoreCase(h.key, "host")) {
-            // Defense in depth against DNS rebinding: only an IP literal can
-            // legitimately reach us (no name resolution involved). The one
-            // name we accept is `localhost:<port>`, which browsers hardwire
-            // to loopback without a lookup.
-            if (!std.mem.startsWith(u8, h.value, "localhost:")) {
-                _ = std.Io.net.IpAddress.parseLiteral(h.value) catch {
-                    log.warn(.serve, "rejected websocket host", .{ .host = h.value[0..@min(h.value.len, 64)] });
-                    return error.ForbiddenHost;
-                };
+            if (isAllowedHost(h.value, advertise_host) == false) {
+                log.warn(.serve, "rejected websocket host", .{ .host = h.value[0..@min(h.value.len, 64)], .note = "See `--advertise-host <host>` if this is a legitimate host" });
+                return error.ForbiddenHost;
             }
         }
     }
@@ -1160,7 +1155,59 @@ fn webSocketAccept(head: []const u8, out: *[28]u8) ![]const u8 {
     return out;
 }
 
+// Defense in depth against DNS rebinding: only an IP literal can legitimately
+// reach us (no name resolution involved). Two names are accepted:
+// `localhost:<port>`, which browsers hardwire to loopback without a lookup,
+// and the host the operator explicitly advertises with --advertise-host. That
+// is the name /json/version tells clients to dial (e.g. a Docker Compose
+// service name), and a rebinding attacker's domain cannot equal it.
+fn isAllowedHost(value: []const u8, advertise_host: ?[]const u8) bool {
+    if (std.mem.startsWith(u8, value, "localhost:")) {
+        return true;
+    }
+    if (std.Io.net.IpAddress.parseLiteral(value)) |_| {
+        return true;
+    } else |_| {}
+    const advertised = advertise_host orelse return false;
+    // Host is `name` or `name:port`; IPv6 literals were accepted above, so the
+    // last colon, if any, separates the port.
+    const name = if (std.mem.lastIndexOfScalar(u8, value, ':')) |i| value[0..i] else value;
+    return name.len > 0 and std.ascii.eqlIgnoreCase(name, advertised);
+}
+
 const testing = @import("../testing.zig");
+
+test "http: isAllowedHost accepts IP literals and localhost, rejects other names" {
+    try testing.expectEqual(true, isAllowedHost("127.0.0.1:9222", null));
+    try testing.expectEqual(true, isAllowedHost("[::1]:9222", null));
+    try testing.expectEqual(true, isAllowedHost("localhost:9222", null));
+    try testing.expectEqual(false, isAllowedHost("lightpanda:9222", null));
+    try testing.expectEqual(false, isAllowedHost("attacker.example:9222", null));
+}
+
+test "http: isAllowedHost accepts the explicitly advertised host" {
+    try testing.expectEqual(true, isAllowedHost("lightpanda:9222", "lightpanda"));
+    try testing.expectEqual(true, isAllowedHost("LightPanda:9222", "lightpanda"));
+    try testing.expectEqual(true, isAllowedHost("lightpanda", "lightpanda"));
+    try testing.expectEqual(false, isAllowedHost("lightpanda.attacker.example:9222", "lightpanda"));
+    try testing.expectEqual(false, isAllowedHost("attacker.example:9222", "lightpanda"));
+    try testing.expectEqual(false, isAllowedHost(":9222", "lightpanda"));
+    // The explicit host never weakens the original rules.
+    try testing.expectEqual(true, isAllowedHost("10.0.0.5:9222", "lightpanda"));
+}
+
+test "http: webSocketAccept honours the advertised host" {
+    testing.expectLog(&.{.serve});
+    const head = "GET / HTTP/1.1\r\n" ++
+        "Host: lightpanda:9222\r\n" ++
+        "Upgrade: websocket\r\n" ++
+        "Connection: Upgrade\r\n" ++
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    var out: [28]u8 = undefined;
+    try testing.expectError(error.ForbiddenHost, webSocketAccept(head, &out, null));
+    try testing.expectString("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", try webSocketAccept(head, &out, "lightpanda"));
+}
 
 test "http: the read buffer grows with the request and gives the space back" {
     var pair: [2]posix.socket_t = undefined;

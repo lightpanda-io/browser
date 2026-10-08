@@ -256,6 +256,46 @@
   }
 </script>
 
+<script id="select_remove_index">
+  {
+    const parent = document.createElement('div')
+    document.body.appendChild(parent)
+    parent.innerHTML = '<select><option>a</option><optgroup><option>b</option></optgroup><option>c</option></select>'
+    const sel = parent.firstChild
+
+    // remove(index) removes the option at index, like options.remove(index)
+    sel.remove(1)
+    testing.expectEqual(true, sel.isConnected)
+    testing.expectEqual('a,c', Array.from(sel.options, (o) => o.text).join(','))
+
+    // out of range is a no-op
+    sel.remove(5)
+    sel.remove(-1)
+    testing.expectEqual(2, sel.options.length)
+
+    let iterations = 0
+    while (sel.options.length > 0 && iterations < 10) {
+      sel.remove(0)
+      iterations++
+    }
+    testing.expectEqual(2, iterations)
+    testing.expectEqual(true, sel.isConnected)
+
+    // the index converts like a WebIDL long
+    parent.innerHTML = '<select><option>a</option><option>b</option><option>c</option><option>d</option></select>'
+    const sel2 = parent.firstChild
+    sel2.remove(undefined)
+    sel2.remove(null)
+    sel2.remove('1')
+    testing.expectEqual('c', Array.from(sel2.options, (o) => o.text).join(','))
+    testing.expectEqual(true, sel2.isConnected)
+
+    // remove() without an index removes the select itself
+    sel.remove()
+    testing.expectEqual(false, sel.isConnected)
+  }
+</script>
+
 <script id="options_add_errors">
   {
     const sel = document.createElement('select')

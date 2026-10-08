@@ -121,6 +121,10 @@ pub fn send(self: *LightPanda, raw_event: telemetry.Event) !void {
         };
     }
 
+    if (raw_event == .tool and mergeTool(self.pending.items, raw_event.tool)) {
+        return;
+    }
+
     if (self.pending.items.len >= MAX_PENDING) {
         self.dropped +|= 1;
         return;
@@ -132,6 +136,19 @@ pub fn send(self: *LightPanda, raw_event: telemetry.Event) !void {
         return;
     };
     self.cond.signal(lp.io);
+}
+
+/// Folds `tool` into a queued row with the same id, source and outcome.
+fn mergeTool(pending: []telemetry.Event, tool: telemetry.Event.Tool) bool {
+    for (pending) |*event| switch (event.*) {
+        .tool => |*t| if (t.id == tool.id and t.source == tool.source and t.outcome == tool.outcome) {
+            t.count +|= tool.count;
+            t.duration_ms +|= tool.duration_ms;
+            return true;
+        },
+        else => {},
+    };
+    return false;
 }
 
 fn run(self: *LightPanda) void {
@@ -313,6 +330,34 @@ const EventRow = struct {
                 try writer.write(l.provider);
                 try writer.write(l.model);
             },
+            .tool => |t| {
+                try writer.write("T");
+                try writer.write(t.id);
+                try writer.write(switch (t.source) {
+                    .llm => "L",
+                    .user => "U",
+                    .script => "S",
+                    .mcp => "M",
+                });
+                try writer.write(switch (t.outcome) {
+                    .ok => "O",
+                    .is_error => "E",
+                    .frame_not_loaded => "F",
+                    .invalid_params => "P",
+                    .node_not_found => "N",
+                    .navigation_failed => "V",
+                    .navigation_timeout => "T",
+                    .cancelled => "C",
+                    .timeout => "W",
+                    .internal => "I",
+                });
+                try writer.write(t.count);
+                try writer.write(t.duration_ms);
+            },
+            .mcp_client => |c| {
+                try writer.write("C");
+                try writer.write(@backingInt(c));
+            },
         }
         try writer.endArray();
     }
@@ -371,6 +416,18 @@ test "Telemetry: event row wire format" {
             .event = .{ .llm = .{ .provider = "nollm", .model = null } },
             .expected = "[\"L\",\"nollm\",null]",
         },
+        .{
+            .event = .{ .tool = .{ .id = 14, .source = .llm, .outcome = .ok, .count = 3, .duration_ms = 12 } },
+            .expected = "[\"T\",14,\"L\",\"O\",3,12]",
+        },
+        .{
+            .event = .{ .tool = .{ .id = 1, .source = .script, .outcome = .navigation_timeout, .duration_ms = 0 } },
+            .expected = "[\"T\",1,\"S\",\"T\",1,0]",
+        },
+        .{
+            .event = .{ .mcp_client = .cursor },
+            .expected = "[\"C\",3]",
+        },
     };
 
     for (cases) |case| {
@@ -379,6 +436,20 @@ test "Telemetry: event row wire format" {
         try std.json.Stringify.value(&EventRow{ .event = case.event }, .{}, &w.writer);
         try testing.expectEqual(case.expected, w.written());
     }
+}
+
+test "Telemetry: tool calls merge by id, source and outcome" {
+    var pending = [_]telemetry.Event{
+        .{ .run = {} },
+        .{ .tool = .{ .id = 14, .source = .llm, .outcome = .ok, .duration_ms = 10 } },
+    };
+    try testing.expect(mergeTool(&pending, .{ .id = 14, .source = .llm, .outcome = .ok, .duration_ms = 5 }));
+    try testing.expectEqual(2, pending[1].tool.count);
+    try testing.expectEqual(15, pending[1].tool.duration_ms);
+
+    try testing.expect(!mergeTool(&pending, .{ .id = 14, .source = .mcp, .outcome = .ok, .duration_ms = 5 }));
+    try testing.expect(!mergeTool(&pending, .{ .id = 14, .source = .llm, .outcome = .is_error, .duration_ms = 5 }));
+    try testing.expect(!mergeTool(&pending, .{ .id = 15, .source = .llm, .outcome = .ok, .duration_ms = 5 }));
 }
 
 test "Telemetry: header wire format" {

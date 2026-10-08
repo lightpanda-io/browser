@@ -402,27 +402,13 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                         attribute_iterator,
                         .{},
                     ),
-                    asUint("base") => {
-                        const n = try createHtmlElementT(
-                            document,
-                            Element.Html.Base,
-                            namespace,
-                            attribute_iterator,
-                            .{},
-                        );
-
-                        // If the frame's base url is not already set, fill it
-                        // with the base tag.
-                        if (document._frame) |realm| {
-                            if (realm.base_url == null) {
-                                if (n.as(Element).getAttributeInterned("href")) |href| {
-                                    realm.base_url = try URL.resolve(realm.arena, realm.url, href, .{});
-                                }
-                            }
-                        }
-
-                        return n;
-                    },
+                    asUint("base") => return createHtmlElementT(
+                        document,
+                        Element.Html.Base,
+                        namespace,
+                        attribute_iterator,
+                        .{},
+                    ),
                     asUint("menu") => return createHtmlElementT(
                         document,
                         Element.Html.Generic,
@@ -845,24 +831,25 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                 //
                 // Undefined elements are created in the "undefined" state and
                 // upgraded later, when a matching definition is registered.
-                if (creation != .construct or definition == null) {
+                if (creation == .bare_context or definition == null) {
                     const node = try createHtmlElementT(document, Element.Html.Custom, namespace, attribute_iterator, .{
                         ._tag_name = tag_name,
                         ._definition = definition,
-                        ._upgrade_candidate = creation == .construct,
+                        ._upgrade_candidate = creation != .bare_context,
                     });
-                    if (creation == .construct) {
+                    if (creation != .bare_context) {
                         try realm._undefined_custom_elements.append(realm.arena, node.as(Element).is(Element.Html.Custom).?);
                     }
                     return node;
                 }
 
-                if (from_clone) {
+                if (from_clone or creation == .upgrade) {
                     const node = try createHtmlElementT(document, Element.Html.Custom, namespace, attribute_iterator, .{
                         ._tag_name = tag_name,
                         ._definition = null,
                     });
-                    try realm._ce_reactions.enqueueUpgrade(realm, node.as(Element).is(Element.Html.Custom).?, definition.?);
+                    const reactions_frame = if (creation == .upgrade) creation.upgrade else realm;
+                    try reactions_frame._ce_reactions.enqueueUpgrade(reactions_frame, node.as(Element).is(Element.Html.Custom).?, definition.?);
                     return node;
                 }
 

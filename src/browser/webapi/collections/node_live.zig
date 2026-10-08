@@ -27,6 +27,7 @@ const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
 const Selector = @import("../selector/Selector.zig");
 const Form = @import("../element/html/Form.zig");
+const HTMLDocument = @import("../HTMLDocument.zig");
 
 const String = lp.String;
 
@@ -45,6 +46,7 @@ const Mode = enum {
     links,
     anchors,
     form,
+    document_named,
 };
 
 const ClassNameFilter = struct {
@@ -73,7 +75,8 @@ const Filters = union(Mode) {
     selected_options,
     links,
     anchors,
-    form: struct { form: *Form, form_id: ?[]const u8 },
+    form: struct { form: *Form, form_id: ?[]const u8, image_buttons: bool },
+    document_named: []const u8,
 
     fn TypeOf(comptime mode: Mode) type {
         @setEvalBranchQuota(10_000);
@@ -103,7 +106,7 @@ const Filters = union(Mode) {
 pub fn NodeLive(comptime mode: Mode) type {
     const Filter = Filters.TypeOf(mode);
     const TW = switch (mode) {
-        .tag, .tag_name, .tag_name_ns, .class_name, .name, .all_elements, .links, .anchors, .form => TreeWalker.FullExcludeSelf,
+        .tag, .tag_name, .tag_name_ns, .class_name, .name, .all_elements, .links, .anchors, .form, .document_named => TreeWalker.FullExcludeSelf,
         .child_elements, .child_tag, .cells => TreeWalker.Children,
         // A select's options can sit one level down, inside an <optgroup>, so
         // these two walk the subtree and filter on the parent instead.
@@ -362,6 +365,13 @@ pub fn NodeLive(comptime mode: Mode) type {
                     if (!isFormControl(el)) {
                         return false;
                     }
+                    if (self._filter.image_buttons == false) {
+                        if (el.is(Element.Html.Input)) |input| {
+                            if (input._input_type == .image) {
+                                return false;
+                            }
+                        }
+                    }
 
                     if (self._filter.form_id) |form_id| {
                         if (el.getAttributeSafe(comptime .wrap("form"))) |element_form_attr| {
@@ -388,6 +398,10 @@ pub fn NodeLive(comptime mode: Mode) type {
                     // checks, where N = number of controls. For forms with many nested
                     // controls, this could be significantly faster.
                     return self._filter.form.asNode().contains(node);
+                },
+                .document_named => {
+                    const el = node.is(Element) orelse return false;
+                    return HTMLDocument.isNamed(el, self._filter);
                 },
             }
         }
@@ -440,6 +454,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .links => .{ ._data = .{ .links = self } },
                 .anchors => .{ ._data = .{ .anchors = self } },
                 .form => .{ ._data = .{ .form = self } },
+                .document_named => .{ ._data = .{ .document_named = self } },
             };
         }
     };

@@ -55,6 +55,7 @@
       if (typeof msg === 'string' && msg.startsWith('cb-')) {
         seen.push(msg);
         thrown[msg] = e.error instanceof Error;
+        e.preventDefault();
       }
     };
     window.addEventListener('error', onError);

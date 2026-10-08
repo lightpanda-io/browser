@@ -23,7 +23,9 @@
     \\options:
     \\  --advertise-host <HOST>
     \\          The host to advertise, e.g. in the /json/version response. Useful,
-    \\          for example, when --host is 0.0.0.0.
+    \\          for example, when --host is 0.0.0.0. CDP and BiDi WebSocket
+    \\          upgrades accept this name as the Host header, alongside IP
+    \\          literals and localhost.
     \\          Defaults to --host value.
     \\  --cdp-max-connections <INT>
     \\          Maximum number of simultaneous CDP connections.
@@ -311,6 +313,12 @@
     \\           One-shot mode: run a single user turn, print the final answer
     \\           to stdout, and exit. Conflicts with the positional script. With
     \\           --save, the answer is suppressed and a script is written instead.
+    \\  --trace <PATH>
+    \\          Write one JSON line per step to PATH: each model call (latency,
+    \\          input, cached and output tokens) and each tool call (arguments,
+    \\          latency, result size, page URL and HTTP status), then a summary.
+    \\          Arguments keep their $LP_* placeholders; results are not written.
+    \\          Overwrites PATH if it exists.
     \\  --url <URL>
     \\          Open this page before the first turn. With --task it saves the
     \\          model a turn spent navigating; with --save the opening
@@ -465,6 +473,14 @@
     \\          Time in ms to establish an HTTP connection before timing out. 0 means
     \\          never.
     \\          Defaults to 8000.
+    \\  --http-curves
+    \\          Colon-separated key exchange groups offered in the TLS handshake,
+    \\          in preference order, e.g. "X25519:P-256:P-384". Passed to
+    \\          libcurl's CURLOPT_SSL_EC_CURVES.
+    \\  --http-debug
+    \\          Enables libcurl verbose output. Output written directly to stderr
+    \\          by licurl and does not follow the configured log format.
+    \\          Defaults to off (not set).
     \\  --http-header <HEADER>
     \\          Extra custom header added to every outgoing HTTP request, including redirections,
     \\          in "Name: Value" form. Can be passed multiple times. The last one is used.
@@ -533,6 +549,11 @@
     \\  --proxy-bearer-token <TOKEN>
     \\          Token sent for bearer authentication with the proxy:
     \\          Proxy-Authorization: Bearer <token>.
+    \\  --render-font <PATH>
+    \\          Font file (TrueType, OpenType or collection) used by the png and pdf
+    \\          dumps, and by screenshots, for characters the bundled DejaVu fonts
+    \\          lack, e.g. CJK. Can be passed multiple times; earlier files win.
+    \\          e.g. --render-font NotoSansCJK-Regular.ttc
     \\  --robot-store-entry-limit <INT>
     \\          Maximum number of entries kept in the RobotStore. 0 means no limit.
     \\          Defaults to 1000.

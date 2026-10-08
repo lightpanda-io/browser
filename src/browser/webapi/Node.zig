@@ -1735,25 +1735,40 @@ pub fn assignedSlot(self: *Node, frame: *const Frame) ?*Element.Html.Slot {
     return frame.page._assigned_slots.get(self);
 }
 
-// An inert element applies to all its chidren, so walk up to see if we have
-// an inert parent
+/// Inert applies to the whole subtree, so any inert flat-tree ancestor counts.
 pub fn isInert(self: *Node, frame: *const Frame) bool {
     var current: ?*Node = self;
-    while (current) |node| {
+    while (current) |node| : (current = node.flatTreeParent(frame)) {
         if (node.is(Element)) |el| {
             if (el._namespace == .html and el.hasAttributeSafe(comptime .wrap("inert"))) {
                 return true;
             }
         }
-        if (node.assignedSlot(frame)) |slot| {
-            current = slot.asNode();
-        } else if (node.is(ShadowRoot)) |shadow| {
-            current = shadow._host.asNode();
-        } else {
-            current = node._parent;
-        }
     }
     return false;
+}
+
+/// The parent in the flat tree: an assigned slottable's slot, a shadow root's
+/// host, else the DOM parent.
+pub fn flatTreeParent(self: *Node, frame: *const Frame) ?*Node {
+    if (self.assignedSlot(frame)) |slot| {
+        return slot.asNode();
+    }
+    if (self.is(ShadowRoot)) |shadow| {
+        return shadow._host.asNode();
+    }
+    return self._parent;
+}
+
+/// The flat-tree parent element: shadow content inherits from its host, a
+/// slotted node from its slot.
+pub fn flatTreeParentElement(self: *Node, frame: *const Frame) ?*Element {
+    const parent = self.flatTreeParent(frame) orelse return null;
+    if (parent.is(Element)) |el| {
+        return el;
+    }
+    // A shadow root's flat-tree parent is its host
+    return (parent.flatTreeParent(frame) orelse return null).is(Element);
 }
 
 pub const JsApi = struct {

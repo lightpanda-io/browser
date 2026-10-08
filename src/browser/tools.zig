@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const zenai = @import("zenai");
 
 const NodeRegistry = @import("../NodeRegistry.zig");
+const TelemetryTool = @import("../telemetry/telemetry.zig").Event.Tool;
 
 const DOMNode = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
@@ -267,6 +268,41 @@ pub const Tool = enum {
     getCookies,
     getEnv,
 
+    /// Telemetry wire id: append, never renumber. 0 is reserved for a name
+    /// that matched no tool.
+    pub fn telemetryId(self: Tool) u8 {
+        return switch (self) {
+            .goto => 1,
+            .search => 2,
+            .markdown => 3,
+            .html => 4,
+            .screenshot => 5,
+            .links => 6,
+            .evaluate => 7,
+            .extract => 8,
+            .tree => 9,
+            .nodeDetails => 10,
+            .interactiveElements => 11,
+            .structuredData => 12,
+            .detectForms => 13,
+            .click => 14,
+            .fill => 15,
+            .scroll => 16,
+            .waitForSelector => 17,
+            .waitForScript => 18,
+            .waitForState => 19,
+            .hover => 20,
+            .press => 21,
+            .selectOption => 22,
+            .setChecked => 23,
+            .findElement => 24,
+            .consoleLogs => 25,
+            .getUrl => 26,
+            .getCookies => 27,
+            .getEnv => 28,
+        };
+    }
+
     /// State-mutating: surfaces in JavaScript recordings. Read-only tools
     /// (queries, env probes) stay out so a replay doesn't bloat the script
     /// with noise.
@@ -397,7 +433,7 @@ pub const Tool = enum {
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. Render markdown for just that node's subtree. 0 is treated as omitted." },
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
                     \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output; same groups as the html tool's strip. `shell` (page chrome by markup) and `clutter` (keep only the main content, in the manner of reader modes) are the ones that matter for reading; `ui` also drops images.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -414,7 +450,7 @@ pub const Tool = enum {
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, dump only that node's outerHTML. 0 is treated as omitted." },
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
                     \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output: `js` (script, noscript, script preloads), `css` (style, stylesheet links), `ui` (css plus img, picture, video, audio, svg, canvas, iframe), `invisible` (elements an author rule or inline style sets to display:none), `shell` (nav, aside, dialog, page-level header/footer and the matching landmark roles; skipped when that would drop most of the text), `clutter` (keep only the main content, in the manner of reader modes; includes `shell` and `invisible`, and falls back to `shell` when it finds too little). {\"js\":true,\"css\":true} keeps a page dump small.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -432,7 +468,7 @@ pub const Tool = enum {
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, render only that node. 0 is treated as omitted." },
                     \\    "fullPage": { "type": "boolean", "description": "Render the whole content height instead of one viewport. Defaults to false." },
                     \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the render; same groups as the html tool's strip (`js`, `css`, `ui`, `invisible`, `shell`, `clutter`).", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -446,7 +482,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "limit": { "type": "integer", "description": "Optional. Return at most this many links, in document order." },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -460,7 +496,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "script": { "type": "string", "description": "JavaScript run in the page context. A bare trailing expression, or `return` with top-level `await`, is the result." },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
                     \\    "save": { "type": "string", "description": "Optional bridge-store key. The evaluate's return value is stored under this name and re-exposed as `lp.<name>` to subsequent evaluates. Objects, arrays, and strings are serialized automatically — no JSON.stringify needed." }
                     \\  },
@@ -506,7 +542,7 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root. 0 is treated as omitted." },
                     \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
@@ -721,7 +757,7 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "url": { "type": "string", "description": "Restrict output to cookies matching this URL's host. Defaults to the current page." },
+                    \\    "url": { "type": "string", "description": "Restrict output to cookies matching this URL's host. Defaults to the current page. An empty string is treated as omitted." },
                     \\    "all": { "type": "boolean", "default": false, "description": "If true, dump every cookie regardless of host. Overrides `url`." }
                     \\  }
                     \\}
@@ -777,7 +813,7 @@ const url_params_schema = minify(
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing." },
+    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing. An empty string is treated as omitted." },
     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
     \\  }
     \\}
@@ -835,6 +871,9 @@ pub fn errorMessage(err: ToolError) []const u8 {
 pub const ToolResult = struct {
     text: []const u8,
     is_error: bool = false,
+    /// The call left a different frame current, so `--save` records the
+    /// navigation a read tool's `url` made rather than one it skipped.
+    navigated: bool = false,
     /// Only set when the caller passed `CallOpts.inline_image`.
     image: ?lp.screenshot.Prepared = null,
     /// Resolved before the action runs, because a navigation takes the node
@@ -845,7 +884,7 @@ pub const ToolResult = struct {
 };
 
 /// Where a call left the page. MCP serializes it as `structuredContent` so a
-/// client reads the status without regexing `Navigated successfully. HTTP 404
+/// client reads the status without regexing `Navigated. HTTP 404
 /// Not Found.` back apart. The transport drops null optionals rather than
 /// writing them, so the matching `outputSchema` requires `url` alone.
 pub const PageState = struct {
@@ -854,7 +893,7 @@ pub const PageState = struct {
     title: ?[]const u8,
 };
 
-fn pageState(frame: *lp.Frame) PageState {
+pub fn pageState(frame: *lp.Frame) PageState {
     return .{
         .url = frame.url,
         .httpStatus = frame._http_status,
@@ -894,6 +933,15 @@ pub const CallOpts = struct {
     /// Fill in `ToolResult.selector`: a registry id means nothing in a later
     /// session, so `--save` cannot replay a call that used one.
     record: bool = false,
+    /// Scripts parse the text, so only model-facing callers set it.
+    nav_note: bool = false,
+    source: TelemetryTool.Source,
+};
+
+/// Told about every call once it returns, failures included.
+pub const Observer = struct {
+    context: *anyopaque,
+    onCall: *const fn (context: *anyopaque, tool_name: []const u8, arguments: ?std.json.Value, result: *const ToolResult, ms: u64, frame: ?*lp.Frame) void,
 };
 
 // An inline screenshot is re-sent on every turn; keep it within what models
@@ -909,10 +957,49 @@ pub fn call(
     arguments: ?std.json.Value,
     opts: CallOpts,
 ) ToolError!ToolResult {
+    const start = lp.datetime.milliTimestamp(.awake);
+    const maybe_tool = std.meta.stringToEnum(Tool, tool_name);
+    const result = callInner(arena, session, registry, maybe_tool, tool_name, arguments, opts);
+    const id: u8 = if (maybe_tool) |t| t.telemetryId() else 0;
+    session.browser.app.telemetry.recordTool(id, opts.source, telemetryOutcome(result), start);
+    if (session.tool_observer) |observer| {
+        const reported: ToolResult = result catch |err| .{ .text = errorMessage(err), .is_error = true };
+        observer.onCall(observer.context, tool_name, arguments, &reported, lp.datetime.milliTimestamp(.awake) -| start, session.currentFrame());
+    }
+    return result;
+}
+
+fn telemetryOutcome(result: ToolError!ToolResult) TelemetryTool.Outcome {
+    const r = result catch |err| return errorOutcome(err);
+    return if (r.is_error) .is_error else .ok;
+}
+
+pub fn errorOutcome(err: ToolError) TelemetryTool.Outcome {
+    return switch (err) {
+        error.FrameNotLoaded => .frame_not_loaded,
+        error.InvalidParams => .invalid_params,
+        error.NodeNotFound => .node_not_found,
+        error.NavigationFailed => .navigation_failed,
+        error.NavigationTimeout => .navigation_timeout,
+        error.Cancelled => .cancelled,
+        error.Timeout => .timeout,
+        error.InternalError, error.OutOfMemory => .internal,
+    };
+}
+
+fn callInner(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    maybe_tool: ?Tool,
+    tool_name: []const u8,
+    arguments: ?std.json.Value,
+    opts: CallOpts,
+) ToolError!ToolResult {
     // In-band so an LLM that invented a tool name (e.g. OpenAI's internal
     // `multi_tool_use.parallel` wrapper) learns the name is wrong instead of
     // retrying it with different arguments.
-    const tool = std.meta.stringToEnum(Tool, tool_name) orelse return .{
+    const tool = maybe_tool orelse return .{
         .text = try arena.print("Unknown tool: {s}", .{tool_name}),
         .is_error = true,
     };
@@ -935,6 +1022,7 @@ pub fn call(
     else
         null;
 
+    const frame_before = if (session.currentFrame()) |f| f._frame_id else null;
     var result = dispatch(arena, session, registry, tool, substituted, opts) catch |err| {
         if (err == error.NavigationFailed) {
             if (formatNavigationError(arena, session)) |text|
@@ -943,6 +1031,18 @@ pub fn call(
         return err;
     };
     result.selector = selector;
+    if (session.currentFrame()) |frame| result.navigated = frame._frame_id != frame_before;
+    if (opts.nav_note) {
+        if (session.currentFrame()) |frame| {
+            const note = if (result.navigated)
+                try navErrorNote(arena, frame)
+            else if (tool.navigatesToUrl())
+                try movedNote(arena, substituted, frame)
+            else
+                null;
+            if (note) |n| result.text = try arena.print("{s}\n\n{s}", .{ n, result.text });
+        }
+    }
     if (tool.reportsPageState()) {
         if (session.currentFrame()) |frame| result.page_state = pageState(frame);
     }
@@ -979,7 +1079,7 @@ fn dispatch(
 ) ToolError!ToolResult {
     return switch (tool) {
         .goto => .{ .text = try execGoto(arena, session, registry, substituted) },
-        .search => execSearch(arena, substituted),
+        .search => execSearch(arena, session, substituted),
         .markdown => .{ .text = try execMarkdown(arena, session, registry, substituted) },
         .html => .{ .text = try execHtml(arena, session, registry, substituted) },
         .screenshot => try execScreenshot(arena, session, registry, substituted, opts.inline_image),
@@ -1114,12 +1214,34 @@ fn navStatus(arena: std.mem.Allocator, frame: *const lp.Frame) []const u8 {
     return arena.print("{d} {s}", .{ status, phrase }) catch "unknown";
 }
 
+/// Otherwise the model takes the current page for the URL it asked for.
+fn movedNote(arena: std.mem.Allocator, arguments: ?std.json.Value, frame: *const lp.Frame) !?[]const u8 {
+    const args = arguments orelse return null;
+    if (args != .object) return null;
+    const url = switch (args.object.get("url") orelse return null) {
+        .string => |s| s,
+        else => return null,
+    };
+    if (url.len == 0 or std.mem.eql(u8, url, frame.url)) return null;
+    return try arena.print("The page is at {s}, not {s}: a redirect or an in-page navigation moved it, and this reads it as it is. Use goto to reload {s}.", .{ frame.url, url, url });
+}
+
+/// Error and challenge pages would otherwise read as the requested content.
+fn navErrorNote(arena: std.mem.Allocator, frame: *const lp.Frame) !?[]const u8 {
+    if (frame._bot_challenge) |challenge| {
+        return try arena.print("Blocked by a {s} bot challenge (HTTP {s}): this is not the requested content.", .{ @tagName(challenge), navStatus(arena, frame) });
+    }
+    const status = frame._http_status orelse return null;
+    if (status < 400) return null;
+    return try arena.print("HTTP {s}: this is likely an error or rate-limit page, not the requested content.", .{navStatus(arena, frame)});
+}
+
 fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgs(GotoParams, arena, arguments);
     const result = try performGoto(session, registry, args.url, .{ .timeout = args.timeout, .wait_until = args.waitUntil });
     const status = if (session.currentFrame()) |frame| navStatus(arena, frame) else "unknown";
     return switch (result) {
-        .completed => arena.print("Navigated successfully. HTTP {s}.", .{status}),
+        .completed => arena.print("Navigated. HTTP {s}.", .{status}),
         .timeout => arena.print("Navigation started (HTTP {s}) but the page did not finish loading before the timeout.", .{status}),
     } catch ToolError.InternalError;
 }
@@ -1244,7 +1366,7 @@ pub fn searchKeyStatus(engine: SearchEngine) ?KeyStatus {
     return null;
 }
 
-fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!ToolResult {
+fn execSearch(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError!ToolResult {
     const args = try parseArgs(SearchParams, arena, arguments);
     if (args.query.len == 0) return ToolError.InvalidParams;
 
@@ -1259,7 +1381,7 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
                     // Fall through on any failure so one outage doesn't kill
                     // a whole benchmark run.
                     var detail: Failure = .{};
-                    if (apiSearch(engine, arena, api_key, timeout_ms, args.query, &detail)) |markdown_| {
+                    if (session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, args.query, &detail })) |markdown_| {
                         return .{ .text = markdown_ };
                     } else |err| {
                         last_err = err;
@@ -1274,7 +1396,7 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
         },
         inline else => |tag| {
             inline for (api_engines) |engine| {
-                if (engine.tag == tag) return searchExplicit(arena, engine, timeout_ms, args.query);
+                if (engine.tag == tag) return searchExplicit(arena, session, engine, timeout_ms, args.query);
             }
             @compileError("engine missing from api_engines: " ++ @tagName(tag));
         },
@@ -1282,14 +1404,14 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
 }
 
 /// No fallback: a failed call or a missing key is an error result.
-fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, timeout_ms: u32, query: []const u8) ToolError!ToolResult {
+fn searchExplicit(arena: std.mem.Allocator, session: *lp.Session, comptime engine: anytype, timeout_ms: u32, query: []const u8) ToolError!ToolResult {
     const label = @tagName(engine.tag);
     const api_key = engineKey(engine) catch return .{
         .text = "web search engine is set to " ++ label ++ " but " ++ engine.env_var ++ " is not set in the environment",
         .is_error = true,
     };
     var detail: Failure = .{};
-    const markdown_ = apiSearch(engine, arena, api_key, timeout_ms, query, &detail) catch |err|
+    const markdown_ = session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, query, &detail }) catch |err|
         return searchFailed(arena, label, err, detail);
     return .{ .text = markdown_ };
 }
@@ -2427,7 +2549,9 @@ fn ensurePage(session: *lp.Session, registry: *NodeRegistry, url: ?[:0]const u8,
     if (url) |u| {
         if (session.currentFrame()) |frame| {
             const is_loaded = frame._parse_state != .pre and frame._last_navigate_error == null;
-            if (is_loaded and std.mem.eql(u8, frame.url, u)) {
+            // Reloading would discard what a redirect or in-page navigation did.
+            const is_here = std.mem.eql(u8, frame.url, u) or std.mem.eql(u8, frame._requested_url, u);
+            if (is_loaded and is_here) {
                 return frame;
             }
         }
@@ -2566,13 +2690,21 @@ pub fn parseValue(comptime T: type, arena: std.mem.Allocator, value: std.json.Va
             return error.InvalidParams;
         },
     };
-    // Schema contract: backendNodeId 0 means omitted — registry ids start at 1,
-    // and zero-filling models (gpt-5.x) send 0 for "unset".
+    // Schema contract: backendNodeId 0 and url "" mean omitted. Registry ids
+    // start at 1 and "" is no URL; zero-filling models (gpt-5.x) send them for
+    // "unset", and navigating to "" would tear the page down.
     if (comptime @typeInfo(T) == .@"struct" and @hasField(T, "backendNodeId") and
         @typeInfo(@FieldType(T, "backendNodeId")) == .optional)
     {
         if (parsed.backendNodeId) |nid| {
             if (nid == 0) parsed.backendNodeId = null;
+        }
+    }
+    if (comptime @typeInfo(T) == .@"struct" and @hasField(T, "url") and
+        @typeInfo(@FieldType(T, "url")) == .optional)
+    {
+        if (parsed.url) |u| {
+            if (u.len == 0) parsed.url = null;
         }
     }
     return parsed;
@@ -2727,10 +2859,10 @@ pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) err
 test "call: unknown tool name surfaces in-band" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
 
-    // Session/registry are never touched on this branch; the name check is
-    // the first thing `call` does.
-    const r = try call(arena.allocator(), undefined, undefined, "multi_tool_use.parallel", null, .{});
+    const r = try call(arena.allocator(), testing.test_session, &registry, "multi_tool_use.parallel", null, .{ .source = .user });
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
 }
@@ -2750,13 +2882,35 @@ test "tree and nodeDetails read the node's own frame" {
 
     const aa = testing.arena_allocator;
     const tree_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{html_id}), .{});
-    const tree = try call(aa, page.session, &registry, "tree", tree_args, .{});
+    const tree = try call(aa, page.session, &registry, "tree", tree_args, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, tree.text, "child-label") != null);
     try std.testing.expect(std.mem.find(u8, tree.text, "parent-") == null);
 
     const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{input_id}), .{});
-    const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{});
+    const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, details.text, "child-label") != null);
+}
+
+test "tree and nodeDetails list iframes with their URL" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/semantic_tree_iframe.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    _ = try call(aa, page.session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.querySelector('iframe').contentWindow.history.replaceState(null, '', '?moved'); const f = document.createElement('iframe'); f.setAttribute('src', 'semantic_tree_iframe_child.html?scripted'); document.body.appendChild(f)"}
+    , .{}), .{ .source = .user });
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "Iframe value='http://127.0.0.1:9582/src/browser/tests/cdp/semantic_tree_iframe_child.html?moved'") != null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "Iframe value='http://127.0.0.1:9582/src/browser/tests/cdp/semantic_tree_iframe_child.html?scripted'") != null);
+
+    const iframe = (try page.frame().?.document.querySelector(.wrap("iframe"), page.frame().?)).?.asNode();
+    const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{(try registry.register(iframe)).id}), .{});
+    const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, details.text, "\"value\":\"http://127.0.0.1:9582/src/browser/tests/cdp/semantic_tree_iframe_child.html?moved\"") != null);
 }
 
 test "goto: a navigation stuck waiting for a connection is an error" {
@@ -2776,13 +2930,116 @@ test "goto: a navigation stuck waiting for a connection is an error" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":300}
     , .{});
-    try std.testing.expectError(error.NavigationTimeout, call(aa, session, &registry, "goto", args, .{}));
+    try std.testing.expectError(error.NavigationTimeout, call(aa, session, &registry, "goto", args, .{ .source = .user }));
 
     for (held.items) |conn| network.releaseConnection(conn);
     held.clearRetainingCapacity();
 
-    const r = try call(aa, session, &registry, "goto", args, .{});
-    try std.testing.expectEqualStrings("Navigated successfully. HTTP 200 OK.", r.text);
+    const r = try call(aa, session, &registry, "goto", args, .{ .source = .user });
+    try std.testing.expectEqualStrings("Navigated. HTTP 200 OK.", r.text);
+}
+
+test "tools: goto flags an error status instead of reporting success" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/status/429"}
+    , .{});
+    const r = try call(aa, session, &registry, "goto", args, .{ .nav_note = true, .source = .user });
+    try std.testing.expectEqualStrings("HTTP 429 Too Many Requests: this is likely an error or rate-limit page, not the requested content.\n\nNavigated. HTTP 429 Too Many Requests.", r.text);
+}
+
+test "tools: a read tool navigating by url flags an error status" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/status/404"}
+    , .{});
+    const r = try call(aa, session, &registry, "markdown", args, .{ .nav_note = true, .source = .user });
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "HTTP 404 Not Found: this is likely an error"));
+
+    const reload = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/status/403"}
+    , .{});
+    const s = try call(aa, session, &registry, "markdown", reload, .{ .source = .user });
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "rate-limit") == null);
+}
+
+test "tools: a read tool keeps a page that moved within the document" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    _ = try call(aa, session, &registry, "goto", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ url ++ "\"}", .{}), .{ .source = .user });
+    _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.body.dataset.mark = 'kept'; history.pushState(null, '', '?moved')"}
+    , .{}), .{ .source = .user });
+
+    const r = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ url ++ "\"}", .{}), .{ .nav_note = true, .source = .user });
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "The page is at " ++ url ++ "?moved, not " ++ url ++ ":"));
+    try std.testing.expect(!r.navigated);
+
+    const empty = try call(aa, session, &registry, "tree", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":""}
+    , .{}), .{ .nav_note = true, .source = .user });
+    try std.testing.expect(!empty.is_error and !empty.navigated);
+
+    const mark = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.body.dataset.mark"}
+    , .{}), .{ .source = .user });
+    try std.testing.expectEqualStrings("kept", mark.text);
+}
+
+test "tools: a read tool keeps a page reached through a redirect" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/xhr/redirect"}
+    , .{});
+    _ = try call(aa, session, &registry, "goto", args, .{ .source = .user });
+    _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.body.dataset.mark = 'kept'"}
+    , .{}), .{ .source = .user });
+
+    _ = try call(aa, session, &registry, "markdown", args, .{ .source = .user });
+    const mark = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.body.dataset.mark"}
+    , .{}), .{ .source = .user });
+    try std.testing.expectEqualStrings("kept", mark.text);
+}
+
+test "tools: a bot challenge is named" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/challenge/vercel"}
+    , .{});
+    const r = try call(aa, session, &registry, "tree", args, .{ .nav_note = true, .source = .user });
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "Blocked by a vercel bot challenge (HTTP 429 Too Many Requests)"));
 }
 
 test "tools: navStatus names the status, or says it has none" {
@@ -2837,6 +3094,23 @@ test "parseValue: zero-filled optional backendNodeId treated as omitted" {
         \\{"backendNodeId":0}
     , .{});
     try std.testing.expectEqual(@as(NodeRegistry.Id, 0), (try parseValue(Required, aa, zero_required)).backendNodeId);
+}
+
+test "parseValue: empty optional url treated as omitted" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const Params = struct { url: ?[:0]const u8 = null };
+    const empty = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":""}
+    , .{});
+    try std.testing.expect((try parseValue(Params, aa, empty)).url == null);
+
+    const real = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"https://example.com"}
+    , .{});
+    try std.testing.expectEqualStrings("https://example.com", (try parseValue(Params, aa, real)).url.?);
 }
 
 test "substituteEnvVars resolves LP_* vars" {
@@ -3114,6 +3388,6 @@ test "markdown: a same-url page whose navigation failed is navigated again" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:1/"}
     , .{});
-    try std.testing.expect((try call(aa, session, &registry, "goto", args, .{})).is_error);
-    try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{})).is_error);
+    try std.testing.expect((try call(aa, session, &registry, "goto", args, .{ .source = .user })).is_error);
+    try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{ .source = .user })).is_error);
 }

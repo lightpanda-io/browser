@@ -310,7 +310,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                     .value = resolved.ptr,
                     .prototype_chain = resolved.prototype_chain.ptr,
                     .prototype_len = @intCast(resolved.prototype_chain.len),
-                    .subtype = if (@hasDecl(JsApi.Meta, "subtype")) JsApi.Meta.subype else .node,
+                    .subtype = inspectorSubtype(resolved.prototype_chain),
                 };
 
                 v8.v8__Object__SetAlignedPointerInInternalField(js_obj.handle, 0, tao);
@@ -1655,3 +1655,15 @@ pub const Scope = struct {
         return self.local.toLocal(global);
     }
 };
+
+// The subtype the inspector reports for one of our objects, as Chrome does:
+// "node" for Nodes, "error" for DOMExceptions, none for everything else.
+fn inspectorSubtype(prototype_chain: []const TaggedOpaque.PrototypeChainEntry) ?bridge.SubType {
+    const node_index = bridge.JsApiLookup.getId(@import("../webapi/Node.zig").JsApi);
+    const dom_exception_index = bridge.JsApiLookup.getId(@import("../webapi/DOMException.zig").JsApi);
+    for (prototype_chain) |proto| {
+        if (proto.index == node_index) return .node;
+        if (proto.index == dom_exception_index) return .@"error";
+    }
+    return null;
+}

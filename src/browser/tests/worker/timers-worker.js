@@ -71,11 +71,9 @@
       results.setInterval_string_ran = (self.__si_string_ran >= 1);
     }
 
-    // Non-function, non-string handlers must throw.
+    // A handler that isn't callable is converted to a string and compiled.
     {
-      let threw = false;
-      try { setTimeout(123, 1); } catch (_) { threw = true; }
-      results.setTimeout_invalid_throws = threw;
+      results.setTimeout_non_string_id_is_number = (typeof setTimeout(undefined) === 'number');
     }
 
     postMessage({ ok: true, results });

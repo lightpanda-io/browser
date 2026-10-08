@@ -92,7 +92,7 @@ pub fn setMethod(self: *Form, method: []const u8, frame: *Frame) !void {
 }
 
 pub fn getElements(self: *Form, frame: *Frame) !*HTMLFormControlsCollection {
-    const node_live = self.iterator(frame);
+    const node_live = self.iterator(.{ .image_buttons = false }, frame);
     const elements = try frame._factory.chained(.{
         node_live.htmlCollectionValue(),
         HTMLFormControlsCollection{ ._proto = undefined },
@@ -101,14 +101,18 @@ pub fn getElements(self: *Form, frame: *Frame) !*HTMLFormControlsCollection {
     return elements;
 }
 
-pub fn iterator(self: *Form, frame: *Frame) NodeLive(.form) {
+const IteratorOpts = struct {
+    image_buttons: bool = true, // form.elements doesn't incude input type=image
+};
+
+pub fn iterator(self: *Form, opts: IteratorOpts, frame: *Frame) NodeLive(.form) {
     const form_id = self.asElement().getId();
     const root = if (form_id != null)
         self.asNode().getRootNode(.{}) // Has ID: walk entire document to find form=ID controls
     else
         self.asNode(); // No ID: walk only form subtree (no external controls possible)
 
-    return NodeLive(.form).init(root, .{ .form = self, .form_id = form_id }, frame);
+    return NodeLive(.form).init(root, .{ .form = self, .form_id = form_id, .image_buttons = opts.image_buttons }, frame);
 }
 
 fn getAction(self: *Form, frame: *Frame) ![]const u8 {
@@ -155,7 +159,9 @@ pub fn submit(self: *Form, frame: *Frame) !void {
 pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
     const submitter_element = if (submitter) |s| blk: {
         // The submitter must be a submit button.
-        if (!isSubmitButton(s)) return error.TypeError;
+        if (isSubmitButton(s) == false) {
+            return error.TypeError;
+        }
 
         // The submitter's form owner must be this form element.
         const submitter_form = getFormOwner(s, frame);
@@ -165,6 +171,41 @@ pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
     } else self.asElement();
 
     return frame.submitForm(submitter_element, self, .{});
+}
+
+/// The form's first submit button in tree order.
+/// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#default-button
+pub fn getDefaultButton(self: *Form, frame: *Frame) ?*Element {
+    var it = self.iterator(.{}, frame);
+    while (it.next()) |element| {
+        if (isSubmitButton(element)) {
+            return element;
+        }
+    }
+    return null;
+}
+
+/// Implicit submission without a default button only submits when the form has
+/// at most one field that blocks it. Like Chrome, it also requires `trigger`,
+/// the field that got the Enter key, to be that field: Enter on a checkbox or
+/// a radio does not submit.
+/// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission
+pub fn canSubmitImplicitly(self: *Form, trigger: *Input, frame: *Frame) bool {
+    var blocker: ?*Input = null;
+    var it = self.iterator(.{}, frame);
+    while (it.next()) |element| {
+        const input = element.is(Input) orelse continue;
+        switch (input._input_type) {
+            .text, .search, .url, .tel, .email, .password, .date, .month, .week, .time, .@"datetime-local", .number => {
+                if (blocker != null) {
+                    return false;
+                }
+                blocker = input;
+            },
+            else => {},
+        }
+    }
+    return blocker == trigger;
 }
 
 /// Returns true if the element is a submit button per the HTML spec:
@@ -191,6 +232,11 @@ fn getFormOwner(element: *Element, frame: *Frame) ?*Form {
     return null;
 }
 
+fn getAtIndex(self: *Form, index: usize, frame: *Frame) ?*Element {
+    var it = self.iterator(.{ .image_buttons = false }, frame);
+    return it.getAtIndex(index, frame);
+}
+
 // https://html.spec.whatwg.org/multipage/forms.html#dom-form-nameditem
 // One matching control is returned as is; more than one as a live RadioNodeList.
 fn namedItem(self: *Form, name: []const u8, frame: *Frame) !?HTMLFormControlsCollection.NamedItemResult {
@@ -199,7 +245,7 @@ fn namedItem(self: *Form, name: []const u8, frame: *Frame) !?HTMLFormControlsCol
     }
 
     var first: ?*Element = null;
-    var it = self.iterator(frame);
+    var it = self.iterator(.{ .image_buttons = false }, frame);
     while (it.next()) |element| {
         if (HTMLFormControlsCollection.matchesName(element, name) == false) {
             continue;
@@ -221,7 +267,7 @@ fn namedItem(self: *Form, name: []const u8, frame: *Frame) !?HTMLFormControlsCol
 /// Returns true if every submittable element in the form is valid. Fires an
 /// `invalid` event on each failing element.
 pub fn checkValidity(self: *Form, frame: *Frame) !bool {
-    var iter = self.iterator(frame);
+    var iter = self.iterator(.{}, frame);
     var all_valid = true;
     while (iter.next()) |element| {
         const ok = try checkElementValidity(element, frame);
@@ -256,13 +302,14 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const @"[int]" = bridge.indexed(Form.getAtIndex, null, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(Form.namedItem, null, null, null, struct {
         fn wrap(self: *Form, field_name: []const u8, frame: *Frame) !u32 {
             if (field_name.len == 0) {
                 return error.NotHandled;
             }
 
-            var it = self.iterator(frame);
+            var it = self.iterator(.{ .image_buttons = false }, frame);
             while (it.next()) |element| {
                 if (HTMLFormControlsCollection.matchesName(element, field_name)) {
                     return js.v8.DontEnum;
