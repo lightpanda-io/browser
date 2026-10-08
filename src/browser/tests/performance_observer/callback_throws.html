@@ -5,6 +5,13 @@
   const state = await testing.async();
 
   let calledSecond = false;
+  const errors = [];
+  const onError = (e) => {
+    errors.push(e.error);
+    e.preventDefault();
+  };
+  window.addEventListener('error', onError);
+
   const first = new PerformanceObserver(() => {
     first.disconnect();
     throw new Error('boom');
@@ -21,8 +28,12 @@
     performance.mark("throwMark");
   });
 
+  window.removeEventListener('error', onError);
+
   state.resolve();
   await state.done(() => {
     testing.expectEqual(true, calledSecond);
+    testing.expectEqual(1, errors.length);
+    testing.expectEqual('boom', errors[0].message);
   });
 </script>
