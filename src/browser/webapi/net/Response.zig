@@ -25,10 +25,11 @@ const Page = @import("../../Page.zig");
 const Transfer = @import("../../../network/HttpClient.zig").Transfer;
 
 const Blob = @import("../Blob.zig");
+const AbortSignal = @import("../AbortSignal.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
-const FormData = @import("FormData.zig");
 
 const Headers = @import("Headers.zig");
+const FormData = @import("FormData.zig");
 const body_init = @import("body_init.zig");
 
 const Execution = js.Execution;
@@ -57,6 +58,7 @@ _is_redirected: bool,
 _http_transfer: ?*Transfer = null,
 _body_used: bool = false,
 _body_stream: ?*ReadableStream = null,
+_signal: ?*AbortSignal = null, // fetch's abort, aborts response body read
 
 const Body = union(enum) {
     empty,
@@ -304,6 +306,11 @@ pub fn getBody(self: *Response, exec: *const Execution) !?*ReadableStream {
                 return stream;
             }
             const stream = blk: {
+                if (self.abortReason() != null) {
+                    const stream = try ReadableStream.init(null, null, exec);
+                    try stream._controller.doError("The operation was aborted.");
+                    break :blk stream;
+                }
                 if (body.len == 0) {
                     const stream = try ReadableStream.init(null, null, exec);
                     try stream._controller.close();
@@ -337,6 +344,15 @@ pub fn getBody(self: *Response, exec: *const Execution) !?*ReadableStream {
 fn lockStream(stream: *ReadableStream, exec: *const Execution) !void {
     _ = try stream.getReader(exec);
     stream._disturbed = true;
+}
+
+// TODO: a body stream obtained before the abort isn't errored.
+fn abortReason(self: *const Response) ?AbortSignal.Reason {
+    const signal = self._signal orelse return null;
+    if (signal._aborted == false or self._body == .empty) {
+        return null;
+    }
+    return signal._reason;
 }
 
 pub fn isOK(self: *const Response) bool {
@@ -383,6 +399,9 @@ fn consume(self: *Response, exec: *const Execution) !void {
 
 pub fn consumeBytes(self: *Response, exec: *const Execution) ![]const u8 {
     try self.consume(exec);
+    if (self.abortReason() != null) {
+        return exec.js.local.?.typeError("The operation was aborted.");
+    }
     return switch (self._body) {
         .empty => "",
         .bytes => |b| b,
@@ -421,6 +440,12 @@ const Package = enum { array_buffer, bytes, text, json, blob, form_data };
 fn consumeAs(self: *Response, kind: Package, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
     try self.consume(exec);
+
+    if (self.abortReason()) |reason| {
+        var resolver = local.createPromiseResolver();
+        resolver.reject("response aborted", try AbortSignal.reasonJsValue(reason, local));
+        return resolver.promise();
+    }
 
     const content_type = try self._headers.get("content-type", exec);
     switch (self._body) {
@@ -596,6 +621,7 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
         ._is_redirected = self._is_redirected,
         ._headers = try .initGuarded(.{ .obj = self._headers }, self._headers._guard, exec),
         ._http_transfer = null,
+        ._signal = self._signal,
     };
     arena.report();
     return cloned;

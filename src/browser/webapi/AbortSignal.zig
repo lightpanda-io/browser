@@ -21,6 +21,8 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 
+const Fetch = @import("net/Fetch.zig");
+
 const Event = @import("Event.zig");
 const Scheduler = @import("Scheduler.zig");
 const EventTarget = @import("EventTarget.zig");
@@ -40,6 +42,7 @@ const Dependend = union(enum) {
     // Handled by the owning signal's markAborted (which runs for dependent
     // signals too, unlike this union's markAborted).
     scheduler_task: *Scheduler.Task,
+    fetch: *Fetch, // The fetch removes itself when it completes.
 
     // Returns false if the dependent was already aborted, in which case no
     // abort event must be dispatched for it.
@@ -54,14 +57,14 @@ const Dependend = union(enum) {
                 try dep.markAborted(exec);
                 return true;
             },
-            .scheduler_task => return false,
+            .scheduler_task, .fetch => return false,
         }
     }
 
     fn dispatchAbortEvent(self: Dependend, exec: *const Execution) !void {
         switch (self) {
             .signal => |dep| try dep.dispatchAbortEvent(exec),
-            .model_context_tool, .scheduler_task => {},
+            .model_context_tool, .scheduler_task, .fetch => {},
         }
     }
 };
@@ -149,11 +152,21 @@ fn markAborted(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !vo
     }
 
     // Unlike the loop in abort(), this runs for dependent signals too, so a
-    // task registered on an any() signal still gets rejected.
+    // task or fetch registered on an any() signal still gets rejected.
     for (self._dependents.items) |dep| {
         switch (dep) {
             .scheduler_task => |task| task.onAbort(self._reason, exec),
+            .fetch => |fetch| fetch.abort(self._reason),
             else => {},
+        }
+    }
+}
+
+pub fn removeDependent(self: *AbortSignal, dep: Dependend) void {
+    for (self._dependents.items, 0..) |d, i| {
+        if (std.meta.eql(d, dep)) {
+            _ = self._dependents.orderedRemove(i);
+            return;
         }
     }
 }
