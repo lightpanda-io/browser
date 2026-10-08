@@ -698,11 +698,8 @@ fn onNearHeapLimit(self: *Env, current_limit: usize, initial_limit: usize) usize
         self.requestTerminate();
     }
 
-    const cap = initial_limit + 256 * 1024 * 1024;
-    if (current_limit >= cap) {
-        return current_limit;
-    }
-    return @min(cap, current_limit + 64 * 1024 * 1024);
+    // give it 256MB more to, hopefully, shtudown cleanly
+    return @max(current_limit, initial_limit + 256 * 1024 * 1024);
 }
 
 // Called from the network thread, caused v8 to eventually call terminateInterrupt
@@ -730,14 +727,19 @@ pub fn pendingStallReport(self: *const Env) ?u64 {
 fn terminateInterrupt(_: ?*v8.Isolate, data: ?*anyopaque) callconv(.c) void {
     const self: *Env = @ptrCast(@alignCast(data.?));
     if (self.terminate_requested.load(.acquire)) {
-        const requested_at = self.stall_report_requested_at.swap(0, .acq_rel);
-        if (requested_at != 0) {
-            self.logStall(requested_at);
-        }
-        if (self.heap_report_requested.swap(false, .acq_rel)) {
-            self.logHeapLimit();
-        }
+        self.logPendingReports();
         v8.v8__Isolate__TerminateExecution(self.isolate.handle);
+    }
+}
+
+// Runs on the worker thread, while the script being stopped is on the stack.
+pub fn logPendingReports(self: *Env) void {
+    const requested_at = self.stall_report_requested_at.swap(0, .acq_rel);
+    if (requested_at != 0) {
+        self.logStall(requested_at);
+    }
+    if (self.heap_report_requested.swap(false, .acq_rel)) {
+        self.logHeapLimit();
     }
 }
 
@@ -1055,6 +1057,42 @@ test "Env: heap limit termination logs the running script once" {
     var caught: js.TryCatch.Caught = .{};
     try testing.expectError(error.ExecutionTerminated, driver_fn.tryCall(void, .{local.newCallback(State.exhaust, &state)}, &caught));
     try testing.expectEqual(false, env.heap_report_requested.load(.acquire));
+}
+
+test "Env: a pending termination refuses native calls" {
+    // "JS heap limit reached", then the refusal logs "JS heap limit script".
+    testing.expectLog(&.{ .app, .app });
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const env = frame.js.env;
+
+    const State = struct {
+        env: *Env,
+        fn exhaust(self: *@This()) void {
+            _ = self.env.onNearHeapLimit(1024, 1024);
+        }
+    };
+    var state = State{ .env = env };
+
+    // No loop and no JS call after exhaust(): nothing reaches a V8 stack
+    // check, so only the setter can stop the script.
+    const driver = try local.exec("(function(exhaust) { exhaust(); document.title = 'ran'; })", null);
+    const driver_fn = js.Function{ .local = local, .handle = @ptrCast(driver.handle) };
+    var caught: js.TryCatch.Caught = .{};
+    if (driver_fn.tryCall(void, .{local.newCallback(State.exhaust, &state)}, &caught)) {
+        return error.NativeCallNotRefused;
+    } else |_| {}
+    try testing.expectEqual(false, env.heap_report_requested.load(.acquire));
+
+    env.cancelTerminate();
+    try testing.expectEqual(false, std.mem.eql(u8, "ran", try (try local.exec("document.title", null)).toStringSlice()));
 }
 
 test "Env: canceling a termination drops its pending stall report" {
