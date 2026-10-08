@@ -2414,10 +2414,22 @@ test "cdp.frame: navigate answers with errorText when the navigation fails" {
     const frame = bc.mainFrame() orelse unreachable;
     try testing.expectEqualSlices(u8, "http://127.0.0.1:1/unreachable", frame.url);
 
+    // The error document's frameNavigated precedes the answer: a client that
+    // navigates again on the answer must not take it for its own navigation.
     var answers: usize = 0;
+    var navigated = false;
     for (ctx.received.items) |msg| {
+        if (msg.object.get("method")) |method| {
+            if (method == .string and std.mem.eql(u8, method.string, "Page.frameNavigated")) {
+                const loader_id = msg.object.get("params").?.object.get("frame").?.object.get("loaderId").?;
+                if (std.mem.eql(u8, loader_id.string, "LID-0000000002")) navigated = true;
+            }
+        }
         const msg_id = msg.object.get("id") orelse continue;
-        if (msg_id == .integer and msg_id.integer == 52) answers += 1;
+        if (msg_id == .integer and msg_id.integer == 52) {
+            try testing.expect(navigated);
+            answers += 1;
+        }
     }
     try testing.expectEqual(1, answers);
 }

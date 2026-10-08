@@ -1978,23 +1978,6 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._last_navigate_error = err;
     log.debug(.frame, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
 
-    // A navigation that fails before any response headers arrive never
-    // reaches the frame_navigated dispatch in frameHeaderCallback, so the
-    // Page.navigate command that initiated it would stay unanswered forever.
-    // Tell CDP so it can answer with an errorText (Chrome semantics).
-    // _http_status is set as soon as headers are processed; non-null means
-    // frameHeaderCallback already answered the command — don't answer twice.
-    if (self._http_status == null) {
-        self._session.notification.dispatch(.frame_navigate_failed, &.{
-            .frame_id = self._frame_id,
-            .loader_id = self._loader_id,
-            .timestamp = lp.datetime.timestamp(.boot),
-            .url = self.url,
-            .err = err,
-            .opts = self._navigated_options orelse .{},
-        });
-    }
-
     // A pending root navigation that failed before commit. A cancelled one
     // (window.stop(), Fetch.failRequest) leaves the OLD active Page untouched.
     // Otherwise, like Chrome, commit an error document in its place: the OLD
@@ -2002,20 +1985,26 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // DOMContentLoaded or load.
     if (self.page.replaces != null) {
         if (err == error.TransferCanceled) {
+            self.navigateFailed(err);
             self._session.discardPendingPage(self.page);
             return;
         }
         self._session.commitPendingPage(self.page) catch |e| {
             log.err(.frame, "commit error page", .{ .err = e, .type = self._type, .url = self.url });
+            self.navigateFailed(err);
             if (self.page.replaces != null) {
                 self._session.discardPendingPage(self.page);
             }
             return;
         };
+        // Like Chrome, the error document's frameNavigated goes out before
+        // the Page.navigate answer: a client that starts its next navigation
+        // on that answer would otherwise take this document's events for it.
         self.errorPageNavigated() catch |e| {
             log.err(.frame, "error page navigated", .{ .err = e, .type = self._type, .url = self.url });
         };
     }
+    self.navigateFailed(err);
 
     self._parse_state.deinit(self);
     self._parse_state = .{ .err = err };
@@ -2026,6 +2015,26 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
         log.err(.browser, "frameErrorCallback", .{ .err = e, .type = self._type, .url = self.url });
         return;
     };
+}
+
+// A navigation that fails before any response headers arrive never
+// reaches the frame_navigated dispatch in frameHeaderCallback, so the
+// Page.navigate command that initiated it would stay unanswered forever.
+// Tell CDP so it can answer with an errorText (Chrome semantics).
+// _http_status is set as soon as headers are processed; non-null means
+// frameHeaderCallback already answered the command — don't answer twice.
+fn navigateFailed(self: *Frame, err: anyerror) void {
+    if (self._http_status != null) {
+        return;
+    }
+    self._session.notification.dispatch(.frame_navigate_failed, &.{
+        .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
+        .timestamp = lp.datetime.timestamp(.boot),
+        .url = self.url,
+        .err = err,
+        .opts = self._navigated_options orelse .{},
+    });
 }
 
 // The parts of frameHeaderDoneCallback an error document committed in place of
