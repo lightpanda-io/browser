@@ -1165,7 +1165,7 @@ const Env = struct {
     // needs the Unicode ID_Start / ID_Continue tables. V8 has them; a RegExp
     // over the remaining input tells us where the identifier ends.
     fn nameLenUnicode(self: Env, s: []const u8) Error!usize {
-        const re = js.RegExp.init(self.local, "^[\\p{ID_Start}$_][\\p{ID_Continue}$\\u200C\\u200D]*", js.RegExp.Flag.unicode) catch return error.JsException;
+        const re = js.RegExp.init(self.local, "^[\\p{ID_Start}$_][\\p{ID_Continue}$\\u200C\\u200D]*", .{ .flags = js.RegExp.Flag.unicode, .backtrack_limit = null }) catch return error.JsException;
         const result = (re.exec(s) catch return error.JsException) orelse return 0;
         const matched = result.get("0") catch return error.JsException;
         const str = matched.isString() orelse return 0;
@@ -1186,7 +1186,7 @@ const Env = struct {
             return false;
         }
         const source = if (first) "^[\\p{ID_Start}$_]" else "^[\\p{ID_Continue}$\\u200C\\u200D]";
-        const re = js.RegExp.init(self.local, source, js.RegExp.Flag.unicode) catch return error.JsException;
+        const re = js.RegExp.init(self.local, source, .{ .flags = js.RegExp.Flag.unicode, .backtrack_limit = null }) catch return error.JsException;
         return re.match(s[0..cp_len]) catch return error.JsException;
     }
 };
@@ -1810,7 +1810,7 @@ const Component = struct {
         if (self.options.ignore_case) {
             flags |= js.RegExp.Flag.ignore_case;
         }
-        return js.RegExp.init(local, self.regexp_source, flags);
+        return js.RegExp.init(local, self.regexp_source, .{ .flags = flags });
     }
 
     /// Runs the component against `input`; null when it doesn't match.

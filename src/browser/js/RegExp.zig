@@ -39,10 +39,18 @@ pub const Flag = struct {
     pub const unicode_sets: c_int = v8.kRegExpUnicodeSets;
 };
 
-pub fn init(local: *const js.Local, pattern: []const u8, flags: c_int) !RegExp {
+pub const InitOpts = struct {
+    flags: c_int = Flag.none,
+    backtrack_limit: ?u32 = 1_000_000,
+};
+
+pub fn init(local: *const js.Local, pattern: []const u8, opts: InitOpts) !RegExp {
     const pattern_handle = local.isolate.initStringHandle(pattern);
-    const handle = v8.v8__RegExp__New(local.handle, pattern_handle, flags) orelse return error.JsException;
-    return .{ .local = local, .handle = handle };
+    const handle = if (opts.backtrack_limit) |limit|
+        v8.v8__RegExp__NewWithBacktrackLimit(local.handle, pattern_handle, opts.flags, limit)
+    else
+        v8.v8__RegExp__New(local.handle, pattern_handle, opts.flags);
+    return .{ .local = local, .handle = handle orelse return error.JsException };
 }
 
 // Runs the pattern against `subject`. Returns the result Array (as a generic
