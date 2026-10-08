@@ -619,3 +619,16 @@
     testing.expectEqual(0, date_selects);
   }
 </script>
+
+<script id="pattern_catastrophic_backtracking">
+  {
+    // A nested quantifier backtracks exponentially on a value that almost
+    // matches. Chrome bounds the match and returns at once, treating a
+    // pattern that gives up as not matching.
+    const input = document.createElement('input');
+    input.pattern = '(a+)+';
+    input.value = 'a'.repeat(40) + 'b';
+    testing.expectEqual(true, input.validity.patternMismatch);
+    testing.expectEqual(false, input.checkValidity());
+  }
+</script>

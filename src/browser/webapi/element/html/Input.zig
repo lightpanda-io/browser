@@ -470,7 +470,7 @@ pub fn suffersPatternMismatch(self: *const Input, frame: *Frame) bool {
     defer try_catch.deinit();
 
     const wrapped = frame.call_arena.print("^(?:{s})$", .{pattern}) catch return false;
-    const re = js.RegExp.init(&ls.local, wrapped, js.RegExp.Flag.unicode_sets) catch return false;
+    const re = js.RegExp.init(&ls.local, wrapped, .{ .flags = js.RegExp.Flag.unicode_sets }) catch return false;
     const matched = re.match(value) catch return false;
 
     return !matched;
