@@ -20,7 +20,7 @@ TEST_JOBS=1 make test                           # Run in one process (default: u
 
 The custom test runner (`src/test_runner.zig`) detects memory leaks in debug builds. **A test that allocates without freeing fails** — not just lints.
 
-The suite is split across processes that run at the same time, each taking every Nth test. So a test can't rely on an earlier one having run, and files it writes go in `std.testing.tmpDir`, never a fixed path. Each process binds its test servers to ephemeral ports; fixtures keep addressing `127.0.0.1:9582` / `localhost:9582` (HTTP) and `:9584` (WebSocket), which libcurl routes to the real ones.
+The suite is split across processes that run at the same time, each claiming the next test not yet taken. So a test can't rely on an earlier one having run, and files it writes go in `std.testing.tmpDir`, never a fixed path. Each process binds its test servers to ephemeral ports; fixtures keep addressing `127.0.0.1:9582` / `localhost:9582` (HTTP) and `:9584` (WebSocket), which libcurl routes to the real ones.
 
 ## Formatting
 

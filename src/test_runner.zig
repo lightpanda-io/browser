@@ -51,7 +51,7 @@ pub fn main(init: std.process.Init) !void {
     defer std.testing.io_instance.deinit();
 
     const env = Env.init(init.environ_map);
-    if (env.shard == null and env.jobs > 1) {
+    if (env.claim == null and env.jobs > 1) {
         try runShards(std.testing.io_instance.io(), arena.allocator(), init.environ_map, env.jobs);
     }
 
@@ -111,15 +111,16 @@ const Runner = struct {
         // Then we have a special check to make sure _some_ test was run. This
         const webapi_html_test_mode = self.env.filter == null and self.env.subfilter != null;
 
-        var index: usize = 0;
+        var claim: ?Claim = if (self.env.claim) |path| try .open(io, path) else null;
+        var index: u64 = 0;
         for (builtin.test_functions) |t| {
             if (isSetup(t) or isTeardown(t) or isAfterEach(t)) {
                 continue;
             }
 
-            if (self.env.shard) |shard| {
+            if (claim) |*c| {
                 defer index += 1;
-                if (index % shard.count != shard.index) {
+                if (!c.owns(index)) {
                     continue;
                 }
             }
@@ -285,6 +286,31 @@ const Runner = struct {
     }
 };
 
+/// A counter shared by every shard through a mapped file, so each test goes to
+/// whichever shard is free first instead of a fixed share of them.
+const Claim = struct {
+    counter: *std.atomic.Value(u64),
+    // the test index this shard holds
+    next: u64,
+
+    fn open(io: Io, path: []const u8) !Claim {
+        const file = try Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
+        defer file.close(io);
+        const mem = try std.posix.mmap(null, @sizeOf(u64), .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, file.handle, 0);
+        const counter: *std.atomic.Value(u64) = @ptrCast(mem.ptr);
+        return .{ .counter = counter, .next = counter.fetchAdd(1, .monotonic) };
+    }
+
+    /// Whether this shard runs the test at `index`. Indices must come in order:
+    /// a new one is only claimed once the held one is behind us.
+    fn owns(self: *Claim, index: u64) bool {
+        if (index > self.next) {
+            self.next = self.counter.fetchAdd(1, .monotonic);
+        }
+        return index == self.next;
+    }
+};
+
 // A run's outcome. Shards send it to their parent as JSON.
 const Report = struct {
     pass: usize = 0,
@@ -323,20 +349,23 @@ const Report = struct {
     }
 };
 
-/// Runs the suite as `jobs` copies of this binary, each taking every jobs-th
-/// test, and merges what they report.
+/// Runs the suite as `jobs` copies of this binary, which claim tests one at a
+/// time, and merges what they report.
 fn runShards(io: Io, arena: Allocator, environ_map: *const std.process.Environ.Map, jobs: usize) !noreturn {
     const exe = try std.process.executablePathAlloc(io, arena);
     const dir = try arena.print(".zig-cache/tmp/test-shards-{d}", .{std.c.getpid()});
     try Io.Dir.cwd().createDirPath(io, dir);
     defer Io.Dir.cwd().deleteTree(io, dir) catch {};
 
+    const claim_path = try arena.print("{s}/claim", .{dir});
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = claim_path, .data = &std.mem.toBytes(@as(u64, 0)) });
+
     const children = try arena.alloc(std.process.Child, jobs);
     const report_paths = try arena.alloc([]const u8, jobs);
     for (children, report_paths, 0..) |*child, *report_path, i| {
         report_path.* = try arena.print("{s}/{d}.json", .{ dir, i });
         var child_env = try environ_map.clone(arena);
-        try child_env.put("TEST_SHARD", try arena.print("{d}/{d}", .{ i, jobs }));
+        try child_env.put("TEST_CLAIM", claim_path);
         try child_env.put("TEST_REPORT", report_path.*);
         child.* = try std.process.spawn(io, .{ .argv = &.{exe}, .environ_map = &child_env });
     }
@@ -506,15 +535,10 @@ const Env = struct {
     metrics: bool,
     // number of processes to split the suite across
     jobs: usize,
-    // set in a process spawned to run one share of the suite
-    shard: ?Shard,
+    // set in a process spawned to run one share of the suite: its Claim file
+    claim: ?[]const u8,
     // where a shard writes its Report
     report: ?[]const u8,
-
-    const Shard = struct {
-        index: usize,
-        count: usize,
-    };
 
     fn init(map: *const std.process.Environ.Map) Env {
         const full_filter = readEnv(map, "TEST_FILTER");
@@ -529,7 +553,7 @@ const Env = struct {
             .fail_first = readEnvBool(map, "TEST_FAIL_FIRST", false),
             // metrics are compared across runs, so keep them to one process
             .jobs = if (metrics) 1 else readEnvInt(map, "TEST_JOBS") orelse defaultJobs(),
-            .shard = parseShard(readEnv(map, "TEST_SHARD")),
+            .claim = readEnv(map, "TEST_CLAIM"),
             .report = readEnv(map, "TEST_REPORT"),
         };
     }
@@ -542,15 +566,6 @@ const Env = struct {
     fn readEnvInt(map: *const std.process.Environ.Map, key: []const u8) ?usize {
         const value = readEnv(map, key) orelse return null;
         return std.fmt.parseInt(usize, value, 10) catch null;
-    }
-
-    fn parseShard(value: ?[]const u8) ?Shard {
-        const v = value orelse return null;
-        const index_str, const count_str = std.mem.cutScalar(u8, v, '/') orelse return null;
-        const index = std.fmt.parseInt(usize, index_str, 10) catch return null;
-        const count = std.fmt.parseInt(usize, count_str, 10) catch return null;
-        if (index >= count) return null;
-        return .{ .index = index, .count = count };
     }
 
     fn readEnv(map: *const std.process.Environ.Map, key: []const u8) ?[]const u8 {
