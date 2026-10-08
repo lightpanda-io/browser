@@ -606,7 +606,7 @@ pub fn navigationBase(self: *const Frame) [:0]const u8 {
     var maybe_not_blank_frame = self;
     while (true) {
         const maybe_base = maybe_not_blank_frame.base();
-        if (std.mem.eql(u8, maybe_base, "about:blank") == false) {
+        if (URL.isAboutBlank(maybe_base) == false) {
             return maybe_base;
         }
         // The orelse here is probably an invalid case, but there isn't
@@ -696,7 +696,7 @@ fn isPotentiallyTrustworthy(self: *const Frame) bool {
     // No origin: either an opaque one (data:, which is never trustworthy), a
     // file: document, or an about:blank/srcdoc with nothing to inherit from.
     const url = self.url;
-    return std.mem.eql(u8, url, "about:blank") or std.mem.eql(u8, url, "about:srcdoc") or std.mem.startsWith(u8, url, "file:");
+    return URL.isAboutBlank(url) or std.mem.eql(u8, url, "about:srcdoc") or std.mem.startsWith(u8, url, "file:");
 }
 
 pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !void {
@@ -726,7 +726,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     const http_client = &session.browser.http_client;
 
     // Handle synthetic navigations: about:blank, about:srcdoc and blob: URLs
-    const is_about_blank = std.mem.eql(u8, "about:blank", request_url);
+    const is_about_blank = URL.isAboutBlank(request_url);
     const is_srcdoc = !is_about_blank and std.mem.eql(u8, "about:srcdoc", request_url);
     const is_blob = !is_about_blank and !is_srcdoc and std.mem.startsWith(u8, request_url, "blob:");
 
@@ -999,7 +999,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
             break :blk .{ try arena.dupeSentinel(u8, request_url, 0), false };
         }
 
-        if (std.mem.eql(u8, request_url, "about:blank")) {
+        if (URL.isAboutBlank(request_url)) {
             // navigate will handle this special case
             break :blk .{ "about:blank", true };
         }
@@ -2181,7 +2181,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     });
 
     const url = blk: {
-        if (std.mem.eql(u8, src, "about:blank")) {
+        if (URL.isAboutBlank(src)) {
             break :blk "about:blank"; // navigate will handle this special case
         }
         if (std.mem.eql(u8, src, "about:srcdoc")) {
@@ -2273,14 +2273,14 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
         if (opts.url.len == 0) {
             break :blk "about:blank";
         }
-        if (std.mem.eql(u8, opts.url, "about:blank")) {
+        if (URL.isAboutBlank(opts.url)) {
             break :blk "about:blank";
         }
         const frame_base = base_blk: {
             var frame = self;
             while (true) {
                 const maybe_base = frame.base();
-                if (!std.mem.eql(u8, maybe_base, "about:blank")) {
+                if (URL.isAboutBlank(maybe_base) == false) {
                     break :base_blk maybe_base;
                 }
                 frame = frame.parent orelse break :base_blk "";
