@@ -200,12 +200,7 @@ pub const LockRequest = struct {
         defer ls.deinit();
 
         const resolver = self.resolver.local(&ls.local);
-        const value = AbortSignal.reasonJsValue(reason, &ls.local) catch {
-            resolver.rejectError("LockManager.signal.aborted", .{ .dom_exception = .{ .err = error.AbortError } });
-            self.manager.releaseLock(self);
-            return;
-        };
-        resolver.reject("LockManager.signal.aborted", value);
+        resolver.reject("LockManager.signal.aborted", reason);
         self.manager.releaseLock(self);
     }
 };
