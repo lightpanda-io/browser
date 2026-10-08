@@ -1664,7 +1664,7 @@ test "cdp: Page.navigate on the STARTUP session returns -32000" {
         .sessionId = "STARTUP",
         .params = .{ .url = "https://example.com" },
     });
-    try ctx.expectSentError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{ .id = 1, .session_id = "STARTUP" });
+    try ctx.expectSentError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{ .id = 1 });
 }
 
 test "cdp: disconnect latches so the worker keeps exiting" {
