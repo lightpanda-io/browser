@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
+const target = @import("target.zig");
 
 const js = @import("../../../browser/js/js.zig");
 const URL = @import("../../../browser/URL.zig");
@@ -755,6 +756,7 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
         .type = "Navigation",
         .frame = FrameWriter{ .bc = bc, .frame = frame },
     }, .{ .session_id = session_id });
+    try target.sendTargetInfoChanged(bc, event.frame_id);
 
     {
         const aux_data = try arena.print("{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
@@ -854,6 +856,7 @@ pub fn frameNavigatedWithinDocument(bc: anytype, event: *const Notification.Fram
         .url = event.url,
         .navigationType = @tagName(event.navigation_type),
     }, .{ .session_id = session_id });
+    try target.sendTargetInfoChanged(bc, event.frame_id);
 }
 
 pub fn frameDOMContentLoaded(bc: anytype, event: *const Notification.FrameDOMContentLoaded) !void {
@@ -891,6 +894,8 @@ pub fn frameLoaded(bc: anytype, event: *const Notification.FrameLoaded) !void {
         .{ .timestamp = timestamp },
         .{ .session_id = session_id },
     );
+    // The title is usually known by now, not at navigation.
+    try target.sendTargetInfoChanged(bc, event.frame_id);
 
     if (bc.page_life_cycle_events) {
         const loader_id = &id.toLoaderId(event.loader_id);
