@@ -289,9 +289,9 @@ pub fn request(
         }
     }
 
-    const owned_name = try lp.String.init(exec.arena, name, .{});
+    const owned_name = try lp.String.init(exec.page_arena, name, .{});
 
-    const lock_request = try exec.arena.create(LockRequest);
+    const lock_request = try exec.page_arena.create(LockRequest);
     lock_request.* = .{
         .manager = self,
         .name = owned_name,
@@ -300,7 +300,7 @@ pub fn request(
         .cb = try cb.persist(),
         .resolver = try resolver.persist(),
         .exec = exec,
-        .client_id = try std.fmt.allocPrint(exec.arena, "{d}", .{exec.frameId()}),
+        .client_id = try std.fmt.allocPrint(exec.page_arena, "{d}", .{exec.frameId()}),
         .granted = false,
     };
 
@@ -326,7 +326,7 @@ pub fn request(
         }
 
         lock_request.state = .held;
-        try self._locks.append(exec.arena, lock_request);
+        try self._locks.append(exec.page_arena, lock_request);
         lock_request.scheduleFireCallback();
         return promise;
     }
@@ -340,17 +340,17 @@ pub fn request(
     }
 
     if (must_queue_request) {
-        try self._locks.append(exec.arena, lock_request);
+        try self._locks.append(exec.page_arena, lock_request);
         if (options.signal) |signal| {
-            try signal._dependents.append(exec.arena, .{ .lock_request = lock_request });
+            try signal._dependents.append(exec.page_arena, .{ .lock_request = lock_request });
         }
         return promise;
     }
 
     lock_request.state = .held;
-    try self._locks.append(exec.arena, lock_request);
+    try self._locks.append(exec.page_arena, lock_request);
     if (options.signal) |signal| {
-        try signal._dependents.append(exec.arena, .{ .lock_request = lock_request });
+        try signal._dependents.append(exec.page_arena, .{ .lock_request = lock_request });
     }
     lock_request.scheduleFireCallback();
     return promise;

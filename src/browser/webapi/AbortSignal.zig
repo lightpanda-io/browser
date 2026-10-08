@@ -66,7 +66,6 @@ const Dependend = union(enum) {
     fn dispatchAbortEvent(self: Dependend, exec: *const Execution) !void {
         switch (self) {
             .signal => |dep| try dep.dispatchAbortEvent(exec),
-            .model_context_tool, .scheduler_task, .fetch => {},
             .model_context_tool, .scheduler_task, .fetch, .lock_request => {},
         }
     }
