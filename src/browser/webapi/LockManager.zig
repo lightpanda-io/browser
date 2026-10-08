@@ -180,7 +180,7 @@ pub const LockRequest = struct {
             .name = "weblocks.fireCallbackWithNull",
             .finalizer = cancelled,
         }) catch |err| {
-            log.debug(.dom, "weblocks schedule fireCallbackWithNull", .{ .err = err });
+            log.debug(.dom, "weblocks schedule cb null", .{ .err = err });
         };
     }
 
@@ -403,19 +403,11 @@ fn releaseLock(self: *LockManager, lock_request: *LockRequest) void {
     }
     defer lock_request.deinit();
 
-    var to_grant: std.ArrayList(*LockRequest) = .empty;
     for (self._locks.items) |lr| {
         if (lr.state != .pending or !lr.name.eql(lock_request.name)) continue;
         if (self.heldConflicts(lr.name, lr.options.mode)) break;
 
         lr.state = .held;
-        to_grant.append(lock_request.exec.call_arena, lr) catch {
-            lr.state = .pending;
-            break;
-        };
-    }
-
-    for (to_grant.items) |lr| {
         lr.scheduleFireCallback();
     }
 }
