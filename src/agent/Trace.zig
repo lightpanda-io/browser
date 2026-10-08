@@ -130,9 +130,12 @@ fn write(self: *Trace, record: anytype) void {
     self.offset += self.line.written().len;
 }
 
+const testing = @import("../testing.zig");
+
 test "Trace writes one JSON line per step, arguments as given" {
-    const path = "trace-test.jsonl";
-    defer std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "trace.jsonl");
 
     var trace: Trace = try .create(std.testing.allocator, path);
     trace.run("openai", "gpt-test", "find courts");

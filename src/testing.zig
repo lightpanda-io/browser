@@ -585,7 +585,7 @@ test "tests:beforeAll" {
     // need to wait for the server to be listening, else tests will fail because
     // they aren't able to connect.
     var wg: lp.WaitGroup = .{};
-    wg.startMany(1);
+    wg.start();
     test_cdp_server_thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
     wg.wait();
 }
