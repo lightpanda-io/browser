@@ -1728,7 +1728,7 @@ test "MCP - waitForSelector: timeout" {
     // Missing element after the timeout surfaces as NodeNotFound, matching
     // the error /hover, /click, etc. produce when their selector misses.
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#nonexistent","timeout":100}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#nonexistent","timeout":20}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expectJson(.{

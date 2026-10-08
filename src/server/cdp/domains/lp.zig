@@ -851,7 +851,7 @@ test "cdp.lp: waitForSelector" {
     try ctx.processMessage(.{
         .id = 3,
         .method = "LP.waitForSelector",
-        .params = .{ .selector = "#nonexistent", .timeout = 100 },
+        .params = .{ .selector = "#nonexistent", .timeout = 20 },
     });
     const err_obj = (try ctx.getSentMessage(2)).?.object.get("error").?.object;
     try testing.expect(err_obj.get("code") != null);

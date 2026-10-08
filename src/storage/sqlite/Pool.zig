@@ -163,6 +163,6 @@ fn testPool(p: *Pool) !void {
         };
         conn.exec("commit", .{}) catch unreachable;
         p.release(conn);
-        lp.io.sleep(.fromMilliseconds(2), .awake) catch {};
+        lp.io.sleep(.fromMicroseconds(100), .awake) catch {};
     }
 }

@@ -2928,7 +2928,7 @@ test "goto: a navigation stuck waiting for a connection is an error" {
 
     const aa = testing.arena_allocator;
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
-        \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":300}
+        \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":50}
     , .{});
     try std.testing.expectError(error.NavigationTimeout, call(aa, session, &registry, "goto", args, .{ .source = .user }));
 

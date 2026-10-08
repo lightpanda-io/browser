@@ -320,7 +320,7 @@
     const state = await testing.async();
     const worker = new Worker('./fetch-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'basic' }), 100);
+    worker.postMessage({ kind: 'basic' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker fetch error: ' + data.err);
@@ -338,7 +338,7 @@
     const state = await testing.async();
     const worker = new Worker('./fetch-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'post' }), 100);
+    worker.postMessage({ kind: 'post' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker fetch error: ' + data.err);
@@ -440,7 +440,7 @@
     const state = await testing.async();
     const worker = new Worker('./fetch-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'blob' }), 100);
+    worker.postMessage({ kind: 'blob' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker fetch error: ' + data.err);
