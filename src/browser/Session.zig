@@ -941,6 +941,12 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
 
     page.frame.navigate(url, opts) catch |err| {
         log.debug(.browser, "pending navigation start", .{ .err = err, .url = url });
+        // A transfer that fails inside submit() runs its error_callback before
+        // returning, which commits an error document: `page` is live now, the
+        // errdefers must not destroy it.
+        if (page.replaces == null and page.destroying == false) {
+            return;
+        }
         return err;
     };
 
@@ -1096,6 +1102,34 @@ test "Session: retiring a pending page destroys it once" {
 
     // Would deinit `pending` twice if it had been queued twice.
     session.processDestroyQueues();
+}
+
+test "Session: a root navigation whose submit fails commits an error document" {
+    const session = testing.test_session;
+    defer session.closeAllPages();
+
+    const handle = try session.createPage();
+    const live = handle.page().?;
+
+    const client = &session.browser.http_client;
+    client.test_fail_submit = error.TestSubmitFailure;
+    defer client.test_fail_submit = null;
+
+    try session.initiateRootNavigation(live.frame._frame_id, "http://127.0.0.1:9582/src/browser/tests/hi.html", .{});
+
+    const committed = handle.page().?;
+    try testing.expect(committed != live);
+    try testing.expectEqual(false, committed.destroying);
+    try testing.expectEqual(null, committed.replaces);
+    try testing.expectEqual(1, session.pages.items.len);
+    try testing.expectEqual(committed, session.pages.items[0]);
+
+    const js = @import("js/js.zig");
+    var ls: js.Local.Scope = undefined;
+    committed.frame.js.localScope(&ls);
+    defer ls.deinit();
+    const text = try ls.local.exec("document.querySelector('p')?.textContent", null);
+    try testing.expectEqual("Reason: TestSubmitFailure", try text.toStringSlice());
 }
 
 test "Session: console capture runs no page JS" {
