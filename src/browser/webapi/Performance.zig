@@ -679,7 +679,11 @@ pub fn scheduleDelivery(self: *Performance) !void {
                 while (i < perf._observers.items.len) : (i += 1) {
                     const observer = perf._observers.items[i];
                     if (observer.hasRecords()) {
-                        try observer.dispatch();
+                        observer.dispatch() catch |err| {
+                            if (err == error.ExecutionTerminated) {
+                                return err;
+                            }
+                        };
                     }
                 }
                 return null;

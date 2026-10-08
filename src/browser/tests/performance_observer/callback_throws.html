@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="throwingObserverDoesNotStopOthers" type=module>
+  const state = await testing.async();
+
+  let calledSecond = false;
+  const first = new PerformanceObserver(() => {
+    first.disconnect();
+    throw new Error('boom');
+  });
+  first.observe({ type: "mark" });
+
+  await new Promise((resolve) => {
+    const second = new PerformanceObserver(() => {
+      calledSecond = true;
+      second.disconnect();
+      resolve();
+    });
+    second.observe({ type: "mark" });
+    performance.mark("throwMark");
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, calledSecond);
+  });
+</script>
