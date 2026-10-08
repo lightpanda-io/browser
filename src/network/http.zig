@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const builtin = @import("builtin");
 
 const Config = @import("../Config.zig");
 const sys_net = @import("../sys/net.zig");
@@ -30,6 +31,10 @@ const repeat = @import("../string.zig").repeat;
 
 const log = lp.log;
 const posix = std.posix;
+
+// Tests run several processes, each with its own ephemeral test servers, while
+// fixtures keep addressing the fixed ports. Routes those to the real ones.
+pub var test_connect_to: ?*libcurl.CurlSList = null;
 
 pub const readfunc_pause = libcurl.curl_readfunc_pause;
 pub const writefunc_error = libcurl.curl_writefunc_error;
@@ -284,6 +289,9 @@ pub const Connection = struct {
 
     pub fn setURL(self: *const Connection, url: [:0]const u8) !void {
         try libcurl.curl_easy_setopt(self._easy, .url, url.ptr);
+        if (comptime builtin.is_test) {
+            try libcurl.curl_easy_setopt(self._easy, .connect_to, test_connect_to);
+        }
     }
 
     pub fn setTimeout(self: *const Connection, timeout_ms: u32) !void {

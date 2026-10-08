@@ -101,14 +101,13 @@ const testing = @import("../../testing.zig");
 test "Sqlite: Pool" {
     // :memory: _has_ to run with a single connection in the pool, which isn't
     // that useful for testing. So we create a temp file.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.arena_allocator);
+    const path = try testing.arena_allocator.printSentinel("{s}/pool.sqlite", .{dir}, 0);
 
-    std.Io.Dir.cwd().deleteFile(testing.io, "/tmp/lightpanda_test.sqlite") catch {};
-    var pool = try Pool.init(testing.allocator, "/tmp/lightpanda_test.sqlite");
-
-    defer {
-        pool.deinit(testing.allocator);
-        std.Io.Dir.cwd().deleteFile(testing.io, "/tmp/lightpanda_test.sqlite") catch {};
-    }
+    var pool = try Pool.init(testing.allocator, path);
+    defer pool.deinit(testing.allocator);
 
     {
         const conn = try pool.acquire();

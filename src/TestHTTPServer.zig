@@ -28,6 +28,8 @@ const TestHTTPServer = @This();
 shutdown: std.atomic.Value(bool),
 listener: ?std.Io.net.Server,
 handler: Handler,
+// ephemeral, known once run() has signaled the wait group
+port: u16,
 
 const Handler = *const fn (req: *std.http.Server.Request) anyerror!void;
 
@@ -36,6 +38,7 @@ pub fn init(handler: Handler) TestHTTPServer {
         .shutdown = .init(true),
         .listener = null,
         .handler = handler,
+        .port = 0,
     };
 }
 
@@ -54,10 +57,11 @@ pub fn stop(self: *TestHTTPServer) void {
 }
 
 pub fn run(self: *TestHTTPServer, wg: *lp.WaitGroup) !void {
-    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 9582);
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
 
     self.listener = try address.listen(lp.io, .{ .reuse_address = true });
     var listener = &self.listener.?;
+    self.port = listener.socket.address.getPort();
     self.shutdown.store(false, .release);
 
     wg.finish();

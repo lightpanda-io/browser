@@ -19,6 +19,9 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const repeat = @import("string.zig").repeat;
+const http = @import("network/http.zig");
+const sys_net = @import("sys/net.zig");
+const libcurl = @import("sys/libcurl.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -515,6 +518,7 @@ const TestWSServer = @import("TestWSServer.zig");
 const TestHTTPServer = @import("TestHTTPServer.zig");
 
 pub var test_cdp_server: ?*Server = null;
+pub var test_cdp_port: u16 = 0;
 var test_cdp_server_thread: ?std.Thread = null;
 var test_http_server: ?TestHTTPServer = null;
 var test_http_server_thread: ?std.Thread = null;
@@ -571,6 +575,30 @@ test "tests:beforeAll" {
     // need to wait for the servers to be listening, else tests will fail because
     // they aren't able to connect.
     wg.wait();
+
+    try routeTestPorts();
+}
+
+// Fixtures address the test servers by fixed ports, but each test process binds
+// ephemeral ones so that several can run at once.
+fn routeTestPorts() !void {
+    const http_port = test_http_server.?.port;
+    const ws_port = test_ws_server.?.port;
+    const routes = [_]struct { []const u8, u16, u16 }{
+        .{ "127.0.0.1", 9582, http_port },
+        .{ "localhost", 9582, http_port },
+        .{ "127.0.0.1", 9584, ws_port },
+        .{ "localhost", 9584, ws_port },
+    };
+
+    var list: ?*libcurl.CurlSList = null;
+    errdefer libcurl.curl_slist_free_all(list);
+    for (routes) |route| {
+        const host, const port, const real_port = route;
+        const entry = try arena_allocator.printSentinel("{s}:{d}:127.0.0.1:{d}", .{ host, port, real_port }, 0);
+        list = libcurl.curl_slist_append(list, entry) orelse return error.OutOfMemory;
+    }
+    http.test_connect_to = list;
 }
 
 test "tests:afterAll" {
@@ -601,6 +629,9 @@ test "tests:afterAll" {
         thread.join();
     }
 
+    libcurl.curl_slist_free_all(http.test_connect_to);
+    http.test_connect_to = null;
+
     @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
 
     // Browser must be deinit'd before the notification — Session/Frame
@@ -613,12 +644,17 @@ test "tests:afterAll" {
 }
 
 fn serveCDP(wg: *lp.WaitGroup) !void {
-    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 9583);
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
 
     test_cdp_server = Server.init(test_app, address) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
+
+    var bound: std.posix.sockaddr.storage = undefined;
+    var bound_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.storage);
+    try sys_net.getsockname(test_cdp_server.?.listener, @ptrCast(&bound), &bound_len);
+    test_cdp_port = sys_net.addressFromSockaddr(@ptrCast(&bound)).getPort();
     test_cdp_server.?.protocols = .{ .cdp = true, .webdriver = true };
     wg.finish();
 

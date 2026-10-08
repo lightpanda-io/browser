@@ -2816,7 +2816,8 @@ fn createHTTPSession(body: []const u8, expect_ws_url: bool) ![36]u8 {
     try testing.expectEqual(false, capabilities.get("acceptInsecureCerts").?.bool);
     if (expect_ws_url) {
         const ws_url = capabilities.get("webSocketUrl").?.string;
-        try testing.expectEqual("ws://127.0.0.1:9583/session/", ws_url[0 .. ws_url.len - 36]);
+        const expected = try testing.arena_allocator.print("ws://127.0.0.1:{d}/session/", .{testing.test_cdp_port});
+        try testing.expectEqual(expected, ws_url[0 .. ws_url.len - 36]);
         try testing.expectEqual(id, ws_url[ws_url.len - 36 ..]);
     } else {
         try testing.expectEqual(null, capabilities.get("webSocketUrl"));
@@ -3062,7 +3063,8 @@ test "server: get /json/version" {
         try testing.expect(std.mem.startsWith(u8, res1, "HTTP/1.1 200 OK\r\n"));
         try testing.expect(std.mem.find(u8, res1, "\"Browser\": \"Lightpanda/") != null);
         try testing.expect(std.mem.find(u8, res1, "\"Protocol-Version\": \"1.3\"") != null);
-        try testing.expect(std.mem.find(u8, res1, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9583/\"") != null);
+        const ws_url = try testing.arena_allocator.print("\"webSocketDebuggerUrl\": \"ws://127.0.0.1:{d}/\"", .{testing.test_cdp_port});
+        try testing.expect(std.mem.find(u8, res1, ws_url) != null);
     }
 
     {
@@ -3228,7 +3230,7 @@ const MockCDP = struct {
 };
 
 fn createTestClient() !TestClient {
-    const address: sys_net.IpAddress = .{ .ip4 = .loopback(9583) };
+    const address: sys_net.IpAddress = .{ .ip4 = .loopback(testing.test_cdp_port) };
     const socket = try sys_net.connect(&address);
 
     const timeout = std.mem.toBytes(posix.timeval{
@@ -3382,7 +3384,7 @@ const TestClient = struct {
 
 // A server of our own, bound to an ephemeral port and never run(): these
 // tests drive its handlers by hand to reproduce what one event batch does.
-// The real test server (port 9583) is shared and can't be torn down.
+// The real test server is shared and can't be torn down.
 const LoopTest = struct {
     server: *Server,
     address: sys_net.IpAddress,
