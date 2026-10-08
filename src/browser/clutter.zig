@@ -132,7 +132,7 @@ const Stats = struct {
     table_parts: bool = false,
     has_data_table: bool = false,
 
-    // A direct child that keeps a <div> from reading as a paragraph.
+    // A descendant that keeps a <div> from reading as a paragraph.
     block_child: bool = false,
     data_table: bool = false,
 
@@ -328,7 +328,7 @@ const Pass = struct {
                 parent.add(st);
                 parent.countSelf(countedAs(tag, st), 1);
                 parent.textish += if (isTextish(tag)) st.text else st.textish;
-                if (blocksParagraph(tag)) {
+                if (blocksParagraph(tag) or st.block_child) {
                     parent.block_child = true;
                 }
             },
@@ -584,7 +584,7 @@ const Pass = struct {
         if (self.flags.clean == false) return null;
         switch (tag) {
             .form, .fieldset, .table, .ul, .ol => {},
-            // A <div> without block children is a paragraph to readability.
+            // A <div> without block descendants is a paragraph to readability.
             .div => if (st.block_child == false) return null,
             else => return null,
         }
