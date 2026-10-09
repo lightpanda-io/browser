@@ -123,36 +123,36 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
     // attached targets.
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
-    // Like Chrome, report the initial about:blank as loaded. Its state is left
-    // as is, since the first navigation reuses it (see canNavigateInPlace).
-    if (URL.isAboutBlank(frame.url)) {
-        const frame_id = &id.toFrameId(frame._frame_id);
-        const loader_id = &id.toLoaderId(frame._loader_id);
+    switch (frame._load_state) {
+        .load, .parsing => {
+            // The page is in progress, events will be dispatch later.
+            return cmd.sendResult(null, .{});
+        },
+        .waiting, .complete => {
+            // The page is loaded (or waiting for navigation) always dispatch
+            // load event.
+            const frame_id = &id.toFrameId(frame._frame_id);
+            const loader_id = &id.toLoaderId(frame._loader_id);
 
-        const now = lp.datetime.timestamp(.boot);
-        try sendPageLifecycle(bc, "DOMContentLoaded", now, frame_id, loader_id);
-        try sendPageLifecycle(bc, "load", now, frame_id, loader_id);
-        return cmd.sendResult(null, .{});
-    }
+            const now = lp.datetime.timestamp(.boot);
+            try sendPageLifecycle(bc, "DOMContentLoaded", now, frame_id, loader_id);
+            try sendPageLifecycle(bc, "load", now, frame_id, loader_id);
 
-    if (frame._load_state == .complete) {
-        const frame_id = &id.toFrameId(frame._frame_id);
-        const loader_id = &id.toLoaderId(frame._loader_id);
-
-        const now = lp.datetime.timestamp(.boot);
-        try sendPageLifecycle(bc, "DOMContentLoaded", now, frame_id, loader_id);
-        try sendPageLifecycle(bc, "load", now, frame_id, loader_id);
-
-        const http_client = frame._session.browser.http_client;
-        const http_active = http_client.http_active;
-        const http_buffered = http_client.dispatch_count;
-        const total_network_activity = http_active + http_buffered + http_client.intercepted;
-        if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
-            try sendPageLifecycle(bc, "networkAlmostIdle", now, frame_id, loader_id);
-        }
-        if (frame._notified_network_idle.check(total_network_activity == 0)) {
-            try sendPageLifecycle(bc, "networkIdle", now, frame_id, loader_id);
-        }
+            // Dispatch network events only for complete page, ie. w/ real nav
+            // done.
+            if (frame._load_state == .complete) {
+                const http_client = frame._session.browser.http_client;
+                const http_active = http_client.http_active;
+                const http_buffered = http_client.dispatch_count;
+                const total_network_activity = http_active + http_buffered + http_client.intercepted;
+                if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
+                    try sendPageLifecycle(bc, "networkAlmostIdle", now, frame_id, loader_id);
+                }
+                if (frame._notified_network_idle.check(total_network_activity == 0)) {
+                    try sendPageLifecycle(bc, "networkIdle", now, frame_id, loader_id);
+                }
+            }
+        },
     }
 
     return cmd.sendResult(null, .{});
