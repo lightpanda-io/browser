@@ -1369,6 +1369,10 @@ pub fn searchKeyStatus(engine: SearchEngine) ?KeyStatus {
 fn execSearch(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError!ToolResult {
     const args = try parseArgs(SearchParams, arena, arguments);
     if (args.query.len == 0) return ToolError.InvalidParams;
+    // A search through a search engine's page carries the query in its URL,
+    // so `--block-urls` already refuses a query that matches a pattern
+    // (`*some-site*`). Treat API searches the same way.
+    if (session.browser.http_client.blocksUrl(args.query)) return .{ .text = "No results." };
 
     const timeout_ms = args.timeout orelse default_search_timeout_ms;
     switch (search_engine) {
