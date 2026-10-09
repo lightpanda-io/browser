@@ -238,7 +238,7 @@ fn createTarget(cmd: *CDP.Command) !void {
         try doAttachtoTarget(cmd, target_id);
     }
 
-    if (!std.mem.eql(u8, "about:blank", params.url)) {
+    if (URL.isAboutBlank(params.url) == false) {
         const encoded_url = try URL.resolveNavigation(frame.call_arena, params.url, .{});
         try frame.navigate(
             encoded_url,

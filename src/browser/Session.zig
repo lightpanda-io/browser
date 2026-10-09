@@ -29,6 +29,7 @@ const Factory = @import("Factory.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Navigation = @import("webapi/navigation/Navigation.zig");
 
+const URL = @import("URL.zig");
 const Page = @import("Page.zig");
 const Frame = @import("Frame.zig");
 const Browser = @import("Browser.zig");
@@ -393,6 +394,8 @@ pub fn createPage(self: *Session) !PageHandle {
 
     const frame_id = self.nextFrameId();
     const frame = try self.installNewActivePage(frame_id);
+
+    frame.document._ready_state = .complete;
 
     // https://html.spec.whatwg.org/multipage/document-sequences.html --
     // Creating a new browsing context always produces an initial about:blank
@@ -912,7 +915,7 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
     // therefore no frameHeaderDoneCallback to commit a pending Page. Swap the
     // active Page immediately instead of allocating a pending one that would
     // never be promoted, leaving the previous document in place (issue #2363).
-    if (std.mem.eql(u8, "about:blank", url) or std.mem.startsWith(u8, url, "blob:")) {
+    if (URL.isAboutBlank(url) or std.mem.startsWith(u8, url, "blob:")) {
         return self.replaceRootImmediate(frame_id, url, opts);
     }
 
