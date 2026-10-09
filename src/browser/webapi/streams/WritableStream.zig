@@ -18,11 +18,13 @@
 
 const js = @import("../../js/js.zig");
 
+const ReadableStream = @import("ReadableStream.zig");
 const WritableStreamDefaultWriter = @import("WritableStreamDefaultWriter.zig");
 const WritableStreamDefaultController = @import("WritableStreamDefaultController.zig");
 const TransformStream = @import("TransformStream.zig");
 
 const Execution = js.Execution;
+const StoredError = ReadableStream.StoredError;
 
 const WritableStream = @This();
 
@@ -35,7 +37,7 @@ pub const State = enum {
 _state: State,
 _writer: ?*WritableStreamDefaultWriter,
 _controller: *WritableStreamDefaultController,
-_stored_error: ?[]const u8,
+_stored_error: ?StoredError,
 _write_fn: ?js.Function.Global,
 _close_fn: ?js.Function.Global,
 _transform_stream: ?*TransformStream,

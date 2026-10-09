@@ -162,3 +162,20 @@
     testing.expectEqual(true, result2.done);
   })();
 </script>
+
+<script id=transform_error_both_sides type=module>
+  const state = await testing.async();
+
+  // controller.error(e) errors the readable and the writable side with e.
+  const err = new Error('boom');
+  const ts = new TransformStream({ transform(chunk, controller) { controller.error(err); } });
+  const writer = ts.writable.getWriter();
+  const reader = ts.readable.getReader();
+  await writer.write('a').catch(() => {});
+  const errors = [await reader.read().catch((e) => e), await writer.write('b').catch((e) => e)];
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([true, true], errors.map((e) => e === err));
+  });
+</script>
