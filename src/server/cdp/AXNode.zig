@@ -290,13 +290,6 @@ pub const Writer = struct {
 
         try w.objectField("value");
         switch (value) {
-            .integer => |v| {
-                // CDP spec requires integer values to be serialized as strings.
-                // 20 bytes is enough for the decimal representation of a 64-bit integer.
-                var buf: [20]u8 = undefined;
-                const s = try std.mem.print(&buf, "{d}", .{v});
-                try w.write(s);
-            },
             inline else => |v| try w.write(v),
         }
 
@@ -1657,7 +1650,7 @@ test "AXNode: writer" {
     const level = nodeProperty(heading, "level") orelse return error.HeadingLevelNotFound;
     try testing.expectEqual("integer", level.get("type").?.string);
     // CDP spec: integer values must be serialized as strings
-    try testing.expectEqual("1", level.get("value").?.string);
+    try testing.expectEqual(1, level.get("value").?.integer);
 }
 
 test "AXNode: writer prunes hidden and resolves labels" {
