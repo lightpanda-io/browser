@@ -15,7 +15,7 @@ TEST_FILTER="WebApi: #selector_all" make test   # Filter main + subtest (separat
 TEST_VERBOSE=true make test
 TEST_FAIL_FIRST=true make test
 METRICS=true make test                          # Capture allocation/duration metrics as JSON
-TEST_JOBS=1 make test                           # Run in one process (default: up to 4 in parallel)
+TEST_JOBS=1 make test                           # Run in one process (default: up to 4, or 1 when filtered)
 ```
 
 The custom test runner (`src/test_runner.zig`) detects memory leaks in debug builds. **A test that allocates without freeing fails** — not just lints.

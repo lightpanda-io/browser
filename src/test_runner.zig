@@ -568,13 +568,18 @@ const Env = struct {
             .verbose = readEnvBool(map, "TEST_VERBOSE", false),
             .fail_first = readEnvBool(map, "TEST_FAIL_FIRST", false),
             // metrics are compared across runs, so keep them to one process
-            .jobs = if (metrics) 1 else readEnvInt(map, "TEST_JOBS") orelse defaultJobs(),
+            .jobs = if (metrics) 1 else readEnvInt(map, "TEST_JOBS") orelse defaultJobs(filter, subfilter),
             .claim = readEnv(map, "TEST_CLAIM"),
             .report = readEnv(map, "TEST_REPORT"),
         };
     }
 
-    fn defaultJobs() usize {
+    /// A filtered run is usually someone debugging one case, who wants as
+    /// little variability as possible, so it stays in one process unless asked.
+    fn defaultJobs(filter: ?[]const u8, subfilter: ?[]const u8) usize {
+        if (filter != null or subfilter != null) {
+            return 1;
+        }
         const cpus = std.Thread.getCpuCount() catch 1;
         return @min(cpus, 4);
     }
