@@ -68,7 +68,9 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
     if (target._type == .node and listener.typ.eql(comptime .wrap("load"))) {
         // optimization so that we avoid firing load for things (e.g. images)
         // if there's no load listener regsitered (which is pretty common).
-        const owner = target.subtype(Node).ownerFrame(self.frame) orelse return;
+        // A frameless document's node (createHTMLDocument, DOMParser) can be
+        // adopted into the caller's document later and load there.
+        const owner = target.subtype(Node).ownerFrame(self.frame) orelse self.frame;
         owner._event_manager.has_dom_load_listener = true;
     }
 }

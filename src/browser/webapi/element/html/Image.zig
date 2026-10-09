@@ -446,6 +446,10 @@ test "WebApi: HTML.Image srcset" {
     try testing.htmlRunner("element/html/image_srcset.html", .{});
 }
 
+test "WebApi: HTML.Image frameless load listener" {
+    try testing.htmlRunner("element/html/image_frameless_load.html", .{});
+}
+
 test "WebApi: HTML.Image fetch" {
     try testing.htmlRunner("element/html/image_fetch.html", .{ .load_resources = .{ .image = true } });
 }
