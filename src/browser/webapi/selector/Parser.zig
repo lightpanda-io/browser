@@ -473,11 +473,6 @@ fn isUnknownWebkit(name: []const u8) bool {
         !inList(name, &webkit_pseudo_classes);
 }
 
-fn hasPseudoElement(selector: Selector.Selector) bool {
-    const parts = selector.rightmost().parts;
-    return parts[parts.len - 1] == .pseudo_element;
-}
-
 const tree_abiding_pseudo_elements = [_][]const u8{
     "after",                          "backdrop",                   "before",
     "checkmark",                      "details-content",            "file-selector-button",
@@ -674,7 +669,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
 
                 // Parse a full selector (with potential combinators and compounds)
                 const selector = try parse(arena, self.consumeUntilCommaOrParen());
-                if (hasPseudoElement(selector)) return error.InvalidPseudoClass;
+                if (selector.hasPseudoElement()) return error.InvalidPseudoClass;
                 try selectors.append(arena, selector);
 
                 _ = self.skipSpaces();
@@ -772,7 +767,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
                 }
 
                 const selector = try parse(arena, self.consumeUntilCommaOrParen());
-                if (hasPseudoElement(selector)) return error.InvalidPseudoClass;
+                if (selector.hasPseudoElement()) return error.InvalidPseudoClass;
                 try selectors.append(arena, try absolutize(arena, selector, combinator));
 
                 _ = self.skipSpaces();

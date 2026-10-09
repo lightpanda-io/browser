@@ -424,6 +424,12 @@ pub const Selector = struct {
         return self.segments[self.segments.len - 1].compound;
     }
 
+    /// Such a selector matches no element.
+    pub fn hasPseudoElement(self: Selector) bool {
+        const parts = self.rightmost().parts;
+        return parts[parts.len - 1] == .pseudo_element;
+    }
+
     pub fn format(self: Selector, writer: *std.Io.Writer) !void {
         try self.first.format(writer);
         for (self.segments) |segment| {

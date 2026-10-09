@@ -2,10 +2,13 @@
 <script src="../testing.js"></script>
 <style>
   .x::after { display: none; }
+  .hide, .x::before { display: none; }
+  *, ::before, ::after { --ring: 3px; }
 </style>
 
 <body>
   <div id="d" class="x"><span id="s">S</span></div>
+  <div id="h" class="hide">H</div>
 </body>
 
 <script id="valid_and_never_matches">
@@ -55,5 +58,9 @@
   const d = document.getElementById('d');
   testing.expectEqual('block', getComputedStyle(d).display);
   testing.expectTrue(d.checkVisibility());
+
+  // A pseudo-element in a selector list doesn't drop the other selectors.
+  testing.expectFalse(document.getElementById('h').checkVisibility());
+  testing.expectEqual('3px', getComputedStyle(d).getPropertyValue('--ring').trim());
 }
 </script>
