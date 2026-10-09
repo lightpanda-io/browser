@@ -37,8 +37,14 @@ pub fn write(self: *WritableStreamDefaultWriter, chunk: js.Value, exec: *const E
         return local.typeError("Writer has been released");
     };
 
-    if (stream._state != .writable) {
-        return local.typeError("Stream is not writable");
+    switch (stream._state) {
+        .writable => {},
+        .errored => {
+            const resolver = local.createPromiseResolver();
+            stream._stored_error.?.reject("WritableStreamDefaultWriter.write", resolver);
+            return resolver.promise();
+        },
+        .closed => return local.typeError("Stream is not writable"),
     }
 
     try stream.writeChunk(chunk, exec);

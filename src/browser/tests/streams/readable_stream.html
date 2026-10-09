@@ -450,3 +450,21 @@
     ], results);
   });
 </script>
+
+<script id=stored_error type=module>
+  const state = await testing.async();
+
+  // read() and cancel() reject with whatever controller.error() was given.
+  const errored = new ReadableStream({ start(c) { c.error('err!'); } }).getReader();
+  const no_reason = new ReadableStream({ start(c) { c.error(); } }).getReader();
+  const results = [
+    await errored.read().catch((e) => e),
+    await errored.cancel().catch((e) => e),
+    await no_reason.read().then(() => 'resolved', (e) => e),
+  ];
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['err!', 'err!', undefined], results);
+  });
+</script>

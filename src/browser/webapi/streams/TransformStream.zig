@@ -211,13 +211,21 @@ pub const TransformStreamDefaultController = struct {
         try self._stream._readable._controller.enqueueValue(value);
     }
 
-    fn doError(self: *TransformStreamDefaultController, reason: []const u8) !void {
+    /// Errors both sides of the stream. The writable side goes first; erroring
+    /// it runs no JS, while rejecting the readable's pending reads does.
+    fn doError(self: *TransformStreamDefaultController, reason: ?js.Value) !void {
+        try self._stream._writable._controller.doError(reason);
         try self._stream._readable._controller.doError(reason);
     }
 
+    /// Errors both sides with the same TypeError object.
     pub fn typeError(self: *TransformStreamDefaultController, message: []const u8) !void {
-        try self._stream._readable._controller.typeError(message);
-        self._stream._writable._controller.doError(message);
+        var ls: js.Local.Scope = undefined;
+        self._stream._readable._execution.js.localScope(&ls);
+        defer ls.deinit();
+
+        const local = &ls.local;
+        return self.doError(.{ .local = local, .handle = local.isolate.createTypeError(message) });
     }
 
     pub fn terminate(self: *TransformStreamDefaultController) !void {
