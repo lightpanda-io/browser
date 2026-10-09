@@ -365,13 +365,13 @@ pub const Writer = struct {
                         if (is_disabled) {
                             try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
                         }
+                        try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                        if (!is_disabled) {
+                            try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                        }
 
                         switch (input._input_type) {
                             .text, .email, .tel, .url, .search, .password, .number => {
-                                try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
-                                if (!is_disabled) {
-                                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                                }
                                 try self.writeAXProperty(.{ .name = .editable, .value = .{ .token = "plaintext" } }, w);
                                 if (!is_disabled) {
                                     try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
@@ -380,17 +380,7 @@ pub const Writer = struct {
                                 try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = el.hasAttributeInterned("readonly") } }, w);
                                 try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeInterned("required") } }, w);
                             },
-                            .button, .submit, .reset, .image => {
-                                try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
-                                if (!is_disabled) {
-                                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                                }
-                            },
                             .checkbox, .radio => {
-                                try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
-                                if (!is_disabled) {
-                                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                                }
                                 const is_checked = el.hasAttributeInterned("checked");
                                 try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = if (is_checked) "true" else "false" } }, w);
                             },
