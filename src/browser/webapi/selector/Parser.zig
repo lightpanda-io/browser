@@ -168,6 +168,11 @@ fn parse(arena: Allocator, input: []const u8) ParseError!Selector.Selector {
     while (parser.skipSpaces()) {
         if (parser.peek() == 0) break;
 
+        if (parser.isPseudoElementStart()) {
+            try parser.pseudoElement(arena, &current_compound);
+            break;
+        }
+
         const part = try parser.parsePart(arena);
         try current_compound.append(arena, part);
 
@@ -241,6 +246,11 @@ fn parse(arena: Allocator, input: []const u8) ParseError!Selector.Selector {
 
         while (parser.skipSpaces()) {
             if (parser.peek() == 0) break;
+
+            if (parser.isPseudoElementStart()) {
+                try parser.pseudoElement(arena, &current_compound);
+                break;
+            }
 
             const part = try parser.parsePart(arena);
             try current_compound.append(arena, part);
@@ -396,6 +406,212 @@ fn consumeUntilCommaOrParen(self: *Parser) []const u8 {
     return result;
 }
 
+const pseudo_elements = [_][]const u8{
+    "after",         "backdrop",            "before",          "checkmark",
+    "column",        "cue",                 "details-content", "file-selector-button",
+    "first-letter",  "first-line",          "grammar-error",   "interest-button",
+    "marker",        "permission-icon",     "picker-icon",     "placeholder",
+    "scroll-marker", "scroll-marker-group", "search-text",     "select-listbox",
+    "selection",     "spelling-error",      "target-text",     "view-transition",
+};
+const functional_pseudo_elements = [_][]const u8{
+    "cue",                            "highlight",                  "part",
+    "picker",                         "slotted",                    "view-transition-group",
+    "view-transition-group-children", "view-transition-image-pair", "view-transition-new",
+    "view-transition-old",
+};
+// Any other -webkit- name is an unknown, valid pseudo-element.
+const webkit_pseudo_classes = [_][]const u8{
+    "-webkit-any-link",        "-webkit-autofill",    "-webkit-drag",
+    "-webkit-full-page-media", "-webkit-full-screen", "-webkit-full-screen-ancestor",
+};
+const legacy_pseudo_elements = [_][]const u8{ "before", "after", "first-line", "first-letter" };
+
+fn isPseudoElementStart(self: *const Parser) bool {
+    const input = self.input;
+    if (std.mem.startsWith(u8, input, "::")) return true;
+    if (input.len < 2 or input[0] != ':') return false;
+    const name = pseudoName(input[1..]);
+    const rest = input[1 + name.len ..];
+    return inList(name, &legacy_pseudo_elements) and !std.mem.startsWith(u8, rest, "(");
+}
+
+fn pseudoName(input: []const u8) []const u8 {
+    var i: usize = 0;
+    while (i < input.len and (std.ascii.isAlphanumeric(input[i]) or input[i] == '-' or input[i] == '_')) : (i += 1) {}
+    return input[0..i];
+}
+
+fn inList(name: []const u8, comptime list: []const []const u8) bool {
+    inline for (list) |entry| {
+        if (std.ascii.eqlIgnoreCase(name, entry)) return true;
+    }
+    return false;
+}
+
+fn pseudoElement(self: *Parser, arena: Allocator, compound: *std.ArrayList(Part)) !void {
+    var current = try self.onePseudoElement();
+    while (self.peek() == ':') {
+        if (self.isPseudoElementStart()) {
+            const next = try self.onePseudoElement();
+            if (!current.allowsPseudoElement(next)) return error.InvalidSelector;
+            current = next;
+            continue;
+        }
+        self.input = self.input[1..];
+        const name = pseudoName(self.input);
+        self.input = self.input[name.len..];
+        if (self.peek() == '(') {
+            const args = try self.arguments();
+            const forgiving = (std.ascii.eqlIgnoreCase(name, "is") or std.ascii.eqlIgnoreCase(name, "where")) and
+                !current.is("column") and !current.is("slotted");
+            if (!forgiving and (args.len == 0 or !current.allowsFunctionalPseudoClass(name))) {
+                return error.InvalidSelector;
+            }
+        } else if (!current.allowsPseudoClass(name)) {
+            return error.InvalidSelector;
+        }
+    }
+    if (self.skipSpaces()) return error.InvalidSelector;
+
+    if (compound.items.len == 0) {
+        try compound.append(arena, .universal);
+    }
+    try compound.append(arena, .pseudo_element);
+}
+
+fn isUnknownWebkit(name: []const u8) bool {
+    return name.len > "-webkit-".len and std.ascii.startsWithIgnoreCase(name, "-webkit-") and
+        !inList(name, &webkit_pseudo_classes);
+}
+
+fn hasPseudoElement(selector: Selector.Selector) bool {
+    const parts = selector.rightmost().parts;
+    return parts.len > 0 and parts[parts.len - 1] == .pseudo_element;
+}
+
+const tree_abiding_pseudo_elements = [_][]const u8{
+    "after",                          "backdrop",                   "before",
+    "checkmark",                      "details-content",            "file-selector-button",
+    "interest-button",                "marker",                     "permission-icon",
+    "picker",                         "picker-icon",                "placeholder",
+    "select-listbox",                 "view-transition",            "view-transition-group",
+    "view-transition-group-children", "view-transition-image-pair", "view-transition-new",
+    "view-transition-old",
+};
+const element_backed_pseudo_elements = [_][]const u8{ "part", "details-content", "select-listbox", "permission-icon", "picker" };
+const scrollbar_pseudo_elements = [_][]const u8{
+    "-webkit-resizer",         "-webkit-scrollbar",       "-webkit-scrollbar-button",      "-webkit-scrollbar-corner",
+    "-webkit-scrollbar-thumb", "-webkit-scrollbar-track", "-webkit-scrollbar-track-piece",
+};
+const user_action_pseudo_classes = [_][]const u8{ "active", "focus", "focus-visible", "focus-within", "hover" };
+const scrollbar_pseudo_classes = [_][]const u8{
+    "active",    "corner-present", "decrement",  "disabled", "double-button",
+    "enabled",   "end",            "horizontal", "hover",    "increment",
+    "no-button", "single-button",  "start",      "vertical", "window-inactive",
+};
+const after_part_pseudo_classes = [_][]const u8{
+    "-webkit-any-link",    "-webkit-autofill",             "-webkit-drag",      "-webkit-full-page-media",
+    "-webkit-full-screen", "-webkit-full-screen-ancestor", "active",            "active-view-transition",
+    "any-link",            "autofill",                     "checked",           "default",
+    "defined",             "disabled",                     "enabled",           "focus",
+    "focus-visible",       "focus-within",                 "fullscreen",        "future",
+    "granted",             "hover",                        "in-range",          "indeterminate",
+    "interest-source",     "interest-target",              "invalid",           "link",
+    "modal",               "open",                         "optional",          "out-of-range",
+    "past",                "picture-in-picture",           "placeholder-shown", "popover-open",
+    "read-only",           "read-write",                   "required",          "target",
+    "target-after",        "target-before",                "target-current",    "unbounded",
+    "user-invalid",        "user-valid",                   "valid",             "visited",
+    "window-inactive",     "xr-overlay",
+};
+const after_part_functional_pseudo_classes = [_][]const u8{ "active-view-transition-type", "dir", "lang", "state" };
+
+const PseudoElement = struct {
+    name: []const u8,
+    functional: bool,
+
+    fn is(self: PseudoElement, comptime name: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(self.name, name);
+    }
+
+    fn isElementBacked(self: PseudoElement) bool {
+        return inList(self.name, &element_backed_pseudo_elements);
+    }
+
+    fn allowsPseudoElement(self: PseudoElement, next: PseudoElement) bool {
+        if (self.isElementBacked()) return !next.is("part") and !next.is("slotted") and !(next.is("cue") and next.functional);
+        if (self.is("slotted")) return inList(next.name, &tree_abiding_pseudo_elements);
+        if (self.is("before") or self.is("after")) return next.is("marker");
+        if (self.is("column")) return next.is("scroll-marker");
+        return false;
+    }
+
+    fn allowsFunctionalPseudoClass(self: PseudoElement, name: []const u8) bool {
+        return self.isElementBacked() and inList(name, &after_part_functional_pseudo_classes);
+    }
+
+    fn allowsPseudoClass(self: PseudoElement, name: []const u8) bool {
+        if (self.isElementBacked()) return inList(name, &after_part_pseudo_classes);
+        if (inList(self.name, &scrollbar_pseudo_elements)) return inList(name, &scrollbar_pseudo_classes);
+        if (self.is("file-selector-button") or (self.is("cue") and !self.functional) or isUnknownWebkit(self.name)) {
+            return inList(name, &user_action_pseudo_classes);
+        }
+        if (self.is("selection")) return std.ascii.eqlIgnoreCase(name, "window-inactive");
+        if (self.functional and std.ascii.startsWithIgnoreCase(self.name, "view-transition-")) {
+            return std.ascii.eqlIgnoreCase(name, "only-child");
+        }
+        if (self.is("search-text")) return std.ascii.eqlIgnoreCase(name, "current");
+        if (self.is("scroll-marker")) {
+            return inList(name, &user_action_pseudo_classes) or inList(name, &.{ "target-current", "target-before", "target-after" });
+        }
+        if (self.is("scroll-marker-group")) return inList(name, &.{ "hover", "focus-within" });
+        return false;
+    }
+};
+
+fn arguments(self: *Parser) ![]const u8 {
+    const input = self.input[1..];
+    var depth: usize = 0;
+    for (input, 0..) |c, i| switch (c) {
+        '(' => depth += 1,
+        ')' => {
+            if (depth == 0) {
+                self.input = input[i + 1 ..];
+                return std.mem.trim(u8, input[0..i], &std.ascii.whitespace);
+            }
+            depth -= 1;
+        },
+        else => {},
+    };
+    return error.InvalidSelector;
+}
+
+fn onePseudoElement(self: *Parser) !PseudoElement {
+    const double = std.mem.startsWith(u8, self.input, "::");
+    self.input = self.input[if (double) 2 else 1..];
+    const name = pseudoName(self.input);
+    self.input = self.input[name.len..];
+
+    if (!double) {
+        if (!inList(name, &legacy_pseudo_elements)) return error.InvalidSelector;
+        return .{ .name = name, .functional = false };
+    }
+    if (self.peek() == '(') {
+        if (!inList(name, &functional_pseudo_elements)) return error.InvalidSelector;
+        const args = try self.arguments();
+        if (args.len == 0) return error.InvalidSelector;
+        if (std.ascii.eqlIgnoreCase(name, "picker") and !std.ascii.eqlIgnoreCase(args, "select")) {
+            return error.InvalidSelector;
+        }
+        return .{ .name = name, .functional = true };
+    }
+    if (!inList(name, &pseudo_elements) and !isUnknownWebkit(name)) {
+        return error.InvalidSelector;
+    }
+    return .{ .name = name, .functional = false };
+}
+
 fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
     if (comptime lp.IS_DEBUG) {
         // Should have been verified by caller
@@ -473,6 +689,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
 
                 // Parse a full selector (with potential combinators and compounds)
                 const selector = try parse(arena, self.consumeUntilCommaOrParen());
+                if (hasPseudoElement(selector)) return error.InvalidPseudoClass;
                 try selectors.append(arena, selector);
 
                 _ = self.skipSpaces();
@@ -570,6 +787,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
                 }
 
                 const selector = try parse(arena, self.consumeUntilCommaOrParen());
+                if (hasPseudoElement(selector)) return error.InvalidPseudoClass;
                 try selectors.append(arena, try absolutize(arena, selector, combinator));
 
                 _ = self.skipSpaces();

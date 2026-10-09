@@ -1141,6 +1141,7 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
                     else => {},
                 }
             },
+            .pseudo_element => return null,
             .universal, .attribute => {},
         }
     }
@@ -1185,7 +1186,7 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
         switch (part) {
             .id => ids.* += 1,
             .class => classes.* += 1,
-            .tag, .tag_name => elements.* += 1,
+            .tag, .tag_name, .pseudo_element => elements.* += 1,
             .universal => {}, // zero specificity
             .attribute => classes.* += 1,
             .pseudo_class => |pc| {
