@@ -1496,7 +1496,9 @@ pub fn getAnimations(_: *const Element) []*Animation {
 }
 
 pub fn animate(_: *Element, _: ?js.Object, _: ?js.Object, frame: *Frame) !*Animation {
-    return Animation.init(frame);
+    const animation = try Animation.init(frame);
+    try animation.play(frame);
+    return animation;
 }
 
 pub fn closest(self: *Element, input: []const u8, frame: *Frame) !?*Element {

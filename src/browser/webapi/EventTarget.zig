@@ -54,6 +54,8 @@ const MediaQueryList = @import("css/MediaQueryList.zig");
 
 const TextTrackCue = @import("media/TextTrackCue.zig");
 
+const Animation = @import("animation/Animation.zig");
+
 const Navigation = @import("navigation/Navigation.zig");
 const NavigationHistoryEntry = @import("navigation/NavigationHistoryEntry.zig");
 const XMLHttpRequestEventTarget = @import("net/XMLHttpRequestEventTarget.zig");
@@ -72,6 +74,7 @@ _type: Type align(8),
 
 pub const Type = enum(u8) {
     abort_signal,
+    animation,
     broadcast_channel,
     cookie_store,
     event_source,
@@ -108,6 +111,7 @@ pub const Type = enum(u8) {
 pub fn Subtype(comptime tag: Type) type {
     return switch (tag) {
         .abort_signal => AbortSignal,
+        .animation => Animation,
         .broadcast_channel => BroadcastChannel,
         .cookie_store => CookieStore,
         .event_source => EventSource,
@@ -328,6 +332,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .worker_global_scope => writer.writeAll("<WorkerGlobalScope>"),
         .xhr => writer.writeAll("<XMLHttpRequestEventTarget>"),
         .abort_signal => writer.writeAll("<AbortSignal>"),
+        .animation => writer.writeAll("<Animation>"),
         .media_query_list => writer.writeAll("<MediaQueryList>"),
         .message_port => writer.writeAll("<MessagePort>"),
         .broadcast_channel => writer.writeAll("<BroadcastChannel>"),
@@ -352,6 +357,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
 pub fn toString(self: *EventTarget) []const u8 {
     return switch (self._type) {
         .abort_signal => return "[object AbortSignal]",
+        .animation => return "[object Animation]",
         .broadcast_channel => return "[object BroadcastChannel]",
         .cookie_store => return "[object CookieStore]",
         .event_source => return "[object EventSource]",

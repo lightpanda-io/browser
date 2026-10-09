@@ -32,6 +32,7 @@ const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const MediaQueryList = @import("webapi/css/MediaQueryList.zig");
+const Animation = @import("webapi/animation/Animation.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
 
 const log = lp.log;
@@ -91,6 +92,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
         .node => try self.dispatchNode(target.subtype(Node), event),
         .xhr => try self.dispatchDirect(target, event, target.subtype(XMLHttpRequestEventTarget).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .media_query_list => try self.dispatchDirect(target, event, target.subtype(MediaQueryList).inlineHandler(event._type_string), .{ .context = "dispatch" }),
+        .animation => try self.dispatchDirect(target, event, target.subtype(Animation).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .performance => try self.dispatchDirect(target, event, target.subtype(Performance).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .screen_orientation => try self.dispatchDirect(target, event, target.subtype(Screen.Orientation).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .window => try self.dispatchDirect(target, event, windowInlineHandler(target.subtype(Window), event._type_string), .{ .context = "dispatch" }),
