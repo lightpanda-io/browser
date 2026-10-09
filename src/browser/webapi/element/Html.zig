@@ -23,6 +23,7 @@ const js = @import("../../js/js.zig");
 const Factory = @import("../../Factory.zig");
 
 const Frame = @import("../../Frame.zig");
+const StyleManager = @import("../../StyleManager.zig");
 const reflection = @import("reflection.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
@@ -318,13 +319,21 @@ pub fn asEventTarget(self: *HtmlElement) *@import("../EventTarget.zig") {
 }
 
 pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !void {
-    const tag = self.asElement().getTag();
+    const el = self.asElement();
+    // An element that isn't being rendered returns its text content
+    const owner = el.ownerFrame(frame) orelse return self.asNode().getTextContent(writer);
+    const style_manager = &owner._style_manager;
+    if (self.asNode().isConnected() == false or style_manager.isHidden(el, .{})) {
+        return self.asNode().getTextContent(writer);
+    }
+
+    const tag = el.getTag();
     switch (innerTextDisplay(self, tag)) {
         .skip, .replaced => return,
         else => {},
     }
 
-    var state = InnerTextState{ .writer = writer, .frame = frame, .preserve = tag == .pre };
+    var state = InnerTextState{ .writer = writer, .style_manager = style_manager, .preserve = tag == .pre };
     try self.collectInnerText(&state);
 }
 
@@ -1507,8 +1516,9 @@ pub fn parseInteger(input: []const u8) ?i32 {
 const InnerTextState = struct {
     writer: *std.Io.Writer,
 
-    // Needed to reach the StyleManager for CSS-driven visibility (display:none).
-    frame: *Frame,
+    // The walk never leaves the root's document, so we can capture the
+    // style_manager upfront
+    style_manager: *StyleManager,
 
     // number of line breaks we've accumulated for the block. Emitted lazily that
     // leading/trailing breaks aren't written and so that we can emit the max
@@ -1583,6 +1593,10 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
     var saw_row = false;
     var saw_cell = false;
 
+    // The text of an invisible element isn't included, but we still walk all
+    // its children, since they can make themeselves visible again.
+    const text_hidden = state.style_manager.hasVisibilityHiddenInherited(el);
+
     var it = el.asNode().childrenIterator();
     while (it.next()) |child| {
         switch (child._type) {
@@ -1605,8 +1619,9 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
                 const c = child.subtype(Node.CData);
                 switch (c._type) {
                     .text => {
-                        if (child_filter != .none) {
-                            // Text directly inside <select>/<optgroup> is skipped
+                        if (child_filter != .none or text_hidden) {
+                            // Text directly inside <select>/<optgroup> is skipped,
+                            // as is visibility:hidden text
                             continue;
                         }
                         if (table_ctx and isAllAsciiWhitespace(c.getData().str())) {
@@ -1636,10 +1651,8 @@ fn handleChildElement(
     // visibility of el.parent doesn't matter. So we only care about visibility
     // on the element itself and then on each child. This is much simpler too.
     const el = he.asElement();
-    if (el.ownerFrame(state.frame)) |owner| {
-        if (owner._style_manager.hasDisplayNone(el)) {
-            return;
-        }
+    if (state.style_manager.hasDisplayNone(el)) {
+        return;
     }
 
     if (he._type == .br) {

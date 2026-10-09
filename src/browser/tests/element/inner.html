@@ -196,10 +196,19 @@
   d1.innerHTML = 'a<br style="display:none">b';
   testing.expectEqual("ab", d1.innerText);
 
-  // Guard: visibility:hidden text stays INCLUDED (the check is display-only),
-  // so a future switch to a visibility-aware check can't silently over-exclude.
   d1.innerHTML = '<span style="visibility:hidden">X</span>Y';
-  testing.expectEqual("XY", d1.innerText);
+  testing.expectEqual("Y", d1.innerText);
+
+  {
+    const div = document.createElement('div');
+    div.innerHTML = 'abc <span style=display:none> 123 </span> xyz';
+    testing.expectEqual('abc  123  xyz', div.innerText);
+    testing.expectEqual(' 123 ', div.querySelector('span')?.innerText);
+
+    document.documentElement.appendChild(div);
+    testing.expectEqual('abc xyz', div.innerText);
+    testing.expectEqual(' 123 ', div.querySelector('span')?.innerText);
+  }
 </script>
 
 <script id=rawTextContext>
