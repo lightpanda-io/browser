@@ -819,7 +819,11 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
             }
         }
 
+        // A missing or empty name excludes the control from the entry list.
         const name = element.getName() orelse continue;
+        if (name.len == 0) {
+            continue;
+        }
         const value = blk: {
             if (element.is(Form.Input)) |input| {
                 const input_type = input._input_type;
