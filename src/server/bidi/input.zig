@@ -781,6 +781,53 @@ test "bidi.input: click via element origin" {
     } }, .{ .id = 9 });
 }
 
+test "bidi.input: later releases of a three-button chord report detail 0" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const context_id = try ctx.createContext(.{ .url = "bidi/input.html" });
+
+    try evaluate(&ctx, 1, context_id,
+        \\window.releases = [];
+        \\for (const type of ['mouseup', 'click', 'auxclick', 'dblclick']) {
+        \\  document.addEventListener(type, e => releases.push(`${e.type}:${e.button}:${e.buttons}:${e.detail}`));
+        \\}
+        \\'ready'
+    );
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "string", .value = "ready" } }, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = context_id, .locator = .{ .type = "css", .value = "#btn" } },
+    });
+    try ctx.expectSentResult(.{ .nodes = .{.{ .sharedId = "1" }} }, .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "mouse",
+            .actions = .{
+                .{ .type = "pointerMove", .x = 0, .y = 0, .origin = .{ .type = "element", .element = .{ .sharedId = "1" } } },
+                .{ .type = "pointerDown", .button = 0 },
+                .{ .type = "pointerDown", .button = 2 },
+                .{ .type = "pointerDown", .button = 1 },
+                .{ .type = "pointerUp", .button = 2 },
+                .{ .type = "pointerUp", .button = 1 },
+                .{ .type = "pointerUp", .button = 0 },
+            },
+        }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    try evaluate(&ctx, 4, context_id, "window.releases.join(' ')");
+    try ctx.expectSentResult(.{ .type = "success", .result = .{
+        .type = "string",
+        .value = "mouseup:2:5:1 auxclick:2:5:1 mouseup:1:1:0 mouseup:0:0:0",
+    } }, .{ .id = 4 });
+}
+
 test "bidi.input: keys and modifiers" {
     var ctx = try testing.context();
     defer ctx.deinit();

@@ -259,17 +259,16 @@ pub const PointerButtons = struct {
     /// Whether the gesture's opening pointerdown suppressed the compat mouse
     /// events; held for the whole gesture so each split message reads it here.
     mousedown_suppressed: bool = false,
-    /// Where the gesture's pointerdown landed, until its first release fires
-    /// the gesture's one click.
+    /// Where the latest press landed, until the release that follows it fires
+    /// its click. A release with no press behind it has no target, and
+    /// reports a click count of 0.
     down_target: ?*Element = null,
 
     /// `g.buttons_down` is ignored: the held mask supplies it.
     pub fn press(self: *PointerButtons, frame: *Frame, target: *Element, g: Gesture) !void {
         const bit = buttonsBitmask(g.button);
         const starts_gesture = self.held & ~bit == 0;
-        if (starts_gesture) {
-            self.down_target = target;
-        }
+        self.down_target = target;
         self.held |= bit;
 
         var pg = g;
@@ -285,21 +284,26 @@ pub const PointerButtons = struct {
     pub fn release(self: *PointerButtons, frame: *Frame, target: *Element, g: Gesture) !?*Element {
         const click_target = if (self.down_target) |down| commonClickTarget(down, target) else null;
         const was_suppressed = self.mousedown_suppressed;
-        self.down_target = null;
+        const was_pressed = self.down_target != null;
         self.releaseButton(g.button);
 
         var rg = g;
         rg.buttons_down = self.held;
+        // Chrome reports a release with no press since the previous one (the
+        // later releases of a chord, or a lone release) with a click count of
+        // 0, whatever the client sent.
+        if (!was_pressed) rg.click_count = 0;
         try releaseSequence(frame, target, rg, was_suppressed, click_target);
         return click_target;
     }
 
-    /// The last held button releasing ends the gesture and clears its state.
+    /// Every release consumes the latest press, even if it hit no element.
+    /// The last held button releasing also clears the gesture's suppression.
     fn releaseButton(self: *PointerButtons, button: i32) void {
+        self.down_target = null;
         self.held &= ~buttonsBitmask(button);
         if (self.held == 0) {
             self.mousedown_suppressed = false;
-            self.down_target = null;
         }
     }
 

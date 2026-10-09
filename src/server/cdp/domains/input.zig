@@ -1981,3 +1981,167 @@ test "cdp.input: re-navigating an iframe drops the pointer state on its elements
     try testing.expect(page.input_pointer.down_target == null);
     try testing.expectEqual(0, page.input_pointer.held);
 }
+
+const MouseStep = struct {
+    type: []const u8,
+    button: []const u8,
+    x: ?f64 = null,
+    y: ?f64 = null,
+};
+
+/// Dispatches `steps` as Input.dispatchMouseEvent at #btn unless overridden,
+/// clickCount 2 throughout,
+/// and checks the whole `window.seq` log against `expected` (JS array elements).
+/// `setup` runs first, e.g. to add listeners that log into `window.seq`.
+fn expectMouseSequence(setup: []const u8, steps: []const MouseStep, comptime expected: []const u8) !void {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(setup, null);
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().y", null)).toF64();
+
+    for (steps, 1..) |step, id| {
+        try ctx.processMessage(.{
+            .id = @as(i32, @intCast(id)),
+            .method = "Input.dispatchMouseEvent",
+            .params = .{ .type = step.type, .x = step.x orelse rect_x, .y = step.y orelse rect_y, .button = step.button, .clickCount = 2 },
+        });
+    }
+
+    const result = try ls.local.compileAndRun("JSON.stringify(window.seq) === JSON.stringify([" ++ expected ++ "])", null);
+    try testing.expect(result.isTrue());
+}
+
+test "cdp.input: the release that ends a chord reports detail 0" {
+    try expectMouseSequence("", &.{
+        .{ .type = "mousePressed", .button = "left" },
+        .{ .type = "mousePressed", .button = "right" },
+        .{ .type = "mouseReleased", .button = "right" },
+        .{ .type = "mouseReleased", .button = "left" },
+    },
+        \\'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:2::true',
+        \\'mousedown:2:3:2::true', 'mouseup:2:1:2::true',
+        \\'pointerup:0:0:0:mouse:true', 'mouseup:0:0:0::true'
+    );
+}
+
+test "cdp.input: the release that ends a chord reports detail 0 when the secondary button ends it" {
+    try expectMouseSequence("", &.{
+        .{ .type = "mousePressed", .button = "right" },
+        .{ .type = "mousePressed", .button = "left" },
+        .{ .type = "mouseReleased", .button = "left" },
+        .{ .type = "mouseReleased", .button = "right" },
+    },
+        \\'pointerdown:2:2:0:mouse:true', 'mousedown:2:2:2::true',
+        \\'mousedown:0:3:2::true', 'mouseup:0:2:2::true', 'click:0:2:2:mouse:true',
+        \\'pointerup:2:0:0:mouse:true', 'mouseup:2:0:0::true'
+    );
+}
+
+test "cdp.input: every release after the first of a three-button chord reports detail 0" {
+    try expectMouseSequence("", &.{
+        .{ .type = "mousePressed", .button = "left" },
+        .{ .type = "mousePressed", .button = "right" },
+        .{ .type = "mousePressed", .button = "middle" },
+        .{ .type = "mouseReleased", .button = "right" },
+        .{ .type = "mouseReleased", .button = "middle" },
+        .{ .type = "mouseReleased", .button = "left" },
+    },
+        \\'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:2::true',
+        \\'mousedown:2:3:2::true', 'mousedown:1:7:2::true',
+        \\'mouseup:2:5:2::true', 'mouseup:1:1:0::true',
+        \\'pointerup:0:0:0:mouse:true', 'mouseup:0:0:0::true'
+    );
+}
+
+test "cdp.input: a release with no press behind it reports detail 0" {
+    try expectMouseSequence("", &.{
+        .{ .type = "mouseReleased", .button = "left" },
+    },
+        \\'pointerup:0:0:0:mouse:true', 'mouseup:0:0:0::true'
+    );
+}
+
+test "cdp.input: pressing a button again mid-chord re-arms its auxclick" {
+    try expectMouseSequence(
+        \\document.getElementById('btn').addEventListener('auxclick', e => window.seq.push(`auxclick:${e.button}:${e.buttons}:${e.detail}`));
+    , &.{
+        .{ .type = "mousePressed", .button = "left" },
+        .{ .type = "mousePressed", .button = "right" },
+        .{ .type = "mouseReleased", .button = "right" },
+        .{ .type = "mousePressed", .button = "right" },
+        .{ .type = "mouseReleased", .button = "right" },
+        .{ .type = "mouseReleased", .button = "left" },
+    },
+        \\'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:2::true',
+        \\'mousedown:2:3:2::true', 'mouseup:2:1:2::true', 'auxclick:2:1:2',
+        \\'mousedown:2:3:2::true', 'mouseup:2:1:2::true', 'auxclick:2:1:2',
+        \\'pointerup:0:0:0:mouse:true', 'mouseup:0:0:0::true'
+    );
+}
+
+test "cdp.input: a release that misses every element consumes the latest press" {
+    const points = [_]struct { x: f64, y: f64 }{
+        .{ .x = -1000, .y = -1000 },
+        .{ .x = 700, .y = 500 },
+    };
+    for (points) |point| {
+        try expectMouseSequence(
+            // Bound the fixture's root boxes so (700,500) is a genuine miss.
+            \\document.body.lastElementChild.remove();
+            \\for (const el of [document.documentElement, document.body]) {
+            \\  el.style.width = '200px'; el.style.height = '100px';
+            \\}
+            \\if (document.elementFromPoint(700, 500) !== null) throw new Error('expected an empty hit-test point');
+            \\document.getElementById('btn').addEventListener('dblclick', e => window.seq.push(`dblclick:${e.detail}`));
+        , &.{
+            .{ .type = "mousePressed", .button = "left" },
+            .{ .type = "mousePressed", .button = "right" },
+            .{ .type = "mouseReleased", .button = "right", .x = point.x, .y = point.y },
+            .{ .type = "mouseReleased", .button = "left" },
+        },
+            \\'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:2::true',
+            \\'mousedown:2:3:2::true',
+            \\'pointerup:0:0:0:mouse:true', 'mouseup:0:0:0::true'
+        );
+    }
+}
+
+test "cdp.input: a missed release preserves held buttons and mouse suppression" {
+    try expectMouseSequence(
+        \\{
+        \\  const button = document.getElementById('btn');
+        \\  button.addEventListener('pointerdown', e => e.preventDefault());
+        \\  button.addEventListener('pointermove', e => window.seq.push(`pointermove:${e.button}:${e.buttons}:${e.detail}`));
+        \\  button.addEventListener('auxclick', e => window.seq.push(`auxclick:${e.button}:${e.buttons}:${e.detail}`));
+        \\}
+    , &.{
+        .{ .type = "mousePressed", .button = "left" },
+        .{ .type = "mousePressed", .button = "right" },
+        .{ .type = "mouseReleased", .button = "right", .x = -1000, .y = -1000 },
+        .{ .type = "mousePressed", .button = "middle" },
+        .{ .type = "mouseReleased", .button = "middle" },
+        .{ .type = "mouseReleased", .button = "left" },
+    },
+        \\'pointerdown:0:1:0:mouse:true', 'pointermove:2:3:0',
+        \\'pointermove:1:5:0', 'pointermove:1:1:0', 'auxclick:1:1:2',
+        \\'pointerup:0:0:0:mouse:true'
+    );
+}
