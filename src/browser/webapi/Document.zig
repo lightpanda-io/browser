@@ -1020,7 +1020,9 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
         preorder_index += 1;
         if (node.is(Element)) |element| {
             hidden = hidden or style_manager.hasDisplayNone(element);
-            if (!hidden) {
+            // pointer-events:none lets the hit fall through to what's under
+            // it, but a child can opt back in, so the subtree is still walked.
+            if (!hidden and !style_manager.hasPointerEventsNone(element)) {
                 if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
                     if (ignore_x) {
                         topmost = element;
@@ -1052,7 +1054,10 @@ fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *E
     var current: ?*Element = (try self.elementFromPoint(x, y, frame)) orelse return &.{};
     var result: std.ArrayList(*Element) = .empty;
     while (current) |el| {
-        try result.append(frame.local_arena, el);
+        // The root element is always last, as in Chrome, even when it isn't hit.
+        if (el.parentElement() == null or !el.hasPointerEventsNone(frame)) {
+            try result.append(frame.local_arena, el);
+        }
         current = el.parentElement();
     }
     return result.items;
