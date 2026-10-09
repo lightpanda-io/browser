@@ -1286,7 +1286,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         // client decodes it; checks CompressionStream('brotli') output with a
         // decoder that isn't ours.
         var body_buf: [4096]u8 = undefined;
-        const body = try req.readerExpectNone(&body_buf).allocRemaining(arena_allocator, .limited(4 * 1024 * 1024));
+        const body = try req.readerExpectNone(&body_buf).allocRemaining(req_allocator, .limited(4 * 1024 * 1024));
         return req.respond(body, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/octet-stream" },
