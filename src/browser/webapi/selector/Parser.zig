@@ -161,136 +161,41 @@ pub fn parseList(arena: Allocator, input: []const u8) ParseError![]const Selecto
 
 fn parse(arena: Allocator, input: []const u8) ParseError!Selector.Selector {
     var parser = Parser{ .input = input };
+    const first = try parser.parseCompound(arena);
+
     var segments: std.ArrayList(Segment) = .empty;
-    var current_compound: std.ArrayList(Part) = .empty;
-
-    // Parse the first compound (no combinator before it)
     while (parser.skipSpaces()) {
-        if (parser.peek() == 0) break;
-
-        const part = try parser.parsePart(arena);
-        try current_compound.append(arena, part);
-
-        // Check what comes after this part
-        const start_pos = parser.input;
-        const has_whitespace = parser.skipSpacesConsumed();
-        const next = parser.peek();
-
-        if (next == 0) {
-            // End of input
-            break;
-        }
-
-        if (next == '>' or next == '+' or next == '~') {
-            // Explicit combinator
-            break;
-        }
-
-        if (has_whitespace and isStartOfPart(next)) {
-            // Whitespace followed by another selector part = descendant combinator
-            // Restore position before the whitespace so the segment loop can handle it
-            parser.input = start_pos;
-            break;
-        }
-
-        // If we have a non-whitespace character that could start a part,
-        // it's part of this compound (like "div.class" or "div#id")
-        if (!has_whitespace and isStartOfPart(next)) {
-            // Continue parsing this compound
-            continue;
-        }
-
-        // Otherwise, end of compound
-        break;
-    }
-
-    if (current_compound.items.len == 0) {
-        return error.InvalidSelector;
-    }
-
-    const first_compound = current_compound.items;
-    current_compound = .empty;
-
-    // Parse remaining segments with combinators
-    while (parser.skipSpaces()) {
-        const next = parser.peek();
-        if (next == 0) break;
-
-        // Parse combinator
-        const combinator: Combinator = switch (next) {
-            '>' => blk: {
-                parser.input = parser.input[1..];
-                break :blk .child;
-            },
-            '+' => blk: {
-                parser.input = parser.input[1..];
-                break :blk .next_sibling;
-            },
-            '~' => blk: {
-                parser.input = parser.input[1..];
-                break :blk .subsequent_sibling;
-            },
-            else => .descendant, // whitespace = descendant combinator
-        };
-
-        // Parse the compound that follows the combinator
-        _ = parser.skipSpaces();
-        if (parser.peek() == 0) {
-            return error.InvalidSelector; // Combinator with nothing after it
-        }
-
-        while (parser.skipSpaces()) {
-            if (parser.peek() == 0) break;
-
-            const part = try parser.parsePart(arena);
-            try current_compound.append(arena, part);
-
-            // Check what comes after this part
-            const seg_start_pos = parser.input;
-            const seg_has_whitespace = parser.skipSpacesConsumed();
-            const peek_next = parser.peek();
-
-            if (peek_next == 0) {
-                // End of input
-                break;
-            }
-
-            if (peek_next == '>' or peek_next == '+' or peek_next == '~') {
-                // Next combinator found
-                break;
-            }
-
-            if (seg_has_whitespace and isStartOfPart(peek_next)) {
-                // Whitespace followed by another part = new segment
-                // Restore position before whitespace
-                parser.input = seg_start_pos;
-                break;
-            }
-
-            // If no whitespace and it's a start of part, continue compound
-            if (!seg_has_whitespace and isStartOfPart(peek_next)) {
-                continue;
-            }
-
-            // Otherwise, end of compound
-            break;
-        }
-
-        if (current_compound.items.len == 0) {
-            return error.InvalidSelector;
-        }
-
+        const combinator = parser.parseCombinator();
         try segments.append(arena, .{
             .combinator = combinator,
-            .compound = .{ .parts = current_compound.items },
+            .compound = try parser.parseCompound(arena),
         });
-        current_compound = .empty;
     }
 
-    return .{
-        .first = .{ .parts = first_compound },
-        .segments = segments.items,
+    return .{ .first = first, .segments = segments.items };
+}
+
+// Parts written with no whitespace between them ("div.a#b") form a compound.
+fn parseCompound(self: *Parser, arena: Allocator) ParseError!Selector.Compound {
+    _ = self.skipSpaces();
+    var parts: std.ArrayList(Part) = .empty;
+    while (true) {
+        try parts.append(arena, try self.parsePart(arena));
+        if (!isStartOfPart(self.peek())) break;
+    }
+    return .{ .parts = parts.items };
+}
+
+// Whitespace alone, already skipped by the caller, is a descendant combinator.
+fn parseCombinator(self: *Parser) Combinator {
+    const c: Combinator = switch (self.peek()) {
+        '>' => .child,
+        '+' => .next_sibling,
+        '~' => .subsequent_sibling,
+        else => return .descendant,
     };
+    self.input = self.input[1..];
+    return c;
 }
 
 // :has() arguments are relative selectors. Absolutize them at parse time by
@@ -755,16 +660,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
                 // and is anchored at the element being matched, with an implied
                 // descendant combinator when none is written.
                 // https://drafts.csswg.org/selectors-4/#relational
-                const combinator: Combinator = switch (self.peek()) {
-                    '>' => .child,
-                    '+' => .next_sibling,
-                    '~' => .subsequent_sibling,
-                    else => .descendant,
-                };
-                if (combinator != .descendant) {
-                    self.input = self.input[1..];
-                    _ = self.skipSpaces();
-                }
+                const combinator = self.parseCombinator();
 
                 const selector = try parse(arena, self.consumeUntilCommaOrParen());
                 if (selector.hasPseudoElement()) return error.InvalidPseudoClass;
