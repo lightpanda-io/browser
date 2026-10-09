@@ -11,6 +11,10 @@ self.addEventListener('error', (e) => {
   }
   const msg = e.error && e.error.message;
   seen.push(msg);
+  if (seen.length === 5) {
+    // Deferred so a failed guard's re-reports land before we report.
+    setTimeout(report, 0);
+  }
   if (msg === 'reentrant') {
     reentrant = 1;
     // Thrown while reporting: must not be reported again.
@@ -32,4 +36,10 @@ setTimeout(() => { throw new Error('setTimeout'); }, 0);
 queueMicrotask(() => { throw new Error('queueMicrotask'); });
 setTimeout(() => { throw new Error('reentrant'); }, 5);
 
-setTimeout(() => postMessage({ seen: seen.slice().sort(), reentrant }), 20);
+let reported = false;
+function report() {
+  if (reported) return;
+  reported = true;
+  postMessage({ seen: seen.slice().sort(), reentrant });
+}
+setTimeout(report, 1000);
