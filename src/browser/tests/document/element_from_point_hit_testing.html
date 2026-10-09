@@ -13,6 +13,13 @@
     <div id="inherits">Inherits</div>
     <div id="live" style="pointer-events: auto">Live</div>
   </div>
+  <div id="under_hidden">
+    <span id="hidden" style="visibility: hidden">Hidden</span>
+    <span id="collapsed" style="visibility: collapse">Collapsed</span>
+  </div>
+  <div id="hidden_wrap" style="visibility: hidden">
+    <div id="shown" style="visibility: visible">Shown</div>
+  </div>
 </body>
 
 <script id="computed_pointer_events">
@@ -34,20 +41,39 @@
     return [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
   };
 
-  // The hit falls through to an element underneath: #under in a real
-  // layout, possibly a further ancestor in ours.
+  // #under in Chrome; our layout can land on a further ancestor.
   const dead = document.getElementById('dead');
   const hit = document.elementFromPoint(...center(dead));
   testing.expectTrue(hit !== dead && hit.contains(dead));
   testing.expectFalse(document.elementsFromPoint(...center(dead)).includes(dead));
 
-  // A pointer-events:auto child of a pointer-events:none parent is hit, and
-  // the parent is left out of the stack.
   const live = document.getElementById('live');
   testing.expectEqual(live, document.elementFromPoint(...center(live)));
   const stack = document.elementsFromPoint(...center(live));
   testing.expectEqual(live, stack[0]);
   testing.expectFalse(stack.includes(document.getElementById('wrap')));
   testing.expectEqual(document.documentElement, stack[stack.length - 1]);
+}
+</script>
+
+<script id="hit_skips_visibility_hidden">
+{
+  const center = (el) => {
+    const r = el.getBoundingClientRect();
+    return [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+  };
+
+  for (const id of ['hidden', 'collapsed']) {
+    const el = document.getElementById(id);
+    const hit = document.elementFromPoint(...center(el));
+    testing.expectTrue(hit !== el && hit.contains(el));
+    testing.expectFalse(document.elementsFromPoint(...center(el)).includes(el));
+  }
+
+  const shown = document.getElementById('shown');
+  testing.expectEqual(shown, document.elementFromPoint(...center(shown)));
+  const stack = document.elementsFromPoint(...center(shown));
+  testing.expectEqual(shown, stack[0]);
+  testing.expectFalse(stack.includes(document.getElementById('hidden_wrap')));
 }
 </script>

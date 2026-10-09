@@ -665,6 +665,15 @@ pub fn hasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     return self.visibilityProps(el).pointer_events_none;
 }
 
+/// Blink's VisibleToHitTestRequest. Ignores display:none, which callers handle
+/// for the whole subtree.
+pub fn isHitTestable(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return true;
+    const p = self.visibilityProps(el);
+    return !p.visibility_hidden and !p.pointer_events_none;
+}
+
 /// The axes along which `el` is a scroll container: its own computed overflow
 /// on that axis is auto, scroll or overlay. No ancestor walk.
 pub fn overflowAxes(self: *StyleManager, el: *Element) Element.ScrollAxes {
