@@ -322,6 +322,8 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .child_elements => return node._type == .element,
                 .child_tag => {
                     const el = node.is(Element) orelse return false;
+                    // getTag() is namespace-blind: an SVG "tr" reports .tr
+                    if (el._namespace != .html) return false;
                     return el.getTag() == self._filter;
                 },
                 .cells => {

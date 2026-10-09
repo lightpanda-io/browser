@@ -101,22 +101,44 @@
     add(add(table, 'caption'), 'tr', 'nested1');
     add(add(add(tbody.firstChild, 'td'), 'table'), 'tr', 'nested2');
 
-    const ids = () => Array.from(table.rows ?? [], (row) => row.id).join(',');
+    const ids = () => Array.from(table.rows, (row) => row.id).join(',');
 
     // thead rows first, then table-level and tbody rows, then tfoot rows.
     testing.expectEqual('head1,top1,body1,foot1', ids());
-    testing.expectEqual('HTMLCollection', table.rows?.constructor.name);
-    testing.expectEqual(4, table.rows?.length);
-    testing.expectEqual('body1', table.rows?.[2].id);
-    testing.expectEqual('foot1', table.rows?.namedItem('foot1')?.id);
-    testing.expectEqual(null, table.rows?.namedItem('nested1'));
+    testing.expectEqual('HTMLCollection', table.rows.constructor.name);
+    testing.expectEqual(4, table.rows.length);
+    testing.expectEqual('body1', table.rows[2].id);
+    testing.expectEqual('foot1', table.rows.namedItem('foot1').id);
+    testing.expectEqual(null, table.rows.namedItem('nested1'));
 
     // The collection is live.
     const rows = table.rows;
     add(tbody, 'tr', 'body2');
-    testing.expectEqual(5, rows?.length);
+    testing.expectEqual(5, rows.length);
     testing.expectEqual('head1,top1,body1,body2,foot1', ids());
 
-    testing.expectEqual(0, document.createElement('table').rows?.length);
+    testing.expectEqual(0, document.createElement('table').rows.length);
+  }
+</script>
+
+<script id="svg_rows">
+  {
+    // Only HTML tr/tbody count: an SVG element named "tr" or "tbody" isn't one.
+    const svg = 'http://www.w3.org/2000/svg';
+    const table = document.createElement('table');
+    const tbody = table.appendChild(document.createElement('tbody'));
+    tbody.appendChild(document.createElement('tr')).id = 'real';
+    tbody.appendChild(document.createElementNS(svg, 'tr')).id = 'svg1';
+    table.appendChild(document.createElementNS(svg, 'tr')).id = 'svg2';
+    const svgBody = table.appendChild(document.createElementNS(svg, 'tbody'));
+    svgBody.appendChild(document.createElement('tr')).id = 'inSvg';
+
+    testing.expectEqual(1, table.rows.length);
+    testing.expectEqual('real', table.rows[0].id);
+    testing.expectEqual(null, table.rows.namedItem('svg1'));
+    testing.expectEqual(null, table.rows.namedItem('inSvg'));
+    testing.expectEqual(1, table.tBodies.length);
+    testing.expectEqual(1, tbody.rows.length);
+    testing.expectEqual('real', tbody.rows[0].id);
   }
 </script>

@@ -88,6 +88,9 @@ pub const RowWalker = struct {
     // the next candidate row inside the current section
     _row: ?*Node = null,
 
+    const Row = Element.Html.TableRow;
+    const Section = Element.Html.TableSection;
+
     const Phase = enum { head, body, foot };
     const Opts = struct {};
 
@@ -102,7 +105,7 @@ pub const RowWalker = struct {
         while (true) {
             while (self._row) |node| {
                 self._row = node.nextSibling();
-                if (tagOf(node) == .tr) {
+                if (node.is(Row) != null) {
                     return node;
                 }
             }
@@ -119,15 +122,15 @@ pub const RowWalker = struct {
             self._child = child.nextSibling();
 
             switch (self._phase) {
-                .head => if (tagOf(child) == .thead) {
+                .head => if (sectionTag(child) == .thead) {
                     self._row = child.firstChild();
                 },
-                .body => switch (tagOf(child) orelse continue) {
-                    .tr => return child,
-                    .tbody => self._row = child.firstChild(),
-                    else => {},
+                .body => if (child.is(Row) != null) {
+                    return child;
+                } else if (sectionTag(child) == .tbody) {
+                    self._row = child.firstChild();
                 },
-                .foot => if (tagOf(child) == .tfoot) {
+                .foot => if (sectionTag(child) == .tfoot) {
                     self._row = child.firstChild();
                 },
             }
@@ -143,22 +146,19 @@ pub const RowWalker = struct {
     }
 
     pub fn contains(self: *const RowWalker, target: *Node) bool {
-        if (tagOf(target) != .tr) {
+        if (target.is(Row) == null) {
             return false;
         }
         const parent = target._parent orelse return false;
         if (parent == self._root) {
             return true;
         }
-        return switch (tagOf(parent) orelse return false) {
-            .thead, .tbody, .tfoot => parent._parent == self._root,
-            else => false,
-        };
+        return parent.is(Section) != null and parent._parent == self._root;
     }
 
-    fn tagOf(node: *Node) ?Element.Tag {
-        const el = node.is(Element) orelse return null;
-        return el.getTag();
+    fn sectionTag(node: *Node) ?Element.Tag {
+        const section = node.is(Section) orelse return null;
+        return section._tag;
     }
 };
 
