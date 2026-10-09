@@ -2554,12 +2554,9 @@ pub fn queueHashChange(self: *Frame, old_url: []const u8, new_url: []const u8) !
     });
 }
 
-// Hard cap on a single external stylesheet body. CSS rule storage is per-
-// arena so a hostile sheet could otherwise inflate page memory; 2 MiB is
-// well above anything seen on real sites (Tailwind's `preflight + utilities`
-// build is ~400 KiB gzipped, ~3 MiB raw — at which point a site should be
-// splitting by route anyway).
-const MAX_STYLESHEET_BYTES: usize = 2 * 1024 * 1024;
+// CSS rule storage is per-arena, so a hostile sheet could otherwise inflate
+// page memory. Chrome has no cap, and aggregated theme sheets exceed 2 MiB.
+pub const MAX_STYLESHEET_BYTES: usize = 4 * 1024 * 1024;
 
 // Synchronously fetch and parse an external `<link rel=stylesheet>`.
 // href is passed in as an optimization since the [currently] only callsite has

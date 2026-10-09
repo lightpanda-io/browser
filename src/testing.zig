@@ -1162,13 +1162,28 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/styles/large.css")) {
+        // Over 2 MiB, with the rule under test last.
+        const chunk = ".pad { color: #abcdef; } "; // 25 bytes
+        const tail = ".large-hide { display: none; }";
+        const repeats = 5 * 1024 * 1024 / 2 / chunk.len;
+        var body = try std.ArrayList(u8).initCapacity(req_allocator, chunk.len * repeats + tail.len);
+        for (0..repeats) |_| body.appendSliceAssumeCapacity(chunk);
+        body.appendSliceAssumeCapacity(tail);
+        return req.respond(body.items, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/styles/oversize.css")) {
-        // Body that exceeds Frame.MAX_STYLESHEET_BYTES (2 MiB) — written as a
+        // Body that exceeds Frame.MAX_STYLESHEET_BYTES — written as a
         // long sequence of valid declarations so the response itself parses
         // fine and the error path is exercised by the size cap, not by a
         // CSS parse failure.
         const chunk = ".pad { color: #abcdef; } "; // 25 bytes
-        const repeats = (2 * 1024 * 1024 / chunk.len) + 1024;
+        const repeats = (Frame.MAX_STYLESHEET_BYTES / chunk.len) + 1024;
         var body = try std.ArrayList(u8).initCapacity(req_allocator, chunk.len * repeats);
         for (0..repeats) |_| body.appendSliceAssumeCapacity(chunk);
         return req.respond(body.items, .{
