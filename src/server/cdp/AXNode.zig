@@ -362,11 +362,12 @@ pub const Writer = struct {
                         const input = el.as(DOMNode.Element.Html.Input);
                         const is_disabled = el.isDisabled();
 
+                        if (is_disabled) {
+                            try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
+                        }
+
                         switch (input._input_type) {
                             .text, .email, .tel, .url, .search, .password, .number => {
-                                if (is_disabled) {
-                                    try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
-                                }
                                 try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                                 if (!is_disabled) {
                                     try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
@@ -399,6 +400,9 @@ pub const Writer = struct {
                     .textarea => {
                         const is_disabled = el.isDisabled();
 
+                        if (is_disabled) {
+                            try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
+                        }
                         try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
@@ -414,6 +418,9 @@ pub const Writer = struct {
                     .select => {
                         const is_disabled = el.isDisabled();
 
+                        if (is_disabled) {
+                            try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
+                        }
                         try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
@@ -431,6 +438,9 @@ pub const Writer = struct {
                     },
                     .button => {
                         const is_disabled = el.isDisabled();
+                        if (is_disabled) {
+                            try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
+                        }
                         try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
