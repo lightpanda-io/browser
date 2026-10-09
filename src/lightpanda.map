@@ -1,0 +1,9 @@
+/* liblightpanda.so exports exactly the C API; everything else (BoringSSL,
+ * curl, sqlite, V8, zig runtime) stays local so a host linking its own
+ * copies cannot interpose. */
+{
+  global:
+    lp_*;
+  local:
+    *;
+};

@@ -224,6 +224,13 @@ pub fn Builder(comptime commands: anytype) type {
     return struct {
         const Self = @This();
 
+        /// Hidden commands exist in `Enum`/`Union` (for programmatic
+        /// construction, e.g. the C API's `embed`) but are not parseable
+        /// and never appear in help.
+        fn isHidden(comptime command: anytype) bool {
+            return @hasField(@TypeOf(command), "hidden") and command.hidden;
+        }
+
         /// Enum type for provided commands.
         pub const Enum = blk: {
             const len = commands.len + 1;
@@ -423,6 +430,7 @@ pub fn Builder(comptime commands: anytype) type {
 
             const cmd_str: []const u8 = args.next() orelse "serve";
             inline for (commands) |command| {
+                if (comptime isHidden(command)) continue;
                 // Match a command.
                 if (std.mem.eql(u8, cmd_str, command.name)) {
                     const cmd_parsed = try parseCommand(allocator, command, &args);
@@ -439,6 +447,7 @@ pub fn Builder(comptime commands: anytype) type {
                 };
 
                 inline for (commands) |command| {
+                    if (comptime isHidden(command)) continue;
                     if (std.mem.eql(u8, command_name, command.name)) {
                         return .{
                             exec_name,
@@ -477,6 +486,7 @@ pub fn Builder(comptime commands: anytype) type {
             _ = args.skip();
 
             inline for (commands) |command| {
+                if (comptime isHidden(command)) continue;
                 if (std.mem.eql(u8, @tagName(command_enum), command.name)) {
                     const cmd_parsed = try parseCommand(allocator, command, &args);
                     return .{ exec_name, cmd_parsed };
