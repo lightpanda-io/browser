@@ -417,6 +417,28 @@
 }
 </script>
 
+<script id=stealDoesNotDrainMicrotasksSynchronously type=module>
+{
+  const state = await testing.async();
+  const order = [];
+
+  navigator.locks.request('c', () => {
+    order.push('A');
+    navigator.locks.request('c', { steal: true }, () => {});
+    order.push('B');
+    return new Promise(() => {});
+  }).catch(() => order.push('C'));
+
+  setTimeout(() => {
+    state.resolve(order.join(','));
+  }, 50);
+
+  await state.done((v) => {
+    testing.expectEqual('A,B,C', v);
+  });
+}
+</script>
+
 <script id=queryReportsHeldAndPending type=module>
 {
   const state = await testing.async();

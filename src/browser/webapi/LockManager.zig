@@ -25,6 +25,7 @@ const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const Execution = @import("../js/Execution.zig");
 const AbortSignal = @import("AbortSignal.zig");
+const DOMException = @import("DOMException.zig");
 
 const Lock = @import("Lock.zig");
 
@@ -313,10 +314,18 @@ pub fn request(
                 _ = self._locks.orderedRemove(i);
 
                 const lock_resolver = lr.resolver.local(lr.exec.js.local.?);
-                lock_resolver.rejectError(
-                    "steal weblock",
-                    .{ .dom_exception = .{ .err = error.AbortError } },
-                );
+                const exception = DOMException.fromError(error.AbortError) orelse unreachable;
+                if (lock_resolver.local.zigValueToJs(exception, .{})) |js_val| {
+                    // Use rejectValue (no microtask drain): the stealing
+                    // script may still be on the stack (e.g. steal called
+                    // from within the held lock's own callback), and
+                    // draining here would run unrelated reactions mid-script.
+                    lock_resolver.rejectValue(js_val) catch |err| {
+                        log.err(.bug, "steal weblock", .{ .err = err, .persistent = false });
+                    };
+                } else |err| {
+                    log.err(.bug, "steal weblock", .{ .err = err, .persistent = false });
+                }
 
                 lr.finished = true;
                 lr.deinit();
