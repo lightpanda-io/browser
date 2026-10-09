@@ -395,6 +395,8 @@ pub fn createPage(self: *Session) !PageHandle {
     const frame_id = self.nextFrameId();
     const frame = try self.installNewActivePage(frame_id);
 
+    frame.document._ready_state = .complete;
+
     // https://html.spec.whatwg.org/multipage/document-sequences.html --
     // Creating a new browsing context always produces an initial about:blank
     // Document with its own session history entry, even before any real

@@ -709,6 +709,8 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     const page_scope = page.logScope();
     defer page_scope.exit();
 
+    self.document._ready_state = .loading;
+
     const is_root = self == &page.frame;
     const log_data = .{
         .url = request_url,
