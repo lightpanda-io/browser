@@ -424,6 +424,13 @@ fn clearUrlBlocklist(self: *Client) void {
     }
 }
 
+/// Whether a `--block-urls` pattern (or CDP `Network.setBlockedURLs`)
+/// matches `url`. The search tool uses it to drop results the browser would
+/// refuse to open anyway.
+pub fn blocksUrl(self: *const Client, url: []const u8) bool {
+    return if (self.url_blocklist) |*blocklist| blocklist.isBlocked(url) else false;
+}
+
 /// Every reason a request is refused before it reaches the network:
 /// `--block-urls` patterns and the `--adblock-lists` filters both land here
 /// so that no call site can apply one without the other.

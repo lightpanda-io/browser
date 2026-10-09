@@ -1381,7 +1381,7 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.js
                     // Fall through on any failure so one outage doesn't kill
                     // a whole benchmark run.
                     var detail: Failure = .{};
-                    if (session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, args.query, &detail })) |markdown_| {
+                    if (session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, args.query, &detail, &session.browser.http_client })) |markdown_| {
                         return .{ .text = markdown_ };
                     } else |err| {
                         last_err = err;
@@ -1411,7 +1411,7 @@ fn searchExplicit(arena: std.mem.Allocator, session: *lp.Session, comptime engin
         .is_error = true,
     };
     var detail: Failure = .{};
-    const markdown_ = session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, query, &detail }) catch |err|
+    const markdown_ = session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, query, &detail, &session.browser.http_client }) catch |err|
         return searchFailed(arena, label, err, detail);
     return .{ .text = markdown_ };
 }
@@ -1450,6 +1450,7 @@ fn apiSearch(
     timeout_ms: u32,
     query: []const u8,
     detail: *Failure,
+    url_filter: anytype,
 ) ![]const u8 {
     var init_options = engine.init_options;
     // The cascade (or the model) is the retry; honoring a Retry-After (60 s
@@ -1479,7 +1480,20 @@ fn apiSearch(
     };
     defer response.deinit();
 
-    return renderResults(arena, try engine.collect(arena, response.value));
+    return renderResults(arena, try dropBlocked(arena, try engine.collect(arena, response.value), url_filter));
+}
+
+/// Drops hits whose URL the browser's `--block-urls` patterns would refuse,
+/// so a search can't hand the model a page it isn't allowed to open, or that
+/// page's text in a snippet. A synthesized answer may draw on a dropped hit,
+/// so it goes too. `url_filter` is anything with `blocksUrl(url) bool`.
+fn dropBlocked(arena: std.mem.Allocator, results: SearchResults, url_filter: anytype) std.mem.Allocator.Error!SearchResults {
+    var kept: std.ArrayList(Hit) = .empty;
+    for (results.hits) |hit| {
+        if (!url_filter.blocksUrl(hit.url)) try kept.append(arena, hit);
+    }
+    if (kept.items.len == results.hits.len) return results;
+    return .{ .hits = kept.items };
 }
 
 pub const Hit = struct {
@@ -3341,6 +3355,35 @@ test "brave titles and descriptions render on one line" {
         "1. **Multi line title** — https://example.org\n   line one line two\n\n",
         try renderResults(aa, try collectBrave(aa, resp)),
     );
+}
+
+test "dropBlocked: blocked hits and the synthesized answer go, the rest stay in order" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const Filter = struct {
+        fn blocksUrl(_: @This(), url: []const u8) bool {
+            return std.mem.find(u8, url, "huggingface.co/datasets/") != null;
+        }
+    };
+    const results: SearchResults = .{ .answer = "42", .hits = &.{
+        .{ .title = "a", .url = "https://example.org/a", .snippet = "" },
+        .{ .title = "gold", .url = "https://huggingface.co/datasets/x/y", .snippet = "answer: 42" },
+        .{ .title = "b", .url = "https://example.org/b", .snippet = "" },
+    } };
+
+    const filtered = try dropBlocked(aa, results, Filter{});
+    try std.testing.expectEqual(2, filtered.hits.len);
+    try std.testing.expectEqualStrings("https://example.org/a", filtered.hits[0].url);
+    try std.testing.expectEqualStrings("https://example.org/b", filtered.hits[1].url);
+    try std.testing.expectEqualStrings("", filtered.answer);
+
+    const untouched = try dropBlocked(aa, .{ .answer = "42", .hits = results.hits[0..1] }, Filter{});
+    try std.testing.expectEqualStrings("42", untouched.answer);
+
+    const all_blocked = try dropBlocked(aa, .{ .hits = results.hits[1..2] }, Filter{});
+    try std.testing.expectEqualStrings("No results.", try renderResults(aa, all_blocked));
 }
 
 test "searchFailed: a rate limit says so, a bare failure stays short" {
