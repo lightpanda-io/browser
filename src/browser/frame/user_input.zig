@@ -929,9 +929,9 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
         if (is_enter) {
             return implicitFormSubmission(frame, input);
         }
-        _ = try applyEdit(frame, input, .{ .insert = text }, .{});
+        _ = try applyEdit(frame, input, .{ .insert = text });
     } else if (target.is(Element.Html.TextArea)) |textarea| {
-        _ = try applyEdit(frame, textarea, if (is_enter) .line_break else .{ .insert = text }, .{});
+        _ = try applyEdit(frame, textarea, if (is_enter) .line_break else .{ .insert = text });
     }
 }
 
@@ -966,6 +966,9 @@ fn keypressFor(frame: *Frame, keydown: *const KeyboardEvent) !*KeyboardEvent {
 }
 
 pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
+    if (event.getIsTrusted() == false) {
+        return;
+    }
     const keyboard_event = event.is(KeyboardEvent) orelse return;
     const key = keyboard_event.getKey();
 
@@ -978,7 +981,7 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         return moveFocus(frame, keyboard_event.getShiftKey() == false);
     }
 
-    if (key == .Enter and event.getIsTrusted()) {
+    if (key == .Enter) {
         if (target.is(Element)) |element| {
             if (enterFollowsLink(element)) {
                 return dispatchKeyboardClick(frame, element);
@@ -1015,7 +1018,7 @@ fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: Key
 
     if (key == .Backspace or key == .Delete) {
         const edit: Edit = .{ .delete = if (key == .Delete) .forward else .backward };
-        _ = try applyEdit(frame, ctl, edit, .{ .beforeinput = keyboard_event.asEvent().getIsTrusted() });
+        _ = try applyEdit(frame, ctl, edit);
     }
 }
 
@@ -1027,7 +1030,7 @@ pub const Edit = union(enum) {
 
 /// A text edit as the user makes it: cancellable through beforeinput, and
 /// refused on a readonly or disabled control. Returns whether it happened.
-pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit, opts: struct { beforeinput: bool = true }) !bool {
+pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit) !bool {
     const el = ctl.asElement();
     if (!ctl.acceptsTextEntry() or el.isDisabled()) {
         return false;
@@ -1044,7 +1047,7 @@ pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit, opts: struct { beforei
         .line_break => .{ null, "\n", "insertLineBreak" },
         .delete => |dir| .{ null, null, if (dir == .forward) "deleteContentForward" else "deleteContentBackward" },
     };
-    if (opts.beforeinput and !try allowEdit(frame, el, data, text, input_type)) {
+    if (!try allowEdit(frame, el, data, text, input_type)) {
         return false;
     }
     if (!editable) {
@@ -1271,9 +1274,9 @@ pub fn insertText(frame: *Frame, v: []const u8) !void {
     const html_element = frame.document._active_element orelse return;
 
     if (html_element.is(Element.Html.Input)) |input| {
-        _ = try applyEdit(frame, input, .{ .insert = v }, .{});
+        _ = try applyEdit(frame, input, .{ .insert = v });
     } else if (html_element.is(Element.Html.TextArea)) |textarea| {
-        _ = try applyEdit(frame, textarea, .{ .insert = v }, .{});
+        _ = try applyEdit(frame, textarea, .{ .insert = v });
     }
 }
 
