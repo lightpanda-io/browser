@@ -363,7 +363,7 @@ test "Function: requested termination is classified and blocks re-entry" {
     try testing.expectEqual(3, try (try local.exec("1 + 2", null)).toI32());
 }
 
-test "Function: nested microtask checkpoint keeps the caller's termination" {
+test "Function: microtask checkpoint is a no-op while JS is on the stack" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
@@ -372,49 +372,27 @@ test "Function: nested microtask checkpoint keeps the caller's termination" {
     defer ls.deinit();
     const local = &ls.local;
 
-    const env = frame.js.env;
-    defer env.cancelTerminate();
-
     const State = struct {
-        env: *js.Env,
         local: *const js.Local,
-        resumed: bool = false,
 
-        fn kill(self: *@This()) void {
-            self.env.requestTerminate();
-        }
-
-        // Draining the queue from a native call runs at call depth >= 1, with
-        // the caller's JS still on the stack. A terminate landing in here is
-        // aimed at that caller too, so the checkpoint must not clear it.
+        // A native call runs at call depth >= 1, with the caller's JS still on
+        // the stack: draining the queue here would run reactions mid-script.
         fn pump(self: *@This()) void {
             self.local.runMicrotasks();
         }
-
-        fn markResumed(self: *@This()) void {
-            self.resumed = true;
-        }
     };
-    var state = State{ .env = env, .local = local };
+    var state = State{ .local = local };
 
     const driver = try local.exec(
-        \\(function(kill, pump, resumed) {
-        \\  Promise.resolve().then(function(){ kill(); for(;;){} });
+        \\(function(pump) {
+        \\  let ran = false;
+        \\  Promise.resolve().then(function(){ ran = true; });
         \\  pump();
-        \\  resumed();
+        \\  return ran;
         \\})
     , null);
     const driver_fn = Function{ .local = local, .handle = @ptrCast(driver.handle) };
-
-    var caught: js.TryCatch.Caught = .{};
-    const args = .{
-        local.newCallback(State.kill, &state),
-        local.newCallback(State.pump, &state),
-        local.newCallback(State.markResumed, &state),
-    };
-    try testing.expectError(error.ExecutionTerminated, driver_fn.tryCall(void, args, &caught));
-    try testing.expectEqual(false, state.resumed);
-    try testing.expectEqual(true, env.terminatePending());
+    try testing.expectEqual(false, try driver_fn.call(bool, .{local.newCallback(State.pump, &state)}));
 }
 
 test "Function: a terminated checkpoint stops the context loop" {
@@ -422,68 +400,47 @@ test "Function: a terminated checkpoint stops the context loop" {
     const other = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    var ls: js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
-    defer ls.deinit();
-    const local = &ls.local;
-
     const env = frame.js.env;
     defer env.cancelTerminate();
 
-    // The second context's queue is the one the loop must not go on to reach:
-    // entering a checkpoint on a terminating isolate consumes the termination,
-    // which would let the wedged caller below resume.
-    {
-        var other_ls: js.Local.Scope = undefined;
-        other.js.localScope(&other_ls);
-        defer other_ls.deinit();
-        try other_ls.local.eval(
-            \\window.__ran = false;
-            \\Promise.resolve().then(function(){ window.__ran = true; });
-        , null);
-    }
-
     const State = struct {
         env: *js.Env,
-        local: *const js.Local,
-        resumed: bool = false,
 
         fn kill(self: *@This()) void {
             self.env.requestTerminate();
         }
-
-        fn pump(self: *@This()) void {
-            self.local.runMicrotasks();
-        }
-
-        fn markResumed(self: *@This()) void {
-            self.resumed = true;
-        }
     };
-    var state = State{ .env = env, .local = local };
+    var state = State{ .env = env };
 
-    const driver = try local.exec(
-        \\(function(kill, pump, resumed) {
-        \\  Promise.resolve().then(function(){ kill(); for(;;){} });
-        \\  pump();
-        \\  resumed();
-        \\})
-    , null);
-    const driver_fn = Function{ .local = local, .handle = @ptrCast(driver.handle) };
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const local = &ls.local;
 
-    var caught: js.TryCatch.Caught = .{};
-    const args = .{
-        local.newCallback(State.kill, &state),
-        local.newCallback(State.pump, &state),
-        local.newCallback(State.markResumed, &state),
-    };
-    try testing.expectError(error.ExecutionTerminated, driver_fn.tryCall(void, args, &caught));
-    try testing.expectEqual(false, state.resumed);
+        const setup = try local.exec(
+            \\(function(kill) {
+            \\  Promise.resolve().then(function(){ kill(); for(;;){} });
+            \\})
+        , null);
+        const setup_fn = Function{ .local = local, .handle = @ptrCast(setup.handle) };
+        try setup_fn.call(void, .{local.newCallback(State.kill, &state)});
+    }
 
-    env.cancelTerminate();
+    // The second context's queue is the one the loop must not go on to reach
+    // once the first context's checkpoint was terminated.
     var other_ls: js.Local.Scope = undefined;
     other.js.localScope(&other_ls);
     defer other_ls.deinit();
+    try other_ls.local.eval(
+        \\window.__ran = false;
+        \\Promise.resolve().then(function(){ window.__ran = true; });
+    , null);
+
+    env.runMicrotasks();
+    try testing.expectEqual(true, env.terminatePending());
+
+    env.cancelTerminate();
     try testing.expectEqual(false, (try other_ls.local.exec("window.__ran", null)).toBool());
 }
 

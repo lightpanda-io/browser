@@ -501,6 +501,13 @@ pub fn destroyContext(self: *Env, context: *Context) void {
 }
 
 pub fn runMicrotasks(self: *Env) void {
+    // Checkpoints only happen at en empty JS stack.
+    for (self.contexts.items) |ctx| {
+        if (ctx.call_depth > 0) {
+            return;
+        }
+    }
+
     if (self.microtask_queues_are_running == false) {
         self.terminate_mutex.lockUncancelable(lp.io);
         defer self.terminate_mutex.unlock(lp.io);
@@ -525,12 +532,7 @@ pub fn runMicrotasks(self: *Env) void {
 
             if (self.terminatePending()) {
                 if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate)) {
-                    for (self.contexts.items) |c| {
-                        if (c.call_depth > 0) {
-                            return;
-                        }
-                    }
-                    // None of the contexts are "entered", it's safe to
+                    // No context is entered (checked above), so it's safe to
                     // clear the termination flag.
                     v8.v8__Isolate__CancelTerminateExecution(v8_isolate);
                 }
@@ -848,6 +850,11 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
         .handle = v8_context,
         .call_arena = ctx.call_arena,
     };
+
+    // Called synchronously by V8, so we bypass Caller and it's call_depth
+    // increment. Do it manually.
+    ctx.call_depth += 1;
+    defer ctx.call_depth -= 1;
 
     const no_handler = promise_event == v8.kPromiseRejectWithNoHandler;
     switch (ctx.global) {
