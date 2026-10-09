@@ -552,6 +552,10 @@ fn getElementText(cmd: *BiDi.Command, p: ElementId) !void {
     const frame = (try currentFrame(cmd)) orelse return;
     const element = (try requireElement(cmd, p.id, frame)) orelse return;
 
+    if (element.isVisible(frame) == false) {
+        return cmd.sendResult("");
+    }
+
     var aw: std.Io.Writer.Allocating = .init(cmd.arena);
     element.getInnerText(&aw.writer, frame) catch |err| switch (err) {
         error.NotHtmlElement => try element.asNode().getTextContent(&aw.writer),
