@@ -76,7 +76,9 @@ fn getFullAXTree(cmd: *CDP.Command) !void {
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
 
-    return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{}) }, .{});
+    return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{
+        .depth = params.depth orelse 0,
+    }) }, .{});
 }
 
 fn queryAXTree(cmd: *CDP.Command) !void {
