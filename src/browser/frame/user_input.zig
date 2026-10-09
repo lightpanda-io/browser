@@ -1001,6 +1001,10 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
 // edit keys other than text insertion (typeChar's) are handled by Input and
 // TextArea the same
 fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: KeyboardEvent.Key) !void {
+    if (isSelectAll(keyboard_event, key)) {
+        return ctl.select(frame);
+    }
+
     if (caretMove(key, ctl)) |move| {
         // Word/paragraph motions (ctrl/alt/meta variants) aren't modeled.
         if (keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey()) {
@@ -1079,6 +1083,17 @@ fn caretMove(key: KeyboardEvent.Key, ctl: anytype) ?@TypeOf(ctl.*).CaretMove {
         .ArrowUp => if (@TypeOf(ctl) == *Element.Html.Input) .line_start else null,
         .ArrowDown => if (@TypeOf(ctl) == *Element.Html.Input) .line_end else null,
         else => null,
+    };
+}
+
+// Ctrl+A alone, as in Chrome on Linux
+fn isSelectAll(keyboard_event: *KeyboardEvent, key: KeyboardEvent.Key) bool {
+    if (!keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey() or keyboard_event.getShiftKey()) {
+        return false;
+    }
+    return switch (key) {
+        .standard => |s| std.ascii.eqlIgnoreCase(s, "a"),
+        else => false,
     };
 }
 
