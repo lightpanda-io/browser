@@ -207,7 +207,8 @@ fn buildCdpCookie(allocator: Allocator, param: CdpCookie) !Cookie {
         .value = param.value,
         .domain = if (dotted) domain else null,
         .path = param.path,
-        .expires = param.expires,
+        // As Chrome's MakeCookieFromProtocolValues, a negative expires is a session cookie.
+        .expires = if (param.expires) |e| (if (e < 0) null else e) else null,
         .secure = secure,
         .http_only = param.httpOnly,
         .same_site = parseSameSite(param.sameSite),
@@ -329,6 +330,15 @@ test "cdp.Storage: setCookies takes back the cookies getCookies gave" {
     try ctx.processMessage(.{ .id = 2, .method = "Storage.setCookies", .params = .{ .cookies = &[_]CdpCookie{expired} } });
     try ctx.expectSentResult(null, .{ .id = 2 });
     try testing.expectEqual(0, ctx.cdp().browser_context.?.session.cookie_jar.cookies.items.len);
+
+    // getCookies reports a session cookie with expires: -1.
+    var session = cookie;
+    session.expires = -1;
+    try ctx.processMessage(.{ .id = 5, .method = "Storage.setCookies", .params = .{ .cookies = &[_]CdpCookie{session} } });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    const jar = &ctx.cdp().browser_context.?.session.cookie_jar;
+    try testing.expectEqual(1, jar.cookies.items.len);
+    try testing.expectEqual(null, jar.cookies.items[0].expires);
 
     // What Chrome refuses among those fields.
     var bad_port = cookie;
