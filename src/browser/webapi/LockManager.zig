@@ -81,8 +81,8 @@ pub const LockRequest = struct {
         defer ls.deinit();
 
         const resolver = self.resolver.local(&ls.local);
-        resolver.resolve("Lock callback result", value.?);
         self.finish();
+        resolver.resolve("Lock callback result", value.?);
     }
 
     fn onRejected(self: *LockRequest, value: ?js.Value) void {
@@ -93,8 +93,8 @@ pub const LockRequest = struct {
         defer ls.deinit();
 
         const resolver = self.resolver.local(&ls.local);
-        resolver.reject("Lock callback result", value.?);
         self.finish();
+        resolver.reject("Lock callback result", value.?);
     }
 
     fn fireCallbackWith(self: *LockRequest, lock: ?Lock) void {
@@ -113,8 +113,8 @@ pub const LockRequest = struct {
         if (self.granted) {
             if (self.options.signal) |signal| {
                 if (signal._aborted) {
-                    resolver.reject("LockManager.signal.aborted", signal._reason);
                     self.finish();
+                    resolver.reject("LockManager.signal.aborted", signal._reason);
                     return;
                 }
             }
@@ -131,18 +131,18 @@ pub const LockRequest = struct {
                 self.finish();
                 return;
             }
+            self.finish();
             if (try_catch.exceptionValue()) |exception| {
                 resolver.reject("Lock callback", exception);
             } else {
                 resolver.rejectError("Lock callback", .{ .generic_error = @errorName(err) });
             }
-            self.finish();
             return;
         };
 
         if (result.isPromise() == false) {
-            resolver.resolve("Lock callback result", result);
             self.finish();
+            resolver.resolve("Lock callback result", result);
             return;
         }
 

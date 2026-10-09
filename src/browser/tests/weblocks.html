@@ -403,6 +403,20 @@
 }
 </script>
 
+<script id=lockIsReleasedBeforeRequestPromiseResolves type=module>
+{
+  const state = await testing.async();
+  await navigator.locks.request('release-before-resolve', () => 1);
+  const result = await navigator.locks.request('release-before-resolve', { ifAvailable: true }, (lock) => {
+    return lock === null ? 'unavailable' : 'acquired';
+  });
+  state.resolve(result);
+  await state.done((v) => {
+    testing.expectEqual('acquired', v);
+  });
+}
+</script>
+
 <script id=queryReportsHeldAndPending type=module>
 {
   const state = await testing.async();
