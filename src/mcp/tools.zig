@@ -1170,13 +1170,13 @@ test "MCP - save writes the script to disk" {
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
-    const path = "mcp-save-test-script.js";
-    std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
-    defer std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "script.js");
 
-    const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"save","arguments":{"path":"mcp-save-test-script.js","script":"const page = new Page();\nawait page.goto(\"https://example.com\");"}}}
-    ;
+    const msg = try testing.arena_allocator.print(
+        \\{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"save","arguments":{{"path":"{s}","script":"const page = new Page();\nawait page.goto(\"https://example.com\");"}}}}}}
+    , .{path});
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.find(u8, out.written(), "saved 2 line") != null);
 
@@ -1839,12 +1839,12 @@ test "MCP - screenshot: inline image, file, unsafe path" {
     // Inline images are narrowed to the model-facing limit.
     try testing.expect(std.mem.find(u8, out.written(), "PNG, 1280x") != null);
 
-    const path = "mcp-screenshot-test.png";
-    std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
-    defer std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "screenshot.png");
 
     out.clearRetainingCapacity();
-    const to_file = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"screenshot\",\"arguments\":{\"path\":\"" ++ path ++ "\",\"selector\":\"#hoverTarget\"}}}";
+    const to_file = try testing.arena_allocator.print("{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"screenshot\",\"arguments\":{{\"path\":\"{s}\",\"selector\":\"#hoverTarget\"}}}}}}", .{path});
     try router.handleMessage(server, testing.arena_allocator, to_file);
     try testing.expect(std.mem.find(u8, out.written(), "Saved 1920x") != null);
     try testing.expect(std.mem.find(u8, out.written(), "\"type\":\"image\"") == null);

@@ -204,10 +204,7 @@ pub fn run(self: *HttpServer, address: sys_net.IpAddress) !void {
     try sys_net.listen(listener, self.app.config.maxPendingConnections());
 
     // --port 0 asks the OS for an ephemeral port; log the one we actually got.
-    var bound: posix.sockaddr.storage = undefined;
-    var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
-    try sys_net.getsockname(listener, @ptrCast(&bound), &bound_len);
-    log.note(.mcp, "mcp http server running", .{ .address = sys_net.addressFromSockaddr(@ptrCast(&bound)) });
+    log.note(.mcp, "mcp http server running", .{ .address = try sys_net.boundAddress(listener) });
 
     self.listener = listener;
     // On non-Linux stop() closes the listener itself to unblock accept.

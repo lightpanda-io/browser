@@ -51,6 +51,10 @@ pub fn main(init: std.process.Init) !void {
     defer std.testing.io_instance.deinit();
 
     const env = Env.init(init.environ_map);
+    if (env.claim == null and env.jobs > 1) {
+        try runShards(std.testing.io_instance.io(), arena.allocator(), init.environ_map, env.jobs);
+    }
+
     var runner = Runner.init(allocator, arena.allocator(), &ta, env);
     RUNNER = &runner;
     try runner.run(std.testing.io_instance.io());
@@ -61,7 +65,7 @@ const Runner = struct {
     allocator: Allocator,
     ta: *TrackingAllocator,
 
-    // per-test arena, used for collecting substests
+    // per-test arena, used for collecting subtests, then for the final Report
     arena: Allocator,
     subtests: std.ArrayList([]const u8),
 
@@ -107,9 +111,19 @@ const Runner = struct {
         // Then we have a special check to make sure _some_ test was run. This
         const webapi_html_test_mode = self.env.filter == null and self.env.subfilter != null;
 
+        var claim: ?Claim = if (self.env.claim) |path| try .open(io, path) else null;
+        // counts only the tests below, so the indices claimed have no gaps
+        var index: u64 = 0;
         for (builtin.test_functions) |t| {
             if (isSetup(t) or isTeardown(t) or isAfterEach(t)) {
                 continue;
+            }
+
+            if (claim) |*c| {
+                defer index += 1;
+                if (!c.owns(index)) {
+                    continue;
+                }
             }
 
             var status = Status.pass;
@@ -196,10 +210,11 @@ const Runner = struct {
                     if (@errorReturnTrace()) |trace| {
                         std.debug.dumpErrorReturnTrace(trace);
                     }
+                    try fail_list.append(self.allocator, try self.allocator.dupe(u8, friendly_name));
                     if (self.env.fail_first) {
+                        if (claim) |*c| c.stop();
                         break;
                     }
-                    try fail_list.append(self.allocator, try self.allocator.dupe(u8, friendly_name));
                 },
             }
 
@@ -225,50 +240,172 @@ const Runner = struct {
             }
         }
 
-        const total_tests = pass + fail;
-        const status = if (total_tests > 0 and fail == 0) Status.pass else Status.fail;
-        Printer.status(status, "\n{d} of {d} test{s} passed\n", .{ pass, total_tests, if (total_tests != 1) "s" else "" });
-        if (skip > 0) {
-            Printer.status(.skip, "{d} test{s} skipped\n", .{ skip, if (skip != 1) "s" else "" });
-        }
-        if (leak > 0) {
-            Printer.status(.fail, "{d} test{s} leaked\n", .{ leak, if (leak != 1) "s" else "" });
-        }
+        const report: Report = .{
+            .pass = pass,
+            .fail = fail,
+            .skip = skip,
+            .leak = leak,
+            .failed = fail_list.items,
+            .slowest = slowest.drain(self.arena),
+        };
 
-        slowest.display();
-        // stats
-        if (self.env.metrics) {
-            Printer.fmt("\n", .{});
-            const stdout = std.Io.File.stdout();
-            var writer = stdout.writerStreaming(io, &.{});
-            const stats = self.ta.stats();
-            try std.json.Stringify.value(&.{
-                .{ .name = "browser", .bench = .{
-                    .duration = ns_duration,
-                    .alloc_nb = stats.allocation_count,
-                    .realloc_nb = stats.reallocation_count,
-                    .alloc_size = stats.allocated_bytes,
-                } },
-                .{ .name = "v8", .bench = .{
-                    .duration = ns_duration,
-                    .alloc_nb = 0,
-                    .realloc_nb = 0,
-                    .alloc_size = v8_peak_memory,
-                } },
-            }, .{ .whitespace = .indent_2 }, &writer.interface);
-            Printer.fmt("\n", .{});
-        }
-
-        if (fail_list.items.len > 0) {
-            Printer.status(.fail, "\nFailed Test Summary: \n", .{});
-            for (fail_list.items) |name| {
-                Printer.status(.fail, "- {s}\n", .{name});
+        if (self.env.report) |path| {
+            const json = try std.json.Stringify.valueAlloc(self.arena, report, .{});
+            try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = json });
+        } else {
+            report.print();
+            if (self.env.metrics) {
+                try self.printMetrics(io, ns_duration);
             }
         }
 
         std.process.exit(if (fail == 0) 0 else 1);
     }
+
+    fn printMetrics(self: *Runner, io: Io, ns_duration: u64) !void {
+        Printer.fmt("\n", .{});
+        const stdout = std.Io.File.stdout();
+        var writer = stdout.writerStreaming(io, &.{});
+        const stats = self.ta.stats();
+        try std.json.Stringify.value(&.{
+            .{ .name = "browser", .bench = .{
+                .duration = ns_duration,
+                .alloc_nb = stats.allocation_count,
+                .realloc_nb = stats.reallocation_count,
+                .alloc_size = stats.allocated_bytes,
+            } },
+            .{ .name = "v8", .bench = .{
+                .duration = ns_duration,
+                .alloc_nb = 0,
+                .realloc_nb = 0,
+                .alloc_size = v8_peak_memory,
+            } },
+        }, .{ .whitespace = .indent_2 }, &writer.interface);
+        Printer.fmt("\n", .{});
+    }
 };
+
+/// A counter shared by every shard through a mapped file, so each test goes to
+/// whichever shard is free first instead of a fixed share of them.
+const Claim = struct {
+    counter: *std.atomic.Value(u64),
+    held: u64,
+
+    fn open(io: Io, path: []const u8) !Claim {
+        const file = try Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
+        defer file.close(io);
+        const mem = try std.posix.mmap(null, @sizeOf(u64), .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, file.handle, 0);
+        const counter: *std.atomic.Value(u64) = @ptrCast(mem.ptr);
+        return .{ .counter = counter, .held = counter.fetchAdd(1, .monotonic) };
+    }
+
+    /// Whether this shard runs the test at `index`. Indices must come in order
+    /// and without gaps: a new one is only claimed once the held one is behind
+    /// us, and a skipped index would hand out one already walked past.
+    fn owns(self: *Claim, index: u64) bool {
+        if (index > self.held) {
+            self.held = self.counter.fetchAdd(1, .monotonic);
+        }
+        return index == self.held;
+    }
+
+    /// Hands every shard an index past the last test, so they all stop.
+    fn stop(self: *Claim) void {
+        // far from maxInt, so the fetchAdds still to come can't wrap
+        self.counter.store(std.math.maxInt(u64) / 2, .monotonic);
+    }
+};
+
+const Report = struct {
+    pass: usize = 0,
+    fail: usize = 0,
+    skip: usize = 0,
+    leak: usize = 0,
+    failed: []const []const u8 = &.{},
+    slowest: []const SlowTracker.TestInfo = &.{},
+
+    fn print(self: *const Report) void {
+        const total_tests = self.pass + self.fail;
+        const status = if (total_tests > 0 and self.fail == 0) Status.pass else Status.fail;
+        Printer.status(status, "\n{d} of {d} test{s} passed\n", .{ self.pass, total_tests, if (total_tests != 1) "s" else "" });
+        if (self.skip > 0) {
+            Printer.status(.skip, "{d} test{s} skipped\n", .{ self.skip, if (self.skip != 1) "s" else "" });
+        }
+        if (self.leak > 0) {
+            Printer.status(.fail, "{d} test{s} leaked\n", .{ self.leak, if (self.leak != 1) "s" else "" });
+        }
+        if (self.slowest.len > 0) {
+            Printer.fmt("\nSlowest {d} test{s}: \n", .{ self.slowest.len, if (self.slowest.len != 1) "s" else "" });
+            for (self.slowest) |info| {
+                const ms = @as(f64, @floatFromInt(info.ns)) / 1_000_000.0;
+                Printer.fmt("  {d:.2}ms\t{s}\n", .{ ms, info.name });
+            }
+        }
+        if (self.failed.len > 0) {
+            Printer.status(.fail, "\nFailed Test Summary: \n", .{});
+            for (self.failed) |name| {
+                Printer.status(.fail, "- {s}\n", .{name});
+            }
+        }
+    }
+};
+
+fn runShards(io: Io, arena: Allocator, environ_map: *const std.process.Environ.Map, jobs: usize) !noreturn {
+    const exe = try std.process.executablePathAlloc(io, arena);
+    // exit() below skips defers, so this one only covers the error returns
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // children resolve paths against the same cwd, which tmpDir is under
+    const dir = try Io.Dir.path.join(arena, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "claim", .data = &std.mem.toBytes(@as(u64, 0)) });
+    const claim_path = try arena.print("{s}/claim", .{dir});
+
+    const children = try arena.alloc(std.process.Child, jobs);
+    var spawned: usize = 0;
+    // a no-op on the ones already waited for
+    errdefer for (children[0..spawned]) |*child| child.kill(io);
+    for (children, 0..) |*child, i| {
+        var child_env = try environ_map.clone(arena);
+        try child_env.put("TEST_CLAIM", claim_path);
+        try child_env.put("TEST_REPORT", try arena.print("{s}/{d}.json", .{ dir, i }));
+        child.* = try std.process.spawn(io, .{ .argv = &.{exe}, .environ_map = &child_env });
+        spawned += 1;
+    }
+
+    var total: Report = .{};
+    var failed: std.ArrayList([]const u8) = .empty;
+    var slowest: SlowTracker = .init(io, arena, 5);
+    var crashed = false;
+    for (children, 0..) |*child, i| {
+        const term = try child.wait(io);
+        const data = tmp.dir.readFileAlloc(io, try arena.print("{d}.json", .{i}), arena, .limited(1024 * 1024)) catch {
+            Printer.status(.fail, "\nshard {d}/{d} exited without a report: {any}\n", .{ i, jobs, term });
+            crashed = true;
+            continue;
+        };
+        const report = try std.json.parseFromSliceLeaky(Report, arena, data, .{});
+        // the report is written before exit, so a crash on the way out only shows here
+        if (term.success() != (report.fail == 0)) {
+            Printer.status(.fail, "\nshard {d}/{d} reported {d} failures but ended with {any}\n", .{ i, jobs, report.fail, term });
+            crashed = true;
+        }
+        total.pass += report.pass;
+        total.fail += report.fail;
+        total.skip += report.skip;
+        total.leak += report.leak;
+        try failed.appendSlice(arena, report.failed);
+        for (report.slowest) |info| {
+            slowest.track(info.name, info.ns);
+        }
+    }
+    total.failed = failed.items;
+    total.slowest = slowest.drain(arena);
+
+    total.print();
+    tmp.cleanup();
+    std.process.exit(if (total.fail == 0 and !crashed) 0 else 1);
+}
 
 // When only part of a test runs, expectations about what the whole test logs
 // can't be enforced.
@@ -291,19 +428,28 @@ const Printer = struct {
     }
 
     fn status(s: Status, comptime format: []const u8, args: anytype) void {
-        switch (s) {
-            .pass => std.debug.print("\x1b[32m", .{}),
-            .fail => std.debug.print("\x1b[31m", .{}),
-            .skip => std.debug.print("\x1b[33m", .{}),
-            else => {},
-        }
         // Reset before a trailing newline so the escape never starts the next line.
         const reset = "\x1b[0m";
-        if (comptime std.mem.endsWith(u8, format, "\n")) {
-            std.debug.print(format[0 .. format.len - 1] ++ reset ++ "\n", args);
-        } else {
-            std.debug.print(format ++ reset, args);
+        const body = comptime if (std.mem.endsWith(u8, format, "\n"))
+            format[0 .. format.len - 1] ++ reset ++ "\n"
+        else
+            format ++ reset;
+        // Buffered so it goes out in one write: shards share the terminal, and
+        // a color sent apart from its text can land after another shard's reset.
+        var buffer: [4096]u8 = undefined;
+        const stderr = std.debug.lockStderr(&buffer);
+        defer std.debug.unlockStderr();
+        switch (s) {
+            inline else => |c| stderr.file_writer.interface.print(comptime color(c) ++ body, args) catch {},
         }
+    }
+
+    fn color(s: Status) []const u8 {
+        return switch (s) {
+            .pass => "\x1b[32m",
+            .fail => "\x1b[31m",
+            .skip => "\x1b[33m",
+        };
     }
 };
 
@@ -311,7 +457,6 @@ const Status = enum {
     pass,
     fail,
     skip,
-    text,
 };
 
 const SlowTracker = struct {
@@ -352,17 +497,20 @@ const SlowTracker = struct {
         const start = self.start;
         self.start = timestamp;
         const ns: u64 = @intCast(start.durationTo(timestamp).toNanoseconds());
-        if (is_unnamed_test) {
-            return ns;
+        if (!is_unnamed_test) {
+            self.track(test_name, ns);
         }
+        return ns;
+    }
 
+    fn track(self: *SlowTracker, test_name: []const u8, ns: u64) void {
         var slowest = &self.slowest;
 
         if (slowest.count() < self.max) {
             // Capacity is fixed to the # of slow tests we want to track
             // If we've tracked fewer tests than this capacity, than always add
-            slowest.push(self.allocator, TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
-            return ns;
+            slowest.push(self.allocator, .{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
+            return;
         }
 
         {
@@ -371,27 +519,24 @@ const SlowTracker = struct {
             const fastest_of_the_slow = slowest.peekMin() orelse unreachable;
             if (fastest_of_the_slow.ns > ns) {
                 // the test was faster than our fastest slow test, don't add
-                return ns;
+                return;
             }
         }
 
         // the previous fastest of our slow tests, has been pushed off.
         _ = slowest.popMin();
-        slowest.push(self.allocator, TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
-        return ns;
+        slowest.push(self.allocator, .{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
     }
 
-    fn display(self: *SlowTracker) void {
-        var slowest = self.slowest;
-        const count = slowest.count();
-        if (count == 0) {
-            return;
+    /// Empties the tracker into a slice, slowest first.
+    fn drain(self: *SlowTracker, allocator: Allocator) []const TestInfo {
+        const out = allocator.alloc(TestInfo, self.slowest.count()) catch @panic("OOM");
+        var i = out.len;
+        while (i > 0) {
+            i -= 1;
+            out[i] = self.slowest.popMin().?;
         }
-        Printer.fmt("\nSlowest {d} test{s}: \n", .{ count, if (count != 1) "s" else "" });
-        while (slowest.popMin()) |info| {
-            const ms = @as(f64, @floatFromInt(info.ns)) / 1_000_000.0;
-            Printer.fmt("  {d:.2}ms\t{s}\n", .{ ms, info.name });
-        }
+        return out;
     }
 
     fn compareTiming(context: void, a: TestInfo, b: TestInfo) std.math.Order {
@@ -406,18 +551,42 @@ const Env = struct {
     filter: ?[]const u8,
     subfilter: ?[]const u8,
     metrics: bool,
+    jobs: usize,
+    // set in a process spawned to run one share of the suite: its Claim file
+    claim: ?[]const u8,
+    report: ?[]const u8,
 
     fn init(map: *const std.process.Environ.Map) Env {
         const full_filter = readEnv(map, "TEST_FILTER");
         const filter, const subfilter = parseFilter(full_filter);
+        const metrics = readEnvBool(map, "METRICS", false);
 
         return .{
             .filter = filter,
             .subfilter = subfilter,
-            .metrics = readEnvBool(map, "METRICS", false),
+            .metrics = metrics,
             .verbose = readEnvBool(map, "TEST_VERBOSE", false),
             .fail_first = readEnvBool(map, "TEST_FAIL_FIRST", false),
+            // metrics are compared across runs, so keep them to one process
+            .jobs = if (metrics) 1 else readEnvInt(map, "TEST_JOBS") orelse defaultJobs(filter, subfilter),
+            .claim = readEnv(map, "TEST_CLAIM"),
+            .report = readEnv(map, "TEST_REPORT"),
         };
+    }
+
+    /// A filtered run is usually someone debugging one case, who wants as
+    /// little variability as possible, so it stays in one process unless asked.
+    fn defaultJobs(filter: ?[]const u8, subfilter: ?[]const u8) usize {
+        if (filter != null or subfilter != null) {
+            return 1;
+        }
+        const cpus = std.Thread.getCpuCount() catch 1;
+        return @min(cpus, 4);
+    }
+
+    fn readEnvInt(map: *const std.process.Environ.Map, key: []const u8) ?usize {
+        const value = readEnv(map, key) orelse return null;
+        return std.fmt.parseInt(usize, value, 10) catch null;
     }
 
     fn readEnv(map: *const std.process.Environ.Map, key: []const u8) ?[]const u8 {

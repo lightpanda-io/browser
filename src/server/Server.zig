@@ -151,10 +151,7 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
         try sys_net.bind(l, sa.ptr(), sa.len);
         {
             // look this up incase --port 0 was used
-            var bound: posix.sockaddr.storage = undefined;
-            var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
-            try sys_net.getsockname(l, @ptrCast(&bound), &bound_len);
-            const bound_address = sys_net.addressFromSockaddr(@ptrCast(&bound));
+            const bound_address = try sys_net.boundAddress(l);
 
             json_version_response = try http.buildJSONVersionResponse(app, bound_address.getPort());
             errdefer allocator.free(json_version_response);
@@ -1816,6 +1813,7 @@ test "server: HTTP session bootstrap" {
     // What Selenium does before it speaks BiDi: a POST /session
     // that hands back the websocket URL, then a DELETE on quit.
     const session_id = try createHTTPSession("{\"capabilities\":{\"firstMatch\":[{}],\"alwaysMatch\":{\"browserName\":\"firefox\",\"webSocketUrl\":true}}}", true);
+    errdefer deleteHTTPSession(&session_id, true) catch {};
 
     var c = try createTestClient();
     defer c.deinit();
@@ -1947,6 +1945,7 @@ test "server: HTTP session idle timeout disabled" {
     server.session_timeout_ms = null;
 
     const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    errdefer deleteHTTPSession(&session_id, true) catch {};
 
     // never idle-listed, so nothing reaps it: it's still there to DELETE
     lp.io.sleep(.fromMilliseconds(50), .awake) catch {};
@@ -1956,16 +1955,22 @@ test "server: HTTP session idle timeout disabled" {
 test "server: HTTP session ended before its worker attached" {
     // The mailbox is alive from spawn: a DELETE that lands while the worker
     // is still starting up is a plain push, drained on its first tick.
-    // worker_pool.live is the loop's; the gauge is the cross-thread view of it
-    const gauge = &lp.metrics.serve_active_connections;
-    const live = gauge.get(.bidi);
+    // A deleted session's worker exits after the 200, so an earlier test's
+    // can still be winding down: a snapshot of the gauge would count it.
+    try waitForNoBidiWorkers();
 
     const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
     try deleteHTTPSession(&session_id, true);
 
     // the worker exited and gave its slot back
+    try waitForNoBidiWorkers();
+}
+
+/// worker_pool.live is the loop's; the gauge is the cross-thread view of it.
+fn waitForNoBidiWorkers() !void {
+    const gauge = &lp.metrics.serve_active_connections;
     var attempts: usize = 0;
-    while (gauge.get(.bidi) != live) : (attempts += 1) {
+    while (gauge.get(.bidi) != 0) : (attempts += 1) {
         try testing.expect(attempts < 200);
         lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
     }
@@ -2741,6 +2746,7 @@ test "server: HTTP command errors" {
     }
 
     const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    errdefer deleteHTTPSession(&session_id, true) catch {};
 
     // routing errors are the loop's, in W3C form. A known path with the wrong
     // method is an unknown command like any other.
@@ -2816,7 +2822,8 @@ fn createHTTPSession(body: []const u8, expect_ws_url: bool) ![36]u8 {
     try testing.expectEqual(false, capabilities.get("acceptInsecureCerts").?.bool);
     if (expect_ws_url) {
         const ws_url = capabilities.get("webSocketUrl").?.string;
-        try testing.expectEqual("ws://127.0.0.1:9583/session/", ws_url[0 .. ws_url.len - 36]);
+        const expected = try testing.arena_allocator.print("ws://127.0.0.1:{d}/session/", .{testing.test_cdp_port});
+        try testing.expectEqual(expected, ws_url[0 .. ws_url.len - 36]);
         try testing.expectEqual(id, ws_url[ws_url.len - 36 ..]);
     } else {
         try testing.expectEqual(null, capabilities.get("webSocketUrl"));
@@ -3062,7 +3069,8 @@ test "server: get /json/version" {
         try testing.expect(std.mem.startsWith(u8, res1, "HTTP/1.1 200 OK\r\n"));
         try testing.expect(std.mem.find(u8, res1, "\"Browser\": \"Lightpanda/") != null);
         try testing.expect(std.mem.find(u8, res1, "\"Protocol-Version\": \"1.3\"") != null);
-        try testing.expect(std.mem.find(u8, res1, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9583/\"") != null);
+        const ws_url = try testing.arena_allocator.print("\"webSocketDebuggerUrl\": \"ws://127.0.0.1:{d}/\"", .{testing.test_cdp_port});
+        try testing.expect(std.mem.find(u8, res1, ws_url) != null);
     }
 
     {
@@ -3228,7 +3236,7 @@ const MockCDP = struct {
 };
 
 fn createTestClient() !TestClient {
-    const address: sys_net.IpAddress = .{ .ip4 = .loopback(9583) };
+    const address: sys_net.IpAddress = .{ .ip4 = .loopback(testing.test_cdp_port) };
     const socket = try sys_net.connect(&address);
 
     const timeout = std.mem.toBytes(posix.timeval{
@@ -3382,7 +3390,7 @@ const TestClient = struct {
 
 // A server of our own, bound to an ephemeral port and never run(): these
 // tests drive its handlers by hand to reproduce what one event batch does.
-// The real test server (port 9583) is shared and can't be torn down.
+// The real test server is shared and can't be torn down.
 const LoopTest = struct {
     server: *Server,
     address: sys_net.IpAddress,
@@ -3394,11 +3402,7 @@ const LoopTest = struct {
         // run() does this; runOnce() on its own would never see an accept
         try server.io_engine.monitorListener(server.listener);
 
-        var bound: posix.sockaddr.storage = undefined;
-        var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
-        try sys_net.getsockname(server.listener, @ptrCast(&bound), &bound_len);
-
-        return .{ .server = server, .address = sys_net.addressFromSockaddr(@ptrCast(&bound)) };
+        return .{ .server = server, .address = try sys_net.boundAddress(server.listener) };
     }
 
     fn deinit(self: *LoopTest) void {
