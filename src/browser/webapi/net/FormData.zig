@@ -810,9 +810,9 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
                     continue;
                 }
 
-                const name = element.getName();
-                const x_key = if (name) |n| try arena.print("{s}.x", .{n}) else "x";
-                const y_key = if (name) |n| try arena.print("{s}.y", .{n}) else "y";
+                const name = element.getName() orelse "";
+                const x_key = if (name.len > 0) try arena.print("{s}.x", .{name}) else "x";
+                const y_key = if (name.len > 0) try arena.print("{s}.y", .{name}) else "y";
                 try appendString(&list, arena, x_key, "0");
                 try appendString(&list, arena, y_key, "0");
                 continue;
