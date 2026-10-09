@@ -592,6 +592,13 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
         return;
     }
 
+    // Reporting calls back into Zig (e.g. a DOMException's message accessor).
+    // At call_depth 0 that call resets the call_arena, which the code reporting
+    // the error may still be using (e.g. a dispatch's snapshot of its targets).
+    const call_depth = frame.js.call_depth;
+    frame.js.call_depth = call_depth + 1;
+    defer frame.js.call_depth = call_depth;
+
     frame.page.recordJsError(error.JsException);
 
     const target = self.asEventTarget();

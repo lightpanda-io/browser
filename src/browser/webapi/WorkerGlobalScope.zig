@@ -473,6 +473,11 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
         return;
     }
 
+    // See Window.reportError: keeps the call_arena alive while reporting.
+    const call_depth = self.js.call_depth;
+    self.js.call_depth = call_depth + 1;
+    defer self.js.call_depth = call_depth;
+
     self.page.recordJsError(error.JsException);
 
     self._reporting_error = true;
