@@ -24,6 +24,7 @@ const Mime = @import("Mime.zig");
 const Page = @import("Page.zig");
 const Factory = @import("Factory.zig");
 const Session = @import("Session.zig");
+const DocumentRegistry = @import("DocumentRegistry.zig");
 const EventManager = @import("EventManager.zig");
 const ScriptManager = @import("ScriptManager.zig");
 const StyleManager = @import("StyleManager.zig");
@@ -104,6 +105,10 @@ _history_document_id: u32,
 page: *Page,
 
 _session: *Session,
+
+// Node.getDocument is called a lot. Reference this here, from the Browser, to
+// avoid the _session.browser.documents jumps.
+documents: *DocumentRegistry,
 
 _event_manager: EventManager,
 
@@ -377,6 +382,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         .local_arena = local_arena.allocator(),
         ._frame_id = frame_id,
         ._session = session,
+        .documents = &session.browser.documents,
         ._loader_id = loader_id,
         ._history_document_id = loader_id,
         ._factory = factory,
@@ -2797,6 +2803,7 @@ pub fn adoptNodeTree(self: *Frame, node: *Node, old_owner: *Document, new_owner:
 
     // Per spec, adopted steps run on each element after its document is set.
     if (node.is(Element)) |el| {
+        el._attributes.adopt(node._owner, self);
         Element.Html.Custom.enqueueAdoptedCallbackOnElement(el, old_owner, new_owner, self);
 
         // The shadow tree follows its host across documents: re-own it and
