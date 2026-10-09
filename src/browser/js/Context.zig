@@ -638,6 +638,10 @@ pub fn dynamicModuleCallback(
         },
     };
 
+    // prevent running a microtask checkpoint mid-script
+    self.call_depth += 1;
+    defer self.call_depth -= 1;
+
     const promise = self._dynamicModuleCallback(normalized_specifier, resource, &local) catch |err| blk: {
         log.debug(.js, "dynamic module callback", .{
             .err = err,
