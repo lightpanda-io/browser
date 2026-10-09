@@ -2554,11 +2554,8 @@ pub fn queueHashChange(self: *Frame, old_url: []const u8, new_url: []const u8) !
     });
 }
 
-// Hard cap on a single external stylesheet body. CSS rule storage is per-
-// arena so a hostile sheet could otherwise inflate page memory. Real sites
-// ship aggregated sheets above 2 MiB (caltrain.com's Drupal theme is
-// 2.35 MB, with Bootstrap's `.dropdown-menu { display: none }` inside), and a
-// dropped sheet leaves hidden menus and tab panels in innerText.
+// CSS rule storage is per-arena, so a hostile sheet could otherwise inflate
+// page memory. Chrome has no cap, and aggregated theme sheets exceed 2 MiB.
 pub const MAX_STYLESHEET_BYTES: usize = 4 * 1024 * 1024;
 
 // Synchronously fetch and parse an external `<link rel=stylesheet>`.

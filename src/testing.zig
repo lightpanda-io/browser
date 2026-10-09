@@ -1163,8 +1163,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.eql(u8, path, "/styles/large.css")) {
-        // 2.5 MiB, past the old 2 MiB cap, with the rule under test last so
-        // the whole body has to be parsed for it to apply.
+        // Over 2 MiB, with the rule under test last.
         const chunk = ".pad { color: #abcdef; } "; // 25 bytes
         const tail = ".large-hide { display: none; }";
         const repeats = 5 * 1024 * 1024 / 2 / chunk.len;
