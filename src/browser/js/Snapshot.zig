@@ -453,6 +453,7 @@ fn countExternalReferences() comptime_int {
                     continue;
                 }
                 count += 1;
+                if (value.fast_getter) |_| count += 1;
                 if (value.setter != null) {
                     count += 1;
                 }
@@ -535,6 +536,11 @@ fn collectExternalReferences() [countExternalReferences()]isize {
 
                 references[idx] = @bitCast(@intFromPtr(value.getter));
                 idx += 1;
+                if (value.fast_getter) |fast_getter| {
+                    // V8 stores a pointer to the CFunction struct itself, not to fast_method_fn.
+                    references[idx] = @bitCast(@intFromPtr(fast_getter));
+                    idx += 1;
+                }
                 if (value.setter) |setter| {
                     references[idx] = @bitCast(@intFromPtr(setter));
                     idx += 1;
@@ -1010,10 +1016,25 @@ const unforgeables: []const Unforgeable = blk: {
 fn attachAccessorProperty(comptime name: [:0]const u8, value: bridge.Accessor, isolate: *v8.Isolate, template: *const v8.FunctionTemplate, signature: anytype, target: anytype) void {
     const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
     const getter_signature = if (value.static) null else signature;
-    const getter_callback = v8.v8__FunctionTemplate__New__Config(isolate, &.{
-        .callback = value.getter,
-        .signature = getter_signature,
-    }).?;
+
+    const getter_callback: *const v8.FunctionTemplate = blk: {
+        if (value.fast_getter) |fast_getter| {
+            break :blk v8.v8__FunctionTemplate__New__CFunction(isolate, &.{
+                .callback = value.getter,
+                .data = null,
+                .signature = getter_signature,
+                .length = 0,
+                .behavior = v8.kConstructorBehavior_Throw, // Required with a fast function.
+                .side_effect_type = v8.kSideEffectType_HasSideEffect,
+            }, fast_getter, 0, 0, 0).?;
+        } else {
+            break :blk v8.v8__FunctionTemplate__New__Config(isolate, &.{
+                .callback = value.getter,
+                .signature = getter_signature,
+            }).?;
+        }
+    };
+
     // WebIDL: getter function's .name should be "get X"
     const getter_name_str = "get " ++ name;
     const getter_name_v8 = v8.v8__String__NewFromUtf8(isolate, getter_name_str.ptr, v8.kNormal, @intCast(getter_name_str.len));
