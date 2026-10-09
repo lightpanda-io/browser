@@ -70,14 +70,12 @@ pub fn asNode(self: *Option) *Node {
 }
 
 pub fn getValue(self: *Option, frame: *Frame) []const u8 {
-    // If value attribute exists, use that; otherwise use text content (stripped)
+    // If value attribute exists, use that; otherwise use the text
     if (self._value) |v| {
         return v;
     }
 
-    const node = self.asNode();
-    const text = node.getTextContentAlloc(frame.local_arena) catch return "";
-    return std.mem.trim(u8, text, &std.ascii.whitespace);
+    return self.strippedText(frame.local_arena);
 }
 
 pub fn setValue(self: *Option, value: []const u8, frame: *Frame) !void {
@@ -87,8 +85,24 @@ pub fn setValue(self: *Option, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getText(self: *const Option, frame: *Frame) []const u8 {
+    return self.strippedText(frame.call_arena);
+}
+
+// https://html.spec.whatwg.org/multipage/form-elements.html#dom-option-text
+fn strippedText(self: *const Option, allocator: std.mem.Allocator) []const u8 {
     const node: *Node = @constCast(self.asConstElement().asConstNode());
-    return node.getTextContentAlloc(frame.call_arena) catch "";
+    const content = node.getTextContentAlloc(allocator) catch return "";
+
+    // Strip and collapse ASCII whitespace.
+    var result: std.ArrayList(u8) = std.ArrayList(u8).initCapacity(allocator, content.len) catch return "";
+    var it = std.mem.tokenizeAny(u8, content, " \t\n\r\x0C");
+    while (it.next()) |word| {
+        if (result.items.len > 0) {
+            result.appendAssumeCapacity(' ');
+        }
+        result.appendSliceAssumeCapacity(word);
+    }
+    return result.items;
 }
 
 fn setText(self: *Option, value: []const u8, frame: *Frame) !void {
