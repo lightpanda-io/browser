@@ -139,14 +139,6 @@ pub fn callWithThisRethrow(self: *const Function, comptime T: type, this: anytyp
 // An exception is reported on the global (e.g. window.reportError, which also
 // dispatches the "error" event).
 pub fn callWithThisReport(self: *const Function, this: anytype, args: anytype) !void {
-    // Reporting can callback into Zig (e.g. getting a DOMExceptions' message).
-    // If we're at call_depth == 0, that call will reset call_arena which our
-    // caller might be using.
-    const ctx = self.local.ctx;
-    const call_depth = ctx.call_depth;
-    ctx.call_depth = call_depth + 1;
-    defer ctx.call_depth = call_depth;
-
     var try_catch: js.TryCatch = undefined;
     try_catch.init(self.local);
     defer try_catch.deinit();
@@ -156,7 +148,7 @@ pub fn callWithThisReport(self: *const Function, this: anytype, args: anytype) !
             return err;
         }
         const exc = try_catch.exceptionValue() orelse return;
-        try ctx.global.reportError(exc);
+        try self.local.ctx.global.reportError(exc);
     };
 }
 
