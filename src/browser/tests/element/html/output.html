@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<output id="out1" name="result">42</output>
+
+<script id="type">
+  testing.expectEqual('output', $('#out1').type);
+  testing.expectEqual('output', document.createElement('output').type);
+</script>
