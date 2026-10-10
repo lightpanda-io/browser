@@ -949,7 +949,30 @@ fn isLengthProperty(name: []const u8) bool {
     return length_properties.has(name);
 }
 
+// Box-model lengths whose initial computed value is zero. Border widths compute
+// to zero while border-style is its initial `none`.
+const zero_length_defaults = std.StaticStringMap(void).initComptime(.{
+    .{ "margin", {} },
+    .{ "margin-top", {} },
+    .{ "margin-right", {} },
+    .{ "margin-bottom", {} },
+    .{ "margin-left", {} },
+    .{ "padding", {} },
+    .{ "padding-top", {} },
+    .{ "padding-right", {} },
+    .{ "padding-bottom", {} },
+    .{ "padding-left", {} },
+    .{ "border-width", {} },
+    .{ "border-top-width", {} },
+    .{ "border-right-width", {} },
+    .{ "border-bottom-width", {} },
+    .{ "border-left-width", {} },
+});
+
 fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, name: String) []const u8 {
+    if (zero_length_defaults.has(name.str())) {
+        return "0px";
+    }
     switch (name.len) {
         5 => {
             if (name.eql(comptime .wrap("color"))) {
