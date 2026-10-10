@@ -69,7 +69,7 @@ pub fn init(arena: std.mem.Allocator, node: *Node, registry: *NodeRegistry, fram
 /// Walk the pruned tree with `visitor`: `visit(*Node, *NodeData) !bool`
 /// returns whether to descend into the children, `leave() !void` closes a
 /// visited node.
-fn visitAll(self: @This(), visitor: anytype) error{WriteFailed}!void {
+pub fn visitAll(self: @This(), visitor: anytype) error{WriteFailed}!void {
     var xpath_buffer: std.ArrayList(u8) = .empty;
     const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
         log.err(.app, "listener map failed", .{ .err = err });
@@ -97,13 +97,13 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
     return self.visitAll(&visitor);
 }
 
-const OptionData = struct {
+pub const OptionData = struct {
     value: []const u8,
     text: []const u8,
     selected: bool,
 };
 
-const NodeData = struct {
+pub const NodeData = struct {
     id: NodeRegistry.Id,
     axn: AXNode,
     role: []const u8,
