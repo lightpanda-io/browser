@@ -340,7 +340,7 @@ fn pseudoName(input: []const u8) []const u8 {
     return input[0..i];
 }
 
-fn inList(name: []const u8, comptime list: []const []const u8) bool {
+fn inList(name: []const u8, list: []const []const u8) bool {
     for (list) |entry| {
         if (std.ascii.eqlIgnoreCase(name, entry)) return true;
     }
