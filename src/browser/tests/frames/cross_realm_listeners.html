@@ -59,6 +59,27 @@
   });
 </script>
 
+<script id=dispatch_on_child_window>
+  testing.onload(() => {
+    const cw = $('#f1').contentWindow;
+
+    // The parent's dispatchEvent on the child's window: it dispatches in the
+    // child's frame, so the child's window.event is the event.
+    const e = new Event('wping');
+    let child_event = null;
+    let parent_event = null;
+    const listener = () => {
+      child_event = cw.event;
+      parent_event = window.event;
+    };
+    cw.addEventListener('wping', listener);
+    EventTarget.prototype.dispatchEvent.call(cw, e);
+    testing.expectEqual(true, child_event === e);
+    testing.expectEqual(undefined, parent_event);
+    cw.removeEventListener('wping', listener);
+  });
+</script>
+
 <script id=window_listeners_dropped_on_navigation type=module>
   const state = await testing.async();
 
