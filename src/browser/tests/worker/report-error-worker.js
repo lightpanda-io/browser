@@ -3,13 +3,14 @@
 const seen = [];
 let reentrant = 0;
 self.addEventListener('error', (e) => {
-  if (reentrant > 0) {
-    // Reached again from our own throw below: the guard failed.
+  const msg = e.error && e.error.message;
+  if (msg === 'again') {
     reentrant += 1;
-    if (reentrant < 5) throw new Error('again');
+    if (reentrant < 5) {
+      throw new Error('again');
+    }
     return;
   }
-  const msg = e.error && e.error.message;
   seen.push(msg);
   if (seen.length === 5) {
     // Deferred so a failed guard's re-reports land before we report.
