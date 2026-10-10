@@ -69,6 +69,34 @@
 }
 </script>
 
+<script id=attr_follows_adoption>
+{
+  const doc = new DOMParser().parseFromString('<div a=1 b=2></div>', 'text/html');
+  const div = doc.querySelector('div');
+  // Handed out before the element moves.
+  const a = div.getAttributeNode('a');
+  testing.expectEqual(doc, a.ownerDocument);
+
+  document.adoptNode(div);
+  testing.expectEqual(document, a.ownerDocument);
+  testing.expectEqual(document, div.getAttributeNode('b').ownerDocument);
+
+  // Through insertion too, and on descendants.
+  const other = new DOMParser().parseFromString('<p c=3><i d=4></i></p>', 'text/html');
+  const p = other.querySelector('p');
+  const d = other.querySelector('i').getAttributeNode('d');
+  testing.expectEqual(other, d.ownerDocument);
+  document.body.appendChild(p);
+  testing.expectEqual(document, d.ownerDocument);
+
+  // A removed Attr keeps its node document.
+  p.firstChild.removeAttributeNode(d);
+  other.adoptNode(p);
+  testing.expectEqual(document, d.ownerDocument);
+  testing.expectEqual(other, p.getAttributeNode('c').ownerDocument);
+}
+</script>
+
 <script id=iframe_document type=module>
 {
   const state = await testing.async();

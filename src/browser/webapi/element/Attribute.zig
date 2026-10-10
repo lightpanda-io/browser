@@ -310,9 +310,23 @@ pub const List = struct {
 
         const name = try self.put(attribute._name, attribute._value, element, frame);
         attribute._element = element;
+        attribute.asNode()._owner = element.asNode()._owner;
         const page = frame.page;
         try page.attribute_lookup.put(page.arena, .{ .list = self, .name = name.ptr }, attribute);
         return existing_attribute;
+    }
+
+    // An Attr's node document follows its element's: re-own the ones handed out
+    pub fn adopt(self: *const List, owner: u32, frame: *const Frame) void {
+        const lookup = &frame.page.attribute_lookup;
+        if (lookup.count() == 0) {
+            return;
+        }
+        for (self.entries()) |*entry| {
+            if (lookup.get(.{ .list = self, .name = entry._name_ptr })) |attr| {
+                attr.asNode()._owner = owner;
+            }
+        }
     }
 
     // called form our parser, names already lower-cased
