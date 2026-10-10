@@ -113,6 +113,11 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
                 return style_manager.customPropertyValue(element, wrapped) orelse "";
             }
 
+            // Resolved in pixels, as the synthetic text metrics measure it.
+            if (wrapped.eql(comptime .wrap("font-size"))) {
+                return frame.local_arena.print("{d}px", .{style_manager.computedFontSize(element)}) catch "16px";
+            }
+
             // Resolve inline `style=` declarations through the element's
             // parsed inline style, so computed values match `el.style`. One
             // an !important rule beats falls through to the values below.
@@ -949,29 +954,64 @@ fn isLengthProperty(name: []const u8) bool {
     return length_properties.has(name);
 }
 
-// Box-model lengths whose initial computed value is zero. Border widths compute
-// to zero while border-style is its initial `none`.
-const zero_length_defaults = std.StaticStringMap(void).initComptime(.{
-    .{ "margin", {} },
-    .{ "margin-top", {} },
-    .{ "margin-right", {} },
-    .{ "margin-bottom", {} },
-    .{ "margin-left", {} },
-    .{ "padding", {} },
-    .{ "padding-top", {} },
-    .{ "padding-right", {} },
-    .{ "padding-bottom", {} },
-    .{ "padding-left", {} },
-    .{ "border-width", {} },
-    .{ "border-top-width", {} },
-    .{ "border-right-width", {} },
-    .{ "border-bottom-width", {} },
-    .{ "border-left-width", {} },
+// Computed values of properties nothing declares: their CSS initial values, as
+// Chrome reports them for a plain element. Measuring code parses many of these
+// (parseFloat, keyword checks), so '' would read as NaN or as no value at all.
+// Border widths compute to zero while border-style is its initial `none`.
+const initial_values = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "margin", "0px" },
+    .{ "margin-top", "0px" },
+    .{ "margin-right", "0px" },
+    .{ "margin-bottom", "0px" },
+    .{ "margin-left", "0px" },
+    .{ "padding", "0px" },
+    .{ "padding-top", "0px" },
+    .{ "padding-right", "0px" },
+    .{ "padding-bottom", "0px" },
+    .{ "padding-left", "0px" },
+    .{ "border-width", "0px" },
+    .{ "border-top-width", "0px" },
+    .{ "border-right-width", "0px" },
+    .{ "border-bottom-width", "0px" },
+    .{ "border-left-width", "0px" },
+    .{ "border-style", "none" },
+    .{ "border-top-style", "none" },
+    .{ "border-right-style", "none" },
+    .{ "border-bottom-style", "none" },
+    .{ "border-left-style", "none" },
+    .{ "border-radius", "0px" },
+    .{ "border-top-left-radius", "0px" },
+    .{ "border-top-right-radius", "0px" },
+    .{ "border-bottom-right-radius", "0px" },
+    .{ "border-bottom-left-radius", "0px" },
+    .{ "font-weight", "400" },
+    .{ "line-height", "normal" },
+    .{ "letter-spacing", "normal" },
+    .{ "word-spacing", "0px" },
+    .{ "text-indent", "0px" },
+    .{ "position", "static" },
+    .{ "top", "auto" },
+    .{ "right", "auto" },
+    .{ "bottom", "auto" },
+    .{ "left", "auto" },
+    .{ "z-index", "auto" },
+    .{ "box-sizing", "content-box" },
+    .{ "min-width", "0px" },
+    .{ "min-height", "0px" },
+    .{ "max-width", "none" },
+    .{ "max-height", "none" },
+    .{ "flex-grow", "0" },
+    .{ "flex-shrink", "1" },
+    .{ "flex-basis", "auto" },
+    .{ "transform", "none" },
+    .{ "gap", "normal" },
+    .{ "row-gap", "normal" },
+    .{ "column-gap", "normal" },
 });
 
 fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, name: String) []const u8 {
-    if (zero_length_defaults.has(name.str())) {
-        return "0px";
+    if (initial_values.get(name.str())) |value| {
+        return value;
     }
     switch (name.len) {
         5 => {

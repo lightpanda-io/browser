@@ -287,6 +287,52 @@
 }
 </script>
 
+<script id="computedStyleInitialValues">
+{
+  const div = document.createElement('div');
+  document.body.appendChild(div);
+  const cs = window.getComputedStyle(div);
+  const expected = {
+    'font-weight': '400', 'line-height': 'normal', 'letter-spacing': 'normal',
+    'word-spacing': '0px', 'text-indent': '0px', 'position': 'static',
+    'top': 'auto', 'right': 'auto', 'bottom': 'auto', 'left': 'auto', 'z-index': 'auto',
+    'box-sizing': 'content-box', 'min-width': '0px', 'min-height': '0px',
+    'max-width': 'none', 'max-height': 'none', 'flex-grow': '0', 'flex-shrink': '1',
+    'flex-basis': 'auto', 'transform': 'none', 'gap': 'normal', 'column-gap': 'normal', 'border-radius': '0px',
+    'border-top-left-radius': '0px', 'border-bottom-right-radius': '0px',
+    'border-style': 'none', 'border-top-style': 'none', 'border-left-style': 'none',
+  };
+  for (const [name, value] of Object.entries(expected)) {
+    testing.expectEqual(value, cs.getPropertyValue(name));
+  }
+  testing.expectEqual('static', cs.position);
+  testing.expectEqual('content-box', cs.boxSizing);
+  testing.expectEqual('1', cs.flexShrink);
+  testing.expectEqual('', div.style.position);
+
+  // font-size resolves to pixels, inherited through inline styles.
+  testing.expectEqual('16px', cs.fontSize);
+  const outer = document.createElement('div');
+  outer.style.fontSize = '20px';
+  const inner = document.createElement('span');
+  const relative = document.createElement('span');
+  relative.style.fontSize = '1.5em';
+  outer.append(inner, relative);
+  document.body.appendChild(outer);
+  testing.expectEqual('20px', getComputedStyle(outer).fontSize);
+  testing.expectEqual('20px', getComputedStyle(inner).fontSize);
+  testing.expectEqual('30px', getComputedStyle(relative).fontSize);
+  testing.expectEqual('1.5em', relative.style.fontSize);
+
+  const positioned = document.createElement('div');
+  positioned.style.cssText = 'position: absolute; top: 4px';
+  document.body.appendChild(positioned);
+  testing.expectEqual('absolute', getComputedStyle(positioned).position);
+  testing.expectEqual('4px', getComputedStyle(positioned).top);
+  testing.expectEqual('auto', getComputedStyle(positioned).left);
+}
+</script>
+
 <script id="computedStyleInline">
 {
   const div = document.createElement('div');
@@ -298,7 +344,7 @@
   testing.expectEqual('700', cs.getPropertyValue('font-weight'));
   testing.expectEqual('rgb(1, 2, 3)', cs.getPropertyValue('color'));
   testing.expectEqual('rgb(1, 2, 3)', div.style.getPropertyValue('color'));
-  testing.expectEqual('', cs.getPropertyValue('letter-spacing'));
+  testing.expectEqual('normal', cs.getPropertyValue('letter-spacing'));
 
   const plainDiv = document.createElement('div');
   document.body.appendChild(plainDiv);
