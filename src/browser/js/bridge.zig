@@ -241,6 +241,8 @@ pub const Function = struct {
     }
 };
 
+const TaggedOpaque = @import("TaggedOpaque.zig");
+
 pub const Accessor = struct {
     static: bool = false,
     deletable: bool = true,
@@ -249,7 +251,13 @@ pub const Accessor = struct {
     exposed: Caller.Function.Opts.Exposed = .both,
     cache: ?Caller.Function.Opts.Caching = null,
     getter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
+    fast_getter: ?*const v8.CFunction = null,
     setter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
+
+    // Can only take 1 arg.
+    const fast_method_args = [_]v8.CTypeInfo{
+        .{ .type = v8.kCTypeInfoType_V8Value },
+    };
 
     fn init(comptime T: type, comptime getter: anytype, comptime setter: anytype, comptime opts: Caller.Function.Opts) Accessor {
         var accessor = Accessor{
@@ -273,6 +281,58 @@ pub const Accessor = struct {
                     Caller.Function.call(T, handle.?, getter, getter_opts);
                 }
             }.wrap;
+
+            const can_be_fast = blk: {
+                switch (@typeInfo(@TypeOf(getter))) {
+                    .@"fn" => |info| {
+                        const param_types = info.param_types;
+                        break :blk param_types.len == 1 and
+                            opts.static == false and
+                            opts.cache == null and
+                            opts.noop == false and
+                            opts.embedded_receiver == false;
+                    },
+                    .null => false,
+                    else => unreachable,
+                }
+            };
+
+            fast_getter: {
+                if (comptime can_be_fast) {
+                    const R = @typeInfo(@TypeOf(getter)).@"fn".return_type.?;
+
+                    const host_to_v8_type = switch (comptime R) {
+                        void => v8.kCTypeInfoType_Void,
+                        bool => v8.kCTypeInfoType_Bool,
+                        u8 => break :fast_getter, // u8 return crashes TurboFan.
+                        i32 => v8.kCTypeInfoType_Int32,
+                        u32 => v8.kCTypeInfoType_Uint32,
+                        i64 => v8.kCTypeInfoType_Int64,
+                        u64 => v8.kCTypeInfoType_Uint64,
+                        f32 => v8.kCTypeInfoType_Float32,
+                        f64 => v8.kCTypeInfoType_Float64,
+                        else => break :fast_getter,
+                    };
+
+                    const fast_fn = struct {
+                        fn wrap(handle: ?*const v8.Value) callconv(.c) R {
+                            const self = TaggedOpaque.fromJS(*T, handle.?) catch unreachable;
+                            return @call(.auto, getter, .{self});
+                        }
+                    }.wrap;
+
+                    const fast_method_info: *const v8.CFunctionInfo = &.{
+                        .return_info = .{ .type = host_to_v8_type },
+                        .arg_count = fast_method_args.len,
+                        .arg_info = &fast_method_args,
+                    };
+
+                    accessor.fast_getter = &.{
+                        .address = @ptrCast(&fast_fn),
+                        .type_info = fast_method_info,
+                    };
+                }
+            }
         }
 
         if (@typeInfo(@TypeOf(setter)) != .null) {
