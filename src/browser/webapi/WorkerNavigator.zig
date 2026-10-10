@@ -23,6 +23,7 @@ const Navigator = @import("Navigator.zig");
 const Permissions = @import("Permissions.zig");
 const StorageManager = @import("StorageManager.zig");
 const NavigatorUAData = @import("NavigatorUAData.zig");
+const LockManager = @import("LockManager.zig");
 
 const WorkerNavigator = @This();
 
@@ -39,6 +40,7 @@ _pad: bool = false,
 _permissions: Permissions = .{},
 _storage: StorageManager = .{},
 _ua_data: NavigatorUAData = .{},
+_locks: ?*LockManager = null,
 
 pub const init: WorkerNavigator = .{};
 
@@ -106,6 +108,15 @@ fn getUserAgentData(self: *WorkerNavigator) *NavigatorUAData {
     return &self._ua_data;
 }
 
+fn getLocks(self: *WorkerNavigator, exec: *Execution) !*LockManager {
+    if (self._locks) |l| {
+        return l;
+    }
+    const l = try exec._factory.create(LockManager{});
+    self._locks = l;
+    return l;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(WorkerNavigator);
 
@@ -132,4 +143,5 @@ pub const JsApi = struct {
     pub const permissions = bridge.accessor(WorkerNavigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(WorkerNavigator.getStorage, null, .{});
     pub const userAgentData = bridge.accessor(WorkerNavigator.getUserAgentData, null, .{});
+    pub const locks = bridge.accessor(WorkerNavigator.getLocks, null, .{});
 };
