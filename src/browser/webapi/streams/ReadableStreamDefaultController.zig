@@ -30,24 +30,14 @@ const Execution = js.Execution;
 const ReadableStreamDefaultController = @This();
 
 pub const Chunk = union(enum) {
-    // the order matters, sorry.
     uint8array: js.TypedArray(u8),
     string: []const u8,
-    js_value: js.Value.Global,
-
-    pub fn dupe(self: Chunk, allocator: std.mem.Allocator) !Chunk {
-        return switch (self) {
-            .string => |str| .{ .string = try allocator.dupe(u8, str) },
-            .uint8array => |arr| .{ .uint8array = try arr.dupe(allocator) },
-            .js_value => |val| .{ .js_value = val },
-        };
-    }
 };
 
 _stream: *ReadableStream,
 _execution: *const Execution,
 _arena: std.mem.Allocator,
-_queue: std.ArrayList(Chunk),
+_queue: std.ArrayList(js.Value.Global),
 _pending_reads: std.ArrayList(js.PromiseResolver.Global),
 _high_water_mark: u32,
 
@@ -77,8 +67,11 @@ pub fn enqueueNoSideEffects(self: *ReadableStreamDefaultController, chunk: Chunk
     if (self._stream._state != .readable) {
         return error.StreamNotReadable;
     }
-    const chunk_copy = try chunk.dupe(self._arena);
-    return self._queue.append(self._arena, chunk_copy);
+
+    var ls: js.Local.Scope = undefined;
+    self._execution.js.localScope(&ls);
+    defer ls.deinit();
+    try self.queueValue(try chunkToJs(&ls.local, chunk));
 }
 
 /// Resolves pending reads with queued chunks. Pairs with `enqueueNoSideEffects`.
@@ -98,15 +91,14 @@ pub fn fulfillPendingReads(self: *ReadableStreamDefaultController) void {
     while (self._pending_reads.items.len > 0 and self._queue.items.len > 0) {
         const resolver = self._pending_reads.orderedRemove(0);
         const chunk = self._queue.orderedRemove(0);
-        const result = ReadableStreamDefaultReader.ReadResult{
-            .done = false,
-            .value = .fromChunk(chunk),
-        };
 
         var ls: js.Local.Scope = undefined;
         exec.js.localScope(&ls);
         defer ls.deinit();
-        ls.toLocal(resolver).resolve("stream fulfill pending read", result);
+
+        const value = ls.toLocal(chunk);
+        chunk.release();
+        resolveRead(&ls.local, resolver, value, "stream fulfill pending read");
     }
 }
 
@@ -115,32 +107,10 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
         return error.StreamNotReadable;
     }
 
-    const exec = self._execution;
-    if (self._pending_reads.items.len == 0) {
-        const chunk_copy = try chunk.dupe(self._arena);
-        return self._queue.append(self._arena, chunk_copy);
-    }
-
-    // I know, this is ouch! But we expect to have very few (if any)
-    // pending reads.
-    const resolver = self._pending_reads.orderedRemove(0);
-    const result = ReadableStreamDefaultReader.ReadResult{
-        .done = false,
-        .value = .fromChunk(chunk),
-    };
-
-    if (comptime lp.IS_DEBUG) {
-        if (exec.js.local == null) {
-            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.enqueue", .url = exec.url.* });
-            std.debug.assert(exec.js.local != null);
-        }
-    }
-
     var ls: js.Local.Scope = undefined;
-    exec.js.localScope(&ls);
+    self._execution.js.localScope(&ls);
     defer ls.deinit();
-
-    ls.toLocal(resolver).resolve("stream enqueue", result);
+    return self.enqueueLocal(&ls.local, try chunkToJs(&ls.local, chunk), "stream enqueue");
 }
 
 /// Enqueue a raw JS value, preserving its type (number, bool, object, etc.).
@@ -150,32 +120,57 @@ pub fn enqueueValue(self: *ReadableStreamDefaultController, value: js.Value) !vo
         return error.StreamNotReadable;
     }
 
-    const exec = self._execution;
+    var ls: js.Local.Scope = undefined;
+    self._execution.js.localScope(&ls);
+    defer ls.deinit();
+    return self.enqueueLocal(&ls.local, value, "stream enqueue value");
+}
+
+fn enqueueLocal(self: *ReadableStreamDefaultController, local: *const js.Local, value: js.Value, comptime source: []const u8) !void {
     if (self._pending_reads.items.len == 0) {
-        const persisted = try value.persist();
-        try self._queue.append(self._arena, .{ .js_value = persisted });
-        return;
+        return self.queueValue(value);
     }
 
-    const resolver = self._pending_reads.orderedRemove(0);
-    const persisted = try value.persist();
-    const result = ReadableStreamDefaultReader.ReadResult{
-        .done = false,
-        .value = .{ .js_value = persisted },
-    };
-
     if (comptime lp.IS_DEBUG) {
+        const exec = self._execution;
         if (exec.js.local == null) {
-            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.enqueueValue", .url = exec.url.* });
+            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController." ++ source, .url = exec.url.* });
             std.debug.assert(exec.js.local != null);
         }
     }
 
-    var ls: js.Local.Scope = undefined;
-    exec.js.localScope(&ls);
-    defer ls.deinit();
+    // I know, this is ouch! But we expect to have very few (if any)
+    // pending reads.
+    const resolver = self._pending_reads.orderedRemove(0);
+    resolveRead(local, resolver, value, source);
+}
 
-    ls.toLocal(resolver).resolve("stream enqueue value", result);
+fn queueValue(self: *ReadableStreamDefaultController, value: js.Value) !void {
+    const persisted = try value.persist();
+    errdefer persisted.release();
+    try self._queue.append(self._arena, persisted);
+}
+
+fn chunkToJs(local: *const js.Local, chunk: Chunk) !js.Value {
+    return switch (chunk) {
+        inline else => |c| local.zigValueToJs(c, .{}),
+    };
+}
+
+fn resolveRead(local: *const js.Local, resolver: js.PromiseResolver.Global, value: js.Value, comptime source: []const u8) void {
+    defer resolver.release();
+    const result = ReadableStreamDefaultReader.ReadResult{
+        .done = false,
+        .value = .{ .value = value },
+    };
+    local.toLocal(resolver).resolve(source, result);
+}
+
+pub fn clearQueue(self: *ReadableStreamDefaultController) void {
+    for (self._queue.items) |chunk| {
+        chunk.release();
+    }
+    self._queue.clearRetainingCapacity();
 }
 
 pub fn close(self: *ReadableStreamDefaultController) !void {
@@ -204,6 +199,7 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
         exec.js.localScope(&ls);
         defer ls.deinit();
         ls.toLocal(resolver).resolve("stream close", result);
+        resolver.release();
     }
 
     self._pending_reads.clearRetainingCapacity();
@@ -226,6 +222,7 @@ fn fail(self: *ReadableStreamDefaultController, err: []const u8, type_error: boo
 
     self._stream._state = .errored;
     self._stream._stored_error = try self._arena.dupe(u8, err);
+    self.clearQueue();
 
     // Reject all pending reads
     for (self._pending_reads.items) |resolver| {
@@ -235,11 +232,13 @@ fn fail(self: *ReadableStreamDefaultController, err: []const u8, type_error: boo
         } else {
             local_resolver.reject("stream error", err);
         }
+        resolver.release();
     }
     self._pending_reads.clearRetainingCapacity();
 }
 
-pub fn dequeue(self: *ReadableStreamDefaultController) ?Chunk {
+/// The caller owns the returned global and must release it.
+pub fn dequeue(self: *ReadableStreamDefaultController) ?js.Value.Global {
     if (self._queue.items.len == 0) {
         return null;
     }
@@ -277,3 +276,53 @@ pub const JsApi = struct {
     pub const @"error" = bridge.function(ReadableStreamDefaultController.doError, .{});
     pub const desiredSize = bridge.accessor(ReadableStreamDefaultController.getDesiredSize, null, .{});
 };
+
+const testing = @import("../../../testing.zig");
+test "ReadableStreamDefaultController: chunks and pending reads release their globals" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const tracker = &frame.js.page.globals;
+    const base = tracker.list.items.len;
+
+    _ = try ls.local.exec(
+        \\{
+        \\  let c;
+        \\  const r = new ReadableStream({ start(ctrl) { c = ctrl; } }).getReader();
+        \\  // queued, then read
+        \\  for (let i = 0; i < 50; i++) c.enqueue(new Uint8Array(1024));
+        \\  for (let i = 0; i < 50; i++) r.read();
+        \\  // pending, then enqueued
+        \\  for (let i = 0; i < 50; i++) r.read();
+        \\  for (let i = 0; i < 50; i++) c.enqueue('x');
+        \\  // pending, then closed
+        \\  r.read();
+        \\  c.close();
+        \\}
+        \\{
+        \\  let c;
+        \\  const s = new ReadableStream({ start(ctrl) { c = ctrl; } });
+        \\  for (let i = 0; i < 50; i++) c.enqueue(i);
+        \\  s.cancel();
+        \\}
+        \\{
+        \\  let c;
+        \\  new ReadableStream({ start(ctrl) { c = ctrl; } }).getReader().read();
+        \\  c.error('boom');
+        \\}
+        \\{
+        \\  let c;
+        \\  new ReadableStream({ start(ctrl) { c = ctrl; } });
+        \\  for (let i = 0; i < 50; i++) c.enqueue(i);
+        \\  c.error('boom');
+        \\}
+        \\new Response('native chunk').body.getReader().read();
+    , null);
+
+    // cancel() keeps its own resolver so a repeated cancel returns the same promise.
+    try testing.expectEqual(base + 1, tracker.list.items.len);
+}

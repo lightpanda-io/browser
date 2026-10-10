@@ -100,7 +100,7 @@ pub fn Deflate(comptime mode: enum(u1) { compress, decompress }) type {
             return self.exec.js.typeError(message);
         }
 
-        const FeedError = error{ StreamNotReadable, OutOfMemory, HasJunkData, InvalidData };
+        const FeedError = error{ StreamNotReadable, OutOfMemory, CreateObjectFailure, HasJunkData, InvalidData };
 
         fn feed(
             self: *Deflate(mode),
