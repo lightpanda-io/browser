@@ -458,6 +458,40 @@
 }
 </script>
 
+<script id=emptyNameSkipped>
+{
+  // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#constructing-the-form-data-set
+  // A control whose name attribute is the empty string is skipped, the same
+  // as one without a name attribute.
+  const form = document.createElement('form');
+
+  const named = document.createElement('input');
+  named.name = 'q';
+  named.value = 'lightpanda';
+  form.appendChild(named);
+
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.setAttribute('name', '');
+  hidden.value = 'nope-hidden';
+  form.appendChild(hidden);
+
+  const text = document.createElement('input');
+  text.setAttribute('name', '');
+  text.value = 'nope-text';
+  form.appendChild(text);
+
+  const ta = document.createElement('textarea');
+  ta.setAttribute('name', '');
+  ta.value = 'nope-textarea';
+  form.appendChild(ta);
+
+  const fd = new FormData(form);
+  testing.expectEqual([['q', 'lightpanda']], Array.from(fd.entries()));
+  testing.expectEqual(false, fd.has(''));
+}
+</script>
+
 <script id=multipleImagesWithSameName>
 {
   // Test that when multiple images share a name, only submitter's coordinates are included

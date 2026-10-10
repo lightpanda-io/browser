@@ -22,3 +22,20 @@
   testing.expectEqual('x', $('#d2').getAttribute('part'));
 }
 </script>
+
+<script id=part_assignment>
+(function () {
+  'use strict';
+  // [PutForwards=value]: assigning sets the attribute, even in strict mode.
+  const div = document.createElement('div');
+  const part = div.part;
+  div.part = 'container wrapper';
+  testing.expectEqual('container wrapper', div.getAttribute('part'));
+  testing.expectEqual(part, div.part);
+  testing.expectEqual(2, div.part.length);
+
+  div.part = '';
+  testing.expectEqual('', div.getAttribute('part'));
+  testing.expectEqual(0, div.part.length);
+})();
+</script>

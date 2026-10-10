@@ -13,7 +13,7 @@ inputs:
   zig-v8:
     description: 'zig-v8 release tag the prebuilt lib came from'
     required: false
-    default: 'v0.5.8'
+    default: 'v0.5.9'
 
 runs:
   using: "composite"
@@ -44,4 +44,4 @@ runs:
     - name: v8 snapshot
       shell: bash
       if: hashFiles('src/snapshot.bin') == ''
-      run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
+      run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast snapshot_creator -- src/snapshot.bin

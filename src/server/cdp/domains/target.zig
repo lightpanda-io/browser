@@ -71,22 +71,32 @@ fn getTargets(cmd: *CDP.Command) !void {
         }, .{});
     };
 
-    const target_id = &(bc.target_id orelse {
+    const info = pageTargetInfo(bc) orelse {
         return cmd.sendResult(.{
             .targetInfos = [_]TargetInfo{},
         }, .{});
-    });
+    };
+    return cmd.sendResult(.{ .targetInfos = [_]TargetInfo{info} }, .{});
+}
 
-    return cmd.sendResult(.{
-        .targetInfos = [_]TargetInfo{.{
-            .targetId = target_id,
-            .type = "page",
-            .title = bc.getTitle() orelse "",
-            .url = bc.getURL() orelse "about:blank",
-            .attached = true,
-            .canAccessOpener = false,
-        }},
-    }, .{});
+fn pageTargetInfo(bc: *const CDP.BrowserContext) ?TargetInfo {
+    const target_id = if (bc.target_id) |*tid| tid else return null;
+    return .{
+        .targetId = target_id,
+        .title = bc.getTitle() orelse "",
+        .url = bc.getURL() orelse "about:blank",
+        .browserContextId = bc.id,
+    };
+}
+
+/// Clients such as Browser Use track a tab's URL and title only through this
+/// event, as Chrome sends it whenever either changes.
+pub fn sendTargetInfoChanged(bc: *const CDP.BrowserContext, frame_id: u32) !void {
+    if (!bc.cdp.target_discover) return;
+    const main = bc.mainFrame() orelse return;
+    if (main._frame_id != frame_id) return;
+    const info = pageTargetInfo(bc) orelse return;
+    try bc.cdp.sendEvent("Target.targetInfoChanged", .{ .targetInfo = info }, .{});
 }
 
 fn getBrowserContexts(cmd: *CDP.Command) !void {
@@ -195,7 +205,7 @@ fn createTarget(cmd: *CDP.Command) !void {
         frame.js.localScope(&ls);
         defer ls.deinit();
 
-        const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
+        const aux_data = try cmd.arena.print("{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
         bc.inspector().contextCreated(
             &ls.local,
             "",
@@ -228,7 +238,7 @@ fn createTarget(cmd: *CDP.Command) !void {
         try doAttachtoTarget(cmd, target_id);
     }
 
-    if (!std.mem.eql(u8, "about:blank", params.url)) {
+    if (URL.isAboutBlank(params.url) == false) {
         const encoded_url = try URL.resolveNavigation(frame.call_arena, params.url, .{});
         try frame.navigate(
             encoded_url,
@@ -331,21 +341,11 @@ fn getTargetInfo(cmd: *CDP.Command) !void {
 
     if (params.targetId) |param_target_id| {
         const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-        const target_id = &(bc.target_id orelse return error.TargetNotLoaded);
-        if (std.mem.eql(u8, target_id, param_target_id) == false) {
+        const info = pageTargetInfo(bc) orelse return error.TargetNotLoaded;
+        if (std.mem.eql(u8, info.targetId, param_target_id) == false) {
             return error.UnknownTargetId;
         }
-
-        return cmd.sendResult(.{
-            .targetInfo = TargetInfo{
-                .targetId = target_id,
-                .type = "page",
-                .title = bc.getTitle() orelse "",
-                .url = bc.getURL() orelse "about:blank",
-                .attached = true,
-                .canAccessOpener = false,
-            },
-        }, .{});
+        return cmd.sendResult(.{ .targetInfo = info }, .{});
     }
 
     return cmd.sendResult(.{
@@ -415,9 +415,33 @@ fn detachFromTarget(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-// TODO: noop method
 fn setDiscoverTargets(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        discover: bool,
+        filter: ?[]const TargetFilter = null,
+    })) orelse return error.InvalidParams;
+
+    cmd.cdp.target_discover = params.discover and filterIncludesPage(params.filter);
     return cmd.sendResult(null, .{});
+}
+
+/// One entry of Target.setAutoAttach's `filter`: `type`
+/// selects the target type it matches (absent matches any
+/// type), `exclude` turns the entry into an exclusion.
+const TargetFilter = struct {
+    type: ?[]const u8 = null,
+    exclude: bool = false,
+};
+
+/// Does the client's target filter include page targets?
+/// Entries are checked in order: the first entry matching the
+/// target type decides; an absent type matches any type.
+fn filterIncludesPage(filter: ?[]const TargetFilter) bool {
+    for (filter orelse return true) |f| {
+        const t = f.type orelse return !f.exclude;
+        if (std.mem.eql(u8, t, "page")) return !f.exclude;
+    }
+    return false;
 }
 
 fn setAutoAttach(cmd: *CDP.Command) !void {
@@ -425,7 +449,7 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
         autoAttach: bool,
         waitForDebuggerOnStart: bool,
         flatten: bool = true,
-        // filter: ?[]TargetFilter = null,
+        filter: ?[]const TargetFilter = null,
     })) orelse return error.InvalidParams;
 
     // set a flag to send Target.attachedToTarget events
@@ -467,16 +491,22 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     // there.
     // This hack requires the main cdp dispatch handler to special case
     // messages from this "STARTUP" session.
-    try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
-        .sessionId = "STARTUP",
-        .targetInfo = TargetInfo{
-            .type = "page",
-            .targetId = "TID-STARTUP",
-            .title = "",
-            .url = "about:blank",
-            .browserContextId = "BID-STARTUP",
-        },
-    }, .{});
+    //
+    // A client that excluded page targets from auto-attach
+    // (puppeteer does) must not hear about this placeholder:
+    // navigating it would land on the page-less STARTUP session.
+    if (filterIncludesPage(params.filter)) {
+        try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
+            .sessionId = "STARTUP",
+            .targetInfo = TargetInfo{
+                .type = "page",
+                .targetId = "TID-STARTUP",
+                .title = "",
+                .url = "about:blank",
+                .browserContextId = "BID-STARTUP",
+            },
+        }, .{});
+    }
 
     try cmd.sendResult(null, .{});
 }
@@ -1127,4 +1157,79 @@ test "cdp.target: setAutoAttach false sends detachedFromTarget" {
     try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = session_id }, .{});
     try testing.expectEqual(null, bc.session_id);
     try ctx.expectSentResult(null, .{ .id = 12 });
+}
+
+test "cdp.target: targetInfoChanged reports the page's URL and title" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.setDiscoverTargets", .params = .{ .discover = true } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-TIC", .url = "cdp/accname.html", .target_id = "FID-000000000I".* });
+    try ctx.expectSentEvent("Target.targetInfoChanged", .{ .targetInfo = .{
+        .targetId = &bc.target_id.?,
+        .url = bc.getURL().?,
+        .title = "AccName Fixture",
+        .browserContextId = "BID-TIC",
+    } }, .{});
+}
+
+test "cdp.target: targetInfoChanged requires setDiscoverTargets" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .url = "cdp/accname.html" });
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
+        const method = msg.object.get("method") orelse continue;
+        try testing.expect(!std.mem.eql(u8, method.string, "Target.targetInfoChanged"));
+    }
+    try testing.expect(i > 0);
+}
+
+test "cdp.target: setAutoAttach with page-exclude filter sends no attachedToTarget" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // Puppeteer's filter: exclude page targets, include the rest.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Target.setAutoAttach",
+        .params = .{
+            .autoAttach = true,
+            .waitForDebuggerOnStart = false,
+            .filter = [_]TargetFilter{
+                .{ .type = "page", .exclude = true },
+                .{},
+            },
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    // The STARTUP placeholder is a page target: with pages
+    // excluded, only the result may be sent.
+    try ctx.expectSentCount(1);
+}
+
+test "cdp.target: setAutoAttach without filter still sends startup attachedToTarget" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Target.setAutoAttach",
+        .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false },
+    });
+    try ctx.expectSentEvent("Target.attachedToTarget", .{
+        .sessionId = "STARTUP",
+        .targetInfo = .{
+            .targetId = "TID-STARTUP",
+            .type = "page",
+            .title = "",
+            .url = "about:blank",
+            .browserContextId = "BID-STARTUP",
+        },
+    }, .{ .index = 0 });
+    try ctx.expectSentResult(null, .{ .id = 1, .index = 1 });
+    try ctx.expectSentCount(2);
 }

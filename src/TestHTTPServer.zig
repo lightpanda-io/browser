@@ -54,7 +54,7 @@ pub fn stop(self: *TestHTTPServer) void {
 }
 
 pub fn run(self: *TestHTTPServer, wg: *lp.WaitGroup) !void {
-    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 9582);
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
 
     self.listener = try address.listen(lp.io, .{ .reuse_address = true });
     var listener = &self.listener.?;
@@ -113,7 +113,7 @@ pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
     var url_buf: [1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&url_buf);
     var unescaped_file_path = try URL.unescape(fba.allocator(), file_path);
-    if (std.mem.indexOfScalarPos(u8, unescaped_file_path, 0, '?')) |pos| {
+    if (std.mem.findScalarPos(u8, unescaped_file_path, 0, '?')) |pos| {
         unescaped_file_path = unescaped_file_path[0..pos];
     }
     const file = std.Io.Dir.cwd().openFile(lp.io, unescaped_file_path, .{}) catch |err| switch (err) {
@@ -156,6 +156,10 @@ fn getContentType(file_path: []const u8) []const u8 {
 
     if (std.mem.endsWith(u8, file_path, ".htm")) {
         return "text/html";
+    }
+
+    if (std.mem.endsWith(u8, file_path, ".txt")) {
+        return "text/plain";
     }
 
     if (std.mem.endsWith(u8, file_path, ".xml")) {

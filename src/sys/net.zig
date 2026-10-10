@@ -25,7 +25,7 @@ const builtin = @import("builtin");
 
 const c = std.c;
 const posix = std.posix;
-const native_os = builtin.os.tag;
+const native_os = builtin.target.os.tag;
 
 pub const socket_t = posix.socket_t;
 pub const IpAddress = std.Io.net.IpAddress;
@@ -98,7 +98,7 @@ pub fn socket(domain: u32, socket_type: u32, protocol: u32) !socket_t {
     // SOCK.NONBLOCK/CLOEXEC are Zig-invented shim values); strip them and
     // apply via fcntl instead. Linux/FreeBSD accept them natively.
     const flag_bits = posix.SOCK.NONBLOCK | posix.SOCK.CLOEXEC;
-    const extra: u32 = if (comptime builtin.os.tag.isDarwin()) socket_type & flag_bits else 0;
+    const extra: u32 = if (comptime builtin.target.os.tag.isDarwin()) socket_type & flag_bits else 0;
     const rc = c.socket(domain, socket_type & ~extra, protocol);
     if (rc < 0) {
         return errnoError(c.errno(rc));
@@ -178,6 +178,13 @@ pub fn getsockname(sock: socket_t, addr: *posix.sockaddr, len: *posix.socklen_t)
     if (rc != 0) {
         return errnoError(c.errno(rc));
     }
+}
+
+pub fn boundAddress(sock: socket_t) !IpAddress {
+    var bound: posix.sockaddr.storage = undefined;
+    var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
+    try getsockname(sock, @ptrCast(&bound), &bound_len);
+    return addressFromSockaddr(@ptrCast(&bound));
 }
 
 pub fn connect(addr: *const IpAddress) !socket_t {

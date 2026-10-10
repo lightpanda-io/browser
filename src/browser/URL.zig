@@ -47,7 +47,7 @@ pub fn resolve(
     }
     defer href.deinit();
 
-    return allocator.dupeZ(u8, href.slice());
+    return allocator.dupeSentinel(u8, href.slice(), 0);
 }
 
 /// Resolves a user-provided "address bar" URL the way curl does. Bare host like
@@ -55,7 +55,7 @@ pub fn resolve(
 pub fn resolveNavigation(allocator: Allocator, url: []const u8, options: ResolveOptions) ![:0]const u8 {
     return resolve(allocator, "", url, options) catch |err| switch (err) {
         error.TypeError => {
-            const with_scheme = try std.fmt.allocPrintSentinel(allocator, "http://{s}", .{url}, 0);
+            const with_scheme = try allocator.printSentinel("http://{s}", .{url}, 0);
             return resolve(allocator, "", with_scheme, options);
         },
         else => return err,
@@ -138,6 +138,10 @@ fn shouldPercentEncode(c: u8, comptime encode_set: EncodeSet) bool {
     };
 }
 
+pub fn isAboutBlank(url: []const u8) bool {
+    return std.mem.eql(u8, url, "about:blank");
+}
+
 pub fn isCompleteHTTPUrl(url: []const u8) bool {
     if (url.len < 3) { // Minimum is "x://"
         return false;
@@ -154,7 +158,7 @@ pub fn isCompleteHTTPUrl(url: []const u8) bool {
     }
 
     // Check if there's a scheme (protocol) ending with ://
-    const colon_pos = std.mem.indexOfScalar(u8, url, ':') orelse return false;
+    const colon_pos = std.mem.findScalar(u8, url, ':') orelse return false;
 
     // Check if it's followed by //
     if (colon_pos + 2 >= url.len or url[colon_pos + 1] != '/' or url[colon_pos + 2] != '/') {
@@ -183,30 +187,30 @@ pub fn isCompleteHTTPUrl(url: []const u8) bool {
 
 pub fn getUsername(raw: [:0]const u8) []const u8 {
     const user_info = getUserInfo(raw) orelse return "";
-    const pos = std.mem.indexOfScalarPos(u8, user_info, 0, ':') orelse return user_info;
+    const pos = std.mem.findScalarPos(u8, user_info, 0, ':') orelse return user_info;
     return user_info[0..pos];
 }
 
 pub fn getPassword(raw: [:0]const u8) []const u8 {
     const user_info = getUserInfo(raw) orelse return "";
-    const pos = std.mem.indexOfScalarPos(u8, user_info, 0, ':') orelse return "";
+    const pos = std.mem.findScalarPos(u8, user_info, 0, ':') orelse return "";
     return user_info[pos + 1 ..];
 }
 
 pub fn getPathname(raw: [:0]const u8) []const u8 {
-    const protocol_end = std.mem.indexOf(u8, raw, "://");
+    const protocol_end = std.mem.find(u8, raw, "://");
 
     // Handle scheme:path URLs like about:blank (no "://")
     if (protocol_end == null) {
-        const colon_pos = std.mem.indexOfScalar(u8, raw, ':') orelse return "";
+        const colon_pos = std.mem.findScalar(u8, raw, ':') orelse return "";
         const path = raw[colon_pos + 1 ..];
-        const query_or_hash = std.mem.indexOfAny(u8, path, "?#") orelse path.len;
+        const query_or_hash = std.mem.findAny(u8, path, "?#") orelse path.len;
         return path[0..query_or_hash];
     }
 
-    const path_start = std.mem.indexOfScalarPos(u8, raw, protocol_end.? + 3, '/') orelse raw.len;
+    const path_start = std.mem.findScalarPos(u8, raw, protocol_end.? + 3, '/') orelse raw.len;
 
-    const query_or_hash_start = std.mem.indexOfAnyPos(u8, raw, path_start, "?#") orelse raw.len;
+    const query_or_hash_start = std.mem.findAnyPos(u8, raw, path_start, "?#") orelse raw.len;
 
     if (path_start >= query_or_hash_start) {
         return "/";
@@ -216,7 +220,7 @@ pub fn getPathname(raw: [:0]const u8) []const u8 {
 }
 
 pub fn getProtocol(raw: []const u8) []const u8 {
-    const pos = std.mem.indexOfScalarPos(u8, raw, 0, ':') orelse return "";
+    const pos = std.mem.findScalarPos(u8, raw, 0, ':') orelse return "";
     return raw[0 .. pos + 1];
 }
 
@@ -241,7 +245,7 @@ pub fn isLoopbackHost(hostname: []const u8) bool {
     const address = std.Io.net.IpAddress.parseLiteral(host) catch return false;
     return switch (address) {
         .ip4 => |ip4| ip4.bytes[0] == 127,
-        .ip6 => |ip6| std.mem.eql(u8, &ip6.bytes, &([_]u8{0} ** 15 ++ [_]u8{1})),
+        .ip6 => |ip6| std.mem.eql(u8, &ip6.bytes, &(@as([15]u8, @splat(0)) ++ [_]u8{1})),
     };
 }
 
@@ -275,7 +279,7 @@ pub fn getPort(raw: []const u8) []const u8 {
 fn findPortSeparator(host: []const u8) ?usize {
     if (host.len > 0 and host[0] == '[') {
         // IPv6: find closing bracket, port separator must be after it
-        const bracket_end = std.mem.indexOfScalar(u8, host, ']') orelse return null;
+        const bracket_end = std.mem.findScalar(u8, host, ']') orelse return null;
         if (bracket_end + 1 < host.len and host[bracket_end + 1] == ':') {
             return bracket_end + 1;
         }
@@ -283,7 +287,7 @@ fn findPortSeparator(host: []const u8) ?usize {
     }
 
     // Regular host: find last colon and verify it's followed by digits
-    const pos = std.mem.lastIndexOfScalar(u8, host, ':') orelse return null;
+    const pos = std.mem.findScalarLast(u8, host, ':') orelse return null;
     if (pos + 1 >= host.len) return null;
 
     for (host[pos + 1 ..]) |c| {
@@ -293,10 +297,10 @@ fn findPortSeparator(host: []const u8) ?usize {
 }
 
 pub fn getSearch(raw: [:0]const u8) []const u8 {
-    const pos = std.mem.indexOfScalarPos(u8, raw, 0, '?') orelse return "";
+    const pos = std.mem.findScalarPos(u8, raw, 0, '?') orelse return "";
     const query_part = raw[pos..];
 
-    if (std.mem.indexOfScalarPos(u8, query_part, 0, '#')) |fragment_start| {
+    if (std.mem.findScalarPos(u8, query_part, 0, '#')) |fragment_start| {
         return query_part[0..fragment_start];
     }
 
@@ -304,12 +308,12 @@ pub fn getSearch(raw: [:0]const u8) []const u8 {
 }
 
 pub fn getHash(raw: [:0]const u8) []const u8 {
-    const start = std.mem.indexOfScalarPos(u8, raw, 0, '#') orelse return "";
+    const start = std.mem.findScalarPos(u8, raw, 0, '#') orelse return "";
     return raw[start..];
 }
 
 pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
-    const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return null;
+    const scheme_end = std.mem.find(u8, raw, "://") orelse return null;
 
     // Only HTTP and HTTPS schemes have origins
     const protocol = raw[0 .. scheme_end + 1];
@@ -323,7 +327,7 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
 
     // Check for port in the host:port section
     const host_part = auth.getHost(raw);
-    if (std.mem.lastIndexOfScalar(u8, host_part, ':')) |colon_pos_in_host| {
+    if (std.mem.findScalarLast(u8, host_part, ':')) |colon_pos_in_host| {
         const port = host_part[colon_pos_in_host + 1 ..];
 
         // Validate it's actually a port (all digits)
@@ -332,7 +336,7 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
                 // Not a port (probably IPv6)
                 if (has_user_info) {
                     // Need to allocate to exclude user info
-                    return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ raw[0 .. scheme_end + 1], host_part });
+                    return try allocator.print("{s}//{s}", .{ raw[0 .. scheme_end + 1], host_part });
                 }
                 // Can return a slice
                 return raw[0..authority_end];
@@ -348,14 +352,14 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
             // Need to allocate to build origin without default port and/or user info
             const hostname = host_part[0..colon_pos_in_host];
             if (is_default) {
-                return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ protocol, hostname });
+                return try allocator.print("{s}//{s}", .{ protocol, hostname });
             } else {
-                return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ protocol, host_part });
+                return try allocator.print("{s}//{s}", .{ protocol, host_part });
             }
         }
     } else if (has_user_info) {
         // No port, but has user info - need to allocate
-        return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ raw[0 .. scheme_end + 1], host_part });
+        return try allocator.print("{s}//{s}", .{ raw[0 .. scheme_end + 1], host_part });
     }
 
     // Common case: no user info, no default port - return slice (zero allocation!)
@@ -382,7 +386,7 @@ fn getUserInfo(raw: [:0]const u8) ?[]const u8 {
     if (!auth.has_user_info) return null;
 
     // User info is from authority_start to host_start - 1 (excluding the @)
-    const scheme_end = std.mem.indexOf(u8, raw, "://").?;
+    const scheme_end = std.mem.find(u8, raw, "://").?;
     const authority_start = scheme_end + 3;
     return raw[authority_start .. auth.host_start - 1];
 }
@@ -395,8 +399,8 @@ pub fn getHost(raw: []const u8) []const u8 {
 // Returns true if these two URLs point to the same document.
 pub fn eqlDocument(first: [:0]const u8, second: [:0]const u8) bool {
     // First '#' signifies the start of the fragment.
-    const first_hash_index = std.mem.indexOfScalar(u8, first, '#') orelse first.len;
-    const second_hash_index = std.mem.indexOfScalar(u8, second, '#') orelse second.len;
+    const first_hash_index = std.mem.findScalar(u8, first, '#') orelse first.len;
+    const second_hash_index = std.mem.findScalar(u8, second, '#') orelse second.len;
     return std.mem.eql(u8, first[0..first_hash_index], second[0..second_hash_index]);
 }
 
@@ -409,7 +413,7 @@ fn buildUrl(
     search: []const u8,
     hash: []const u8,
 ) ![:0]const u8 {
-    return std.fmt.allocPrintSentinel(allocator, "{s}//{s}{s}{s}{s}", .{
+    return allocator.printSentinel("{s}//{s}{s}{s}{s}", .{
         protocol,
         host,
         pathname,
@@ -426,7 +430,7 @@ pub fn setProtocol(current: [:0]const u8, value: []const u8, allocator: Allocato
 
     // Add : suffix if not present
     const protocol = if (value.len > 0 and value[value.len - 1] != ':')
-        try std.fmt.allocPrint(allocator, "{s}:", .{value})
+        try allocator.print("{s}:", .{value})
     else
         value;
 
@@ -440,7 +444,7 @@ pub fn setHost(current: [:0]const u8, value: []const u8, allocator: Allocator) !
     const hash = getHash(current);
 
     // Check if the new value includes a port
-    const colon_pos = std.mem.lastIndexOfScalar(u8, value, ':');
+    const colon_pos = std.mem.findScalarLast(u8, value, ':');
     const clean_host = if (colon_pos) |pos| blk: {
         const port_str = value[pos + 1 ..];
         // Remove default ports
@@ -455,7 +459,7 @@ pub fn setHost(current: [:0]const u8, value: []const u8, allocator: Allocator) !
         // No port in new value - preserve existing port
         const current_port = getPort(current);
         if (current_port.len > 0) {
-            break :blk try std.fmt.allocPrint(allocator, "{s}:{s}", .{ value, current_port });
+            break :blk try allocator.print("{s}:{s}", .{ value, current_port });
         }
         break :blk value;
     };
@@ -466,7 +470,7 @@ pub fn setHost(current: [:0]const u8, value: []const u8, allocator: Allocator) !
 pub fn setHostname(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
     const current_port = getPort(current);
     const new_host = if (current_port.len > 0)
-        try std.fmt.allocPrint(allocator, "{s}:{s}", .{ value, current_port })
+        try allocator.print("{s}:{s}", .{ value, current_port })
     else
         value;
 
@@ -492,7 +496,7 @@ pub fn setPort(current: [:0]const u8, value: ?[]const u8, allocator: Allocator) 
         if (std.mem.eql(u8, protocol, "http:") and std.mem.eql(u8, port_str, "80")) {
             break :blk hostname;
         }
-        break :blk try std.fmt.allocPrint(allocator, "{s}:{s}", .{ hostname, port_str });
+        break :blk try allocator.print("{s}:{s}", .{ hostname, port_str });
     } else hostname;
 
     return buildUrl(allocator, protocol, new_host, pathname, search, hash);
@@ -508,7 +512,7 @@ pub fn setPathname(current: [:0]const u8, value: []const u8, allocator: Allocato
 
     // Add / prefix if not present and value is not empty
     const pathname = if (encoded.len > 0 and encoded[0] != '/')
-        try std.fmt.allocPrint(allocator, "/{s}", .{encoded})
+        try allocator.print("/{s}", .{encoded})
     else
         encoded;
 
@@ -525,7 +529,7 @@ pub fn setSearch(current: [:0]const u8, value: []const u8, allocator: Allocator)
 
     // Add ? prefix if not present and value is not empty
     const search = if (encoded.len > 0 and value[0] != '?')
-        try std.fmt.allocPrint(allocator, "?{s}", .{encoded})
+        try allocator.print("?{s}", .{encoded})
     else
         encoded;
 
@@ -542,7 +546,7 @@ pub fn setHash(current: [:0]const u8, value: []const u8, allocator: Allocator) !
 
     // Add # prefix if not present and value is not empty
     const hash = if (encoded.len > 0 and encoded[0] != '#')
-        try std.fmt.allocPrint(allocator, "#{s}", .{encoded})
+        try allocator.print("#{s}", .{encoded})
     else
         encoded;
 
@@ -586,7 +590,7 @@ fn buildUrlWithUserInfo(
     if (username.len == 0 and password.len == 0) {
         return buildUrl(allocator, protocol, host, pathname, search, hash);
     } else if (password.len == 0) {
-        return std.fmt.allocPrintSentinel(allocator, "{s}//{s}@{s}{s}{s}{s}", .{
+        return allocator.printSentinel("{s}//{s}@{s}{s}{s}{s}", .{
             protocol,
             username,
             host,
@@ -595,7 +599,7 @@ fn buildUrlWithUserInfo(
             hash,
         }, 0);
     } else {
-        return std.fmt.allocPrintSentinel(allocator, "{s}//{s}:{s}@{s}{s}{s}{s}", .{
+        return allocator.printSentinel("{s}//{s}:{s}@{s}{s}{s}{s}", .{
             protocol,
             username,
             password,
@@ -609,7 +613,7 @@ fn buildUrlWithUserInfo(
 
 pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []const u8) ![:0]const u8 {
     if (query_string.len == 0) {
-        return arena.dupeZ(u8, url);
+        return arena.dupeSentinel(u8, url, 0);
     }
 
     var buf: std.ArrayList(u8) = .empty;
@@ -618,7 +622,7 @@ pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []cons
     try buf.ensureTotalCapacityPrecise(arena, url.len + 2 + query_string.len);
     buf.appendSliceAssumeCapacity(url);
 
-    if (std.mem.indexOfScalar(u8, url, '?')) |index| {
+    if (std.mem.findScalar(u8, url, '?')) |index| {
         const last_index = url.len - 1;
         if (index != last_index and url[last_index] != '&') {
             buf.appendAssumeCapacity('&');
@@ -633,8 +637,7 @@ pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []cons
 
 pub fn getRobotsUrl(arena: Allocator, url: [:0]const u8) ![:0]const u8 {
     const origin = try getOrigin(arena, url) orelse return error.NoOrigin;
-    return try std.fmt.allocPrintSentinel(
-        arena,
+    return try arena.printSentinel(
         "{s}/robots.txt",
         .{origin},
         0,
@@ -642,7 +645,7 @@ pub fn getRobotsUrl(arena: Allocator, url: [:0]const u8) ![:0]const u8 {
 }
 
 pub fn unescape(arena: Allocator, input: []const u8) ![]const u8 {
-    if (std.mem.indexOfScalar(u8, input, '%') == null) {
+    if (std.mem.findScalar(u8, input, '%') == null) {
         return input;
     }
 
@@ -669,7 +672,7 @@ pub fn unescape(arena: Allocator, input: []const u8) ![]const u8 {
 }
 
 pub fn stripFragment(url: []const u8) []const u8 {
-    return url[0 .. std.mem.indexOfScalar(u8, url, '#') orelse url.len];
+    return url[0 .. std.mem.findScalar(u8, url, '#') orelse url.len];
 }
 
 const AuthorityInfo = struct {
@@ -687,19 +690,19 @@ const AuthorityInfo = struct {
 // SECURITY: Only looks for @ within the authority portion (before /?#)
 // to prevent path-based @ injection attacks.
 fn parseAuthority(raw: []const u8) ?AuthorityInfo {
-    const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return null;
+    const scheme_end = std.mem.find(u8, raw, "://") orelse return null;
     const authority_start = scheme_end + 3;
 
     // Find end of authority FIRST (start of path/query/fragment,
     // a NUL/CR/LF/TAB, or end of string).
-    const authority_end = if (std.mem.indexOfAny(u8, raw[authority_start..], "/?#\x00\r\n\t")) |end|
+    const authority_end = if (std.mem.findAny(u8, raw[authority_start..], "/?#\x00\r\n\t")) |end|
         authority_start + end
     else
         raw.len;
 
     // Only look for @ within the authority portion, not in path/query/fragment
     const authority_portion = raw[authority_start..authority_end];
-    if (std.mem.indexOf(u8, authority_portion, "@")) |pos| {
+    if (std.mem.find(u8, authority_portion, "@")) |pos| {
         return .{
             .host_start = authority_start + pos + 1,
             .host_end = authority_end,
@@ -725,6 +728,16 @@ test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(false, isCompleteHTTPUrl("/example.com"));
     try testing.expectEqual(false, isCompleteHTTPUrl("../../about"));
     try testing.expectEqual(false, isCompleteHTTPUrl("about"));
+}
+
+test "URL: isAboutBlank" {
+    try testing.expectEqual(true, isAboutBlank("about:blank"));
+    try testing.expectEqual(false, isAboutBlank("about:srcdoc"));
+    try testing.expectEqual(false, isAboutBlank("about:"));
+    try testing.expectEqual(false, isAboutBlank(""));
+    try testing.expectEqual(false, isAboutBlank("about"));
+    try testing.expectEqual(false, isAboutBlank("http://example.com/about:blank"));
+    try testing.expectEqual(false, isAboutBlank("https://example.com/blob:x"));
 }
 
 test "URL: resolve regression (#1093)" {

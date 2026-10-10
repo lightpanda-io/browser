@@ -21,6 +21,7 @@ const std = @import("std");
 const CDP = @import("../CDP.zig");
 const js = @import("../../../browser/js/js.zig");
 const Notification = @import("../../../Notification.zig");
+const repeat = @import("../../../string.zig").repeat;
 
 const Allocator = std.mem.Allocator;
 
@@ -114,7 +115,7 @@ const RemoteObject = struct {
                 self.value = .{ .float = n };
             }
         } else if (value.isBigInt()) {
-            self.unserializableValue = try std.fmt.allocPrint(arena, "{s}n", .{try value.toStringSliceWithAlloc(arena)});
+            self.unserializableValue = try arena.print("{s}n", .{try value.toStringSliceWithAlloc(arena)});
         }
     }
 };
@@ -365,7 +366,7 @@ test "cdp.runtime: console notifications run no page JS" {
         \\console.log('head-marker', probe, 'tail-marker-'.repeat(20));
     , null);
 
-    const tail = "tail-marker-" ** 20;
+    const tail = repeat("tail-marker-", 20);
     try ctx.expectSentEvent("Console.messageAdded", .{ .level = "log", .text = "head-marker [object Object] " ++ tail }, .{});
     try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "log", .args = .{ .{ .type = "string", .value = "head-marker" }, .{ .type = "object", .className = "Object" }, .{ .type = "string", .value = tail } } }, .{});
     const probed = try ls.local.exec("globalThis.probed", null);
@@ -374,4 +375,29 @@ test "cdp.runtime: console notifications run no page JS" {
     try testing.expectEqual(0, ctx.cdp().link.send_depth);
     try ctx.processMessage(.{ .id = 62, .method = "Runtime.evaluate", .params = .{ .expression = "6 * 7" } });
     try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 42 } }, .{ .id = 62 });
+}
+
+test "cdp.runtime: only nodes have the node subtype, DOMExceptions are errors" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-SUBT", .url = "hi.html", .target_id = "FID-000000SUBT".* });
+    try ctx.processMessage(.{ .id = 70, .method = "Runtime.enable" });
+
+    try ctx.processMessage(.{ .id = 71, .method = "Runtime.evaluate", .params = .{ .expression = "document.body" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object", .subtype = "node", .className = "HTMLBodyElement" } }, .{ .id = 71 });
+
+    try ctx.processMessage(.{ .id = 72, .method = "Runtime.evaluate", .params = .{ .expression = "new DOMException('custom', 'NotFoundError')" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object", .subtype = "error", .className = "DOMException", .description = "NotFoundError: custom" } }, .{ .id = 72 });
+
+    try ctx.processMessage(.{ .id = 73, .method = "Runtime.evaluate", .params = .{ .expression = "location" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object", .className = "Location", .description = "Location" } }, .{ .id = 73 });
+    try ctx.processMessage(.{ .id = 74, .method = "Runtime.evaluate", .params = .{ .expression = "window" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object", .className = "Window" } }, .{ .id = 74 });
+    for (ctx.received.items) |msg| {
+        const id = msg.object.get("id") orelse continue;
+        if (id.integer != 73 and id.integer != 74) continue;
+        const result = msg.object.get("result").?.object.get("result").?.object;
+        try testing.expectEqual(null, result.get("subtype"));
+    }
 }

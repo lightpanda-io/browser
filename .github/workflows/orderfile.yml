@@ -56,7 +56,7 @@ jobs:
       - uses: ./.github/actions/orderfile
         id: orderfile
         with:
-          build-args: -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64
+          build-args: -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast -Dcpu=x86_64
 
       - name: open a pull request
         env:

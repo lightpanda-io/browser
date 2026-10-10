@@ -53,6 +53,7 @@ pub const Command = union(enum) {
     get_title,
     get_window_handle,
     get_window_handles,
+    close_window,
     get_window_rect,
     set_window_rect: SetWindowRect,
     maximize_window,
@@ -213,8 +214,8 @@ const Route = struct {
             @field(value, parameter) = std.Uri.percentDecodeInPlace(try arena.dupe(u8, captured[i]));
         }
         const parsed = try parseBody(Body(T, self.parameters), arena, body);
-        inline for (@typeInfo(@TypeOf(parsed)).@"struct".fields) |field| {
-            @field(value, field.name) = @field(parsed, field.name);
+        inline for (@typeInfo(@TypeOf(parsed)).@"struct".field_names) |field_name| {
+            @field(value, field_name) = @field(parsed, field_name);
         }
         return @unionInit(Command, name, value);
     }
@@ -230,6 +231,7 @@ const routes = [_]Route{
     .init(.GET, "/title", .get_title),
     .init(.GET, "/window", .get_window_handle),
     .init(.GET, "/window/handles", .get_window_handles),
+    .init(.DELETE, "/window", .close_window),
     .init(.GET, "/window/rect", .get_window_rect),
     .init(.POST, "/window/rect", .set_window_rect),
     .init(.POST, "/window/maximize", .maximize_window),
@@ -292,23 +294,15 @@ pub fn parse(arena: Allocator, method: Method, path: []const u8, body: []const u
 // What's left of a command once its path parameters, which are its leading
 // fields, are taken out: the part that comes from the body.
 fn Body(comptime T: type, comptime parameters: []const []const u8) type {
-    const fields = @typeInfo(T).@"struct".fields;
-    for (parameters, fields[0..parameters.len]) |parameter, field| {
-        if (!std.mem.eql(u8, parameter, field.name)) {
-            @compileError(@typeName(T) ++ ": field '" ++ field.name ++ "' should be the path parameter '" ++ parameter ++ "'");
+    const info = @typeInfo(T).@"struct";
+    for (parameters, info.field_names[0..parameters.len]) |parameter, field_name| {
+        if (!std.mem.eql(u8, parameter, field_name)) {
+            @compileError(@typeName(T) ++ ": field '" ++ field_name ++ "' should be the path parameter '" ++ parameter ++ "'");
         }
     }
 
-    const rest = fields[parameters.len..];
-    var field_names: [rest.len][:0]const u8 = undefined;
-    var types: [rest.len]type = undefined;
-    var attrs: [rest.len]std.builtin.Type.StructField.Attributes = undefined;
-    for (rest, 0..) |field, i| {
-        field_names[i] = field.name;
-        types[i] = field.type;
-        attrs[i] = .{ .@"align" = field.alignment, .default_value_ptr = field.default_value_ptr };
-    }
-    return @Struct(.auto, null, &field_names, &types, &attrs);
+    const n = parameters.len;
+    return @Struct(.auto, null, info.field_names[n..], info.field_types[n..], info.field_attrs[n..]);
 }
 
 // Both are split on '/', so a leading empty segment lines up on either side.
@@ -318,7 +312,7 @@ fn parseBody(comptime T: type, arena: Allocator, body: []const u8) ParseError!T 
         // POSTs without parameters still send a body ("{}"); nothing to read
         return {};
     }
-    if (@typeInfo(T).@"struct".fields.len == 0) {
+    if (@typeInfo(T).@"struct".field_names.len == 0) {
         // everything the command takes came from the path
         return .{};
     }
@@ -344,6 +338,7 @@ pub fn process(cmd: *BiDi.Command) !void {
         .get_title => return getTitle(cmd),
         .get_window_handle => return getWindowHandle(cmd),
         .get_window_handles => return getWindowHandles(cmd),
+        .close_window => return closeWindow(cmd),
         .get_window_rect, .maximize_window, .minimize_window, .fullscreen_window => return getWindowRect(cmd),
         .set_window_rect => |p| return setWindowRect(cmd, p),
         .get_page_source => return getPageSource(cmd),
@@ -426,6 +421,14 @@ fn getWindowHandle(cmd: *BiDi.Command) !void {
 fn getWindowHandles(cmd: *BiDi.Command) !void {
     const ctx = (try currentContext(cmd)) orelse return;
     return cmd.sendResult(&[_][]const u8{&ctx.id});
+}
+
+// DELETE /session/{id}/window
+fn closeWindow(cmd: *BiDi.Command) !void {
+    if (cmd.bidi.browsing_context) |*ctx| {
+        try browsing_context.destroy(cmd, ctx);
+    }
+    return cmd.sendResult(&[_][]const u8{});
 }
 
 // GET /session/{id}/window/rect
@@ -548,6 +551,10 @@ fn getActiveElement(cmd: *BiDi.Command) !void {
 fn getElementText(cmd: *BiDi.Command, p: ElementId) !void {
     const frame = (try currentFrame(cmd)) orelse return;
     const element = (try requireElement(cmd, p.id, frame)) orelse return;
+
+    if (element.isVisible(frame) == false) {
+        return cmd.sendResult("");
+    }
 
     var aw: std.Io.Writer.Allocating = .init(cmd.arena);
     element.getInnerText(&aw.writer, frame) catch |err| switch (err) {
@@ -886,21 +893,20 @@ fn addCookie(cmd: *BiDi.Command, p: AddCookie) !void {
     }
 
     const c = p.cookie;
-    const spec: storage.Spec = .{
+    storage.add(&cmd.bidi.user_context.session.cookie_jar, .{
         .name = c.name,
         .value = c.value,
         .domain = c.domain,
         .path = c.path,
         .secure = c.secure,
         .http_only = c.httpOnly,
-        .expiry = c.expiry,
+        .expires = if (c.expiry) |expiry| @floatFromInt(expiry) else null,
         .same_site = if (c.sameSite) |same_site| switch (same_site) {
             .Strict => .strict,
             .Lax => .lax,
             .None => .none,
         } else null,
-    };
-    storage.add(&cmd.bidi.user_context.session.cookie_jar, spec, frame.url) catch |err| switch (err) {
+    }, frame.url) catch |err| switch (err) {
         error.OutOfMemory => return err,
         error.InvalidDomain => return cmd.sendError("invalid cookie domain", "the domain doesn't match the current document"),
         error.UnableToSetCookie => return cmd.sendError("unable to set cookie", "the cookie was rejected"),
@@ -923,7 +929,7 @@ pub const Reference = struct {
 
     pub fn init(arena: Allocator, registry: *NodeRegistry, node: *Node) !Reference {
         const registered = try registry.register(node);
-        return .{ .shared_id = try std.fmt.allocPrint(arena, "{d}", .{registered.id}) };
+        return .{ .shared_id = try arena.print("{d}", .{registered.id}) };
     }
 
     fn initFromCommand(cmd: *BiDi.Command, node: *Node) !Reference {
@@ -1122,6 +1128,7 @@ test "bidi.http_command: parse" {
     try testing.expect(try parse(arena, .POST, "/back", "{}") == .back);
     try testing.expect(try parse(arena, .POST, "/forward", "{}") == .forward);
     try testing.expect(try parse(arena, .GET, "/window/handles", "") == .get_window_handles);
+    try testing.expect(try parse(arena, .DELETE, "/window", "") == .close_window);
     try testing.expect(try parse(arena, .DELETE, "/actions", "") == .release_actions);
 
     // a known path with the wrong method is an unknown command too

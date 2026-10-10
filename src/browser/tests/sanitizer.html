@@ -121,7 +121,7 @@
 {
   // Allowing every data attribute subsumes any named individually, and the
   // config has to stay valid.
-  const s = new Sanitizer({attributes: ['data-x', 'id'], elements: [{name: 'div', attributes: ['data-y']}]});
+  const s = new Sanitizer({attributes: ['data-x', 'id'], elements: [{name: 'div', attributes: ['data-y']}], dataAttributes: false});
   testing.expectEqual(true, s.setDataAttributes(true));
   testing.expectEqual([{name: 'id', namespace: null}], s.get().attributes);
   testing.expectEqual([], s.get().elements[0].attributes);

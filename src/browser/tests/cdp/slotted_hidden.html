@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html>
+<body>
+    <div id="host"><button id="slotted-hidden">slotted-hidden</button><button id="slotted-shown" slot="shown">slotted-shown</button></div>
+    <script>
+        document.getElementById("host").attachShadow({ mode: "open" }).innerHTML =
+            '<slot name="shown"></slot><div style="display: none"><slot></slot></div>';
+    </script>
+</body>
+</html>

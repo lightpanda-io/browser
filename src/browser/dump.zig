@@ -510,6 +510,9 @@ pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, pruned: ?*const 
     }
 
     if (strip.invisible) {
+        if (el.is(Template) != null) {
+            return true;
+        }
         if (el.ownerFrame(frame)) |owner| {
             if (owner._style_manager.hasAuthorDisplayNone(el)) {
                 return true;
@@ -635,14 +638,14 @@ fn shouldEscapeText(node_: ?*Node) bool {
 }
 fn writeEscapedText(text: []const u8, writer: *std.Io.Writer) !void {
     // Fast path: if no special characters, write directly
-    const first_special = std.mem.indexOfAnyPos(u8, text, 0, &.{ '&', '<', '>', 194 }) orelse {
+    const first_special = std.mem.findAnyPos(u8, text, 0, &.{ '&', '<', '>', 194 }) orelse {
         return writer.writeAll(text);
     };
 
     try writer.writeAll(text[0..first_special]);
     var remaining = try writeEscapedByte(text, first_special, writer);
 
-    while (std.mem.indexOfAnyPos(u8, remaining, 0, &.{ '&', '<', '>', 194 })) |offset| {
+    while (std.mem.findAnyPos(u8, remaining, 0, &.{ '&', '<', '>', 194 })) |offset| {
         try writer.writeAll(remaining[0..offset]);
         remaining = try writeEscapedByte(remaining, offset, writer);
     }
@@ -787,6 +790,24 @@ test "dump: strip.invisible removes author display:none elements" {
     );
 }
 
+test "dump: strip.invisible removes templates and their content" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<template><p>row</p></template><p>text</p>");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try deep(div.asNode(), .{}, &aw.writer, frame);
+    try testing.expectString("<div><template><p>row</p></template><p>text</p></div>", aw.written());
+
+    aw.clearRetainingCapacity();
+    try deep(div.asNode(), .{ .strip = .{ .invisible = true } }, &aw.writer, frame);
+    try testing.expectString("<div><p>text</p></div>", aw.written());
+}
+
 test "dump: strip.shell removes page chrome but keeps sectioned header/footer" {
     try expectShellDump(
         \\<header>H</header><nav>N</nav><main><header>MH</header><p>body</p><footer>MF</footer></main><article><footer>AF</footer></article><aside>A</aside><dialog>D</dialog><footer>F</footer>
@@ -927,7 +948,7 @@ test "dump: with_frames and with_base inject a <base> in every document" {
 // Each content document gets its own LimitedWriter; the cut must still happen
 // once, with a single marker and no end tags after it.
 test "dump: max_bytes cut inside a nested content document" {
-    const cut = comptime std.mem.indexOf(u8, frames_dump, "<b>deep").? + 4;
+    const cut = comptime std.mem.find(u8, frames_dump, "<b>deep").? + 4;
     try expectPageDump(
         "dump_frames.html",
         .{ .with_frames = true, .max_bytes = cut },

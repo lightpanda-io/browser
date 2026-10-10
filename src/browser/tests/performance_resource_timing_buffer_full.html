@@ -12,6 +12,68 @@
 
     const order = [];
     let event = null;
+    let fired = null;
+    const nextFire = () => new Promise((resolve) => fired = resolve);
+    // The event's task copies the secondary buffer back after the dispatch,
+    // and microtasks run between listeners, so give it a task to finish.
+    const nextTask = () => new Promise((resolve) => setTimeout(resolve));
+
+    performance.onresourcetimingbufferfull = (e) => {
+      event = e;
+      order.push('handler');
+    };
+    performance.addEventListener('resourcetimingbufferfull', () => {
+      order.push('listener');
+      fired();
+    });
+
+    let firing = nextFire();
+    await (await fetch(testing.ORIGIN + '/xhr')).text();
+    await firing;
+    await nextTask();
+    // The handler made no room, so the entry is dropped.
+    const dropped = performance.getEntriesByType('resource').length;
+
+    // A handler that makes room gets the overflowed entry copied in.
+    performance.onresourcetimingbufferfull = () => {
+      order.push('grow');
+      performance.setResourceTimingBufferSize(1);
+    };
+    firing = nextFire();
+    await (await fetch(testing.ORIGIN + '/xhr/json')).text();
+    await firing;
+    await nextTask();
+    const copied = performance.getEntriesByType('resource');
+    state.resolve();
+
+    await state.done(() => {
+      performance.onresourcetimingbufferfull = null;
+      testing.expectEqual(['handler', 'listener', 'grow', 'listener'], order);
+      testing.expectEqual('resourcetimingbufferfull', event.type);
+      testing.expectEqual(true, event.isTrusted);
+      // Non-bubbling per spec, Chrome, and WPT
+      // (resource-timing/buffer-full-when-populate-entries.html). Firefox
+      // fires it bubbling, so this one assertion fails there.
+      testing.expectEqual(false, event.bubbles);
+      testing.expectEqual(true, event.target === performance);
+      testing.expectEqual(0, dropped);
+      testing.expectEqual(1, copied.length);
+      testing.expectEqual(true, copied[0].name.endsWith('/xhr/json'));
+    });
+  }
+</script>
+
+<!-- Its own file: script blocks run concurrently, so a fetch here would show
+     up in the other resource tests' observers. -->
+<script id=buffer_full type=module>
+  {
+    const state = await testing.async();
+    performance.clearResourceTimings();
+    // Every resource overflows a zero-length buffer.
+    performance.setResourceTimingBufferSize(0);
+
+    const order = [];
+    let event = null;
     performance.onresourcetimingbufferfull = (e) => {
       event = e;
       order.push('handler');

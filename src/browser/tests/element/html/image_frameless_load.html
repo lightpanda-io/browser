@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+<body></body>
+
+<!--
+  Must be the only `load` listener on a node in this page: the frame skips
+  image load events when none was registered on it.
+-->
+<script id="frameless-doc-img-adopted-fires-load">
+  // jQuery.parseHTML builds nodes in a createHTMLDocument document.
+  const doc = document.implementation.createHTMLDocument('');
+  const img = doc.createElement('img');
+  img.src = 'a.png';
+  let fired = false;
+  img.addEventListener('load', () => fired = true);
+  document.body.appendChild(img);
+  testing.onload(() => testing.expectEqual(true, fired));
+</script>

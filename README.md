@@ -350,6 +350,7 @@ TEST_FILTER="WebApi: #selector_all" make test   # Filter main + subtest (separat
 TEST_VERBOSE=true make test
 TEST_FAIL_FIRST=true make test
 METRICS=true make test                          # Capture allocation/duration metrics as JSON
+TEST_JOBS=1 make test                           # Run in one process (default: up to 4, or 1 when filtered)
 ```
 
 ### End to end tests
@@ -458,7 +459,7 @@ zig build -Dwpt_extensions run -- fetch \
 it's useful to build in `releaseFast` mode to make tests faster.
 
 ```
-zig build -Dwpt_extensions -Doptimize=ReleaseFast run -- serve ...
+zig build -Dwpt_extensions -Doptimize=fast run -- serve ...
 ```
 
 ## Contributing

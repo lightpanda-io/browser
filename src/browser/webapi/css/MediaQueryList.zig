@@ -45,7 +45,7 @@ pub fn init(query: []const u8, frame: *Frame) !*MediaQueryList {
         ._frame = frame,
         ._matches = MediaQuery.matches(media, frame.page.getViewport()),
     });
-    try frame._media_query_lists.append(frame.arena, self);
+    try frame._media_query_lists.append(frame.page_arena, self);
     return self;
 }
 

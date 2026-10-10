@@ -7,6 +7,7 @@
   let capturedEvent = null;
 
   window.addEventListener('error', (e) => {
+    e.preventDefault();
     errorEventFired = true;
     capturedEvent = e;
   });
@@ -24,6 +25,7 @@
 {
   let evt = null;
   window.addEventListener('error', (e) => {
+    e.preventDefault();
     evt = e;
   });
 
@@ -63,7 +65,8 @@
     parentCalled = true;
   });
 
-  window.addEventListener('error', () => {
+  window.addEventListener('error', (e) => {
+    e.preventDefault();
     windowCalled = true;
   });
 
@@ -79,6 +82,7 @@
   let evt = null;
 
   window.addEventListener('error', (e) => {
+    e.preventDefault();
     evt = e;
   });
 
@@ -95,7 +99,8 @@
 {
   let callCount = 0;
 
-  window.addEventListener('error', () => {
+  window.addEventListener('error', (e) => {
+    e.preventDefault();
     callCount++;
   });
 
@@ -112,6 +117,7 @@
   let evt = null;
 
   window.addEventListener('error', (e) => {
+    e.preventDefault();
     evt = e;
   });
 
@@ -130,6 +136,7 @@
   let evt = null;
 
   window.addEventListener('error', (e) => {
+    e.preventDefault();
     eventFired = true;
     evt = e;
   });
@@ -150,6 +157,7 @@
   let evt = null;
 
   window.addEventListener('error', (e) => {
+    e.preventDefault();
     eventFired = true;
     evt = e;
   });

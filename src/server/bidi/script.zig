@@ -114,7 +114,7 @@ fn callFunction(cmd: *BiDi.Command) !void {
     // parenthesized is what turns it into something callable. \n added incase
     // the functionDeclaration has a trailing comment.
     const arena = cmd.arena;
-    const source = try std.fmt.allocPrint(arena, "({s}\n)", .{p.functionDeclaration});
+    const source = try arena.print("({s}\n)", .{p.functionDeclaration});
     const reply: Reply = .init(cmd, ctx);
     const declaration = ls.local.exec(source, "bidi.callFunction") catch |err| {
         return sendException(&reply, frame, &ls.local, &try_catch, err);

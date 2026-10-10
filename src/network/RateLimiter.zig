@@ -164,7 +164,7 @@ test "RateLimiter: sweep" {
 
     var buf: [16]u8 = undefined;
     for (0..3) |i| {
-        _ = try rl.reserve(try std.fmt.bufPrint(&buf, "h{d}.test", .{i}), 1000);
+        _ = try rl.reserve(try std.mem.print(&buf, "h{d}.test", .{i}), 1000);
     }
     try testing.expectEqual(3, rl.next.count());
 
@@ -174,7 +174,7 @@ test "RateLimiter: sweep" {
     try testing.expectEqual(8, rl.sweep_at);
 
     for (4..7) |i| {
-        _ = try rl.reserve(try std.fmt.bufPrint(&buf, "h{d}.test", .{i}), 1000);
+        _ = try rl.reserve(try std.mem.print(&buf, "h{d}.test", .{i}), 1000);
     }
     try testing.expectEqual(7, rl.next.count());
 

@@ -31,7 +31,7 @@ pub fn insert(self: *CSSRuleList, index: u32, rule: *CSSRule, frame: *Frame) !vo
     if (index > self._rules.items.len) {
         return error.IndexSizeError;
     }
-    try self._rules.insert(frame.arena, index, rule);
+    try self._rules.insert(frame.page_arena, index, rule);
 }
 
 pub fn remove(self: *CSSRuleList, index: u32) !void {

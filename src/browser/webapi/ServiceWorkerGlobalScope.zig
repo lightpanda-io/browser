@@ -93,7 +93,7 @@ fn init(
     const arena = try session.getArena(.small, "ServiceWorker");
     errdefer arena.release();
 
-    const owned_url = try arena.dupeZ(u8, script_url);
+    const owned_url = try arena.dupeSentinel(u8, script_url, 0);
     const frame_id = session.nextFrameId();
     const loader_id = session.nextLoaderId();
 
@@ -186,7 +186,7 @@ pub fn getOrCreate(
     errdefer self.deinit();
 
     const page = frame.page;
-    try page.service_workers.append(page.frame_arena, self);
+    try page.service_workers.append(page.arena, self);
     errdefer _ = page.service_workers.pop();
 
     try session.service_workers.put(session.arena.allocator(), self._scope_url, self);

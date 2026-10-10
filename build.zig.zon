@@ -2,11 +2,11 @@
     .name = .browser,
     .version = "1.1.0-dev",
     .fingerprint = 0xda130f3af836cea0, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/200123d4a5eee5136aa96a3933c651cc3d2c069f.tar.gz",
-            .hash = "v8-0.0.0-xddH67dJAwAdG6Puk7KzLsWsEzP8kqxLDfS-6tpkKS5B",
+            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/b73e4fa2d0afe5036745ae7d332cc5cb7e7adb53.tar.gz",
+            .hash = "v8-0.0.0-xddH64tVAwDZKW4zyy2h9cKXeWfWSjupsZIwTbYxSL9T",
         },
         // .v8 = .{ .path = "../zig-v8-fork" },
         .brotli = .{
@@ -17,6 +17,10 @@
         .zlib = .{
             .url = "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz",
             .hash = "N-V-__8AAJ2cNgAgfBtAw33Bxfu1IWISDeKKSr3DAqoAysIJ",
+        },
+        .zstd = .{
+            .url = "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz",
+            .hash = "N-V-__8AAPZ7fwBg4JoCzM_0o2A8wxH2hsUUeiU1iuZv53L5",
         },
         .nghttp2 = .{
             .url = "https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.gz",
@@ -32,20 +36,24 @@
             .hash = "N-V-__8AALJXUwHr71AwttzhEqqYTvFb_jz0EQ5Ou3OWpHBM",
         },
         .sqlite3 = .{
-            .url = "https://github.com/allyourcodebase/sqlite3/archive/7a615f5af79009cd733e3480658586d9b0d28b35.tar.gz",
-            .hash = "sqlite3-3.53.2-DMxLWuAOAAA_Px0arJOIOaP4AKEu5prbsQgPMA35W1zz",
+            .url = "https://sqlite.org/2026/sqlite-amalgamation-3530200.zip",
+            .hash = "N-V-__8AALc_rgC04POe18O0LKFRm4ouQpLtL3riscEmWp-Q",
         },
         .zenai = .{
-            .url = "git+https://github.com/lightpanda-io/zenai.git#b3386fde741d3d9f76674e4706ac1db27923c855",
-            .hash = "zenai-0.0.0-iOY_VJEhBwBj9qGuHOtw1TdQw0aiIbOZhXlybkSqhXKs",
+            .url = "git+https://github.com/lightpanda-io/zenai.git#5dd2002f40b20944669e30977e4a715afdfbd9af",
+            .hash = "zenai-0.0.0-iOY_VAfLBwDFgYw_i4Zea-5TwzZhm5NZeeXEySewf6Hn",
         },
         .isocline = .{
             .url = "git+https://github.com/arrufat/isocline#4a99434bee4a5ed04c1639514224d48cd55e1405",
             .hash = "N-V-__8AAHxtEwB16xj2Xz-zx_uklGdTP5C2-GHXDoSzah-8",
         },
         .pcre2 = .{
-            .url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz",
-            .hash = "pcre2-10.49.0-IZ6r68cregBKN199ndY6AaKNyKJpNmnQVSm8-h0gp4sj",
+            .url = "git+https://github.com/PCRE2Project/pcre2#9ad4a2e956876747a5022bf04614c7e39e71d4ec",
+            .hash = "pcre2-10.50.0-DEV-IZ6r6yDTrgCmI3jcBntPIdZLWLhNORGZZSi8hxQkc11x",
+        },
+        .translate_c = .{
+            .url = "git+https://codeberg.org/ziglang/translate-c?ref=2.0.0#0da7a16c3235b935b82421646076e0657cda21f6",
+            .hash = "translate_c-2.0.0-Q_BUWltOBwA0229IE8wwSxxGzOxyRso3hvcb1nN8oJX_",
         },
     },
     .paths = .{""},

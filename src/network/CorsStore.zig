@@ -297,7 +297,7 @@ test "CorsStore: expired entries are treated as a miss on covers" {
 
     try store.put(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = false }, .{
         .methods_wildcard = true,
-        .methods = .initEmpty(),
+        .methods = .empty,
         .headers_wildcard = true,
         .headers = &.{}, // empty slice, nothing to free
         .expires_at = lp.datetime.milliTimestamp(.real) - 1,
@@ -356,7 +356,7 @@ test "CorsStore: credentialed and non-credentialed grants for same origin/target
     // Non-credentialed grant: wildcard headers allowed (valid per spec for non-cred requests).
     try store.put(.{ .origin = origin, .target = target, .credentials = false }, .{
         .methods_wildcard = true,
-        .methods = .initEmpty(),
+        .methods = .empty,
         .headers_wildcard = true,
         .headers = &.{},
         .expires_at = lp.datetime.milliTimestamp(.real) + 60_000,
@@ -407,7 +407,7 @@ test "CorsStore: covers never lets a wildcard cover Authorization" {
     const key = Key{ .origin = "https://a.example", .target = "https://api.example", .credentials = false };
     try store.put(key, .{
         .methods_wildcard = true,
-        .methods = .initEmpty(),
+        .methods = .empty,
         .headers_wildcard = true,
         .headers = &.{},
         .expires_at = std.math.maxInt(u64),

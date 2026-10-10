@@ -922,7 +922,7 @@ pub const Script = struct {
         // Handle importmap special case here: the content is a JSON containing imports.
         // Multiple <script type="importmap"> elements merge with first-wins semantics.
         if (fe.kind == .importmap) {
-            self.manager.importmap.merge(frame.arena, frame.base(), self.source.content()) catch |err| {
+            self.manager.importmap.merge(frame.page_arena, frame.base(), self.source.content()) catch |err| {
                 log.debug(.browser, "parse importmap script", .{
                     .err = err,
                     .src = url,
@@ -967,12 +967,12 @@ pub const Script = struct {
             return;
         }
 
-        defer {
+        defer if (frame.js.call_depth == 0) {
             local.runMacrotasks(); // also runs microtasks
             _ = frame.js.scheduler.run() catch |err| {
                 log.err(.frame, "scheduler", .{ .err = err });
             };
-        }
+        };
 
         if (success) {
             self.executeCallback(comptime .wrap("load"));

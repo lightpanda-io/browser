@@ -517,7 +517,7 @@ pub fn lookupPrefixForElement(self: *Element, namespace: []const u8, frame: *Fra
 
 fn _prefix(self: *const Element) ?[]const u8 {
     const name = self.getTagNameLower();
-    if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
+    if (std.mem.findPos(u8, name, 0, ":")) |pos| {
         return name[0..pos];
     }
     return null;
@@ -525,7 +525,7 @@ fn _prefix(self: *const Element) ?[]const u8 {
 
 pub fn getLocalName(self: *Element) []const u8 {
     const name = self.getTagNameLower();
-    if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
+    if (std.mem.findPos(u8, name, 0, ":")) |pos| {
         return name[pos + 1 ..];
     }
 
@@ -738,7 +738,7 @@ fn prefixedAttributeName(namespace: []const u8, local_name: []const u8, frame: *
         }
         return null;
     };
-    return try std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix, local_name });
+    return try frame.local_arena.print("{s}:{s}", .{ prefix, local_name });
 }
 
 pub fn getAttributeSafe(self: *const Element, name: String) ?[]const u8 {
@@ -854,12 +854,12 @@ pub fn setAttributeNS(
     value: String,
     frame: *Frame,
 ) !void {
-    const local_start = if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx| blk: {
+    const local_start = if (std.mem.findScalarPos(u8, qualified_name, 0, ':')) |idx| blk: {
         if (idx == 0 or idx == qualified_name.len - 1) {
             // cannot be at the start or end of the qname
             return error.InvalidCharacterError;
         }
-        if (std.mem.indexOfScalarPos(u8, qualified_name, idx + 1, ':') != null) {
+        if (std.mem.findScalarPos(u8, qualified_name, idx + 1, ':') != null) {
             // and can only have one
             return error.InvalidCharacterError;
         }
@@ -926,7 +926,7 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
 
     const shadow_root = try ShadowRoot.init(self, opts, frame);
     const page = frame.page;
-    try page.element_shadow_roots.put(page.frame_arena, self, shadow_root);
+    try page.element_shadow_roots.put(page.arena, self, shadow_root);
     self._flags.shadow_host = true;
     return shadow_root;
 }
@@ -1026,7 +1026,7 @@ pub fn getAttributeNames(self: *const Element, frame: *Frame) ![][]const u8 {
 
 pub fn getAttributeNamedNodeMap(self: *Element, frame: *Frame) !*Attribute.NamedNodeMap {
     const page = frame.page;
-    const gop = try page.attribute_named_node_map_lookup.getOrPut(page.frame_arena, @intFromPtr(self));
+    const gop = try page.attribute_named_node_map_lookup.getOrPut(page.arena, @intFromPtr(self));
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(Attribute.NamedNodeMap{ ._element = self });
     }
@@ -1038,7 +1038,7 @@ pub fn getAttributeNamedNodeMap(self: *Element, frame: *Frame) !*Attribute.Named
 pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
     const owner = self.ownerFrame(frame) orelse frame;
     const page = frame.page;
-    const gop = try page.element_styles.getOrPut(page.frame_arena, self);
+    const gop = try page.element_styles.getOrPut(page.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try CSSStyleProperties.init(self, false, owner);
     }
@@ -1087,7 +1087,7 @@ pub fn setStyle(self: *Element, value: []const u8, frame: *Frame) !void {
 
 pub fn getClassList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     const page = frame.page;
-    const gop = try page.element_class_lists.getOrPut(page.frame_arena, self);
+    const gop = try page.element_class_lists.getOrPut(page.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1102,9 +1102,14 @@ pub fn setClassList(self: *Element, value: String, frame: *Frame) !void {
     try class_list.setValue(value, frame);
 }
 
+pub fn setPartList(self: *Element, value: String, frame: *Frame) !void {
+    const part_list = try self.getPartList(frame);
+    try part_list.setValue(value, frame);
+}
+
 pub fn getPartList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     const page = frame.page;
-    const gop = try page.element_part_lists.getOrPut(page.frame_arena, self);
+    const gop = try page.element_part_lists.getOrPut(page.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1116,7 +1121,7 @@ pub fn getPartList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
 
 pub fn getRelList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     const page = frame.page;
-    const gop = try page.element_rel_lists.getOrPut(page.frame_arena, self);
+    const gop = try page.element_rel_lists.getOrPut(page.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1134,7 +1139,7 @@ pub const TokenListLookup = std.AutoHashMapUnmanaged(TokenListKey, *collections.
 
 pub fn getTokenList(self: *Element, comptime attribute: TokenListAttribute, frame: *Frame) !*collections.DOMTokenList {
     const page = frame.page;
-    const gop = try page.element_token_lists.getOrPut(page.frame_arena, .{ .element = self, .attribute = attribute });
+    const gop = try page.element_token_lists.getOrPut(page.arena, .{ .element = self, .attribute = attribute });
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1146,7 +1151,7 @@ pub fn getTokenList(self: *Element, comptime attribute: TokenListAttribute, fram
 
 pub fn getDataset(self: *Element, frame: *Frame) !*DOMStringMap {
     const page = frame.page;
-    const gop = try page.element_datasets.getOrPut(page.frame_arena, self);
+    const gop = try page.element_datasets.getOrPut(page.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(DOMStringMap{
             ._element = self,
@@ -1222,7 +1227,7 @@ pub fn isSvgLink(self: *Element) bool {
 
 // An editing host takes focus like a form control does.
 pub fn isEditingHost(self: *Element) bool {
-    const value = self.getAttributeSafe(.wrap("contenteditable")) orelse return false;
+    const value = self.getAttributeInterned("contenteditable") orelse return false;
     return std.ascii.eqlIgnoreCase(value, "false") == false;
 }
 
@@ -1231,7 +1236,7 @@ pub fn isEditingHost(self: *Element) bool {
 pub fn isEditable(self: *Element) bool {
     var current: ?*Element = self;
     while (current) |el| : (current = el.parentElement()) {
-        if (el.getAttributeSafe(.wrap("contenteditable")) != null) {
+        if (el.getAttributeInterned("contenteditable") != null) {
             return el.isEditingHost();
         }
     }
@@ -1298,34 +1303,43 @@ pub fn focus(self: *Element, frame: *Frame) !void {
     }
 
     const owner = self.ownerFrame(frame) orelse return;
+    const already_active = owner.document._active_element == self;
+    if (already_active == false and self.isFocusable(owner) == false) {
+        return;
+    }
+
+    // The focus chain runs through navigable containers: each <iframe> holding
+    // the focused document is the focused area of its parent document, so the
+    // parent's activeElement is that <iframe>. Like Chrome, ancestors blur
+    // their previous element first, and the <iframe> itself gets no focus events.
+    // https://html.spec.whatwg.org/multipage/interaction.html#focus-chain
+    var child = owner;
+    while (child.iframe) |container| {
+        const parent = child.parent orelse break;
+        const parent_doc = parent.document;
+        const old = parent_doc._active_element;
+        if (old == container.asElement()) {
+            break;
+        }
+        parent_doc.setActiveElement(container.asElement(), parent);
+        if (old) |o| {
+            _ = try blurFocusedArea(o, null, parent);
+        }
+        child = parent;
+    }
+
+    if (already_active) {
+        return;
+    }
+
     const doc = owner.document;
     const old_active = doc._active_element;
-    if (old_active == self) {
-        return;
-    }
-
-    if (self.isFocusable(owner) == false) {
-        return;
-    }
-
-    const FocusEvent = @import("event/FocusEvent.zig");
-
     const new_target = self.asEventTarget();
     doc.setActiveElement(self, owner);
 
-    if (old_active) |old| {
-        const old_target = old.asEventTarget();
+    const old_related: ?*EventTarget = if (old_active) |old| try blurFocusedArea(old, new_target, owner) else null;
 
-        // Dispatch blur on old element (no bubble, composed)
-        const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = new_target }, owner);
-        try owner._event_manager.dispatch(old_target, blur_event.asEvent());
-
-        // Dispatch focusout on old element (bubbles, composed)
-        const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = new_target }, owner);
-        try owner._event_manager.dispatch(old_target, focusout_event.asEvent());
-    }
-
-    const old_related: ?*EventTarget = if (old_active) |old| old.asEventTarget() else null;
+    const FocusEvent = @import("event/FocusEvent.zig");
 
     // Dispatch focus on new element (no bubble, composed)
     const focus_event = try FocusEvent.initTrusted(comptime .wrap("focus"), .{ .composed = true, .relatedTarget = old_related }, owner);
@@ -1336,6 +1350,41 @@ pub fn focus(self: *Element, frame: *Frame) !void {
     try owner._event_manager.dispatch(new_target, focusin_event.asEvent());
 }
 
+// `old` just lost focus in `frame`'s document. When it's an <iframe> holding
+// the focus chain, the element focused inside it is what blurs (and its
+// document's activeElement is cleared); the <iframe> itself gets no events.
+// Returns the relatedTarget for the element taking focus: the blurred element,
+// unless it was in another document.
+fn blurFocusedArea(old: *Element, related: ?*EventTarget, frame: *Frame) !?*EventTarget {
+    var el = old;
+    var el_frame = frame;
+    var el_related = related;
+    while (el.is(Html.IFrame)) |iframe| {
+        const window = iframe._window orelse break;
+        const child = window._frame;
+        const inner = child.document._active_element orelse return null;
+        child.document.setActiveElement(null, child);
+        el = inner;
+        el_frame = child;
+        // relatedTarget doesn't cross documents
+        el_related = null;
+    }
+    try dispatchBlur(el, el_related, el_frame);
+    return if (el_frame == frame) el.asEventTarget() else null;
+}
+
+// Dispatches blur (no bubble) then focusout (bubbles) on `old`, which just lost focus.
+fn dispatchBlur(old: *Element, related: ?*EventTarget, frame: *Frame) !void {
+    const FocusEvent = @import("event/FocusEvent.zig");
+    const old_target = old.asEventTarget();
+
+    const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = related }, frame);
+    try frame._event_manager.dispatch(old_target, blur_event.asEvent());
+
+    const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = related }, frame);
+    try frame._event_manager.dispatch(old_target, focusout_event.asEvent());
+}
+
 pub fn blur(self: *Element, frame: *Frame) !void {
     // A frameless document never has a focused element.
     const owner = self.ownerFrame(frame) orelse return;
@@ -1343,17 +1392,7 @@ pub fn blur(self: *Element, frame: *Frame) !void {
     if (doc._active_element != self) return;
 
     doc.setActiveElement(null, owner);
-
-    const FocusEvent = @import("event/FocusEvent.zig");
-    const old_target = self.asEventTarget();
-
-    // Dispatch blur (no bubble, composed)
-    const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true }, owner);
-    try owner._event_manager.dispatch(old_target, blur_event.asEvent());
-
-    // Dispatch focusout (bubbles, composed)
-    const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true }, owner);
-    try owner._event_manager.dispatch(old_target, focusout_event.asEvent());
+    _ = try blurFocusedArea(self, null, owner);
 }
 
 pub fn getChildren(self: *Element, frame: *Frame) !collections.NodeLive(.child_elements) {
@@ -1457,7 +1496,9 @@ pub fn getAnimations(_: *const Element) []*Animation {
 }
 
 pub fn animate(_: *Element, _: ?js.Object, _: ?js.Object, frame: *Frame) !*Animation {
-    return Animation.init(frame);
+    const animation = try Animation.init(frame);
+    try animation.play(frame);
+    return animation;
 }
 
 pub fn closest(self: *Element, input: []const u8, frame: *Frame) !?*Element {
@@ -2030,7 +2071,7 @@ pub fn clone(self: *Element, deep: bool, document: *const Node.Document, frame: 
     if (self._namespace == .unknown) {
         const page = document._page;
         if (page.element_namespace_uris.get(self)) |uri| {
-            try page.element_namespace_uris.put(page.frame_arena, node.as(Element), uri);
+            try page.element_namespace_uris.put(page.arena, node.as(Element), uri);
         }
     }
 
@@ -2168,7 +2209,7 @@ fn writeScroll(self: *Element, write: ScrollWrite, frame: *Frame) !bool {
         return false;
     }
 
-    const gop = try owner.page.element_scroll_positions.getOrPut(owner.page.frame_arena, self);
+    const gop = try owner.page.element_scroll_positions.getOrPut(owner.page.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
@@ -2709,7 +2750,7 @@ pub const JsApi = struct {
         }
     }.wrap, Element.setClassName, .{ .ce_reactions = true });
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{ .ce_reactions = true });
-    pub const part = bridge.accessor(Element.getPartList, null, .{});
+    pub const part = bridge.accessor(Element.getPartList, Element.setPartList, .{ .ce_reactions = true });
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});
     pub const style = bridge.accessor(Element.getOrCreateStyle, Element.setStyle, .{});
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});

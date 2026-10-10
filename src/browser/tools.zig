@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const zenai = @import("zenai");
 
 const NodeRegistry = @import("../NodeRegistry.zig");
+const TelemetryTool = @import("../telemetry/telemetry.zig").Event.Tool;
 
 const DOMNode = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
@@ -267,6 +268,41 @@ pub const Tool = enum {
     getCookies,
     getEnv,
 
+    /// Telemetry wire id: append, never renumber. 0 is reserved for a name
+    /// that matched no tool.
+    pub fn telemetryId(self: Tool) u8 {
+        return switch (self) {
+            .goto => 1,
+            .search => 2,
+            .markdown => 3,
+            .html => 4,
+            .screenshot => 5,
+            .links => 6,
+            .evaluate => 7,
+            .extract => 8,
+            .tree => 9,
+            .nodeDetails => 10,
+            .interactiveElements => 11,
+            .structuredData => 12,
+            .detectForms => 13,
+            .click => 14,
+            .fill => 15,
+            .scroll => 16,
+            .waitForSelector => 17,
+            .waitForScript => 18,
+            .waitForState => 19,
+            .hover => 20,
+            .press => 21,
+            .selectOption => 22,
+            .setChecked => 23,
+            .findElement => 24,
+            .consoleLogs => 25,
+            .getUrl => 26,
+            .getCookies => 27,
+            .getEnv => 28,
+        };
+    }
+
     /// State-mutating: surfaces in JavaScript recordings. Read-only tools
     /// (queries, env probes) stay out so a replay doesn't bloat the script
     /// with noise.
@@ -397,7 +433,7 @@ pub const Tool = enum {
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. Render markdown for just that node's subtree. 0 is treated as omitted." },
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
                     \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output; same groups as the html tool's strip. `shell` (page chrome by markup) and `clutter` (keep only the main content, in the manner of reader modes) are the ones that matter for reading; `ui` also drops images.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -414,7 +450,7 @@ pub const Tool = enum {
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, dump only that node's outerHTML. 0 is treated as omitted." },
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
                     \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output: `js` (script, noscript, script preloads), `css` (style, stylesheet links), `ui` (css plus img, picture, video, audio, svg, canvas, iframe), `invisible` (elements an author rule or inline style sets to display:none), `shell` (nav, aside, dialog, page-level header/footer and the matching landmark roles; skipped when that would drop most of the text), `clutter` (keep only the main content, in the manner of reader modes; includes `shell` and `invisible`, and falls back to `shell` when it finds too little). {\"js\":true,\"css\":true} keeps a page dump small.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -432,7 +468,7 @@ pub const Tool = enum {
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, render only that node. 0 is treated as omitted." },
                     \\    "fullPage": { "type": "boolean", "description": "Render the whole content height instead of one viewport. Defaults to false." },
                     \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the render; same groups as the html tool's strip (`js`, `css`, `ui`, `invisible`, `shell`, `clutter`).", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -446,7 +482,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "limit": { "type": "integer", "description": "Optional. Return at most this many links, in document order." },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -460,7 +496,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "script": { "type": "string", "description": "JavaScript run in the page context. A bare trailing expression, or `return` with top-level `await`, is the result." },
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
                     \\    "save": { "type": "string", "description": "Optional bridge-store key. The evaluate's return value is stored under this name and re-exposed as `lp.<name>` to subsequent evaluates. Objects, arrays, and strings are serialized automatically — no JSON.stringify needed." }
                     \\  },
@@ -506,7 +542,7 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root. 0 is treated as omitted." },
                     \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
@@ -721,7 +757,7 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "url": { "type": "string", "description": "Restrict output to cookies matching this URL's host. Defaults to the current page." },
+                    \\    "url": { "type": "string", "description": "Restrict output to cookies matching this URL's host. Defaults to the current page. An empty string is treated as omitted." },
                     \\    "all": { "type": "boolean", "default": false, "description": "If true, dump every cookie regardless of host. Overrides `url`." }
                     \\  }
                     \\}
@@ -777,17 +813,17 @@ const url_params_schema = minify(
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing." },
+    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing. An empty string is treated as omitted." },
     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
     \\  }
     \\}
 );
 
-/// Materialized form of `Tool.definition` keyed by `@intFromEnum(Tool)`.
+/// Materialized form of `Tool.definition` keyed by `@backingInt(Tool)`.
 /// Built at comptime by iterating every `Tool` tag — order and count
 /// can't drift because both come from the enum itself.
-pub const tool_defs: [@typeInfo(Tool).@"enum".fields.len]Tool.Definition = blk: {
-    var arr: [@typeInfo(Tool).@"enum".fields.len]Tool.Definition = undefined;
+pub const tool_defs: [@typeInfo(Tool).@"enum".field_names.len]Tool.Definition = blk: {
+    var arr: [@typeInfo(Tool).@"enum".field_names.len]Tool.Definition = undefined;
     for (std.enums.values(Tool), 0..) |t, i| arr[i] = t.definition();
     break :blk arr;
 };
@@ -795,10 +831,10 @@ pub const tool_defs: [@typeInfo(Tool).@"enum".fields.len]Tool.Definition = blk: 
 /// Comptime-built flat array of tool names, in `Tool` declaration order.
 /// Use this when callers only need the names (slash-command lookup, MCP
 /// `tools/list`).
-pub const names: [@typeInfo(Tool).@"enum".fields.len][]const u8 = blk: {
-    const fields = @typeInfo(Tool).@"enum".fields;
-    var arr: [fields.len][]const u8 = undefined;
-    for (fields, 0..) |f, i| arr[i] = f.name;
+pub const names: [@typeInfo(Tool).@"enum".field_names.len][]const u8 = blk: {
+    const field_names = @typeInfo(Tool).@"enum".field_names;
+    var arr: [field_names.len][]const u8 = undefined;
+    for (field_names, 0..) |field_name, i| arr[i] = field_name;
     break :blk arr;
 };
 
@@ -835,6 +871,9 @@ pub fn errorMessage(err: ToolError) []const u8 {
 pub const ToolResult = struct {
     text: []const u8,
     is_error: bool = false,
+    /// The call left a different frame current, so `--save` records the
+    /// navigation a read tool's `url` made rather than one it skipped.
+    navigated: bool = false,
     /// Only set when the caller passed `CallOpts.inline_image`.
     image: ?lp.screenshot.Prepared = null,
     /// Resolved before the action runs, because a navigation takes the node
@@ -845,7 +884,7 @@ pub const ToolResult = struct {
 };
 
 /// Where a call left the page. MCP serializes it as `structuredContent` so a
-/// client reads the status without regexing `Navigated successfully. HTTP 404
+/// client reads the status without regexing `Navigated. HTTP 404
 /// Not Found.` back apart. The transport drops null optionals rather than
 /// writing them, so the matching `outputSchema` requires `url` alone.
 pub const PageState = struct {
@@ -854,7 +893,7 @@ pub const PageState = struct {
     title: ?[]const u8,
 };
 
-fn pageState(frame: *lp.Frame) PageState {
+pub fn pageState(frame: *lp.Frame) PageState {
     return .{
         .url = frame.url,
         .httpStatus = frame._http_status,
@@ -894,6 +933,15 @@ pub const CallOpts = struct {
     /// Fill in `ToolResult.selector`: a registry id means nothing in a later
     /// session, so `--save` cannot replay a call that used one.
     record: bool = false,
+    /// Scripts parse the text, so only model-facing callers set it.
+    nav_note: bool = false,
+    source: TelemetryTool.Source,
+};
+
+/// Told about every call once it returns, failures included.
+pub const Observer = struct {
+    context: *anyopaque,
+    onCall: *const fn (context: *anyopaque, tool_name: []const u8, arguments: ?std.json.Value, result: *const ToolResult, ms: u64, frame: ?*lp.Frame) void,
 };
 
 // An inline screenshot is re-sent on every turn; keep it within what models
@@ -909,11 +957,50 @@ pub fn call(
     arguments: ?std.json.Value,
     opts: CallOpts,
 ) ToolError!ToolResult {
+    const start = lp.datetime.milliTimestamp(.awake);
+    const maybe_tool = std.meta.stringToEnum(Tool, tool_name);
+    const result = callInner(arena, session, registry, maybe_tool, tool_name, arguments, opts);
+    const id: u8 = if (maybe_tool) |t| t.telemetryId() else 0;
+    session.browser.app.telemetry.recordTool(id, opts.source, telemetryOutcome(result), start);
+    if (session.tool_observer) |observer| {
+        const reported: ToolResult = result catch |err| .{ .text = errorMessage(err), .is_error = true };
+        observer.onCall(observer.context, tool_name, arguments, &reported, lp.datetime.milliTimestamp(.awake) -| start, session.currentFrame());
+    }
+    return result;
+}
+
+fn telemetryOutcome(result: ToolError!ToolResult) TelemetryTool.Outcome {
+    const r = result catch |err| return errorOutcome(err);
+    return if (r.is_error) .is_error else .ok;
+}
+
+pub fn errorOutcome(err: ToolError) TelemetryTool.Outcome {
+    return switch (err) {
+        error.FrameNotLoaded => .frame_not_loaded,
+        error.InvalidParams => .invalid_params,
+        error.NodeNotFound => .node_not_found,
+        error.NavigationFailed => .navigation_failed,
+        error.NavigationTimeout => .navigation_timeout,
+        error.Cancelled => .cancelled,
+        error.Timeout => .timeout,
+        error.InternalError, error.OutOfMemory => .internal,
+    };
+}
+
+fn callInner(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    maybe_tool: ?Tool,
+    tool_name: []const u8,
+    arguments: ?std.json.Value,
+    opts: CallOpts,
+) ToolError!ToolResult {
     // In-band so an LLM that invented a tool name (e.g. OpenAI's internal
     // `multi_tool_use.parallel` wrapper) learns the name is wrong instead of
     // retrying it with different arguments.
-    const tool = std.meta.stringToEnum(Tool, tool_name) orelse return .{
-        .text = try std.fmt.allocPrint(arena, "Unknown tool: {s}", .{tool_name}),
+    const tool = maybe_tool orelse return .{
+        .text = try arena.print("Unknown tool: {s}", .{tool_name}),
         .is_error = true,
     };
     if (diagnoseArgs(arena, arguments)) |msg|
@@ -935,6 +1022,7 @@ pub fn call(
     else
         null;
 
+    const frame_before = if (session.currentFrame()) |f| f._frame_id else null;
     var result = dispatch(arena, session, registry, tool, substituted, opts) catch |err| {
         if (err == error.NavigationFailed) {
             if (formatNavigationError(arena, session)) |text|
@@ -943,6 +1031,18 @@ pub fn call(
         return err;
     };
     result.selector = selector;
+    if (session.currentFrame()) |frame| result.navigated = frame._frame_id != frame_before;
+    if (opts.nav_note) {
+        if (session.currentFrame()) |frame| {
+            const note = if (result.navigated)
+                try navErrorNote(arena, frame)
+            else if (tool.navigatesToUrl())
+                try movedNote(arena, substituted, frame)
+            else
+                null;
+            if (note) |n| result.text = try arena.print("{s}\n\n{s}", .{ n, result.text });
+        }
+    }
     if (tool.reportsPageState()) {
         if (session.currentFrame()) |frame| result.page_state = pageState(frame);
     }
@@ -979,7 +1079,7 @@ fn dispatch(
 ) ToolError!ToolResult {
     return switch (tool) {
         .goto => .{ .text = try execGoto(arena, session, registry, substituted) },
-        .search => execSearch(arena, substituted),
+        .search => execSearch(arena, session, substituted),
         .markdown => .{ .text = try execMarkdown(arena, session, registry, substituted) },
         .html => .{ .text = try execHtml(arena, session, registry, substituted) },
         .screenshot => try execScreenshot(arena, session, registry, substituted, opts.inline_image),
@@ -1012,7 +1112,7 @@ fn dispatch(
 fn formatNavigationError(arena: std.mem.Allocator, session: *lp.Session) ?[]const u8 {
     const frame = session.currentFrame() orelse return null;
     const err = frame._last_navigate_error orelse return null;
-    return std.fmt.allocPrint(arena, "navigation failed: {s}", .{@errorName(err)}) catch null;
+    return arena.print("navigation failed: {s}", .{@errorName(err)}) catch null;
 }
 
 /// Run JavaScript against the current page. The script need not be
@@ -1023,7 +1123,7 @@ pub fn evalScript(
     registry: *NodeRegistry,
     script: []const u8,
 ) ToolError!ToolResult {
-    const z = try arena.dupeZ(u8, script);
+    const z = try arena.dupeSentinel(u8, script, 0);
     const page = try ensurePage(session, registry, null, null);
     return runEval(arena, page, z, null);
 }
@@ -1109,9 +1209,31 @@ fn navStatus(arena: std.mem.Allocator, frame: *const lp.Frame) []const u8 {
     // `std.http.Status` is an enum(u10) and `_http_status` is only clamped to
     // u16 (`http.getResponseCode`), so a server answering with a 4-digit code
     // would make the cast illegal behaviour rather than an unknown phrase.
-    const phrase = if (status > 599) "" else @as(std.http.Status, @enumFromInt(status)).phrase() orelse "";
-    if (phrase.len == 0) return std.fmt.allocPrint(arena, "{d}", .{status}) catch "unknown";
-    return std.fmt.allocPrint(arena, "{d} {s}", .{ status, phrase }) catch "unknown";
+    const phrase = if (status > 599) "" else @as(std.http.Status, @fromBackingInt(@intCast(status))).phrase() orelse "";
+    if (phrase.len == 0) return arena.print("{d}", .{status}) catch "unknown";
+    return arena.print("{d} {s}", .{ status, phrase }) catch "unknown";
+}
+
+/// Otherwise the model takes the current page for the URL it asked for.
+fn movedNote(arena: std.mem.Allocator, arguments: ?std.json.Value, frame: *const lp.Frame) !?[]const u8 {
+    const args = arguments orelse return null;
+    if (args != .object) return null;
+    const url = switch (args.object.get("url") orelse return null) {
+        .string => |s| s,
+        else => return null,
+    };
+    if (url.len == 0 or std.mem.eql(u8, url, frame.url)) return null;
+    return try arena.print("The page is at {s}, not {s}: a redirect or an in-page navigation moved it, and this reads it as it is. Use goto to reload {s}.", .{ frame.url, url, url });
+}
+
+/// Error and challenge pages would otherwise read as the requested content.
+fn navErrorNote(arena: std.mem.Allocator, frame: *const lp.Frame) !?[]const u8 {
+    if (frame._bot_challenge) |challenge| {
+        return try arena.print("Blocked by a {s} bot challenge (HTTP {s}): this is not the requested content.", .{ @tagName(challenge), navStatus(arena, frame) });
+    }
+    const status = frame._http_status orelse return null;
+    if (status < 400) return null;
+    return try arena.print("HTTP {s}: this is likely an error or rate-limit page, not the requested content.", .{navStatus(arena, frame)});
 }
 
 fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1119,8 +1241,8 @@ fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     const result = try performGoto(session, registry, args.url, .{ .timeout = args.timeout, .wait_until = args.waitUntil });
     const status = if (session.currentFrame()) |frame| navStatus(arena, frame) else "unknown";
     return switch (result) {
-        .completed => std.fmt.allocPrint(arena, "Navigated successfully. HTTP {s}.", .{status}),
-        .timeout => std.fmt.allocPrint(arena, "Navigation started (HTTP {s}) but the page did not finish loading before the timeout.", .{status}),
+        .completed => arena.print("Navigated. HTTP {s}.", .{status}),
+        .timeout => arena.print("Navigation started (HTTP {s}) but the page did not finish loading before the timeout.", .{status}),
     } catch ToolError.InternalError;
 }
 
@@ -1244,9 +1366,13 @@ pub fn searchKeyStatus(engine: SearchEngine) ?KeyStatus {
     return null;
 }
 
-fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!ToolResult {
+fn execSearch(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError!ToolResult {
     const args = try parseArgs(SearchParams, arena, arguments);
     if (args.query.len == 0) return ToolError.InvalidParams;
+    // A search through a search engine's page carries the query in its URL,
+    // so `--block-urls` already refuses a query that matches a pattern
+    // (`*some-site*`). Treat API searches the same way.
+    if (session.browser.http_client.blocksUrl(args.query)) return .{ .text = "No results." };
 
     const timeout_ms = args.timeout orelse default_search_timeout_ms;
     switch (search_engine) {
@@ -1259,7 +1385,7 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
                     // Fall through on any failure so one outage doesn't kill
                     // a whole benchmark run.
                     var detail: Failure = .{};
-                    if (apiSearch(engine, arena, api_key, timeout_ms, args.query, &detail)) |markdown_| {
+                    if (session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, args.query, &detail, &session.browser.http_client })) |markdown_| {
                         return .{ .text = markdown_ };
                     } else |err| {
                         last_err = err;
@@ -1274,7 +1400,7 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
         },
         inline else => |tag| {
             inline for (api_engines) |engine| {
-                if (engine.tag == tag) return searchExplicit(arena, engine, timeout_ms, args.query);
+                if (engine.tag == tag) return searchExplicit(arena, session, engine, timeout_ms, args.query);
             }
             @compileError("engine missing from api_engines: " ++ @tagName(tag));
         },
@@ -1282,14 +1408,14 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
 }
 
 /// No fallback: a failed call or a missing key is an error result.
-fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, timeout_ms: u32, query: []const u8) ToolError!ToolResult {
+fn searchExplicit(arena: std.mem.Allocator, session: *lp.Session, comptime engine: anytype, timeout_ms: u32, query: []const u8) ToolError!ToolResult {
     const label = @tagName(engine.tag);
     const api_key = engineKey(engine) catch return .{
         .text = "web search engine is set to " ++ label ++ " but " ++ engine.env_var ++ " is not set in the environment",
         .is_error = true,
     };
     var detail: Failure = .{};
-    const markdown_ = apiSearch(engine, arena, api_key, timeout_ms, query, &detail) catch |err|
+    const markdown_ = session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, query, &detail, &session.browser.http_client }) catch |err|
         return searchFailed(arena, label, err, detail);
     return .{ .text = markdown_ };
 }
@@ -1328,6 +1454,7 @@ fn apiSearch(
     timeout_ms: u32,
     query: []const u8,
     detail: *Failure,
+    url_filter: anytype,
 ) ![]const u8 {
     var init_options = engine.init_options;
     // The cascade (or the model) is the retry; honoring a Retry-After (60 s
@@ -1357,7 +1484,20 @@ fn apiSearch(
     };
     defer response.deinit();
 
-    return renderResults(arena, try engine.collect(arena, response.value));
+    return renderResults(arena, try dropBlocked(arena, try engine.collect(arena, response.value), url_filter));
+}
+
+/// Drops hits whose URL the browser's `--block-urls` patterns would refuse,
+/// so a search can't hand the model a page it isn't allowed to open, or that
+/// page's text in a snippet. A synthesized answer may draw on a dropped hit,
+/// so it goes too. `url_filter` is anything with `blocksUrl(url) bool`.
+fn dropBlocked(arena: std.mem.Allocator, results: SearchResults, url_filter: anytype) std.mem.Allocator.Error!SearchResults {
+    var kept: std.ArrayList(Hit) = .empty;
+    for (results.hits) |hit| {
+        if (!url_filter.blocksUrl(hit.url)) try kept.append(arena, hit);
+    }
+    if (kept.items.len == results.hits.len) return results;
+    return .{ .hits = kept.items };
 }
 
 pub const Hit = struct {
@@ -1521,17 +1661,17 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
 
     if (args.path) |path| {
         const content_height = writePng(&prepared, path) catch |err| return .{
-            .text = std.fmt.allocPrint(arena, "could not write {s}: {s}", .{ path, @errorName(err) }) catch return ToolError.OutOfMemory,
+            .text = arena.print("could not write {s}: {s}", .{ path, @errorName(err) }) catch return ToolError.OutOfMemory,
             .is_error = true,
         };
         // The renderer reports the content height; a fixed strip is its own height.
         const height = if (prepared.opts.height == 0) content_height else prepared.opts.height;
-        return .{ .text = std.fmt.allocPrint(arena, "Saved {d}x{d} PNG to {s}", .{ prepared.opts.width, height, absolutePath(arena, path) }) catch return ToolError.OutOfMemory };
+        return .{ .text = arena.print("Saved {d}x{d} PNG to {s}", .{ prepared.opts.width, height, absolutePath(arena, path) }) catch return ToolError.OutOfMemory };
     }
 
     prepared.fit(inline_image_max_width, inline_image_max_height) catch return ToolError.InternalError;
     return .{
-        .text = std.fmt.allocPrint(arena, "PNG, {d}x{d}", .{ prepared.opts.width, prepared.opts.height }) catch return ToolError.OutOfMemory,
+        .text = arena.print("PNG, {d}x{d}", .{ prepared.opts.width, prepared.opts.height }) catch return ToolError.OutOfMemory,
         .image = prepared,
     };
 }
@@ -1646,14 +1786,12 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
 
     // Block scope preserves a trailing expression's value and keeps top-level
     // `let`/`const` from leaking; top-level `await`/`return` need the async IIFE.
-    const block_script = std.fmt.allocPrintSentinel(
-        arena,
+    const block_script = arena.printSentinel(
         "{{ {s}\n}}",
         .{args.script},
         0,
     ) catch return ToolError.OutOfMemory;
-    const iife_script = std.fmt.allocPrintSentinel(
-        arena,
+    const iife_script = arena.printSentinel(
         "(async function(){{ \"use strict\"; {s} }})()",
         .{args.script},
         0,
@@ -1697,7 +1835,7 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     if (result.text.len == 0) return result; // silenced save=; don't re-emit via nav suffix
 
     const page_title = after.getTitle() catch null;
-    const text = std.fmt.allocPrint(arena, "{s}\n(Navigated to {s}, HTTP {s}, title: {s})", .{
+    const text = arena.print("{s}\n(Navigated to {s}, HTTP {s}, title: {s})", .{
         result.text, after.url, navStatus(arena, after), page_title orelse "(none)",
     }) catch return ToolError.InternalError;
     return .{ .text = text };
@@ -1811,7 +1949,7 @@ fn bridgePrelude(arena: std.mem.Allocator, store: *const BridgeStore) ![:0]const
         try aw.writer.writeAll(kv.value_ptr.*);
     }
     try aw.writer.writeAll("};");
-    return arena.dupeZ(u8, aw.written());
+    return arena.dupeSentinel(u8, aw.written(), 0);
 }
 
 const bridge_postlude: [:0]const u8 = "JSON.stringify(globalThis.lp)";
@@ -1925,7 +2063,7 @@ fn formatActionResult(
     target: ActionTarget,
     suffix: []const u8,
 ) ToolError![]const u8 {
-    return std.fmt.allocPrint(arena, "{s} ({f}){s}", .{ prefix, target, suffix }) catch ToolError.InternalError;
+    return arena.print("{s} ({f}){s}", .{ prefix, target, suffix }) catch ToolError.InternalError;
 }
 
 /// What `finalizeAction` compares against; take it before the action runs.
@@ -1972,7 +2110,7 @@ fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     }
 
     const page_title = page.getTitle() catch null;
-    return std.fmt.allocPrint(arena, "{s}.{s} Page url: {s}, HTTP {s}, title: {s}", .{
+    return arena.print("{s}.{s} Page url: {s}, HTTP {s}, title: {s}", .{
         body, note, page.url, navStatus(arena, page), page_title orelse "(none)",
     }) catch ToolError.InternalError;
 }
@@ -2009,7 +2147,7 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     lp.actions.fill(resolved.node, text, resolved.page) catch |err| return mapActionError(err);
 
     // Show the original reference (e.g. $LP_PASSWORD) in the result, not the resolved value
-    const suffix = std.fmt.allocPrint(arena, " with \"{s}\"", .{raw_text}) catch return ToolError.InternalError;
+    const suffix = arena.print(" with \"{s}\"", .{raw_text}) catch return ToolError.InternalError;
     const body = try formatActionResult(arena, "Filled element", resolved.target, suffix);
     return finalizeAction(arena, session, registry, scope, body);
 }
@@ -2032,15 +2170,15 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeReg
     const result = lp.actions.scroll(if (resolved) |r| r.node else null, args.x, args.y, page) catch |err| return mapActionError(err);
 
     const body = (switch (result.target) {
-        .window => std.fmt.allocPrint(arena, "Scrolled window to x: {d}, y: {d}", .{ result.x, result.y }),
-        .node => std.fmt.allocPrint(arena, "Scrolled element ({f}) to x: {d}, y: {d}", .{
+        .window => arena.print("Scrolled window to x: {d}, y: {d}", .{ result.x, result.y }),
+        .node => arena.print("Scrolled element ({f}) to x: {d}, y: {d}", .{
             resolved.?.target,
             result.x,
             result.y,
         }),
         .container => |container| blk: {
             const registered = registry.register(container) catch return ToolError.InternalError;
-            break :blk std.fmt.allocPrint(arena, "Scrolled scroll container ({f}) of element ({f}) to x: {d}, y: {d}", .{
+            break :blk arena.print("Scrolled scroll container ({f}) of element ({f}) to x: {d}, y: {d}", .{
                 ActionTarget{ .backend_node_id = registered.id },
                 resolved.?.target,
                 result.x,
@@ -2087,7 +2225,7 @@ fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry:
     };
 
     const registered = registry.register(node) catch return ToolError.InternalError;
-    return std.fmt.allocPrint(arena, "Element found. backendNodeId: {d}", .{registered.id}) catch return ToolError.InternalError;
+    return arena.print("Element found. backendNodeId: {d}", .{registered.id}) catch return ToolError.InternalError;
 }
 
 fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -2138,7 +2276,7 @@ fn execWaitForState(arena: std.mem.Allocator, session: *lp.Session, arguments: ?
         },
     };
 
-    return std.fmt.allocPrint(arena, "Page reached {s}.", .{@tagName(args.state)}) catch return ToolError.InternalError;
+    return arena.print("Page reached {s}.", .{@tagName(args.state)}) catch return ToolError.InternalError;
 }
 
 fn execHover(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -2182,7 +2320,7 @@ fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
 
     // Pressing Enter on a form input triggers implicit form submission;
     // `finalizeAction` drains the queued navigation before tagging the body.
-    const body = std.fmt.allocPrint(arena, "Pressed key '{s}'", .{args.key}) catch return ToolError.InternalError;
+    const body = arena.print("Pressed key '{s}'", .{args.key}) catch return ToolError.InternalError;
     return finalizeAction(arena, session, registry, scope, body);
 }
 
@@ -2199,7 +2337,7 @@ fn execSelectOption(arena: std.mem.Allocator, session: *lp.Session, registry: *N
 
     lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| return mapActionError(err);
 
-    const prefix = std.fmt.allocPrint(arena, "Selected option '{s}'", .{args.value}) catch return ToolError.InternalError;
+    const prefix = arena.print("Selected option '{s}'", .{args.value}) catch return ToolError.InternalError;
     const body = try formatActionResult(arena, prefix, resolved.target, "");
     return finalizeAction(arena, session, registry, scope, body);
 }
@@ -2218,7 +2356,7 @@ fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     lp.actions.setChecked(resolved.node, args.checked, resolved.page) catch |err| return mapActionError(err);
 
     const state_str: []const u8 = if (args.checked) "checked" else "unchecked";
-    const suffix = std.fmt.allocPrint(arena, " to {s}", .{state_str}) catch return ToolError.InternalError;
+    const suffix = arena.print(" to {s}", .{state_str}) catch return ToolError.InternalError;
     const body = try formatActionResult(arena, "Set element", resolved.target, suffix);
     return finalizeAction(arena, session, registry, scope, body);
 }
@@ -2247,7 +2385,7 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *No
                 's' => options.dot_all = true,
                 'm' => options.multiline = true,
                 else => return .{
-                    .text = try std.fmt.allocPrint(arena, "findElement: unsupported regex flag '{c}' in '{s}'", .{ flag, name }),
+                    .text = try arena.print("findElement: unsupported regex flag '{c}' in '{s}'", .{ flag, name }),
                     .is_error = true,
                 },
             };
@@ -2255,7 +2393,7 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *No
             const regex = session.browser.app.regex_context.compile(lit.body, options, &diag) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.InvalidRegex => return .{
-                    .text = try std.fmt.allocPrint(arena, "findElement: invalid name regex '{s}': {s} at offset {d}", .{ lit.body, diag.message(), diag.offset }),
+                    .text = try arena.print("findElement: invalid name regex '{s}': {s} at offset {d}", .{ lit.body, diag.message(), diag.offset }),
                     .is_error = true,
                 },
             };
@@ -2284,11 +2422,11 @@ const RegexLiteral = struct {
 /// written as `/foo/` still matches itself, the search being unanchored.
 fn regexLiteral(text: []const u8) ?RegexLiteral {
     if (text.len == 0 or text[0] != '/') return null;
-    const close = std.mem.lastIndexOfScalar(u8, text, '/') orelse return null;
+    const close = std.mem.findScalarLast(u8, text, '/') orelse return null;
     if (close < 2) return null;
     const flags = text[close + 1 ..];
     for (flags) |flag| {
-        if (std.mem.indexOfScalar(u8, "dgimsuvy", flag) == null) return null;
+        if (std.mem.findScalar(u8, "dgimsuvy", flag) == null) return null;
     }
     return .{ .body = text[1..close], .flags = flags };
 }
@@ -2315,7 +2453,7 @@ fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]
 
     if (args.name) |name| {
         if (lookupLpEnv(name)) |value| return value;
-        return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{name}) catch ToolError.InternalError;
+        return arena.print("Environment variable '{s}' is not set", .{name}) catch ToolError.InternalError;
     }
 
     const env_names = lpEnvNames(arena) catch return ToolError.InternalError;
@@ -2340,7 +2478,7 @@ pub fn lpEnvNames(arena: std.mem.Allocator) error{OutOfMemory}![]const []const u
     var ptr = std.c.environ;
     while (ptr[0]) |entry| : (ptr += 1) {
         const line = std.mem.span(entry);
-        const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const eq_idx = std.mem.findScalar(u8, line, '=') orelse continue;
         const name = line[0..eq_idx];
         if (!std.mem.startsWith(u8, name, "LP_")) continue;
         try env_names.append(arena, try arena.dupe(u8, name));
@@ -2390,7 +2528,7 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
 
     const filter_url: ?[:0]const u8 = blk: {
         if (args.all) break :blk null;
-        if (args.url) |u| break :blk arena.dupeZ(u8, u) catch return ToolError.InternalError;
+        if (args.url) |u| break :blk arena.dupeSentinel(u8, u, 0) catch return ToolError.InternalError;
         if (session.currentFrame()) |f| break :blk f.url;
         return "No current page. Pass `url` to filter by host or `all=true` to list every cookie.";
     };
@@ -2410,7 +2548,7 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
     }
     if (count == 0) {
         const label = filter_url orelse "(unfiltered)";
-        return std.fmt.allocPrint(arena, "No cookies for {s}.", .{label}) catch ToolError.InternalError;
+        return arena.print("No cookies for {s}.", .{label}) catch ToolError.InternalError;
     }
     return aw.written();
 }
@@ -2429,7 +2567,9 @@ fn ensurePage(session: *lp.Session, registry: *NodeRegistry, url: ?[:0]const u8,
     if (url) |u| {
         if (session.currentFrame()) |frame| {
             const is_loaded = frame._parse_state != .pre and frame._last_navigate_error == null;
-            if (is_loaded and std.mem.eql(u8, frame.url, u)) {
+            // Reloading would discard what a redirect or in-page navigation did.
+            const is_here = std.mem.eql(u8, frame.url, u) or std.mem.eql(u8, frame._requested_url, u);
+            if (is_loaded and is_here) {
                 return frame;
             }
         }
@@ -2544,7 +2684,7 @@ fn diagnoseArgs(arena: std.mem.Allocator, arguments: ?std.json.Value) ?[]const u
     if (args.object.get("state")) |v| switch (v) {
         .string => |s| if (std.meta.stringToEnum(lp.Config.WaitUntil, s) == null)
             return formatEnumError(arena, "state", s, lp.Config.WaitUntil),
-        else => return std.fmt.allocPrint(arena, "state must be a string", .{}) catch null,
+        else => return arena.print("state must be a string", .{}) catch null,
     };
 
     return null;
@@ -2553,9 +2693,9 @@ fn diagnoseArgs(arena: std.mem.Allocator, arguments: ?std.json.Value) ?[]const u
 fn formatEnumError(arena: std.mem.Allocator, field: []const u8, got: []const u8, comptime E: type) ?[]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     aw.writer.print("invalid {s} '{s}'. Expected one of: ", .{ field, got }) catch return null;
-    inline for (std.meta.fields(E), 0..) |f, i| {
+    inline for (@typeInfo(E).@"enum".field_names, 0..) |field_name, i| {
         if (i > 0) aw.writer.writeAll(", ") catch return null;
-        aw.writer.writeAll(f.name) catch return null;
+        aw.writer.writeAll(field_name) catch return null;
     }
     return aw.written();
 }
@@ -2568,13 +2708,21 @@ pub fn parseValue(comptime T: type, arena: std.mem.Allocator, value: std.json.Va
             return error.InvalidParams;
         },
     };
-    // Schema contract: backendNodeId 0 means omitted — registry ids start at 1,
-    // and zero-filling models (gpt-5.x) send 0 for "unset".
+    // Schema contract: backendNodeId 0 and url "" mean omitted. Registry ids
+    // start at 1 and "" is no URL; zero-filling models (gpt-5.x) send them for
+    // "unset", and navigating to "" would tear the page down.
     if (comptime @typeInfo(T) == .@"struct" and @hasField(T, "backendNodeId") and
         @typeInfo(@FieldType(T, "backendNodeId")) == .optional)
     {
         if (parsed.backendNodeId) |nid| {
             if (nid == 0) parsed.backendNodeId = null;
+        }
+    }
+    if (comptime @typeInfo(T) == .@"struct" and @hasField(T, "url") and
+        @typeInfo(@FieldType(T, "url")) == .optional)
+    {
+        if (parsed.url) |u| {
+            if (u.len == 0) parsed.url = null;
         }
     }
     return parsed;
@@ -2601,7 +2749,7 @@ pub fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
     if (v != .object) return v;
 
     const schemas = lp.Schema.all();
-    const tool_idx = @intFromEnum(tool);
+    const tool_idx = @backingInt(tool);
     if (tool_idx >= schemas.len) return v;
     const schema = schemas[tool_idx];
 
@@ -2632,7 +2780,7 @@ fn substituteStringArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
     const needsSub = struct {
         fn f(is_fill_: bool, key: []const u8, val: std.json.Value) bool {
             if (is_fill_ and std.mem.eql(u8, key, "value")) return false;
-            return val == .string and std.mem.indexOf(u8, val.string, "$LP_") != null;
+            return val == .string and std.mem.find(u8, val.string, "$LP_") != null;
         }
     }.f;
 
@@ -2661,13 +2809,13 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutO
     // Pages routinely contain `$5.99`-style content where `$` is incidental.
     // Lowercase `$lp_…` falls through here too — `getenv` is
     // case-sensitive on Linux, so it would never resolve anyway.
-    const first_lp = std.mem.indexOf(u8, input, "$LP_") orelse return input;
+    const first_lp = std.mem.find(u8, input, "$LP_") orelse return input;
 
     var result: std.ArrayList(u8) = .empty;
     try result.ensureTotalCapacity(arena, input.len);
     var i: usize = first_lp;
     var last_copy: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, input, i, '$')) |dollar| {
+    while (std.mem.findScalarPos(u8, input, i, '$')) |dollar| {
         const var_start = dollar + 1;
         var var_end = var_start;
         while (var_end < input.len and (std.ascii.isAlphanumeric(input[var_end]) or input[var_end] == '_')) {
@@ -2718,8 +2866,8 @@ pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) err
     var current: []const u8 = input;
     var changed = false;
     for (pairs.items) |p| {
-        if (std.mem.indexOf(u8, current, p.value) == null) continue;
-        const placeholder = try std.fmt.allocPrint(arena, "${s}", .{p.name});
+        if (std.mem.find(u8, current, p.value) == null) continue;
+        const placeholder = try arena.print("${s}", .{p.name});
         current = try std.mem.replaceOwned(u8, arena, current, p.value, placeholder);
         changed = true;
     }
@@ -2729,10 +2877,10 @@ pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) err
 test "call: unknown tool name surfaces in-band" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
 
-    // Session/registry are never touched on this branch; the name check is
-    // the first thing `call` does.
-    const r = try call(arena.allocator(), undefined, undefined, "multi_tool_use.parallel", null, .{});
+    const r = try call(arena.allocator(), testing.test_session, &registry, "multi_tool_use.parallel", null, .{ .source = .user });
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
 }
@@ -2751,14 +2899,36 @@ test "tree and nodeDetails read the node's own frame" {
     const input_id = (try registry.register(input)).id;
 
     const aa = testing.arena_allocator;
-    const tree_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try std.fmt.allocPrint(aa, "{{\"backendNodeId\":{d}}}", .{html_id}), .{});
-    const tree = try call(aa, page.session, &registry, "tree", tree_args, .{});
-    try std.testing.expect(std.mem.indexOf(u8, tree.text, "child-label") != null);
-    try std.testing.expect(std.mem.indexOf(u8, tree.text, "parent-") == null);
+    const tree_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{html_id}), .{});
+    const tree = try call(aa, page.session, &registry, "tree", tree_args, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "child-label") != null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "parent-") == null);
 
-    const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try std.fmt.allocPrint(aa, "{{\"backendNodeId\":{d}}}", .{input_id}), .{});
-    const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{});
-    try std.testing.expect(std.mem.indexOf(u8, details.text, "child-label") != null);
+    const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{input_id}), .{});
+    const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, details.text, "child-label") != null);
+}
+
+test "tree and nodeDetails list iframes with their URL" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/semantic_tree_iframe.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    _ = try call(aa, page.session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.querySelector('iframe').contentWindow.history.replaceState(null, '', '?moved'); const f = document.createElement('iframe'); f.setAttribute('src', 'semantic_tree_iframe_child.html?scripted'); document.body.appendChild(f)"}
+    , .{}), .{ .source = .user });
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "Iframe value='http://127.0.0.1:9582/src/browser/tests/cdp/semantic_tree_iframe_child.html?moved'") != null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "Iframe value='http://127.0.0.1:9582/src/browser/tests/cdp/semantic_tree_iframe_child.html?scripted'") != null);
+
+    const iframe = (try page.frame().?.document.querySelector(.wrap("iframe"), page.frame().?)).?.asNode();
+    const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{(try registry.register(iframe)).id}), .{});
+    const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, details.text, "\"value\":\"http://127.0.0.1:9582/src/browser/tests/cdp/semantic_tree_iframe_child.html?moved\"") != null);
 }
 
 test "goto: a navigation stuck waiting for a connection is an error" {
@@ -2775,16 +2945,124 @@ test "goto: a navigation stuck waiting for a connection is an error" {
     defer if (session.primaryPage()) |page| page.close();
 
     const aa = testing.arena_allocator;
-    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
-        \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":300}
+    const stuck = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":50}
     , .{});
-    try std.testing.expectError(error.NavigationTimeout, call(aa, session, &registry, "goto", args, .{}));
+    try std.testing.expectError(error.NavigationTimeout, call(aa, session, &registry, "goto", stuck, .{ .source = .user }));
 
     for (held.items) |conn| network.releaseConnection(conn);
     held.clearRetainingCapacity();
 
-    const r = try call(aa, session, &registry, "goto", args, .{});
-    try std.testing.expectEqualStrings("Navigated successfully. HTTP 200 OK.", r.text);
+    // Short timeouts are for the stuck case only: slow builds (tsan) need
+    // longer than that to actually load the page.
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":5000}
+    , .{});
+    const r = try call(aa, session, &registry, "goto", args, .{ .source = .user });
+    try std.testing.expectEqualStrings("Navigated. HTTP 200 OK.", r.text);
+}
+
+test "tools: goto flags an error status instead of reporting success" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/status/429"}
+    , .{});
+    const r = try call(aa, session, &registry, "goto", args, .{ .nav_note = true, .source = .user });
+    try std.testing.expectEqualStrings("HTTP 429 Too Many Requests: this is likely an error or rate-limit page, not the requested content.\n\nNavigated. HTTP 429 Too Many Requests.", r.text);
+}
+
+test "tools: a read tool navigating by url flags an error status" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/status/404"}
+    , .{});
+    const r = try call(aa, session, &registry, "markdown", args, .{ .nav_note = true, .source = .user });
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "HTTP 404 Not Found: this is likely an error"));
+
+    const reload = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/status/403"}
+    , .{});
+    const s = try call(aa, session, &registry, "markdown", reload, .{ .source = .user });
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "rate-limit") == null);
+}
+
+test "tools: a read tool keeps a page that moved within the document" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    _ = try call(aa, session, &registry, "goto", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ url ++ "\"}", .{}), .{ .source = .user });
+    _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.body.dataset.mark = 'kept'; history.pushState(null, '', '?moved')"}
+    , .{}), .{ .source = .user });
+
+    const r = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ url ++ "\"}", .{}), .{ .nav_note = true, .source = .user });
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "The page is at " ++ url ++ "?moved, not " ++ url ++ ":"));
+    try std.testing.expect(!r.navigated);
+
+    const empty = try call(aa, session, &registry, "tree", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":""}
+    , .{}), .{ .nav_note = true, .source = .user });
+    try std.testing.expect(!empty.is_error and !empty.navigated);
+
+    const mark = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.body.dataset.mark"}
+    , .{}), .{ .source = .user });
+    try std.testing.expectEqualStrings("kept", mark.text);
+}
+
+test "tools: a read tool keeps a page reached through a redirect" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/xhr/redirect"}
+    , .{});
+    _ = try call(aa, session, &registry, "goto", args, .{ .source = .user });
+    _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.body.dataset.mark = 'kept'"}
+    , .{}), .{ .source = .user });
+
+    _ = try call(aa, session, &registry, "markdown", args, .{ .source = .user });
+    const mark = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.body.dataset.mark"}
+    , .{}), .{ .source = .user });
+    try std.testing.expectEqualStrings("kept", mark.text);
+}
+
+test "tools: a bot challenge is named" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/challenge/vercel"}
+    , .{});
+    const r = try call(aa, session, &registry, "tree", args, .{ .nav_note = true, .source = .user });
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "Blocked by a vercel bot challenge (HTTP 429 Too Many Requests)"));
 }
 
 test "tools: navStatus names the status, or says it has none" {
@@ -2839,6 +3117,23 @@ test "parseValue: zero-filled optional backendNodeId treated as omitted" {
         \\{"backendNodeId":0}
     , .{});
     try std.testing.expectEqual(@as(NodeRegistry.Id, 0), (try parseValue(Required, aa, zero_required)).backendNodeId);
+}
+
+test "parseValue: empty optional url treated as omitted" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const Params = struct { url: ?[:0]const u8 = null };
+    const empty = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":""}
+    , .{});
+    try std.testing.expect((try parseValue(Params, aa, empty)).url == null);
+
+    const real = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"https://example.com"}
+    , .{});
+    try std.testing.expectEqualStrings("https://example.com", (try parseValue(Params, aa, real)).url.?);
 }
 
 test "substituteEnvVars resolves LP_* vars" {
@@ -2922,7 +3217,7 @@ test "execGetEnv hides non-LP_ values even when set" {
     const arguments: std.json.Value = .{ .object = obj };
 
     const r = try execGetEnv(aa, arguments);
-    try std.testing.expect(std.mem.indexOf(u8, r, var_value) == null);
+    try std.testing.expect(std.mem.find(u8, r, var_value) == null);
     try std.testing.expectEqualStrings(
         "Environment variable '" ++ var_name ++ "' is not set",
         r,
@@ -2937,9 +3232,9 @@ test "formatLpEnvNames renders names without values" {
     const env_names = [_][]const u8{ "LP_BAR", "LP_FOO" };
     const r = try formatLpEnvNames(aa, &env_names);
 
-    try std.testing.expect(std.mem.indexOf(u8, r, "LP_FOO") != null);
-    try std.testing.expect(std.mem.indexOf(u8, r, "LP_BAR") != null);
-    try std.testing.expect(std.mem.indexOf(u8, r, "secret") == null);
+    try std.testing.expect(std.mem.find(u8, r, "LP_FOO") != null);
+    try std.testing.expect(std.mem.find(u8, r, "LP_BAR") != null);
+    try std.testing.expect(std.mem.find(u8, r, "secret") == null);
 }
 
 test "formatLpEnvNames reports empty when no names" {
@@ -2966,11 +3261,11 @@ test "tavily results render as markdown" {
     };
 
     const md = try renderResults(aa, try collectTavily(aa, resp));
-    try std.testing.expect(std.mem.indexOf(u8, md, "**Answer:** Paris") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "1. **Paris - Wikipedia**") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "Paris is the capital of France.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "2. **France**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "**Answer:** Paris") != null);
+    try std.testing.expect(std.mem.find(u8, md, "1. **Paris - Wikipedia**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
+    try std.testing.expect(std.mem.find(u8, md, "Paris is the capital of France.") != null);
+    try std.testing.expect(std.mem.find(u8, md, "2. **France**") != null);
 }
 
 test "tavily: no results render as a notice" {
@@ -2996,10 +3291,10 @@ test "brave results render as markdown" {
     };
 
     const md = try renderResults(aa, try collectBrave(aa, resp));
-    try std.testing.expect(std.mem.indexOf(u8, md, "1. **Paris - Wikipedia**") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "Paris is the capital of France.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "2. **France**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "1. **Paris - Wikipedia**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
+    try std.testing.expect(std.mem.find(u8, md, "Paris is the capital of France.") != null);
+    try std.testing.expect(std.mem.find(u8, md, "2. **France**") != null);
 }
 
 test "brave: no results render as a notice" {
@@ -3026,10 +3321,10 @@ test "keenable results render the snippet as the body" {
     };
 
     const md = try renderResults(aa, try collectKeenable(aa, resp));
-    try std.testing.expect(std.mem.indexOf(u8, md, "1. **Zig (programming language)**") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "Zig is a system programming language.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "2. **Zig guide**") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "Compile-time execution.") != null);
+    try std.testing.expect(std.mem.find(u8, md, "1. **Zig (programming language)**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "Zig is a system programming language.") != null);
+    try std.testing.expect(std.mem.find(u8, md, "2. **Zig guide**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "Compile-time execution.") != null);
 }
 
 test "writeResultItem uses the URL as title when the title is empty" {
@@ -3066,6 +3361,35 @@ test "brave titles and descriptions render on one line" {
     );
 }
 
+test "dropBlocked: blocked hits and the synthesized answer go, the rest stay in order" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const Filter = struct {
+        fn blocksUrl(_: @This(), url: []const u8) bool {
+            return std.mem.find(u8, url, "huggingface.co/datasets/") != null;
+        }
+    };
+    const results: SearchResults = .{ .answer = "42", .hits = &.{
+        .{ .title = "a", .url = "https://example.org/a", .snippet = "" },
+        .{ .title = "gold", .url = "https://huggingface.co/datasets/x/y", .snippet = "answer: 42" },
+        .{ .title = "b", .url = "https://example.org/b", .snippet = "" },
+    } };
+
+    const filtered = try dropBlocked(aa, results, Filter{});
+    try std.testing.expectEqual(2, filtered.hits.len);
+    try std.testing.expectEqualStrings("https://example.org/a", filtered.hits[0].url);
+    try std.testing.expectEqualStrings("https://example.org/b", filtered.hits[1].url);
+    try std.testing.expectEqualStrings("", filtered.answer);
+
+    const untouched = try dropBlocked(aa, .{ .answer = "42", .hits = results.hits[0..1] }, Filter{});
+    try std.testing.expectEqualStrings("42", untouched.answer);
+
+    const all_blocked = try dropBlocked(aa, .{ .hits = results.hits[1..2] }, Filter{});
+    try std.testing.expectEqualStrings("No results.", try renderResults(aa, all_blocked));
+}
+
 test "searchFailed: a rate limit says so, a bare failure stays short" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
@@ -3076,10 +3400,10 @@ test "searchFailed: a rate limit says so, a bare failure stays short" {
         .message = "Public API hourly limit reached.\nWait 2 minutes to continue.",
     });
     try std.testing.expect(limited.is_error);
-    try std.testing.expect(std.mem.indexOf(u8, limited.text, "(HTTP 429)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, limited.text, "Public API hourly limit reached.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, limited.text, "rate-limited right now") != null);
-    try std.testing.expect(std.mem.indexOf(u8, limited.text, "\n") == null);
+    try std.testing.expect(std.mem.find(u8, limited.text, "(HTTP 429)") != null);
+    try std.testing.expect(std.mem.find(u8, limited.text, "Public API hourly limit reached.") != null);
+    try std.testing.expect(std.mem.find(u8, limited.text, "rate-limited right now") != null);
+    try std.testing.expect(std.mem.find(u8, limited.text, "\n") == null);
 
     const bare = try searchFailed(aa, "web", error.ConnectionRefused, .{});
     try std.testing.expectEqualStrings("web search failed: ConnectionRefused", bare.text);
@@ -3116,6 +3440,6 @@ test "markdown: a same-url page whose navigation failed is navigated again" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:1/"}
     , .{});
-    try std.testing.expect((try call(aa, session, &registry, "goto", args, .{})).is_error);
-    try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{})).is_error);
+    try std.testing.expect((try call(aa, session, &registry, "goto", args, .{ .source = .user })).is_error);
+    try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{ .source = .user })).is_error);
 }

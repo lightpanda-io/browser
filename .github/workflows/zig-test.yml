@@ -57,7 +57,7 @@ jobs:
     needs: zig-fmt
 
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     if: github.event.pull_request.draft == false
 

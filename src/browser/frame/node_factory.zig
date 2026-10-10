@@ -402,27 +402,13 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                         attribute_iterator,
                         .{},
                     ),
-                    asUint("base") => {
-                        const n = try createHtmlElementT(
-                            document,
-                            Element.Html.Base,
-                            namespace,
-                            attribute_iterator,
-                            .{},
-                        );
-
-                        // If the frame's base url is not already set, fill it
-                        // with the base tag.
-                        if (document._frame) |realm| {
-                            if (realm.base_url == null) {
-                                if (n.as(Element).getAttributeInterned("href")) |href| {
-                                    realm.base_url = try URL.resolve(realm.arena, realm.url, href, .{});
-                                }
-                            }
-                        }
-
-                        return n;
-                    },
+                    asUint("base") => return createHtmlElementT(
+                        document,
+                        Element.Html.Base,
+                        namespace,
+                        attribute_iterator,
+                        .{},
+                    ),
                     asUint("menu") => return createHtmlElementT(
                         document,
                         Element.Html.Generic,
@@ -823,10 +809,10 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                 },
                 else => {},
             }
-            const tag_name = try String.init(frame.arena, name, .{});
+            const tag_name = try String.init(frame.page_arena, name, .{});
 
             // Check if this is a custom element (must have hyphen for HTML namespace)
-            const has_hyphen = std.mem.indexOfScalar(u8, name, '-') != null;
+            const has_hyphen = std.mem.findScalar(u8, name, '-') != null;
             if (has_hyphen and namespace == .html) {
                 // A document without a browsing context has no registry: its
                 // elements stay undefined until inserted into a document that
@@ -845,24 +831,25 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                 //
                 // Undefined elements are created in the "undefined" state and
                 // upgraded later, when a matching definition is registered.
-                if (creation != .construct or definition == null) {
+                if (creation == .bare_context or definition == null) {
                     const node = try createHtmlElementT(document, Element.Html.Custom, namespace, attribute_iterator, .{
                         ._tag_name = tag_name,
                         ._definition = definition,
-                        ._upgrade_candidate = creation == .construct,
+                        ._upgrade_candidate = creation != .bare_context,
                     });
-                    if (creation == .construct) {
-                        try realm._undefined_custom_elements.append(realm.arena, node.as(Element).is(Element.Html.Custom).?);
+                    if (creation != .bare_context) {
+                        try realm._undefined_custom_elements.append(realm.page_arena, node.as(Element).is(Element.Html.Custom).?);
                     }
                     return node;
                 }
 
-                if (from_clone) {
+                if (from_clone or creation == .upgrade) {
                     const node = try createHtmlElementT(document, Element.Html.Custom, namespace, attribute_iterator, .{
                         ._tag_name = tag_name,
                         ._definition = null,
                     });
-                    try realm._ce_reactions.enqueueUpgrade(realm, node.as(Element).is(Element.Html.Custom).?, definition.?);
+                    const reactions_frame = if (creation == .upgrade) creation.upgrade else realm;
+                    try reactions_frame._ce_reactions.enqueueUpgrade(reactions_frame, node.as(Element).is(Element.Html.Custom).?, definition.?);
                     return node;
                 }
 
@@ -964,7 +951,7 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
             return createSvgElementT(document, Element.Svg.Generic, name, attribute_iterator, .{ ._tag = tag });
         },
         else => {
-            const tag_name = try String.init(frame.arena, name, .{});
+            const tag_name = try String.init(frame.page_arena, name, .{});
             return createHtmlElementT(document, Element.Html.Unknown, namespace, attribute_iterator, .{ ._tag_name = tag_name });
         },
     }
@@ -1156,7 +1143,7 @@ fn parserAttributeName(frame: *Frame, qname: Parser.QualName) ![]const u8 {
     if (prefix.len == 0) {
         return local;
     }
-    return std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix, local });
+    return frame.local_arena.print("{s}:{s}", .{ prefix, local });
 }
 
 // Called when `new MyElement()` is invoked directly in JS (not via the
@@ -1179,7 +1166,7 @@ pub fn constructCustomElement(frame: *Frame, new_target: JS.Function) !*Element 
         return error.IllegalConstructor;
     }
 
-    const tag_name = try String.init(frame.arena, definition.name, .{});
+    const tag_name = try String.init(frame.page_arena, definition.name, .{});
     const node = try createHtmlElementT(frame.document, Element.Html.Custom, .html, null, .{
         ._tag_name = tag_name,
         ._definition = definition,
@@ -1207,7 +1194,7 @@ pub fn createComment(document: *const Node.Document, text: []const u8) !*Node {
 
 pub fn createCDATASection(document: *const Node.Document, data: []const u8) !*Node {
     // Validate that the data doesn't contain "]]>"
-    if (std.mem.indexOf(u8, data, "]]>") != null) {
+    if (std.mem.find(u8, data, "]]>") != null) {
         return error.InvalidCharacterError;
     }
 
@@ -1221,10 +1208,10 @@ pub fn createCDATASection(document: *const Node.Document, data: []const u8) !*No
 
 pub fn createProcessingInstruction(document: *const Node.Document, target: []const u8, data: []const u8) !*Node {
     // Validate neither target nor data contain "?>"
-    if (std.mem.indexOf(u8, target, "?>") != null) {
+    if (std.mem.find(u8, target, "?>") != null) {
         return error.InvalidCharacterError;
     }
-    if (std.mem.indexOf(u8, data, "?>") != null) {
+    if (std.mem.find(u8, data, "?>") != null) {
         return error.InvalidCharacterError;
     }
 
@@ -1300,7 +1287,7 @@ fn isXmlNameChar(c: u21) bool {
         (c >= 0x203F and c <= 0x2040);
 }
 
-fn asUint(comptime string: anytype) std.meta.Int(
+fn asUint(comptime string: anytype) @Int(
     .unsigned,
     @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
 ) {

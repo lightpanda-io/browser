@@ -69,63 +69,40 @@ pub fn TextEntry(comptime T: type) type {
             try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
         }
 
-        pub fn innerInsert(self: *T, str: []const u8, frame: *Frame) !void {
-            const arena = frame.arena;
-
-            switch (howSelected(self)) {
-                .full => {
-                    // fully selected, replace the content.
-                    const new_value = try arena.dupe(u8, str);
-                    try self.setUserValue(new_value, frame);
-                    // the sanitized value can be shorter than what was inserted
-                    const new_len: u32 = @intCast(self.getValue().len);
-                    self._selection_start = new_len;
-                    self._selection_end = new_len;
-                    self._selection_direction = .none;
-                    try dispatchSelectionChangeEvent(self, frame);
+        pub fn innerInsert(self: *T, str: []const u8, data: ?[]const u8, input_type: []const u8, frame: *Frame) !void {
+            const current_value = self.getValue();
+            const value_len: u32 = @intCast(current_value.len);
+            const start: u32, const end: u32 = switch (howSelected(self)) {
+                .full => .{ 0, value_len },
+                .partial => |range| range,
+                .none => blk: {
+                    // Controls without a caret (e.g. date) append.
+                    const caret = if (tracksSelection(self)) @min(self._selection_start, value_len) else value_len;
+                    break :blk .{ caret, caret };
                 },
-                .partial => |range| {
-                    // partially selected, replace the selected content.
-                    const current_value = self.getValue();
-                    const before = current_value[0..range[0]];
-                    const remaining = current_value[range[1]..];
+            };
 
-                    const new_value = try std.mem.concat(
-                        arena,
-                        u8,
-                        &.{ before, str, remaining },
-                    );
-                    try self.setUserValue(new_value, frame);
-
-                    const new_pos: u32 = @intCast(@min(range[0] + str.len, self.getValue().len));
-                    self._selection_start = new_pos;
-                    self._selection_end = new_pos;
-                    self._selection_direction = .none;
-                    try dispatchSelectionChangeEvent(self, frame);
-                },
-                .none => {
-                    // nothing selected, insert at the caret. Controls without
-                    // a caret (e.g. date) append.
-                    const current_value = self.getValue();
-                    const caret = if (tracksSelection(self)) @min(self._selection_start, current_value.len) else current_value.len;
-                    const new_value = try std.mem.concat(arena, u8, &.{ current_value[0..caret], str, current_value[caret..] });
-                    try self.setUserValue(new_value, frame);
-                    if (tracksSelection(self)) {
-                        // the sanitized value can be shorter than what was inserted
-                        const new_pos: u32 = @intCast(@min(caret + str.len, self.getValue().len));
-                        self._selection_start = new_pos;
-                        self._selection_end = new_pos;
-                        self._selection_direction = .none;
-                        try dispatchSelectionChangeEvent(self, frame);
-                    }
-                },
+            {
+                const scratch = try frame.getArena(current_value.len + str.len, "TextEntry.innerInsert");
+                defer scratch.release();
+                const new_value = try std.mem.concat(scratch.allocator(), u8, &.{ current_value[0..start], str, current_value[end..] });
+                try self.setUserValue(new_value, frame);
             }
-            try dispatchInputEvent(self, str, "insertText", frame);
+
+            if (tracksSelection(self)) {
+                // the sanitized value can be shorter than what was inserted
+                const new_pos: u32 = @intCast(@min(start + str.len, self.getValue().len));
+                self._selection_start = new_pos;
+                self._selection_end = new_pos;
+                self._selection_direction = .none;
+                try dispatchSelectionChangeEvent(self, frame);
+            }
+            try dispatchInputEvent(self, data, input_type, frame);
         }
 
         // forward == delete
         // !forward == backspace
-        pub fn innerDelete(self: *T, forward: bool, frame: *Frame) !void {
+        pub fn innerDelete(self: *T, forward: bool, input_type: []const u8, frame: *Frame) !void {
             const current_value = self.getValue();
             const value_len: u32 = @intCast(current_value.len);
 
@@ -161,16 +138,20 @@ pub fn TextEntry(comptime T: type) type {
                 },
             }
 
-            const new_value = try std.mem.concat(frame.arena, u8, &.{
-                current_value[0..start],
-                current_value[@min(end, value_len)..],
-            });
-            try self.setUserValue(new_value, frame);
+            {
+                const scratch = try frame.getArena(current_value.len, "TextEntry.innerDelete");
+                defer scratch.release();
+                const new_value = try std.mem.concat(scratch.allocator(), u8, &.{
+                    current_value[0..start],
+                    current_value[@min(end, value_len)..],
+                });
+                try self.setUserValue(new_value, frame);
+            }
             self._selection_start = start;
             self._selection_end = start;
             self._selection_direction = .none;
             try dispatchSelectionChangeEvent(self, frame);
-            try dispatchInputEvent(self, null, if (forward) "deleteContentForward" else "deleteContentBackward", frame);
+            try dispatchInputEvent(self, null, input_type, frame);
         }
 
         // Collapses the selection to the end of the value. Unlike
@@ -252,11 +233,11 @@ pub fn TextEntry(comptime T: type) type {
                     return @intCast(@min(next, value.len));
                 },
                 .line_start => {
-                    const nl = std.mem.lastIndexOfScalar(u8, value[0..pos], '\n') orelse return 0;
+                    const nl = std.mem.findScalarLast(u8, value[0..pos], '\n') orelse return 0;
                     return @intCast(nl + 1);
                 },
                 .line_end => {
-                    const nl = std.mem.indexOfScalarPos(u8, value, pos, '\n') orelse return @intCast(value.len);
+                    const nl = std.mem.findScalarPos(u8, value, pos, '\n') orelse return @intCast(value.len);
                     return @intCast(nl);
                 },
             }

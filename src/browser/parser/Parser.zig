@@ -91,7 +91,7 @@ pending_text: ?PendingText,
 // on flush keeps the largest capacity ever needed, so total dead memory on the
 // parser arena is bounded to one peak-run-sized allocation regardless of how
 // many text runs the parse contains. Matters for Streaming, whose arena is the
-// page-lifetime frame.arena (individual frees are no-ops there).
+// page-lifetime frame.page_arena (individual frees are no-ops there).
 //
 // Single-chunk text runs leave this buf empty: the chunk lives only in
 // CData._data via createTextNode. The buf is seeded from _data.str() on the
@@ -108,6 +108,9 @@ allow_declarative_shadow: bool = false,
 // a <template> context is processed "in template" mode which has specific
 // behavior.
 context: ?*Element = null,
+
+// // Fragment parsing doesn't run custom element constructor synchronously
+fragment: bool = false,
 
 xml_error: bool = false,
 terminated: bool = false,
@@ -147,7 +150,7 @@ pub fn flushPendingText(self: *Parser) !void {
     if (self.buf.items.len == 0) return;
     defer self.buf.clearRetainingCapacity();
     pt.text_node._data = try lp.String.init(
-        self.frame.arena,
+        self.frame.page_arena,
         self.buf.items,
         .{ .dupe = true },
     );
@@ -311,6 +314,7 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
 }
 
 pub fn parseFragment(self: *Parser, html: []const u8) void {
+    self.fragment = true;
     const context_name: []const u8 = if (self.context orelse self.container.node.is(Element)) |el|
         el.getLocalName()
     else
@@ -532,6 +536,17 @@ fn createContextElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.Qu
 
 fn _createElementCallbackWithDefaultnamespace(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator, default_namespace: Element.Namespace) ?*anyopaque {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    if (self.fragment) {
+        const frame = self.document._frame orelse self.frame;
+        const previous_creation = frame._custom_element_creation;
+        frame._custom_element_creation = .{ .upgrade = self.frame };
+        defer frame._custom_element_creation = previous_creation;
+        return self._createElementCallback(data, qname, attributes, default_namespace) catch |err| {
+            self.err = .{ .err = err, .source = .create_element };
+            return null;
+        };
+    }
+
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     return self._createElementCallback(data, qname, attributes, default_namespace) catch |err| {
@@ -546,7 +561,7 @@ fn _createElementCallback(self: *Parser, data: *anyopaque, qname: h5e.QualName, 
     // like createElementNS. html5ever never sets a prefix; xml5ever does.
     const name = if (qname.prefix.unwrap()) |prefix| blk: {
         if (prefix.len == 0) break :blk local;
-        break :blk try std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix.slice(), local });
+        break :blk try frame.local_arena.print("{s}:{s}", .{ prefix.slice(), local });
     } else local;
     const namespace_string = qname.ns.slice();
     const namespace = if (namespace_string.len == 0) default_namespace else Element.Namespace.parse(namespace_string);
@@ -555,7 +570,7 @@ fn _createElementCallback(self: *Parser, data: *anyopaque, qname: h5e.QualName, 
         // Same as Document.createElementNS: keep the URI so namespaceURI and
         // lookupNamespaceURI can return it.
         const page = self.document._page;
-        try page.element_namespace_uris.put(page.frame_arena, node.as(Element), try frame.dupeString(namespace_string));
+        try page.element_namespace_uris.put(page.arena, node.as(Element), try frame.dupeString(namespace_string));
     }
 
     const pn = try self.arena.create(ParsedNode);
@@ -817,7 +832,7 @@ fn rebuildIn(self: *Parser, node: *Node, document: *Node.Document) !*Node {
         // The URI lives in a side table, see _createElementCallback.
         const page = self.document._page;
         if (page.element_namespace_uris.fetchRemove(element)) |entry| {
-            try page.element_namespace_uris.put(page.frame_arena, copy.as(Element), entry.value);
+            try page.element_namespace_uris.put(page.arena, copy.as(Element), entry.value);
         }
     }
     return copy;
@@ -976,7 +991,7 @@ fn getNode(ref: *anyopaque) *Node {
     return getParsed(ref).node;
 }
 
-fn asUint(comptime string: anytype) std.meta.Int(
+fn asUint(comptime string: anytype) @Int(
     .unsigned,
     @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
 ) {

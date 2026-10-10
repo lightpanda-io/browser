@@ -146,7 +146,7 @@ pub fn assign(self: *Slot, values: []const js.Value, frame: *Frame) !void {
     self._manually_assigned.clearRetainingCapacity();
 
     for (nodes) |node| {
-        const gop = try page._manual_slot_assignments.getOrPut(page.frame_arena, node);
+        const gop = try page._manual_slot_assignments.getOrPut(page.arena, node);
         if (gop.found_existing) {
             const other = gop.value_ptr.*;
             if (other == self) {
@@ -162,7 +162,7 @@ pub fn assign(self: *Slot, values: []const js.Value, frame: *Frame) !void {
             }
         }
         gop.value_ptr.* = self;
-        try self._manually_assigned.append(frame.arena, node);
+        try self._manually_assigned.append(frame.page_arena, node);
     }
 
     if (self.asNode().containingShadowRoot()) |shadow_root| {

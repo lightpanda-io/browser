@@ -23,6 +23,7 @@ const URL = @import("../../URL.zig");
 const DateTime = @import("../../../datetime.zig").DateTime;
 const Notification = @import("../../../Notification.zig");
 const public_suffix_list = @import("../../../data/public_suffix_list.zig").lookup;
+const repeat = @import("../../../string.zig").repeat;
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -118,10 +119,7 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         return error.InvalidNameValue;
     };
 
-    if (cookie_name.len == 0 and (std.ascii.startsWithIgnoreCase(cookie_value, "__Host-") or std.ascii.startsWithIgnoreCase(cookie_value, "__Secure-"))) {
-        // A nameless cookie whose value begins with __Host- or __Secure-
-        // (case-insensitive) would otherwise impersonate a cookie with that
-        // prefix. Reject per the cookie-name-prefix rules.
+    if (cookie_name.len == 0 and hasHiddenPrefix(cookie_value)) {
         return error.InvalidNameValue;
     }
 
@@ -137,7 +135,7 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
 
     var it = std.mem.splitScalar(u8, rest, ';');
     while (it.next()) |attribute| {
-        const sep = std.mem.indexOfScalarPos(u8, attribute, 0, '=') orelse attribute.len;
+        const sep = std.mem.findScalarPos(u8, attribute, 0, '=') orelse attribute.len;
         const key_string = trim(attribute[0..sep]);
 
         if (key_string.len > scrap.len) {
@@ -171,30 +169,9 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         return error.InsecureSameSite;
     }
 
-    // Enforce cookie-name-prefix rules. Match is case-insensitive to
-    // cover impersonation attempts (e.g. "__HoSt-").
-    // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-cookie-name-prefixes
-    if (std.ascii.startsWithIgnoreCase(cookie_name, "__Host-")) {
-        if (secure == null) {
-            return error.InvalidPrefixedCookie;
-        }
-
-        if (!URL.isPotentiallyTrustworthy(url)) {
-            return error.InvalidPrefixedCookie;
-        }
-
-        if (domain != null and domain.?.len > 0) {
-            return error.InvalidPrefixedCookie;
-        }
-
-        if (path == null or !std.mem.eql(u8, path.?, "/")) {
-            return error.InvalidPrefixedCookie;
-        }
-    } else if (std.ascii.startsWithIgnoreCase(cookie_name, "__Secure-")) {
-        if (secure == null) {
-            return error.InvalidPrefixedCookie;
-        }
-        if (!URL.isPotentiallyTrustworthy(url)) {
+    if (prefixOf(cookie_name)) |prefix| {
+        const secure_origin = secure != null and URL.isPotentiallyTrustworthy(url);
+        if (!prefix.allows(secure_origin, http_only orelse false, if (domain) |d| d.len > 0 else false, path orelse "")) {
             return error.InvalidPrefixedCookie;
         }
     }
@@ -219,11 +196,18 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         if (expires) |expires_| {
             var exp_dt = DateTime.parse(expires_, .rfc822) catch null;
             if (exp_dt == null) {
-                if ((expires_.len > 11 and expires_[7] == '-' and expires_[11] == '-')) {
-                    // Replace dashes and try again
+                const dashed = expires_.len > 11 and expires_[7] == '-' and expires_[11] == '-';
+                const utc = std.ascii.endsWithIgnoreCase(expires_, " utc");
+                if (dashed or utc) {
+                    // Replace dashes and a "UTC" zone, and try again
                     const output = try aa.dupe(u8, expires_);
-                    output[7] = ' ';
-                    output[11] = ' ';
+                    if (dashed) {
+                        output[7] = ' ';
+                        output[11] = ' ';
+                    }
+                    if (utc) {
+                        @memcpy(output[output.len - 3 ..], "GMT");
+                    }
                     exp_dt = DateTime.parse(output, .rfc822) catch null;
                 }
             }
@@ -250,6 +234,129 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         .domain = owned_domain,
         .expires = normalized_expires,
     };
+}
+
+pub const Fields = struct {
+    name: []const u8,
+    value: []const u8,
+    domain: ?[]const u8 = null,
+    path: ?[]const u8 = null,
+    expires: ?f64 = null,
+    secure: bool = false,
+    http_only: bool = false,
+    same_site: ?SameSite = null,
+};
+
+/// A cookie a protocol (CDP, BiDi, WebDriver) sets field by field rather than
+/// through a Set-Cookie line, with the character and size checks of Chrome's
+/// CanonicalCookie::CreateSanitizedCookie, which both its CDP and its BiDi go
+/// through.
+pub fn fromFields(allocator: Allocator, url: ?[:0]const u8, fields: Fields) error{ OutOfMemory, InvalidCookie, InvalidDomain }!Cookie {
+    if ((fields.name.len == 0 and (fields.value.len == 0 or hasHiddenPrefix(fields.value))) or
+        fields.name.len + fields.value.len > max_cookie_size or
+        !isValidField(fields.name, ";=") or
+        !isValidField(fields.value, ";"))
+    {
+        return error.InvalidCookie;
+    }
+    if (fields.path) |path| {
+        // Chrome URL-encodes any other control character in a path.
+        if (std.mem.findAny(u8, path, ";\r\n\x00") != null or hasOuterWhitespace(path)) {
+            return error.InvalidCookie;
+        }
+    }
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+
+    // Allocate before the struct literal copies `arena` into the result.
+    const name = try a.dupe(u8, fields.name);
+    const value = try a.dupe(u8, fields.value);
+    const domain = parseDomain(a, url, fields.domain) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidDomain,
+    };
+    // Without a url there's nothing to encode: only the dupe can fail.
+    const path = parsePath(a, null, fields.path) catch return error.OutOfMemory;
+
+    if (prefixOf(fields.name)) |prefix| {
+        if (!prefix.allows(fields.secure, fields.http_only, fields.domain != null, path)) {
+            return error.InvalidCookie;
+        }
+    }
+
+    return .{
+        .arena = arena,
+        .name = name,
+        .value = value,
+        .domain = domain,
+        .path = path,
+        .expires = fields.expires,
+        .secure = fields.secure,
+        .http_only = fields.http_only,
+        .same_site = fields.same_site orelse .lax,
+        .same_site_default = fields.same_site == null,
+    };
+}
+
+pub const Prefix = struct {
+    text: []const u8,
+    http: bool = false,
+    host: bool = false,
+
+    /// Chrome's IsCookiePrefixValid. `secure` only when a Secure cookie could
+    /// be set from where this one comes from.
+    pub fn allows(self: Prefix, secure: bool, http_only: bool, has_domain: bool, path: []const u8) bool {
+        return secure and
+            (!self.http or http_only) and
+            (!self.host or (!has_domain and std.mem.eql(u8, path, "/")));
+    }
+};
+
+// Chrome's kPrefixes, matched in this order and case-insensitively, so that
+// "__HoSt-" can't sidestep the rules.
+// https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-cookie-name-prefixes
+const prefixes = [_]Prefix{
+    .{ .text = "__Secure-" },
+    .{ .text = "__Host-Http-", .http = true, .host = true },
+    .{ .text = "__Http-", .http = true },
+    .{ .text = "__Host-", .host = true },
+};
+
+pub fn prefixOf(name: []const u8) ?Prefix {
+    for (prefixes) |prefix| {
+        if (std.ascii.startsWithIgnoreCase(name, prefix.text)) {
+            return prefix;
+        }
+    }
+    return null;
+}
+
+/// Chrome's HasHiddenPrefixName: a nameless cookie's value would read as a
+/// prefixed name in the Cookie header.
+pub fn hasHiddenPrefix(value: []const u8) bool {
+    return prefixOf(std.mem.trimStart(u8, value, " \t")) != null;
+}
+
+// Chrome's IsValidCookieName/Value: no control character (tab included) and
+// none of `separators`, but bytes above 0x7F are fine.
+fn isValidField(field: []const u8, comptime separators: []const u8) bool {
+    if (hasOuterWhitespace(field)) {
+        return false;
+    }
+    for (field) |c| {
+        if (std.ascii.isControl(c) or std.mem.findScalar(u8, separators, c) != null) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Chrome's ParseTokenString/ParseValueString trim it, and refuse a field
+// that doesn't survive the parse unchanged.
+fn hasOuterWhitespace(field: []const u8) bool {
+    return std.mem.trim(u8, field, " \t").len != field.len;
 }
 
 const ValidateCookieError = error{ Empty, InvalidByteSequence };
@@ -316,7 +423,7 @@ pub fn parsePath(arena: Allocator, url_: ?[:0]const u8, explicit_path: ?[]const 
     }
 
     var owned_path: []const u8 = try percentEncode(arena, url_path, isPathChar);
-    const last = std.mem.lastIndexOfScalar(u8, owned_path[1..], '/') orelse {
+    const last = std.mem.findScalarLast(u8, owned_path[1..], '/') orelse {
         return "/";
     };
     return try arena.dupe(u8, owned_path[0 .. last + 1]);
@@ -347,7 +454,7 @@ pub fn parseDomain(arena: Allocator, url_: ?[:0]const u8, explicit_domain: ?[]co
                 return error.InvalidDomain;
             }
 
-            if (std.mem.indexOfScalarPos(u8, owned_domain, 1, '.') == null and std.mem.eql(u8, "localhost", owned_domain[1..]) == false) {
+            if (std.mem.findScalarPos(u8, owned_domain, 1, '.') == null and std.mem.eql(u8, "localhost", owned_domain[1..]) == false) {
                 // can't set a cookie for a TLD
                 return error.InvalidDomain;
             }
@@ -419,10 +526,10 @@ fn isPathChar(c: u8) bool {
 }
 
 fn parseNameValue(str: []const u8) !struct { []const u8, []const u8, []const u8 } {
-    const key_value_end = std.mem.indexOfScalarPos(u8, str, 0, ';') orelse str.len;
+    const key_value_end = std.mem.findScalarPos(u8, str, 0, ';') orelse str.len;
     const rest = if (key_value_end == str.len) "" else str[key_value_end + 1 ..];
 
-    const sep = std.mem.indexOfScalarPos(u8, str[0..key_value_end], 0, '=') orelse {
+    const sep = std.mem.findScalarPos(u8, str[0..key_value_end], 0, '=') orelse {
         const value = trim(str[0..key_value_end]);
         if (value.len == 0) {
             return error.Empty;
@@ -751,9 +858,9 @@ pub fn areHostsSameSite(target_host: []const u8, origin_host: []const u8) bool {
 }
 
 fn findSecondLevelDomain(host: []const u8) []const u8 {
-    var i = std.mem.lastIndexOfScalar(u8, host, '.') orelse return host;
+    var i = std.mem.findScalarLast(u8, host, '.') orelse return host;
     while (true) {
-        i = std.mem.lastIndexOfScalar(u8, host[0..i], '.') orelse return host;
+        i = std.mem.findScalarLast(u8, host[0..i], '.') orelse return host;
         const strip = i + 1;
         if (public_suffix_list(host[strip..]) == false) {
             return host[strip..];
@@ -798,6 +905,56 @@ fn toLower(str: []u8) []u8 {
 
 const testing = @import("../../../testing.zig");
 const test_url = "http://lightpanda.io/";
+test "cookie: fromFields refuses what Chrome's CreateSanitizedCookie does" {
+    const url = "https://example.com/";
+    const too_long: [max_cookie_size]u8 = @splat('v');
+    const refused = [_]Fields{
+        .{ .name = "a;b", .value = "v" },
+        .{ .name = "a=b", .value = "v" },
+        .{ .name = " a", .value = "v" },
+        .{ .name = "a", .value = "x;y" },
+        .{ .name = "a", .value = "x\ty" },
+        .{ .name = "a", .value = "x\x7fy" },
+        .{ .name = "a", .value = "v " },
+        .{ .name = "", .value = "" },
+        .{ .name = "a", .value = &too_long },
+        .{ .name = "a", .value = "v", .path = "/a\nb" },
+    };
+    for (refused) |fields| {
+        try testing.expectError(error.InvalidCookie, fromFields(testing.allocator, url, fields));
+    }
+    try testing.expectError(error.InvalidDomain, fromFields(testing.allocator, url, .{ .name = "a", .value = "v", .domain = "other.com" }));
+
+    // Chrome's cookie-name prefixes, beyond what the parse tests cover.
+    const prefix_refused = [_]Fields{
+        .{ .name = "", .value = " __host-x" },
+        .{ .name = "__host-a", .value = "v", .secure = true, .domain = ".example.com" },
+        .{ .name = "__Host-Http-a", .value = "v", .secure = true },
+    };
+    for (prefix_refused) |fields| {
+        try testing.expectError(error.InvalidCookie, fromFields(testing.allocator, url, fields));
+    }
+    const prefix_accepted = [_]Fields{
+        .{ .name = "__Host-a", .value = "v", .secure = true },
+        .{ .name = "__Host-Http-a", .value = "v", .secure = true, .http_only = true },
+    };
+    for (prefix_accepted) |fields| {
+        const cookie = try fromFields(testing.allocator, url, fields);
+        cookie.deinit();
+    }
+
+    // Wider than RFC 6265bis's grammar, as in Chrome.
+    const accepted = [_]Fields{
+        .{ .name = "a b", .value = "caf\xc3\xa9" },
+        .{ .name = "a", .value = "" },
+        .{ .name = "a", .value = "v", .path = "/a\x01b" },
+    };
+    for (accepted) |fields| {
+        const cookie = try fromFields(testing.allocator, url, fields);
+        cookie.deinit();
+    }
+}
+
 test "cookie: findSecondLevelDomain" {
     const cases = [_]struct { []const u8, []const u8 }{
         .{ "", "" },
@@ -895,15 +1052,15 @@ test "Jar: add limit" {
         .domain = "lightpanda.io",
         .path = "/",
         .expires = null,
-        .value = "v" ** 4096 ++ "v",
+        .value = repeat("v", 4096) ++ "v",
     }, now, true));
 
     // generate unique names.
     const names = comptime blk: {
-        @setEvalBranchQuota(max_jar_size);
+        @setEvalBranchQuota(max_jar_size * 10);
         var result: [max_jar_size][]const u8 = undefined;
         for (0..max_jar_size) |i| {
-            result[i] = "v" ** i;
+            result[i] = repeat("v", i);
         }
         break :blk result;
     };
@@ -1271,9 +1428,12 @@ test "Cookie: parse key=value" {
     try expectError(error.InvalidByteSequence, null, "a\rb=c");
     try expectError(error.InvalidByteSequence, null, &.{ 'a', '=', 'b', 0 });
 
-    // Nameless cookies whose value begins with __Host- or __Secure-
-    // (case-insensitive) are rejected so they can't impersonate prefixed cookies.
+    // Nameless cookies whose value begins with a prefix (case-insensitive,
+    // after leading whitespace) are rejected so they can't impersonate
+    // prefixed cookies.
     try expectError(error.InvalidNameValue, null, "=__Host-abc=1");
+    try expectError(error.InvalidNameValue, null, "=__Http-abc");
+    try expectError(error.InvalidNameValue, null, "= __Secure-abc");
     try expectError(error.InvalidNameValue, null, "=__Secure-abc=1");
     try expectError(error.InvalidNameValue, null, "=__HoSt-abc");
     try expectError(error.InvalidNameValue, null, "__Secure-abc");
@@ -1296,6 +1456,12 @@ test "Cookie: parse key=value" {
     try expectAttribute(.{ .name = "__Secure-abc", .value = "1" }, "https://lightpanda.io/", "__Secure-abc=1; Secure");
     try expectAttribute(.{ .name = "__SeCuRe-abc", .value = "1" }, "https://lightpanda.io/", "__SeCuRe-abc=1; Secure; Domain=lightpanda.io");
     try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Secure-abc=1");
+
+    // __Http- and __Host-Http- also need HttpOnly.
+    try expectAttribute(.{ .name = "__Http-abc", .http_only = true }, "https://lightpanda.io/", "__Http-abc=1; Secure; HttpOnly");
+    try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Http-abc=1; Secure");
+    try expectAttribute(.{ .name = "__Host-Http-abc", .http_only = true }, "https://lightpanda.io/", "__Host-Http-abc=1; Secure; HttpOnly; Path=/");
+    try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Host-Http-abc=1; Secure; HttpOnly");
 
     // plain-http loopback
     try expectAttribute(.{ .name = "__Host-abc" }, "http://127.0.0.1:3000/", "__Host-abc=1; Secure; Path=/");
@@ -1434,6 +1600,11 @@ test "Cookie: parse expires" {
 
     try expectAttribute(.{ .expires = 1918798080 }, null, "b;expires=Wed, 21 Oct 2030 07:28:00 GMT");
     try expectAttribute(.{ .expires = 1784275395 }, null, "b;expires=Fri, 17-Jul-2026 08:03:15 GMT");
+    try expectAttribute(.{ .expires = 1918798080 }, null, "b;expires=Wed, 21 Oct 2030 07:28:00 UTC");
+    try expectAttribute(.{ .expires = 1784275395 }, null, "b;expires=Fri, 17-Jul-2026 08:03:15 UTC");
+    try expectAttribute(.{ .expires = 0 }, null, "b;expires=Thu, 01 Jan 1970 00:00:00 UTC");
+    try expectAttribute(.{ .expires = 1918798080 }, null, "b;expires=Wed, 21 Oct 2030 07:28:00 utc");
+    try expectAttribute(.{ .expires = 1784275395 }, null, "b;expires=Fri, 17-Jul-2026 08:03:15 Utc");
     // max-age has priority over expires
     try expectAttribute(.{ .expires = lp.datetime.timestamp(.real) + 10 }, null, "b;Max-Age=10; expires=Wed, 21 Oct 2030 07:28:00 GMT");
 }
@@ -1511,8 +1682,8 @@ test "Cookie: parse domain" {
 }
 
 test "Cookie: parse limit" {
-    try expectError(error.CookieHeaderSizeExceeded, "http://lightpanda.io/", "v" ** 8192 ++ ";domain=lightpanda.io");
-    try expectError(error.CookieSizeExceeded, "http://lightpanda.io/", "v" ** 4096 ++ "v;domain=lightpanda.io");
+    try expectError(error.CookieHeaderSizeExceeded, "http://lightpanda.io/", repeat("v", 8192) ++ ";domain=lightpanda.io");
+    try expectError(error.CookieSizeExceeded, "http://lightpanda.io/", repeat("v", 4096) ++ "v;domain=lightpanda.io");
 }
 
 const ExpectedCookie = struct {
@@ -1545,14 +1716,14 @@ fn expectAttribute(expected: anytype, url_: ?[:0]const u8, set_cookie: []const u
     var cookie = try Cookie.parse(testing.allocator, url_ orelse test_url, set_cookie);
     defer cookie.deinit();
 
-    inline for (@typeInfo(@TypeOf(expected)).@"struct".fields) |f| {
-        if (comptime std.mem.eql(u8, f.name, "expires")) {
+    inline for (@typeInfo(@TypeOf(expected)).@"struct".field_names) |field_name| {
+        if (comptime std.mem.eql(u8, field_name, "expires")) {
             switch (@typeInfo(@TypeOf(expected.expires))) {
                 .int, .comptime_int => try testing.expectDelta(@as(f64, @floatFromInt(expected.expires)), cookie.expires, 1.0),
                 else => try testing.expectDelta(expected.expires, cookie.expires, 1.0),
             }
         } else {
-            try testing.expectEqual(@field(expected, f.name), @field(cookie, f.name));
+            try testing.expectEqual(@field(expected, field_name), @field(cookie, field_name));
         }
     }
 }

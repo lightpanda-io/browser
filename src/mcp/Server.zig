@@ -147,7 +147,7 @@ pub fn useSession(self: *Self, id: ?[]const u8) !*lp.ToolSession {
 pub fn nextSessionId(self: *Self, arena: std.mem.Allocator) ![]const u8 {
     while (true) {
         self.session_seq += 1;
-        const candidate = try std.fmt.allocPrint(arena, "s{d}", .{self.session_seq});
+        const candidate = try arena.print("s{d}", .{self.session_seq});
         if (!self.sessions.contains(candidate)) return candidate;
     }
 }
@@ -177,6 +177,9 @@ pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
 
 pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
     const id = req.id orelse return;
+    if (protocol.clientName(req.params)) |name| {
+        self.app.telemetry.record(.{ .mcp_client = .fromName(name) });
+    }
     try self.sendResult(id, protocol.InitializeResult{
         .protocolVersion = @tagName(protocol.Version.negotiate(req.params)),
         .capabilities = .{

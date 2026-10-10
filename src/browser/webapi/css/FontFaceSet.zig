@@ -45,7 +45,8 @@ pub fn init(frame: *Frame) !*FontFaceSet {
     });
 }
 
-pub fn deinit(self: *FontFaceSet, _: *Page) void {
+pub fn deinit(self: *FontFaceSet, page: *Page) void {
+    page.event_listeners.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 

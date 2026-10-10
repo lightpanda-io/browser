@@ -256,12 +256,12 @@ pub fn reload(cmd: *BiDi.Command, ctx: *Context, wait: NavigateOpts.Wait) !void 
 
     // the frame's arena, which these live in, is gone once the reload commits
     const arena = cmd.arena;
-    const url = try arena.dupeZ(u8, frame.url);
+    const url = try arena.dupeSentinel(u8, frame.url, 0);
     var nav_opts: Frame.NavigateOpts = .{ .reason = .address_bar, .kind = .reload };
     if (frame._navigated_options) |prev| {
         nav_opts.method = prev.method;
         nav_opts.body = if (prev.body) |b| try arena.dupe(u8, b) else null;
-        nav_opts.header = if (prev.header) |h| try arena.dupeZ(u8, h) else null;
+        nav_opts.header = if (prev.header) |h| try arena.dupeSentinel(u8, h, 0) else null;
     }
     return startNavigation(cmd, ctx, frame, url, nav_opts, wait);
 }
@@ -325,7 +325,7 @@ pub fn traverse(cmd: *BiDi.Command, ctx: *Context, frame: *Frame, delta: i32) !v
         defer ls.deinit();
         frame.js.local = &ls.local;
 
-        try frame._session.history.go(delta, frame);
+        try frame.window._history.go(delta, frame);
     }
     return answerAfterNavigation(cmd, ctx, frame);
 }
@@ -526,7 +526,7 @@ pub const Locator = union(enum) {
                         const rendered = std.mem.trim(u8, text.written(), &std.ascii.whitespace);
                         break :blk switch (self) {
                             .link_text => std.mem.eql(u8, rendered, needle),
-                            else => std.mem.indexOf(u8, rendered, needle) != null,
+                            else => std.mem.find(u8, rendered, needle) != null,
                         };
                     },
                     else => unreachable, // css and xpath returned above

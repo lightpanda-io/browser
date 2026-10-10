@@ -56,6 +56,9 @@ _entries: std.ArrayList(*Entry) = .empty,
 // resources has its own cap, so it's split from entries (it's also potentially
 // polled more)
 _resources: std.ArrayList(*Entry) = .empty,
+// Entries that arrive while the buffer is full. Get copied into _resources
+// if a handler makes room.
+_secondary_resources: std.ArrayList(*Entry) = .empty,
 _timing: PerformanceTiming = .{},
 _navigation: PerformanceNavigation = .{},
 _event_counts: EventCounts = .{},
@@ -289,10 +292,13 @@ const ResourceInfo = struct {
 };
 
 pub fn addResource(self: *Performance, info: ResourceInfo) !void {
-    const buffer_full = self._resources.items.len >= self._resource_buffer_size;
-    if (buffer_full) {
+    var buffer: ?*std.ArrayList(*Entry) = &self._resources;
+    if (self._buffer_full_pending or self.canAddResource() == false) {
         try self.scheduleBufferFull();
-        if (self.hasObserverFor(.resource) == false) {
+        buffer = if (self._buffer_full_pending) &self._secondary_resources else null;
+        if (buffer == null and self.hasObserverFor(.resource) == false) {
+            // There's no listener, so nothing can copy from our secondary, so
+            // we just drop it
             return;
         }
     }
@@ -338,9 +344,13 @@ pub fn addResource(self: *Performance, info: ResourceInfo) !void {
     rt._proto._type = .{ .resource = rt };
     // Observers see every entry; only the buffer has a cap.
     try self.notifyObservers(rt._proto);
-    if (!buffer_full) {
-        try self.insertOrdered(&self._resources, rt._proto);
+    if (buffer) |b| {
+        try self.insertOrdered(b, rt._proto);
     }
+}
+
+fn canAddResource(self: *const Performance) bool {
+    return self._resources.items.len < self._resource_buffer_size;
 }
 
 fn gated(self: *const Performance, allow: bool, micros: u64) f64 {
@@ -350,7 +360,7 @@ fn gated(self: *const Performance, allow: bool, micros: u64) f64 {
 // https://mimesniff.spec.whatwg.org/#minimize-a-supported-mime-type
 fn minimizeMimeType(header: []const u8) []const u8 {
     var buf: [255]u8 = undefined;
-    const raw = std.mem.trim(u8, header[0 .. std.mem.indexOfScalar(u8, header, ';') orelse header.len], " \t");
+    const raw = std.mem.trim(u8, header[0 .. std.mem.findScalar(u8, header, ';') orelse header.len], " \t");
     if (raw.len > buf.len) {
         return "";
     }
@@ -435,7 +445,7 @@ fn contentEncoding(header: []const u8) []const u8 {
     if (header.len == 0) {
         return "";
     }
-    if (std.mem.indexOfScalar(u8, header, ',') != null) {
+    if (std.mem.findScalar(u8, header, ',') != null) {
         return "multiple";
     }
     var buf: [8]u8 = undefined;
@@ -598,11 +608,8 @@ fn hasObserverFor(self: *const Performance, kind: Entry.Type.Enum) bool {
     return false;
 }
 
-// https://w3c.github.io/resource-timing/#dfn-fire-a-buffer-full-event
 // The event is queued rather than fired inline: addResource runs from the
-// HTTP layer, with no JS on the stack. We have no secondary buffer, so an
-// entry that overflows is dropped instead of being copied back in by a
-// handler that calls clearResourceTimings.
+// HTTP layer, with no JS on the stack.
 fn scheduleBufferFull(self: *Performance) !void {
     if (self._buffer_full_pending) {
         return;
@@ -617,19 +624,45 @@ fn scheduleBufferFull(self: *Performance) !void {
         struct {
             fn run(_self: *anyopaque) anyerror!?u32 {
                 const perf: *Performance = @ptrCast(@alignCast(_self));
-                perf._buffer_full_pending = false;
-
-                const exec = perf._exec;
-                const event = try Event.initTrusted(.wrap(BUFFER_FULL), .{}, exec.page);
-                try exec.dispatch(perf.asEventTarget(), event, perf._on_buffer_full, .{
-                    .context = "Performance.bufferfull",
-                });
+                // only reset _after_ the handler runs, so that entries that get
+                // added go to the secondary buffer
+                defer perf._buffer_full_pending = false;
+                try perf.fireBufferFull();
                 return null;
             }
         }.run,
         0,
         .{ .name = "Performance.bufferFull" },
     );
+}
+
+// https://w3c.github.io/resource-timing/#dfn-fire-a-buffer-full-event
+fn fireBufferFull(self: *Performance) !void {
+    const secondary = &self._secondary_resources;
+    while (secondary.items.len > 0) {
+        const excess_before = secondary.items.len;
+        if (self.canAddResource() == false) {
+            const exec = self._exec;
+            const event = try Event.initTrusted(.wrap(BUFFER_FULL), .{}, exec.page);
+            try exec.dispatch(self.asEventTarget(), event, self._on_buffer_full, .{
+                .context = "Performance.bufferfull",
+            });
+        }
+        {
+            // copy the secondary buffers
+            var copied: usize = 0;
+            while (copied < secondary.items.len and self.canAddResource()) : (copied += 1) {
+                try self.insertOrdered(&self._resources, secondary.items[copied]);
+            }
+            secondary.replaceRangeAssumeCapacity(0, copied, &.{});
+        }
+
+        if (secondary.items.len >= excess_before) {
+            // The handler didn't make room for any of them, give up
+            secondary.clearRetainingCapacity();
+            return;
+        }
+    }
 }
 
 // The property handler for a JS-side dispatchEvent (see EventManager.dispatch).
@@ -679,7 +712,11 @@ pub fn scheduleDelivery(self: *Performance) !void {
                 while (i < perf._observers.items.len) : (i += 1) {
                     const observer = perf._observers.items[i];
                     if (observer.hasRecords()) {
-                        try observer.dispatch();
+                        observer.dispatch() catch |err| {
+                            if (err == error.ExecutionTerminated) {
+                                return err;
+                            }
+                        };
                     }
                 }
                 return null;

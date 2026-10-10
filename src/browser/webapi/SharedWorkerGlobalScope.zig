@@ -63,7 +63,7 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
     const arena = try session.getArena(.small, "SharedWorker");
     errdefer arena.release();
 
-    const owned_url = try arena.dupeZ(u8, url);
+    const owned_url = try arena.dupeSentinel(u8, url, 0);
     const frame_id = session.nextFrameId();
     const loader_id = session.nextLoaderId();
     const self = try WorkerGlobalScope.init(

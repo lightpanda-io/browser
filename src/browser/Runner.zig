@@ -359,6 +359,9 @@ pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeou
 
     const timer: std.Io.Timestamp = .now(lp.io, .boot);
     const selector = try Selector.parseLeaky(arena.allocator(), input);
+    for (selector) |s| {
+        if (!s.hasPseudoElement()) break;
+    } else return error.InvalidSelector;
 
     while (true) {
         if (session.isCancelled()) {
@@ -479,7 +482,9 @@ fn firstConditionError(conditions: []const WaitCondition) !void {
 fn hasRunnablePage(session: *Session) bool {
     for (session.pages.items) |page| {
         switch (page.frame._parse_state) {
-            .html, .complete => return true,
+            // An image or raw document has a JS context too: its timers and
+            // animation frames run like an HTML document's.
+            .html, .complete, .raw_done => return true,
             else => {},
         }
     }
@@ -503,6 +508,16 @@ test "Runner: waitForSelector" {
     try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
 }
 
+test "Runner: waitForSelector pseudo-element" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try testing.expectError(error.InvalidSelector, runner.waitForSelector(page.frame_id, "#sel1::before, ::after", 10));
+    const el = try runner.waitForSelector(page.frame_id, "#sel1::before, #sel1", 10);
+    try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
+}
+
 test "Runner: waitForScript timeout" {
     const page = try testing.pageTest("runner/runner1.html", .{});
     defer page.close();
@@ -517,6 +532,45 @@ test "Runner: waitForScript" {
 
     var runner = page.session.runner(.{});
     try runner.waitForScript(page.frame_id, "document.querySelector('#sel1')", 10);
+}
+
+fn expectRunsLikeHtml(url: [:0]const u8) !void {
+    const page = try testing.test_session.createPage();
+    defer page.close();
+    try page.navigate(url, .{});
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
+    {
+        var ls: js.Local.Scope = undefined;
+        page.frame().?.js.localScope(&ls);
+        defer ls.deinit();
+        try ls.local.eval(
+            \\window.__fired = [];
+            \\setTimeout(() => __fired.push('timeout'), 0);
+            \\requestAnimationFrame(() => __fired.push('raf'));
+        , null);
+    }
+    try runner.waitForScript(page.frame_id, "window.__fired.length === 2", 500);
+
+    // Seeded past the 500ms hold so the test doesn't spend it.
+    const frame = page.frame().?;
+    frame._notified_network_idle = .{ .triggered = lp.datetime.milliTimestamp(.boot) -| 600 };
+    var conditions = [_]WaitCondition{.{
+        .frame_id = page.frame_id,
+        .until = .done,
+        .status = .complete,
+    }};
+    _ = try runner._wait(true, 50, &conditions);
+    try testing.expectEqual(true, frame._notified_network_idle == .done);
+}
+
+test "Runner: text document runs timers and notifies idle" {
+    try expectRunsLikeHtml("http://127.0.0.1:9582/src/browser/tests/runner/plain.txt");
+}
+
+test "Runner: image document runs timers and notifies idle" {
+    try expectRunsLikeHtml("http://127.0.0.1:9582/images/ok.png");
 }
 
 test "Runner: networkidle notifies child frames" {

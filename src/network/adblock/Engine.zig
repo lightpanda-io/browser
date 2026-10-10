@@ -40,6 +40,7 @@ const HttpClient = @import("../HttpClient.zig");
 const domain = @import("domain.zig");
 const pattern = @import("pattern.zig");
 const NetworkFilter = @import("NetworkFilter.zig");
+const repeat = @import("../../string.zig").repeat;
 
 const Allocator = std.mem.Allocator;
 
@@ -477,7 +478,7 @@ const RegexShape = struct {
                         '!' => lookaround = .negative,
                         else => {
                             // A named group is a plain group with a label.
-                            const close = std.mem.indexOfScalarPos(u8, self.source, self.i, '>') orelse return error.Unsupported;
+                            const close = std.mem.findScalarPos(u8, self.source, self.i, '>') orelse return error.Unsupported;
                             self.i = close + 1;
                         },
                     }
@@ -556,9 +557,9 @@ const RegexShape = struct {
                 optional = false;
             },
             '{' => {
-                const close = std.mem.indexOfScalarPos(u8, self.source, self.i, '}') orelse return;
+                const close = std.mem.findScalarPos(u8, self.source, self.i, '}') orelse return;
                 const body = self.source[self.i + 1 .. close];
-                const comma = std.mem.indexOfScalar(u8, body, ',') orelse body.len;
+                const comma = std.mem.findScalar(u8, body, ',') orelse body.len;
                 // Not a quantifier at all: JavaScript reads the `{` literally.
                 const min = std.fmt.parseUnsigned(usize, body[0..comma], 10) catch return;
                 if (comma + 1 < body.len) _ = std.fmt.parseUnsigned(usize, body[comma + 1 ..], 10) catch return;
@@ -739,7 +740,7 @@ test "adblock.Engine: a request keeps its first tokens, the rest as tail" {
     const kind: NetworkFilter.ResourceTypes = .{ .script = true };
 
     // Exactly as many tokens as the buffer holds: nothing is left to walk...
-    const full = "x/" ** (max - 1) ++ "x";
+    const full = repeat("x/", max - 1) ++ "x";
     var buf: [512]u8 = undefined;
     var request: Request = Request.init(full, &buf, "", kind).?;
     try testing.expectEqual(max, request.tokens_len);

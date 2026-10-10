@@ -315,12 +315,82 @@
   }
 </script>
 
+<script id=abort_reasons type=module>
+  {
+    const state = await testing.async();
+
+    async function rejection(promise) {
+      try {
+        await promise;
+        return 'resolved';
+      } catch (e) {
+        return e;
+      }
+    }
+
+    // /xhr/slow takes 100ms: the abort must not wait for it
+    const c1 = new AbortController();
+    setTimeout(() => c1.abort(), 10);
+    const start = Date.now();
+    const inflight = await rejection(fetch('http://127.0.0.1:9582/xhr/slow', { signal: c1.signal }));
+    const elapsed = Date.now() - start;
+
+    const c2 = new AbortController();
+    const custom = new Error('mine');
+    setTimeout(() => c2.abort(custom), 10);
+    const custom_reason = await rejection(fetch('http://127.0.0.1:9582/xhr/slow', { signal: c2.signal }));
+
+    const timeout = await rejection(fetch('http://127.0.0.1:9582/xhr/slow', { signal: AbortSignal.timeout(10) }));
+
+    const c3 = new AbortController();
+    setTimeout(() => c3.abort('any'), 10);
+    const any = await rejection(fetch('http://127.0.0.1:9582/xhr/slow', {
+      signal: AbortSignal.any([new AbortController().signal, c3.signal]),
+    }));
+
+    const pre_aborted = await rejection(fetch('http://127.0.0.1:9582/xhr', { signal: AbortSignal.abort(custom) }));
+
+    // aborting after the body was read is a no-op
+    const c4 = new AbortController();
+    const response = await fetch('http://127.0.0.1:9582/xhr', { signal: c4.signal });
+    const text = await response.text();
+    c4.abort();
+
+    // aborting after resolve errors an unread body, with the signal's reason
+    const c5 = new AbortController();
+    const unread = await fetch('http://127.0.0.1:9582/xhr', { signal: c5.signal });
+    const unread_clone = unread.clone();
+    c5.abort(custom);
+    const unread_text = await rejection(unread.text());
+    const unread_clone_json = await rejection(unread_clone.json());
+
+    const c6 = new AbortController();
+    const streamed = await fetch('http://127.0.0.1:9582/xhr', { signal: c6.signal });
+    c6.abort();
+    const stream_read = await rejection(streamed.body.getReader().read());
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('AbortError', inflight.name);
+      testing.expectTrue(elapsed < 100, 'abort waited for the response: ' + elapsed);
+      testing.expectEqual(custom, custom_reason);
+      testing.expectEqual('TimeoutError', timeout.name);
+      testing.expectEqual('any', any);
+      testing.expectEqual(custom, pre_aborted);
+      testing.expectEqual(100, text.length);
+      testing.expectEqual(custom, unread_text);
+      testing.expectEqual(custom, unread_clone_json);
+      testing.expectTrue(stream_read !== 'resolved', 'aborted body stream read resolved');
+    });
+  }
+</script>
+
 <script id=fetch_in_worker type=module>
   {
     const state = await testing.async();
     const worker = new Worker('./fetch-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'basic' }), 100);
+    worker.postMessage({ kind: 'basic' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker fetch error: ' + data.err);
@@ -338,7 +408,7 @@
     const state = await testing.async();
     const worker = new Worker('./fetch-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'post' }), 100);
+    worker.postMessage({ kind: 'post' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker fetch error: ' + data.err);
@@ -440,7 +510,7 @@
     const state = await testing.async();
     const worker = new Worker('./fetch-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'blob' }), 100);
+    worker.postMessage({ kind: 'blob' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker fetch error: ' + data.err);

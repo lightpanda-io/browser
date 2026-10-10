@@ -257,7 +257,9 @@
   img.src = "/images/404.png";
   img.src = "/images/ok.png";
 
-  await new Promise(resolve => setTimeout(resolve, 300));
+  await new Promise(resolve => img.addEventListener("load", resolve, { once: true }));
+  // Leave room for a stray report from the superseded fetch.
+  await new Promise(resolve => setTimeout(resolve, 50));
 
   state.resolve();
   await state.done(() => {
@@ -281,7 +283,7 @@
   img.src = "/images/ok.png";
   img.removeAttribute("src");
 
-  await new Promise(resolve => setTimeout(resolve, 300));
+  await new Promise(resolve => setTimeout(resolve, 50));
 
   state.resolve();
   await state.done(() => {

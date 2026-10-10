@@ -29,24 +29,6 @@ const log = lp.log;
 const String = lp.String;
 const Allocator = std.mem.Allocator;
 
-const EventKey = struct {
-    event_target: usize,
-    type_string: String,
-};
-
-const EventKeyContext = struct {
-    pub fn hash(_: @This(), key: EventKey) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(std.mem.asBytes(&key.event_target));
-        hasher.update(key.type_string.str());
-        return hasher.final();
-    }
-
-    pub fn eql(_: @This(), a: EventKey, b: EventKey) bool {
-        return a.event_target == b.event_target and a.type_string.eql(b.type_string);
-    }
-};
-
 // EventManagerBase provides core event listener management without DOM-specific
 // functionality. It handles listener registration, removal, and the basic dispatch
 // loop for non-propagating events.
@@ -55,12 +37,8 @@ pub const EventManagerBase = @This();
 arena: Allocator,
 listener_pool: std.heap.MemoryPool(Listener),
 list_pool: std.heap.MemoryPool(std.DoublyLinkedList),
-lookup: std.HashMapUnmanaged(
-    EventKey,
-    *std.DoublyLinkedList,
-    EventKeyContext,
-    std.hash_map.default_max_load_percentage,
-),
+// @intFromPtr(event_target) -> [{type, listener-linked-list}]
+lookup: std.AutoHashMapUnmanaged(usize, std.ArrayList(TypeListeners)),
 dispatch_depth: usize,
 deferred_removals: std.ArrayList(struct { list: *std.DoublyLinkedList, listener: *Listener }),
 
@@ -74,6 +52,11 @@ pub fn init(arena: Allocator) EventManagerBase {
         .deferred_removals = .empty,
     };
 }
+
+const TypeListeners = struct {
+    typ: String,
+    list: *std.DoublyLinkedList,
+};
 
 pub const RegisterOptions = struct {
     once: bool = false,
@@ -111,34 +94,39 @@ pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, 
         }
     }
 
-    // Allocate the type string we'll use in both listener and key
-    const type_string = try String.init(arena, typ, .{});
+    const gop = try self.lookup.getOrPut(arena, @intFromPtr(target));
+    if (gop.found_existing == false) {
+        gop.value_ptr.* = .empty;
+    }
+    const types = gop.value_ptr;
 
-    const gop = try self.lookup.getOrPut(arena, .{
-        .type_string = type_string,
-        .event_target = @intFromPtr(target),
-    });
-    if (gop.found_existing) {
-        // check for duplicate callbacks already registered. Listeners that
-        // have been removed (e.g. a `once` listener that fired mid-dispatch
-        // and is awaiting destruction in deferred_removals) are not "in"
-        // the listener list per spec — skip them.
-        var node = gop.value_ptr.*.first;
-        while (node) |n| {
-            const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
-            node = n.next;
-            if (listener.removed) continue;
-            const is_duplicate = switch (callback) {
-                .object => |obj| listener.function.eqlObject(obj),
-                .function => |func| listener.function.eqlFunction(func),
-            };
-            if (is_duplicate and listener.capture == opts.capture) {
-                return null;
-            }
+    const list, const type_string = blk: {
+        if (findType(types.items, .wrap(typ))) |existing| {
+            break :blk .{ existing.list, existing.typ };
         }
-    } else {
-        gop.value_ptr.* = try self.list_pool.create(arena);
-        gop.value_ptr.*.* = .{};
+        const type_string = try String.init(arena, typ, .{});
+        const list = try self.list_pool.create(arena);
+        list.* = .{};
+        try types.append(arena, .{ .typ = type_string, .list = list });
+        break :blk .{ list, type_string };
+    };
+
+    // check for duplicate callbacks already registered. Listeners that
+    // have been removed (e.g. a `once` listener that fired mid-dispatch
+    // and is awaiting destruction in deferred_removals) are not "in"
+    // the listener list per spec — skip them.
+    var node = list.first;
+    while (node) |n| {
+        const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
+        node = n.next;
+        if (listener.removed) continue;
+        const is_duplicate = switch (callback) {
+            .object => |obj| listener.function.eqlObject(obj),
+            .function => |func| listener.function.eqlFunction(func),
+        };
+        if (is_duplicate and listener.capture == opts.capture) {
+            return null;
+        }
     }
 
     const func = switch (callback) {
@@ -157,16 +145,13 @@ pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, 
         .typ = type_string,
     };
     // append the listener to the list of listeners for this target
-    gop.value_ptr.*.append(&listener.node);
+    list.append(&listener.node);
 
     return listener;
 }
 
 pub fn remove(self: *EventManagerBase, target: *EventTarget, typ: []const u8, callback: Callback, use_capture: bool) void {
-    const list = self.lookup.get(.{
-        .type_string = .wrap(typ),
-        .event_target = @intFromPtr(target),
-    }) orelse return;
+    const list = self.getListeners(target, .wrap(typ)) orelse return;
     if (findListener(list, callback, use_capture)) |listener| {
         self.removeListener(list, listener);
     }
@@ -189,20 +174,44 @@ pub fn removeListener(self: *EventManagerBase, list: *std.DoublyLinkedList, list
     }
 }
 
+/// Drops every listener on `target`.
+pub fn removeTarget(self: *EventManagerBase, target: *EventTarget) void {
+    var kv = self.lookup.fetchRemove(@intFromPtr(target)) orelse return;
+    for (kv.value.items) |type_listeners| {
+        const list = type_listeners.list;
+        var node = list.first;
+        while (node) |n| {
+            node = n.next;
+            self.removeListener(list, @alignCast(@fieldParentPtr("node", n)));
+        }
+        if (self.dispatch_depth == 0) {
+            self.list_pool.destroy(list);
+        } else {
+            // we leak this until the arena is cleared, no big deal
+        }
+    }
+    kv.value.deinit(self.arena);
+}
+
 /// Check if there are any listeners registered for a target/type combination.
 fn hasListeners(self: *EventManagerBase, target: *EventTarget, typ: []const u8) bool {
-    return self.lookup.get(.{
-        .event_target = @intFromPtr(target),
-        .type_string = .wrap(typ),
-    }) != null;
+    return self.getListeners(target, .wrap(typ)) != null;
 }
 
 /// Get the listener list for a target/type, if any exist.
 pub fn getListeners(self: *EventManagerBase, target: *EventTarget, event_type: String) ?*std.DoublyLinkedList {
-    return self.lookup.get(.{
-        .event_target = @intFromPtr(target),
-        .type_string = event_type,
-    });
+    const types = self.lookup.get(@intFromPtr(target)) orelse return null;
+    const entry = findType(types.items, event_type) orelse return null;
+    return entry.list;
+}
+
+fn findType(types: []const TypeListeners, event_type: String) ?*const TypeListeners {
+    for (types) |*entry| {
+        if (entry.typ.eql(event_type)) {
+            return entry;
+        }
+    }
+    return null;
 }
 
 /// Whether the list still holds a listener, or one that can call
@@ -308,17 +317,21 @@ pub fn dispatchDirect(
     // Call the property handler (e.g., onmessage) if present
     if (getFunction(handler, &ls.local)) |func| {
         event._current_target = target;
-        var caught: js.TryCatch.Caught = .{};
-        _ = func.tryCallWithThis(void, target, .{event}, &caught) catch |err| {
-            if (err == error.ExecutionTerminated) {
-                return error.ExecutionTerminated;
-            }
-            page.recordJsError(err);
-            if (err == error.JsException) {
+        // Reported like an exception from an addEventListener listener (see
+        // Listener.run), so the global's "error" event / onerror fires.
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+        func.callWithThisRethrow(void, target, .{event}) catch |err| switch (err) {
+            error.ExecutionTerminated => return error.ExecutionTerminated,
+            error.JsException, error.TryCatchRethrow => {
                 event._listeners_did_throw = true;
-            } else {
-                log.debug(.event, opts.context, .{ .err = err, .caught = caught });
-            }
+                Listener.reportException(&try_catch, &ls.local);
+            },
+            else => {
+                page.recordJsError(err);
+                log.debug(.event, opts.context, .{ .err = err });
+            },
         };
     }
 
@@ -476,7 +489,7 @@ pub const Listener = struct {
                 };
             },
             .string => |string| {
-                const str = try arena.dupeZ(u8, string.str());
+                const str = try arena.dupeSentinel(u8, string.str(), 0);
                 local.eval(str, null) catch |err| {
                     if (err == error.ExecutionTerminated) {
                         return error.ExecutionTerminated;
@@ -537,19 +550,15 @@ pub const Listener = struct {
 
     // Reports a listener exception to the relevant global (firing
     // window.onerror / an "error" event) without stopping the dispatch.
-    fn reportException(try_catch: *js.TryCatch, local: *const js.Local) void {
+    pub fn reportException(try_catch: *js.TryCatch, local: *const js.Local) void {
         const exc = try_catch.exceptionValue() orelse return;
         reportExceptionValue(local, exc);
     }
 
     fn reportExceptionValue(local: *const js.Local, exc: js.Value) void {
-        switch (local.ctx.global) {
-            .frame => |frame| frame.window.reportError(exc, frame) catch |err| {
-                log.debug(.event, "listener report error", .{ .err = err });
-            },
-            // No worker error-event plumbing here (yet); still count it.
-            .worker => local.ctx.page.recordJsError(error.JsException),
-        }
+        local.ctx.global.reportError(exc) catch |err| {
+            log.debug(.event, "listener report error", .{ .err = err });
+        };
     }
 };
 

@@ -56,7 +56,7 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
     const url = if (_url) |u|
         try @import("../URL.zig").resolve(arena.allocator(), frame.url, u, .{})
     else
-        try arena.dupeZ(u8, frame.url);
+        try arena.dupeSentinel(u8, frame.url, 0);
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
     _ = try session.navigation.pushEntry(url, .{ .source = .history, .value = json }, frame, true);
@@ -80,7 +80,7 @@ fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8,
     const url = if (_url) |u|
         try @import("../URL.zig").resolve(arena.allocator(), frame.url, u, .{})
     else
-        try arena.dupeZ(u8, frame.url);
+        try arena.dupeSentinel(u8, frame.url, 0);
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
     _ = try session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, frame, true);
@@ -109,11 +109,13 @@ fn goInner(delta: i32, frame: *Frame) !void {
 
     const index = @as(usize, @intCast(index_s));
     const entry = frame._session.navigation._entries.items[index];
+    // popstate fires on the document that stays; a traversal to another
+    // document replaces this one instead.
+    const same_document = entry.sameDocument(frame);
 
     _ = try frame._session.navigation.navigateInner(entry._url, .{ .traverse = index }, frame);
 
-    const url = entry._url orelse return;
-    if (frame.isSameOrigin(url)) {
+    if (same_document) {
         const target = frame.window.asEventTarget();
         if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
             const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
@@ -158,4 +160,5 @@ const testing = @import("../../testing.zig");
 test "WebApi: History" {
     try testing.htmlRunner("history.html", .{});
     try testing.htmlRunner("history_url_update.html", .{});
+    try testing.htmlRunner("history_traverse.html", .{});
 }

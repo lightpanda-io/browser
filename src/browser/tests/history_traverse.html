@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=traverse_entries_of_one_document>
+  {
+    // Entries pushed by this document belong to it whatever their path or
+    // query: traversing between them must stay in the document (location
+    // updated synchronously, popstate fired) instead of loading the URL.
+    const original = location.href;
+    const path = location.pathname;
+    const pops = [];
+    const onpop = (e) => pops.push([location.pathname + location.search, e.state]);
+    window.addEventListener('popstate', onpop);
+
+    history.pushState({n: 1}, '', '?n=1');
+    history.pushState({n: 2}, '', '/history-traverse-path');
+
+    history.back();
+    testing.expectEqual(path + '?n=1', location.pathname + location.search);
+    testing.expectEqual({n: 1}, history.state);
+
+    history.forward();
+    testing.expectEqual('/history-traverse-path', location.pathname);
+    testing.expectEqual({n: 2}, history.state);
+
+    testing.expectEqual([
+      [path + '?n=1', {n: 1}],
+      ['/history-traverse-path', {n: 2}],
+    ], pops);
+
+    const pushed = navigation.entries().find((e) => e.url.endsWith('/history-traverse-path'));
+    testing.expectEqual(true, pushed.sameDocument);
+
+    window.removeEventListener('popstate', onpop);
+    history.replaceState(null, '', original);
+  }
+</script>

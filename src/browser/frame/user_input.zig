@@ -259,17 +259,16 @@ pub const PointerButtons = struct {
     /// Whether the gesture's opening pointerdown suppressed the compat mouse
     /// events; held for the whole gesture so each split message reads it here.
     mousedown_suppressed: bool = false,
-    /// Where the gesture's pointerdown landed, until its first release fires
-    /// the gesture's one click.
+    /// Where the latest press landed, until the release that follows it fires
+    /// its click. A release with no press behind it has no target, and
+    /// reports a click count of 0.
     down_target: ?*Element = null,
 
     /// `g.buttons_down` is ignored: the held mask supplies it.
     pub fn press(self: *PointerButtons, frame: *Frame, target: *Element, g: Gesture) !void {
         const bit = buttonsBitmask(g.button);
         const starts_gesture = self.held & ~bit == 0;
-        if (starts_gesture) {
-            self.down_target = target;
-        }
+        self.down_target = target;
         self.held |= bit;
 
         var pg = g;
@@ -285,21 +284,26 @@ pub const PointerButtons = struct {
     pub fn release(self: *PointerButtons, frame: *Frame, target: *Element, g: Gesture) !?*Element {
         const click_target = if (self.down_target) |down| commonClickTarget(down, target) else null;
         const was_suppressed = self.mousedown_suppressed;
-        self.down_target = null;
+        const was_pressed = self.down_target != null;
         self.releaseButton(g.button);
 
         var rg = g;
         rg.buttons_down = self.held;
+        // Chrome reports a release with no press since the previous one (the
+        // later releases of a chord, or a lone release) with a click count of
+        // 0, whatever the client sent.
+        if (!was_pressed) rg.click_count = 0;
         try releaseSequence(frame, target, rg, was_suppressed, click_target);
         return click_target;
     }
 
-    /// The last held button releasing ends the gesture and clears its state.
+    /// Every release consumes the latest press, even if it hit no element.
+    /// The last held button releasing also clears the gesture's suppression.
     fn releaseButton(self: *PointerButtons, button: i32) void {
+        self.down_target = null;
         self.held &= ~buttonsBitmask(button);
         if (self.held == 0) {
             self.mousedown_suppressed = false;
-            self.down_target = null;
         }
     }
 
@@ -593,22 +597,18 @@ fn isEditingHost(node: *Node) bool {
 }
 
 fn outermostEditingHost(target: *Element) ?*Element {
-    var node: ?*Node = target.asNode();
-    var editable: ?*Node = null;
-    while (node) |n| : (node = n._parent) {
-        if (isEditingHost(n)) {
-            editable = n;
+    var host: ?*Element = null;
+    var current: ?*Element = target;
+    while (current) |el| : (current = el.parentElement()) {
+        if (el.getAttributeInterned("contenteditable") == null) {
+            continue;
+        }
+        if (el.isEditingHost() == false) {
             break;
         }
+        host = el;
     }
-    var host = editable orelse return null;
-    while (host._parent) |p| {
-        if (!isEditingHost(p)) {
-            break;
-        }
-        host = p;
-    }
-    return host.is(Element);
+    return host;
 }
 
 /// Mousedown default action. A mousedown outside any focusable element moves
@@ -741,13 +741,22 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
             // image button submits its form. The form-data set already gets the
             // submitter's coordinate fields appended via FormData.collectForm
             // (see src/browser/webapi/net/FormData.zig).
+            // A disabled submit button has no activation behavior; isDisabled
+            // also covers an ancestor <fieldset disabled>, which a synthetic
+            // dispatchEvent click does not otherwise check.
             if (input._input_type == .submit or input._input_type == .image) {
+                if (element.isDisabled()) {
+                    return;
+                }
                 return frame.submitForm(element, input.getForm(frame), .{});
             }
         },
         .button => {
             const button = html_element.subtype(Element.Html.Button);
             if (std.mem.eql(u8, button.getType(), "submit")) {
+                if (element.isDisabled()) {
+                    return;
+                }
                 return frame.submitForm(element, button.getForm(frame), .{});
             }
         },
@@ -848,6 +857,19 @@ pub fn focusedElement(frame: *Frame) ?*Element {
     return frame.window._document.getActiveElement();
 }
 
+/// The frame keyboard input goes to. Starting from `frame`, descend while the
+/// focused element is an <iframe> with a loaded document: that iframe holds
+/// the focus chain, so its document's focused element is where keys land.
+pub fn focusedFrame(frame: *Frame) *Frame {
+    var current = frame;
+    while (current.document._active_element) |active| {
+        const iframe = active.is(Element.Html.IFrame) orelse break;
+        const window = iframe._window orelse break;
+        current = window._frame;
+    }
+    return current;
+}
+
 /// Dispatches a trusted keydown on `target` then, unless cancelled, types
 /// `text` (Chrome's WebKeyboardEvent.text; null when the client sends the
 /// char as its own event, as chromedp does). Returns whether the keydown was
@@ -905,25 +927,37 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
 
     if (target.is(Element.Html.Input)) |input| {
         if (is_enter) {
-            return frame.submitForm(input.asElement(), input.getForm(frame), .{});
+            return implicitFormSubmission(frame, input);
         }
-        return insertInto(frame, input, text);
+        _ = try applyEdit(frame, input, .{ .insert = text });
+    } else if (target.is(Element.Html.TextArea)) |textarea| {
+        _ = try applyEdit(frame, textarea, if (is_enter) .line_break else .{ .insert = text });
     }
+}
 
-    if (target.is(Element.Html.TextArea)) |textarea| {
-        if (is_enter) {
-            if (try allowEdit(frame, textarea.asElement(), null, "\n", "insertLineBreak")) {
-                try textarea.innerInsert("\n", frame);
-            }
+/// Enter in a form field. The default button, when there is one, is clicked and
+/// its activation submits the form with it as the submitter; otherwise the
+/// form submits itself (SubmitEvent.submitter is null).
+/// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission
+fn implicitFormSubmission(frame: *Frame, input: *Element.Html.Input) !void {
+    const form = input.getForm(frame) orelse return;
+    if (form.getDefaultButton(frame)) |button| {
+        if (button.isDisabled()) {
             return;
         }
-        return insertInto(frame, textarea, text);
+        return dispatchKeyboardClick(frame, button);
     }
+    if (!form.canSubmitImplicitly(input, frame)) {
+        return;
+    }
+    return frame.submitForm(form.asElement(), form, .{});
 }
 
 fn keypressFor(frame: *Frame, keydown: *const KeyboardEvent) !*KeyboardEvent {
     return KeyboardEvent.initTrusted(comptime .wrap("keypress"), .{
         .key = keydown.getKey().asString(),
+        .code = keydown._code,
+        .location = keydown._location,
         .ctrlKey = keydown.getCtrlKey(),
         .shiftKey = keydown.getShiftKey(),
         .altKey = keydown.getAltKey(),
@@ -932,6 +966,9 @@ fn keypressFor(frame: *Frame, keydown: *const KeyboardEvent) !*KeyboardEvent {
 }
 
 pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
+    if (event.getIsTrusted() == false) {
+        return;
+    }
     const keyboard_event = event.is(KeyboardEvent) orelse return;
     const key = keyboard_event.getKey();
 
@@ -944,7 +981,7 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         return moveFocus(frame, keyboard_event.getShiftKey() == false);
     }
 
-    if (key == .Enter and event.getIsTrusted()) {
+    if (key == .Enter) {
         if (target.is(Element)) |element| {
             if (enterFollowsLink(element)) {
                 return dispatchKeyboardClick(frame, element);
@@ -967,6 +1004,10 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
 // edit keys other than text insertion (typeChar's) are handled by Input and
 // TextArea the same
 fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: KeyboardEvent.Key) !void {
+    if (isSelectAll(keyboard_event, key)) {
+        return ctl.select(frame);
+    }
+
     if (caretMove(key, ctl)) |move| {
         // Word/paragraph motions (ctrl/alt/meta variants) aren't modeled.
         if (keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey()) {
@@ -976,20 +1017,61 @@ fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: Key
     }
 
     if (key == .Backspace or key == .Delete) {
-        const forward = key == .Delete;
-        if (!keyboard_event.asEvent().getIsTrusted() or try allowEdit(frame, ctl.asElement(), null, null, deleteInputType(forward))) {
-            try ctl.innerDelete(forward, frame);
-        }
+        const edit: Edit = .{ .delete = if (key == .Delete) .forward else .backward };
+        _ = try applyEdit(frame, ctl, edit);
     }
 }
 
-fn insertInto(frame: *Frame, ctl: anytype, text: []const u8) !void {
-    if (!ctl.acceptsTextEntry()) {
-        return;
+pub const Edit = union(enum) {
+    insert: []const u8,
+    line_break,
+    delete: enum { backward, forward },
+};
+
+/// A text edit as the user makes it: cancellable through beforeinput, and
+/// refused on a readonly or disabled control. Returns whether it happened.
+pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit) !bool {
+    const el = ctl.asElement();
+    if (!ctl.acceptsTextEntry() or el.isDisabled()) {
+        return false;
     }
-    if (try allowEdit(frame, ctl.asElement(), text, text, "insertText")) {
-        try ctl.innerInsert(text, frame);
+    const editable = acceptsEdit(el);
+    // Chrome fires beforeinput and textInput for text typed into a readonly
+    // control and only then refuses it; its editing commands fire nothing.
+    if (!editable and edit != .insert) {
+        return false;
     }
+
+    const data: ?[]const u8, const text: ?[]const u8, const input_type: []const u8 = switch (edit) {
+        .insert => |t| .{ t, t, "insertText" },
+        .line_break => .{ null, "\n", "insertLineBreak" },
+        .delete => |dir| .{ null, null, if (dir == .forward) "deleteContentForward" else "deleteContentBackward" },
+    };
+    if (!try allowEdit(frame, el, data, text, input_type)) {
+        return false;
+    }
+    if (!editable) {
+        return false;
+    }
+
+    if (text) |t| {
+        try ctl.innerInsert(t, data, input_type, frame);
+    } else {
+        try ctl.innerDelete(edit.delete == .forward, input_type, frame);
+    }
+    return true;
+}
+
+pub fn acceptsEdit(el: *Element) bool {
+    if (el.isDisabled()) {
+        return false;
+    }
+    if (el.is(Element.Html.Input)) |input| {
+        if (!input.readonlyApplies()) {
+            return true;
+        }
+    }
+    return !el.hasAttributeInterned("readonly");
 }
 
 // Caret movement a key's default action performs on `ctl`, if any. On a
@@ -1007,8 +1089,15 @@ fn caretMove(key: KeyboardEvent.Key, ctl: anytype) ?@TypeOf(ctl.*).CaretMove {
     };
 }
 
-fn deleteInputType(forward: bool) []const u8 {
-    return if (forward) "deleteContentForward" else "deleteContentBackward";
+// Ctrl+A alone, as in Chrome on Linux
+fn isSelectAll(keyboard_event: *KeyboardEvent, key: KeyboardEvent.Key) bool {
+    if (!keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey() or keyboard_event.getShiftKey()) {
+        return false;
+    }
+    return switch (key) {
+        .standard => |s| std.ascii.eqlIgnoreCase(s, "a"),
+        else => false,
+    };
 }
 
 // pre-edit events for a trusted key's default action, can cancel the edit
@@ -1185,11 +1274,9 @@ pub fn insertText(frame: *Frame, v: []const u8) !void {
     const html_element = frame.document._active_element orelse return;
 
     if (html_element.is(Element.Html.Input)) |input| {
-        return insertInto(frame, input, v);
-    }
-
-    if (html_element.is(Element.Html.TextArea)) |textarea| {
-        return insertInto(frame, textarea, v);
+        _ = try applyEdit(frame, input, .{ .insert = v });
+    } else if (html_element.is(Element.Html.TextArea)) |textarea| {
+        _ = try applyEdit(frame, textarea, .{ .insert = v });
     }
 }
 

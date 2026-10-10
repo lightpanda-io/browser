@@ -137,7 +137,7 @@ fn isXPathQuery(q: []const u8) bool {
     // before it must be one of the 13 named axes. Walk back the run of
     // [a-zA-Z-] characters and look it up in the closed set.
     var idx: usize = 0;
-    while (std.mem.indexOfPos(u8, q, idx, "::")) |hit| : (idx = hit + 1) {
+    while (std.mem.findPos(u8, q, idx, "::")) |hit| : (idx = hit + 1) {
         if (hit == 0) continue;
         var start = hit;
         while (start > 0) {
@@ -739,7 +739,7 @@ fn fileFromDiskPath(path: []const u8, page: *Page) !*File {
 }
 
 fn mimeFromExtension(name: []const u8) []const u8 {
-    const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return "application/octet-stream";
+    const dot = std.mem.findScalarLast(u8, name, '.') orelse return "application/octet-stream";
     if (dot + 1 >= name.len) return "application/octet-stream";
     var buf: [16]u8 = undefined;
     const ext_raw = name[dot + 1 ..];
@@ -980,11 +980,10 @@ test "cdp.dom: setFileInputFiles on file input" {
     try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
 
     // Drop a temp file we can upload.
-    try std.Io.Dir.cwd().createDirPath(lp.io, ".zig-cache/tmp");
-    var tmp_dir = try std.Io.Dir.cwd().openDir(lp.io, ".zig-cache/tmp", .{});
-    defer tmp_dir.close(lp.io);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
     {
-        const f = try tmp_dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
+        const f = try tmp.dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
         defer f.close(lp.io);
         try f.writeStreamingAll(lp.io, "hello upload");
     }
@@ -994,7 +993,7 @@ test "cdp.dom: setFileInputFiles on file input" {
         .method = "DOM.setFileInputFiles",
         .params = .{
             .nodeId = 1,
-            .files = &[_][]const u8{".zig-cache/tmp/upload.txt"},
+            .files = &[_][]const u8{try testing.tmpPath(&tmp, "upload.txt")},
         },
     });
     try ctx.expectSentResult(null, .{ .id = 3 });
@@ -1016,14 +1015,13 @@ test "cdp.dom: setFileInputFiles exposes files to JS" {
     try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
 
     // Two files, so we can assert ordering as well as identity and iteration.
-    try std.Io.Dir.cwd().createDirPath(lp.io, ".zig-cache/tmp");
-    var tmp_dir = try std.Io.Dir.cwd().openDir(lp.io, ".zig-cache/tmp", .{});
-    defer tmp_dir.close(lp.io);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
     {
-        const a = try tmp_dir.createFile(lp.io, "a.txt", .{ .truncate = true });
+        const a = try tmp.dir.createFile(lp.io, "a.txt", .{ .truncate = true });
         defer a.close(lp.io);
         try a.writeStreamingAll(lp.io, "aaa");
-        const b = try tmp_dir.createFile(lp.io, "b.txt", .{ .truncate = true });
+        const b = try tmp.dir.createFile(lp.io, "b.txt", .{ .truncate = true });
         defer b.close(lp.io);
         try b.writeStreamingAll(lp.io, "bbbb");
     }
@@ -1048,7 +1046,7 @@ test "cdp.dom: setFileInputFiles exposes files to JS" {
         .method = "DOM.setFileInputFiles",
         .params = .{
             .nodeId = 1,
-            .files = &[_][]const u8{ ".zig-cache/tmp/a.txt", ".zig-cache/tmp/b.txt" },
+            .files = &[_][]const u8{ try testing.tmpPath(&tmp, "a.txt"), try testing.tmpPath(&tmp, "b.txt") },
         },
     });
     try ctx.expectSentResult(null, .{ .id = 3 });
@@ -1138,11 +1136,10 @@ test "cdp.dom: setFileInputFiles errors when a path is missing" {
 
     // First path exists, second does not: the first File is created then must be
     // freed when the second read fails (the test runner panics on a leak).
-    try std.Io.Dir.cwd().createDirPath(lp.io, ".zig-cache/tmp");
-    var tmp_dir = try std.Io.Dir.cwd().openDir(lp.io, ".zig-cache/tmp", .{});
-    defer tmp_dir.close(lp.io);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
     {
-        const f = try tmp_dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
+        const f = try tmp.dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
         defer f.close(lp.io);
         try f.writeStreamingAll(lp.io, "hello upload");
     }
@@ -1152,7 +1149,7 @@ test "cdp.dom: setFileInputFiles errors when a path is missing" {
         .method = "DOM.setFileInputFiles",
         .params = .{
             .nodeId = 1,
-            .files = &[_][]const u8{ ".zig-cache/tmp/upload.txt", ".zig-cache/tmp/does-not-exist.txt" },
+            .files = &[_][]const u8{ try testing.tmpPath(&tmp, "upload.txt"), try testing.tmpPath(&tmp, "does-not-exist.txt") },
         },
     });
     try ctx.expectSentError(-31998, "FileNotFound", .{ .id = 3 });
@@ -1170,11 +1167,10 @@ test "cdp.dom: focus and setFileInputFiles fire in the node's own frame" {
     const text_node = try bc.node_registry.register(text.asNode());
     const upload_node = try bc.node_registry.register(upload.asNode());
 
-    try std.Io.Dir.cwd().createDirPath(lp.io, ".zig-cache/tmp");
-    var tmp_dir = try std.Io.Dir.cwd().openDir(lp.io, ".zig-cache/tmp", .{});
-    defer tmp_dir.close(lp.io);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
     {
-        const f = try tmp_dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
+        const f = try tmp.dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
         defer f.close(lp.io);
         try f.writeStreamingAll(lp.io, "hello upload");
     }
@@ -1186,7 +1182,7 @@ test "cdp.dom: focus and setFileInputFiles fire in the node's own frame" {
         .method = "DOM.setFileInputFiles",
         .params = .{
             .nodeId = upload_node.id,
-            .files = &[_][]const u8{".zig-cache/tmp/upload.txt"},
+            .files = &[_][]const u8{try testing.tmpPath(&tmp, "upload.txt")},
         },
     });
     try ctx.expectSentResult(null, .{ .id = 2 });

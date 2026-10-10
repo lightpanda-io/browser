@@ -66,14 +66,11 @@ pub fn getValue(self: *const Attribute) String {
 pub fn setValue(self: *Attribute, data_: ?String, frame: *Frame) !void {
     const data = data_ orelse String.empty;
     const el = self._element orelse {
-        self._value = try data.dupe(frame.arena);
+        self._value = try data.dupe(frame.page_arena);
         return;
     };
     // this takes ownership of the data
     try el.setAttribute(self._name, data, frame);
-
-    // not the most efficient, but we don't expect this to be called often
-    self._value = (try el.getAttribute(self._name, frame)) orelse String.empty;
 }
 
 pub fn getNamespaceURI(_: *const Attribute) ?[]const u8 {
@@ -213,7 +210,7 @@ pub const List = struct {
     // *Attribute until the attribute is removed.
     pub fn getOrCreateAttribute(self: *const List, entry: *const Entry, element: *Element, frame: *Frame) !*Attribute {
         const page = frame.page;
-        const gop = try page.attribute_lookup.getOrPut(page.frame_arena, .{ .list = self, .name = entry._name_ptr });
+        const gop = try page.attribute_lookup.getOrPut(page.arena, .{ .list = self, .name = entry._name_ptr });
         if (!gop.found_existing) {
             gop.value_ptr.* = try entry.toAttribute(element, element.ownerFrame(frame) orelse frame);
         }
@@ -247,6 +244,16 @@ pub const List = struct {
             }
             e.setValue(try owner.dupeString(value.str()));
             entry = e;
+
+            // An Attr is the attribute itself, so one handed out earlier must
+            // see the new value. Every write to an existing entry lands here.
+            // putAttribute detaches the Attr it replaces before calling us:
+            // that one keeps its old value.
+            if (frame.page.attribute_lookup.get(.{ .list = self, .name = e._name_ptr })) |attr| {
+                if (attr._element != null) {
+                    attr._value = .wrap(e.value());
+                }
+            }
         } else {
             try self.ensureUnusedCapacity(1, owner);
             entry = &self._entries[self._len];
@@ -304,7 +311,7 @@ pub const List = struct {
         const name = try self.put(attribute._name, attribute._value, element, frame);
         attribute._element = element;
         const page = frame.page;
-        try page.attribute_lookup.put(page.frame_arena, .{ .list = self, .name = name.ptr }, attribute);
+        try page.attribute_lookup.put(page.arena, .{ .list = self, .name = name.ptr }, attribute);
         return existing_attribute;
     }
 
@@ -396,9 +403,9 @@ pub const List = struct {
             return;
         }
         if (self._cap == 0) {
-            self._entries = (try frame.arena.alloc(Entry, new_cap)).ptr;
+            self._entries = (try frame.page_arena.alloc(Entry, new_cap)).ptr;
         } else {
-            self._entries = (try frame.arena.realloc(self._entries[0..self._cap], new_cap)).ptr;
+            self._entries = (try frame.page_arena.realloc(self._entries[0..self._cap], new_cap)).ptr;
         }
         self._cap = new_cap;
     }
@@ -531,7 +538,7 @@ pub fn validateAttributeName(name: String) !void {
         return error.InvalidCharacterError;
     }
 
-    if (std.mem.indexOfAny(u8, name_str, invalid_name_chars) != null) {
+    if (std.mem.findAny(u8, name_str, invalid_name_chars) != null) {
         return error.InvalidCharacterError;
     }
 }
@@ -545,9 +552,9 @@ fn canonicalizeName(name: []const u8, frame: *Frame) ![]const u8 {
         return static;
     }
     const page = frame.page;
-    const gop = try page.attribute_names.getOrPut(page.frame_arena, name);
+    const gop = try page.attribute_names.getOrPut(page.arena, name);
     if (!gop.found_existing) {
-        gop.key_ptr.* = try page.frame_arena.dupe(u8, name);
+        gop.key_ptr.* = try page.arena.dupe(u8, name);
     }
     return gop.key_ptr.*;
 }
@@ -726,7 +733,7 @@ fn formatAttribute(name: []const u8, value: []const u8, writer: *std.Io.Writer) 
     }
 
     try writer.writeByte('"');
-    const offset = std.mem.indexOfAny(u8, value, "`' &\"<>=") orelse {
+    const offset = std.mem.findAny(u8, value, "`' &\"<>=") orelse {
         try writer.writeAll(value);
         return writer.writeByte('"');
     };
@@ -782,7 +789,7 @@ fn writeEscapedAttributeValue(value: []const u8, first_offset: usize, writer: *s
     });
 
     var remaining = value[first_offset + 1 ..];
-    while (std.mem.indexOfAny(u8, remaining, "&\"<>")) |offset| {
+    while (std.mem.findAny(u8, remaining, "&\"<>")) |offset| {
         try writer.writeAll(remaining[0..offset]);
         try writer.writeAll(switch (remaining[offset]) {
             '&' => "&amp;",

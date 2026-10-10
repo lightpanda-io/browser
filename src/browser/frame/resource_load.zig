@@ -43,7 +43,7 @@ pub fn image(frame: *Frame, img: *Element.Html.Image, src: []const u8) !void {
     // makes. They still get the synthetic load the no-fetch path would have
     // given them, so the two modes agree.
     if (frame._parse_mode == .fragment) {
-        return frame.queueLoad(Factory.protoOf(img));
+        return frame.queueImageEvent(img, .load);
     }
 
     const arena = try session.getArena(.small, "resource_load.image");
@@ -198,7 +198,7 @@ const ImageLoad = struct {
             // puts us inside html5ever parsing, and an event handler is free
             // to navigate. Queueing also puts these events ahead of window
             // load, which is where the spec wants them.
-            frame.queueElementEvent(Factory.protoOf(img), kind) catch |err| {
+            frame.queueImageEvent(img, kind) catch |err| {
                 log.warn(.frame, "image queue event", .{ .err = err, .kind = kind });
             };
         }

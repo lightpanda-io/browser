@@ -187,14 +187,9 @@ fn visitNode(
         // We handle options/optgroups natively inside their parents, skip them in the general walk
         if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
-        // Hidden subtrees are never entered, so below the root only the
-        // element's own display matters.
-        const style_manager = &self.frame._style_manager;
-        const hidden = if (current_depth == 0)
-            style_manager.isHidden(el, .{})
-        else
-            style_manager.hasDisplayNone(el);
-        if (hidden) {
+        // Not just the element's own display: a slotted element inherits
+        // from its slot, which this light-tree walk never visits.
+        if (self.frame._style_manager.isHidden(el, .{})) {
             return;
         }
 
@@ -237,6 +232,9 @@ fn visitNode(
         } else if (el.is(Element.Html.Select)) |select| {
             value = select.getValue(self.frame);
             options = try extractSelectOptions(el.asNode(), self.frame, self.arena);
+        } else if (el.is(Element.Html.IFrame)) |iframe| {
+            // The tree doesn't enter frames; the URL lets the agent open one.
+            value = try iframe.currentURL(self.frame);
         }
 
         if (el.is(Element.Html)) |html_el| {
@@ -255,7 +253,7 @@ fn visitNode(
     const xpath = ctx.xpath_buffer.items;
 
     const has_explicit_label = if (node.is(Element)) |el|
-        el.getAttributeInterned("aria-label") != null or el.getAttributeInterned("title") != null
+        !isAllWhitespace(el.getAttributeInterned("aria-label") orelse "") or el.getAttributeInterned("title") != null
     else
         false;
 
@@ -293,7 +291,7 @@ fn visitNode(
         }
 
         if (std.mem.eql(u8, role, "StaticText") and node._parent != null) {
-            if (parent_name != null and name != null and std.mem.indexOf(u8, parent_name.?, name.?) != null) {
+            if (parent_name != null and name != null and std.mem.find(u8, parent_name.?, name.?) != null) {
                 should_visit = false;
             }
         }
@@ -385,7 +383,7 @@ const JsonVisitor = struct {
         try self.jw.beginObject();
 
         try self.jw.objectField("nodeId");
-        try self.jw.write(try std.fmt.allocPrint(self.tree.arena, "{d}", .{data.id}));
+        try self.jw.write(try self.tree.arena.print("{d}", .{data.id}));
 
         try self.jw.objectField("backendDOMNodeId");
         try self.jw.write(data.id);
@@ -740,6 +738,8 @@ pub fn nodeDetails(self: Self) !NodeDetails {
         } else if (el.is(Element.Html.Select)) |select| {
             value = select.getValue(frame);
             options = try extractSelectOptions(el.asNode(), frame, arena);
+        } else if (el.is(Element.Html.IFrame)) |iframe| {
+            value = try iframe.currentURL(frame);
         }
 
         if (el.is(Element.Html)) |html_el| {
@@ -784,7 +784,7 @@ test "SemanticTree backendDOMNodeId" {
     const json_str = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
     defer testing.allocator.free(json_str);
 
-    try testing.expect(std.mem.indexOf(u8, json_str, "\"backendDOMNodeId\":") != null);
+    try testing.expect(std.mem.find(u8, json_str, "\"backendDOMNodeId\":") != null);
 }
 
 test "SemanticTree max_depth" {
@@ -803,7 +803,25 @@ test "SemanticTree max_depth" {
     try st.textStringify(&aw.writer);
     const text_str = aw.written();
 
-    try testing.expect(std.mem.indexOf(u8, text_str, "other") == null);
+    try testing.expect(std.mem.find(u8, text_str, "other") == null);
+}
+
+test "SemanticTree: a slotted element inherits its slot's display" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/slotted_hidden.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false });
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try st.textStringify(&aw.writer);
+
+    try testing.expect(std.mem.find(u8, aw.written(), "slotted-shown") != null);
+    try testing.expect(std.mem.find(u8, aw.written(), "slotted-hidden") == null);
 }
 
 test "SemanticTree: deep nesting doesn't overflow the native stack" {
@@ -832,7 +850,7 @@ test "SemanticTree: deep nesting doesn't overflow the native stack" {
     const json_str = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
     defer testing.allocator.free(json_str);
 
-    try testing.expect(std.mem.indexOf(u8, json_str, "\"role\":\"link\",\"name\":\"deep\"") != null);
+    try testing.expect(std.mem.find(u8, json_str, "\"role\":\"link\",\"name\":\"deep\"") != null);
     try testing.expectEqual(depth, std.mem.count(u8, json_str, "/g[1]"));
     try testing.expect(std.mem.endsWith(u8, json_str, "/text()[1]\",\"nodeType\":3,\"nodeValue\":\"deep\",\"children\":[]}]}"));
 }

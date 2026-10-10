@@ -57,7 +57,8 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
     try cmd.sendResult(null, .{});
 
     const bc = cmd.browser_context orelse return;
-    const frame = bc.mainFrame() orelse return;
+    // Keys go to the focused frame, which is an iframe's when one has focus.
+    const frame = Frame.user_input.focusedFrame(bc.mainFrame() orelse return);
 
     // Chrome types text only for an event carrying it: a keyDown with `text`
     // (Puppeteer, Playwright) or a `char` (chromedp, after a text-less keyDown).
@@ -158,7 +159,7 @@ fn insertText(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return;
-    const frame = bc.mainFrame() orelse return;
+    const frame = Frame.user_input.focusedFrame(bc.mainFrame() orelse return);
 
     try Frame.user_input.insertText(frame, params.text);
 
@@ -262,6 +263,50 @@ test "cdp.input: insertText replaces select()ed value of email and number inputs
     _ = try ls.local.compileAndRun("inp.type = 'text'; inp.value = 'ab'; inp.select();", null);
     try ctx.processMessage(.{ .id = 3, .method = "Input.insertText", .params = .{ .text = "c\nd" } });
     try testing.expect((try ls.local.compileAndRun("inp.value === 'cd' && inp.selectionStart === 2", null)).isTrue());
+}
+
+test "cdp.input: keyboard input goes to the focused element inside an iframe" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/input_focused_frame.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun("document.getElementById('f').contentDocument.getElementById('inner').focus()", null);
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.insertText",
+        .params = .{ .text = "ab" },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "c", .text = "c" },
+    });
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyUp", .key = "c" },
+    });
+
+    const inner = try ls.local.compileAndRun("document.getElementById('f').contentDocument.getElementById('inner').value", null);
+    try testing.expectEqual("abc", try inner.toStringSlice());
+    const outer = try ls.local.compileAndRun("document.getElementById('outer').value", null);
+    try testing.expectEqual("", try outer.toStringSlice());
 }
 
 test "cdp.input: dispatchMouseEvent mouseMoved fires hover events" {
@@ -1537,6 +1582,76 @@ test "cdp.input: dispatchKeyEvent caret movement keys move the text entry cursor
     }
 }
 
+test "cdp.input: dispatchKeyEvent Ctrl+A selects the whole value" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.body.innerHTML = '<input id="t" type="text"><textarea id="ta"></textarea>';
+        \\const t = document.getElementById('t');
+        \\const ta = document.getElementById('ta');
+        \\const sel = (e) => [e.selectionStart, e.selectionEnd].join(',');
+    , null);
+
+    const alt = 1;
+    const ctrl = 2;
+    const meta = 4;
+    const shift = 8;
+    const Step = struct { setup: [:0]const u8, key: []const u8, modifiers: u4, expect: [:0]const u8 };
+    const steps = [_]Step{
+        // the Puppeteer/Playwright way to clear a field: select all, then delete
+        .{ .setup = "t.focus(); t.value = 'hello'; t.setSelectionRange(2, 2)", .key = "a", .modifiers = ctrl, .expect = "sel(t) === '0,5'" },
+        .{ .setup = "t.focus(); t.value = 'hello'; t.setSelectionRange(2, 2)", .key = "A", .modifiers = ctrl, .expect = "sel(t) === '0,5'" },
+        .{ .setup = "ta.focus(); ta.value = 'ab\\ncd'; ta.setSelectionRange(1, 1)", .key = "a", .modifiers = ctrl, .expect = "sel(ta) === '0,5'" },
+        // Meta+A, Ctrl+Alt+A and Ctrl+Shift+A do nothing in Chrome on Linux
+        .{ .setup = "t.focus(); t.value = 'hello'; t.setSelectionRange(2, 2)", .key = "a", .modifiers = meta, .expect = "sel(t) === '2,2'" },
+        .{ .setup = "t.focus(); t.value = 'hello'; t.setSelectionRange(2, 2)", .key = "a", .modifiers = ctrl | alt, .expect = "sel(t) === '2,2'" },
+        .{ .setup = "t.focus(); t.value = 'hello'; t.setSelectionRange(2, 2)", .key = "A", .modifiers = ctrl | shift, .expect = "sel(t) === '2,2'" },
+    };
+
+    var id: u32 = 1;
+    for (steps) |step| {
+        _ = try ls.local.compileAndRun(step.setup, null);
+        try ctx.processMessage(.{
+            .id = id,
+            .method = "Input.dispatchKeyEvent",
+            .params = .{ .type = "keyDown", .key = step.key, .code = "KeyA", .modifiers = step.modifiers },
+        });
+        id += 1;
+        try testing.expect((try ls.local.compileAndRun(step.expect, null)).isTrue());
+    }
+
+    // a keydown from script has no default action, as in Chrome
+    try testing.expect((try ls.local.compileAndRun(
+        \\t.focus(); t.value = 'hello'; t.setSelectionRange(2, 2);
+        \\t.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true, cancelable: true }));
+        \\t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }));
+        \\t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+        \\t.value === 'hello' && sel(t) === '2,2' && document.activeElement === t
+    , null)).isTrue());
+
+    _ = try ls.local.compileAndRun("t.focus(); t.value = 'hello'; t.setSelectionRange(5, 5)", null);
+    try ctx.processMessage(.{
+        .id = id,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "a", .code = "KeyA", .modifiers = ctrl },
+    });
+    id += 1;
+    try ctx.processMessage(.{
+        .id = id,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "Backspace", .code = "Backspace" },
+    });
+    try testing.expect((try ls.local.compileAndRun("t.value === ''", null)).isTrue());
+}
+
 // chromedp's SendKeys shape: a text-less keyDown, the char with the text, keyUp.
 test "cdp.input: dispatchKeyEvent text-less keyDown then char types once" {
     var ctx = try testing.context();
@@ -1587,6 +1702,7 @@ test "cdp.input: dispatchKeyEvent text-less keyDown then char types once" {
         \\document.body.appendChild(ta);
         \\ta.value = 'one';
         \\ta.focus();
+        \\ta.addEventListener('input', (e) => window.taInput = e.inputType + ':' + e.data);
     , null);
     try ctx.processMessage(.{ .id = 6, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter" } });
     try ctx.expectSentResult(null, .{ .id = 6 });
@@ -1594,7 +1710,43 @@ test "cdp.input: dispatchKeyEvent text-less keyDown then char types once" {
     try ctx.expectSentResult(null, .{ .id = 7 });
     try ctx.processMessage(.{ .id = 8, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyUp", .key = "Enter", .code = "Enter" } });
     try ctx.expectSentResult(null, .{ .id = 8 });
-    try testing.expect((try ls.local.compileAndRun("ta.value === 'one\\n'", null)).isTrue());
+    try testing.expect((try ls.local.compileAndRun("ta.value === 'one\\n' && window.taInput === 'insertLineBreak:null'", null)).isTrue());
+}
+
+test "cdp.input: a readonly textarea fires beforeinput for typed text only, a disabled one nothing" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // As in Chrome, typed text reaches beforeinput before the readonly
+    // control refuses it; Backspace and Enter fire no edit event.
+    _ = try ls.local.compileAndRun(
+        \\const ta = document.createElement('textarea');
+        \\document.body.appendChild(ta);
+        \\ta.value = 'ro';
+        \\ta.readOnly = true;
+        \\ta.focus();
+        \\window.edits = [];
+        \\for (const t of ['beforeinput', 'input']) ta.addEventListener(t, (e) => window.edits.push(t + ':' + e.inputType));
+    , null);
+    try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "x", .text = "x" } });
+    try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Backspace", .code = "Backspace" } });
+    try ctx.processMessage(.{ .id = 3, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter", .text = "\r" } });
+    try ctx.processMessage(.{ .id = 4, .method = "Input.insertText", .params = .{ .text = "y" } });
+    try testing.expect((try ls.local.compileAndRun(
+        \\ta.value === 'ro' && window.edits.join() === 'beforeinput:insertText,beforeinput:insertText'
+    , null)).isTrue());
+
+    // A disabled control fires nothing, not even for typed text.
+    _ = try ls.local.compileAndRun("ta.readOnly = false; ta.disabled = true; window.edits = [];", null);
+    try ctx.processMessage(.{ .id = 5, .method = "Input.insertText", .params = .{ .text = "z" } });
+    try testing.expect((try ls.local.compileAndRun("ta.value === 'ro' && window.edits.length === 0", null)).isTrue());
 }
 
 test "cdp.input: dispatchKeyEvent char honors keypress and beforeinput vetoes" {
@@ -1721,7 +1873,143 @@ test "cdp.input: dispatchKeyEvent Enter clicks buttons and submits once" {
     var id: u32 = 1;
     for (cases) |c| {
         var buf: [32]u8 = undefined;
-        _ = try ls.local.compileAndRun(try std.fmt.bufPrint(&buf, "arm('{s}')", .{c.id}), null);
+        _ = try ls.local.compileAndRun(try std.mem.print(&buf, "arm('{s}')", .{c.id}), null);
+
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "char", .key = "Enter", .text = "\r" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyUp", .key = "Enter", .code = "Enter" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+
+        const got = try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSlice();
+        try testing.expectEqualSlices(u8, c.expect, got);
+    }
+}
+
+// Enter in a text field clicks the form's default button (its first submit
+// button in tree order), which then submits with itself as the submitter.
+// Without a default button the form submits itself, unless more than one
+// field blocks implicit submission.
+test "cdp.input: dispatchKeyEvent Enter in a field submits through the default button" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.body.insertAdjacentHTML('beforeend',
+        \\  '<form id=a><input id=a_text name=q><input id=a_go type=submit name=search value=Go><button id=a_go2>2</button></form>' +
+        \\  '<form id=b><input id=b_text><button id=b_go disabled>go</button></form>' +
+        \\  '<form id=c><fieldset disabled><button id=c_go>go</button></fieldset><input id=c_text></form>' +
+        \\  '<form id=d><input id=d_text name=q><input type=checkbox><input type=hidden></form>' +
+        \\  '<form id=e><input id=e_text><input type=email></form>' +
+        \\  '<input id=f_go type=submit form=f name=out value=1><form id=f><input id=f_text><button id=f_go2>2</button></form>');
+        \\window.events = [];
+        \\document.addEventListener('click', (e) => window.events.push('click:' + e.target.id), true);
+        \\document.addEventListener('submit', (e) => {
+        \\  e.preventDefault();
+        \\  const s = e.submitter;
+        \\  const entries = Array.from(new FormData(e.target, s)).map(([k, v]) => k + '=' + v).join('&');
+        \\  window.events.push('submit:' + (s ? s.id : 'null') + ':' + entries);
+        \\}, true);
+        \\window.arm = (id) => {
+        \\  window.events = [];
+        \\  document.getElementById(id).focus();
+        \\};
+    , null);
+
+    const cases = [_]struct { id: []const u8, expect: []const u8 }{
+        .{ .id = "a_text", .expect = "click:a_go submit:a_go:q=&search=Go" },
+        .{ .id = "b_text", .expect = "" },
+        .{ .id = "c_text", .expect = "" },
+        .{ .id = "d_text", .expect = "submit:null:q=" },
+        .{ .id = "e_text", .expect = "" },
+        .{ .id = "f_text", .expect = "click:f_go submit:f_go:out=1" },
+    };
+
+    var id: u32 = 1;
+    for (cases) |c| {
+        var buf: [32]u8 = undefined;
+        _ = try ls.local.compileAndRun(try std.mem.print(&buf, "arm('{s}')", .{c.id}), null);
+
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "char", .key = "Enter", .text = "\r" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyUp", .key = "Enter", .code = "Enter" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+
+        const got = try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSlice();
+        try testing.expectEqualSlices(u8, c.expect, got);
+    }
+}
+
+// Enter on a checkbox or a radio clicks the form's default button like a text
+// field does, but without a default button it never submits the form: only a
+// text field can trigger the submission. Enter on a select never submits.
+// Expectations match Chrome.
+test "cdp.input: dispatchKeyEvent Enter on a checkbox, radio or select" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.body.insertAdjacentHTML('beforeend',
+        \\  '<form id=g><input id=g_text name=q><input id=g_cb type=checkbox name=c checked><input id=g_radio type=radio name=r value=1 checked><select id=g_sel name=s><option>x</option></select></form>' +
+        \\  '<form id=h><input id=h_cb type=checkbox name=c checked><input id=h_radio type=radio name=r value=1 checked><select id=h_sel name=s><option>x</option></select><button id=h_go name=go value=1>go</button></form>' +
+        \\  '<form id=i><input id=i_cb type=checkbox name=c checked><input id=i_radio type=radio name=r value=1 checked><select id=i_sel name=s><option>x</option></select></form>');
+        \\window.events = [];
+        \\document.addEventListener('click', (e) => window.events.push('click:' + e.target.id), true);
+        \\document.addEventListener('submit', (e) => {
+        \\  e.preventDefault();
+        \\  const s = e.submitter;
+        \\  const entries = Array.from(new FormData(e.target, s)).map(([k, v]) => k + '=' + v).join('&');
+        \\  window.events.push('submit:' + (s ? s.id : 'null') + ':' + entries);
+        \\}, true);
+        \\window.arm = (id) => {
+        \\  window.events = [];
+        \\  document.getElementById(id).focus();
+        \\};
+    , null);
+
+    const cases = [_]struct { id: []const u8, expect: []const u8 }{
+        // no default button, one text field
+        .{ .id = "g_text", .expect = "submit:null:q=&c=on&r=1&s=x" },
+        .{ .id = "g_cb", .expect = "" },
+        .{ .id = "g_radio", .expect = "" },
+        .{ .id = "g_sel", .expect = "" },
+        // a default button
+        .{ .id = "h_cb", .expect = "click:h_go submit:h_go:c=on&r=1&s=x&go=1" },
+        .{ .id = "h_radio", .expect = "click:h_go submit:h_go:c=on&r=1&s=x&go=1" },
+        .{ .id = "h_sel", .expect = "" },
+        // no default button, no text field
+        .{ .id = "i_cb", .expect = "" },
+        .{ .id = "i_radio", .expect = "" },
+        .{ .id = "i_sel", .expect = "" },
+    };
+
+    var id: u32 = 1;
+    for (cases) |c| {
+        var buf: [32]u8 = undefined;
+        _ = try ls.local.compileAndRun(try std.mem.print(&buf, "arm('{s}')", .{c.id}), null);
 
         try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter" } });
         try ctx.expectSentResult(null, .{ .id = id });
@@ -1762,4 +2050,168 @@ test "cdp.input: re-navigating an iframe drops the pointer state on its elements
     try testing.expect(page.input_hover_target == null);
     try testing.expect(page.input_pointer.down_target == null);
     try testing.expectEqual(0, page.input_pointer.held);
+}
+
+const MouseStep = struct {
+    type: []const u8,
+    button: []const u8,
+    x: ?f64 = null,
+    y: ?f64 = null,
+};
+
+/// Dispatches `steps` as Input.dispatchMouseEvent at #btn unless overridden,
+/// clickCount 2 throughout,
+/// and checks the whole `window.seq` log against `expected` (JS array elements).
+/// `setup` runs first, e.g. to add listeners that log into `window.seq`.
+fn expectMouseSequence(setup: []const u8, steps: []const MouseStep, comptime expected: []const u8) !void {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(setup, null);
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().y", null)).toF64();
+
+    for (steps, 1..) |step, id| {
+        try ctx.processMessage(.{
+            .id = @as(i32, @intCast(id)),
+            .method = "Input.dispatchMouseEvent",
+            .params = .{ .type = step.type, .x = step.x orelse rect_x, .y = step.y orelse rect_y, .button = step.button, .clickCount = 2 },
+        });
+    }
+
+    const result = try ls.local.compileAndRun("JSON.stringify(window.seq) === JSON.stringify([" ++ expected ++ "])", null);
+    try testing.expect(result.isTrue());
+}
+
+test "cdp.input: the release that ends a chord reports detail 0" {
+    try expectMouseSequence("", &.{
+        .{ .type = "mousePressed", .button = "left" },
+        .{ .type = "mousePressed", .button = "right" },
+        .{ .type = "mouseReleased", .button = "right" },
+        .{ .type = "mouseReleased", .button = "left" },
+    },
+        \\'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:2::true',
+        \\'mousedown:2:3:2::true', 'mouseup:2:1:2::true',
+        \\'pointerup:0:0:0:mouse:true', 'mouseup:0:0:0::true'
+    );
+}
+
+test "cdp.input: the release that ends a chord reports detail 0 when the secondary button ends it" {
+    try expectMouseSequence("", &.{
+        .{ .type = "mousePressed", .button = "right" },
+        .{ .type = "mousePressed", .button = "left" },
+        .{ .type = "mouseReleased", .button = "left" },
+        .{ .type = "mouseReleased", .button = "right" },
+    },
+        \\'pointerdown:2:2:0:mouse:true', 'mousedown:2:2:2::true',
+        \\'mousedown:0:3:2::true', 'mouseup:0:2:2::true', 'click:0:2:2:mouse:true',
+        \\'pointerup:2:0:0:mouse:true', 'mouseup:2:0:0::true'
+    );
+}
+
+test "cdp.input: every release after the first of a three-button chord reports detail 0" {
+    try expectMouseSequence("", &.{
+        .{ .type = "mousePressed", .button = "left" },
+        .{ .type = "mousePressed", .button = "right" },
+        .{ .type = "mousePressed", .button = "middle" },
+        .{ .type = "mouseReleased", .button = "right" },
+        .{ .type = "mouseReleased", .button = "middle" },
+        .{ .type = "mouseReleased", .button = "left" },
+    },
+        \\'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:2::true',
+        \\'mousedown:2:3:2::true', 'mousedown:1:7:2::true',
+        \\'mouseup:2:5:2::true', 'mouseup:1:1:0::true',
+        \\'pointerup:0:0:0:mouse:true', 'mouseup:0:0:0::true'
+    );
+}
+
+test "cdp.input: a release with no press behind it reports detail 0" {
+    try expectMouseSequence("", &.{
+        .{ .type = "mouseReleased", .button = "left" },
+    },
+        \\'pointerup:0:0:0:mouse:true', 'mouseup:0:0:0::true'
+    );
+}
+
+test "cdp.input: pressing a button again mid-chord re-arms its auxclick" {
+    try expectMouseSequence(
+        \\document.getElementById('btn').addEventListener('auxclick', e => window.seq.push(`auxclick:${e.button}:${e.buttons}:${e.detail}`));
+    , &.{
+        .{ .type = "mousePressed", .button = "left" },
+        .{ .type = "mousePressed", .button = "right" },
+        .{ .type = "mouseReleased", .button = "right" },
+        .{ .type = "mousePressed", .button = "right" },
+        .{ .type = "mouseReleased", .button = "right" },
+        .{ .type = "mouseReleased", .button = "left" },
+    },
+        \\'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:2::true',
+        \\'mousedown:2:3:2::true', 'mouseup:2:1:2::true', 'auxclick:2:1:2',
+        \\'mousedown:2:3:2::true', 'mouseup:2:1:2::true', 'auxclick:2:1:2',
+        \\'pointerup:0:0:0:mouse:true', 'mouseup:0:0:0::true'
+    );
+}
+
+test "cdp.input: a release that misses every element consumes the latest press" {
+    const points = [_]struct { x: f64, y: f64 }{
+        .{ .x = -1000, .y = -1000 },
+        .{ .x = 700, .y = 500 },
+    };
+    for (points) |point| {
+        try expectMouseSequence(
+            // Bound the fixture's root boxes so (700,500) is a genuine miss.
+            \\document.body.lastElementChild.remove();
+            \\for (const el of [document.documentElement, document.body]) {
+            \\  el.style.width = '200px'; el.style.height = '100px';
+            \\}
+            \\if (document.elementFromPoint(700, 500) !== null) throw new Error('expected an empty hit-test point');
+            \\document.getElementById('btn').addEventListener('dblclick', e => window.seq.push(`dblclick:${e.detail}`));
+        , &.{
+            .{ .type = "mousePressed", .button = "left" },
+            .{ .type = "mousePressed", .button = "right" },
+            .{ .type = "mouseReleased", .button = "right", .x = point.x, .y = point.y },
+            .{ .type = "mouseReleased", .button = "left" },
+        },
+            \\'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:2::true',
+            \\'mousedown:2:3:2::true',
+            \\'pointerup:0:0:0:mouse:true', 'mouseup:0:0:0::true'
+        );
+    }
+}
+
+test "cdp.input: a missed release preserves held buttons and mouse suppression" {
+    try expectMouseSequence(
+        \\{
+        \\  const button = document.getElementById('btn');
+        \\  button.addEventListener('pointerdown', e => e.preventDefault());
+        \\  button.addEventListener('pointermove', e => window.seq.push(`pointermove:${e.button}:${e.buttons}:${e.detail}`));
+        \\  button.addEventListener('auxclick', e => window.seq.push(`auxclick:${e.button}:${e.buttons}:${e.detail}`));
+        \\}
+    , &.{
+        .{ .type = "mousePressed", .button = "left" },
+        .{ .type = "mousePressed", .button = "right" },
+        .{ .type = "mouseReleased", .button = "right", .x = -1000, .y = -1000 },
+        .{ .type = "mousePressed", .button = "middle" },
+        .{ .type = "mouseReleased", .button = "middle" },
+        .{ .type = "mouseReleased", .button = "left" },
+    },
+        \\'pointerdown:0:1:0:mouse:true', 'pointermove:2:3:0',
+        \\'pointermove:1:5:0', 'pointermove:1:1:0', 'auxclick:1:1:2',
+        \\'pointerup:0:0:0:mouse:true'
+    );
 }

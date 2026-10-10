@@ -30,6 +30,7 @@ const StorageManager = @import("StorageManager.zig");
 const NavigatorUAData = @import("NavigatorUAData.zig");
 const Geolocation = @import("geolocation/Geolocation.zig");
 const ServiceWorkerContainer = @import("ServiceWorkerContainer.zig");
+const LockManager = @import("LockManager.zig");
 
 const Navigator = @This();
 
@@ -48,6 +49,7 @@ _geolocation: ?*Geolocation = null,
 _storage: StorageManager = .{},
 _ua_data: NavigatorUAData = .{},
 _service_worker: ?*ServiceWorkerContainer = null,
+_locks: ?*LockManager = null,
 
 pub const init: Navigator = .{};
 
@@ -122,7 +124,7 @@ pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
 }
 
 pub fn getPlatform(_: *const Navigator) []const u8 {
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .macos => "MacIntel",
         .windows => "Win32",
         .linux => "Linux x86_64",
@@ -174,6 +176,15 @@ fn getServiceWorker(self: *Navigator, frame: *Frame) !*ServiceWorkerContainer {
     const sw = try ServiceWorkerContainer.init(frame);
     self._service_worker = sw;
     return sw;
+}
+
+fn getLocks(self: *Navigator, exec: *Execution) !*LockManager {
+    if (self._locks) |l| {
+        return l;
+    }
+    const l = try exec._factory.create(LockManager{});
+    self._locks = l;
+    return l;
 }
 
 fn getUserAgentData(self: *Navigator) *NavigatorUAData {
@@ -244,7 +255,7 @@ fn validateProtocolHandlerScheme(scheme: []const u8) !void {
 }
 
 fn validateProtocolHandlerURL(url: [:0]const u8, frame: *const Frame) !void {
-    if (std.mem.indexOf(u8, url, "%s") == null) {
+    if (std.mem.find(u8, url, "%s") == null) {
         return error.SyntaxError;
     }
     if (frame.isSameOrigin(url) == false) {
@@ -284,6 +295,7 @@ pub const JsApi = struct {
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
     pub const serviceWorker = bridge.accessor(Navigator.getServiceWorker, null, .{});
+    pub const locks = bridge.accessor(Navigator.getLocks, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
     pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{});

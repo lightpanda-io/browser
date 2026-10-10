@@ -443,7 +443,10 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
         if (init.value.len == 0) {
             return error.InvalidCookieName;
         }
-        if (std.mem.indexOfScalar(u8, init.value, '=') != null) {
+        if (std.mem.findScalar(u8, init.value, '=') != null) {
+            return error.InvalidCookieName;
+        }
+        if (Cookie.hasHiddenPrefix(init.value)) {
             return error.InvalidCookieName;
         }
     }
@@ -451,7 +454,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
     // Reject inputs the cookie model can't represent. `=` is allowed in
     // values but not in names; `;` and the control characters (U+0000–U+001F,
     // U+007F) break the cookie wire format and so are forbidden in both.
-    if (std.mem.indexOfScalar(u8, init.name, '=') != null) {
+    if (std.mem.findScalar(u8, init.name, '=') != null) {
         return error.InvalidCookieName;
     }
     if (hasForbiddenChar(init.name)) {
@@ -470,7 +473,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
     if (init.path.len > 1024) {
         return error.InvalidCookiePath;
     }
-    if (std.mem.indexOfAny(u8, init.path, ";\r\n\x00") != null) {
+    if (std.mem.findAny(u8, init.path, ";\r\n\x00") != null) {
         return error.InvalidCookiePath;
     }
     if (init.domain) |d| {
@@ -481,7 +484,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
         if (d.len > 1024) {
             return error.InvalidCookieDomain;
         }
-        if (std.mem.indexOfAny(u8, d, ";\r\n\x00") != null) {
+        if (std.mem.findAny(u8, d, ";\r\n\x00") != null) {
             return error.InvalidCookieDomain;
         }
     }
@@ -495,31 +498,10 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
     // marks any cookie written from a trustworthy origin as Secure.
     const secure = trustworthy or init.sameSite == .none;
 
-    // The `__Http-` and `__Host-Http-` prefixes are reserved for HTTP-state
-    // cookies; the (script) CookieStore API can never set them, on any origin.
-    if (std.ascii.startsWithIgnoreCase(init.name, "__Http-") or std.ascii.startsWithIgnoreCase(init.name, "__Host-Http-")) {
-        return error.InvalidPrefixedCookie;
-    }
-
-    // Cookie-name-prefix rules — match Cookie.parse, case-insensitive to
-    // catch impersonation attempts (e.g. "__HoSt-").
-    // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-cookie-name-prefixes
-    if (std.ascii.startsWithIgnoreCase(init.name, "__Host-")) {
-        if (!trustworthy) {
-            return error.InvalidPrefixedCookie;
-        }
-        if (init.domain) |d| {
-            if (d.len > 0) {
-                return error.InvalidPrefixedCookie;
-            }
-        }
-
+    // Script can't set HttpOnly, so __Http- and __Host-Http- never pass.
+    if (Cookie.prefixOf(init.name)) |prefix| {
         const resolved_path = try Cookie.parsePath(exec.local_arena, url, init.path);
-        if (std.mem.eql(u8, resolved_path, "/") == false) {
-            return error.InvalidPrefixedCookie;
-        }
-    } else if (std.ascii.startsWithIgnoreCase(init.name, "__Secure-")) {
-        if (!trustworthy) {
+        if (!prefix.allows(trustworthy, false, if (init.domain) |d| d.len > 0 else false, resolved_path)) {
             return error.InvalidPrefixedCookie;
         }
     }

@@ -21,6 +21,7 @@ const std = @import("std");
 const CDP = @import("CDP.zig");
 const Inbox = @import("../../Inbox.zig");
 const Driver = @import("../Driver.zig");
+const sys_net = @import("../../sys/net.zig");
 
 pub const base = @import("../../testing.zig");
 
@@ -38,6 +39,7 @@ pub const pageTest = base.pageTest;
 pub const newString = base.newString;
 pub const expectLog = base.expectLog;
 pub const silenceLog = base.silenceLog;
+pub const tmpPath = base.tmpPath;
 pub const arena_allocator = base.arena_allocator;
 
 pub const TestContext = struct {
@@ -106,8 +108,7 @@ pub const TestContext = struct {
                 bc.target_id = "TID-000000000Z".*;
             }
             const page = try bc.session.createPage();
-            const full_url = try std.fmt.allocPrintSentinel(
-                base.arena_allocator,
+            const full_url = try base.arena_allocator.printSentinel(
                 "http://127.0.0.1:9582/src/browser/tests/{s}",
                 .{url},
                 0,
@@ -197,7 +198,9 @@ pub const TestContext = struct {
             break :blk try std.json.parseFromSliceLeaky(json.Value, base.arena_allocator, serialized, .{});
         };
 
-        for (0..5) |_| {
+        try self.read();
+        const start: std.Io.Timestamp = .now(io, .awake);
+        while (true) {
             for (self.received.items, 0..) |received, i| {
                 if (try base.isEqualJson(expected_json, received) == false) {
                     continue;
@@ -213,13 +216,10 @@ pub const TestContext = struct {
                 return;
             }
 
-            if (self.cdp_.browser_context) |*bc| {
-                if (bc.session.hasPage()) {
-                    var runner = bc.session.runner(.{});
-                    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
-                }
+            if (start.durationTo(.now(io, .awake)).toMilliseconds() >= 2000) {
+                break;
             }
-            io.sleep(.fromMilliseconds(5), .awake) catch {};
+            try self.tick();
             try self.read();
         }
         self.dumpReceived();
@@ -234,14 +234,27 @@ pub const TestContext = struct {
     }
 
     pub fn getSentMessage(self: *TestContext, index: usize) !?json.Value {
-        for (0..5) |_| {
-            if (index < self.received.items.len) {
-                return self.received.items[index];
-            }
-            io.sleep(.fromMilliseconds(5), .awake) catch {};
+        if (index >= self.received.items.len) {
             try self.read();
         }
+        if (index < self.received.items.len) {
+            return self.received.items[index];
+        }
         return null;
+    }
+
+    /// Advances the page so asynchronous events get a chance to be sent.
+    fn tick(self: *TestContext) !void {
+        if (self.cdp_.browser_context) |*bc| {
+            if (bc.session.hasPage()) {
+                var runner = bc.session.runner(.{});
+                switch (try runner.tickForFrame(bc.page_handle.?.frame_id, 20, .{ .until = .done })) {
+                    .ok => return,
+                    .done => {},
+                }
+            }
+        }
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
     }
 
     fn read(self: *TestContext) !void {
@@ -313,9 +326,11 @@ pub fn context() !TestContext {
         _ = std.c.close(pair[1]);
     }
 
+    // Replies are written synchronously, so reads never need to wait for data.
+    const flags = try sys_net.fcntl(pair[0], posix.F.GETFL, 0);
+    _ = try sys_net.fcntl(pair[0], posix.F.SETFL, flags | @as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
+
     const timeout = std.mem.toBytes(posix.timeval{ .sec = 0, .usec = 5_000 });
-    try posix.setsockopt(pair[0], posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
-    try posix.setsockopt(pair[0], posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
     try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
     try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
 

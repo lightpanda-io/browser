@@ -319,14 +319,12 @@ pub fn deliverEntries(self: *IntersectionObserver, frame: *Frame) !void {
     // whether we safely deliver these to v8 or not, we're done with these
     defer releaseAll(entries, frame.page);
 
-    var caught: js.TryCatch.Caught = .{};
-
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    ls.toLocal(self._callback).tryCall(void, .{ entries, self }, &caught) catch |err| {
-        log.debug(.frame, "IntsctObserver.deliverEntries", .{ .err = err, .caught = caught });
+    ls.toLocal(self._callback).callWithThisReport(self, .{ entries, self }) catch |err| {
+        log.debug(.frame, "IntsctObserver.deliverEntries", .{ .err = err });
         return err;
     };
 }
@@ -426,7 +424,8 @@ const testing = @import("../../testing.zig");
 // observer stays registered on the frame for as long as it is alive. `deferred`
 // re-observes from a timer, one delivery per macrotask tick, the way a
 // fetch-driven pager behaves; otherwise the chain never leaves the microtask
-// checkpoint.
+// checkpoint. New sentinels go first: an appended one would measure every
+// earlier sibling, making the chain quadratic.
 fn observeSentinelChain(frame: *Frame, comptime deferred: bool) !void {
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -435,7 +434,7 @@ fn observeSentinelChain(frame: *Frame, comptime deferred: bool) !void {
     try ls.local.eval(
         \\(function(deferred) {
         \\  const list = document.createElement('div');
-        \\  const observe = () => io.observe(list.appendChild(document.createElement('div')));
+        \\  const observe = () => io.observe(list.insertBefore(document.createElement('div'), list.firstChild));
         \\  const io = new IntersectionObserver((entries) => {
         \\    for (const entry of entries) {
         \\      if (!entry.isIntersecting) continue;

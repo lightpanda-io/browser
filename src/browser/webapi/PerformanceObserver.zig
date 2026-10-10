@@ -65,7 +65,7 @@ pub fn init(callback: js.Function.Global, exec: *const Execution) !*PerformanceO
         ._entries = .empty,
         ._performance = exec.performance(),
         ._js = exec.js,
-        ._arena = exec.arena,
+        ._arena = exec.page_arena,
     });
 }
 
@@ -112,10 +112,10 @@ pub fn observe(self: *PerformanceObserver, maybe_options: ?ObserveOptions) !void
     // Update entries.
     var interests: u16 = 0;
     for (entry_types) |entry_type| {
-        const fields = @typeInfo(Performance.Entry.Type.Enum).@"enum".fields;
-        inline for (fields) |field| {
-            if (std.mem.eql(u8, field.name, entry_type)) {
-                const flag = @as(u16, 1) << @as(u16, field.value);
+        const info = @typeInfo(Performance.Entry.Type.Enum).@"enum";
+        inline for (info.field_names, info.field_values) |field_name, field_value| {
+            if (std.mem.eql(u8, field_name, entry_type)) {
+                const flag = @as(u16, 1) << @as(u16, field_value);
                 interests |= flag;
             }
         }
@@ -182,7 +182,7 @@ pub fn interested(
 }
 
 pub fn interestedIn(self: *const PerformanceObserver, kind: Performance.Entry.Type.Enum) bool {
-    const flag = @as(u16, 1) << @intCast(@intFromEnum(kind));
+    const flag = @as(u16, 1) << @intCast(@backingInt(kind));
     return self._interests & flag != 0;
 }
 
@@ -198,9 +198,8 @@ pub fn dispatch(self: *PerformanceObserver) !void {
     self._js.localScope(&ls);
     defer ls.deinit();
 
-    var caught: js.TryCatch.Caught = .{};
-    ls.toLocal(self._callback).tryCall(void, .{ EntryList{ ._entries = records }, self }, &caught) catch |err| {
-        log.debug(.frame, "PerfObserver.dispatch", .{ .err = err, .caught = caught });
+    ls.toLocal(self._callback).callWithThisReport(self, .{ EntryList{ ._entries = records }, self }) catch |err| {
+        log.debug(.frame, "PerfObserver.dispatch", .{ .err = err });
         return err;
     };
 }

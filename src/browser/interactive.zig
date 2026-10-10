@@ -213,11 +213,11 @@ fn walkInteractive(
             else => {},
         }
 
-        if (el.ownerFrame(frame)) |owner| {
-            if (owner._style_manager.hasDisplayNone(el)) {
-                tw.skipChildren();
-                continue;
-            }
+        // Not just the element's own display: a slotted element inherits
+        // from its slot, which this light-tree walk never visits.
+        if (!el.isVisible(frame)) {
+            tw.skipChildren();
+            continue;
         }
 
         const html_el = el.is(Element.Html) orelse continue;
@@ -238,7 +238,7 @@ fn walkInteractive(
         if (filter.name) |nf| {
             const n = name orelse continue;
             const hit = switch (nf) {
-                .substring => |s| std.ascii.indexOfIgnoreCase(n, s) != null,
+                .substring => |s| std.ascii.findIgnoreCase(n, s) != null,
                 .regex => |re| re.matches(n),
             };
             if (!hit) continue;
@@ -284,13 +284,14 @@ pub fn buildListenerTargetMap(frame: *Frame, arena: Allocator) !ListenerTargetMa
     var map = ListenerTargetMap{};
 
     // addEventListener registrations
-    var it = frame._event_manager.base.lookup.iterator();
+    var it = frame.page.event_listeners.lookup.iterator();
     while (it.next()) |entry| {
-        const list = entry.value_ptr.*;
-        if (list.first != null) {
-            const gop = try map.getOrPut(arena, entry.key_ptr.event_target);
-            if (!gop.found_existing) gop.value_ptr.* = .empty;
-            try gop.value_ptr.append(arena, entry.key_ptr.type_string.str());
+        for (entry.value_ptr.items) |*type_listeners| {
+            if (type_listeners.list.first != null) {
+                const gop = try map.getOrPut(arena, entry.key_ptr.*);
+                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                try gop.value_ptr.append(arena, type_listeners.typ.str());
+            }
         }
     }
 
@@ -333,8 +334,8 @@ pub fn classifyInteractivity(
         if (isInteractiveRole(role)) return .aria;
     }
 
-    // 3. contenteditable (15 bytes, exceeds SSO limit for comptime)
-    if (el.getAttributeSafe(.wrap("contenteditable"))) |ce| {
+    // 3. contenteditable
+    if (el.getAttributeInterned("contenteditable")) |ce| {
         if (ce.len == 0 or std.ascii.eqlIgnoreCase(ce, "true")) return .contenteditable;
     }
 
@@ -681,6 +682,16 @@ test "browser.interactive: disabled by fieldset" {
     try testing.expect(elements[0].disabled);
     // Button inside first legend is NOT disabled
     try testing.expect(!elements[1].disabled);
+}
+
+test "browser.interactive: a slotted element inherits its slot's display" {
+    var page = try testing.pageTest("cdp/slotted_hidden.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const elements = try collectInteractiveElements(frame.window._document.asNode(), frame.call_arena, frame);
+    try testing.expectEqual(1, elements.len);
+    try testing.expectEqual("slotted-shown", elements[0].name.?);
 }
 
 test "browser.interactive: pointer-events none" {

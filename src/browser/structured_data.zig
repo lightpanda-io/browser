@@ -303,7 +303,7 @@ const LinkHeaderIterator = struct {
             }
 
             const target_start = self.i + 1;
-            const gt = std.mem.indexOfScalarPos(u8, v, target_start, '>') orelse {
+            const gt = std.mem.findScalarPos(u8, v, target_start, '>') orelse {
                 self.i = v.len;
                 return null;
             };
@@ -348,7 +348,7 @@ fn extractRel(params: []const u8) ?[]const u8 {
     var it = std.mem.splitScalar(u8, params, ';');
     while (it.next()) |raw_param| {
         const param = std.mem.trim(u8, raw_param, &std.ascii.whitespace);
-        const eq = std.mem.indexOfScalarPos(u8, param, 0, '=') orelse continue;
+        const eq = std.mem.findScalarPos(u8, param, 0, '=') orelse continue;
         const name = std.mem.trim(u8, param[0..eq], &std.ascii.whitespace);
         if (std.ascii.eqlIgnoreCase(name, "rel") == false) {
             continue;
@@ -515,7 +515,7 @@ test "structured_data: json-ld" {
     defer testing.test_session.closeAllPages();
 
     try testing.expectEqual(1, data.json_ld.len);
-    try testing.expect(std.mem.indexOf(u8, data.json_ld[0], "Article") != null);
+    try testing.expect(std.mem.find(u8, data.json_ld[0], "Article") != null);
 }
 
 test "structured_data: multiple json-ld" {
@@ -705,10 +705,10 @@ test "structured_data: link headers from response" {
     defer testing.test_session.closeAllPages();
 
     // Stand in for what frameHeaderDoneCallback records from the navigation.
-    try frame._http_headers.append(frame.arena, .{ .name = "link", .value =
+    try frame._http_headers.append(frame.page_arena, .{ .name = "link", .value =
         \\<https://docs.example.com/>; rel="service-doc"
     });
-    try frame._http_headers.append(frame.arena, .{ .name = "link", .value =
+    try frame._http_headers.append(frame.page_arena, .{ .name = "link", .value =
         \\<https://api.example.com/spec>; rel="service-desc", </css/site.css>; rel="stylesheet"
     });
 

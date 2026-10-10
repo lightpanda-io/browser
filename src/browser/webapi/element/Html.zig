@@ -23,6 +23,7 @@ const js = @import("../../js/js.zig");
 const Factory = @import("../../Factory.zig");
 
 const Frame = @import("../../Frame.zig");
+const StyleManager = @import("../../StyleManager.zig");
 const reflection = @import("reflection.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
@@ -319,16 +320,26 @@ pub fn asEventTarget(self: *HtmlElement) *@import("../EventTarget.zig") {
 }
 
 pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !void {
-    const tag = self.asElement().getTag();
+    const el = self.asElement();
+    // An element that isn't being rendered returns its text content
+    const owner = el.ownerFrame(frame) orelse return self.asNode().getTextContent(writer);
+    const style_manager = &owner._style_manager;
+    if (self.asNode().isConnected() == false or style_manager.isHidden(el, .{})) {
+        return self.asNode().getTextContent(writer);
+    }
+
+    const tag = el.getTag();
     switch (innerTextDisplay(self, tag)) {
         .skip, .replaced => return,
         else => {},
     }
 
-    var state = InnerTextState{ .writer = writer, .frame = frame, .preserve = tag == .pre };
-    if (self.asElement().ownerFrame(frame)) |owner| {
-        state.transform = owner._style_manager.textTransform(self.asElement());
-    }
+    var state = InnerTextState{
+        .writer = writer,
+        .style_manager = style_manager,
+        .preserve = tag == .pre,
+        .transform = style_manager.textTransform(el),
+    };
     try self.collectInnerText(&state);
 }
 
@@ -515,7 +526,7 @@ pub fn getAccessKeyLabel(self: *HtmlElement, frame: *Frame) ![]const u8 {
     if (codepoints != 1) {
         return "";
     }
-    return std.fmt.allocPrint(frame.local_arena, "Alt+{s}", .{value});
+    return frame.local_arena.print("Alt+{s}", .{value});
 }
 
 pub fn getPopover(self: *HtmlElement) ?[]const u8 {
@@ -559,7 +570,7 @@ pub fn getTabIndex(self: *HtmlElement) i32 {
 
 pub fn setTabIndex(self: *HtmlElement, value: i32, frame: *Frame) !void {
     var buf: [12]u8 = undefined;
-    const str = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    const str = std.mem.print(&buf, "{d}", .{value}) catch unreachable;
     try self.asElement().setAttributeSafe(comptime .wrap("tabindex"), .wrap(str), frame);
 }
 
@@ -621,12 +632,9 @@ pub fn setTitle(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
 // unsupported value. Spec walk per HTML §7.7.5.2 still applies — the nearest
 // ancestor with `contenteditable` wins; "false" disables. See PR #2310 for
 // the routing-vs-fail-loud discussion.
-//
-// "contenteditable" is 15 bytes — past the comptime SSO limit — so the
-// String wrap runs at runtime, mirroring the pattern in interactive.zig.
 /// Reflects the attribute only; `isContentEditable` stays false regardless.
 pub fn getContentEditable(self: *HtmlElement) []const u8 {
-    const raw = self.asElement().getAttributeSafe(.wrap("contenteditable")) orelse return "inherit";
+    const raw = self.asElement().getAttributeInterned("contenteditable") orelse return "inherit";
     if (raw.len == 0 or std.ascii.eqlIgnoreCase(raw, "true")) return "true";
     if (std.ascii.eqlIgnoreCase(raw, "false")) return "false";
     if (std.ascii.eqlIgnoreCase(raw, "plaintext-only")) return "plaintext-only";
@@ -695,7 +703,7 @@ fn setAttributeListener(
     }
 
     if (listener_callback) |cb| {
-        try frame._event_target_attr_listeners.put(frame.arena, .{
+        try frame._event_target_attr_listeners.put(frame.page_arena, .{
             .target = self.asEventTarget(),
             .handler = listener_type,
         }, cb);
@@ -1514,8 +1522,9 @@ pub fn parseInteger(input: []const u8) ?i32 {
 const InnerTextState = struct {
     writer: *std.Io.Writer,
 
-    // Needed to reach the StyleManager for CSS-driven visibility (display:none).
-    frame: *Frame,
+    // The walk never leaves the root's document, so we can capture the
+    // style_manager upfront
+    style_manager: *StyleManager,
 
     // number of line breaks we've accumulated for the block. Emitted lazily that
     // leading/trailing breaks aren't written and so that we can emit the max
@@ -1599,6 +1608,10 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
     var saw_row = false;
     var saw_cell = false;
 
+    // The text of an invisible element isn't included, but we still walk all
+    // its children, since they can make themeselves visible again.
+    const text_hidden = state.style_manager.hasVisibilityHiddenInherited(el);
+
     var it = el.asNode().childrenIterator();
     while (it.next()) |child| {
         switch (child._type) {
@@ -1621,8 +1634,9 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
                 const c = child.subtype(Node.CData);
                 switch (c._type) {
                     .text => {
-                        if (child_filter != .none) {
-                            // Text directly inside <select>/<optgroup> is skipped
+                        if (child_filter != .none or text_hidden) {
+                            // Text directly inside <select>/<optgroup> is skipped,
+                            // as is visibility:hidden text
                             continue;
                         }
                         if (table_ctx and isAllAsciiWhitespace(c.getData().str())) {
@@ -1652,10 +1666,8 @@ fn handleChildElement(
     // visibility of el.parent doesn't matter. So we only care about visibility
     // on the element itself and then on each child. This is much simpler too.
     const el = he.asElement();
-    if (el.ownerFrame(state.frame)) |owner| {
-        if (owner._style_manager.hasDisplayNone(el)) {
-            return;
-        }
+    if (state.style_manager.hasDisplayNone(el)) {
+        return;
     }
 
     if (he._type == .br) {
@@ -1671,11 +1683,9 @@ fn handleChildElement(
     // text-transform inherits, so a child's own value covers its subtree only.
     const parent_transform = state.transform;
     defer state.transform = parent_transform;
-    if (el.ownerFrame(state.frame)) |owner| {
-        const own = owner._style_manager.ownTextTransform(el);
-        if (own != .inherit) {
-            state.transform = own;
-        }
+    const own_transform = state.style_manager.ownTextTransform(el);
+    if (own_transform != .inherit) {
+        state.transform = own_transform;
     }
 
     switch (innerTextDisplay(he, tag)) {
@@ -1773,7 +1783,7 @@ fn writeText(c: *Node.CData, state: *InnerTextState) !void {
 
     // Every case mapping we apply keeps the UTF-8 length, so the text is
     // rendered to a scratch buffer and mapped in place.
-    var scratch: std.Io.Writer.Allocating = .init(state.frame.local_arena);
+    var scratch: std.Io.Writer.Allocating = .init(state.style_manager.frame.local_arena);
     defer scratch.deinit();
     const out = state.writer;
     state.writer = &scratch.writer;
@@ -1946,7 +1956,7 @@ fn renderedTextFragment(document: *const Node.Document, value: []const u8, frame
 
     var rest = value;
     while (true) {
-        const text_end = std.mem.indexOfAny(u8, rest, "\r\n") orelse rest.len;
+        const text_end = std.mem.findAny(u8, rest, "\r\n") orelse rest.len;
         if (text_end > 0) {
             try nodes.append(arena, .{ .text = rest[0..text_end] });
         }

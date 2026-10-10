@@ -120,6 +120,11 @@ stall_report_requested_at: std.atomic.Value(u64) = .init(0),
 // observes that as non-zero.
 stall_report_stalled_ms: std.atomic.Value(u64) = .init(0),
 
+// Set by the near-heap-limit callback, consumed on the worker by
+// terminateInterrupt so the script that ran out of heap is identified before
+// it is killed.
+heap_report_requested: std.atomic.Value(bool) = .init(false),
+
 // Set while a V8 context (or the isolate) is being disposed.
 tearing_down: bool = false,
 
@@ -153,7 +158,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     v8.v8__Isolate__CreateParams__CONSTRUCT(params);
     params.snapshot_blob = @ptrCast(&snapshot.startup_data);
 
-    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator().?;
+    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator(js.ArrayBuffer.MAX_LENGTH).?;
     errdefer v8.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
 
     params.external_references = &snapshot.external_references;
@@ -185,6 +190,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     isolate.enter();
     errdefer isolate.exit();
 
+    _ = v8.v8__Isolate__AddMessageListener(isolate_handle, messageCallback);
     v8.v8__Isolate__SetHostInitializeImportMetaObjectCallback(isolate_handle, Context.metaObjectCallback);
 
     // Allocate arrays dynamically to avoid comptime dependency on JsApis.len
@@ -344,7 +350,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .value = @ptrCast(global.window),
         .prototype_chain = (&Window.JsApi.Meta.prototype_chain).ptr,
         .prototype_len = @intCast(Window.JsApi.Meta.prototype_chain.len),
-        .subtype = .node,
+        .subtype = null,
     } else switch (global._type) {
         .dedicated => |scope| .{
             .value = @ptrCast(scope),
@@ -400,7 +406,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .url = &global.url,
         .buf = &global.buf,
         .charset = &global.charset,
-        .arena = global.arena,
+        .page_arena = if (comptime is_frame) global.page_arena else global.arena,
         .page = context.page,
         .session = page.session,
         .call_arena = params.call_arena,
@@ -495,6 +501,13 @@ pub fn destroyContext(self: *Env, context: *Context) void {
 }
 
 pub fn runMicrotasks(self: *Env) void {
+    // Checkpoints only happen at en empty JS stack.
+    for (self.contexts.items) |ctx| {
+        if (ctx.call_depth > 0) {
+            return;
+        }
+    }
+
     if (self.microtask_queues_are_running == false) {
         self.terminate_mutex.lockUncancelable(lp.io);
         defer self.terminate_mutex.unlock(lp.io);
@@ -519,12 +532,7 @@ pub fn runMicrotasks(self: *Env) void {
 
             if (self.terminatePending()) {
                 if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate)) {
-                    for (self.contexts.items) |c| {
-                        if (c.call_depth > 0) {
-                            return;
-                        }
-                    }
-                    // None of the contexts are "entered", it's safe to
+                    // No context is entered (checked above), so it's safe to
                     // clear the termination flag.
                     v8.v8__Isolate__CancelTerminateExecution(v8_isolate);
                 }
@@ -689,14 +697,12 @@ fn onNearHeapLimit(self: *Env, current_limit: usize, initial_limit: usize) usize
 
     // Context disposal can trigger this after execution has ended.
     if (self.tearing_down == false) {
+        self.heap_report_requested.store(true, .release);
         self.requestTerminate();
     }
 
-    const cap = initial_limit + 256 * 1024 * 1024;
-    if (current_limit >= cap) {
-        return current_limit;
-    }
-    return @min(cap, current_limit + 64 * 1024 * 1024);
+    // give it 256MB more to, hopefully, shtudown cleanly
+    return @max(current_limit, initial_limit + 256 * 1024 * 1024);
 }
 
 // Called from the network thread, caused v8 to eventually call terminateInterrupt
@@ -724,18 +730,26 @@ pub fn pendingStallReport(self: *const Env) ?u64 {
 fn terminateInterrupt(_: ?*v8.Isolate, data: ?*anyopaque) callconv(.c) void {
     const self: *Env = @ptrCast(@alignCast(data.?));
     if (self.terminate_requested.load(.acquire)) {
-        const requested_at = self.stall_report_requested_at.swap(0, .acq_rel);
-        if (requested_at != 0) {
-            self.logStall(requested_at);
-        }
+        self.logPendingReports();
         v8.v8__Isolate__TerminateExecution(self.isolate.handle);
     }
 }
 
-const STALL_STACK_FRAMES = 12;
-const STALL_URL_MAX = 512;
+// Runs on the worker thread, while the script being stopped is on the stack.
+pub fn logPendingReports(self: *Env) void {
+    const requested_at = self.stall_report_requested_at.swap(0, .acq_rel);
+    if (requested_at != 0) {
+        self.logStall(requested_at);
+    }
+    if (self.heap_report_requested.swap(false, .acq_rel)) {
+        self.logHeapLimit();
+    }
+}
 
-const StallReport = struct {
+const SCRIPT_STACK_FRAMES = 12;
+const SCRIPT_URL_MAX = 512;
+
+const ScriptReport = struct {
     url: []const u8 = "",
     page_url: []const u8 = "",
     stack: []const u8 = "",
@@ -744,24 +758,24 @@ const StallReport = struct {
 // Runs on the worker thread, inside a V8 interrupt: reads the current stack
 // but never runs JavaScript. Everything returned is either in `stack_buf` or
 // owned by the frame, so it's only valid until the caller returns.
-fn stallReport(self: *Env, stack_buf: []u8) StallReport {
+fn scriptReport(self: *Env, stack_buf: []u8) ScriptReport {
     const isolate = self.isolate.handle;
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, isolate);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
-    var report: StallReport = .{};
+    var report: ScriptReport = .{};
     if (Context.fromIsolate(self.isolate)) |entry| {
         const ctx, _ = entry;
-        report.url = string.truncateUtf8(ctx.global.url(), STALL_URL_MAX);
+        report.url = string.truncateUtf8(ctx.global.url(), SCRIPT_URL_MAX);
         report.page_url = string.truncateUtf8(switch (ctx.global) {
             .frame => |frame| frame.page.frame.url,
             .worker => |worker| worker.page.frame.url,
-        }, STALL_URL_MAX);
+        }, SCRIPT_URL_MAX);
     }
 
     var writer: std.Io.Writer = .fixed(stack_buf);
-    if (v8.v8__StackTrace__CurrentStackTrace__STATIC(isolate, STALL_STACK_FRAMES)) |stack| {
+    if (v8.v8__StackTrace__CurrentStackTrace__STATIC(isolate, SCRIPT_STACK_FRAMES)) |stack| {
         // A full buffer truncates the stack; the frames written are kept.
         js.writeStackTrace(isolate, stack, &writer) catch {};
     }
@@ -771,7 +785,7 @@ fn stallReport(self: *Env, stack_buf: []u8) StallReport {
 
 fn logStall(self: *Env, requested_at: u64) void {
     var stack_buf: [1536]u8 = undefined;
-    const report = self.stallReport(&stack_buf);
+    const report = self.scriptReport(&stack_buf);
     log.warn(.watchdog, "watchdog stall script", .{
         .stalled_ms = self.stall_report_stalled_ms.load(.monotonic),
         .url = report.url,
@@ -779,6 +793,19 @@ fn logStall(self: *Env, requested_at: u64) void {
         // Large when the stall was in native code: the interrupt only lands
         // once control is back in JavaScript.
         .interrupt_delay_ms = lp.datetime.milliTimestamp(.boot) -| requested_at,
+        .stack = report.stack,
+    });
+}
+
+// The stack is whatever runs when the interrupt lands. That's usually the
+// allocating script, but not necessarily the one holding the memory, and if
+// the limit was hit from native code it's the next script to run.
+fn logHeapLimit(self: *Env) void {
+    var stack_buf: [1536]u8 = undefined;
+    const report = self.scriptReport(&stack_buf);
+    log.err(.app, "JS heap limit script", .{
+        .url = report.url,
+        .page_url = report.page_url,
         .stack = report.stack,
     });
 }
@@ -792,6 +819,7 @@ pub fn cancelTerminate(self: *Env) void {
     defer self.terminate_mutex.unlock(lp.io);
     self.terminate_requested.store(false, .release);
     self.stall_report_requested_at.store(0, .release);
+    self.heap_report_requested.store(false, .release);
     v8.v8__Isolate__CancelTerminateExecution(self.isolate.handle);
 }
 
@@ -823,6 +851,11 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
         .call_arena = ctx.call_arena,
     };
 
+    // Called synchronously by V8, so we bypass Caller and it's call_depth
+    // increment. Do it manually.
+    ctx.call_depth += 1;
+    defer ctx.call_depth -= 1;
+
     const no_handler = promise_event == v8.kPromiseRejectWithNoHandler;
     switch (ctx.global) {
         .frame => |frame| {
@@ -844,6 +877,27 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
     }
 }
 
+// V8 reports an exception that escapes to the top without a TryCatch. We
+// *should* have a TryCatch at every Zig-initiated call, so this is almost
+// certainly from a queueMicrotask callback. report it.
+// If you remove this, V8 will print errors to stdout on its own.
+fn messageCallback(_: ?*const v8.Message, data: ?*const v8.Value) callconv(.c) void {
+    const v8_isolate = v8.v8__Isolate__GetCurrent().?;
+    const isolate = js.Isolate{ .handle = v8_isolate };
+    const ctx, const v8_context = Context.fromIsolate(isolate) orelse return;
+
+    const local = js.Local{
+        .ctx = ctx,
+        .isolate = isolate,
+        .handle = v8_context,
+        .call_arena = ctx.call_arena,
+    };
+
+    ctx.global.reportError(.{ .local = &local, .handle = data orelse return }) catch |err| {
+        log.debug(.js, "report uncaught exception", .{ .err = err });
+    };
+}
+
 fn fatalCallback(c_location: [*c]const u8, c_message: [*c]const u8) callconv(.c) void {
     const location = std.mem.span(c_location);
     const message = std.mem.span(c_message);
@@ -853,8 +907,9 @@ fn fatalCallback(c_location: [*c]const u8, c_message: [*c]const u8) callconv(.c)
 
 fn oomCallback(c_location: [*c]const u8, details: ?*const v8.OOMDetails) callconv(.c) void {
     const location = std.mem.span(c_location);
-    const detail = if (details) |d| std.mem.span(d.detail) else "";
-    log.fatal(.app, "V8 OOM", .{ .location = location, .detail = detail });
+    const d = details orelse &v8.OOMDetails{};
+    const detail: []const u8 = if (d.detail == null) "" else std.mem.span(d.detail);
+    log.fatal(.app, "V8 OOM", .{ .location = location, .detail = detail, .is_heap_oom = d.is_heap_oom });
     @import("../../crash_handler.zig").crash("V8 OOM", .{ .location = location, .detail = detail }, @returnAddress());
 }
 
@@ -923,7 +978,7 @@ test "Env: a heap limit reached during teardown does not arm a termination" {
     try testing.expect(granted > limit);
 }
 
-test "Env: stall report names the running frame and script stack" {
+test "Env: script report names the running frame and script stack" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
@@ -942,7 +997,7 @@ test "Env: stall report names the running frame and script stack" {
 
         fn capture(self: *@This()) void {
             var buf: [1536]u8 = undefined;
-            const report = self.env.stallReport(&buf);
+            const report = self.env.scriptReport(&buf);
             self.url_len = @min(report.url.len, self.url.len);
             @memcpy(self.url[0..self.url_len], report.url[0..self.url_len]);
             self.page_url_matches = std.mem.eql(u8, report.url, report.page_url);
@@ -965,8 +1020,8 @@ test "Env: stall report names the running frame and script stack" {
     try testing.expectEqual(frame.url, state.url[0..state.url_len]);
     try testing.expectEqual(true, state.page_url_matches);
     const stack = state.stack[0..state.stack_len];
-    const inner = std.mem.indexOf(u8, stack, "stallInner (https://example.com/stall.js:3:") orelse return error.MissingInnerFrame;
-    const outer = std.mem.indexOf(u8, stack, "stallOuter (https://example.com/stall.js:2:") orelse return error.MissingOuterFrame;
+    const inner = std.mem.find(u8, stack, "stallInner (https://example.com/stall.js:3:") orelse return error.MissingInnerFrame;
+    const outer = std.mem.find(u8, stack, "stallOuter (https://example.com/stall.js:2:") orelse return error.MissingOuterFrame;
     try testing.expect(inner < outer);
 }
 
@@ -999,6 +1054,74 @@ test "Env: watchdog termination logs the stalled script once" {
     var caught: js.TryCatch.Caught = .{};
     try testing.expectError(error.ExecutionTerminated, driver_fn.tryCall(void, .{local.newCallback(State.stall, &state)}, &caught));
     try testing.expectEqual(0, env.stall_report_requested_at.load(.acquire));
+}
+
+test "Env: heap limit termination logs the running script once" {
+    // Two "JS heap limit reached" lines, then one "JS heap limit script".
+    testing.expectLog(&.{ .app, .app, .app });
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const env = frame.js.env;
+    defer env.cancelTerminate();
+
+    const State = struct {
+        env: *Env,
+        fn exhaust(self: *@This()) void {
+            // V8 can call back again before the interrupt lands.
+            _ = self.env.onNearHeapLimit(1024, 1024);
+            _ = self.env.onNearHeapLimit(2048, 1024);
+        }
+    };
+    var state = State{ .env = env };
+
+    const driver = try local.exec("(function(exhaust) { exhaust(); for(;;){} })", null);
+    const driver_fn = js.Function{ .local = local, .handle = @ptrCast(driver.handle) };
+    var caught: js.TryCatch.Caught = .{};
+    try testing.expectError(error.ExecutionTerminated, driver_fn.tryCall(void, .{local.newCallback(State.exhaust, &state)}, &caught));
+    try testing.expectEqual(false, env.heap_report_requested.load(.acquire));
+}
+
+test "Env: a pending termination refuses native calls" {
+    // "JS heap limit reached", then the refusal logs "JS heap limit script".
+    testing.expectLog(&.{ .app, .app });
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const env = frame.js.env;
+
+    const State = struct {
+        env: *Env,
+        fn exhaust(self: *@This()) void {
+            _ = self.env.onNearHeapLimit(1024, 1024);
+        }
+    };
+    var state = State{ .env = env };
+
+    // No loop and no JS call after exhaust(): nothing reaches a V8 stack
+    // check, so only the setter can stop the script.
+    const driver = try local.exec("(function(exhaust) { exhaust(); document.title = 'ran'; })", null);
+    const driver_fn = js.Function{ .local = local, .handle = @ptrCast(driver.handle) };
+    var caught: js.TryCatch.Caught = .{};
+    if (driver_fn.tryCall(void, .{local.newCallback(State.exhaust, &state)}, &caught)) {
+        return error.NativeCallNotRefused;
+    } else |_| {}
+    try testing.expectEqual(false, env.heap_report_requested.load(.acquire));
+
+    env.cancelTerminate();
+    try testing.expectEqual(false, std.mem.eql(u8, "ran", try (try local.exec("document.title", null)).toStringSlice()));
 }
 
 test "Env: canceling a termination drops its pending stall report" {

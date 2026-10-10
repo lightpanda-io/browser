@@ -501,7 +501,7 @@ fn parseUrlEncoded(self: *FormData, bytes: []const u8) !void {
         if (pair.len == 0) {
             continue;
         }
-        if (std.mem.indexOfScalar(u8, pair, '=')) |idx| {
+        if (std.mem.findScalar(u8, pair, '=')) |idx| {
             try self.appendText(
                 try urlDecode(self._arena.allocator(), pair[0..idx]),
                 try urlDecode(self._arena.allocator(), pair[idx + 1 ..]),
@@ -519,7 +519,7 @@ fn parseUrlEncoded(self: *FormData, bytes: []const u8) !void {
 fn indexOfSpecial(slice: []const u8) ?usize {
     const vector_len = std.simd.suggestVectorLength(u8) orelse {
         // Non-SIMD path.
-        return std.mem.indexOfAnyPos(u8, slice, 0, "%+");
+        return std.mem.findAnyPos(u8, slice, 0, "%+");
     };
     const Vector = @Vector(vector_len, u8);
 
@@ -530,14 +530,14 @@ fn indexOfSpecial(slice: []const u8) ?usize {
         const chunk: Vector = slice[end..][0..vector_len].*;
 
         const mask = @intFromBool(chunk == percent) | @intFromBool(chunk == plus);
-        const mask_int = @as(std.meta.Int(.unsigned, vector_len), @bitCast(mask));
+        const mask_int = @as(@Int(.unsigned, vector_len), @bitCast(mask));
 
         if (mask_int != 0) {
             return end + @ctz(mask_int);
         }
     }
 
-    return std.mem.indexOfAnyPos(u8, slice, end, "%+");
+    return std.mem.findAnyPos(u8, slice, end, "%+");
 }
 
 /// URL-decodes passed `raw` slice; returned value may or may not be heap allocated.
@@ -700,7 +700,7 @@ fn parseMultipart(self: *FormData, bytes: []const u8, boundary: []const u8, exec
 // prefix of longer text does not terminate the part.
 fn indexOfBoundary(haystack: []const u8, boundary: []const u8) ?usize {
     var start: usize = 0;
-    while (std.mem.indexOfPos(u8, haystack, start, "\r\n--")) |i| {
+    while (std.mem.findPos(u8, haystack, start, "\r\n--")) |i| {
         const rest = haystack[i + 4 ..];
         if (std.mem.startsWith(u8, rest, boundary)) {
             const after = rest[boundary.len..];
@@ -716,7 +716,7 @@ fn indexOfBoundary(haystack: []const u8, boundary: []const u8) ?usize {
 // "Parse a multipart/form-data name": undo writeMultipartName's escapes
 // (%0A, %0D, %22); any other percent sequence passes through verbatim.
 fn decodeMultipartName(arena: Allocator, raw: []const u8) ![]const u8 {
-    if (std.mem.indexOfScalar(u8, raw, '%') == null) {
+    if (std.mem.findScalar(u8, raw, '%') == null) {
         return raw;
     }
 
@@ -796,8 +796,7 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
     var list: std.ArrayList(Entry) = .empty;
     const form = form_ orelse return list;
 
-    var elements = try form.getElements(frame);
-    var it = try elements.iterator();
+    var it = form.iterator(.{}, frame);
     while (it.next()) |element| {
         if (element.isDisabled()) {
             continue;
@@ -811,16 +810,20 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
                     continue;
                 }
 
-                const name = element.getName();
-                const x_key = if (name) |n| try std.fmt.allocPrint(arena, "{s}.x", .{n}) else "x";
-                const y_key = if (name) |n| try std.fmt.allocPrint(arena, "{s}.y", .{n}) else "y";
+                const name = element.getName() orelse "";
+                const x_key = if (name.len > 0) try arena.print("{s}.x", .{name}) else "x";
+                const y_key = if (name.len > 0) try arena.print("{s}.y", .{name}) else "y";
                 try appendString(&list, arena, x_key, "0");
                 try appendString(&list, arena, y_key, "0");
                 continue;
             }
         }
 
+        // A missing or empty name excludes the control from the entry list.
         const name = element.getName() orelse continue;
+        if (name.len == 0) {
+            continue;
+        }
         const value = blk: {
             if (element.is(Form.Input)) |input| {
                 const input_type = input._input_type;

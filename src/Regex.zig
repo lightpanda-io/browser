@@ -25,6 +25,7 @@
 
 const std = @import("std");
 const pcre2 = @import("pcre2");
+const repeat = @import("string.zig").repeat;
 
 const Allocator = std.mem.Allocator;
 
@@ -171,8 +172,9 @@ const MATCH_SCRATCH = 24 * 1024;
 /// Whether the pattern matches anywhere in `text`, as `RegExp.test` would
 /// answer. A match that hits the backtracking limits counts as no match.
 pub fn matches(self: Regex, text: []const u8) bool {
-    var scratch = std.heap.stackFallback(MATCH_SCRATCH, self.context.allocator);
-    var allocator = scratch.get();
+    var scratch_buf: [MATCH_SCRATCH]u8 = undefined;
+    var scratch: std.heap.BufferFirstAllocator = .init(&scratch_buf, self.context.allocator);
+    var allocator = scratch.allocator();
     const general = pcre2.pcre2_general_context_create_8(Context.cMalloc, Context.cFree, &allocator) orelse return false;
     defer pcre2.pcre2_general_context_free_8(general);
 
@@ -236,9 +238,9 @@ test "Regex: invalid patterns are errors, runaway ones no match" {
     // the caller.
     const runaway = try context.compile("^(a+)+$", .{ .case_insensitive = true }, null);
     defer runaway.deinit();
-    const subject = "a" ** 64 ++ "b";
+    const subject = repeat("a", 64) ++ "b";
     try testing.expect(!runaway.matches(subject));
-    try testing.expect(runaway.matches("a" ** 64));
+    try testing.expect(runaway.matches(repeat("a", 64)));
 }
 
 test "Regex: dot_all and multiline follow the JavaScript flags" {

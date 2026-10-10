@@ -339,7 +339,7 @@ pub const DateTime = struct {
 
         _ = std.meta.stringToEnum(enum { UT, GMT, Z }, parser.rest()) orelse return error.UnsupportedTimeZone;
 
-        return initUTC(year, @intFromEnum(month) + 1, day, tm.hour, tm.min, tm.sec, tm.micros);
+        return initUTC(year, @backingInt(month) + 1, day, tm.hour, tm.min, tm.sec, tm.micros);
     }
 
     fn parseRFC3339(input: []const u8) !DateTime {
@@ -621,7 +621,7 @@ pub fn localTime(ts: i64) !LibcTm {
     return tm;
 }
 
-const LibcTm = extern struct {
+pub const LibcTm = extern struct {
     tm_sec: c_int,
     tm_min: c_int,
     tm_hour: c_int,
@@ -831,13 +831,13 @@ test "Date: json" {
 test "Date: format" {
     {
         var buf: [20]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{Date{ .year = 2023, .month = 5, .day = 22 }});
+        const out = try std.mem.print(&buf, "{f}", .{Date{ .year = 2023, .month = 5, .day = 22 }});
         try testing.expectString("2023-05-22", out);
     }
 
     {
         var buf: [20]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{Date{ .year = -102, .month = 12, .day = 9 }});
+        const out = try std.mem.print(&buf, "{f}", .{Date{ .year = -102, .month = 12, .day = 9 }});
         try testing.expectString("-0102-12-09", out);
     }
 }
@@ -1022,37 +1022,37 @@ test "Time: json" {
 test "Time: format" {
     {
         var buf: [20]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{Time{ .hour = 23, .min = 59, .sec = 59, .micros = 0 }});
+        const out = try std.mem.print(&buf, "{f}", .{Time{ .hour = 23, .min = 59, .sec = 59, .micros = 0 }});
         try testing.expectString("23:59:59", out);
     }
 
     {
         var buf: [20]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{Time{ .hour = 8, .min = 9, .sec = 10, .micros = 12 }});
+        const out = try std.mem.print(&buf, "{f}", .{Time{ .hour = 8, .min = 9, .sec = 10, .micros = 12 }});
         try testing.expectString("08:09:10.000012", out);
     }
 
     {
         var buf: [20]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{Time{ .hour = 8, .min = 9, .sec = 10, .micros = 123 }});
+        const out = try std.mem.print(&buf, "{f}", .{Time{ .hour = 8, .min = 9, .sec = 10, .micros = 123 }});
         try testing.expectString("08:09:10.000123", out);
     }
 
     {
         var buf: [20]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{Time{ .hour = 8, .min = 9, .sec = 10, .micros = 1234 }});
+        const out = try std.mem.print(&buf, "{f}", .{Time{ .hour = 8, .min = 9, .sec = 10, .micros = 1234 }});
         try testing.expectString("08:09:10.001234", out);
     }
 
     {
         var buf: [20]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{Time{ .hour = 8, .min = 9, .sec = 10, .micros = 12345 }});
+        const out = try std.mem.print(&buf, "{f}", .{Time{ .hour = 8, .min = 9, .sec = 10, .micros = 12345 }});
         try testing.expectString("08:09:10.012345", out);
     }
 
     {
         var buf: [20]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{Time{ .hour = 8, .min = 9, .sec = 10, .micros = 123456 }});
+        const out = try std.mem.print(&buf, "{f}", .{Time{ .hour = 8, .min = 9, .sec = 10, .micros = 123456 }});
         try testing.expectString("08:09:10.123456", out);
     }
 }
@@ -1737,37 +1737,37 @@ test "DateTime: json" {
 test "DateTime: format" {
     {
         var buf: [30]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{try DateTime.initUTC(2023, 5, 22, 23, 59, 59, 0)});
+        const out = try std.mem.print(&buf, "{f}", .{try DateTime.initUTC(2023, 5, 22, 23, 59, 59, 0)});
         try testing.expectString("2023-05-22T23:59:59Z", out);
     }
 
     {
         var buf: [30]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{try DateTime.initUTC(2023, 5, 22, 8, 9, 10, 12)});
+        const out = try std.mem.print(&buf, "{f}", .{try DateTime.initUTC(2023, 5, 22, 8, 9, 10, 12)});
         try testing.expectString("2023-05-22T08:09:10.000012Z", out);
     }
 
     {
         var buf: [30]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{try DateTime.initUTC(2023, 5, 22, 8, 9, 10, 123)});
+        const out = try std.mem.print(&buf, "{f}", .{try DateTime.initUTC(2023, 5, 22, 8, 9, 10, 123)});
         try testing.expectString("2023-05-22T08:09:10.000123Z", out);
     }
 
     {
         var buf: [30]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{try DateTime.initUTC(2023, 5, 22, 8, 9, 10, 1234)});
+        const out = try std.mem.print(&buf, "{f}", .{try DateTime.initUTC(2023, 5, 22, 8, 9, 10, 1234)});
         try testing.expectString("2023-05-22T08:09:10.001234Z", out);
     }
 
     {
         var buf: [30]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{try DateTime.initUTC(-102, 12, 9, 8, 9, 10, 12345)});
+        const out = try std.mem.print(&buf, "{f}", .{try DateTime.initUTC(-102, 12, 9, 8, 9, 10, 12345)});
         try testing.expectString("-0102-12-09T08:09:10.012345Z", out);
     }
 
     {
         var buf: [30]u8 = undefined;
-        const out = try std.fmt.bufPrint(&buf, "{f}", .{try DateTime.initUTC(-102, 12, 9, 8, 9, 10, 123456)});
+        const out = try std.mem.print(&buf, "{f}", .{try DateTime.initUTC(-102, 12, 9, 8, 9, 10, 123456)});
         try testing.expectString("-0102-12-09T08:09:10.123456Z", out);
     }
 }
@@ -2171,7 +2171,7 @@ test "DateTime: sub" {
 
 fn expectDateTime(expected: []const u8, dt: DateTime) !void {
     var buf: [30]u8 = undefined;
-    const actual = try std.fmt.bufPrint(&buf, "{f}", .{dt});
+    const actual = try std.mem.print(&buf, "{f}", .{dt});
     try testing.expectString(expected, actual);
 }
 

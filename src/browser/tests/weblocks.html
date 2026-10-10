@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=weblocksSurface>
+{
+  testing.expectEqual('function', typeof navigator.locks.request);
+  testing.expectEqual('function', typeof navigator.locks.query);
+  testing.expectEqual(true, navigator.locks instanceof LockManager);
+}
+</script>
+
+<script id=requestGrantsExclusiveLock type=module>
+{
+  const state = await testing.async();
+  const result = await navigator.locks.request('a', (lock) => {
+    testing.expectEqual('a', lock.name);
+    testing.expectEqual('exclusive', lock.mode);
+    return 'granted';
+  });
+  state.resolve(result);
+  await state.done((v) => {
+    testing.expectEqual('granted', v);
+  });
+}
+</script>
+
+<script id=requestCallbackRunsAsynchronously>
+{
+  // Per spec (and Chrome), request() must return before the callback runs -
+  // granting happens as a separate task, never synchronously inline.
+  let x = 0;
+  navigator.locks.request('callback-async', () => { x = 1 });
+  testing.expectEqual(0, x);
+}
+</script>
+
+<script id=requestAdoptsAsyncCallback type=module>
+{
+  const state = await testing.async();
+  const result = await navigator.locks.request('b', async (lock) => {
+    testing.expectEqual('b', lock.name);
+    return 'async-granted';
+  });
+  state.resolve(result);
+  await state.done((v) => {
+    testing.expectEqual('async-granted', v);
+  });
+}
+</script>
+
+<script id=requestRejectsOnThrow type=module>
+{
+  const state = await testing.async();
+  try {
+    await navigator.locks.request('c', () => { throw new Error('boom'); });
+    state.resolve('resolved');
+  } catch (e) {
+    state.resolve(e.message);
+  }
+  await state.done((v) => {
+    testing.expectEqual('boom', v);
+  });
+}
+</script>
+
+<script id=exclusiveLocksSerialize type=module>
+{
+  const state = await testing.async();
+  const order = [];
+  let release1;
+  const first = navigator.locks.request('serial', () => new Promise((resolve) => {
+    order.push('first-start');
+    release1 = resolve;
+  }));
+  const second = navigator.locks.request('serial', () => {
+    order.push('second-start');
+  });
+
+  // give the first request a tick to be granted before releasing it
+  await new Promise((r) => setTimeout(r, 0));
+  release1();
+
+  await Promise.all([first, second]);
+  state.resolve(order.join(','));
+  await state.done((v) => {
+    testing.expectEqual('first-start,second-start', v);
+  });
+}
+</script>
+
+<script id=sharedLocksCoexist type=module>
+{
+  const state = await testing.async();
+  const order = [];
+  const a = navigator.locks.request('shared', { mode: 'shared' }, () => {
+    order.push('a');
+  });
+  const b = navigator.locks.request('shared', { mode: 'shared' }, () => {
+    order.push('b');
+  });
+  await Promise.all([a, b]);
+  state.resolve(order.sort().join(','));
+  await state.done((v) => {
+    testing.expectEqual('a,b', v);
+  });
+}
+</script>
+
+<script id=sharedBlocksExclusive type=module>
+{
+  const state = await testing.async();
+  const order = [];
+  let releaseShared;
+  const shared = navigator.locks.request('mix', { mode: 'shared' }, () => new Promise((resolve) => {
+    order.push('shared-start');
+    releaseShared = resolve;
+  }));
+  const exclusive = navigator.locks.request('mix', () => {
+    order.push('exclusive-start');
+  });
+
+  await new Promise((r) => setTimeout(r, 0));
+  releaseShared();
+
+  await Promise.all([shared, exclusive]);
+  state.resolve(order.join(','));
+  await state.done((v) => {
+    testing.expectEqual('shared-start,exclusive-start', v);
+  });
+}
+</script>
+
+<script id=ifAvailableFiresNullWhenHeld type=module>
+{
+  const state = await testing.async();
+  let releaseHeld;
+  const held = navigator.locks.request('avail', () => new Promise((resolve) => {
+    releaseHeld = resolve;
+  }));
+
+  await new Promise((r) => setTimeout(r, 0));
+
+  const result = await navigator.locks.request('avail', { ifAvailable: true }, (lock) => {
+    return lock === null ? 'unavailable' : 'should-not-happen';
+  });
+
+  releaseHeld();
+  await held;
+
+  state.resolve(result);
+  await state.done((v) => {
+    testing.expectEqual('unavailable', v);
+  });
+}
+</script>
+
+<script id=stealAbortsHeldLockAndGrantsNewOne type=module>
+{
+  const state = await testing.async();
+  const order = [];
+  let heldRejection = null;
+
+  const held = navigator.locks.request('steal-me', (lock) => new Promise((_resolve, reject) => {
+    order.push('held-start');
+    // never resolves on its own - it should be aborted by the steal
+  })).catch((e) => { heldRejection = e.name; });
+
+  await new Promise((r) => setTimeout(r, 0));
+
+  const stolen = await navigator.locks.request('steal-me', { steal: true }, (lock) => {
+    order.push('stolen-start');
+    return 'stolen-ok';
+  });
+
+  await held;
+
+  state.resolve(JSON.stringify({ order, heldRejection, stolen }));
+  await state.done((v) => {
+    const parsed = JSON.parse(v);
+    testing.expectEqual('AbortError', parsed.heldRejection);
+    testing.expectEqual('stolen-ok', parsed.stolen);
+  });
+}
+</script>
+
+<script id=stealThenPendingRequestStillGetsGranted type=module>
+{
+  // A request queued behind a lock that later gets stolen (by a third
+  // party) must still eventually be granted once the stolen lock finishes.
+  const state = await testing.async();
+  const order = [];
+  let releaseStolen;
+
+  const holder = navigator.locks.request('steal-queue', (lock) => new Promise((resolve) => {
+    order.push('holder-start');
+    releaseStolen = resolve;
+  }));
+
+  await new Promise((r) => setTimeout(r, 0));
+
+  // queued behind the current holder
+  const waiter = navigator.locks.request('steal-queue', (lock) => {
+    order.push('waiter-start');
+    return 'waiter-done';
+  });
+
+  await new Promise((r) => setTimeout(r, 0));
+
+  // someone else steals the lock out from under the holder
+  const stealer = navigator.locks.request('steal-queue', { steal: true }, (lock) => {
+    order.push('stealer-start');
+    return 'stealer-done';
+  });
+
+  const result = await Promise.race([
+    waiter.then(() => 'waiter-settled'),
+    new Promise((resolve) => setTimeout(() => resolve('timed-out'), 50)),
+  ]);
+
+  state.resolve(JSON.stringify({ order, result }));
+  await state.done((v) => {
+    const parsed = JSON.parse(v);
+    // the waiter must eventually be granted the lock once it's free, even
+    // though it was the *stealer* (not the original holder) that released it.
+    testing.expectEqual(true, parsed.order.includes('waiter-start'));
+    testing.expectEqual('waiter-settled', parsed.result);
+  });
+}
+</script>
+
+<script id=stealRejectsOnInvalidOptionCombos type=module>
+{
+  const state = await testing.async();
+  const errors = [];
+  try {
+    await navigator.locks.request('x', { steal: true, ifAvailable: true }, () => {});
+  } catch (e) { errors.push(e.name); }
+  try {
+    await navigator.locks.request('x', { steal: true, mode: 'shared' }, () => {});
+  } catch (e) { errors.push(e.name); }
+  state.resolve(errors.join(','));
+  await state.done((v) => {
+    testing.expectEqual('NotSupportedError,NotSupportedError', v);
+  });
+}
+</script>
+
+<script id=abortedSignalRejectsImmediately type=module>
+{
+  const state = await testing.async();
+  const controller = new AbortController();
+  controller.abort('nope');
+  let ran = false;
+  try {
+    await navigator.locks.request('abort-pre', { signal: controller.signal }, () => { ran = true; });
+    state.resolve('resolved');
+  } catch (e) {
+    state.resolve(e);
+  }
+  await state.done((v) => {
+    testing.expectEqual('nope', v);
+    testing.expectEqual(false, ran);
+  });
+}
+</script>
+
+<script id=abortBeforeGrantRunsRejectsAndDoesNotRunCallback type=module>
+{
+  const state = await testing.async();
+  const controller = new AbortController();
+  let ran = false;
+  const p = navigator.locks.request('abort-before-grant', { signal: controller.signal }, () => { ran = true; });
+  controller.abort();
+
+  let errName = null;
+  try {
+    await p;
+  } catch (e) {
+    errName = e.name;
+  }
+
+  const next = await navigator.locks.request('abort-before-grant', () => 'next-ok');
+
+  state.resolve(JSON.stringify({ errName, ran, next }));
+  await state.done((v) => {
+    const parsed = JSON.parse(v);
+    testing.expectEqual('AbortError', parsed.errName);
+    testing.expectEqual(false, parsed.ran);
+    testing.expectEqual('next-ok', parsed.next);
+  });
+}
+</script>
+
+<script id=abortWhilePendingRejectsAndPromotesNext type=module>
+{
+  const state = await testing.async();
+  const order = [];
+  let releaseHeld;
+  const held = navigator.locks.request('abort-pending', () => new Promise((resolve) => {
+    releaseHeld = resolve;
+  }));
+
+  await new Promise((r) => setTimeout(r, 0));
+
+  const controller = new AbortController();
+  const aborted = navigator.locks.request('abort-pending', { signal: controller.signal }, () => {
+    order.push('aborted-ran');
+  });
+  const next = navigator.locks.request('abort-pending', () => {
+    order.push('next-ran');
+    return 'next-done';
+  });
+
+  controller.abort('bye');
+
+  let abortedReason = null;
+  try {
+    await aborted;
+  } catch (e) {
+    abortedReason = e;
+  }
+
+  releaseHeld();
+  await held;
+  const nextResult = await next;
+
+  state.resolve(JSON.stringify({ order, abortedReason, nextResult }));
+  await state.done((v) => {
+    const parsed = JSON.parse(v);
+    testing.expectEqual('bye', parsed.abortedReason);
+    testing.expectEqual(false, parsed.order.includes('aborted-ran'));
+    testing.expectEqual('next-done', parsed.nextResult);
+  });
+}
+</script>
+
+<script id=abortImmediatelyAfterQueueingBehindNeverReleasedLock type=module>
+{
+  const state = await testing.async();
+
+  navigator.locks.request('never-released', () => new Promise(() => {}));
+
+  const controller = new AbortController();
+  let ran = false;
+  const queued = navigator.locks.request('never-released', { signal: controller.signal }, () => {
+    ran = true;
+  });
+  controller.abort();
+
+  let errName = null;
+  try {
+    await queued;
+  } catch (e) {
+    errName = e.name;
+  }
+
+  state.resolve(JSON.stringify({ errName, ran }));
+  await state.done((v) => {
+    const parsed = JSON.parse(v);
+    testing.expectEqual('AbortError', parsed.errName);
+    testing.expectEqual(false, parsed.ran);
+  });
+}
+</script>
+
+<script id=abortAfterCallbackAlreadyRanIsNoop type=module>
+{
+  const state = await testing.async();
+  let acquiredResolve;
+  const acquired = new Promise((r) => { acquiredResolve = r; });
+  let releaseFn;
+
+  const controller = new AbortController();
+  const p = navigator.locks.request('abort-after-grant', { signal: controller.signal }, () => {
+    acquiredResolve();
+    return new Promise((resolve) => { releaseFn = resolve; });
+  });
+
+  await acquired;
+  controller.abort();
+  releaseFn('resolved-ok');
+
+  const result = await p;
+  state.resolve(result);
+  await state.done((v) => {
+    testing.expectEqual('resolved-ok', v);
+  });
+}
+</script>
+
+<script id=nameStartingWithDashIsRejected type=module>
+{
+  const state = await testing.async();
+  try {
+    await navigator.locks.request('-reserved', () => {});
+    state.resolve('resolved');
+  } catch (e) {
+    state.resolve(e.name);
+  }
+  await state.done((v) => {
+    testing.expectEqual('NotSupportedError', v);
+  });
+}
+</script>
+
+<script id=abortedRequestIsRemovedBeforePromiseRejects type=module>
+{
+  const state = await testing.async();
+  navigator.locks.request('timeout-abort', () => new Promise(() => {}));
+  navigator.locks.request('timeout-abort', { signal: AbortSignal.timeout(5) }, () => {})
+    .catch(async (e) => {
+      const snapshot = await navigator.locks.query();
+      const pending = snapshot.pending.filter((p) => p.name === 'timeout-abort').length;
+      state.resolve(e.name + ':' + pending);
+    });
+  await state.done((v) => {
+    testing.expectEqual('TimeoutError:0', v);
+  });
+}
+</script>
+
+<script id=lockIsReleasedBeforeRequestPromiseResolves type=module>
+{
+  const state = await testing.async();
+  await navigator.locks.request('release-before-resolve', () => 1);
+  const result = await navigator.locks.request('release-before-resolve', { ifAvailable: true }, (lock) => {
+    return lock === null ? 'unavailable' : 'acquired';
+  });
+  state.resolve(result);
+  await state.done((v) => {
+    testing.expectEqual('acquired', v);
+  });
+}
+</script>
+
+<script id=stealDoesNotDrainMicrotasksSynchronously type=module>
+{
+  const state = await testing.async();
+  const order = [];
+
+  navigator.locks.request('c', () => {
+    order.push('A');
+    navigator.locks.request('c', { steal: true }, () => {});
+    order.push('B');
+    return new Promise(() => {});
+  }).catch(() => order.push('C'));
+
+  setTimeout(() => {
+    state.resolve(order.join(','));
+  }, 50);
+
+  await state.done((v) => {
+    testing.expectEqual('A,B,C', v);
+  });
+}
+</script>
+
+<script id=queryReportsHeldAndPending type=module>
+{
+  const state = await testing.async();
+  let release;
+  const held = navigator.locks.request('query-test', () => new Promise((resolve) => {
+    release = resolve;
+  }));
+
+  await new Promise((r) => setTimeout(r, 0));
+
+  const pending = navigator.locks.request('query-test', () => {});
+
+  const snapshot = await navigator.locks.query();
+  release();
+  await Promise.all([held, pending]);
+
+  const heldEntry = snapshot.held.find((l) => l.name === 'query-test');
+  const pendingEntry = snapshot.pending.find((l) => l.name === 'query-test');
+
+  state.resolve(JSON.stringify({ heldFound: !!heldEntry, pendingFound: !!pendingEntry }));
+  await state.done((v) => {
+    const parsed = JSON.parse(v);
+    testing.expectEqual(true, parsed.heldFound);
+    testing.expectEqual(true, parsed.pendingFound);
+  });
+}
+</script>

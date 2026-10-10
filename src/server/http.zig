@@ -29,6 +29,7 @@ const Driver = @import("Driver.zig");
 const bidi_session = @import("bidi/session.zig");
 const http_command = @import("bidi/http_command.zig");
 const uuidv4 = @import("../id.zig").uuidv4;
+const repeat = @import("../string.zig").repeat;
 
 const log = lp.log;
 const posix = std.posix;
@@ -138,7 +139,7 @@ pub const Connection = struct {
         };
 
         fn parseHeader(self: *State, arena: Allocator, data: []u8) !Parsed {
-            const header_index = std.mem.indexOf(u8, data, "\r\n\r\n") orelse {
+            const header_index = std.mem.find(u8, data, "\r\n\r\n") orelse {
                 return .{ .need = 0 };
             };
 
@@ -176,15 +177,15 @@ pub const Connection = struct {
 
         fn contentLength(header: []const u8) !usize {
             const key = "\r\ncontent-length:";
-            const at = std.ascii.indexOfIgnoreCase(header, key) orelse return 0;
+            const at = std.ascii.findIgnoreCase(header, key) orelse return 0;
             const start = at + key.len;
-            const end = std.mem.indexOfPos(u8, header, start, "\r\n") orelse return error.InvalidHeader;
+            const end = std.mem.findPos(u8, header, start, "\r\n") orelse return error.InvalidHeader;
             const value = std.mem.trim(u8, header[start..end], " \t");
             return std.fmt.parseInt(usize, value, 10) catch error.InvalidHeader;
         }
 
         fn parseRequestLine(header: []const u8) !struct { Method, []const u8, bool, usize } {
-            const l1 = std.mem.indexOfScalar(u8, header, '\r') orelse return error.InvalidHeader;
+            const l1 = std.mem.findScalar(u8, header, '\r') orelse return error.InvalidHeader;
             if (l1 == header.len) {
                 return error.InvalidHeader;
             }
@@ -201,10 +202,10 @@ pub const Connection = struct {
             if (target[0] != '/') {
                 return error.InvalidHeader;
             }
-            const path = target[0 .. std.mem.indexOfScalar(u8, target, '?') orelse target.len];
+            const path = target[0 .. std.mem.findScalar(u8, target, '?') orelse target.len];
 
             const protocol = it.next() orelse return error.InvalidHeader;
-            const keepalive = std.mem.indexOf(u8, protocol, "1.0") == null;
+            const keepalive = std.mem.find(u8, protocol, "1.0") == null;
 
             return .{ method, path, keepalive, l1 };
         }
@@ -674,8 +675,8 @@ fn fillHeader(buf: []u8, status: std.http.Status, comptime content_type: []const
     comptime std.debug.assert(header_format.len + 3 + 31 + 20 <= HEADER_RESERVE);
 
     var header_buf: [HEADER_RESERVE]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, header_format, .{
-        @intFromEnum(status),
+    const header = std.mem.print(&header_buf, header_format, .{
+        @backingInt(status),
         status.phrase() orelse "",
         buf.len - HEADER_RESERVE,
     }) catch unreachable;
@@ -794,7 +795,7 @@ fn newSession(server: *Server, conn: *Connection, req: *Connection.Request) !Ser
 
     const url: ?[]const u8 = blk: {
         if (is_requesting_websocket_url) {
-            break :blk try std.fmt.allocPrint(req.arena, "{s}{s}", .{ server.bidi_session_url, &session_id });
+            break :blk try req.arena.print("{s}{s}", .{ server.bidi_session_url, &session_id });
         }
         break :blk null;
     };
@@ -1055,7 +1056,7 @@ pub fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
         "Content-Length: {d}\r\n" ++
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
         body_format;
-    return try std.fmt.allocPrint(app.allocator, response_format, .{ body_len, host, port });
+    return try app.allocator.print(response_format, .{ body_len, host, port });
 }
 
 // Where the upgraded socket goes: a new worker, or an existing session's.
@@ -1068,7 +1069,7 @@ const Upgrade = union(enum) {
 // hand the fd to its worker (spawning one for a new connection).
 fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target: Upgrade) !Served {
     var accept_buf: [28]u8 = undefined;
-    const accept_key = webSocketAccept(req.head, &accept_buf) catch |err| {
+    const accept_key = webSocketAccept(req.head, &accept_buf, server.advertise_host) catch |err| {
         const response: []const u8 = switch (err) {
             error.ForbiddenOrigin => forbidden_origin_response,
             error.ForbiddenHost => forbidden_host_response,
@@ -1082,7 +1083,7 @@ fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target:
     // The 101 is ~129 bytes into an empty send buffer, so a single write
     // always completes; a partial write here means the peer is already gone.
     var response_buf: [160]u8 = undefined;
-    const response = std.fmt.bufPrint(&response_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
+    const response = std.mem.print(&response_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
         "Upgrade: websocket\r\n" ++
         "Connection: upgrade\r\n" ++
         "Sec-Websocket-Accept: {s}\r\n\r\n", .{accept_key}) catch unreachable;
@@ -1100,8 +1101,9 @@ fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target:
 
 // Validate an incoming WebSocket upgrade request head and, on success, write
 // the Sec-WebSocket-Accept value into `out`. Mirrors the origin/host defenses
-// from the old Handshake path.
-fn webSocketAccept(head: []const u8, out: *[28]u8) ![]const u8 {
+// from the old Handshake path. `advertise_host` is the explicit
+// --advertise-host, if any.
+fn webSocketAccept(head: []const u8, out: *[28]u8, advertise_host: ?[]const u8) ![]const u8 {
     const FOUND_UPGRADE: u8 = 1 << 0;
     const FOUND_VERSION: u8 = 1 << 1;
     const FOUND_CONNECTION: u8 = 1 << 2;
@@ -1123,7 +1125,7 @@ fn webSocketAccept(head: []const u8, out: *[28]u8) ![]const u8 {
             if (h.value.len != 2 or h.value[0] != '1' or h.value[1] != '3') return error.MissingHeader;
             found |= FOUND_VERSION;
         } else if (std.ascii.eqlIgnoreCase(h.key, "connection")) {
-            if (std.ascii.indexOfIgnoreCase(h.value, "upgrade") == null) return error.MissingHeader;
+            if (std.ascii.findIgnoreCase(h.value, "upgrade") == null) return error.MissingHeader;
             found |= FOUND_CONNECTION;
         } else if (std.ascii.eqlIgnoreCase(h.key, "sec-websocket-key")) {
             key = h.value;
@@ -1134,15 +1136,9 @@ fn webSocketAccept(head: []const u8, out: *[28]u8) ![]const u8 {
             log.warn(.serve, "rejected websocket origin", .{ .origin = h.value[0..@min(h.value.len, 64)] });
             return error.ForbiddenOrigin;
         } else if (std.ascii.eqlIgnoreCase(h.key, "host")) {
-            // Defense in depth against DNS rebinding: only an IP literal can
-            // legitimately reach us (no name resolution involved). The one
-            // name we accept is `localhost:<port>`, which browsers hardwire
-            // to loopback without a lookup.
-            if (!std.mem.startsWith(u8, h.value, "localhost:")) {
-                _ = std.Io.net.IpAddress.parseLiteral(h.value) catch {
-                    log.warn(.serve, "rejected websocket host", .{ .host = h.value[0..@min(h.value.len, 64)] });
-                    return error.ForbiddenHost;
-                };
+            if (isAllowedHost(h.value, advertise_host) == false) {
+                log.warn(.serve, "rejected websocket host", .{ .host = h.value[0..@min(h.value.len, 64)], .note = "See `--advertise-host <host>` if this is a legitimate host" });
+                return error.ForbiddenHost;
             }
         }
     }
@@ -1159,7 +1155,59 @@ fn webSocketAccept(head: []const u8, out: *[28]u8) ![]const u8 {
     return out;
 }
 
+// Defense in depth against DNS rebinding: only an IP literal can legitimately
+// reach us (no name resolution involved). Two names are accepted:
+// `localhost:<port>`, which browsers hardwire to loopback without a lookup,
+// and the host the operator explicitly advertises with --advertise-host. That
+// is the name /json/version tells clients to dial (e.g. a Docker Compose
+// service name), and a rebinding attacker's domain cannot equal it.
+fn isAllowedHost(value: []const u8, advertise_host: ?[]const u8) bool {
+    if (std.mem.startsWith(u8, value, "localhost:")) {
+        return true;
+    }
+    if (std.Io.net.IpAddress.parseLiteral(value)) |_| {
+        return true;
+    } else |_| {}
+    const advertised = advertise_host orelse return false;
+    // Host is `name` or `name:port`; IPv6 literals were accepted above, so the
+    // last colon, if any, separates the port.
+    const name = if (std.mem.lastIndexOfScalar(u8, value, ':')) |i| value[0..i] else value;
+    return name.len > 0 and std.ascii.eqlIgnoreCase(name, advertised);
+}
+
 const testing = @import("../testing.zig");
+
+test "http: isAllowedHost accepts IP literals and localhost, rejects other names" {
+    try testing.expectEqual(true, isAllowedHost("127.0.0.1:9222", null));
+    try testing.expectEqual(true, isAllowedHost("[::1]:9222", null));
+    try testing.expectEqual(true, isAllowedHost("localhost:9222", null));
+    try testing.expectEqual(false, isAllowedHost("lightpanda:9222", null));
+    try testing.expectEqual(false, isAllowedHost("attacker.example:9222", null));
+}
+
+test "http: isAllowedHost accepts the explicitly advertised host" {
+    try testing.expectEqual(true, isAllowedHost("lightpanda:9222", "lightpanda"));
+    try testing.expectEqual(true, isAllowedHost("LightPanda:9222", "lightpanda"));
+    try testing.expectEqual(true, isAllowedHost("lightpanda", "lightpanda"));
+    try testing.expectEqual(false, isAllowedHost("lightpanda.attacker.example:9222", "lightpanda"));
+    try testing.expectEqual(false, isAllowedHost("attacker.example:9222", "lightpanda"));
+    try testing.expectEqual(false, isAllowedHost(":9222", "lightpanda"));
+    // The explicit host never weakens the original rules.
+    try testing.expectEqual(true, isAllowedHost("10.0.0.5:9222", "lightpanda"));
+}
+
+test "http: webSocketAccept honours the advertised host" {
+    testing.expectLog(&.{.serve});
+    const head = "GET / HTTP/1.1\r\n" ++
+        "Host: lightpanda:9222\r\n" ++
+        "Upgrade: websocket\r\n" ++
+        "Connection: Upgrade\r\n" ++
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    var out: [28]u8 = undefined;
+    try testing.expectError(error.ForbiddenHost, webSocketAccept(head, &out, null));
+    try testing.expectString("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", try webSocketAccept(head, &out, "lightpanda"));
+}
 
 test "http: the read buffer grows with the request and gives the space back" {
     var pair: [2]posix.socket_t = undefined;
@@ -1177,7 +1225,7 @@ test "http: the read buffer grows with the request and gives the space back" {
     try testing.expectEqual(INITIAL_BUFFER_SIZE, buffer.buf.len);
 
     // a header declares no length, so the buffer doubles to take it
-    const filler = "a" ** max;
+    const filler = repeat("a", max);
     try sys_net.writeAll(pair[1], filler);
     while (buffer.len < filler.len) {
         _ = try buffer.read(pair[0]);
@@ -1194,6 +1242,87 @@ test "http: the read buffer grows with the request and gives the space back" {
     try testing.expectEqual(INITIAL_BUFFER_SIZE, buffer.buf.len);
 }
 
+test "http: a request can arrive over any number of reads" {
+    const body = "{\"capabilities\":{}}";
+    const head = std.fmt.comptimePrint("POST /session HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{body.len});
+    // a head that outgrows the initial buffer, so it's split across doublings too
+    const long_head = "POST /session HTTP/1.1\r\nX-Padding: " ++ repeat("a", INITIAL_BUFFER_SIZE) ++ head["POST /session HTTP/1.1".len..];
+
+    // every two-way split, including within the final CRLF CRLF
+    for (1..head.len + body.len) |at| {
+        try expectSplitRequest(head, body, &.{at});
+    }
+
+    // one byte at a time
+    var one_byte: [head.len + body.len - 1]usize = undefined;
+    for (&one_byte, 1..) |*at, i| {
+        at.* = i;
+    }
+    try expectSplitRequest(head, body, &one_byte);
+
+    // either side of the initial buffer filling, then within the final CRLF
+    // CRLF and the body
+    try expectSplitRequest(long_head, body, &.{
+        INITIAL_BUFFER_SIZE - 1,
+        INITIAL_BUFFER_SIZE,
+        INITIAL_BUFFER_SIZE + 1,
+        long_head.len - 3,
+        long_head.len - 1,
+        long_head.len + 1,
+    });
+}
+
+// Writes head ++ body in pieces ending at each of `splits` (ascending) and
+// expects the request to be incomplete until the last piece arrives.
+fn expectSplitRequest(head: []const u8, body: []const u8, splits: []const usize) !void {
+    var pair: [2]posix.socket_t = undefined;
+    if (std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair) != 0) {
+        return error.SocketPairFailed;
+    }
+    defer sys_net.close(pair[0]);
+    defer sys_net.close(pair[1]);
+
+    var buffer = try Connection.Buffer.init(testing.allocator, 1024 * 1024);
+    defer buffer.deinit();
+
+    const request = try std.mem.concat(testing.allocator, u8, &.{ head, body });
+    defer testing.allocator.free(request);
+
+    var state: Connection.State = .header;
+    var start: usize = 0;
+    for (splits) |end| {
+        try sys_net.writeAll(pair[1], request[start..end]);
+        start = end;
+        try testing.expectEqual(false, try readWritten(&state, &buffer, pair[0], end));
+    }
+    try sys_net.writeAll(pair[1], request[start..]);
+    try testing.expectEqual(true, try readWritten(&state, &buffer, pair[0], request.len));
+
+    const req = state.request;
+    try testing.expectEqual(.POST, req.method);
+    try testing.expectString("/session", req.path);
+    try testing.expectString(head, req.head);
+    try testing.expectString(body, req.body);
+}
+
+// processHTTP's read/parse step, repeated until the `written` bytes are all
+// in the buffer. True once the request is complete.
+fn readWritten(state: *Connection.State, buffer: *Connection.Buffer, socket: posix.socket_t, written: usize) !bool {
+    while (true) {
+        const data = try buffer.read(socket);
+        switch (try state.parseHeader(testing.allocator, data)) {
+            .complete => {
+                try testing.expectEqual(written, data.len);
+                return true;
+            },
+            .need => |needed| try buffer.ensureCapacity(needed),
+        }
+        if (buffer.len == written) {
+            return false;
+        }
+    }
+}
+
 test "http: a declared body is sized upfront" {
     var pair: [2]posix.socket_t = undefined;
     if (std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair) != 0) {
@@ -1208,7 +1337,7 @@ test "http: a declared body is sized upfront" {
     var state: Connection.State = .header;
     const body_len = INITIAL_BUFFER_SIZE * 4;
     var head_buf: [64]u8 = undefined;
-    const head = try std.fmt.bufPrint(&head_buf, "POST /session HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{body_len});
+    const head = try std.mem.print(&head_buf, "POST /session HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{body_len});
     try sys_net.writeAll(pair[1], head);
 
     // the header alone is enough to know how much room the body needs

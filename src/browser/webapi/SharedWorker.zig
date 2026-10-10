@@ -68,7 +68,7 @@ pub fn init(url: []const u8, name_or_options: ?NameOrOpts, frame: *Frame) !*Shar
     const scope = blk: {
         const session = frame._session;
         // \x00 can appear in neither a URL nor a name
-        const lookup_key = try std.fmt.allocPrint(frame.call_arena, "{s}\x00{s}", .{ resolved_url, options.name });
+        const lookup_key = try frame.call_arena.print("{s}\x00{s}", .{ resolved_url, options.name });
         if (session.shared_workers.get(lookup_key)) |existing| {
             break :blk existing;
         }
@@ -77,7 +77,7 @@ pub fn init(url: []const u8, name_or_options: ?NameOrOpts, frame: *Frame) !*Shar
         errdefer s.deinit();
 
         const page = frame.page;
-        try page.shared_workers.append(page.frame_arena, s);
+        try page.shared_workers.append(page.arena, s);
         errdefer _ = page.shared_workers.pop();
 
         try s.register(lookup_key);

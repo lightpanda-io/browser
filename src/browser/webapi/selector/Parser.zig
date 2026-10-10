@@ -50,7 +50,7 @@ const ParseError = error{
 // CSS Syntax preprocessing: normalize line endings (CRLF → LF, CR → LF)
 // https://drafts.csswg.org/css-syntax/#input-preprocessing
 fn preprocessInput(arena: Allocator, input: []const u8) ![]const u8 {
-    var i = std.mem.indexOfScalar(u8, input, '\r') orelse return input;
+    var i = std.mem.findScalar(u8, input, '\r') orelse return input;
 
     var result = try std.ArrayList(u8).initCapacity(arena, input.len);
     result.appendSliceAssumeCapacity(input[0..i]);
@@ -161,136 +161,41 @@ pub fn parseList(arena: Allocator, input: []const u8) ParseError![]const Selecto
 
 fn parse(arena: Allocator, input: []const u8) ParseError!Selector.Selector {
     var parser = Parser{ .input = input };
+    const first = try parser.parseCompound(arena);
+
     var segments: std.ArrayList(Segment) = .empty;
-    var current_compound: std.ArrayList(Part) = .empty;
-
-    // Parse the first compound (no combinator before it)
     while (parser.skipSpaces()) {
-        if (parser.peek() == 0) break;
-
-        const part = try parser.parsePart(arena);
-        try current_compound.append(arena, part);
-
-        // Check what comes after this part
-        const start_pos = parser.input;
-        const has_whitespace = parser.skipSpacesConsumed();
-        const next = parser.peek();
-
-        if (next == 0) {
-            // End of input
-            break;
-        }
-
-        if (next == '>' or next == '+' or next == '~') {
-            // Explicit combinator
-            break;
-        }
-
-        if (has_whitespace and isStartOfPart(next)) {
-            // Whitespace followed by another selector part = descendant combinator
-            // Restore position before the whitespace so the segment loop can handle it
-            parser.input = start_pos;
-            break;
-        }
-
-        // If we have a non-whitespace character that could start a part,
-        // it's part of this compound (like "div.class" or "div#id")
-        if (!has_whitespace and isStartOfPart(next)) {
-            // Continue parsing this compound
-            continue;
-        }
-
-        // Otherwise, end of compound
-        break;
-    }
-
-    if (current_compound.items.len == 0) {
-        return error.InvalidSelector;
-    }
-
-    const first_compound = current_compound.items;
-    current_compound = .empty;
-
-    // Parse remaining segments with combinators
-    while (parser.skipSpaces()) {
-        const next = parser.peek();
-        if (next == 0) break;
-
-        // Parse combinator
-        const combinator: Combinator = switch (next) {
-            '>' => blk: {
-                parser.input = parser.input[1..];
-                break :blk .child;
-            },
-            '+' => blk: {
-                parser.input = parser.input[1..];
-                break :blk .next_sibling;
-            },
-            '~' => blk: {
-                parser.input = parser.input[1..];
-                break :blk .subsequent_sibling;
-            },
-            else => .descendant, // whitespace = descendant combinator
-        };
-
-        // Parse the compound that follows the combinator
-        _ = parser.skipSpaces();
-        if (parser.peek() == 0) {
-            return error.InvalidSelector; // Combinator with nothing after it
-        }
-
-        while (parser.skipSpaces()) {
-            if (parser.peek() == 0) break;
-
-            const part = try parser.parsePart(arena);
-            try current_compound.append(arena, part);
-
-            // Check what comes after this part
-            const seg_start_pos = parser.input;
-            const seg_has_whitespace = parser.skipSpacesConsumed();
-            const peek_next = parser.peek();
-
-            if (peek_next == 0) {
-                // End of input
-                break;
-            }
-
-            if (peek_next == '>' or peek_next == '+' or peek_next == '~') {
-                // Next combinator found
-                break;
-            }
-
-            if (seg_has_whitespace and isStartOfPart(peek_next)) {
-                // Whitespace followed by another part = new segment
-                // Restore position before whitespace
-                parser.input = seg_start_pos;
-                break;
-            }
-
-            // If no whitespace and it's a start of part, continue compound
-            if (!seg_has_whitespace and isStartOfPart(peek_next)) {
-                continue;
-            }
-
-            // Otherwise, end of compound
-            break;
-        }
-
-        if (current_compound.items.len == 0) {
-            return error.InvalidSelector;
-        }
-
+        const combinator = parser.parseCombinator();
         try segments.append(arena, .{
             .combinator = combinator,
-            .compound = .{ .parts = current_compound.items },
+            .compound = try parser.parseCompound(arena),
         });
-        current_compound = .empty;
     }
 
-    return .{
-        .first = .{ .parts = first_compound },
-        .segments = segments.items,
+    return .{ .first = first, .segments = segments.items };
+}
+
+// Parts written with no whitespace between them ("div.a#b") form a compound.
+fn parseCompound(self: *Parser, arena: Allocator) ParseError!Selector.Compound {
+    _ = self.skipSpaces();
+    var parts: std.ArrayList(Part) = .empty;
+    while (true) {
+        try parts.append(arena, try self.parsePart(arena));
+        if (!isStartOfPart(self.peek())) break;
+    }
+    return .{ .parts = parts.items };
+}
+
+// Whitespace alone, already skipped by the caller, is a descendant combinator.
+fn parseCombinator(self: *Parser) Combinator {
+    const c: Combinator = switch (self.peek()) {
+        '>' => .child,
+        '+' => .next_sibling,
+        '~' => .subsequent_sibling,
+        else => return .descendant,
     };
+    self.input = self.input[1..];
+    return c;
 }
 
 // :has() arguments are relative selectors. Absolutize them at parse time by
@@ -320,7 +225,10 @@ fn parsePart(self: *Parser, arena: Allocator) !Part {
             break :blk .universal;
         },
         '[' => .{ .attribute = try self.attribute(arena) },
-        ':' => .{ .pseudo_class = try self.pseudoClass(arena) },
+        ':' => if (self.isPseudoElementStart()) blk: {
+            try self.pseudoElement();
+            break :blk .pseudo_element;
+        } else .{ .pseudo_class = try self.pseudoClass(arena) },
         'a'...'z', 'A'...'Z', '_', '\\', 0x80...0xFF => blk: {
             // Use parseIdentifier for full escape support
             const tag_name = try self.parseIdentifier(arena, error.InvalidTagSelector);
@@ -396,6 +304,210 @@ fn consumeUntilCommaOrParen(self: *Parser) []const u8 {
     return result;
 }
 
+const pseudo_elements = [_][]const u8{
+    "after",         "backdrop",            "before",          "checkmark",
+    "column",        "cue",                 "details-content", "file-selector-button",
+    "first-letter",  "first-line",          "grammar-error",   "interest-button",
+    "marker",        "permission-icon",     "picker-icon",     "placeholder",
+    "scroll-marker", "scroll-marker-group", "search-text",     "select-listbox",
+    "selection",     "spelling-error",      "target-text",     "view-transition",
+};
+const functional_pseudo_elements = [_][]const u8{
+    "cue",                            "highlight",                  "part",
+    "picker",                         "slotted",                    "view-transition-group",
+    "view-transition-group-children", "view-transition-image-pair", "view-transition-new",
+    "view-transition-old",
+};
+// Any other -webkit- name is an unknown, valid pseudo-element.
+const webkit_pseudo_classes = [_][]const u8{
+    "-webkit-any-link",        "-webkit-autofill",    "-webkit-drag",
+    "-webkit-full-page-media", "-webkit-full-screen", "-webkit-full-screen-ancestor",
+};
+const legacy_pseudo_elements = [_][]const u8{ "before", "after", "first-line", "first-letter" };
+
+fn isPseudoElementStart(self: *const Parser) bool {
+    const input = self.input;
+    if (std.mem.startsWith(u8, input, "::")) return true;
+    if (self.peek() != ':') return false;
+    const name = pseudoName(input[1..]);
+    const rest = input[1 + name.len ..];
+    return inList(name, &legacy_pseudo_elements) and !std.mem.startsWith(u8, rest, "(");
+}
+
+fn pseudoName(input: []const u8) []const u8 {
+    var i: usize = 0;
+    while (i < input.len and (std.ascii.isAlphanumeric(input[i]) or input[i] == '-' or input[i] == '_')) : (i += 1) {}
+    return input[0..i];
+}
+
+fn inList(name: []const u8, list: []const []const u8) bool {
+    for (list) |entry| {
+        if (std.ascii.eqlIgnoreCase(name, entry)) return true;
+    }
+    return false;
+}
+
+fn pseudoElement(self: *Parser) !void {
+    var current = try self.onePseudoElement();
+    while (self.peek() == ':') {
+        if (self.isPseudoElementStart()) {
+            const next = try self.onePseudoElement();
+            if (!current.allowsPseudoElement(next)) return error.InvalidSelector;
+            current = next;
+            continue;
+        }
+        self.input = self.input[1..];
+        const name = pseudoName(self.input);
+        self.input = self.input[name.len..];
+        if (self.peek() == '(') {
+            const args = try self.arguments();
+            const forgiving = (std.ascii.eqlIgnoreCase(name, "is") or std.ascii.eqlIgnoreCase(name, "where")) and
+                !current.is("column") and !current.is("slotted");
+            if (!forgiving and (args.len == 0 or !current.allowsFunctionalPseudoClass(name))) {
+                return error.InvalidSelector;
+            }
+        } else if (!current.allowsPseudoClass(name)) {
+            return error.InvalidSelector;
+        }
+    }
+    if (self.skipSpaces()) return error.InvalidSelector;
+}
+
+fn isUnknownWebkit(name: []const u8) bool {
+    return name.len > "-webkit-".len and std.ascii.startsWithIgnoreCase(name, "-webkit-") and
+        !inList(name, &webkit_pseudo_classes);
+}
+
+const tree_abiding_pseudo_elements = [_][]const u8{
+    "after",                          "backdrop",                   "before",
+    "checkmark",                      "details-content",            "file-selector-button",
+    "interest-button",                "marker",                     "permission-icon",
+    "picker",                         "picker-icon",                "placeholder",
+    "select-listbox",                 "view-transition",            "view-transition-group",
+    "view-transition-group-children", "view-transition-image-pair", "view-transition-new",
+    "view-transition-old",
+};
+const element_backed_pseudo_elements = [_][]const u8{ "part", "details-content", "select-listbox", "permission-icon", "picker" };
+const scrollbar_pseudo_elements = [_][]const u8{
+    "-webkit-resizer",         "-webkit-scrollbar",       "-webkit-scrollbar-button",      "-webkit-scrollbar-corner",
+    "-webkit-scrollbar-thumb", "-webkit-scrollbar-track", "-webkit-scrollbar-track-piece",
+};
+const user_action_pseudo_classes = [_][]const u8{ "active", "focus", "focus-visible", "focus-within", "hover" };
+const scrollbar_pseudo_classes = [_][]const u8{
+    "active",    "corner-present", "decrement",  "disabled", "double-button",
+    "enabled",   "end",            "horizontal", "hover",    "increment",
+    "no-button", "single-button",  "start",      "vertical", "window-inactive",
+};
+const after_part_pseudo_classes = webkit_pseudo_classes ++ [_][]const u8{
+    "active",            "active-view-transition",
+    "any-link",          "autofill",
+    "checked",           "default",
+    "defined",           "disabled",
+    "enabled",           "focus",
+    "focus-visible",     "focus-within",
+    "fullscreen",        "future",
+    "granted",           "hover",
+    "in-range",          "indeterminate",
+    "interest-source",   "interest-target",
+    "invalid",           "link",
+    "modal",             "open",
+    "optional",          "out-of-range",
+    "past",              "picture-in-picture",
+    "placeholder-shown", "popover-open",
+    "read-only",         "read-write",
+    "required",          "target",
+    "target-after",      "target-before",
+    "target-current",    "unbounded",
+    "user-invalid",      "user-valid",
+    "valid",             "visited",
+    "window-inactive",   "xr-overlay",
+};
+const after_part_functional_pseudo_classes = [_][]const u8{ "active-view-transition-type", "dir", "lang", "state" };
+
+const PseudoElement = struct {
+    name: []const u8,
+    functional: bool,
+
+    fn is(self: PseudoElement, name: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(self.name, name);
+    }
+
+    fn isElementBacked(self: PseudoElement) bool {
+        return inList(self.name, &element_backed_pseudo_elements);
+    }
+
+    fn allowsPseudoElement(self: PseudoElement, next: PseudoElement) bool {
+        if (self.isElementBacked()) return !next.is("part") and !next.is("slotted") and !(next.is("cue") and next.functional);
+        if (self.is("slotted")) return inList(next.name, &tree_abiding_pseudo_elements);
+        if (self.is("before") or self.is("after")) return next.is("marker");
+        if (self.is("column")) return next.is("scroll-marker");
+        return false;
+    }
+
+    fn allowsFunctionalPseudoClass(self: PseudoElement, name: []const u8) bool {
+        return self.isElementBacked() and inList(name, &after_part_functional_pseudo_classes);
+    }
+
+    fn allowsPseudoClass(self: PseudoElement, name: []const u8) bool {
+        if (self.isElementBacked()) return inList(name, &after_part_pseudo_classes);
+        if (inList(self.name, &scrollbar_pseudo_elements)) return inList(name, &scrollbar_pseudo_classes);
+        if (self.is("file-selector-button") or (self.is("cue") and !self.functional) or isUnknownWebkit(self.name)) {
+            return inList(name, &user_action_pseudo_classes);
+        }
+        if (self.is("selection")) return std.ascii.eqlIgnoreCase(name, "window-inactive");
+        if (std.ascii.startsWithIgnoreCase(self.name, "view-transition-")) {
+            return std.ascii.eqlIgnoreCase(name, "only-child");
+        }
+        if (self.is("search-text")) return std.ascii.eqlIgnoreCase(name, "current");
+        if (self.is("scroll-marker")) {
+            return inList(name, &user_action_pseudo_classes) or inList(name, &.{ "target-current", "target-before", "target-after" });
+        }
+        if (self.is("scroll-marker-group")) return inList(name, &.{ "hover", "focus-within" });
+        return false;
+    }
+};
+
+fn arguments(self: *Parser) ![]const u8 {
+    const input = self.input[1..];
+    var depth: usize = 0;
+    for (input, 0..) |c, i| switch (c) {
+        '(' => depth += 1,
+        ')' => {
+            if (depth == 0) {
+                self.input = input[i + 1 ..];
+                return std.mem.trim(u8, input[0..i], &std.ascii.whitespace);
+            }
+            depth -= 1;
+        },
+        else => {},
+    };
+    return error.InvalidSelector;
+}
+
+fn onePseudoElement(self: *Parser) !PseudoElement {
+    const double = std.mem.startsWith(u8, self.input, "::");
+    self.input = self.input[if (double) 2 else 1..];
+    const name = pseudoName(self.input);
+    self.input = self.input[name.len..];
+
+    if (!double) {
+        return .{ .name = name, .functional = false };
+    }
+    if (self.peek() == '(') {
+        if (!inList(name, &functional_pseudo_elements)) return error.InvalidSelector;
+        const args = try self.arguments();
+        if (args.len == 0) return error.InvalidSelector;
+        if (std.ascii.eqlIgnoreCase(name, "picker") and !std.ascii.eqlIgnoreCase(args, "select")) {
+            return error.InvalidSelector;
+        }
+        return .{ .name = name, .functional = true };
+    }
+    if (!inList(name, &pseudo_elements) and !isUnknownWebkit(name)) {
+        return error.InvalidSelector;
+    }
+    return .{ .name = name, .functional = false };
+}
+
 fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
     if (comptime lp.IS_DEBUG) {
         // Should have been verified by caller
@@ -404,22 +516,11 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
 
     self.input = self.input[1..];
 
-    // Parse the pseudo-class name
-    const start = self.input;
-    var i: usize = 0;
-    while (i < start.len) : (i += 1) {
-        const c = start[i];
-        if (!std.ascii.isAlphanumeric(c) and c != '-') {
-            break;
-        }
-    }
-
-    if (i == 0) {
+    const name = pseudoName(self.input);
+    if (name.len == 0) {
         return error.InvalidPseudoClass;
     }
-
-    const name = start[0..i];
-    self.input = start[i..];
+    self.input = self.input[name.len..];
 
     const next = self.peek();
 
@@ -473,6 +574,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
 
                 // Parse a full selector (with potential combinators and compounds)
                 const selector = try parse(arena, self.consumeUntilCommaOrParen());
+                if (selector.hasPseudoElement()) return error.InvalidPseudoClass;
                 try selectors.append(arena, selector);
 
                 _ = self.skipSpaces();
@@ -500,7 +602,8 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
                 if (self.peek() == 0) return error.InvalidPseudoClass;
 
                 const selector = try parse(arena, self.consumeUntilCommaOrParen());
-                try selectors.append(arena, selector);
+                // Invalid here, so the forgiving list drops it.
+                if (!selector.hasPseudoElement()) try selectors.append(arena, selector);
 
                 _ = self.skipSpaces();
                 if (self.peek() == ',') {
@@ -527,7 +630,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
                 if (self.peek() == 0) return error.InvalidPseudoClass;
 
                 const selector = try parse(arena, self.consumeUntilCommaOrParen());
-                try selectors.append(arena, selector);
+                if (!selector.hasPseudoElement()) try selectors.append(arena, selector);
 
                 _ = self.skipSpaces();
                 if (self.peek() == ',') {
@@ -558,18 +661,10 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
                 // and is anchored at the element being matched, with an implied
                 // descendant combinator when none is written.
                 // https://drafts.csswg.org/selectors-4/#relational
-                const combinator: Combinator = switch (self.peek()) {
-                    '>' => .child,
-                    '+' => .next_sibling,
-                    '~' => .subsequent_sibling,
-                    else => .descendant,
-                };
-                if (combinator != .descendant) {
-                    self.input = self.input[1..];
-                    _ = self.skipSpaces();
-                }
+                const combinator = self.parseCombinator();
 
                 const selector = try parse(arena, self.consumeUntilCommaOrParen());
+                if (selector.hasPseudoElement()) return error.InvalidPseudoClass;
                 try selectors.append(arena, try absolutize(arena, selector, combinator));
 
                 _ = self.skipSpaces();
@@ -1167,7 +1262,7 @@ fn attributeValue(self: *Parser, arena: Allocator) ![]const u8 {
     return arena.dupe(u8, value);
 }
 
-fn asUint(comptime string: anytype) std.meta.Int(
+fn asUint(comptime string: anytype) @Int(
     .unsigned,
     @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
 ) {

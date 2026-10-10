@@ -67,6 +67,10 @@ allocator: Allocator,
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
 
+// Target.setDiscoverTargets: when true, page target changes are reported
+// via Target.targetInfoChanged.
+target_discover: bool = false,
+
 session_id_gen: SessionIdGen = .{},
 browser_session_id_gen: BrowserSessionIdGen = .{},
 browser_context_id_gen: BrowserContextIdGen = .{},
@@ -235,7 +239,7 @@ fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []c
                 error.InvalidMethod, error.UnknownDomain, error.UnknownMethod => {
                     lp.metrics.serve_unknown_commands.incr(.cdp);
                     // Chrome's code and wording; drivers feature-detect on it.
-                    const message = std.fmt.allocPrint(command.arena, "'{s}' wasn't found", .{input.method}) catch return err;
+                    const message = command.arena.print("'{s}' wasn't found", .{input.method}) catch return err;
                     command.sendError(-32601, message, .{}) catch return err;
                 },
                 else => command.sendError(-31998, @errorName(err), .{}) catch return err,
@@ -262,12 +266,19 @@ fn dispatchStartupCommand(command: *Command, method: []const u8) !void {
         return dispatchCommand(command, method);
     }
 
+    // The placeholder session has no page behind it: an empty
+    // result would look like success while nothing happened.
+    // Say so, and point at the way to get a real target.
+    if (std.mem.eql(u8, method, "Page.navigate")) {
+        return command.sendError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{});
+    }
+
     return command.sendResult(null, .{});
 }
 
 fn dispatchCommand(command: *Command, method: []const u8) !void {
     const domain = blk: {
-        const i = std.mem.indexOfScalarPos(u8, method, 0, '.') orelse {
+        const i = std.mem.findScalarPos(u8, method, 0, '.') orelse {
             return error.InvalidMethod;
         };
         command.input.action = method[i + 1 ..];
@@ -426,7 +437,7 @@ pub const BrowserContext = struct {
             if (log.enabled(.cdp, .debug)) {
                 // msg should be {"method":<method>,...
                 lp.assert(std.mem.startsWith(u8, msg, "{\"method\":"), "onInspectorEvent prefix", .{});
-                const method_end = std.mem.indexOfScalar(u8, msg, ',') orelse {
+                const method_end = std.mem.findScalar(u8, msg, ',') orelse {
                     log.err(.cdp, "invalid inspector event", .{ .msg = msg });
                     return;
                 };
@@ -1354,7 +1365,7 @@ pub const IsolatedWorld = struct {
     }
 
     pub fn isSeeded(self: *const IsolatedWorld, frame_id: u32) bool {
-        return std.mem.indexOfScalar(u32, self.seeded_frames.items, frame_id) != null;
+        return std.mem.findScalar(u32, self.seeded_frames.items, frame_id) != null;
     }
 
     // Keyed by Frame, not frame id: a retired root Page keeps its frame id
@@ -1645,6 +1656,19 @@ test "cdp: STARTUP sessionId" {
         try ctx.processMessage(.{ .id = 4, .method = "Hi", .sessionId = "STARTUP" });
         try ctx.expectSentResult(null, .{ .id = 4, .index = 2, .session_id = "STARTUP" });
     }
+}
+
+test "cdp: Page.navigate on the STARTUP session returns -32000" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Page.navigate",
+        .sessionId = "STARTUP",
+        .params = .{ .url = "https://example.com" },
+    });
+    try ctx.expectSentError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{ .id = 1 });
 }
 
 test "cdp: disconnect latches so the worker keeps exiting" {
