@@ -27,6 +27,7 @@ const target = @import("target.zig");
 const js = @import("../../../browser/js/js.zig");
 const URL = @import("../../../browser/URL.zig");
 const Frame = @import("../../../browser/Frame.zig");
+const History = @import("../../../browser/webapi/History.zig");
 const referrer = @import("../../../browser/referrer.zig");
 const Notification = @import("../../../Notification.zig");
 
@@ -501,6 +502,21 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
     const url = target_url orelse return error.InvalidParams;
 
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    // An entry of the current document (pushState, fragment) is restored in
+    // place, as history.back() does: same document, popstate, no reload.
+    if (nav._entries.items[idx].sameDocument(frame)) {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        var caller: js.Caller = undefined;
+        caller.initWithContext(frame.js, ls.local.handle);
+        defer caller.deinit();
+
+        try History.traverse(idx, frame);
+        return cmd.sendResult(null, .{});
+    }
 
     const opts = Frame.NavigateOpts{
         .reason = .history,
@@ -2788,6 +2804,45 @@ test "cdp.frame: addScriptToEvaluateOnNewDocument" {
 
         const test_val = try ls.local.exec("window.__test2", null);
         try testing.expectEqual(2, try test_val.toI32());
+    }
+}
+
+test "cdp.frame: navigateToHistoryEntry restores an entry of the same document in place" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-B3", .url = "hi.html", .target_id = "TID-B3-0000000".* });
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec(
+            \\window.__marker = 'kept';
+            \\window.__pops = [];
+            \\addEventListener('popstate', (e) => __pops.push(location.pathname + ' ' + JSON.stringify(e.state)));
+            \\history.pushState({n: 1}, '', '/next');
+        , null);
+    }
+
+    // Entry 1 is hi.html, entry 2 the pushState one. Going back to entry 1
+    // must not reload the document: like history.back(), it restores the
+    // entry in place and fires popstate, then answers at once.
+    try ctx.processMessage(.{
+        .id = 50,
+        .method = "Page.navigateToHistoryEntry",
+        .params = .{ .entryId = 1 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 50 });
+
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/hi.html", frame.url);
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("window.__marker + '|' + __pops.join(',')", null);
+        try testing.expectEqualSlices(u8, "kept|/src/browser/tests/hi.html null", try v.toStringSlice());
     }
 }
 

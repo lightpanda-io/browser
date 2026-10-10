@@ -107,7 +107,13 @@ fn goInner(delta: i32, frame: *Frame) !void {
         return;
     }
 
-    const index = @as(usize, @intCast(index_s));
+    try traverse(@intCast(index_s), frame);
+}
+
+// Traverses the session history to the entry at `index`. An entry of this
+// document is restored in place, firing popstate; any other loads its
+// document. Needs an entered JS context (navigateInner creates promises).
+pub fn traverse(index: usize, frame: *Frame) !void {
     const entry = frame._session.navigation._entries.items[index];
     // popstate fires on the document that stays; a traversal to another
     // document replaces this one instead.
