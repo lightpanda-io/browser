@@ -68,6 +68,27 @@
   testing.expectEqual('Text 1', $('#opt1').label)
 </script>
 
+<form id="ws_form">
+  <select id="ws_select" name="city">
+    <option id="opt_ws1">
+      San   Francisco
+    </option>
+    <option id="opt_ws2" selected>New
+      York</option>
+  </select>
+</form>
+
+<script id="text_strips_and_collapses_whitespace">
+  testing.expectEqual('San Francisco', $('#opt_ws1').text)
+  testing.expectEqual('San Francisco', $('#opt_ws1').label)
+  testing.expectEqual('San Francisco', $('#opt_ws1').value)
+  testing.expectEqual('New York', $('#opt_ws2').value)
+  testing.expectEqual('New York', new FormData($('#ws_form')).get('city'))
+
+  $('#ws_select').value = 'San Francisco'
+  testing.expectEqual(0, $('#ws_select').selectedIndex)
+</script>
+
 <script id="text_set">
   $('#opt1').text = 'New Text 1'
   testing.expectEqual('New Text 1', $('#opt1').text)
