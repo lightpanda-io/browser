@@ -403,6 +403,22 @@
 }
 </script>
 
+<script id=abortedRequestIsRemovedBeforePromiseRejects type=module>
+{
+  const state = await testing.async();
+  navigator.locks.request('timeout-abort', () => new Promise(() => {}));
+  navigator.locks.request('timeout-abort', { signal: AbortSignal.timeout(5) }, () => {})
+    .catch(async (e) => {
+      const snapshot = await navigator.locks.query();
+      const pending = snapshot.pending.filter((p) => p.name === 'timeout-abort').length;
+      state.resolve(e.name + ':' + pending);
+    });
+  await state.done((v) => {
+    testing.expectEqual('TimeoutError:0', v);
+  });
+}
+</script>
+
 <script id=lockIsReleasedBeforeRequestPromiseResolves type=module>
 {
   const state = await testing.async();

@@ -207,8 +207,8 @@ pub const LockRequest = struct {
         defer ls.deinit();
 
         const resolver = self.resolver.local(&ls.local);
-        resolver.reject("LockManager.signal.aborted", reason);
         self.manager.releaseLock(self);
+        resolver.reject("LockManager.signal.aborted", reason);
     }
 };
 
