@@ -5,6 +5,7 @@
     \\
     \\The commands are:
     \\  agent       starts an interactive AI agent that can browse the web
+    \\  completion  prints a shell completion script (bash, fish, zsh)
     \\  fetch       fetches the specified URL
     \\  help        displays this message
     \\  mcp         starts an MCP (Model Context Protocol) server (stdio or HTTP)
@@ -371,6 +372,18 @@
     \\          found, prints the running version, the latest release, and how to
     \\          update.
     ,
+    .completion =
+    \\usage: {0s} completion <bash | fish | zsh>
+    \\
+    \\Prints a shell completion script for {0s} to stdout.
+    \\
+    \\Examples:
+    \\  {0s} completion fish | source
+    \\  {0s} completion fish > ~/.config/fish/completions/{0s}.fish
+    \\  {0s} completion bash > ~/.local/share/bash-completion/completions/{0s}
+    \\  {0s} completion zsh > ~/.zfunc/_{0s}
+    \\          then add `fpath=(~/.zfunc $fpath)` before `compinit` in ~/.zshrc
+    ,
     .help =
     \\usage: {0s} help
     \\
@@ -460,7 +473,7 @@
     \\          Time in ms to establish an HTTP connection before timing out. 0 means
     \\          never.
     \\          Defaults to 8000.
-    \\  --http-curves
+    \\  --http-curves <CURVES>
     \\          Colon-separated key exchange groups offered in the TLS handshake,
     \\          in preference order, e.g. "X25519:P-256:P-384". Passed to
     \\          libcurl's CURLOPT_SSL_EC_CURVES.
