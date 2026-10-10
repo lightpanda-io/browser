@@ -1628,6 +1628,15 @@ test "cdp.input: dispatchKeyEvent Ctrl+A selects the whole value" {
         try testing.expect((try ls.local.compileAndRun(step.expect, null)).isTrue());
     }
 
+    // a keydown from script has no default action, as in Chrome
+    try testing.expect((try ls.local.compileAndRun(
+        \\t.focus(); t.value = 'hello'; t.setSelectionRange(2, 2);
+        \\t.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true, cancelable: true }));
+        \\t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }));
+        \\t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+        \\t.value === 'hello' && sel(t) === '2,2' && document.activeElement === t
+    , null)).isTrue());
+
     _ = try ls.local.compileAndRun("t.focus(); t.value = 'hello'; t.setSelectionRange(5, 5)", null);
     try ctx.processMessage(.{
         .id = id,
