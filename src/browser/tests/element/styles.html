@@ -257,6 +257,36 @@
 }
 </script>
 
+<script id="computedStyleBoxModelDefaults">
+{
+  // Undeclared box-model lengths compute to their initial value, never '':
+  // measuring code that folds parseInt(...) into layout math would get NaN.
+  const div = document.createElement('div');
+  document.body.appendChild(div);
+  const cs = window.getComputedStyle(div);
+  for (const side of ['top', 'right', 'bottom', 'left']) {
+    testing.expectEqual('0px', cs.getPropertyValue(`padding-${side}`));
+    testing.expectEqual('0px', cs.getPropertyValue(`margin-${side}`));
+    testing.expectEqual('0px', cs.getPropertyValue(`border-${side}-width`));
+  }
+  testing.expectEqual('0px', cs.paddingTop);
+  testing.expectEqual('0px', cs.marginBottom);
+  testing.expectEqual('0px', cs.borderLeftWidth);
+  testing.expectEqual('0px', cs.padding);
+  testing.expectEqual('0px', cs.margin);
+  testing.expectEqual('0px', cs.borderWidth);
+  testing.expectEqual(0, parseInt(cs.paddingTop, 10) + parseInt(cs.paddingBottom, 10));
+  testing.expectEqual('', div.style.paddingTop);
+
+  const styled = document.createElement('div');
+  styled.style.cssText = 'padding-top: 7px; margin-left: 3px';
+  document.body.appendChild(styled);
+  testing.expectEqual('7px', getComputedStyle(styled).paddingTop);
+  testing.expectEqual('3px', getComputedStyle(styled).marginLeft);
+  testing.expectEqual('0px', getComputedStyle(styled).paddingBottom);
+}
+</script>
+
 <script id="computedStyleInline">
 {
   const div = document.createElement('div');
