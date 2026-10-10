@@ -262,6 +262,8 @@ pub const Part = union(enum) {
     universal, // '*' any element
     pseudo_class: PseudoClass,
     attribute: Attribute,
+    // Matches no element.
+    pseudo_element,
 };
 
 pub const Attribute = struct {
@@ -388,6 +390,7 @@ pub const Compound = struct {
             .attribute => {
                 try writer.writeAll("TODO");
             },
+            .pseudo_element => try writer.writeAll("::pseudo-element"),
         };
     }
 };
@@ -419,6 +422,12 @@ pub const Selector = struct {
             return self.first;
         }
         return self.segments[self.segments.len - 1].compound;
+    }
+
+    /// Such a selector matches no element.
+    pub fn hasPseudoElement(self: Selector) bool {
+        const parts = self.rightmost().parts;
+        return parts[parts.len - 1] == .pseudo_element;
     }
 
     pub fn format(self: Selector, writer: *std.Io.Writer) !void {
