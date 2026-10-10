@@ -79,7 +79,8 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 
     // Computed styles must reflect stylesheet rules, not just the element's
     // inline `style=` attribute. Limited to display/visibility — what aria
-    // tree builders (Playwright ariaSnapshot) consult on every element.
+    // tree builders (Playwright ariaSnapshot) consult on every element — and
+    // pointer-events.
     if (self._is_computed) {
         if (self._element) |element| {
             if (element.ownerFrame(frame)) |owner| {
@@ -91,6 +92,10 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
                 } else if (wrapped.eql(comptime .wrap("visibility"))) {
                     if (style_manager.hasVisibilityHiddenInherited(element)) {
                         return "hidden";
+                    }
+                } else if (wrapped.eqlSlice("pointer-events")) {
+                    if (style_manager.hasPointerEventsNone(element)) {
+                        return "none";
                     }
                 }
             }
@@ -969,6 +974,11 @@ fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, name: String) []con
         10 => {
             if (name.eql(comptime .wrap("visibility"))) {
                 return "visible";
+            }
+        },
+        14 => {
+            if (name.eqlSlice("pointer-events")) {
+                return "auto";
             }
         },
         16 => {
