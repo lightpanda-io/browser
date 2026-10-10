@@ -46,6 +46,7 @@ const HtmlElement = @import("webapi/element/Html.zig");
 const Window = @import("webapi/Window.zig");
 const Cookie = @import("webapi/storage/Cookie.zig");
 const Location = @import("webapi/Location.zig");
+const History = @import("webapi/History.zig");
 const Document = @import("webapi/Document.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
@@ -1067,6 +1068,10 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         // `:target` matches off the fragment, which just changed.
         target.styleChanged();
 
+        // Updating the document for the new entry fires popstate right away
+        // (the entry's state is null), then hashchange in a queued task.
+        // https://html.spec.whatwg.org/multipage/browsing-the-web.html#navigate-fragid
+        try History.firePopState(target, null);
         try target.queueHashChange(old_url, target.url);
 
         // don't defer this, the caller is responsible for freeing it on error
