@@ -759,6 +759,7 @@ pub const BrowserContext = struct {
             .label_index = label_index,
             .temp_arena = temp_arena,
             .filter = opts.filter,
+            .depth = opts.depth,
         };
     }
 

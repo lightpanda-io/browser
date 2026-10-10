@@ -40,7 +40,6 @@ const scratch_retain_limit = 64 * 1024;
 // Need a custom writer, because we can't just serialize the node as-is.
 // Sometimes we want to serializ the node without children, sometimes with just
 // its direct children, and sometimes the entire tree.
-// (For now, we only support direct children)
 pub const Writer = struct {
     root: *const NodeRegistry.Node,
     registry: *NodeRegistry,
@@ -52,6 +51,7 @@ pub const Writer = struct {
     // queryAXTree spec) and emit only nodes whose role + accessible name
     // match the filter, in a flat shape.
     filter: ?Filter = null,
+    depth: i32 = 0,
 
     pub const Filter = struct {
         role: ?[]const u8 = null,
@@ -59,6 +59,7 @@ pub const Writer = struct {
     };
 
     pub const Opts = struct {
+        depth: i32 = 0,
         filter: ?Filter = null,
     };
 
@@ -124,6 +125,8 @@ pub const Writer = struct {
         var descend = try self.writeNode(self.root.id, .fromNode(self.root.dom), walker.hidden(self.root.dom), ignore_cache, w);
         while (walker.next(descend)) |dom_node| {
             descend = false;
+            if (self.depth > 0 and self.depth < walker.depth) continue;
+
             switch (dom_node._type) {
                 .cdata => {
                     if (dom_node.is(DOMNode.CData.Text) == null) {
@@ -1116,6 +1119,7 @@ const Walker = struct {
     current: *DOMNode,
     frame: *Frame,
     hiding_ancestor: ?*DOMNode,
+    depth: i32 = 0,
 
     fn init(root: *DOMNode, frame: *Frame) Walker {
         return .{ .root = root, .current = root, .frame = frame, .hiding_ancestor = hidingAncestor(root, frame) };
@@ -1129,6 +1133,7 @@ const Walker = struct {
                     self.hiding_ancestor = self.current;
                 }
                 self.current = child;
+                self.depth += 1;
                 return child;
             }
         }
@@ -1140,6 +1145,7 @@ const Walker = struct {
                 return sibling;
             }
             node = node._parent.?;
+            self.depth -= 1;
             if (node == self.hiding_ancestor) {
                 self.hiding_ancestor = null;
             }
@@ -2085,6 +2091,68 @@ test "AXNode: writer prunes children when root is hidden" {
 
     try testing.expect(std.mem.find(u8, json, "under-display-none") == null);
     try testing.expect(std.mem.find(u8, json, "\"childIds\":[]") != null);
+}
+
+test "AXNode: writer depth cuts every branch at the same level" {
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/ax_depth.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const node = try registry.register(frame.window._document.asNode());
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer temp_arena.release();
+
+    // document(0) > html(1) > body(2) > div, ul, button(3) > p, li, text(4) > text(5)
+    {
+        const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+            .root = node,
+            .registry = &registry,
+            .frame = frame,
+            .label_index = &label_index,
+            .temp_arena = temp_arena,
+            .depth = 3,
+        }, .{});
+        defer testing.allocator.free(json);
+
+        const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+        defer parsed.deinit();
+        const nodes = parsed.value.array.items;
+
+        // Every branch reaches depth 3, not only the first one.
+        try testing.expect(findNode(nodes, "list", "") != null);
+        try testing.expect(findNode(nodes, "button", "btn") != null);
+        // Nothing below depth 3.
+        try testing.expect(findNode(nodes, "paragraph", "") == null);
+        try testing.expect(findNode(nodes, "listitem", "") == null);
+        try testing.expect(findNode(nodes, "StaticText", "btn") == null);
+    }
+
+    {
+        const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+            .root = node,
+            .registry = &registry,
+            .frame = frame,
+            .label_index = &label_index,
+            .temp_arena = temp_arena,
+            .depth = 4,
+        }, .{});
+        defer testing.allocator.free(json);
+
+        const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+        defer parsed.deinit();
+        const nodes = parsed.value.array.items;
+
+        try testing.expect(findNode(nodes, "paragraph", "") != null);
+        try testing.expect(findNode(nodes, "listitem", "") != null);
+        try testing.expect(findNode(nodes, "StaticText", "btn") != null);
+        // Nothing below depth 4.
+        try testing.expect(findNode(nodes, "StaticText", "one") == null);
+        try testing.expect(findNode(nodes, "StaticText", "item-a") == null);
+    }
 }
 
 test "AXNode: generic containers share memoized ignore answers" {
