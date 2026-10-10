@@ -602,7 +602,8 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
                 if (self.peek() == 0) return error.InvalidPseudoClass;
 
                 const selector = try parse(arena, self.consumeUntilCommaOrParen());
-                try selectors.append(arena, selector);
+                // Invalid here, so the forgiving list drops it.
+                if (!selector.hasPseudoElement()) try selectors.append(arena, selector);
 
                 _ = self.skipSpaces();
                 if (self.peek() == ',') {
@@ -629,7 +630,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
                 if (self.peek() == 0) return error.InvalidPseudoClass;
 
                 const selector = try parse(arena, self.consumeUntilCommaOrParen());
-                try selectors.append(arena, selector);
+                if (!selector.hasPseudoElement()) try selectors.append(arena, selector);
 
                 _ = self.skipSpaces();
                 if (self.peek() == ',') {

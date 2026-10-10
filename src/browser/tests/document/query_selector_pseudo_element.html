@@ -4,6 +4,8 @@
   .x::after { display: none; }
   .hide, .x::before { display: none; }
   *, ::before, ::after { --ring: 3px; }
+  :is(#d::before, .x) { display: none; }
+  .x { display: block; }
 </style>
 
 <body>
@@ -62,5 +64,7 @@
   // A pseudo-element in a selector list doesn't drop the other selectors.
   testing.expectFalse(document.getElementById('h').checkVisibility());
   testing.expectEqual('3px', getComputedStyle(d).getPropertyValue('--ring').trim());
+
+  testing.expectEqual('block', getComputedStyle(d).display);
 }
 </script>
