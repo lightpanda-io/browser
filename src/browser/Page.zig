@@ -25,6 +25,7 @@ const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
 const Factory = @import("Factory.zig");
 const Viewport = @import("Viewport.zig");
+const EventManagerBase = @import("EventManagerBase.zig");
 
 const Blob = @import("webapi/Blob.zig");
 const Node = @import("webapi/Node.zig");
@@ -164,6 +165,11 @@ identity: js.Identity = .{},
 // weak-callback safety.
 finalizer_callbacks: std.AutoHashMapUnmanaged(usize, js.FinalizerCallback) = .empty,
 
+// Event listener registration for every Frame in the Page. This used to be
+// per-frame, but a listener belongs to the target, e.g. a Node, and the Node
+// can be reached and live beyond its Frame.
+event_listeners: EventManagerBase,
+
 // Persisted v8 handles owned by this Page. Handles that outlive the Page are
 // reset on teardown; handles that can be released early are dropped
 // individually. See js.GlobalTracker.
@@ -261,6 +267,7 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
         .arena = arena.allocator(),
         .factory = Factory.init(self, arena.allocator(), &session.browser.documents),
         .globals = .init(session.browser.app.allocator),
+        .event_listeners = .init(arena.allocator()),
         .log_context = .{ .id = log.nextPageId(), .url = &self.frame.url },
     };
     self.queued_navigation = &self.queued_navigation_1;

@@ -174,6 +174,25 @@ pub fn removeListener(self: *EventManagerBase, list: *std.DoublyLinkedList, list
     }
 }
 
+/// Drops every listener on `target`.
+pub fn removeTarget(self: *EventManagerBase, target: *EventTarget) void {
+    var kv = self.lookup.fetchRemove(@intFromPtr(target)) orelse return;
+    for (kv.value.items) |type_listeners| {
+        const list = type_listeners.list;
+        var node = list.first;
+        while (node) |n| {
+            node = n.next;
+            self.removeListener(list, @alignCast(@fieldParentPtr("node", n)));
+        }
+        if (self.dispatch_depth == 0) {
+            self.list_pool.destroy(list);
+        } else {
+            // we leak this until the arena is cleared, no big deal
+        }
+    }
+    kv.value.deinit(self.arena);
+}
+
 /// Check if there are any listeners registered for a target/type combination.
 fn hasListeners(self: *EventManagerBase, target: *EventTarget, typ: []const u8) bool {
     return self.getListeners(target, .wrap(typ)) != null;

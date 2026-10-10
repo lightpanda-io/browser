@@ -284,7 +284,7 @@ pub fn buildListenerTargetMap(frame: *Frame, arena: Allocator) !ListenerTargetMa
     var map = ListenerTargetMap{};
 
     // addEventListener registrations
-    var it = frame._event_manager.base.lookup.iterator();
+    var it = frame.page.event_listeners.lookup.iterator();
     while (it.next()) |entry| {
         for (entry.value_ptr.items) |*type_listeners| {
             if (type_listeners.list.first != null) {

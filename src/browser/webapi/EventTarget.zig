@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
 const EventManager = @import("../EventManager.zig");
 
@@ -190,7 +191,17 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
     event._is_trusted = false;
 
     switch (exec.js.global) {
-        .frame => |frame| {
+        .frame => |caller| {
+            // a Node's or Window's event disaptches in its own frame. It
+            // doens't matter where dispatchEvent was called.
+            const frame: *Frame = switch (self._type) {
+                .node => self.subtype(Node).ownerFrame(caller) orelse caller,
+                .window => blk: {
+                    const window = self.subtype(Window);
+                    break :blk if (window._closed) caller else window._frame;
+                },
+                else => caller,
+            };
             event.acquireRef();
             defer _ = event.releaseRef(frame.page);
             try frame._event_manager.dispatch(self, event);
