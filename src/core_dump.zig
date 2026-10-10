@@ -50,6 +50,7 @@ fn shouldDisable() bool {
 // whether to dump (including the piped-`core_pattern` opt-out), and keeping the
 // hard limit lets the process raise it again if it ever needs to.
 fn disable() !void {
+    if (builtin.os.tag == .windows) return;
     var limit = try std.posix.getrlimit(.CORE);
     limit.cur = 0;
     try std.posix.setrlimit(.CORE, limit);

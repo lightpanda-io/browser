@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const builtin = @import("builtin");
 const string = @import("../string.zig");
 const Config = lp.Config;
 const Schema = lp.Schema;
@@ -27,6 +28,37 @@ const md_term = @import("md_term.zig");
 const prompt_assist = @import("prompt_assist.zig");
 const ansi = @import("ansi.zig");
 const c = @import("isocline");
+
+// std.posix writes need an fd_t, which is a HANDLE on
+// Windows; kernel32's WriteFile is the equivalent.
+extern "kernel32" fn WriteFile(
+    hFile: std.os.windows.HANDLE,
+    lpBuffer: [*]const u8,
+    nNumberOfBytesToWrite: u32,
+    lpNumberOfBytesWritten: *u32,
+    lpOverlapped: ?*anyopaque,
+) std.os.windows.BOOL;
+
+fn writeRaw(handle: std.os.windows.HANDLE, bytes: []const u8) void {
+    var written: u32 = 0;
+    _ = WriteFile(handle, bytes.ptr, @intCast(bytes.len), &written, null);
+}
+
+fn writeErr(bytes: []const u8) void {
+    if (comptime builtin.os.tag == .windows) {
+        writeRaw(std.Io.File.stderr().handle, bytes);
+    } else {
+        _ = std.c.write(std.posix.STDERR_FILENO, bytes.ptr, bytes.len);
+    }
+}
+
+fn writeOut(bytes: []const u8) void {
+    if (comptime builtin.os.tag == .windows) {
+        writeRaw(std.Io.File.stdout().handle, bytes);
+    } else {
+        _ = std.c.write(std.posix.STDOUT_FILENO, bytes.ptr, bytes.len);
+    }
+}
 
 const Terminal = @This();
 
@@ -136,7 +168,7 @@ pub fn agentToolDone(self: *Terminal, name: []const u8, args: []const u8, ok: bo
 /// spinner isn't running (non-tty REPL) so the line isn't silently dropped.
 fn emitStderr(self: *Terminal, bytes: []const u8) void {
     if (self.spinner.emitAbove(bytes)) return;
-    _ = std.c.write(std.posix.STDERR_FILENO, bytes.ptr, bytes.len);
+    writeErr(bytes);
 }
 
 fn formatBulletLine(arena: std.mem.Allocator, name: []const u8, args: []const u8, ok: bool) ![]const u8 {
@@ -153,8 +185,8 @@ pub fn readLine(prompt: [*:0]const u8) ?[]const u8 {
     // \r) only while isocline reads: while active, Ctrl-C arrives as a CSI-u
     // escape rather than raw \x03, so the tty driver raises no SIGINT. Leaving
     // it on during thinking/tool runs would make Ctrl-C unable to interrupt them.
-    _ = std.c.write(std.posix.STDOUT_FILENO, (ansi.kitty_disambiguate).ptr, (ansi.kitty_disambiguate).len);
-    defer _ = std.c.write(std.posix.STDOUT_FILENO, (ansi.kitty_pop).ptr, (ansi.kitty_pop).len);
+    writeOut(ansi.kitty_disambiguate);
+    defer writeOut(ansi.kitty_pop);
     // Isocline auto-appends the line to its (optionally-persisted) history.
     const line = c.ic_readline(prompt) orelse return null;
     return std.mem.sliceTo(line, 0);
@@ -256,8 +288,8 @@ pub fn printMarkdown(self: *Terminal, text: []const u8) void {
 pub fn printPlain(self: *Terminal, text: []const u8) void {
     _ = self;
     if (text.len == 0) return;
-    _ = std.c.write(std.posix.STDOUT_FILENO, (text).ptr, (text).len);
-    _ = std.c.write(std.posix.STDOUT_FILENO, ("\n").ptr, ("\n").len);
+    writeOut(text);
+    writeOut("\n");
 }
 
 /// Write a streamed assistant-text delta (no trailing newline). Rendered
@@ -268,13 +300,13 @@ pub fn printPlain(self: *Terminal, text: []const u8) void {
 pub fn printAssistantDelta(self: *Terminal, text: []const u8) void {
     if (text.len == 0) return;
     if (self.styledOutput()) return self.renderStyled(text, .delta);
-    _ = std.c.write(std.posix.STDOUT_FILENO, (text).ptr, (text).len);
+    writeOut(text);
 }
 
 /// Flush any partial streamed line, terminate it, and reset stream state.
 pub fn endAssistantStream(self: *Terminal) void {
     if (self.styledOutput()) return self.renderStyled("", .end);
-    _ = std.c.write(std.posix.STDOUT_FILENO, ("\n").ptr, ("\n").len);
+    writeOut("\n");
 }
 
 // Must exceed the downstream LLM-judge's snapshot window for full grounding
@@ -312,7 +344,7 @@ pub fn printScriptDone(self: *Terminal, name: []const u8, args: []const u8) void
         ansi.green ++ "●" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s} {s}]" ++ ansi.reset ++ "\n",
         .{ name, args },
     ) catch return;
-    _ = std.c.write(std.posix.STDERR_FILENO, (line).ptr, (line).len);
+    writeErr(line);
 }
 
 /// Re-indents `text` as two-space JSON, or null when it isn't a JSON object/array.

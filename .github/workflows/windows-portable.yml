@@ -1,0 +1,99 @@
+name: windows-portable
+
+# 手动触发或打 portable-v* 标签时构建 Windows 原生便携包。
+# Windows 没有上游预编译 V8，此工作流完整跑 depot_tools -> gclient sync ->
+# gn+ninja 全流程（约 1-1.5 小时），产物为 zip（含 VC 运行库 DLL）。
+on:
+  workflow_dispatch:
+  push:
+    tags: ["portable-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  portable:
+    runs-on: windows-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Install Zig 0.17.0
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest https://ziglang.org/download/0.17.0/zig-x86_64-windows-0.17.0.zip -OutFile $env:RUNNER_TEMP\zig.zip
+          Expand-Archive $env:RUNNER_TEMP\zig.zip -DestinationPath $env:RUNNER_TEMP\zig
+          $zigbin = (Get-ChildItem $env:RUNNER_TEMP\zig -Directory).FullName
+          Write-Output $zigbin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Pre-fetch sqlite amalgamation (zig 0.16 zip-fetch workaround)
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          curl.exe -sL --max-time 300 -o sqlite-amalgamation-3530200.zip https://sqlite.org/2026/sqlite-amalgamation-3530200.zip
+          New-Item sqlite-amalg -ItemType Directory -Force | Out-Null
+          tar -xf sqlite-amalgamation-3530200.zip -C sqlite-amalg --strip-components=1
+          zig fetch "${{ github.workspace }}\sqlite-amalg" | Out-Host
+      - name: diagnose VS/SDK layout on runner
+        shell: pwsh
+        run: |
+          "--- vswhere installationPath ---"
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -products * -property installationPath 2>$null
+          "--- x86 BuildTools MSVC ---"
+          if (Test-Path "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC") { (Get-ChildItem "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC").Name }
+          "--- full editions ---"
+          if (Test-Path "C:\Program Files\Microsoft Visual Studio\2022") { (Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022").Name }
+          "--- Windows Kits Lib ---"
+          if (Test-Path "C:\Program Files (x86)\Windows Kits\10\Lib") { (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Lib").Name }
+      - name: rustup target add x86_64-pc-windows-gnu
+        shell: bash
+        run: rustup target add x86_64-pc-windows-gnu
+      - name: Pre-place gn.exe + ninja.exe (depot_tools archive has no CIPD bootstrap)
+        shell: pwsh
+        run: |
+          $dt = "D:\a\lightpanda-windows-port\lightpanda-windows-port\.lp-cache\depot_tools-15.5.35.13"
+          New-Item $dt -ItemType Directory -Force | Out-Null
+          foreach ($pkg in @(@('gn','https://chrome-infra-packages.appspot.com/dl/gn/gn/windows-amd64/+/latest'), @('ninja','https://chrome-infra-packages.appspot.com/dl/infra/3pp/tools/ninja/windows-amd64/+/latest'))) {
+            curl.exe -sL --max-time 300 -o "$env:RUNNER_TEMP\$($pkg[0]).zip" $pkg[1]
+            Expand-Archive "$env:RUNNER_TEMP\$($pkg[0]).zip" "$env:RUNNER_TEMP\$($pkg[0])" -Force
+            Copy-Item "$env:RUNNER_TEMP\$($pkg[0])\$($pkg[0]).exe" $dt -Force
+          }
+          & "$dt\gn.exe" --version; & "$dt\ninja.exe" --version
+      - name: Build lightpanda native windows (V8 from source, ~1-1.5h)
+        shell: cmd
+        run: |
+          set DEPOT_TOOLS_UPDATE=0
+          set DEPOT_TOOLS_WIN_TOOLCHAIN=0
+          set GYP_MSVS_VERSION=2022
+          set PATH=C:\Program Files\Git\usr\bin;%PATH%
+          zig build -Doptimize=ReleaseFast -Dcpu=x86_64 --summary all > build.log 2>&1 || (type build.log & exit /b 1)
+
+      - name: Package portable
+        shell: pwsh
+        run: |
+          $pkg = 'lightpanda-portable-windows-x64'
+          New-Item $pkg -ItemType Directory -Force | Out-Null
+          Copy-Item zig-out\bin\lightpanda.exe $pkg
+          Copy-Item "$env:SystemRoot\System32\VCRUNTIME140.dll" $pkg -ErrorAction SilentlyContinue
+          Copy-Item "$env:SystemRoot\System32\VCRUNTIME140_1.dll" $pkg -ErrorAction SilentlyContinue
+          Copy-Item README-WINDOWS.txt, LICENSE $pkg
+          Compress-Archive -Path $pkg -DestinationPath lightpanda-portable-windows-x64.zip
+
+      - name: upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a1 # v7.0.1
+        with:
+          name: lightpanda-portable-windows-x64
+          path: lightpanda-portable-windows-x64.zip
+          retention-days: 14
+
+      - name: attach to release (tag builds only, via gh CLI)
+        if: startsWith(github.ref, 'refs/tags/portable-v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag=${GITHUB_REF#refs/tags/}
+          gh release create "$tag" lightpanda-portable-windows-x64.zip --title "lightpanda-portable-windows-x64 $tag" --generate-notes

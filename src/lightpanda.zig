@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 comptime {
     // Strong __clear_cache overriding compiler_rt's broken aarch64 one
@@ -90,6 +91,7 @@ pub const io: std.Io = io_threaded.io();
 /// need the real process environment (env-var lookups, spawned children) use
 /// this instead.
 pub fn environ() std.process.Environ {
+    if (builtin.os.tag == .windows) return .{ .block = .global };
     return .{ .block = .{ .slice = std.mem.span(std.c.environ) } };
 }
 
