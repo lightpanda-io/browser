@@ -661,7 +661,9 @@ pub fn findClickActivationTarget(target: *Node, bubbles: bool) ?*Node {
     return null;
 }
 
-fn runJavascriptUrl(frame: *Frame, source: []const u8) !void {
+// Runs a javascript: URL's script, `source` being the URL without its scheme.
+// It is percent-decoded first, as the "evaluate a javascript: URL" steps do.
+pub fn runJavascriptUrl(frame: *Frame, source: []const u8) !void {
     const arena = try frame.getArena(.tiny, "javascript-url");
     errdefer arena.release();
 
@@ -669,9 +671,7 @@ fn runJavascriptUrl(frame: *Frame, source: []const u8) !void {
     task.* = .{
         .frame = frame,
         .arena = arena,
-        // TODO: the URL body should be percent-decoded; hrefs written in
-        // markup rarely are.
-        .source = try arena.dupe(u8, source),
+        .source = std.Uri.percentDecodeInPlace(try arena.dupe(u8, source)),
     };
     try frame.js.scheduler.add(task, JavascriptUrlTask.run, 0, .{
         .name = "javascript-url",
