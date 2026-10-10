@@ -309,6 +309,7 @@ pub fn deinit(self: *WebSocket, page: *Page) void {
         arena.release();
     }
 
+    page.event_listeners.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 

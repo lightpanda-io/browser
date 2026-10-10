@@ -90,6 +90,9 @@ _gate_waiter: Engine.GateWaiter,
 // versionchange only: the version to fall back to if the upgrade aborts.
 _old_version: ?i64 = null,
 _abort_requests: std.ArrayList(*IDBRequest) = .empty,
+// Every request created under the transaction. They live in our arena, so
+// their listeners have to be dropped when it's released.
+_requests: std.ArrayList(*IDBRequest) = .empty,
 _abort_pending: bool = false,
 // A transaction is only active for one execution of a Scheduler's task. We
 // capture the scheduler's generation here and reject any request made in a
@@ -185,7 +188,7 @@ pub fn initVersionChange(db: *IDBDatabase, exec: *Execution) !*IDBTransaction {
     return self;
 }
 
-pub fn deinit(self: *IDBTransaction, _: *Page) void {
+pub fn deinit(self: *IDBTransaction, page: *Page) void {
     if (comptime lp.IS_DEBUG) {
         // Pins hold refs, so the last release can't happen while parked (nor
         // while a drain task is scheduled).
@@ -197,6 +200,10 @@ pub fn deinit(self: *IDBTransaction, _: *Page) void {
     for (self._clones.items) |*slot| {
         slot.release();
     }
+    for (self._requests.items) |request| {
+        page.event_listeners.removeTarget(request.asEventTarget());
+    }
+    page.event_listeners.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
@@ -504,6 +511,7 @@ pub fn ensureBegun(self: *IDBTransaction) !void {
 pub fn newRequest(self: *IDBTransaction) !*IDBRequest {
     const request = try self._exec._factory.eventTargetWithAllocator(self._arena.allocator(), IDBRequest{ ._proto = undefined });
     request._txn = .{ .owned = self };
+    try self._requests.append(self._arena.allocator(), request);
     return request;
 }
 

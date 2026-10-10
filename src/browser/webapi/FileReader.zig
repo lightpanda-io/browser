@@ -78,7 +78,7 @@ pub fn init(exec: *Execution) !*FileReader {
     });
 }
 
-pub fn deinit(self: *FileReader, _: *Page) void {
+pub fn deinit(self: *FileReader, page: *Page) void {
     if (self._on_abort) |func| func.release();
     if (self._on_error) |func| func.release();
     if (self._on_load) |func| func.release();
@@ -86,6 +86,7 @@ pub fn deinit(self: *FileReader, _: *Page) void {
     if (self._on_load_start) |func| func.release();
     if (self._on_progress) |func| func.release();
 
+    page.event_listeners.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
