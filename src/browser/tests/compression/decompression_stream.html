@@ -379,3 +379,27 @@
     testing.expectEqual({ whole: true, split: true }, results);
   });
 </script>
+
+<script id=stored_type_error type=module>
+  const state = await testing.async();
+
+  // A stream errored by a bad chunk rejects with one TypeError object, on
+  // both sides.
+  const ds = new DecompressionStream('gzip');
+  const writer = ds.writable.getWriter();
+  const reader = ds.readable.getReader();
+  const pending_read = reader.read().catch((e) => e);
+  await writer.write('hello').catch(() => {});
+  const errors = [
+    await pending_read,
+    await reader.read().catch((e) => e),
+    await reader.cancel().catch((e) => e),
+    await writer.write(new Uint8Array(1)).catch((e) => e),
+  ];
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, errors[0] instanceof TypeError);
+    testing.expectEqual([true, true, true, true], errors.map((e) => e === errors[0]));
+  });
+</script>

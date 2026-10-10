@@ -64,8 +64,9 @@ pub fn read(self: *ReadableStreamDefaultReader, exec: *const Execution) !js.Prom
     stream._disturbed = true;
 
     if (stream._state == .errored) {
-        //const err = stream._stored_error orelse "Stream errored";
-        return local.rejectPromise(.{ .type_error = "Stream errored" });
+        const resolver = local.createPromiseResolver();
+        stream._stored_error.?.reject("ReadableStreamDefaultReader.read", resolver);
+        return resolver.promise();
     }
 
     if (stream._controller.dequeue()) |chunk| {
@@ -95,7 +96,7 @@ pub fn releaseLock(self: *ReadableStreamDefaultReader) void {
     }
 }
 
-pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?[]const u8, exec: *const Execution) !js.Promise {
+pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?js.Value, exec: *const Execution) !js.Promise {
     const stream = self._stream orelse {
         return exec.js.typeError("Reader has been released");
     };

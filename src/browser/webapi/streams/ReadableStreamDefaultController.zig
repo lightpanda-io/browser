@@ -209,34 +209,37 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
     self._pending_reads.clearRetainingCapacity();
 }
 
-pub fn doError(self: *ReadableStreamDefaultController, err: []const u8) !void {
-    return self.fail(err, false);
+pub fn doError(self: *ReadableStreamDefaultController, reason: ?js.Value) !void {
+    return self.fail(try .fromJs(reason));
 }
 
-/// Like doError, but pending reads reject with a TypeError instead of the
-/// bare message, which is what native transforms (e.g. CompressionStream) throw.
 pub fn typeError(self: *ReadableStreamDefaultController, message: []const u8) !void {
-    return self.fail(message, true);
+    return self.fail(.{ .type_error = try self._arena.dupe(u8, message) });
 }
 
-fn fail(self: *ReadableStreamDefaultController, err: []const u8, type_error: bool) !void {
-    if (self._stream._state != .readable) {
+fn fail(self: *ReadableStreamDefaultController, err: ReadableStream.StoredError) !void {
+    const stream = self._stream;
+    if (stream._state != .readable) {
         return;
     }
 
-    self._stream._state = .errored;
-    self._stream._stored_error = try self._arena.dupe(u8, err);
+    stream._state = .errored;
+    stream._stored_error = err;
 
-    // Reject all pending reads
-    for (self._pending_reads.items) |resolver| {
-        const local_resolver = self._execution.js.toLocal(resolver);
-        if (type_error) {
-            local_resolver.rejectError("stream error", .{ .type_error = err });
-        } else {
-            local_resolver.reject("stream error", err);
-        }
+    // Rejecting runs page JS, which can reach the list too.
+    const pending_reads = self._pending_reads;
+    self._pending_reads = .empty;
+    if (pending_reads.items.len == 0) {
+        return;
     }
-    self._pending_reads.clearRetainingCapacity();
+
+    var ls: js.Local.Scope = undefined;
+    self._execution.js.localScope(&ls);
+    defer ls.deinit();
+
+    for (pending_reads.items) |resolver| {
+        stream._stored_error.?.reject("stream error", ls.toLocal(resolver));
+    }
 }
 
 pub fn dequeue(self: *ReadableStreamDefaultController) ?Chunk {

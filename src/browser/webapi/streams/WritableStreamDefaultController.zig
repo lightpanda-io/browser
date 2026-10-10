@@ -31,10 +31,10 @@ pub fn init(stream: *WritableStream, exec: *const Execution) !*WritableStreamDef
     });
 }
 
-pub fn doError(self: *WritableStreamDefaultController, reason: []const u8) void {
+pub fn doError(self: *WritableStreamDefaultController, reason: ?js.Value) !void {
     if (self._stream._state != .writable) return;
     self._stream._state = .errored;
-    self._stream._stored_error = reason;
+    self._stream._stored_error = try .fromJs(reason);
 }
 
 pub const JsApi = struct {

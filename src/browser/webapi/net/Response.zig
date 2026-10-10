@@ -306,9 +306,10 @@ pub fn getBody(self: *Response, exec: *const Execution) !?*ReadableStream {
                 return stream;
             }
             const stream = blk: {
-                if (self.abortReason() != null) {
+                if (self.abortReason()) |reason| {
+                    // Like text() and json(), reads reject with the signal's reason.
                     const stream = try ReadableStream.init(null, null, exec);
-                    try stream._controller.doError("The operation was aborted.");
+                    try stream._controller.doError(try AbortSignal.reasonJsValue(reason, exec.js.local.?));
                     break :blk stream;
                 }
                 if (body.len == 0) {
@@ -329,7 +330,7 @@ pub fn getBody(self: *Response, exec: *const Execution) !?*ReadableStream {
                 return stream;
             }
             const stream = try ReadableStream.init(null, null, exec);
-            try stream._controller.doError("Failed to read response body");
+            try stream._controller.typeError("Failed to read response body");
             self._body_stream = stream;
             if (self._body_used) {
                 try lockStream(stream, exec);
