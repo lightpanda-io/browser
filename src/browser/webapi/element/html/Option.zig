@@ -94,7 +94,7 @@ fn strippedText(self: *const Option, allocator: std.mem.Allocator) []const u8 {
     const content = node.getTextContentAlloc(allocator) catch return "";
 
     // Strip and collapse ASCII whitespace.
-    var result: std.ArrayList(u8) = std.ArrayList(u8).initCapacity(allocator, content.len) catch return "";
+    var result = std.ArrayList(u8).initCapacity(allocator, content.len) catch return "";
     var it = std.mem.tokenizeAny(u8, content, " \t\n\r\x0C");
     while (it.next()) |word| {
         if (result.items.len > 0) {
