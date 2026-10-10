@@ -608,6 +608,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
                 .message = err.toStringSlice() catch "Unknown error",
             });
         }
+        notifyExceptionThrown(err, frame);
         return;
     }
 
@@ -667,6 +668,18 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
             });
         }
     }
+    if (!event._prevent_default) {
+        notifyExceptionThrown(err, frame);
+    }
+}
+
+// An error event left uncancelled leaves the exception "uncaught": CDP
+// clients learn about it through Runtime.exceptionThrown.
+fn notifyExceptionThrown(err: js.Value, frame: *Frame) void {
+    frame._session.notification.dispatch(.exception_thrown, &.{
+        .timestamp = lp.datetime.timestamp(.boot),
+        .value = err,
+    });
 }
 
 pub fn matchMedia(_: *const Window, query: []const u8, frame: *Frame) !*MediaQueryList {

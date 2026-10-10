@@ -940,10 +940,12 @@ pub const BrowserContext = struct {
 
     pub fn runtimeEnable(self: *BrowserContext) !void {
         try self.notification.register(.runtime_console_message, self, onRuntimeConsoleMessage);
+        try self.notification.register(.exception_thrown, self, onExceptionThrown);
     }
 
     pub fn runtimeDisable(self: *BrowserContext) void {
         self.notification.unregister(.runtime_console_message, self);
+        self.notification.unregister(.exception_thrown, self);
     }
 
     // Registers for the download notifications dispatched by Frame when a
@@ -1181,6 +1183,13 @@ pub const BrowserContext = struct {
         const arena = self.acquireNotificationArena();
         defer self.releaseNotificationArena();
         return @import("domains/runtime.zig").consoleMessage(arena, self, msg);
+    }
+
+    fn onExceptionThrown(ctx: *anyopaque, msg: *const Notification.ExceptionThrown) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        const arena = self.acquireNotificationArena();
+        defer self.releaseNotificationArena();
+        return @import("domains/runtime.zig").exceptionThrown(arena, self, msg);
     }
 
     fn acquireNotificationArena(self: *BrowserContext) Allocator {
