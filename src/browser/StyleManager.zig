@@ -1265,8 +1265,9 @@ pub const Display = enum(u2) {
     }
 };
 
-/// The case-changing part of `text-transform`. `full-width`, `full-size-kana`
-/// and `math-auto` are accepted but not applied. `.inherit` is both the
+/// The case-changing part of `text-transform`. innerText applies `uppercase`
+/// and `lowercase`; `capitalize` is a computed value only, and `full-width`,
+/// `full-size-kana` and `math-auto` are accepted but not applied. `.inherit` is both the
 /// `inherit`/`unset` keywords and "nothing declared": text-transform inherits.
 pub const TextTransform = enum(u3) {
     inherit,

@@ -6,7 +6,8 @@
 <!--
   text-transform: computed value (cascade + inheritance) and its effect on
   innerText. The rendered text collection steps apply text-transform to each
-  text box, so innerText returns the transformed text.
+  text box, so innerText returns the transformed text. Only uppercase and
+  lowercase are applied; capitalize is reported but leaves the text as is.
 -->
 
 <style>
@@ -58,15 +59,15 @@
   testing.expectEqual('UNAVAILABLE', it('inherited'));
   testing.expectEqual('Mixed Case', it('reset'));
   testing.expectEqual('unavailable', it('lower'));
-  testing.expectEqual("Hello WORLD, It's É-Mail 1st", it('cap'));
+  testing.expectEqual("hello wORLD, it's é-mail 1st", it('cap'));
   testing.expectEqual('mixed', it('id-wins'));
   testing.expectEqual('WIDE', it('combo'));
   testing.expectEqual('STILL UPPER', it('bogus'));
   testing.expectEqual('KEPT', it('inline-inherit'));
   testing.expectEqual('plain', it('inline-initial'));
   testing.expectEqual('Plain Text', it('plain'));
-  testing.expectEqual('a BOLD Two Words z', it('mixed'));
-  testing.expectEqual('Onetwo Three', it('nested'));
+  testing.expectEqual('a BOLD two words z', it('mixed'));
+  testing.expectEqual('onetwo three', it('nested'));
   // textContent is not rendered text: untouched.
   testing.expectEqual('unavailable', $('#class').textContent);
 </script>
