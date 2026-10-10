@@ -531,6 +531,7 @@ pub const BrowserContext = struct {
 
     intercept_state: InterceptState,
     fetch_session_id: ?[]const u8 = null,
+    virtual_time_session_id: ?[]const u8 = null,
 
     // Request bodies retained for Network.getRequestPostData, which can be
     // called after the transfer is gone. Capped at max_post_data_size.
@@ -610,6 +611,7 @@ pub const BrowserContext = struct {
         try notification.register(.frame_dom_content_loaded, self, onFrameDOMContentLoaded);
         try notification.register(.frame_loaded, self, onFrameLoaded);
         try notification.register(.javascript_dialog_opening, self, onJavascriptDialogOpening);
+        try notification.register(.virtual_time_budget_expired, self, onVirtualTimeBudgetExpired);
     }
 
     pub fn deinit(self: *BrowserContext) void {
@@ -993,6 +995,11 @@ pub const BrowserContext = struct {
         @import("domains/page.zig").frameRemove(self);
     }
 
+    fn onVirtualTimeBudgetExpired(ctx: *anyopaque, _: *const Notification.VirtualTimeBudgetExpired) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/emulation.zig").virtualTimeBudgetExpired(self);
+    }
+
     fn onFrameCreated(ctx: *anyopaque, frame: *Frame) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameCreated(self, frame);
@@ -1235,6 +1242,7 @@ pub const BrowserContext = struct {
     /// Returns false when no such session is attached.
     pub fn detachSession(self: *BrowserContext, session_id: []const u8) bool {
         const kv = self.attached_sessions.fetchOrderedRemove(session_id) orelse return false;
+        self.virtualTimeDisableForSession(session_id);
         if (self.session_id) |primary| {
             if (std.mem.eql(u8, primary, session_id)) {
                 self.session_id = null;
@@ -1250,6 +1258,19 @@ pub const BrowserContext = struct {
         }
         self.attached_sessions.clearRetainingCapacity();
         self.session_id = null;
+        self.virtualTimeDisable();
+    }
+
+    fn virtualTimeDisableForSession(self: *BrowserContext, session_id: []const u8) void {
+        const active_session_id = self.virtual_time_session_id orelse return;
+        if (std.mem.eql(u8, active_session_id, session_id)) {
+            self.virtualTimeDisable();
+        }
+    }
+
+    pub fn virtualTimeDisable(self: *BrowserContext) void {
+        self.session.virtual_time = null;
+        self.virtual_time_session_id = null;
     }
 
     fn destroySession(self: *BrowserContext, attached: *AttachedSession) void {
@@ -1506,6 +1527,14 @@ pub const Command = struct {
             .result = if (comptime @typeInfo(@TypeOf(result)) == .null) struct {}{} else result,
             .sessionId = self.input.session_id,
         }, .{ .size_hint = opts.size_hint });
+    }
+
+    /// Valid until that session detaches.
+    pub fn sessionId(self: *const Command, bc: *const BrowserContext) ![]const u8 {
+        if (self.input.session_id) |session_id| {
+            return self.cdp.resolveSessionId(session_id) orelse error.UnknownSessionId;
+        }
+        return bc.session_id orelse error.UnknownSessionId;
     }
 
     pub fn sendEvent(self: *Command, method: []const u8, p: anytype, opts: SendEventOpts) !void {

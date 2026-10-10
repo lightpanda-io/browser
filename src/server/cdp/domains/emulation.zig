@@ -23,6 +23,7 @@ const CDP = @import("../CDP.zig");
 const Config = @import("../../../Config.zig");
 const Mime = @import("../../../browser/Mime.zig");
 const js = @import("../../../browser/js/js.zig");
+const VirtualTime = @import("../../../browser/VirtualTime.zig");
 
 const log = lp.log;
 
@@ -40,6 +41,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         setTimezoneOverride,
         setScriptExecutionDisabled,
         setDefaultBackgroundColorOverride,
+        setVirtualTimePolicy,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -56,6 +58,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .setScriptExecutionDisabled => return setScriptExecutionDisabled(cmd),
         // Nothing is painted with a background.
         .setDefaultBackgroundColorOverride => return cmd.sendResult(null, .{}),
+        .setVirtualTimePolicy => return setVirtualTimePolicy(cmd),
     }
 }
 
@@ -240,6 +243,60 @@ fn setScriptExecutionDisabled(cmd: *CDP.Command) !void {
         return cmd.sendError(-32000, "Disabling script execution is not supported", .{});
     }
     return cmd.sendResult(null, .{});
+}
+
+/// Once the budget runs out the session goes back to real time; Chrome
+/// pauses virtual time instead, which needs a frozen clock we don't have.
+fn setVirtualTimePolicy(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        policy: enum { advance, pause, pauseIfNetworkFetchesPending },
+        budget: ?f64 = null,
+        maxVirtualTimeTaskStarvationCount: ?i64 = null,
+        initialVirtualTime: ?f64 = null,
+    })) orelse return error.InvalidParams;
+
+    if (params.policy == .pause) {
+        return cmd.sendError(-32000, "Pausing virtual time is not supported", .{});
+    }
+    if (params.initialVirtualTime != null) {
+        return cmd.sendError(-32000, "Setting the initial virtual time is not supported", .{});
+    }
+    if (params.maxVirtualTimeTaskStarvationCount) |v| {
+        log.warn(.not_implemented, "Emulation.setVirtualTimePolicy", .{ .maxVirtualTimeTaskStarvationCount = v });
+    }
+
+    if (cmd.cdp.browser.app.live_drivers.load(.monotonic) > 1) {
+        return cmd.sendError(-32000, "Virtual time moves the whole process's clock; not available with other connections open", .{});
+    }
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const budget_ms: ?u32 = if (params.budget) |b| blk: {
+        if (std.math.isNan(b) or b < 0) {
+            return error.InvalidParams;
+        }
+        break :blk @ceil(@min(b, std.math.maxInt(u32)));
+    } else null;
+
+    const session_id = try cmd.sessionId(bc);
+    try cmd.sendResult(.{ .virtualTimeTicksBase = VirtualTime.milli() }, .{});
+    if (budget_ms == 0) {
+        bc.virtualTimeDisable();
+        return cmd.sendEvent("Emulation.virtualTimeBudgetExpired", null, .{ .session_id = session_id });
+    }
+
+    bc.virtual_time_session_id = session_id;
+    bc.session.virtual_time = .{
+        .remaining_ms = budget_ms orelse 0,
+        .refill = if (budget_ms != null) .expires else .unbounded,
+        .skip_during_fetches = params.policy == .advance,
+    };
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#event-virtualTimeBudgetExpired
+pub fn virtualTimeBudgetExpired(bc: *CDP.BrowserContext) !void {
+    const session_id = bc.virtual_time_session_id orelse return;
+    bc.virtual_time_session_id = null;
+    return bc.cdp.sendEvent("Emulation.virtualTimeBudgetExpired", null, .{ .session_id = session_id });
 }
 
 const testing = @import("../testing.zig");
@@ -786,4 +843,104 @@ test "cdp.Emulation: navigator.geolocation errors PERMISSION_DENIED when permiss
 
     const v = try ls.local.exec("window.__geo_code === 1", null);
     try testing.expect(v.isTrue());
+}
+
+fn navigateUnderCDP(bc: *CDP.BrowserContext, comptime fixture: []const u8, pump_ms: u32) !*lp.Frame {
+    const page = try bc.session.createPage();
+    try page.navigate("http://127.0.0.1:9582/src/browser/tests/" ++ fixture, .{});
+    var runner = bc.session.runner(.{});
+    try runner.waitForFrameCDP(page.frame_id, pump_ms, .done);
+    return bc.mainFrame().?;
+}
+
+fn setPolicy(ctx: *testing.TestContext, id: i64, session_id: []const u8, params: anytype) !void {
+    try ctx.processMessage(.{ .id = id, .method = "Emulation.setVirtualTimePolicy", .sessionId = session_id, .params = params });
+    try ctx.expectSentResult(null, .{ .id = @intCast(id), .session_id = session_id });
+}
+
+test "cdp.Emulation: setVirtualTimePolicy skips timers and expires the budget" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-VT1", .session_id = "SID-VT1", .target_id = "TID-0000000VT1".* });
+    try setPolicy(&ctx, 1, "SID-VT1", .{ .policy = "pauseIfNetworkFetchesPending", .budget = 5000 });
+
+    const start = lp.datetime.milliTimestamp(.boot);
+    const frame = try navigateUnderCDP(bc, "runner/virtual_time.html", 1000);
+    try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - start < 1500);
+
+    try expectJs(frame, "document.getElementById('out').textContent === 'virtual-done'");
+    // With nothing left scheduled the rest of the budget runs out at once.
+    try ctx.expectSentEvent("Emulation.virtualTimeBudgetExpired", null, .{ .session_id = "SID-VT1" });
+    try testing.expectEqual(null, bc.session.virtual_time);
+}
+
+test "cdp.Emulation: setVirtualTimePolicy without a budget never expires" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-VT2", .session_id = "SID-VT2", .target_id = "TID-0000000VT2".* });
+    try setPolicy(&ctx, 1, "SID-VT2", .{ .policy = "advance" });
+
+    const frame = try navigateUnderCDP(bc, "runner/virtual_time.html", 500);
+    try expectJs(frame, "document.getElementById('out').textContent === 'virtual-done'");
+    try testing.expectEqual(true, bc.session.virtual_time != null);
+    try testing.expectEqual(0, try ctx.countSentEvents("Emulation.virtualTimeBudgetExpired", "SID-VT2"));
+}
+
+test "cdp.Emulation: setVirtualTimePolicy rejects pause and a zero budget expires at once" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-VT3", .session_id = "SID-VT3", .target_id = "TID-0000000VT3".* });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setVirtualTimePolicy",
+        .params = .{ .policy = "pause" },
+    });
+    try ctx.expectSentError(-32000, "Pausing virtual time is not supported", .{ .id = 1 });
+    try testing.expectEqual(null, bc.session.virtual_time);
+
+    try setPolicy(&ctx, 2, "SID-VT3", .{ .policy = "pauseIfNetworkFetchesPending", .budget = 0 });
+    try ctx.expectSentEvent("Emulation.virtualTimeBudgetExpired", null, .{ .session_id = "SID-VT3" });
+    try testing.expectEqual(null, bc.session.virtual_time);
+}
+
+test "cdp.Emulation: setVirtualTimePolicy belongs to the session that set it" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-VT4", .session_id = "SID-PRIMARY", .target_id = "TID-0000000VT4".* });
+    _ = try bc.attachSession("SID-AUX", null);
+
+    try setPolicy(&ctx, 1, "SID-AUX", .{ .policy = "pauseIfNetworkFetchesPending", .budget = 0 });
+    try ctx.expectSentEvent("Emulation.virtualTimeBudgetExpired", null, .{ .session_id = "SID-AUX" });
+
+    try setPolicy(&ctx, 2, "SID-AUX", .{ .policy = "pauseIfNetworkFetchesPending", .budget = 5000 });
+    try testing.expectEqual(true, bc.session.virtual_time != null);
+
+    try testing.expectEqual(true, bc.detachSession("SID-AUX"));
+    try testing.expectEqual(null, bc.session.virtual_time);
+    try testing.expectEqual(null, bc.virtual_time_session_id);
+}
+
+test "cdp.Emulation: setVirtualTimePolicy needs the process to itself" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-VT5", .session_id = "SID-VT5", .target_id = "TID-0000000VT5".* });
+    const live_drivers = &bc.session.browser.app.live_drivers;
+    defer live_drivers.store(0, .monotonic);
+
+    live_drivers.store(2, .monotonic);
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setVirtualTimePolicy",
+        .params = .{ .policy = "pauseIfNetworkFetchesPending", .budget = 5000 },
+    });
+    try ctx.expectSentError(-32000, "Virtual time moves the whole process's clock; not available with other connections open", .{ .id = 1 });
+
+    live_drivers.store(1, .monotonic);
+    try setPolicy(&ctx, 2, "SID-VT5", .{ .policy = "pauseIfNetworkFetchesPending", .budget = 5000 });
+
+    live_drivers.store(2, .monotonic);
+    const frame = try navigateUnderCDP(bc, "runner/virtual_time.html", 300);
+    try expectJs(frame, "document.getElementById('out').textContent === ''");
+    try testing.expectEqual(5000, bc.session.virtual_time.?.remaining_ms);
 }
