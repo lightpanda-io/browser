@@ -672,6 +672,12 @@ pub fn getPinnedArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) 
     return self._session.getPinnedArena(size_or_bucket, debug);
 }
 
+fn sameOrigin(a: *const Frame, b: *const Frame) bool {
+    const a_origin = a.origin orelse return false;
+    const b_origin = b.origin orelse return false;
+    return std.mem.eql(u8, a_origin, b_origin);
+}
+
 pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
     const current_origin = self.origin orelse return false;
     return URL.isSameOrigin(url, current_origin);
@@ -1028,6 +1034,18 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         .script => |p| p orelse originator,
         .iframe => |iframe| iframe._window.?._frame, // only an frame with existing content (i.e. a window) can be navigated
     };
+
+    // A javascript: URL is not fetched: its script runs in the target's
+    // document, and only for an initiator of the same origin.
+    // https://html.spec.whatwg.org/multipage/browsing-the-web.html#navigate
+    if (std.mem.startsWith(u8, resolved_url, "javascript:")) {
+        if (target == originator or sameOrigin(originator, target)) {
+            try user_input.runJavascriptUrl(target, resolved_url["javascript:".len..]);
+        }
+        // don't defer this, the caller is responsible for freeing it on error
+        arena.release();
+        return;
+    }
 
     const session = target._session;
 

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!--
+  Navigating to a javascript: URL through Location runs the URL's script in
+  this document, as a queued task, after percent-decoding it. Nothing is
+  fetched and the document stays.
+-->
+
+<script id=href type=module>
+{
+  const state = await testing.async();
+  window.__marker = 'kept';
+  window.__ran = [];
+  location.href = 'javascript:window.__ran.push("href%20ran")';
+  // Queued, not run synchronously.
+  testing.expectEqual([], window.__ran);
+  setTimeout(() => state.resolve(), 10);
+  await state.done(() => {
+    testing.expectEqual(['href ran'], window.__ran);
+    testing.expectEqual('kept', window.__marker);
+    testing.expectEqual(testing.BASE_URL + 'window/location_javascript_url.html', location.href);
+  });
+}
+</script>
+
+<script id=assign type=module>
+{
+  const state = await testing.async();
+  window.__assigned = 0;
+  location.assign('javascript:window.__assigned++');
+  setTimeout(() => state.resolve(), 10);
+  await state.done(() => {
+    testing.expectEqual(1, window.__assigned);
+    testing.expectEqual('kept', window.__marker);
+  });
+}
+</script>
+
+<script id=replace type=module>
+{
+  const state = await testing.async();
+  window.__replaced = 0;
+  location.replace('  JavaScript:void window.__replaced++');
+  setTimeout(() => state.resolve(), 10);
+  await state.done(() => {
+    testing.expectEqual(1, window.__replaced);
+    testing.expectEqual('kept', window.__marker);
+  });
+}
+</script>
