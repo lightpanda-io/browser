@@ -28,6 +28,7 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const Document = @import("../../Document.zig");
 const TreeWalker = @import("../../TreeWalker.zig");
+const ElementInternals = @import("../../ElementInternals.zig");
 const CustomElementDefinition = @import("../../CustomElementDefinition.zig");
 
 const HtmlElement = @import("../Html.zig");
@@ -46,12 +47,18 @@ _disconnected_callback_invoked: bool = false,
 _upgrade_failed: bool = false, // a failed upgrade is never retried
 _upgrade_in_progress: bool = false,
 _upgrade_candidate: bool = false, // listed in a frame's _undefined_custom_elements
+_internals: ?*ElementInternals = null,
 
 pub fn asElement(self: *Custom) *Element {
     return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Custom) *Node {
     return self.asElement().asNode();
+}
+
+pub fn isFormAssociated(self: *const Custom) bool {
+    const definition = self._definition orelse return false;
+    return definition.form_associated;
 }
 
 // Reactions are queued via enqueue* and fired via fireReaction at the outer

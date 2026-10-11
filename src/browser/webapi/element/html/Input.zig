@@ -719,31 +719,7 @@ fn getList(self: *Input, frame: *Frame) ?*HtmlElement.DataList {
 }
 
 pub fn getForm(self: *Input, frame: *Frame) ?*Form {
-    const element = self.asElement();
-
-    // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        // form= resolves in the control's own tree (shadow root or document),
-        // not the calling realm's. @constCast: getElementByIdFromNode wants a
-        // mutable *Node but doesn't mutate it (same idiom as radioGroupIterator);
-        // keeping getForm const avoids a wide validity-path const cascade.
-        if (frame.getElementByIdFromNode(element.asNode(), form_id)) |form_element| {
-            return form_element.is(Form);
-        }
-        // form attribute present but invalid - no form owner
-        return null;
-    }
-
-    // No form attribute - traverse ancestors looking for a <form>
-    var node = element.asConstNode()._parent;
-    while (node) |n| {
-        if (n.is(Element.Html.Form)) |form| {
-            return form;
-        }
-        node = n._parent;
-    }
-
-    return null;
+    return Form.ownerOf(self.asElement(), frame);
 }
 
 // Form submission attribute overrides

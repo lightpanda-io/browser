@@ -779,6 +779,10 @@ pub fn hasAttributeInterned(self: *const Element, comptime name: []const u8) boo
 pub fn hasDisabledConcept(self: *const Element) bool {
     return switch (self.getTag()) {
         .button, .input, .select, .textarea, .optgroup, .option, .fieldset => true,
+        .custom => {
+            const custom = @constCast(self).is(Html.Custom) orelse return false;
+            return custom.isFormAssociated();
+        },
         else => false,
     };
 }
@@ -925,6 +929,10 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
     }
 
     const shadow_root = try ShadowRoot.init(self, opts, frame);
+    shadow_root._available_to_internals = opts.declarative or blk: {
+        const custom = self.is(Html.Custom) orelse break :blk false;
+        break :blk custom._definition != null;
+    };
     const page = frame.page;
     try page.element_shadow_roots.put(page.arena, self, shadow_root);
     self._flags.shadow_host = true;
