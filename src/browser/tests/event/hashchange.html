@@ -114,3 +114,34 @@
   });
 }
 </script>
+
+<script id=popStateFiresOnFragmentNavigation type=module>
+{
+  // A fragment navigation fires popstate synchronously, with the new entry's
+  // (null) state, before the assignment returns; hashchange follows in a
+  // queued task.
+  const state = await testing.async();
+  const log = [];
+  const onpop = (e) => log.push(['popstate', e.state, location.hash]);
+  const onhash = (e) => {
+    if (!e.newURL.endsWith('#popstate-check')) return;
+    log.push(['hashchange']);
+    state.resolve();
+  };
+  window.addEventListener('hashchange', onhash);
+
+  window.addEventListener('popstate', onpop);
+  location.hash = '#popstate-check';
+  log.push(['after assignment']);
+  window.removeEventListener('popstate', onpop);
+
+  await state.done(() => {
+    testing.expectEqual([
+      ['popstate', null, '#popstate-check'],
+      ['after assignment'],
+      ['hashchange'],
+    ], log);
+    window.removeEventListener('hashchange', onhash);
+  });
+}
+</script>
