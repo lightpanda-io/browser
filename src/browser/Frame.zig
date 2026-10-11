@@ -991,9 +991,6 @@ fn recordNavigateTelemetry(self: *Frame, tls: bool) void {
 // as the caller almost certainly doesn't expect the frame to go away during the
 // call. So, we schedule the navigation for the next tick.
 pub fn scheduleNavigation(self: *Frame, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
-    if (self.canScheduleNavigation(std.meta.activeTag(nt)) == false) {
-        return;
-    }
     const arena = try self._session.getArena(.small, "scheduleNavigation");
     errdefer arena.release();
     return self.scheduleNavigationWithArena(arena, request_url, opts, nt);
@@ -1034,6 +1031,14 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         .script => |p| p orelse originator,
         .iframe => |iframe| iframe._window.?._frame, // only an frame with existing content (i.e. a window) can be navigated
     };
+
+    // The competing navigation, if any, is queued on the target, which isn't
+    // the originator when a script navigates another frame.
+    if (target.canScheduleNavigation(std.meta.activeTag(nt)) == false) {
+        // don't defer this, the caller is responsible for freeing it on error
+        arena.release();
+        return;
+    }
 
     // A javascript: URL is not fetched: its script runs in the target's
     // document, and only for an initiator of the same origin.
@@ -3835,10 +3840,6 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         return;
     }
 
-    if (self.canScheduleNavigation(.form) == false) {
-        return;
-    }
-
     const form_element = form.asElement();
 
     const submit_button: ?*Element = blk: {
@@ -3861,6 +3862,10 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         };
         break :blk self.resolveTargetFrame(target_name);
     };
+
+    if (target == .frame and target.frame.canScheduleNavigation(.form) == false) {
+        return;
+    }
 
     if (submit_opts.fire_event) {
         // Prevent a submit on the form from firing while we're submit the form.
@@ -4007,7 +4012,8 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
             // resolved encoding (accept-charset or document charset).
             .plaintext => try arena.allocator().printSentinel("Content-Type: text/plain; charset={s}", .{charset}, 0),
         };
-    } else {
+    } else if (URL.isJavascriptUrl(action) == false) {
+        // A javascript: action is navigated to as is, without the entries.
         action = try URL.concatQueryString(arena.allocator(), action, buf.written());
     }
 

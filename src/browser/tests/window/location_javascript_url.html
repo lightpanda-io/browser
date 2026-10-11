@@ -49,3 +49,32 @@
   });
 }
 </script>
+
+<form id=js_form action="javascript:window.__submitted++"><input name=a value=1></form>
+<script id=form_get type=module>
+{
+  // A GET submission navigates to the action as is, without "?a=1".
+  const state = await testing.async();
+  window.__submitted = 0;
+  document.getElementById('js_form').requestSubmit();
+  setTimeout(() => state.resolve(), 10);
+  await state.done(() => {
+    testing.expectEqual(1, window.__submitted);
+    testing.expectEqual('kept', window.__marker);
+  });
+}
+</script>
+
+<a id=js_download download href="javascript:window.__clicked++">x</a>
+<script id=link_download type=module>
+{
+  const state = await testing.async();
+  window.__clicked = 0;
+  document.getElementById('js_download').click();
+  setTimeout(() => state.resolve(), 10);
+  await state.done(() => {
+    testing.expectEqual(1, window.__clicked);
+    testing.expectEqual('kept', window.__marker);
+  });
+}
+</script>
