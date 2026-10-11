@@ -94,6 +94,7 @@ const EventListeners = struct {
     javascript_dialog_opening: List = .{},
     console_message: List = .{},
     runtime_console_message: List = .{},
+    exception_thrown: List = .{},
     model_context_tool_added: List = .{},
     model_context_tool_removed: List = .{},
     cookie_changed: List = .{},
@@ -125,6 +126,7 @@ const Events = union(enum) {
     javascript_dialog_opening: *const JavascriptDialogOpening,
     console_message: *const ConsoleMessage,
     runtime_console_message: *const ConsoleMessage,
+    exception_thrown: *const ExceptionThrown,
     model_context_tool_added: *const ModelContextToolEvent,
     model_context_tool_removed: *const ModelContextToolEvent,
     cookie_changed: *const CookieChanged,
@@ -368,6 +370,14 @@ pub const ConsoleMessage = struct {
     url: ?[]const u8 = null,
     line: ?u32 = null,
     columns: ?u32 = null,
+};
+
+// An uncaught exception reported to a window and not cancelled by an "error"
+// listener: what Chrome logs as "Uncaught …" and sends as
+// Runtime.exceptionThrown.
+pub const ExceptionThrown = struct {
+    timestamp: u64,
+    value: js.Value,
 };
 
 pub fn init(allocator: Allocator) !*Notification {
