@@ -1081,7 +1081,7 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
     else
         lp.String.wrap(attr_name);
 
-    var case_insensitive = false;
+    var case_insensitive: ?bool = null;
     _ = self.skipSpaces();
 
     // Unexpected EOF closes all open constructs per CSS Syntax, so a

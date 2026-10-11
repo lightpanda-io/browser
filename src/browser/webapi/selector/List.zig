@@ -444,28 +444,31 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
         return false;
     };
 
+    const case_insensitive = attr.case_insensitive orelse
+        (el._namespace == .html and case_insensitive_html_attributes.has(attr.name.str()));
+
     switch (attr.matcher) {
         .presence => return true,
         .exact => |expected| {
-            return if (attr.case_insensitive)
+            return if (case_insensitive)
                 std.ascii.eqlIgnoreCase(value, expected)
             else
                 std.mem.eql(u8, value, expected);
         },
         .substring => |expected| {
-            return if (attr.case_insensitive)
+            return if (case_insensitive)
                 std.ascii.findIgnoreCase(value, expected) != null
             else
                 std.mem.find(u8, value, expected) != null;
         },
         .starts_with => |expected| {
-            return if (attr.case_insensitive)
+            return if (case_insensitive)
                 std.ascii.startsWithIgnoreCase(value, expected)
             else
                 std.mem.startsWith(u8, value, expected);
         },
         .ends_with => |expected| {
-            return if (attr.case_insensitive)
+            return if (case_insensitive)
                 std.ascii.endsWithIgnoreCase(value, expected)
             else
                 std.mem.endsWith(u8, value, expected);
@@ -474,7 +477,7 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
             // Space-separated word match (like class names)
             var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
             while (it.next()) |word| {
-                const same = if (attr.case_insensitive)
+                const same = if (case_insensitive)
                     std.ascii.eqlIgnoreCase(word, expected)
                 else
                     std.mem.eql(u8, word, expected);
@@ -485,7 +488,7 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
         },
         .prefix_dash => |expected| {
             // Matches value or value- prefix (for language codes like en, en-US)
-            if (attr.case_insensitive) {
+            if (case_insensitive) {
                 if (std.ascii.eqlIgnoreCase(value, expected)) return true;
                 if (value.len > expected.len and value[expected.len] == '-') {
                     return std.ascii.eqlIgnoreCase(value[0..expected.len], expected);
@@ -500,6 +503,58 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
         },
     }
 }
+
+// Attributes whose values match ASCII case-insensitively on HTML elements
+// unless the selector has an `s` flag.
+// https://html.spec.whatwg.org/multipage/semantics-other.html#case-sensitivity-of-selectors
+const case_insensitive_html_attributes = std.StaticStringMap(void).initComptime(.{
+    .{ "accept", {} },
+    .{ "accept-charset", {} },
+    .{ "align", {} },
+    .{ "alink", {} },
+    .{ "axis", {} },
+    .{ "bgcolor", {} },
+    .{ "charset", {} },
+    .{ "checked", {} },
+    .{ "clear", {} },
+    .{ "codetype", {} },
+    .{ "color", {} },
+    .{ "compact", {} },
+    .{ "declare", {} },
+    .{ "defer", {} },
+    .{ "dir", {} },
+    .{ "direction", {} },
+    .{ "disabled", {} },
+    .{ "enctype", {} },
+    .{ "face", {} },
+    .{ "frame", {} },
+    .{ "hreflang", {} },
+    .{ "http-equiv", {} },
+    .{ "lang", {} },
+    .{ "language", {} },
+    .{ "link", {} },
+    .{ "media", {} },
+    .{ "method", {} },
+    .{ "multiple", {} },
+    .{ "nohref", {} },
+    .{ "noresize", {} },
+    .{ "noshade", {} },
+    .{ "nowrap", {} },
+    .{ "readonly", {} },
+    .{ "rel", {} },
+    .{ "rev", {} },
+    .{ "rules", {} },
+    .{ "scope", {} },
+    .{ "scrolling", {} },
+    .{ "selected", {} },
+    .{ "shape", {} },
+    .{ "target", {} },
+    .{ "text", {} },
+    .{ "type", {} },
+    .{ "valign", {} },
+    .{ "valuetype", {} },
+    .{ "vlink", {} },
+});
 
 fn attributeContainsWord(value: []const u8, word: []const u8) bool {
     var remaining = value;
