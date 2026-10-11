@@ -742,7 +742,7 @@ pub fn open(self: *Window, url_: ?[]const u8, target_: ?[]const u8, features_: ?
     if (is_named) {
         if (page.findPopupByName(target)) |existing| {
             if (raw_url.len > 0) {
-                try existing.scheduleNavigation(raw_url, .{
+                try frame.scheduleNavigation(raw_url, .{
                     .reason = .script,
                     .kind = .{ .push = null },
                 }, .{ .script = existing });

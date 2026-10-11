@@ -25,6 +25,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 const js = @import("../js/js.zig");
 
@@ -661,7 +662,9 @@ pub fn findClickActivationTarget(target: *Node, bubbles: bool) ?*Node {
     return null;
 }
 
-fn runJavascriptUrl(frame: *Frame, source: []const u8) !void {
+// Runs a javascript: URL's script, `source` being the URL without its scheme.
+// It is percent-decoded first, as the "evaluate a javascript: URL" steps do.
+pub fn runJavascriptUrl(frame: *Frame, source: []const u8) !void {
     const arena = try frame.getArena(.tiny, "javascript-url");
     errdefer arena.release();
 
@@ -669,9 +672,7 @@ fn runJavascriptUrl(frame: *Frame, source: []const u8) !void {
     task.* = .{
         .frame = frame,
         .arena = arena,
-        // TODO: the URL body should be percent-decoded; hrefs written in
-        // markup rarely are.
-        .source = try arena.dupe(u8, source),
+        .source = std.Uri.percentDecodeInPlace(try arena.dupe(u8, source)),
     };
     try frame.js.scheduler.add(task, JavascriptUrlTask.run, 0, .{
         .name = "javascript-url",
@@ -804,32 +805,29 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
         return;
     }
 
-    if (std.mem.startsWith(u8, href, "javascript:")) {
-        // Navigating to a javascript: URL evaluates the script in the
-        // node's frame as a queued task. (A string completion value
-        // would replace the document; we ignore results.)
-        return runJavascriptUrl(target.ownerFrame(frame) orelse return, href["javascript:".len..]);
-    }
+    // The link's document initiates the navigation, which isn't `frame` when
+    // a script clicks a link in another frame.
+    const owner = target.ownerFrame(frame) orelse return;
 
-    if (try element.hasAttribute(comptime .wrap("download"), frame)) {
-        log.debug(.browser, "a.download", .{ .type = frame._type, .url = frame.url });
+    if (URL.isJavascriptUrl(href) == false and try element.hasAttribute(comptime .wrap("download"), frame)) {
+        log.debug(.browser, "a.download", .{ .type = owner._type, .url = owner.url });
         return;
     }
 
     const target_frame = blk: {
         if (target_name.len == 0) {
-            break :blk target.ownerFrame(frame) orelse return;
+            break :blk owner;
         }
-        break :blk switch (frame.resolveTargetFrame(target_name)) {
+        break :blk switch (owner.resolveTargetFrame(target_name)) {
             .frame => |f| f,
             .blank => {
-                _ = try (target.ownerFrame(frame) orelse return).openBlankTarget(element, href);
+                _ = try owner.openBlankTarget(element, href);
                 return;
             },
         };
     };
 
-    try frame.scheduleNavigation(href, .{
+    try owner.scheduleNavigation(href, .{
         .reason = .script,
         .kind = .{ .push = null },
     }, .{ .anchor = target_frame });

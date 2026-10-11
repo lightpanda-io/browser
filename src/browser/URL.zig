@@ -142,6 +142,14 @@ pub fn isAboutBlank(url: []const u8) bool {
     return std.mem.eql(u8, url, "about:blank");
 }
 
+// For an unresolved URL, e.g. an attribute: the URL parser strips leading C0
+// controls and spaces, and the scheme is case-insensitive.
+pub fn isJavascriptUrl(url: []const u8) bool {
+    var i: usize = 0;
+    while (i < url.len and url[i] <= ' ') : (i += 1) {}
+    return std.ascii.startsWithIgnoreCase(url[i..], "javascript:");
+}
+
 pub fn isCompleteHTTPUrl(url: []const u8) bool {
     if (url.len < 3) { // Minimum is "x://"
         return false;
