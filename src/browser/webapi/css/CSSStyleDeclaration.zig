@@ -79,7 +79,8 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 
     // Computed styles must reflect stylesheet rules, not just the element's
     // inline `style=` attribute. Limited to display/visibility — what aria
-    // tree builders (Playwright ariaSnapshot) consult on every element.
+    // tree builders (Playwright ariaSnapshot) consult on every element — and
+    // text-transform, which innerText applies.
     if (self._is_computed) {
         if (self._element) |element| {
             if (element.ownerFrame(frame)) |owner| {
@@ -92,6 +93,9 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
                     if (style_manager.hasVisibilityHiddenInherited(element)) {
                         return "hidden";
                     }
+                } else if (wrapped.eqlSlice("text-transform")) {
+                    // Inherited: the nearest declaration up the tree wins.
+                    return style_manager.textTransform(element).keyword();
                 }
             }
         }

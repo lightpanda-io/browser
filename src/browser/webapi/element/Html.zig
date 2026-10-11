@@ -27,6 +27,7 @@ const StyleManager = @import("../../StyleManager.zig");
 const reflection = @import("reflection.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
+const TextTransform = @import("../../StyleManager.zig").TextTransform;
 const global_event_handlers = @import("../global_event_handlers.zig");
 
 const popover = @import("popover.zig");
@@ -333,7 +334,12 @@ pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !
         else => {},
     }
 
-    var state = InnerTextState{ .writer = writer, .style_manager = style_manager, .preserve = tag == .pre };
+    var state = InnerTextState{
+        .writer = writer,
+        .style_manager = style_manager,
+        .preserve = tag == .pre,
+        .transform = style_manager.textTransform(el),
+    };
     try self.collectInnerText(&state);
 }
 
@@ -1538,6 +1544,9 @@ const InnerTextState = struct {
     // preserve whitespace (pre tag, in the future white-space: pre)
     preserve: bool = false,
 
+    // text-transform of the element whose text is being written
+    transform: TextTransform = .none,
+
     fn requireBreaks(self: *InnerTextState, n: u8) void {
         if (n > self.pending_breaks) {
             self.pending_breaks = n;
@@ -1664,6 +1673,14 @@ fn handleChildElement(
         return;
     }
 
+    // text-transform inherits, so a child's own value covers its subtree only.
+    const parent_transform = state.transform;
+    defer state.transform = parent_transform;
+    const own_transform = state.style_manager.ownTextTransform(el);
+    if (own_transform != .inherit) {
+        state.transform = own_transform;
+    }
+
     switch (innerTextDisplay(he, tag)) {
         // Not rendered: skip the subtree entirely (script/style/metadata/...).
         .skip => {},
@@ -1751,6 +1768,28 @@ fn isAllAsciiWhitespace(s: []const u8) bool {
 }
 
 fn writeText(c: *Node.CData, state: *InnerTextState) !void {
+    // `capitalize` is recognized (getComputedStyle reports it) but not
+    // applied: it needs word-boundary tracking across text runs.
+    if (state.transform != .uppercase and state.transform != .lowercase) {
+        return writeRenderedText(c, state);
+    }
+
+    // Every case mapping we apply keeps the UTF-8 length, so the text is
+    // rendered to a scratch buffer and mapped in place.
+    var scratch: std.Io.Writer.Allocating = .init(state.style_manager.frame.local_arena);
+    defer scratch.deinit();
+    const out = state.writer;
+    state.writer = &scratch.writer;
+    const rendered = writeRenderedText(c, state);
+    state.writer = out;
+    try rendered;
+
+    const text = scratch.written();
+    applyTextTransform(text, state.transform);
+    try out.writeAll(text);
+}
+
+fn writeRenderedText(c: *Node.CData, state: *InnerTextState) !void {
     const writer = state.writer;
 
     const s = c.getData().str();
@@ -1790,6 +1829,62 @@ fn writeText(c: *Node.CData, state: *InnerTextState) !void {
     state.pre_w = try c.render(writer, .{ .trim_left = state.trim_left });
     state.wrote_any = true;
     state.trim_left = state.pre_w;
+}
+
+// Maps `text` in place for `uppercase` / `lowercase`.
+fn applyTextTransform(text: []u8, transform: TextTransform) void {
+    var i: usize = 0;
+    while (i < text.len) {
+        const len = std.unicode.utf8ByteSequenceLength(text[i]) catch 1;
+        if (i + len > text.len) {
+            break;
+        }
+        const cp = std.unicode.utf8Decode(text[i..][0..len]) catch {
+            i += 1;
+            continue;
+        };
+        const mapped = switch (transform) {
+            .uppercase => upperCodepoint(cp),
+            .lowercase => lowerCodepoint(cp),
+            else => cp,
+        };
+        if (mapped != cp) {
+            _ = std.unicode.utf8Encode(mapped, text[i..][0..len]) catch unreachable;
+        }
+        i += len;
+    }
+}
+
+// Simple case mappings that keep the UTF-8 length: Latin-1, Latin
+// Extended-A, basic Greek and Cyrillic. Other scripts pass through, as do
+// mappings that change the length (ß -> SS, ı -> I, İ -> i̇).
+fn upperCodepoint(cp: u21) u21 {
+    return switch (cp) {
+        'a'...'z' => cp - 0x20,
+        0xE0...0xF6, 0xF8...0xFE => cp - 0x20,
+        0xFF => 0x178,
+        0x101...0x12F, 0x133...0x137, 0x14B...0x177 => if (cp % 2 == 1) cp - 1 else cp,
+        0x13A...0x148, 0x17A...0x17E => if (cp % 2 == 0) cp - 1 else cp,
+        0x3B1...0x3C1, 0x3C3...0x3C9 => cp - 0x20,
+        0x3C2 => 0x3A3, // final sigma
+        0x430...0x44F => cp - 0x20,
+        0x450...0x45F => cp - 0x50,
+        else => cp,
+    };
+}
+
+fn lowerCodepoint(cp: u21) u21 {
+    return switch (cp) {
+        'A'...'Z' => cp + 0x20,
+        0xC0...0xD6, 0xD8...0xDE => cp + 0x20,
+        0x178 => 0xFF,
+        0x100...0x12E, 0x132...0x136, 0x14A...0x176 => if (cp % 2 == 0) cp + 1 else cp,
+        0x139...0x147, 0x179...0x17D => if (cp % 2 == 1) cp + 1 else cp,
+        0x391...0x3A1, 0x3A3...0x3A9 => cp + 0x20,
+        0x410...0x42F => cp + 0x20,
+        0x400...0x40F => cp + 0x50,
+        else => cp,
+    };
 }
 
 fn mergeTextNodes(left_node: *Node, right_node: *Node, frame: *Frame) !bool {
