@@ -476,6 +476,17 @@ pub fn navigateInner(
         },
     }
 
+    // Like Chrome, every same-document navigation other than pushState and
+    // replaceState (which History reports itself) is a fragment one,
+    // traversals included.
+    if (is_same_document and kind != .reload) {
+        frame._session.notification.dispatch(.frame_navigated_within_document, &.{
+            .url = new_url,
+            .frame_id = frame._frame_id,
+            .navigation_type = .fragment,
+        });
+    }
+
     if (is_same_document and is_same_url and !std.mem.eql(u8, old_url, new_url)) {
         try frame.queueHashChange(old_url, new_url);
     }

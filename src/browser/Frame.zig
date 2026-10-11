@@ -1064,6 +1064,12 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
         }
 
+        session.notification.dispatch(.frame_navigated_within_document, &.{
+            .url = target.url,
+            .frame_id = target._frame_id,
+            .navigation_type = .fragment,
+        });
+
         // `:target` matches off the fragment, which just changed.
         target.styleChanged();
 

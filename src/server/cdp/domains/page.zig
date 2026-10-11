@@ -2920,3 +2920,56 @@ test "cdp.frame: history.pushState emits Page.navigatedWithinDocument" {
         .url = "http://127.0.0.1:9582/next",
     }, .{});
 }
+
+test "cdp.frame: a fragment navigation emits Page.navigatedWithinDocument" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("location.hash = 'a'", null);
+    }
+
+    // Chrome reports location.hash (and same-document anchor clicks) as a
+    // "fragment" navigation.
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "fragment",
+        .url = "http://127.0.0.1:9582/src/browser/tests/hi.html#a",
+    }, .{});
+}
+
+test "cdp.frame: a same-document history traversal emits Page.navigatedWithinDocument" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("history.pushState({}, '', '/next'); history.back()", null);
+    }
+
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "historyApi",
+        .url = "http://127.0.0.1:9582/next",
+    }, .{});
+    // Going back to the pushState entry stays in the document. Chrome reports
+    // a traversal as "fragment" whatever the entry's URL.
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "fragment",
+        .url = "http://127.0.0.1:9582/src/browser/tests/hi.html",
+    }, .{});
+}
