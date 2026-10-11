@@ -305,14 +305,9 @@ fn findPortSeparator(host: []const u8) ?usize {
 }
 
 pub fn getSearch(raw: [:0]const u8) []const u8 {
-    const pos = std.mem.findScalarPos(u8, raw, 0, '?') orelse return "";
-    const query_part = raw[pos..];
-
-    if (std.mem.findScalarPos(u8, query_part, 0, '#')) |fragment_start| {
-        return query_part[0..fragment_start];
-    }
-
-    return query_part;
+    const end = std.mem.findScalar(u8, raw, '#') orelse raw.len;
+    const pos = std.mem.findScalar(u8, raw[0..end], '?') orelse return "";
+    return raw[pos..end];
 }
 
 pub fn getHash(raw: [:0]const u8) []const u8 {
@@ -1539,6 +1534,13 @@ test "URL: getPort" {
     // IPv6 without port - colons inside brackets must not be treated as port separator
     try testing.expectEqualSlices(u8, "", getPort("http://[::1]/path"));
     try testing.expectEqualSlices(u8, "", getPort("https://[2001:db8::1]/"));
+}
+
+test "URL: getSearch ignores a '?' in the fragment" {
+    try testing.expectEqualSlices(u8, "", getSearch("https://example.com/app#/item?id=5"));
+    try testing.expectEqualSlices(u8, "?q=1", getSearch("https://example.com/app?q=1#/item?id=5"));
+    try testing.expectEqualSlices(u8, "?q=1", getSearch("https://example.com/app?q=1"));
+    try testing.expectEqualSlices(u8, "", getSearch("https://example.com/app"));
 }
 
 test "URL: setPathname percent-encodes" {
