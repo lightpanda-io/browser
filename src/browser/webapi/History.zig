@@ -116,12 +116,19 @@ fn goInner(delta: i32, frame: *Frame) !void {
     _ = try frame._session.navigation.navigateInner(entry._url, .{ .traverse = index }, frame);
 
     if (same_document) {
-        const target = frame.window.asEventTarget();
-        if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
-            const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
-            try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
-        }
+        try firePopState(frame, entry._state.value);
         // hashchange is queued by navigateInner.
+    }
+}
+
+// Fires popstate at the frame's window, synchronously: a same-document
+// traversal or a fragment navigation updating the document for its new
+// history entry. `state` is the entry's serialized state.
+pub fn firePopState(frame: *Frame, state: ?[]const u8) !void {
+    const target = frame.window.asEventTarget();
+    if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
+        const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = state }, frame)).asEvent();
+        try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
     }
 }
 
