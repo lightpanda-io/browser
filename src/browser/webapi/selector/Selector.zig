@@ -273,8 +273,15 @@ pub const Attribute = struct {
     // foreign (SVG/MathML) elements, whose attributes are stored unnormalized.
     original_name: String,
     matcher: AttributeMatcher,
-    // From an explicit `i` or `s` flag; null when the selector has none.
-    case_insensitive: ?bool,
+    value_case: AttributeValueCase,
+};
+
+pub const AttributeValueCase = enum {
+    sensitive,
+    insensitive,
+    // No flag on an attribute whose value HTML compares without case: case
+    // insensitive on HTML elements only.
+    html_legacy,
 };
 
 pub const AttributeMatcher = union(enum) {
