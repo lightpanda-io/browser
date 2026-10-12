@@ -1294,7 +1294,12 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     // we can cause issues for the script (e.g. we respond with a 200 from our
     // cache, the server repaints the page because it didn't get the correct 304
     // that the upstream would have returned).
-    if (transfer.findRequestHeader("If-None-Match") != null or transfer.findRequestHeader("If-Modified-Since") != null) {
+    if (transfer.findRequestHeader("If-None-Match") != null or
+        transfer.findRequestHeader("If-Modified-Since") != null or
+        transfer.findRequestHeader("If-Unmodified-Since") != null or
+        transfer.findRequestHeader("If-Match") != null or
+        transfer.findRequestHeader("If-Range") != null)
+    {
         return false;
     }
 
