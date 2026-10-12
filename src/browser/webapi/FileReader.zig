@@ -72,7 +72,7 @@ pub fn init(exec: *Execution) !*FileReader {
 }
 
 pub fn deinit(self: *FileReader, page: *Page) void {
-    page.event_listeners.removeTarget(self.asEventTarget());
+    page.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 

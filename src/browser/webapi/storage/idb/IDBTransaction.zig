@@ -196,9 +196,9 @@ pub fn deinit(self: *IDBTransaction, page: *Page) void {
         slot.release();
     }
     for (self._requests.items) |request| {
-        page.event_listeners.removeTarget(request.asEventTarget());
+        page.removeTarget(request.asEventTarget());
     }
-    page.event_listeners.removeTarget(self.asEventTarget());
+    page.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 

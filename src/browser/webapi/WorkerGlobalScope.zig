@@ -96,6 +96,9 @@ _loader_id: u32,
 // Event management for non-DOM targets in worker context
 _event_manager: EventManagerBase,
 
+// Links in page.worker_scopes
+_page_node: std.DoublyLinkedList.Node = .{},
+
 // Handles module imports (static + dynamic). No parser integration since
 // workers don't have <script> tags.
 _script_manager: ScriptManagerBase,
@@ -202,6 +205,7 @@ pub fn init(
     // features like BroadcastChannel can reach across the page/worker boundary.
     try self.js.setOrigin(self.origin);
 
+    self.page.worker_scopes.append(&self._page_node);
     return leaf;
 }
 
@@ -210,6 +214,7 @@ pub fn deinit(self: *WorkerGlobalScope) void {
     const session = page.session;
     const browser = session.browser;
 
+    page.worker_scopes.remove(&self._page_node);
     browser.http_client.abortOwner(&self._http_owner);
 
     // Close this worker's MessagePorts before the context dies: this severs

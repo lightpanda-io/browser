@@ -131,7 +131,7 @@ pub fn deinit(self: *EventSource, page: *Page) void {
         transfer.cancel();
     }
 
-    page.event_listeners.removeTarget(self.asEventTarget());
+    page.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 

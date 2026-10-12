@@ -145,9 +145,9 @@ pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
     self.clearResponse(page);
 
     if (self._upload) |upload| {
-        page.event_listeners.removeTarget(upload.asEventTarget());
+        page.removeTarget(upload.asEventTarget());
     }
-    page.event_listeners.removeTarget(self.asEventTarget());
+    page.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
@@ -947,6 +947,54 @@ test "WebApi: XHR listeners are dropped when the XHR is freed" {
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
+    defer ls.deinit();
+    const fired = try ls.local.exec(
+        \\for (let i = 0; i < 200; i++) {
+        \\  new XMLHttpRequest().dispatchEvent(new Event('foo'));
+        \\  new XMLHttpRequest().upload.dispatchEvent(new Event('foo'));
+        \\  new XMLHttpRequest().dispatchEvent(new Event('load'));
+        \\  new XMLHttpRequest().upload.dispatchEvent(new Event('load'));
+        \\}
+        \\fired;
+    , null);
+    try testing.expectEqual(0, try fired.toF64());
+}
+
+test "WebApi: worker XHR listeners are dropped when the XHR is freed" {
+    // Same as above, but in a worker, whose listeners live in its own store.
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    // Navigate the frame first to avoid CORS blocking request for the worker.
+    try frame.navigate("http://localhost:9582/", .{});
+    try testing.waitForFrame();
+
+    const worker = try @import("../Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", null, frame);
+    const ctx = worker._worker_scope._proto.js;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        ctx.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec(
+            \\globalThis.fired = 0;
+            \\for (let i = 0; i < 200; i++) {
+            \\  new XMLHttpRequest().addEventListener('foo', () => fired++);
+            \\  new XMLHttpRequest().upload.addEventListener('foo', () => fired++);
+            \\  new XMLHttpRequest().onload = () => fired++;
+            \\  new XMLHttpRequest().upload.onload = () => fired++;
+            \\}
+        , null);
+    }
+
+    // Not env.memoryPressureNotification: it skips small heaps.
+    const isolate = testing.test_session.browser.env.isolate;
+    for (0..3) |_| {
+        isolate.memoryPressureNotification(.critical);
+    }
+
+    var ls: js.Local.Scope = undefined;
+    ctx.localScope(&ls);
     defer ls.deinit();
     const fired = try ls.local.exec(
         \\for (let i = 0; i < 200; i++) {
