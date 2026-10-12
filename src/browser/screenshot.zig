@@ -984,7 +984,7 @@ const Builder = struct {
                 }
                 return;
             },
-            .anchor => {
+            .a => {
                 const href = el.getAttributeInterned("href");
                 const label = el.getAttributeInterned("aria-label") orelse el.getAttributeInterned("title");
                 const info = RenderTree.analyzeContent(el.asNode(), self.frame);

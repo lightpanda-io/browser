@@ -45,14 +45,8 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
 
     // Parse and validate extends option
     const extends_tag: ?Element.Tag = if (options.extends) |extends_name| blk: {
-        const tag = std.meta.stringToEnum(Element.Tag, extends_name) orelse return error.NotSupported;
-
-        // Can't extend custom elements
-        if (tag == .custom) {
-            return error.NotSupported;
-        }
-
-        break :blk tag;
+        // null for custom elements, unknown names and Tag groupings (heading, media)
+        break :blk Element.Tag.parseForMatch(extends_name) orelse return error.NotSupported;
     } else null;
 
     // Do not use getOrPut here to hold the GetOrPut entry until we need to write

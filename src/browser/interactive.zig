@@ -318,7 +318,7 @@ pub fn classifyInteractivity(
     // 1. Native interactive by tag
     switch (el.getTag()) {
         .button, .summary, .details, .select, .textarea => return .native,
-        .anchor, .area => {
+        .a, .area => {
             if (el.getAttributeInterned("href") != null) return .native;
         },
         .input => {

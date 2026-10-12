@@ -79,7 +79,7 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                         Element.Html.Quote,
                         namespace,
                         attribute_iterator,
-                        .{ ._tag_name = comptime .wrap("q"), ._tag = .quote },
+                        .{ ._tag_name = comptime .wrap("q"), ._tag = .q },
                     ),
                     's' => return createHtmlElementT(
                         document,

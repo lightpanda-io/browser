@@ -285,7 +285,7 @@ const Context = struct {
                 self.state.last_char_was_newline = false;
                 return;
             },
-            .anchor => {
+            .a => {
                 const frame = self.frame;
                 // Without href, <a> is a placeholder, not a hyperlink.
                 const href_raw = el.getAttributeInterned("href") orelse {
