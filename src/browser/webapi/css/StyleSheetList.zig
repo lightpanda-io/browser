@@ -26,7 +26,7 @@ pub fn item(self: *const StyleSheetList, index: usize) ?*CSSStyleSheet {
 }
 
 pub fn add(self: *StyleSheetList, sheet: *CSSStyleSheet, frame: *Frame) !void {
-    try self._sheets.append(frame.arena, sheet);
+    try self._sheets.append(frame.page_arena, sheet);
 }
 
 pub fn remove(self: *StyleSheetList, sheet: *CSSStyleSheet) void {

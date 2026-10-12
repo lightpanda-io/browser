@@ -109,11 +109,13 @@ fn goInner(delta: i32, frame: *Frame) !void {
 
     const index = @as(usize, @intCast(index_s));
     const entry = frame._session.navigation._entries.items[index];
+    // popstate fires on the document that stays; a traversal to another
+    // document replaces this one instead.
+    const same_document = entry.sameDocument(frame);
 
     _ = try frame._session.navigation.navigateInner(entry._url, .{ .traverse = index }, frame);
 
-    const url = entry._url orelse return;
-    if (frame.isSameOrigin(url)) {
+    if (same_document) {
         const target = frame.window.asEventTarget();
         if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
             const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
@@ -158,4 +160,5 @@ const testing = @import("../../testing.zig");
 test "WebApi: History" {
     try testing.htmlRunner("history.html", .{});
     try testing.htmlRunner("history_url_update.html", .{});
+    try testing.htmlRunner("history_traverse.html", .{});
 }

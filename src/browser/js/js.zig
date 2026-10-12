@@ -495,10 +495,14 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
 ) callconv(.c) [*c]const u8 {
     _ = v8_context;
 
-    // We _must_ include a non-null description in order for the subtype value
-    // to be included. Besides that, I don't know if the value has any meaning
+    // Without a description, V8 drops the subtype, except for "error": it
+    // then describes the value itself ("name: message", plus the stack).
     const external_entry = Inspector.getTaggedOpaque(c_value) orelse return null;
-    return if (external_entry.subtype == null) null else "";
+    const subtype = external_entry.subtype orelse return null;
+    if (subtype == .@"error") {
+        return null;
+    }
+    return "";
 }
 
 test "TaggedAnyOpaque" {

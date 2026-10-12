@@ -47,14 +47,14 @@ pub fn initGuarded(opts_: ?InitOpts, guard: Guard, exec: *const Execution) !*Hea
     var list = blk: {
         const opts = opts_ orelse break :blk KeyValueList.init();
         switch (opts) {
-            .obj => |obj| break :blk try KeyValueList.copy(exec.arena, obj._list),
+            .obj => |obj| break :blk try KeyValueList.copy(exec.page_arena, obj._list),
             .js_obj => |js_obj| {
-                var list = try KeyValueList.fromJsObject(exec.arena, js_obj, normalizeHeaderName, exec.buf);
+                var list = try KeyValueList.fromJsObject(exec.page_arena, js_obj, normalizeHeaderName, exec.buf);
                 try validateAndNormalize(&list);
                 break :blk list;
             },
             .strings => |kvs| {
-                var list = try KeyValueList.fromArray(exec.arena, kvs, normalizeHeaderName, exec.buf);
+                var list = try KeyValueList.fromArray(exec.page_arena, kvs, normalizeHeaderName, exec.buf);
                 try validateAndNormalize(&list);
                 break :blk list;
             },
@@ -237,7 +237,7 @@ pub fn append(self: *Headers, name: []const u8, value: []const u8, exec: *const 
     if (try self.checkGuard(normalized_name, combined) == .ignore) {
         return;
     }
-    try self._list.append(exec.arena, normalized_name, normalized_value);
+    try self._list.append(exec.page_arena, normalized_name, normalized_value);
 }
 
 pub fn delete(self: *Headers, name: []const u8, exec: *const Execution) !void {
@@ -276,7 +276,7 @@ pub fn set(self: *Headers, name: []const u8, value_: []const u8, exec: *const Ex
     if (try self.checkGuard(normalized_name, value) == .ignore) {
         return;
     }
-    try self._list.set(exec.arena, normalized_name, value);
+    try self._list.set(exec.page_arena, normalized_name, value);
 }
 
 pub fn keys(self: *Headers, exec: *const js.Execution) !*KeyIterator {

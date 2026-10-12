@@ -121,11 +121,10 @@
 
 <script id="constructor_self_insert_foster_parent">
 {
-    // Regression: custom element constructor inserting itself (via appendChild) during
-    // innerHTML parsing. When the element is not valid table content, the HTML5 parser
-    // foster-parents it before the <table> via appendBeforeSiblingCallback. That callback
-    // previously didn't check for an existing _parent before calling insertNodeRelative,
-    // causing the "Page.insertNodeRelative parent" assertion to fire.
+    // Regression: when innerHTML ran constructors synchronously, a constructor
+    // inserting itself left the element with a parent before the parser
+    // foster-parented it, and the "Page.insertNodeRelative parent" assertion
+    // fired. The fragment parser now upgrades the element after insertion.
     let constructorCalled = 0;
     let container;
 
@@ -133,8 +132,6 @@
         constructor() {
             super();
             constructorCalled++;
-            // Insert self into container so _parent is set before the parser
-            // officially places this element via appendBeforeSiblingCallback.
             if (container) container.appendChild(this);
         }
     }
@@ -142,17 +139,12 @@
 
     container = document.createElement('div');
     // ctor-self-insert is not valid table content; the parser foster-parents it
-    // before the <table>, calling appendBeforeSiblingCallback(sibling=table, node=element).
-    // At that point the element already has _parent=container from the constructor.
-    // TODO: we construct synchronously during fragment parsing, so the parent
-    // fails the create-an-element post-conditions. Per spec (and Firefox) the
-    // element is upgraded after insertion instead, and nothing is reported.
-    const errors = testing.withReportedErrors(() => {
-        container.innerHTML = '<table><ctor-self-insert></ctor-self-insert></table>';
-    });
-    testing.expectEqual(['NotSupportedError'], errors.map((e) => e.name));
+    // before the <table>, then the upgrade moves it to the end.
+    container.innerHTML = '<table><ctor-self-insert></ctor-self-insert></table>';
 
     testing.expectEqual(1, constructorCalled);
+    testing.expectEqual(true, container.firstElementChild instanceof HTMLTableElement);
+    testing.expectEqual(true, container.lastElementChild instanceof CtorSelfInsert);
 }
 </script>
 

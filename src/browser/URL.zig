@@ -138,6 +138,18 @@ fn shouldPercentEncode(c: u8, comptime encode_set: EncodeSet) bool {
     };
 }
 
+pub fn isAboutBlank(url: []const u8) bool {
+    return std.mem.eql(u8, url, "about:blank");
+}
+
+// For an unresolved URL, e.g. an attribute: the URL parser strips leading C0
+// controls and spaces, and the scheme is case-insensitive.
+pub fn isJavascriptUrl(url: []const u8) bool {
+    var i: usize = 0;
+    while (i < url.len and url[i] <= ' ') : (i += 1) {}
+    return std.ascii.startsWithIgnoreCase(url[i..], "javascript:");
+}
+
 pub fn isCompleteHTTPUrl(url: []const u8) bool {
     if (url.len < 3) { // Minimum is "x://"
         return false;
@@ -293,14 +305,9 @@ fn findPortSeparator(host: []const u8) ?usize {
 }
 
 pub fn getSearch(raw: [:0]const u8) []const u8 {
-    const pos = std.mem.findScalarPos(u8, raw, 0, '?') orelse return "";
-    const query_part = raw[pos..];
-
-    if (std.mem.findScalarPos(u8, query_part, 0, '#')) |fragment_start| {
-        return query_part[0..fragment_start];
-    }
-
-    return query_part;
+    const end = std.mem.findScalar(u8, raw, '#') orelse raw.len;
+    const pos = std.mem.findScalar(u8, raw[0..end], '?') orelse return "";
+    return raw[pos..end];
 }
 
 pub fn getHash(raw: [:0]const u8) []const u8 {
@@ -724,6 +731,16 @@ test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(false, isCompleteHTTPUrl("/example.com"));
     try testing.expectEqual(false, isCompleteHTTPUrl("../../about"));
     try testing.expectEqual(false, isCompleteHTTPUrl("about"));
+}
+
+test "URL: isAboutBlank" {
+    try testing.expectEqual(true, isAboutBlank("about:blank"));
+    try testing.expectEqual(false, isAboutBlank("about:srcdoc"));
+    try testing.expectEqual(false, isAboutBlank("about:"));
+    try testing.expectEqual(false, isAboutBlank(""));
+    try testing.expectEqual(false, isAboutBlank("about"));
+    try testing.expectEqual(false, isAboutBlank("http://example.com/about:blank"));
+    try testing.expectEqual(false, isAboutBlank("https://example.com/blob:x"));
 }
 
 test "URL: resolve regression (#1093)" {
@@ -1517,6 +1534,13 @@ test "URL: getPort" {
     // IPv6 without port - colons inside brackets must not be treated as port separator
     try testing.expectEqualSlices(u8, "", getPort("http://[::1]/path"));
     try testing.expectEqualSlices(u8, "", getPort("https://[2001:db8::1]/"));
+}
+
+test "URL: getSearch ignores a '?' in the fragment" {
+    try testing.expectEqualSlices(u8, "", getSearch("https://example.com/app#/item?id=5"));
+    try testing.expectEqualSlices(u8, "?q=1", getSearch("https://example.com/app?q=1#/item?id=5"));
+    try testing.expectEqualSlices(u8, "?q=1", getSearch("https://example.com/app?q=1"));
+    try testing.expectEqualSlices(u8, "", getSearch("https://example.com/app"));
 }
 
 test "URL: setPathname percent-encodes" {

@@ -103,7 +103,7 @@ fn request(
     errdefer exec._factory.destroy(req);
 
     if (watch_id != 0) {
-        try self._watches.append(exec.arena, req);
+        try self._watches.append(exec.page_arena, req);
     }
     errdefer if (watch_id != 0) {
         _ = self._watches.pop();

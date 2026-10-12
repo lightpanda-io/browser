@@ -117,13 +117,13 @@ pub fn dirxml(values: []js.Value, exec: *js.Execution) void {
 pub fn count(label_: ?[]const u8, exec: *js.Execution) !void {
     const self = exec.console();
     const label = label_ orelse "default";
-    const gop = try self._counts.getOrPut(exec.arena, label);
+    const gop = try self._counts.getOrPut(exec.page_arena, label);
 
     var current: u64 = 0;
     if (gop.found_existing) {
         current = gop.value_ptr.*;
     } else {
-        gop.key_ptr.* = try exec.arena.dupe(u8, label);
+        gop.key_ptr.* = try exec.page_arena.dupe(u8, label);
     }
 
     const c = current + 1;
@@ -145,13 +145,13 @@ pub fn countReset(label_: ?[]const u8, exec: *js.Execution) !void {
 pub fn time(label_: ?[]const u8, exec: *js.Execution) !void {
     const self = exec.console();
     const label = label_ orelse "default";
-    const gop = try self._timers.getOrPut(exec.arena, label);
+    const gop = try self._timers.getOrPut(exec.page_arena, label);
 
     if (gop.found_existing) {
         logger.info(.js, "console.time", .{ .label = label, .err = "duplicate timer" });
         return;
     }
-    gop.key_ptr.* = try exec.arena.dupe(u8, label);
+    gop.key_ptr.* = try exec.page_arena.dupe(u8, label);
     gop.value_ptr.* = lp.datetime.timestamp(.boot);
 }
 

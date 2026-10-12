@@ -18,6 +18,11 @@
 
 const std = @import("std");
 
+comptime {
+    // Strong __clear_cache overriding compiler_rt's broken aarch64 one
+    _ = @import("clear_cache.zig");
+}
+
 pub const log = @import("log.zig");
 pub const mcp = @import("mcp.zig");
 pub const App = @import("App.zig");

@@ -106,14 +106,14 @@ pub fn unregisterMutationObserver(frame: *Frame, observer: *MutationObserver) vo
 
 pub fn registerIntersectionObserver(frame: *Frame, observer: *IntersectionObserver) !void {
     observer.acquireRef();
-    try frame._intersection.observers.append(frame.arena, observer);
+    try frame._intersection.observers.append(frame.page_arena, observer);
 }
 
 pub fn unregisterIntersectionObserver(frame: *Frame, observer: *IntersectionObserver) void {
     for (frame._intersection.observers.items, 0..) |obs, i| {
         if (obs == observer) {
             observer.releaseRef(frame.page);
-            _ = frame._intersection.observers.swapRemove(i);
+            _ = frame._intersection.observers.orderedRemove(i);
             return;
         }
     }
@@ -121,14 +121,14 @@ pub fn unregisterIntersectionObserver(frame: *Frame, observer: *IntersectionObse
 
 pub fn registerResizeObserver(frame: *Frame, observer: *ResizeObserver) !void {
     observer.acquireRef();
-    try frame._resize.observers.append(frame.arena, observer);
+    try frame._resize.observers.append(frame.page_arena, observer);
 }
 
 pub fn unregisterResizeObserver(frame: *Frame, observer: *ResizeObserver) void {
     for (frame._resize.observers.items, 0..) |obs, i| {
         if (obs == observer) {
             observer.releaseRef(frame.page);
-            _ = frame._resize.observers.swapRemove(i);
+            _ = frame._resize.observers.orderedRemove(i);
             return;
         }
     }
@@ -282,14 +282,21 @@ pub fn deliverResizes(frame: *Frame) void {
         return;
     }
 
-    // Iterate backwards so an observer disconnecting during its callback is safe.
-    var i = frame._resize.observers.items.len;
-    while (i > 0) {
-        i -= 1;
-        if (i >= frame._resize.observers.items.len) {
-            continue;
-        }
-        const observer = frame._resize.observers.items[i];
+    // snapshot and acquireRef because a the callback for observer A could
+    // disconnect, which would then wipe our reference from under us.
+    const observers = frame.call_arena.dupe(*ResizeObserver, frame._resize.observers.items) catch |err| {
+        log.err(.frame, "deliverResizes.snapshot", .{ .err = err, .type = frame._type, .url = frame.url });
+        return;
+    };
+
+    for (observers) |observer| {
+        observer.acquireRef();
+    }
+    defer for (observers) |observer| {
+        observer.releaseRef(frame.page);
+    };
+
+    for (observers) |observer| {
         observer.deliverEntries(frame) catch |err| {
             log.debug(.frame, "frame.deliverResizes", .{ .err = err, .type = frame._type, .url = frame.url });
             if (err == error.ExecutionTerminated) {
@@ -369,14 +376,20 @@ pub fn deliverIntersections(frame: *Frame) void {
         return;
     }
 
-    // Iterate backwards so an observer disconnecting during its callback is safe.
-    var i = frame._intersection.observers.items.len;
-    while (i > 0) {
-        i -= 1;
-        if (i >= frame._intersection.observers.items.len) {
-            continue;
-        }
-        const observer = frame._intersection.observers.items[i];
+    // snapshot and acquireRef because a the callback for observer A could
+    // disconnect, which would then wipe our reference from under us.
+    const observers = frame.call_arena.dupe(*IntersectionObserver, frame._intersection.observers.items) catch |err| {
+        log.err(.frame, "deliverIntersections.snapshot", .{ .err = err, .type = frame._type, .url = frame.url });
+        return;
+    };
+    for (observers) |observer| {
+        observer.acquireRef();
+    }
+    defer for (observers) |observer| {
+        observer.releaseRef(frame.page);
+    };
+
+    for (observers) |observer| {
         observer.deliverEntries(frame) catch |err| {
             log.debug(.frame, "frame.deliverIntersections", .{ .err = err, .type = frame._type, .url = frame.url });
             if (err == error.ExecutionTerminated) {
@@ -442,6 +455,9 @@ pub fn deliverMutations(frame: *Frame) void {
     // we started the delivery. So we need to snapshot this. Any observers which
     // get records during this phase will only be processed on the next microtask tick.
     var notify: std.ArrayList(*MutationObserver) = .empty;
+    defer for (notify.items) |observer| {
+        observer.releaseRef(frame.page);
+    };
     var it: ?*std.DoublyLinkedList.Node = frame._mutation.observers.first;
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
@@ -452,6 +468,7 @@ pub fn deliverMutations(frame: *Frame) void {
             log.err(.frame, "deliverMutations.notify", .{ .err = err, .type = frame._type, .url = frame.url });
             break;
         };
+        observer.acquireRef();
     }
 
     for (notify.items) |observer| {

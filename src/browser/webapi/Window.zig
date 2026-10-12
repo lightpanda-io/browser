@@ -171,7 +171,7 @@ pub fn getName(self: *const Window) []const u8 {
 
 pub fn setName(self: *Window, name: []const u8, frame: *Frame) !void {
     // Store in the Page's frame arena so the slice outlives any call_arena.
-    self._name = try frame.arena.dupe(u8, name);
+    self._name = try frame.page_arena.dupe(u8, name);
 }
 
 pub fn getTop(self: *Window, frame: *Frame) Access {
@@ -459,7 +459,7 @@ fn getOnClick(self: *Window) ?js.Function.Global {
 
 fn setOnClick(self: *Window, setter: ?FunctionSetter) !void {
     if (getFunctionFromSetter(setter)) |cb| {
-        try self._frame._event_target_attr_listeners.put(self._frame.arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
+        try self._frame._event_target_attr_listeners.put(self._frame.page_arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
     } else {
         _ = self._frame._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onclick });
     }
@@ -592,7 +592,16 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
         return;
     }
 
+    // Reporting calls back into Zig (e.g. a DOMException's message accessor).
+    // At call_depth 0 that call resets the call_arena, which the code reporting
+    // the error may still be using (e.g. a dispatch's snapshot of its targets).
+    const call_depth = frame.js.call_depth;
+    frame.js.call_depth = call_depth + 1;
+    defer frame.js.call_depth = call_depth;
+
     frame.page.recordJsError(error.JsException);
+
+    const location = err.errorLocation(frame.call_arena) catch js.Value.ErrorLocation{};
 
     const target = self.asEventTarget();
     if (!frame._event_manager.hasDirectListeners(target, "error", self._on_error)) {
@@ -601,6 +610,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
                 .message = err.toStringSlice() catch "Unknown error",
             });
         }
+        notifyExceptionThrown(err, location, frame);
         return;
     }
 
@@ -610,6 +620,9 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.persist(),
         .message = err.toStringSlice() catch "Unknown error",
+        .filename = location.url,
+        .lineno = location.line,
+        .colno = location.column,
         .bubbles = false,
         .cancelable = true,
     }, frame.page);
@@ -660,6 +673,19 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
             });
         }
     }
+    if (!event._prevent_default) {
+        notifyExceptionThrown(err, location, frame);
+    }
+}
+
+// An error event left uncancelled leaves the exception "uncaught": CDP
+// clients learn about it through Runtime.exceptionThrown.
+fn notifyExceptionThrown(err: js.Value, location: js.Value.ErrorLocation, frame: *Frame) void {
+    frame._session.notification.dispatch(.exception_thrown, &.{
+        .timestamp = lp.datetime.timestamp(.boot),
+        .value = err,
+        .location = location,
+    });
 }
 
 pub fn matchMedia(_: *const Window, query: []const u8, frame: *Frame) !*MediaQueryList {
@@ -672,7 +698,7 @@ pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]
     // common probes
     const pseudo = Element.PseudoElement.parse(pseudo_element orelse "");
     const page = frame.page;
-    const gop = try page.element_computed_styles.getOrPut(page.frame_arena, .{ .element = element, .pseudo = pseudo });
+    const gop = try page.element_computed_styles.getOrPut(page.arena, .{ .element = element, .pseudo = pseudo });
     if (!gop.found_existing) {
         if (pseudo == .other) {
             log.debug(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pseudo_element.? });
@@ -735,7 +761,7 @@ pub fn open(self: *Window, url_: ?[]const u8, target_: ?[]const u8, features_: ?
     if (is_named) {
         if (page.findPopupByName(target)) |existing| {
             if (raw_url.len > 0) {
-                try existing.scheduleNavigation(raw_url, .{
+                try frame.scheduleNavigation(raw_url, .{
                     .reason = .script,
                     .kind = .{ .push = null },
                 }, .{ .script = existing });
@@ -813,7 +839,7 @@ pub fn close(self: *Window) void {
     // freeing workers and iframes), but, for now, we don't have the
     // infrastructure to do this safely so doing it on page tear down is our
     // only option.
-    page.closed_frames.append(page.frame_arena, frame) catch @panic("OOM");
+    page.closed_frames.append(page.arena, frame) catch @panic("OOM");
 }
 
 pub fn focus(_: *Window) void {}

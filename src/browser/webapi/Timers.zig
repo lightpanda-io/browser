@@ -121,7 +121,7 @@ pub fn schedule(
         persisted_params = try arena.dupe(js.Value.Global, opts.params);
     }
 
-    const gop = try self._callbacks.getOrPut(exec.arena, timer_id);
+    const gop = try self._callbacks.getOrPut(exec.page_arena, timer_id);
     if (gop.found_existing) {
         // 2^31 would have to wrap for this to happen.
         return error.TooManyTimeout;
@@ -165,18 +165,23 @@ pub fn clear(self: *Timers, id: u32) void {
 
 // https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#dom-settimeout
 // https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#timerhandler
-// TimerHandler = Function or DOMString. When a string is passed, it is
-// compiled into an anonymous function body, matching how legacy browsers
-// (and all current UAs) interpret `setTimeout("foo()", 100)`.
+// TimerHandler = Function or DOMString. Anything that isn't callable is
+// converted to a string (WebIDL union conversion), so `setTimeout(undefined)`
+// compiles the script "undefined". The string is compiled into an anonymous
+// function body, e.g. `setTimeout("foo()", 100)`.
 pub const LegacyHandler = union(enum) {
     function: js.Function.Global,
-    string: js.String,
+    string: js.Value,
 
     pub fn resolve(handler: LegacyHandler, exec: *js.Execution) !js.Function.Global {
         switch (handler) {
             .function => |fun| return fun,
-            .string => |str| {
-                const fun = try exec.js.local.?.compileFunction(str, &.{}, &.{});
+            .string => |value| {
+                // Value.toString() uses a Symbol's description; ToString throws.
+                if (value.isSymbol()) {
+                    return error.InvalidArgument;
+                }
+                const fun = try exec.js.local.?.compileFunction(try value.toString(), &.{}, &.{});
                 return fun.persist();
             },
         }

@@ -35,10 +35,11 @@ started_ms: u64,
 model_started_ms: u64 = 0,
 model_calls: u32 = 0,
 tool_calls: u32 = 0,
+with_results: bool,
 
-pub fn create(allocator: std.mem.Allocator, path: []const u8) !Trace {
+pub fn create(allocator: std.mem.Allocator, path: []const u8, with_results: bool) !Trace {
     const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .truncate = true });
-    return .{ .file = file, .line = .init(allocator), .started_ms = now() };
+    return .{ .file = file, .line = .init(allocator), .started_ms = now(), .with_results = with_results };
 }
 
 pub fn deinit(self: *Trace) void {
@@ -78,6 +79,7 @@ pub fn toolCall(self: *Trace, name: []const u8, arguments: ?std.json.Value, resu
         .args = arguments,
         .ms = ms,
         .result_bytes = result.text.len,
+        .result = if (self.with_results) result.text else null,
         .@"error" = result.is_error,
         .navigated = result.navigated,
         .page = if (frame) |f| lp.tools.pageState(f) else null,
@@ -130,11 +132,14 @@ fn write(self: *Trace, record: anytype) void {
     self.offset += self.line.written().len;
 }
 
-test "Trace writes one JSON line per step, arguments as given" {
-    const path = "trace-test.jsonl";
-    defer std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+const testing = @import("../testing.zig");
 
-    var trace: Trace = try .create(std.testing.allocator, path);
+test "Trace writes one JSON line per step, arguments as given" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "trace.jsonl");
+
+    var trace: Trace = try .create(std.testing.allocator, path, false);
     trace.run("openai", "gpt-test", "find courts");
 
     var response: zenai.provider.GenerateResult = .init(std.testing.allocator);
@@ -171,7 +176,24 @@ test "Trace writes one JSON line per step, arguments as given" {
     const tool = records[2].value.object;
     try std.testing.expectEqualStrings("$LP_PASSWORD", tool.get("args").?.object.get("value").?.string);
     try std.testing.expectEqual(7, tool.get("result_bytes").?.integer);
+    try std.testing.expect(tool.get("result") == null);
     try std.testing.expect(tool.get("page") == null);
 
     try std.testing.expectEqual(1, records[3].value.object.get("model_calls").?.integer);
+}
+
+test "Trace writes result text only when asked" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "trace.jsonl");
+
+    var trace: Trace = try .create(std.testing.allocator, path, true);
+    trace.toolCall("markdown", null, &.{ .text = "# Title" }, 3, null);
+    trace.deinit();
+
+    const written = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, std.testing.allocator, .limited(4096));
+    defer std.testing.allocator.free(written);
+    const record = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, std.mem.trimEnd(u8, written, "\n"), .{});
+    defer record.deinit();
+    try std.testing.expectEqualStrings("# Title", record.value.object.get("result").?.string);
 }

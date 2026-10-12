@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
@@ -28,6 +29,7 @@ const Element = @import("../../Element.zig");
 
 const HtmlElement = @import("../Html.zig");
 
+const String = lp.String;
 const Base = @This();
 
 pub const Proto = HtmlElement;
@@ -52,20 +54,17 @@ pub fn getHref(self: *Base, frame: *Frame) ![]const u8 {
     return URL.resolve(frame.local_arena, doc.getURL(frame), href, .{});
 }
 
+// Build.attributeChange updates the document base URL.
 pub fn setHref(self: *Base, value: []const u8, frame: *Frame) !void {
-    const element = self.asElement();
-    try element.setAttributeSafe(comptime .wrap("href"), .wrap(value), frame);
+    try self.asElement().setAttributeSafe(comptime .wrap("href"), .wrap(value), frame);
+}
 
+fn updateBaseURL(self: *Base, frame: *Frame) !void {
     // Per HTML spec, the document's base URL is the href of the FIRST <base>
     // element in tree order that has an href attribute — not necessarily this
     // one. Re-derive from scratch so that setting href on a non-authoritative
     // <base>, or clearing href on the authoritative one, both work correctly.
-    const node = element.asNode();
-    if (!node.isConnected()) {
-        return;
-    }
-
-    const owner = node.ownerFrame(frame) orelse return;
+    const owner = self.asNode().ownerFrame(frame) orelse return;
     const first = (try owner.document.querySelector(comptime .wrap("base[href]"), owner)) orelse {
         owner.base_url = null;
         return;
@@ -78,7 +77,29 @@ pub fn setHref(self: *Base, value: []const u8, frame: *Frame) !void {
         owner.base_url = null;
         return;
     }
-    owner.base_url = try URL.resolve(owner.arena, owner.url, href, .{});
+
+    const fallback = owner.inherited_base_url orelse owner.url;
+    const resolved = URL.resolve(frame.local_arena, fallback, href, .{}) catch |err| {
+        if (err == error.TypeError) {
+            owner.base_url = null;
+            return;
+        }
+
+        return err;
+    };
+
+    const protocol = URL.getProtocol(resolved);
+    if (std.mem.eql(u8, protocol, "data:") or std.mem.eql(u8, protocol, "javascript:")) {
+        owner.base_url = null;
+        return;
+    }
+
+    if (owner.base_url) |current| {
+        if (std.mem.eql(u8, current, resolved)) {
+            return;
+        }
+    }
+    owner.base_url = try owner.page_arena.dupeSentinel(u8, resolved, 0);
 }
 
 pub const JsApi = struct {
@@ -96,7 +117,39 @@ pub const JsApi = struct {
     pub const target = reflect.string("target");
 };
 
+pub const Build = struct {
+    pub fn connected(element: *Element, frame: *Frame) !void {
+        return element.as(Base).updateBaseURL(frame);
+    }
+
+    pub fn disconnected(element: *Element, frame: *Frame) !void {
+        return element.as(Base).updateBaseURL(frame);
+    }
+
+    pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("href"))) {
+            return;
+        }
+        if (element.asNode().isConnected() == false) return;
+
+        try element.as(Base).updateBaseURL(frame);
+    }
+
+    pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("href"))) {
+            return;
+        }
+        if (element.asNode().isConnected() == false) return;
+
+        return element.as(Base).updateBaseURL(frame);
+    }
+};
+
 const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Base" {
     try testing.htmlRunner("element/html/base.html", .{});
+}
+
+test "WebApi: HTML.Base dynamic" {
+    try testing.htmlRunner("element/html/base_dynamic.html", .{});
 }

@@ -19,6 +19,9 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const repeat = @import("string.zig").repeat;
+const http = @import("network/http.zig");
+const sys_net = @import("sys/net.zig");
+const libcurl = @import("sys/libcurl.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -39,6 +42,12 @@ pub const arena_allocator = arena_instance.allocator();
 
 pub fn reset() void {
     _ = arena_instance.reset(.retain_capacity);
+}
+
+/// Path of `name` inside a std.testing.tmpDir, relative to the cwd like the
+/// tmpDir itself, since some tools refuse absolute paths.
+pub fn tmpPath(tmp: *const std.testing.TmpDir, name: []const u8) ![:0]const u8 {
+    return std.Io.Dir.path.joinZ(arena_allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, name });
 }
 
 const App = @import("App.zig");
@@ -448,6 +457,11 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
     var wait_ms: u32 = timeout_ms;
     var timer: std.Io.Timestamp = .now(lp.io, .boot);
     while (true) {
+        const sleep_ms: usize = switch (try runner.tickForFrame(page.frame_id, 20, .{ .until = .done })) {
+            .done => @min(test_session.browser.msToNextTask() orelse 20, 20), // could be at BLOCKING_NESTING, so wait a bit more
+            .ok => |next_ms| @min(next_ms, 20),
+        };
+
         var try_catch: js.TryCatch = undefined;
         try_catch.init(&ls.local);
         defer try_catch.deinit();
@@ -464,10 +478,6 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
         if (js_val.isTrue()) {
             return;
         }
-        const sleep_ms: usize = switch (try runner.tickForFrame(page.frame_id, 20, .{ .until = .done })) {
-            .done => @min(test_session.browser.msToNextTask() orelse 20, 20), // could be at BLOCKING_NESTING, so wait a bit more
-            .ok => |next_ms| @min(next_ms, 20),
-        };
 
         const lap: std.Io.Timestamp = .now(lp.io, .boot);
         const ms_elapsed: u64 = @intCast(timer.durationTo(lap).toMilliseconds());
@@ -514,6 +524,7 @@ const TestWSServer = @import("TestWSServer.zig");
 const TestHTTPServer = @import("TestHTTPServer.zig");
 
 pub var test_cdp_server: ?*Server = null;
+pub var test_cdp_port: u16 = 0;
 var test_cdp_server_thread: ?std.Thread = null;
 var test_http_server: ?TestHTTPServer = null;
 var test_http_server_thread: ?std.Thread = null;
@@ -533,6 +544,21 @@ test "tests:beforeAll" {
     log.opts.format = .pretty;
 
     const test_allocator = @import("root").tracking_allocator;
+
+    // Before App.init: its connection pool picks up the routes as it's built.
+    {
+        var wg: lp.WaitGroup = .{};
+        wg.startMany(2);
+
+        test_http_server = TestHTTPServer.init(testHTTPHandler);
+        test_http_server_thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
+
+        test_ws_server = TestWSServer.init();
+        test_ws_server_thread = try std.Thread.spawn(.{}, TestWSServer.run, .{ &test_ws_server.?, &wg });
+
+        wg.wait();
+        try routeTestPorts();
+    }
 
     test_config = try Config.init(test_allocator, "test", .{
         .serve = .{
@@ -556,20 +582,31 @@ test "tests:beforeAll" {
 
     test_session = try test_browser.newSession(test_notification);
 
-    var wg: lp.WaitGroup = .{};
-    wg.startMany(3);
-
-    test_cdp_server_thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
-
-    test_http_server = TestHTTPServer.init(testHTTPHandler);
-    test_http_server_thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
-
-    test_ws_server = TestWSServer.init();
-    test_ws_server_thread = try std.Thread.spawn(.{}, TestWSServer.run, .{ &test_ws_server.?, &wg });
-
-    // need to wait for the servers to be listening, else tests will fail because
+    // need to wait for the server to be listening, else tests will fail because
     // they aren't able to connect.
+    var wg: lp.WaitGroup = .{};
+    wg.start();
+    test_cdp_server_thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
     wg.wait();
+}
+
+/// Fixtures address the test servers by fixed ports, but each test process
+/// binds ephemeral ones so that several can run at once.
+fn routeTestPorts() !void {
+    const routes = [_]struct { u16, u16 }{
+        .{ 9582, test_http_server.?.listener.?.socket.address.getPort() },
+        .{ 9584, test_ws_server.?.port },
+    };
+
+    var list: ?*libcurl.CurlSList = null;
+    errdefer libcurl.curl_slist_free_all(list);
+    for (routes) |route| {
+        const port, const real_port = route;
+        // an empty host matches any, so both 127.0.0.1 and localhost
+        const entry = try arena_allocator.printSentinel(":{d}:127.0.0.1:{d}", .{ port, real_port }, 0);
+        list = libcurl.curl_slist_append(list, entry) orelse return error.OutOfMemory;
+    }
+    http.test_connect_to = list;
 }
 
 test "tests:afterAll" {
@@ -608,16 +645,21 @@ test "tests:afterAll" {
     test_browser.deinit();
     test_notification.deinit();
     test_app.deinit();
+    // curl keeps the list, not a copy: free it once no handle is left
+    libcurl.curl_slist_free_all(http.test_connect_to);
+    http.test_connect_to = null;
     test_config.deinit(@import("root").tracking_allocator);
 }
 
 fn serveCDP(wg: *lp.WaitGroup) !void {
-    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 9583);
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
 
     test_cdp_server = Server.init(test_app, address) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
+
+    test_cdp_port = (try sys_net.boundAddress(test_cdp_server.?.listener)).getPort();
     test_cdp_server.?.protocols = .{ .cdp = true, .webdriver = true };
     wg.finish();
 
@@ -672,6 +714,16 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         // Long enough for a timer scheduled by the requester to fire first.
         lp.io.sleep(.fromMilliseconds(100), .awake) catch {};
         return req.respond("slow", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/hang")) {
+        // For asserting a request didn't wait for its response
+        lp.io.sleep(.fromMilliseconds(2000), .awake) catch {};
+        return req.respond("hang", .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/plain" },
             },
@@ -1120,13 +1172,28 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/styles/large.css")) {
+        // Over 2 MiB, with the rule under test last.
+        const chunk = ".pad { color: #abcdef; } "; // 25 bytes
+        const tail = ".large-hide { display: none; }";
+        const repeats = 5 * 1024 * 1024 / 2 / chunk.len;
+        var body = try std.ArrayList(u8).initCapacity(req_allocator, chunk.len * repeats + tail.len);
+        for (0..repeats) |_| body.appendSliceAssumeCapacity(chunk);
+        body.appendSliceAssumeCapacity(tail);
+        return req.respond(body.items, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/styles/oversize.css")) {
-        // Body that exceeds Frame.MAX_STYLESHEET_BYTES (2 MiB) — written as a
+        // Body that exceeds Frame.MAX_STYLESHEET_BYTES — written as a
         // long sequence of valid declarations so the response itself parses
         // fine and the error path is exercised by the size cap, not by a
         // CSS parse failure.
         const chunk = ".pad { color: #abcdef; } "; // 25 bytes
-        const repeats = (2 * 1024 * 1024 / chunk.len) + 1024;
+        const repeats = (Frame.MAX_STYLESHEET_BYTES / chunk.len) + 1024;
         var body = try std.ArrayList(u8).initCapacity(req_allocator, chunk.len * repeats);
         for (0..repeats) |_| body.appendSliceAssumeCapacity(chunk);
         return req.respond(body.items, .{
@@ -1285,7 +1352,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         // client decodes it; checks CompressionStream('brotli') output with a
         // decoder that isn't ours.
         var body_buf: [4096]u8 = undefined;
-        const body = try req.readerExpectNone(&body_buf).allocRemaining(arena_allocator, .limited(4 * 1024 * 1024));
+        const body = try req.readerExpectNone(&body_buf).allocRemaining(req_allocator, .limited(4 * 1024 * 1024));
         return req.respond(body, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/octet-stream" },

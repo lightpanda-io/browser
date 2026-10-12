@@ -78,8 +78,8 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
             var js_arr = observed_attrs.toArray();
             for (0..js_arr.len()) |i| {
                 const attr_val = js_arr.get(@intCast(i)) catch continue;
-                const attr_name = attr_val.toStringSliceWithAlloc(frame.arena) catch continue;
-                definition.observed_attributes.put(frame.arena, attr_name, {}) catch continue;
+                const attr_name = attr_val.toStringSliceWithAlloc(frame.page_arena) catch continue;
+                definition.observed_attributes.put(frame.page_arena, attr_name, {}) catch continue;
             }
         }
     }
@@ -98,7 +98,7 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
         }
     }
 
-    const gop = try self._definitions.getOrPut(frame.arena, owned_name);
+    const gop = try self._definitions.getOrPut(frame.page_arena, owned_name);
     if (gop.found_existing) {
         return error.NotSupported;
     }
@@ -163,7 +163,7 @@ pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, frame: *Frame
 
     try validateName(name);
 
-    const gop = try self._when_defined.getOrPut(frame.arena, name);
+    const gop = try self._when_defined.getOrPut(frame.page_arena, name);
     if (gop.found_existing) {
         return local.toLocal(gop.value_ptr.*).promise();
     }

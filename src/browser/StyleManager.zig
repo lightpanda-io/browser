@@ -666,6 +666,15 @@ pub fn hasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     return self.visibilityProps(el).pointer_events_none;
 }
 
+/// Blink's VisibleToHitTestRequest. Ignores display:none, which callers handle
+/// for the whole subtree.
+pub fn isHitTestable(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return true;
+    const p = self.visibilityProps(el);
+    return !p.visibility_hidden and !p.pointer_events_none;
+}
+
 /// The axes along which `el` is a scroll container: its own computed overflow
 /// on that axis is auto, scroll or overlay. No ancestor walk.
 pub fn overflowAxes(self: *StyleManager, el: *Element) Element.ScrollAxes {
@@ -1151,6 +1160,7 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
                     else => {},
                 }
             },
+            .pseudo_element => return null,
             .universal, .attribute => {},
         }
     }
@@ -1195,7 +1205,7 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
         switch (part) {
             .id => ids.* += 1,
             .class => classes.* += 1,
-            .tag, .tag_name => elements.* += 1,
+            .tag, .tag_name, .pseudo_element => elements.* += 1,
             .universal => {}, // zero specificity
             .attribute => classes.* += 1,
             .pseudo_class => |pc| {
@@ -1845,13 +1855,34 @@ fn parseInheritedFlag(value: []const u8, comptime on: []const []const u8, compti
     return null;
 }
 
+// Absolute-size keywords, in pixels as Chrome maps them.
+const font_size_keywords = std.StaticStringMapWithEql(f64, std.static_string_map.eqlAsciiIgnoreCase).initComptime(.{
+    .{ "xx-small", 9 },
+    .{ "x-small", 10 },
+    .{ "small", 13 },
+    .{ "medium", 16 },
+    .{ "large", 18 },
+    .{ "x-large", 24 },
+    .{ "xx-large", 32 },
+    .{ "xxx-large", 48 },
+});
+
 fn parseFontSize(self: *StyleManager, raw: []const u8, parent: ?*Element, depth: u8) ?f64 {
     const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
     if (inheritsKeyword(value)) {
         return self.computedFontSizeAt(parent, depth);
     }
-    if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "medium")) {
-        return 16;
+    if (std.ascii.eqlIgnoreCase(value, "initial")) {
+        return DEFAULT_FONT_SIZE;
+    }
+    if (font_size_keywords.get(value)) |size| {
+        return size;
+    }
+    if (std.ascii.eqlIgnoreCase(value, "smaller")) {
+        return self.computedFontSizeAt(parent, depth) / 1.2;
+    }
+    if (std.ascii.eqlIgnoreCase(value, "larger")) {
+        return self.computedFontSizeAt(parent, depth) * 1.2;
     }
 
     const parsed = units.parse(value) catch return null;
@@ -1859,6 +1890,8 @@ fn parseFontSize(self: *StyleManager, raw: []const u8, parent: ?*Element, depth:
         .percentage => self.computedFontSizeAt(parent, depth) / 100.0,
         .em => self.computedFontSizeAt(parent, depth),
         .ex => self.computedFontSizeAt(parent, depth) / 2.0,
+        // The root's own `rem` resolves against the initial size.
+        .rem => if (parent == null) DEFAULT_FONT_SIZE else self.computedFontSizeAt(self.frame.document.getDocumentElement(), depth),
         else => return null,
     };
     const size = parsed.value * factor;

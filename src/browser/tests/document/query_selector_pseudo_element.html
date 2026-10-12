@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<style>
+  .x::after { display: none; }
+  .hide, .x::before { display: none; }
+  *, ::before, ::after { --ring: 3px; }
+  :is(#d::before, .x) { display: none; }
+  .x { display: block; }
+</style>
+
+<body>
+  <div id="d" class="x"><span id="s">S</span></div>
+  <div id="h" class="hide">H</div>
+</body>
+
+<script id="valid_and_never_matches">
+{
+  const d = document.getElementById('d');
+  for (const sel of [
+    '::before', '::after', ':before', ':AFTER', '::first-line', ':first-letter',
+    '::marker', '::placeholder', '::selection', '::backdrop', '::-webkit-scrollbar', '::-webkit-unknown',
+    '::part(x)', '::slotted(span)', '::cue(b)', '::highlight(h)', '::picker(select)',
+    'div::before', '.x::after', '#d::before', 'div > ::after', 'div ::before', ':hover::before',
+    '::before::marker', '::part(x)::before', '::before:is(.a)',
+    '::-webkit-scrollbar-thumb:hover', '::-webkit-scrollbar-button:horizontal:decrement', 'input::file-selector-button:hover',
+    '::selection:window-inactive', '::part(x):hover', '::part(x):state(open)', '::column::scroll-marker:target-current',
+  ]) {
+    testing.expectFalse(d.matches(sel));
+    testing.expectEqual(null, d.closest(sel));
+    testing.expectEqual(0, document.querySelectorAll(sel).length);
+    testing.expectEqual(null, document.querySelector(sel));
+  }
+
+  testing.expectTrue(d.matches('div::before, .x'));
+  testing.expectEqual(1, document.querySelectorAll('span, p::after').length);
+
+  // Forgiving lists keep the other arguments.
+  testing.expectTrue(d.matches(':is(::before, .x)'));
+  testing.expectFalse(d.matches(':where(::after)'));
+}
+</script>
+
+<script id="invalid">
+{
+  const d = document.getElementById('d');
+  for (const sel of [
+    '::foo', ':foo', '::-moz-selection', '::-webkit-autofill', '::before()', '::part()', '::picker(x)',
+    '::before::after', '::before.x', '::before div', '::before > p', '::before[a]', '::before:hover', '::marker::before',
+    ':not(::before)', ':has(::before)', 'div:has(> p::before)',
+    '::placeholder:hover', '::part(x):first-child', '::part(x):not(.a)', '::part(x)::part(y)', '::before::marker:hover',
+  ]) {
+    testing.expectError('SyntaxError', () => d.matches(sel));
+    testing.expectError('SyntaxError', () => document.querySelectorAll(sel));
+  }
+}
+</script>
+
+<script id="stylesheet_rule_skips_element">
+{
+  const d = document.getElementById('d');
+  testing.expectEqual('block', getComputedStyle(d).display);
+  testing.expectTrue(d.checkVisibility());
+
+  // A pseudo-element in a selector list doesn't drop the other selectors.
+  testing.expectFalse(document.getElementById('h').checkVisibility());
+  testing.expectEqual('3px', getComputedStyle(d).getPropertyValue('--ring').trim());
+
+  testing.expectEqual('block', getComputedStyle(d).display);
+}
+</script>

@@ -68,6 +68,31 @@
     });
   </script>
 
+  <script id="ext_stylesheet_large_applies" type=module>
+    const state = await testing.async();
+    const el = document.createElement('div');
+    el.className = 'large-hide';
+    el.textContent = 'hidden by large sheet';
+    document.body.appendChild(el);
+
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/styles/large.css';
+
+    const evt = await new Promise(resolve => {
+      link.addEventListener('load', () => resolve('load'));
+      link.addEventListener('error', () => resolve('error'));
+      document.head.appendChild(link);
+    });
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('load', evt);
+      testing.expectEqual('none', getComputedStyle(el).display);
+      testing.expectFalse(document.body.innerText.includes('hidden by large sheet'));
+    });
+  </script>
+
   <script id="ext_stylesheet_oversize_fires_error" type=module>
     const state = await testing.async();
     const link = document.createElement('link');

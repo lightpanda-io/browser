@@ -422,6 +422,7 @@ fn matchesPart(el: *Node.Element, part: Part, scope: *Node, nth: ?*NthCache, fra
         .universal => return true,
         .pseudo_class => |pseudo| return matchesPseudoClass(el, pseudo, scope, nth, frame),
         .attribute => |attr| return matchesAttribute(el, attr),
+        .pseudo_element => return false,
     }
 }
 
@@ -443,28 +444,34 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
         return false;
     };
 
+    const case_insensitive = switch (attr.value_case) {
+        .sensitive => false,
+        .insensitive => true,
+        .html_legacy => el._namespace == .html,
+    };
+
     switch (attr.matcher) {
         .presence => return true,
         .exact => |expected| {
-            return if (attr.case_insensitive)
+            return if (case_insensitive)
                 std.ascii.eqlIgnoreCase(value, expected)
             else
                 std.mem.eql(u8, value, expected);
         },
         .substring => |expected| {
-            return if (attr.case_insensitive)
+            return if (case_insensitive)
                 std.ascii.findIgnoreCase(value, expected) != null
             else
                 std.mem.find(u8, value, expected) != null;
         },
         .starts_with => |expected| {
-            return if (attr.case_insensitive)
+            return if (case_insensitive)
                 std.ascii.startsWithIgnoreCase(value, expected)
             else
                 std.mem.startsWith(u8, value, expected);
         },
         .ends_with => |expected| {
-            return if (attr.case_insensitive)
+            return if (case_insensitive)
                 std.ascii.endsWithIgnoreCase(value, expected)
             else
                 std.mem.endsWith(u8, value, expected);
@@ -473,7 +480,7 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
             // Space-separated word match (like class names)
             var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
             while (it.next()) |word| {
-                const same = if (attr.case_insensitive)
+                const same = if (case_insensitive)
                     std.ascii.eqlIgnoreCase(word, expected)
                 else
                     std.mem.eql(u8, word, expected);
@@ -484,7 +491,7 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
         },
         .prefix_dash => |expected| {
             // Matches value or value- prefix (for language codes like en, en-US)
-            if (attr.case_insensitive) {
+            if (case_insensitive) {
                 if (std.ascii.eqlIgnoreCase(value, expected)) return true;
                 if (value.len > expected.len and value[expected.len] == '-') {
                     return std.ascii.eqlIgnoreCase(value[0..expected.len], expected);

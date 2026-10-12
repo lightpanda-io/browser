@@ -20,6 +20,11 @@
   <textarea id="textarea_invalid_form_attr" form="nonexistent">invalid form</textarea>
 </form>
 
+<script id="type">
+  testing.expectEqual('textarea', $('#textarea1').type)
+  testing.expectEqual('textarea', document.createElement('textarea').type)
+</script>
+
 <script id="value_initial">
   testing.expectEqual('initial text', $('#textarea1').value)
   testing.expectEqual('', $('#textarea2').value)

@@ -79,7 +79,8 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 
     // Computed styles must reflect stylesheet rules, not just the element's
     // inline `style=` attribute. Limited to display/visibility — what aria
-    // tree builders (Playwright ariaSnapshot) consult on every element.
+    // tree builders (Playwright ariaSnapshot) consult on every element — and
+    // pointer-events.
     if (self._is_computed) {
         if (self._element) |element| {
             if (element.ownerFrame(frame)) |owner| {
@@ -91,6 +92,10 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
                 } else if (wrapped.eql(comptime .wrap("visibility"))) {
                     if (style_manager.hasVisibilityHiddenInherited(element)) {
                         return "hidden";
+                    }
+                } else if (wrapped.eqlSlice("pointer-events")) {
+                    if (style_manager.hasPointerEventsNone(element)) {
+                        return "none";
                     }
                 }
             }
@@ -111,6 +116,11 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 
             if (isCustomProperty(normalized)) {
                 return style_manager.customPropertyValue(element, wrapped) orelse "";
+            }
+
+            // Resolved in pixels, as the synthetic text metrics measure it.
+            if (wrapped.eql(comptime .wrap("font-size"))) {
+                return frame.local_arena.print("{d}px", .{style_manager.computedFontSize(element)}) catch "16px";
             }
 
             // Resolve inline `style=` declarations through the element's
@@ -288,7 +298,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     // Create new property
     const prop = try frame._factory.create(Property{
         ._node = .{},
-        ._name = try String.init(frame.arena, normalized, .{}),
+        ._name = try String.init(frame.page_arena, normalized, .{}),
         ._value = try initOwnedString(frame._factory.storageAllocator(), normalized_value),
         ._important = important,
     });
@@ -949,7 +959,64 @@ fn isLengthProperty(name: []const u8) bool {
     return length_properties.has(name);
 }
 
+// Computed values of properties nothing declares: their CSS initial values, as
+// Chrome reports them for a plain element. Measuring code parses many of these
+// (parseFloat, keyword checks), so '' would read as NaN or as no value at all.
+// Border widths compute to zero while border-style is its initial `none`.
+const initial_values = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "margin", "0px" },
+    .{ "margin-top", "0px" },
+    .{ "margin-right", "0px" },
+    .{ "margin-bottom", "0px" },
+    .{ "margin-left", "0px" },
+    .{ "padding", "0px" },
+    .{ "padding-top", "0px" },
+    .{ "padding-right", "0px" },
+    .{ "padding-bottom", "0px" },
+    .{ "padding-left", "0px" },
+    .{ "border-width", "0px" },
+    .{ "border-top-width", "0px" },
+    .{ "border-right-width", "0px" },
+    .{ "border-bottom-width", "0px" },
+    .{ "border-left-width", "0px" },
+    .{ "border-style", "none" },
+    .{ "border-top-style", "none" },
+    .{ "border-right-style", "none" },
+    .{ "border-bottom-style", "none" },
+    .{ "border-left-style", "none" },
+    .{ "border-radius", "0px" },
+    .{ "border-top-left-radius", "0px" },
+    .{ "border-top-right-radius", "0px" },
+    .{ "border-bottom-right-radius", "0px" },
+    .{ "border-bottom-left-radius", "0px" },
+    .{ "font-weight", "400" },
+    .{ "line-height", "normal" },
+    .{ "letter-spacing", "normal" },
+    .{ "word-spacing", "0px" },
+    .{ "text-indent", "0px" },
+    .{ "top", "auto" },
+    .{ "right", "auto" },
+    .{ "bottom", "auto" },
+    .{ "left", "auto" },
+    .{ "z-index", "auto" },
+    .{ "box-sizing", "content-box" },
+    .{ "min-width", "0px" },
+    .{ "min-height", "0px" },
+    .{ "max-width", "none" },
+    .{ "max-height", "none" },
+    .{ "flex-grow", "0" },
+    .{ "flex-shrink", "1" },
+    .{ "flex-basis", "auto" },
+    .{ "transform", "none" },
+    .{ "gap", "normal" },
+    .{ "row-gap", "normal" },
+    .{ "column-gap", "normal" },
+});
+
 fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, name: String) []const u8 {
+    if (initial_values.get(name.str())) |value| {
+        return value;
+    }
     switch (name.len) {
         5 => {
             if (name.eql(comptime .wrap("color"))) {
@@ -969,6 +1036,11 @@ fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, name: String) []con
         10 => {
             if (name.eql(comptime .wrap("visibility"))) {
                 return "visible";
+            }
+        },
+        14 => {
+            if (name.eqlSlice("pointer-events")) {
+                return "auto";
             }
         },
         16 => {

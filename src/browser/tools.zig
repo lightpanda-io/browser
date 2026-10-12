@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const zenai = @import("zenai");
 
 const NodeRegistry = @import("../NodeRegistry.zig");
+const TelemetryTool = @import("../telemetry/telemetry.zig").Event.Tool;
 
 const DOMNode = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
@@ -266,6 +267,41 @@ pub const Tool = enum {
     getUrl,
     getCookies,
     getEnv,
+
+    /// Telemetry wire id: append, never renumber. 0 is reserved for a name
+    /// that matched no tool.
+    pub fn telemetryId(self: Tool) u8 {
+        return switch (self) {
+            .goto => 1,
+            .search => 2,
+            .markdown => 3,
+            .html => 4,
+            .screenshot => 5,
+            .links => 6,
+            .evaluate => 7,
+            .extract => 8,
+            .tree => 9,
+            .nodeDetails => 10,
+            .interactiveElements => 11,
+            .structuredData => 12,
+            .detectForms => 13,
+            .click => 14,
+            .fill => 15,
+            .scroll => 16,
+            .waitForSelector => 17,
+            .waitForScript => 18,
+            .waitForState => 19,
+            .hover => 20,
+            .press => 21,
+            .selectOption => 22,
+            .setChecked => 23,
+            .findElement => 24,
+            .consoleLogs => 25,
+            .getUrl => 26,
+            .getCookies => 27,
+            .getEnv => 28,
+        };
+    }
 
     /// State-mutating: surfaces in JavaScript recordings. Read-only tools
     /// (queries, env probes) stay out so a replay doesn't bloat the script
@@ -899,6 +935,7 @@ pub const CallOpts = struct {
     record: bool = false,
     /// Scripts parse the text, so only model-facing callers set it.
     nav_note: bool = false,
+    source: TelemetryTool.Source,
 };
 
 /// Told about every call once it returns, failures included.
@@ -920,18 +957,41 @@ pub fn call(
     arguments: ?std.json.Value,
     opts: CallOpts,
 ) ToolError!ToolResult {
-    const observer = session.tool_observer orelse return callUnobserved(arena, session, registry, tool_name, arguments, opts);
-    const started = lp.datetime.milliTimestamp(.boot);
-    const result = callUnobserved(arena, session, registry, tool_name, arguments, opts);
-    const reported: ToolResult = result catch |err| .{ .text = errorMessage(err), .is_error = true };
-    observer.onCall(observer.context, tool_name, arguments, &reported, lp.datetime.milliTimestamp(.boot) - started, session.currentFrame());
+    const start = lp.datetime.milliTimestamp(.awake);
+    const maybe_tool = std.meta.stringToEnum(Tool, tool_name);
+    const result = callInner(arena, session, registry, maybe_tool, tool_name, arguments, opts);
+    const id: u8 = if (maybe_tool) |t| t.telemetryId() else 0;
+    session.browser.app.telemetry.recordTool(id, opts.source, telemetryOutcome(result), start);
+    if (session.tool_observer) |observer| {
+        const reported: ToolResult = result catch |err| .{ .text = errorMessage(err), .is_error = true };
+        observer.onCall(observer.context, tool_name, arguments, &reported, lp.datetime.milliTimestamp(.awake) -| start, session.currentFrame());
+    }
     return result;
 }
 
-fn callUnobserved(
+fn telemetryOutcome(result: ToolError!ToolResult) TelemetryTool.Outcome {
+    const r = result catch |err| return errorOutcome(err);
+    return if (r.is_error) .is_error else .ok;
+}
+
+pub fn errorOutcome(err: ToolError) TelemetryTool.Outcome {
+    return switch (err) {
+        error.FrameNotLoaded => .frame_not_loaded,
+        error.InvalidParams => .invalid_params,
+        error.NodeNotFound => .node_not_found,
+        error.NavigationFailed => .navigation_failed,
+        error.NavigationTimeout => .navigation_timeout,
+        error.Cancelled => .cancelled,
+        error.Timeout => .timeout,
+        error.InternalError, error.OutOfMemory => .internal,
+    };
+}
+
+fn callInner(
     arena: std.mem.Allocator,
     session: *lp.Session,
     registry: *NodeRegistry,
+    maybe_tool: ?Tool,
     tool_name: []const u8,
     arguments: ?std.json.Value,
     opts: CallOpts,
@@ -939,7 +999,7 @@ fn callUnobserved(
     // In-band so an LLM that invented a tool name (e.g. OpenAI's internal
     // `multi_tool_use.parallel` wrapper) learns the name is wrong instead of
     // retrying it with different arguments.
-    const tool = std.meta.stringToEnum(Tool, tool_name) orelse return .{
+    const tool = maybe_tool orelse return .{
         .text = try arena.print("Unknown tool: {s}", .{tool_name}),
         .is_error = true,
     };
@@ -1309,6 +1369,10 @@ pub fn searchKeyStatus(engine: SearchEngine) ?KeyStatus {
 fn execSearch(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError!ToolResult {
     const args = try parseArgs(SearchParams, arena, arguments);
     if (args.query.len == 0) return ToolError.InvalidParams;
+    // A search through a search engine's page carries the query in its URL,
+    // so `--block-urls` already refuses a query that matches a pattern
+    // (`*some-site*`). Treat API searches the same way.
+    if (session.browser.http_client.blocksUrl(args.query)) return .{ .text = "No results." };
 
     const timeout_ms = args.timeout orelse default_search_timeout_ms;
     switch (search_engine) {
@@ -1321,7 +1385,7 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.js
                     // Fall through on any failure so one outage doesn't kill
                     // a whole benchmark run.
                     var detail: Failure = .{};
-                    if (session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, args.query, &detail })) |markdown_| {
+                    if (session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, args.query, &detail, &session.browser.http_client })) |markdown_| {
                         return .{ .text = markdown_ };
                     } else |err| {
                         last_err = err;
@@ -1351,7 +1415,7 @@ fn searchExplicit(arena: std.mem.Allocator, session: *lp.Session, comptime engin
         .is_error = true,
     };
     var detail: Failure = .{};
-    const markdown_ = session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, query, &detail }) catch |err|
+    const markdown_ = session.runPumped(apiSearch, .{ engine, arena, api_key, timeout_ms, query, &detail, &session.browser.http_client }) catch |err|
         return searchFailed(arena, label, err, detail);
     return .{ .text = markdown_ };
 }
@@ -1390,6 +1454,7 @@ fn apiSearch(
     timeout_ms: u32,
     query: []const u8,
     detail: *Failure,
+    url_filter: anytype,
 ) ![]const u8 {
     var init_options = engine.init_options;
     // The cascade (or the model) is the retry; honoring a Retry-After (60 s
@@ -1419,7 +1484,20 @@ fn apiSearch(
     };
     defer response.deinit();
 
-    return renderResults(arena, try engine.collect(arena, response.value));
+    return renderResults(arena, try dropBlocked(arena, try engine.collect(arena, response.value), url_filter));
+}
+
+/// Drops hits whose URL the browser's `--block-urls` patterns would refuse,
+/// so a search can't hand the model a page it isn't allowed to open, or that
+/// page's text in a snippet. A synthesized answer may draw on a dropped hit,
+/// so it goes too. `url_filter` is anything with `blocksUrl(url) bool`.
+fn dropBlocked(arena: std.mem.Allocator, results: SearchResults, url_filter: anytype) std.mem.Allocator.Error!SearchResults {
+    var kept: std.ArrayList(Hit) = .empty;
+    for (results.hits) |hit| {
+        if (!url_filter.blocksUrl(hit.url)) try kept.append(arena, hit);
+    }
+    if (kept.items.len == results.hits.len) return results;
+    return .{ .hits = kept.items };
 }
 
 pub const Hit = struct {
@@ -2802,7 +2880,7 @@ test "call: unknown tool name surfaces in-band" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
-    const r = try call(arena.allocator(), testing.test_session, &registry, "multi_tool_use.parallel", null, .{});
+    const r = try call(arena.allocator(), testing.test_session, &registry, "multi_tool_use.parallel", null, .{ .source = .user });
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
 }
@@ -2822,13 +2900,35 @@ test "tree and nodeDetails read the node's own frame" {
 
     const aa = testing.arena_allocator;
     const tree_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{html_id}), .{});
-    const tree = try call(aa, page.session, &registry, "tree", tree_args, .{});
+    const tree = try call(aa, page.session, &registry, "tree", tree_args, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, tree.text, "child-label") != null);
     try std.testing.expect(std.mem.find(u8, tree.text, "parent-") == null);
 
     const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{input_id}), .{});
-    const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{});
+    const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, details.text, "child-label") != null);
+}
+
+test "tree and nodeDetails list iframes with their URL" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/semantic_tree_iframe.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    _ = try call(aa, page.session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.querySelector('iframe').contentWindow.history.replaceState(null, '', '?moved'); const f = document.createElement('iframe'); f.setAttribute('src', 'semantic_tree_iframe_child.html?scripted'); document.body.appendChild(f)"}
+    , .{}), .{ .source = .user });
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "Iframe value='http://127.0.0.1:9582/src/browser/tests/cdp/semantic_tree_iframe_child.html?moved'") != null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "Iframe value='http://127.0.0.1:9582/src/browser/tests/cdp/semantic_tree_iframe_child.html?scripted'") != null);
+
+    const iframe = (try page.frame().?.document.querySelector(.wrap("iframe"), page.frame().?)).?.asNode();
+    const details_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"backendNodeId\":{d}}}", .{(try registry.register(iframe)).id}), .{});
+    const details = try call(aa, page.session, &registry, "nodeDetails", details_args, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, details.text, "\"value\":\"http://127.0.0.1:9582/src/browser/tests/cdp/semantic_tree_iframe_child.html?moved\"") != null);
 }
 
 test "goto: a navigation stuck waiting for a connection is an error" {
@@ -2845,15 +2945,20 @@ test "goto: a navigation stuck waiting for a connection is an error" {
     defer if (session.primaryPage()) |page| page.close();
 
     const aa = testing.arena_allocator;
-    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
-        \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":300}
+    const stuck = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":50}
     , .{});
-    try std.testing.expectError(error.NavigationTimeout, call(aa, session, &registry, "goto", args, .{}));
+    try std.testing.expectError(error.NavigationTimeout, call(aa, session, &registry, "goto", stuck, .{ .source = .user }));
 
     for (held.items) |conn| network.releaseConnection(conn);
     held.clearRetainingCapacity();
 
-    const r = try call(aa, session, &registry, "goto", args, .{});
+    // Short timeouts are for the stuck case only: slow builds (tsan) need
+    // longer than that to actually load the page.
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html","timeout":5000}
+    , .{});
+    const r = try call(aa, session, &registry, "goto", args, .{ .source = .user });
     try std.testing.expectEqualStrings("Navigated. HTTP 200 OK.", r.text);
 }
 
@@ -2868,7 +2973,7 @@ test "tools: goto flags an error status instead of reporting success" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:9582/status/429"}
     , .{});
-    const r = try call(aa, session, &registry, "goto", args, .{ .nav_note = true });
+    const r = try call(aa, session, &registry, "goto", args, .{ .nav_note = true, .source = .user });
     try std.testing.expectEqualStrings("HTTP 429 Too Many Requests: this is likely an error or rate-limit page, not the requested content.\n\nNavigated. HTTP 429 Too Many Requests.", r.text);
 }
 
@@ -2883,13 +2988,13 @@ test "tools: a read tool navigating by url flags an error status" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:9582/status/404"}
     , .{});
-    const r = try call(aa, session, &registry, "markdown", args, .{ .nav_note = true });
+    const r = try call(aa, session, &registry, "markdown", args, .{ .nav_note = true, .source = .user });
     try std.testing.expect(std.mem.startsWith(u8, r.text, "HTTP 404 Not Found: this is likely an error"));
 
     const reload = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:9582/status/403"}
     , .{});
-    const s = try call(aa, session, &registry, "markdown", reload, .{});
+    const s = try call(aa, session, &registry, "markdown", reload, .{ .source = .user });
     try std.testing.expect(std.mem.indexOf(u8, s.text, "rate-limit") == null);
 }
 
@@ -2902,23 +3007,23 @@ test "tools: a read tool keeps a page that moved within the document" {
 
     const aa = testing.arena_allocator;
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
-    _ = try call(aa, session, &registry, "goto", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ url ++ "\"}", .{}), .{});
+    _ = try call(aa, session, &registry, "goto", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ url ++ "\"}", .{}), .{ .source = .user });
     _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"script":"document.body.dataset.mark = 'kept'; history.pushState(null, '', '?moved')"}
-    , .{}), .{});
+    , .{}), .{ .source = .user });
 
-    const r = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ url ++ "\"}", .{}), .{ .nav_note = true });
+    const r = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ url ++ "\"}", .{}), .{ .nav_note = true, .source = .user });
     try std.testing.expect(std.mem.startsWith(u8, r.text, "The page is at " ++ url ++ "?moved, not " ++ url ++ ":"));
     try std.testing.expect(!r.navigated);
 
     const empty = try call(aa, session, &registry, "tree", try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":""}
-    , .{}), .{ .nav_note = true });
+    , .{}), .{ .nav_note = true, .source = .user });
     try std.testing.expect(!empty.is_error and !empty.navigated);
 
     const mark = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"script":"document.body.dataset.mark"}
-    , .{}), .{});
+    , .{}), .{ .source = .user });
     try std.testing.expectEqualStrings("kept", mark.text);
 }
 
@@ -2933,15 +3038,15 @@ test "tools: a read tool keeps a page reached through a redirect" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:9582/xhr/redirect"}
     , .{});
-    _ = try call(aa, session, &registry, "goto", args, .{});
+    _ = try call(aa, session, &registry, "goto", args, .{ .source = .user });
     _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"script":"document.body.dataset.mark = 'kept'"}
-    , .{}), .{});
+    , .{}), .{ .source = .user });
 
-    _ = try call(aa, session, &registry, "markdown", args, .{});
+    _ = try call(aa, session, &registry, "markdown", args, .{ .source = .user });
     const mark = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"script":"document.body.dataset.mark"}
-    , .{}), .{});
+    , .{}), .{ .source = .user });
     try std.testing.expectEqualStrings("kept", mark.text);
 }
 
@@ -2956,7 +3061,7 @@ test "tools: a bot challenge is named" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:9582/challenge/vercel"}
     , .{});
-    const r = try call(aa, session, &registry, "tree", args, .{ .nav_note = true });
+    const r = try call(aa, session, &registry, "tree", args, .{ .nav_note = true, .source = .user });
     try std.testing.expect(std.mem.startsWith(u8, r.text, "Blocked by a vercel bot challenge (HTTP 429 Too Many Requests)"));
 }
 
@@ -3256,6 +3361,35 @@ test "brave titles and descriptions render on one line" {
     );
 }
 
+test "dropBlocked: blocked hits and the synthesized answer go, the rest stay in order" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const Filter = struct {
+        fn blocksUrl(_: @This(), url: []const u8) bool {
+            return std.mem.find(u8, url, "huggingface.co/datasets/") != null;
+        }
+    };
+    const results: SearchResults = .{ .answer = "42", .hits = &.{
+        .{ .title = "a", .url = "https://example.org/a", .snippet = "" },
+        .{ .title = "gold", .url = "https://huggingface.co/datasets/x/y", .snippet = "answer: 42" },
+        .{ .title = "b", .url = "https://example.org/b", .snippet = "" },
+    } };
+
+    const filtered = try dropBlocked(aa, results, Filter{});
+    try std.testing.expectEqual(2, filtered.hits.len);
+    try std.testing.expectEqualStrings("https://example.org/a", filtered.hits[0].url);
+    try std.testing.expectEqualStrings("https://example.org/b", filtered.hits[1].url);
+    try std.testing.expectEqualStrings("", filtered.answer);
+
+    const untouched = try dropBlocked(aa, .{ .answer = "42", .hits = results.hits[0..1] }, Filter{});
+    try std.testing.expectEqualStrings("42", untouched.answer);
+
+    const all_blocked = try dropBlocked(aa, .{ .hits = results.hits[1..2] }, Filter{});
+    try std.testing.expectEqualStrings("No results.", try renderResults(aa, all_blocked));
+}
+
 test "searchFailed: a rate limit says so, a bare failure stays short" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
@@ -3306,6 +3440,6 @@ test "markdown: a same-url page whose navigation failed is navigated again" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:1/"}
     , .{});
-    try std.testing.expect((try call(aa, session, &registry, "goto", args, .{})).is_error);
-    try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{})).is_error);
+    try std.testing.expect((try call(aa, session, &registry, "goto", args, .{ .source = .user })).is_error);
+    try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{ .source = .user })).is_error);
 }

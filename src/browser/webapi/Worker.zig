@@ -144,6 +144,7 @@ pub fn deinit(self: *Worker) void {
     }
     self.releaseScriptArena();
     self._worker_scope.deinit();
+    self._frame.page.event_listeners.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 

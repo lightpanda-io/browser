@@ -69,7 +69,7 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*StringList {
         .kind = kind,
     };
     const page = frame.page;
-    const gop = try page._svg_string_lists.getOrPut(page.frame_arena, key);
+    const gop = try page._svg_string_lists.getOrPut(page.arena, key);
     if (!gop.found_existing) {
         errdefer _ = page._svg_string_lists.remove(key);
         gop.value_ptr.* = try frame._factory.create(StringList{
@@ -180,10 +180,10 @@ fn commit(self: *StringList, items: []const []const u8, frame: *Frame) !void {
     try self._element.setAttributeSafe(self._attribute_name, .wrap(bytes), frame);
     self._present = true;
     self._snapshot.clearRetainingCapacity();
-    try self._snapshot.appendSlice(frame.arena, bytes);
+    try self._snapshot.appendSlice(frame.page_arena, bytes);
     self._items.clearRetainingCapacity();
     for (bounds) |bound| {
-        try self._items.append(frame.arena, self._snapshot.items[bound[0]..bound[1]]);
+        try self._items.append(frame.page_arena, self._snapshot.items[bound[0]..bound[1]]);
     }
     self._synced = true;
 }
@@ -195,18 +195,18 @@ fn rebuild(self: *StringList, raw: ?[]const u8, frame: *Frame) !void {
     self._items.clearRetainingCapacity();
 
     if (raw) |value| {
-        try self._snapshot.appendSlice(frame.arena, value);
+        try self._snapshot.appendSlice(frame.page_arena, value);
         switch (self._delimiter) {
             .whitespace => {
                 var iterator = std.mem.tokenizeAny(u8, self._snapshot.items, WHITESPACE);
-                while (iterator.next()) |item| try self._items.append(frame.arena, item);
+                while (iterator.next()) |item| try self._items.append(frame.page_arena, item);
             },
             // A set of comma-separated tokens: every segment is a token, even
             // an empty one, and each is trimmed of surrounding whitespace.
             .comma => {
                 var iterator = std.mem.splitScalar(u8, self._snapshot.items, ',');
                 while (iterator.next()) |part| {
-                    try self._items.append(frame.arena, std.mem.trim(u8, part, WHITESPACE));
+                    try self._items.append(frame.page_arena, std.mem.trim(u8, part, WHITESPACE));
                 }
             },
         }

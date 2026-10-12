@@ -359,6 +359,9 @@ pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeou
 
     const timer: std.Io.Timestamp = .now(lp.io, .boot);
     const selector = try Selector.parseLeaky(arena.allocator(), input);
+    for (selector) |s| {
+        if (!s.hasPseudoElement()) break;
+    } else return error.InvalidSelector;
 
     while (true) {
         if (session.isCancelled()) {
@@ -502,6 +505,16 @@ test "Runner: waitForSelector" {
 
     var runner = page.session.runner(.{});
     const el = try runner.waitForSelector(page.frame_id, "#sel1", 10);
+    try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
+}
+
+test "Runner: waitForSelector pseudo-element" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try testing.expectError(error.InvalidSelector, runner.waitForSelector(page.frame_id, "#sel1::before, ::after", 10));
+    const el = try runner.waitForSelector(page.frame_id, "#sel1::before, #sel1", 10);
     try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
 }
 

@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
+const target = @import("target.zig");
 
 const js = @import("../../../browser/js/js.zig");
 const URL = @import("../../../browser/URL.zig");
@@ -122,36 +123,36 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
     // attached targets.
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
-    // Like Chrome, report the initial about:blank as loaded. Its state is left
-    // as is, since the first navigation reuses it (see canNavigateInPlace).
-    if (frame._load_state == .waiting) {
-        const frame_id = &id.toFrameId(frame._frame_id);
-        const loader_id = &id.toLoaderId(frame._loader_id);
+    switch (frame._load_state) {
+        .load, .parsing => {
+            // The page is in progress, events will be dispatch later.
+            return cmd.sendResult(null, .{});
+        },
+        .waiting, .complete => {
+            // The page is loaded (or waiting for navigation) always dispatch
+            // load event.
+            const frame_id = &id.toFrameId(frame._frame_id);
+            const loader_id = &id.toLoaderId(frame._loader_id);
 
-        const now = lp.datetime.timestamp(.boot);
-        try sendPageLifecycle(bc, "DOMContentLoaded", now, frame_id, loader_id);
-        try sendPageLifecycle(bc, "load", now, frame_id, loader_id);
-        return cmd.sendResult(null, .{});
-    }
+            const now = lp.datetime.timestamp(.boot);
+            try sendPageLifecycle(bc, "DOMContentLoaded", now, frame_id, loader_id);
+            try sendPageLifecycle(bc, "load", now, frame_id, loader_id);
 
-    if (frame._load_state == .complete) {
-        const frame_id = &id.toFrameId(frame._frame_id);
-        const loader_id = &id.toLoaderId(frame._loader_id);
-
-        const now = lp.datetime.timestamp(.boot);
-        try sendPageLifecycle(bc, "DOMContentLoaded", now, frame_id, loader_id);
-        try sendPageLifecycle(bc, "load", now, frame_id, loader_id);
-
-        const http_client = frame._session.browser.http_client;
-        const http_active = http_client.http_active;
-        const http_buffered = http_client.dispatch_count;
-        const total_network_activity = http_active + http_buffered + http_client.intercepted;
-        if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
-            try sendPageLifecycle(bc, "networkAlmostIdle", now, frame_id, loader_id);
-        }
-        if (frame._notified_network_idle.check(total_network_activity == 0)) {
-            try sendPageLifecycle(bc, "networkIdle", now, frame_id, loader_id);
-        }
+            // Dispatch network events only for complete page, ie. w/ real nav
+            // done.
+            if (frame._load_state == .complete) {
+                const http_client = frame._session.browser.http_client;
+                const http_active = http_client.http_active;
+                const http_buffered = http_client.dispatch_count;
+                const total_network_activity = http_active + http_buffered + http_client.intercepted;
+                if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
+                    try sendPageLifecycle(bc, "networkAlmostIdle", now, frame_id, loader_id);
+                }
+                if (frame._notified_network_idle.check(total_network_activity == 0)) {
+                    try sendPageLifecycle(bc, "networkIdle", now, frame_id, loader_id);
+                }
+            }
+        },
     }
 
     return cmd.sendResult(null, .{});
@@ -755,6 +756,7 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
         .type = "Navigation",
         .frame = FrameWriter{ .bc = bc, .frame = frame },
     }, .{ .session_id = session_id });
+    try target.sendTargetInfoChanged(bc, event.frame_id);
 
     {
         const aux_data = try arena.print("{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
@@ -854,6 +856,7 @@ pub fn frameNavigatedWithinDocument(bc: anytype, event: *const Notification.Fram
         .url = event.url,
         .navigationType = @tagName(event.navigation_type),
     }, .{ .session_id = session_id });
+    try target.sendTargetInfoChanged(bc, event.frame_id);
 }
 
 pub fn frameDOMContentLoaded(bc: anytype, event: *const Notification.FrameDOMContentLoaded) !void {
@@ -891,6 +894,8 @@ pub fn frameLoaded(bc: anytype, event: *const Notification.FrameLoaded) !void {
         .{ .timestamp = timestamp },
         .{ .session_id = session_id },
     );
+    // The title is usually known by now, not at navigation.
+    try target.sendTargetInfoChanged(bc, event.frame_id);
 
     if (bc.page_life_cycle_events) {
         const loader_id = &id.toLoaderId(event.loader_id);
@@ -2402,15 +2407,70 @@ test "cdp.frame: navigate answers with errorText when the navigation fails" {
     });
     try testing.waitForPage(bc);
 
-    // The pending page was discarded; the active document is untouched.
-    const frame = bc.mainFrame() orelse unreachable;
-    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/hi.html", frame.url);
-
     try ctx.expectSentResult(.{
         .frameId = "FID-0000000001",
         .loaderId = "LID-0000000002",
         .errorText = "CouldntConnect",
     }, .{ .id = 52 });
+
+    // As in Chrome, an error document replaces the active one, and committing
+    // it doesn't answer the command a second time.
+    try ctx.expectSentEvent("Page.frameNavigated", .{ .frame = .{ .url = "http://127.0.0.1:1/unreachable", .loaderId = "LID-0000000002" } }, .{});
+    const frame = bc.mainFrame() orelse unreachable;
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:1/unreachable", frame.url);
+
+    // The error document's frameNavigated precedes the answer: a client that
+    // navigates again on the answer must not take it for its own navigation.
+    var answers: usize = 0;
+    var navigated = false;
+    for (ctx.received.items) |msg| {
+        if (msg.object.get("method")) |method| {
+            if (method == .string and std.mem.eql(u8, method.string, "Page.frameNavigated")) {
+                const loader_id = msg.object.get("params").?.object.get("frame").?.object.get("loaderId").?;
+                if (std.mem.eql(u8, loader_id.string, "LID-0000000002")) navigated = true;
+            }
+        }
+        const msg_id = msg.object.get("id") orelse continue;
+        if (msg_id == .integer and msg_id.integer == 52) {
+            try testing.expect(navigated);
+            answers += 1;
+        }
+    }
+    try testing.expectEqual(1, answers);
+}
+
+test "cdp.frame: a failed script navigation commits an error document" {
+    testing.silenceLog(&.{.frame});
+
+    // A script navigation supersedes the current document, which then never
+    // fires DOMContentLoaded or load. If the navigation fails, clients waiting
+    // on lifecycle events only see them from the error document.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-SNF", .session_id = "SID-SNF", .url = "hi.html", .target_id = "FID-0000000SNF".* });
+    try ctx.processMessage(.{ .id = 1, .method = "Page.setLifecycleEventsEnabled", .sessionId = "SID-SNF", .params = .{ .enabled = true } });
+
+    {
+        const frame = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("location.assign('http://127.0.0.1:1/unreachable')", null);
+    }
+    // Outside the scope: the navigation destroys the page it's entered on.
+    try testing.waitForPage(bc);
+
+    try ctx.expectSentEvent("Page.frameNavigated", .{ .frame = .{ .url = "http://127.0.0.1:1/unreachable", .loaderId = "LID-0000000002" } }, .{ .session_id = "SID-SNF" });
+    try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "DOMContentLoaded", .loaderId = "LID-0000000002" }, .{ .session_id = "SID-SNF" });
+    try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "load", .loaderId = "LID-0000000002" }, .{ .session_id = "SID-SNF" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const v = try ls.local.exec("document.readyState === 'complete' && document.querySelector('h1')?.textContent === 'Navigation failed' && location.href === 'http://127.0.0.1:1/unreachable'", null);
+    try testing.expect(v.toBool());
 }
 
 test "cdp.frame: navigate to about:blank replaces a non-blank document" {
@@ -2859,4 +2919,128 @@ test "cdp.frame: history.pushState emits Page.navigatedWithinDocument" {
         .navigationType = "historyApi",
         .url = "http://127.0.0.1:9582/next",
     }, .{});
+}
+
+test "cdp.frame: a fragment navigation emits Page.navigatedWithinDocument" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("location.hash = 'a'", null);
+    }
+
+    // Chrome reports location.hash (and same-document anchor clicks) as a
+    // "fragment" navigation.
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "fragment",
+        .url = "http://127.0.0.1:9582/src/browser/tests/hi.html#a",
+    }, .{});
+}
+
+test "cdp.frame: a same-document history traversal emits Page.navigatedWithinDocument" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("history.pushState({}, '', '/next'); history.back()", null);
+    }
+
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "historyApi",
+        .url = "http://127.0.0.1:9582/next",
+    }, .{});
+    // Going back to the pushState entry stays in the document. Chrome reports
+    // a traversal as "fragment" whatever the entry's URL.
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "fragment",
+        .url = "http://127.0.0.1:9582/src/browser/tests/hi.html",
+    }, .{});
+}
+
+test "cdp.frame: a fragment navigation to the current URL emits Page.navigatedWithinDocument" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        // Setting location.hash to the current fragment doesn't navigate, but
+        // navigating to the current URL does.
+        _ = try ls.local.exec("location.hash = 'a'; location.hash = 'a'; location.href = '#a'", null);
+    }
+
+    try expectNavigatedWithinDocument(&ctx, &.{
+        "http://127.0.0.1:9582/src/browser/tests/hi.html#a",
+        "http://127.0.0.1:9582/src/browser/tests/hi.html#a",
+    });
+}
+
+test "cdp.frame: Page.navigatedWithinDocument precedes navigations from listeners" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec(
+            \\navigation.addEventListener('currententrychange', () => {
+            \\  if (location.hash === '#a') location.hash = 'b';
+            \\});
+            \\navigation.addEventListener('navigatesuccess', () => {
+            \\  location.hash = 'd';
+            \\}, { once: true });
+            \\location.hash = 'a';
+            \\navigation.navigate('#c');
+        , null);
+    }
+
+    try expectNavigatedWithinDocument(&ctx, &.{
+        "http://127.0.0.1:9582/src/browser/tests/hi.html#a",
+        "http://127.0.0.1:9582/src/browser/tests/hi.html#b",
+        "http://127.0.0.1:9582/src/browser/tests/hi.html#c",
+        "http://127.0.0.1:9582/src/browser/tests/hi.html#d",
+    });
+}
+
+// The subset matcher can't check order or count; look at the events directly.
+fn expectNavigatedWithinDocument(ctx: *testing.TestContext, expected: []const []const u8) !void {
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{ .url = expected[expected.len - 1] }, .{});
+
+    var i: usize = 0;
+    for (ctx.received.items) |received| {
+        const method = received.object.get("method") orelse continue;
+        if (!std.mem.eql(u8, method.string, "Page.navigatedWithinDocument")) continue;
+        try testing.expect(i < expected.len);
+        const url = received.object.get("params").?.object.get("url").?.string;
+        try testing.expectEqualSlices(u8, expected[i], url);
+        i += 1;
+    }
+    try testing.expectEqual(expected.len, i);
 }

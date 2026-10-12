@@ -70,7 +70,13 @@ pub const JsApi = struct {
 
     const reflect = Element.Reflect(Output);
     pub const name = reflect.string("name");
+    pub const @"type" = bridge.property("output", .{ .template = false, .readonly = true });
 
     pub const labels = bridge.accessor(Output.getLabels, null, .{});
     pub const htmlFor = bridge.accessor(Output.getHtmlFor, Output.setHtmlFor, .{ .null_as_undefined = true, .ce_reactions = true });
 };
+
+const testing = @import("../../../../testing.zig");
+test "WebApi: HTML.Output" {
+    try testing.htmlRunner("element/html/output.html", .{});
+}

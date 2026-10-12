@@ -32,10 +32,10 @@ const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const MediaQueryList = @import("webapi/css/MediaQueryList.zig");
+const Animation = @import("webapi/animation/Animation.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 
 // Re-export types from EventManagerBase for API compatibility
 pub const RegisterOptions = EventManagerBase.RegisterOptions;
@@ -45,27 +45,33 @@ const Listener = EventManagerBase.Listener;
 pub const EventManager = @This();
 
 frame: *Frame,
-base: EventManagerBase,
+
+// The Page's listener store (page.event_listeners)
+base: *EventManagerBase,
 
 // Used as an optimization in Page._documentIsComplete. If we know there are no
 // 'load' listeners in the document, we can skip dispatching the per-resource
 // 'load' event (e.g. amazon product page has no listener and ~350 resources)
 has_dom_load_listener: bool,
 
-pub fn init(arena: Allocator, frame: *Frame) EventManager {
+pub fn init(base: *EventManagerBase, frame: *Frame) EventManager {
     return .{
+        .base = base,
         .frame = frame,
         .has_dom_load_listener = false,
-        .base = EventManagerBase.init(arena),
     };
 }
 
 pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, opts: RegisterOptions) !void {
     const listener = (try self.base.register(target, typ, callback, opts)) orelse return;
 
-    // Track load listeners on DOM nodes for optimization
     if (target._type == .node and listener.typ.eql(comptime .wrap("load"))) {
-        self.has_dom_load_listener = true;
+        // optimization so that we avoid firing load for things (e.g. images)
+        // if there's no load listener regsitered (which is pretty common).
+        // A frameless document's node (createHTMLDocument, DOMParser) can be
+        // adopted into the caller's document later and load there.
+        const owner = target.subtype(Node).ownerFrame(self.frame) orelse self.frame;
+        owner._event_manager.has_dom_load_listener = true;
     }
 }
 
@@ -91,6 +97,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
         .node => try self.dispatchNode(target.subtype(Node), event),
         .xhr => try self.dispatchDirect(target, event, target.subtype(XMLHttpRequestEventTarget).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .media_query_list => try self.dispatchDirect(target, event, target.subtype(MediaQueryList).inlineHandler(event._type_string), .{ .context = "dispatch" }),
+        .animation => try self.dispatchDirect(target, event, target.subtype(Animation).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .performance => try self.dispatchDirect(target, event, target.subtype(Performance).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .screen_orientation => try self.dispatchDirect(target, event, target.subtype(Screen.Orientation).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .window => try self.dispatchDirect(target, event, windowInlineHandler(target.subtype(Window), event._type_string), .{ .context = "dispatch" }),
@@ -506,7 +513,7 @@ fn currentEventForTarget(target: *EventTarget, event: *Event) ?*Event {
 
 fn dispatchPhase(self: *EventManager, listeners: TargetListeners, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime capture_only: ?bool) !void {
     const frame = self.frame;
-    const base = &self.base;
+    const base = self.base;
     const list = listeners.list;
 
     // Listeners registered under a legacy name see the event under that name.

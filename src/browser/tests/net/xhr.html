@@ -675,7 +675,7 @@ handler runs, abort() cancels the re-send and no load is delivered.
         req.abort();
         // Long enough for the aborted-but-orphaned re-send to have delivered
         // /xhr/slow (100ms) if abort() failed to cancel it.
-        setTimeout(() => state.resolve(), 250);
+        setTimeout(() => state.resolve(), 150);
       }, 0);
     };
 

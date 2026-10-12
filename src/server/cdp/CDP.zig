@@ -67,6 +67,10 @@ allocator: Allocator,
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
 
+// Target.setDiscoverTargets: when true, page target changes are reported
+// via Target.targetInfoChanged.
+target_discover: bool = false,
+
 session_id_gen: SessionIdGen = .{},
 browser_session_id_gen: BrowserSessionIdGen = .{},
 browser_context_id_gen: BrowserContextIdGen = .{},
@@ -260,6 +264,13 @@ fn dispatchStartupCommand(command: *Command, method: []const u8) !void {
     if (std.mem.eql(u8, method, "Page.getFrameTree")) {
         // The Page.getFrameTree handles startup response gracefully.
         return dispatchCommand(command, method);
+    }
+
+    // The placeholder session has no page behind it: an empty
+    // result would look like success while nothing happened.
+    // Say so, and point at the way to get a real target.
+    if (std.mem.eql(u8, method, "Page.navigate")) {
+        return command.sendError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{});
     }
 
     return command.sendResult(null, .{});
@@ -506,6 +517,9 @@ pub const BrowserContext = struct {
     // so that, if it has _not_ and the page is on its initial about:blank, we
     // can use the existing Frame/js.Context as-is.
     main_world_touched: bool = false,
+
+    // Runtime.exceptionThrown's exceptionDetails.exceptionId.
+    next_exception_id: u32 = 1,
 
     // Scripts registered via Page.addScriptToEvaluateOnNewDocument.
     // Evaluated in each new document after navigation completes.
@@ -929,10 +943,12 @@ pub const BrowserContext = struct {
 
     pub fn runtimeEnable(self: *BrowserContext) !void {
         try self.notification.register(.runtime_console_message, self, onRuntimeConsoleMessage);
+        try self.notification.register(.exception_thrown, self, onExceptionThrown);
     }
 
     pub fn runtimeDisable(self: *BrowserContext) void {
         self.notification.unregister(.runtime_console_message, self);
+        self.notification.unregister(.exception_thrown, self);
     }
 
     // Registers for the download notifications dispatched by Frame when a
@@ -1170,6 +1186,13 @@ pub const BrowserContext = struct {
         const arena = self.acquireNotificationArena();
         defer self.releaseNotificationArena();
         return @import("domains/runtime.zig").consoleMessage(arena, self, msg);
+    }
+
+    fn onExceptionThrown(ctx: *anyopaque, msg: *const Notification.ExceptionThrown) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        const arena = self.acquireNotificationArena();
+        defer self.releaseNotificationArena();
+        return @import("domains/runtime.zig").exceptionThrown(arena, self, msg);
     }
 
     fn acquireNotificationArena(self: *BrowserContext) Allocator {
@@ -1645,6 +1668,19 @@ test "cdp: STARTUP sessionId" {
         try ctx.processMessage(.{ .id = 4, .method = "Hi", .sessionId = "STARTUP" });
         try ctx.expectSentResult(null, .{ .id = 4, .index = 2, .session_id = "STARTUP" });
     }
+}
+
+test "cdp: Page.navigate on the STARTUP session returns -32000" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Page.navigate",
+        .sessionId = "STARTUP",
+        .params = .{ .url = "https://example.com" },
+    });
+    try ctx.expectSentError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{ .id = 1 });
 }
 
 test "cdp: disconnect latches so the worker keeps exiting" {

@@ -25,6 +25,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 const js = @import("../js/js.zig");
 
@@ -280,17 +281,16 @@ pub const PointerButtons = struct {
     /// Whether the gesture's opening pointerdown suppressed the compat mouse
     /// events; held for the whole gesture so each split message reads it here.
     mousedown_suppressed: bool = false,
-    /// Where the gesture's pointerdown landed, until its first release fires
-    /// the gesture's one click.
+    /// Where the latest press landed, until the release that follows it fires
+    /// its click. A release with no press behind it has no target, and
+    /// reports a click count of 0.
     down_target: ?*Element = null,
 
     /// `g.buttons_down` is ignored: the held mask supplies it.
     pub fn press(self: *PointerButtons, frame: *Frame, target: *Element, g: Gesture) !void {
         const bit = buttonsBitmask(g.button);
         const starts_gesture = self.held & ~bit == 0;
-        if (starts_gesture) {
-            self.down_target = target;
-        }
+        self.down_target = target;
         self.held |= bit;
 
         var pg = g;
@@ -306,21 +306,26 @@ pub const PointerButtons = struct {
     pub fn release(self: *PointerButtons, frame: *Frame, target: *Element, g: Gesture) !?*Element {
         const click_target = if (self.down_target) |down| commonClickTarget(down, target) else null;
         const was_suppressed = self.mousedown_suppressed;
-        self.down_target = null;
+        const was_pressed = self.down_target != null;
         self.releaseButton(g.button);
 
         var rg = g;
         rg.buttons_down = self.held;
+        // Chrome reports a release with no press since the previous one (the
+        // later releases of a chord, or a lone release) with a click count of
+        // 0, whatever the client sent.
+        if (!was_pressed) rg.click_count = 0;
         try releaseSequence(frame, target, rg, was_suppressed, click_target);
         return click_target;
     }
 
-    /// The last held button releasing ends the gesture and clears its state.
+    /// Every release consumes the latest press, even if it hit no element.
+    /// The last held button releasing also clears the gesture's suppression.
     fn releaseButton(self: *PointerButtons, button: i32) void {
+        self.down_target = null;
         self.held &= ~buttonsBitmask(button);
         if (self.held == 0) {
             self.mousedown_suppressed = false;
-            self.down_target = null;
         }
     }
 
@@ -964,7 +969,9 @@ pub fn findClickActivationTarget(target: *Node, bubbles: bool) ?*Node {
     return null;
 }
 
-fn runJavascriptUrl(frame: *Frame, source: []const u8) !void {
+// Runs a javascript: URL's script, `source` being the URL without its scheme.
+// It is percent-decoded first, as the "evaluate a javascript: URL" steps do.
+pub fn runJavascriptUrl(frame: *Frame, source: []const u8) !void {
     const arena = try frame.getArena(.tiny, "javascript-url");
     errdefer arena.release();
 
@@ -972,9 +979,7 @@ fn runJavascriptUrl(frame: *Frame, source: []const u8) !void {
     task.* = .{
         .frame = frame,
         .arena = arena,
-        // TODO: the URL body should be percent-decoded; hrefs written in
-        // markup rarely are.
-        .source = try arena.dupe(u8, source),
+        .source = std.Uri.percentDecodeInPlace(try arena.dupe(u8, source)),
     };
     try frame.js.scheduler.add(task, JavascriptUrlTask.run, 0, .{
         .name = "javascript-url",
@@ -1107,32 +1112,29 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
         return;
     }
 
-    if (std.mem.startsWith(u8, href, "javascript:")) {
-        // Navigating to a javascript: URL evaluates the script in the
-        // node's frame as a queued task. (A string completion value
-        // would replace the document; we ignore results.)
-        return runJavascriptUrl(target.ownerFrame(frame) orelse return, href["javascript:".len..]);
-    }
+    // The link's document initiates the navigation, which isn't `frame` when
+    // a script clicks a link in another frame.
+    const owner = target.ownerFrame(frame) orelse return;
 
-    if (try element.hasAttribute(comptime .wrap("download"), frame)) {
-        log.debug(.browser, "a.download", .{ .type = frame._type, .url = frame.url });
+    if (URL.isJavascriptUrl(href) == false and try element.hasAttribute(comptime .wrap("download"), frame)) {
+        log.debug(.browser, "a.download", .{ .type = owner._type, .url = owner.url });
         return;
     }
 
     const target_frame = blk: {
         if (target_name.len == 0) {
-            break :blk target.ownerFrame(frame) orelse return;
+            break :blk owner;
         }
-        break :blk switch (frame.resolveTargetFrame(target_name)) {
+        break :blk switch (owner.resolveTargetFrame(target_name)) {
             .frame => |f| f,
             .blank => {
-                _ = try (target.ownerFrame(frame) orelse return).openBlankTarget(element, href);
+                _ = try owner.openBlankTarget(element, href);
                 return;
             },
         };
     };
 
-    try frame.scheduleNavigation(href, .{
+    try owner.scheduleNavigation(href, .{
         .reason = .script,
         .kind = .{ .push = null },
     }, .{ .anchor = target_frame });
@@ -1232,9 +1234,9 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
         if (is_enter) {
             return implicitFormSubmission(frame, input);
         }
-        _ = try applyEdit(frame, input, .{ .insert = text }, .{});
+        _ = try applyEdit(frame, input, .{ .insert = text });
     } else if (target.is(Element.Html.TextArea)) |textarea| {
-        _ = try applyEdit(frame, textarea, if (is_enter) .line_break else .{ .insert = text }, .{});
+        _ = try applyEdit(frame, textarea, if (is_enter) .line_break else .{ .insert = text });
     }
 }
 
@@ -1269,6 +1271,9 @@ fn keypressFor(frame: *Frame, keydown: *const KeyboardEvent) !*KeyboardEvent {
 }
 
 pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
+    if (event.getIsTrusted() == false) {
+        return;
+    }
     const keyboard_event = event.is(KeyboardEvent) orelse return;
     const key = keyboard_event.getKey();
 
@@ -1281,7 +1286,7 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         return moveFocus(frame, keyboard_event.getShiftKey() == false);
     }
 
-    if (key == .Enter and event.getIsTrusted()) {
+    if (key == .Enter) {
         if (target.is(Element)) |element| {
             if (enterFollowsLink(element)) {
                 return dispatchKeyboardClick(frame, element);
@@ -1304,6 +1309,10 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
 // edit keys other than text insertion (typeChar's) are handled by Input and
 // TextArea the same
 fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: KeyboardEvent.Key) !void {
+    if (isSelectAll(keyboard_event, key)) {
+        return ctl.select(frame);
+    }
+
     if (caretMove(key, ctl)) |move| {
         // Word/paragraph motions (ctrl/alt/meta variants) aren't modeled.
         if (keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey()) {
@@ -1314,7 +1323,7 @@ fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: Key
 
     if (key == .Backspace or key == .Delete) {
         const edit: Edit = .{ .delete = if (key == .Delete) .forward else .backward };
-        _ = try applyEdit(frame, ctl, edit, .{ .beforeinput = keyboard_event.asEvent().getIsTrusted() });
+        _ = try applyEdit(frame, ctl, edit);
     }
 }
 
@@ -1326,7 +1335,7 @@ pub const Edit = union(enum) {
 
 /// A text edit as the user makes it: cancellable through beforeinput, and
 /// refused on a readonly or disabled control. Returns whether it happened.
-pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit, opts: struct { beforeinput: bool = true }) !bool {
+pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit) !bool {
     const el = ctl.asElement();
     if (!ctl.acceptsTextEntry() or el.isDisabled()) {
         return false;
@@ -1343,7 +1352,7 @@ pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit, opts: struct { beforei
         .line_break => .{ null, "\n", "insertLineBreak" },
         .delete => |dir| .{ null, null, if (dir == .forward) "deleteContentForward" else "deleteContentBackward" },
     };
-    if (opts.beforeinput and !try allowEdit(frame, el, data, text, input_type)) {
+    if (!try allowEdit(frame, el, data, text, input_type)) {
         return false;
     }
     if (!editable) {
@@ -1382,6 +1391,17 @@ fn caretMove(key: KeyboardEvent.Key, ctl: anytype) ?@TypeOf(ctl.*).CaretMove {
         .ArrowUp => if (@TypeOf(ctl) == *Element.Html.Input) .line_start else null,
         .ArrowDown => if (@TypeOf(ctl) == *Element.Html.Input) .line_end else null,
         else => null,
+    };
+}
+
+// Ctrl+A alone, as in Chrome on Linux
+fn isSelectAll(keyboard_event: *KeyboardEvent, key: KeyboardEvent.Key) bool {
+    if (!keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey() or keyboard_event.getShiftKey()) {
+        return false;
+    }
+    return switch (key) {
+        .standard => |s| std.ascii.eqlIgnoreCase(s, "a"),
+        else => false,
     };
 }
 
@@ -1559,9 +1579,9 @@ pub fn insertText(frame: *Frame, v: []const u8) !void {
     const html_element = frame.document._active_element orelse return;
 
     if (html_element.is(Element.Html.Input)) |input| {
-        _ = try applyEdit(frame, input, .{ .insert = v }, .{});
+        _ = try applyEdit(frame, input, .{ .insert = v });
     } else if (html_element.is(Element.Html.TextArea)) |textarea| {
-        _ = try applyEdit(frame, textarea, .{ .insert = v }, .{});
+        _ = try applyEdit(frame, textarea, .{ .insert = v });
     }
 }
 

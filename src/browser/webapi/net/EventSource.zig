@@ -128,7 +128,7 @@ pub fn init(url: []const u8, opts_: ?Opts, exec: *const Execution) !*EventSource
     return self;
 }
 
-pub fn deinit(self: *EventSource, _: *Page) void {
+pub fn deinit(self: *EventSource, page: *Page) void {
     self._ready_state = .closed;
     if (self._transfer) |transfer| {
         self._transfer = null;
@@ -145,6 +145,7 @@ pub fn deinit(self: *EventSource, _: *Page) void {
         func.release();
     }
 
+    page.event_listeners.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 

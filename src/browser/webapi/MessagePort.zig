@@ -101,7 +101,7 @@ pub fn postMessage(self: *MessagePort, message: js.Value) !void {
     errdefer cloned.release();
 
     if (!other._enabled) {
-        try other._pending.append(other._exec.arena, cloned);
+        try other._pending.append(other._exec.page_arena, cloned);
         return;
     }
 

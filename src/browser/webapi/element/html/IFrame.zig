@@ -72,6 +72,13 @@ pub fn getSrc(self: *IFrame, frame: *Frame) ![]const u8 {
     return self.asNode().resolveURLReflect(src, frame, .{});
 }
 
+/// The URL the iframe's document is on, which can differ from `src` after
+/// in-frame navigation or redirects; `src` until a document exists.
+pub fn currentURL(self: *IFrame, frame: *Frame) ![]const u8 {
+    if (self._window) |window| return window._frame.url;
+    return self.getSrc(frame);
+}
+
 fn setSrc(self: *IFrame, src: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
 }

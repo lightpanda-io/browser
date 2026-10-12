@@ -186,7 +186,7 @@ pub fn getOrCreate(
     errdefer self.deinit();
 
     const page = frame.page;
-    try page.service_workers.append(page.frame_arena, self);
+    try page.service_workers.append(page.arena, self);
     errdefer _ = page.service_workers.pop();
 
     try session.service_workers.put(session.arena.allocator(), self._scope_url, self);
