@@ -123,3 +123,25 @@
   const el2 = document.querySelector("link[imagesrcset='url1.png 1x, url2.png 2x']");
   testing.expectEqual('preload-link', el2.id);
 </script>
+
+<form id="caseForm" method="POST"><input id="caseCheckbox" type="Checkbox"><input name="Q"></form>
+<a id="caseLink" href="/a" target="_Blank" rel="NoFollow" hreflang="EN-us">a</a>
+<svg><g id="caseSvg" type="Matrix"></g></svg>
+
+<script id="valueCase">
+  // Values of some HTML attributes (method, type, ...) match case-insensitively
+  testing.expectEqual('caseForm', document.querySelector('form[method=post]')?.id);
+  testing.expectEqual('caseCheckbox', document.querySelector('#caseForm input[type=checkbox]')?.id);
+  testing.expectEqual(true, document.getElementById('caseForm').matches('[method^=po]'));
+  testing.expectEqual('caseForm', document.getElementById('caseCheckbox').closest('form[method="post"]')?.id);
+  testing.expectEqual('caseLink', document.querySelector('a[target=_blank][rel~=nofollow][hreflang|=en]')?.id);
+
+  // An explicit `s` flag keeps them case-sensitive
+  testing.expectEqual(null, document.querySelector('form[method=post s]'));
+  testing.expectEqual(null, document.querySelector('a[rel~=nofollow s]'));
+
+  // Other attributes and foreign elements stay case-sensitive
+  testing.expectEqual(null, document.querySelector('[name=q]'));
+  testing.expectEqual(null, document.querySelector('#caseSvg[type=matrix]'));
+  testing.expectEqual('caseSvg', document.querySelector('#caseSvg[type=matrix i]')?.id);
+</script>
