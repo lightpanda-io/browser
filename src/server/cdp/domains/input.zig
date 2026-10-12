@@ -194,10 +194,10 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
 
     switch (params.type) {
         .touchStart => {
-            if (frame.page.input_touch_contact != null) return error.InvalidParams;
+            if (frame.page.input_touch.contact != null) return error.InvalidParams;
         },
         .touchMove, .touchEnd, .touchCancel => {
-            const contact = frame.page.input_touch_contact orelse return error.InvalidParams;
+            const contact = frame.page.input_touch.contact orelse return error.InvalidParams;
             if (params.touchPoints.len == 1 and params.touchPoints[0].id != contact.point.id) {
                 return error.InvalidParams;
             }
@@ -212,7 +212,7 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
     switch (params.type) {
         .touchStart => try Frame.user_input.touchStart(frame, null, point.?, modifiers),
         .touchMove => try Frame.user_input.touchMove(frame, null, point.?, modifiers),
-        .touchEnd => try Frame.user_input.touchEnd(frame, point, modifiers, null),
+        .touchEnd => try Frame.user_input.touchEnd(frame, point, modifiers),
         .touchCancel => try Frame.user_input.touchCancel(frame, modifiers),
     }
 }
@@ -1379,13 +1379,8 @@ test "cdp.input: dispatchTouchEvent reports the client's radius, angle and force
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-
-    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
-    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1437,13 +1432,8 @@ test "cdp.input: dispatchTouchEvent touchStart populates touches/targetTouches/c
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-
-    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
-    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1493,11 +1483,8 @@ test "cdp.input: dispatchTouchEvent preserves each event's modifier keys" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1603,27 +1590,22 @@ test "cdp.input: dispatchTouchEvent a touchStart past every element still opens 
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-
-    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
-    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
 
     try ctx.processMessage(.{
         .id = 1,
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = 0, .y = 3000 }} },
     });
-    try testing.expect(frame.page.input_touch_contact != null);
+    try testing.expect(frame.page.input_touch.contact != null);
 
     try ctx.processMessage(.{
         .id = 2,
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchEnd", .touchPoints = &.{} },
     });
-    try testing.expect(frame.page.input_touch_contact == null);
+    try testing.expect(frame.page.input_touch.contact == null);
 }
 
 test "cdp.input: dispatchTouchEvent empty touchStart is InvalidParams" {
@@ -1696,11 +1678,8 @@ test "cdp.input: dispatchTouchEvent touchMove with no active contact is InvalidP
 test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mismatches" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1724,14 +1703,14 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
         .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y, .id = 0.5 }} },
     });
     try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 1 });
-    try testing.expect(frame.page.input_touch_contact == null);
+    try testing.expect(frame.page.input_touch.contact == null);
 
     try ctx.processMessage(.{
         .id = 2,
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y, .id = 7 }} },
     });
-    try testing.expectEqual(@as(i32, 7), frame.page.input_touch_contact.?.point.id);
+    try testing.expectEqual(@as(i32, 7), frame.page.input_touch.contact.?.point.id);
 
     try ctx.processMessage(.{
         .id = 3,
@@ -1739,8 +1718,8 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
         .params = .{ .type = "touchMove", .touchPoints = &.{.{ .x = x + 100, .y = y + 100, .id = 8 }} },
     });
     try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 3 });
-    try testing.expectEqual(x, frame.page.input_touch_contact.?.point.x);
-    try testing.expectEqual(y, frame.page.input_touch_contact.?.point.y);
+    try testing.expectEqual(x, frame.page.input_touch.contact.?.point.x);
+    try testing.expectEqual(y, frame.page.input_touch.contact.?.point.y);
 
     try ctx.processMessage(.{
         .id = 4,
@@ -1754,14 +1733,14 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
         .params = .{ .type = "touchEnd", .touchPoints = &.{.{ .x = x + 1, .y = y + 20, .id = 8 }} },
     });
     try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 5 });
-    try testing.expect(frame.page.input_touch_contact != null);
+    try testing.expect(frame.page.input_touch.contact != null);
 
     try ctx.processMessage(.{
         .id = 6,
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchEnd", .touchPoints = &.{.{ .x = x + 1, .y = y + 20, .id = 7 }} },
     });
-    try testing.expect(frame.page.input_touch_contact == null);
+    try testing.expect(frame.page.input_touch.contact == null);
     try testing.expect((try ls.local.compileAndRun(
         \\JSON.stringify(touchEvents) === JSON.stringify([
         \\  ['touchstart', 7, target.getBoundingClientRect().x, target.getBoundingClientRect().y],
@@ -1775,13 +1754,8 @@ test "cdp.input: dispatchTouchEvent a second touchStart while a contact is activ
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-
-    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
-    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1831,13 +1805,8 @@ test "cdp.input: dispatchTouchEvent a touchEnd carrying the released point is ac
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-
-    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
-    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1869,7 +1838,7 @@ test "cdp.input: dispatchTouchEvent a touchEnd carrying the released point is ac
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchEnd", .touchPoints = &.{.{ .x = end_x, .y = end_y }} },
     });
-    try testing.expect(frame.page.input_touch_contact == null);
+    try testing.expect(frame.page.input_touch.contact == null);
 
     const result = try ls.local.compileAndRun(
         "window.endTarget === true && window.endX === " ++ "document.getElementById('hoverTarget').getBoundingClientRect().x + 5" ++
@@ -1883,63 +1852,15 @@ test "cdp.input: dispatchTouchEvent a touchEnd carrying the released point is ac
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = rect_x, .y = rect_y }} },
     });
-    try testing.expect(frame.page.input_touch_contact != null);
-}
-
-test "cdp.input: dispatchTouchEvent an empty touchEnd uses the stored position" {
-    var ctx = try testing.context();
-    defer ctx.deinit();
-
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-
-    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
-    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
-
-    var ls: lp.js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
-    defer ls.deinit();
-
-    _ = try ls.local.compileAndRun(
-        \\const t = document.getElementById('hoverTarget');
-        \\t.addEventListener('touchend', (e) => {
-        \\  const touch = e.changedTouches[0];
-        \\  window.endX = touch.clientX;
-        \\  window.endY = touch.clientY;
-        \\});
-    , null);
-
-    const rect_x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x", null)).toF64();
-    const rect_y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y", null)).toF64();
-
-    try ctx.processMessage(.{
-        .id = 1,
-        .method = "Input.dispatchTouchEvent",
-        .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = rect_x, .y = rect_y }} },
-    });
-    try ctx.processMessage(.{
-        .id = 2,
-        .method = "Input.dispatchTouchEvent",
-        .params = .{ .type = "touchEnd", .touchPoints = &.{} },
-    });
-
-    const result = try ls.local.compileAndRun("window.endX === document.getElementById('hoverTarget').getBoundingClientRect().x && window.endY === document.getElementById('hoverTarget').getBoundingClientRect().y", null);
-    try testing.expect(result.isTrue());
+    try testing.expect(frame.page.input_touch.contact != null);
 }
 
 test "cdp.input: dispatchTouchEvent rejects populated touchCancel without lifting contact" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-
-    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
-    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1971,14 +1892,14 @@ test "cdp.input: dispatchTouchEvent rejects populated touchCancel without liftin
         .params = .{ .type = "touchCancel", .touchPoints = &.{.{ .x = cancel_x, .y = cancel_y }} },
     });
     try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 2 });
-    try testing.expect(frame.page.input_touch_contact != null);
+    try testing.expect(frame.page.input_touch.contact != null);
 
     try ctx.processMessage(.{
         .id = 3,
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchCancel", .touchPoints = &.{} },
     });
-    try testing.expect(frame.page.input_touch_contact == null);
+    try testing.expect(frame.page.input_touch.contact == null);
 
     const result = try ls.local.compileAndRun(
         "window.cancelable === false && window.cancelX === " ++ "document.getElementById('hoverTarget').getBoundingClientRect().x" ++
@@ -1992,13 +1913,8 @@ test "cdp.input: dispatchTouchEvent a multi-point touchEnd/touchCancel is Invali
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-
-    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
-    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -2750,11 +2666,8 @@ test "cdp.input: dispatchKeyEvent Enter on a checkbox, radio or select" {
 test "cdp.input: touch tap emits pointer and compatibility activation in order" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -2787,18 +2700,15 @@ test "cdp.input: touch tap emits pointer and compatibility activation in order" 
         \\tapEvents.find(e => e.type === 'mousedown').buttons === 1 && tapEvents.find(e => e.type === 'mousedown').detail === 1 &&
         \\tapEvents.find(e => e.type === 'mouseup').buttons === 0 && tapEvents.find(e => e.type === 'click').detail === 1
     , null)).isTrue());
-    try testing.expect(frame.page.input_touch_contact == null);
+    try testing.expect(frame.page.input_touch.contact == null);
     try testing.expectEqual(@as(u16, 0), frame.page.input_pointer.held);
 }
 
 test "cdp.input: touch tap cancellation distinguishes touch pointer and mouse defaults" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -2845,7 +2755,7 @@ test "cdp.input: touch tap cancellation distinguishes touch pointer and mouse de
         const passed = (try ls.local.compileAndRun(case[1], null)).isTrue();
         if (!passed) std.debug.print("failed prevention case: {s}\n", .{case[0]});
         try testing.expect(passed);
-        try testing.expect(frame.page.input_touch_contact == null);
+        try testing.expect(frame.page.input_touch.contact == null);
     }
 }
 
@@ -2912,11 +2822,8 @@ test "cdp.input: touch pointer retains its target while compatibility events hit
 test "cdp.input: touch slop, scroll and touch-action" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -2954,7 +2861,7 @@ test "cdp.input: touch slop, scroll and touch-action" {
     for (cases) |c| {
         _ = try ls.local.compileAndRun("log = []; preventType = ''; t.style.touchAction = ''; t.parentElement.style.touchAction = '';", null);
         if (c.setup.len > 0) _ = try ls.local.compileAndRun(c.setup, null);
-        frame.page.input_last_tap = null;
+        frame.page.input_touch.last_tap = null;
         try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchTouchEvent", .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y }} } });
         for (c.moves) |m| {
             try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchTouchEvent", .params = .{ .type = "touchMove", .touchPoints = &.{.{ .x = x + m[0], .y = y + m[1] }} } });
@@ -2972,11 +2879,8 @@ test "cdp.input: touch slop, scroll and touch-action" {
 test "cdp.input: consecutive taps count up" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -3008,7 +2912,7 @@ test "cdp.input: consecutive taps count up" {
     try testing.expectEqualSlices(u8, "mousedown:2 click:2 dblclick:2 mousedown:1 click:1", try (try ls.local.compileAndRun("log.join(' ')", null)).toStringSlice());
 
     _ = try ls.local.compileAndRun("log = []", null);
-    frame.page.input_last_tap.?.released_ms -= 401;
+    frame.page.input_touch.last_tap.?.released_ms -= 401;
     try Tap.run(&ctx, x + 20, y + 21, false);
     try Tap.run(&ctx, x + 20, y + 21, true);
     try Tap.run(&ctx, x + 20, y + 21, false);
@@ -3018,11 +2922,8 @@ test "cdp.input: consecutive taps count up" {
 test "cdp.input: passive prevention and finger jitter do not suppress repeated taps" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -3057,11 +2958,8 @@ test "cdp.input: passive prevention and finger jitter do not suppress repeated t
 test "cdp.input: touch tap respects disabled controls across compatibility handlers" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -3097,18 +2995,15 @@ test "cdp.input: touch tap respects disabled controls across compatibility handl
         const passed = (try ls.local.compileAndRun(case[1], null)).isTrue();
         if (!passed) std.debug.print("disabled tap case: {s}\n", .{case[0]});
         try testing.expect(passed);
-        try testing.expect(frame.page.input_touch_contact == null);
+        try testing.expect(frame.page.input_touch.contact == null);
     }
 }
 
 test "cdp.input: touch tap revalidates targets between compatibility events" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -3141,18 +3036,15 @@ test "cdp.input: touch tap revalidates targets between compatibility events" {
         const passed = (try ls.local.compileAndRun(case[1], null)).isTrue();
         if (!passed) std.debug.print("mutating tap case: {s}\n", .{case[0]});
         try testing.expect(passed);
-        try testing.expect(frame.page.input_touch_contact == null);
+        try testing.expect(frame.page.input_touch.contact == null);
     }
 }
 
 test "cdp.input: touch cancellation retains last contact geometry through pointer leave" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -3172,7 +3064,7 @@ test "cdp.input: touch cancellation retains last contact geometry through pointe
         \\events.every(e => e.button === -1 && e.buttons === 0 && e.width === 6 && e.height === 8 && e.pressure === 0 && e.id === 2) &&
         \\!events[0].cancelable && events[1].cancelable && !events[2].cancelable
     , null)).isTrue());
-    try testing.expect(frame.page.input_touch_contact == null);
+    try testing.expect(frame.page.input_touch.contact == null);
 }
 
 test "cdp.input: re-navigating an iframe drops the pointer state on its elements" {

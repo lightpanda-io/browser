@@ -59,10 +59,20 @@ const HoverContext = struct {
     y: f64 = 0,
     buttons: u16 = 0,
     modifiers: Modifiers = .{},
-    with_pointer: bool = true,
 
     fn emit(ctx: HoverContext, frame: *Frame, target: *Element, comptime suffix: []const u8, related: ?*Element, bubbling: bool) void {
-        dispatchBoundaryEvent(frame, target, "mouse" ++ suffix, "pointer" ++ suffix, related, bubbling, ctx);
+        dispatchPointerBoundary(frame, target, "pointer" ++ suffix, related, bubbling, ctx);
+        dispatchMouseBoundary(frame, target, "mouse" ++ suffix, related, bubbling, ctx);
+    }
+};
+
+/// A touch's compatibility hover: the pointer half already fired with the
+/// touch, so only the mouse half is left.
+const CompatHover = struct {
+    ctx: HoverContext,
+
+    fn emit(self: CompatHover, frame: *Frame, target: *Element, comptime suffix: []const u8, related: ?*Element, bubbling: bool) void {
+        dispatchMouseBoundary(frame, target, "mouse" ++ suffix, related, bubbling, self.ctx);
     }
 };
 
@@ -70,14 +80,14 @@ const HoverContext = struct {
 // hovered item so that trasitions can fire the correct events. e.g. mouseout
 // bubbles up normally, but mouseleave will only fire on parents where the new
 // target isn't part of.
-pub fn updateHoverTarget(frame: *Frame, to: ?*Element, ctx: HoverContext) void {
+pub fn updateHoverTarget(frame: *Frame, to: ?*Element, emitter: anytype) void {
     const page = frame.page;
     const from = page.input_hover_target;
     if (from == to) {
         return;
     }
     page.input_hover_target = to;
-    dispatchBoundaryEvents(frame, from, to, ctx);
+    dispatchBoundaryEvents(frame, from, to, emitter);
 }
 
 /// `emitter.emit` fires one boundary event, named by its suffix ("out",
@@ -133,38 +143,38 @@ fn dispatchBoundaryEvents(frame: *Frame, from: ?*Element, to: ?*Element, emitter
     }
 }
 
-// Fire a pointer/mouse event pair, e.g. pointerout + mouseout
-fn dispatchBoundaryEvent(frame: *Frame, target: *Element, comptime mouse_typ: []const u8, comptime pointer_typ: []const u8, related: ?*Element, bubbling: bool, ctx: HoverContext) void {
+fn dispatchPointerBoundary(frame: *Frame, target: *Element, comptime pointer_typ: []const u8, related: ?*Element, bubbling: bool, ctx: HoverContext) void {
     const modifiers = ctx.modifiers;
     const related_target = if (related) |r| r.asEventTarget() else null;
+    const pointer_event = PointerEvent.initTrusted(pointer_typ, .{
+        .bubbles = bubbling,
+        .cancelable = bubbling,
+        .composed = bubbling,
+        .clientX = ctx.x,
+        .clientY = ctx.y,
+        // No button changed state: https://www.w3.org/TR/pointerevents3/#the-button-property
+        .button = -1,
+        .buttons = ctx.buttons,
+        .pointerId = 1,
+        .pointerType = "mouse",
+        .isPrimary = true,
+        .relatedTarget = related_target,
+        .ctrlKey = modifiers.ctrl,
+        .shiftKey = modifiers.shift,
+        .altKey = modifiers.alt,
+        .metaKey = modifiers.meta,
+    }, frame) catch |err| {
+        log.debug(.frame, "boundary pointer event", .{ .err = err, .type = pointer_typ });
+        return;
+    };
+    frame._event_manager.dispatch(target.asEventTarget(), pointer_event.asEvent()) catch |err| {
+        log.debug(.frame, "boundary pointer dispatch", .{ .err = err, .type = pointer_typ });
+    };
+}
 
-    if (ctx.with_pointer) {
-        const pointer_event = PointerEvent.initTrusted(pointer_typ, .{
-            .bubbles = bubbling,
-            .cancelable = bubbling,
-            .composed = bubbling,
-            .clientX = ctx.x,
-            .clientY = ctx.y,
-            // No button changed state: https://www.w3.org/TR/pointerevents3/#the-button-property
-            .button = -1,
-            .buttons = ctx.buttons,
-            .pointerId = 1,
-            .pointerType = "mouse",
-            .isPrimary = true,
-            .relatedTarget = related_target,
-            .ctrlKey = modifiers.ctrl,
-            .shiftKey = modifiers.shift,
-            .altKey = modifiers.alt,
-            .metaKey = modifiers.meta,
-        }, frame) catch |err| {
-            log.debug(.frame, "boundary pointer event", .{ .err = err, .type = pointer_typ });
-            return;
-        };
-        frame._event_manager.dispatch(target.asEventTarget(), pointer_event.asEvent()) catch |err| {
-            log.debug(.frame, "boundary pointer dispatch", .{ .err = err, .type = pointer_typ });
-        };
-    }
-
+fn dispatchMouseBoundary(frame: *Frame, target: *Element, comptime mouse_typ: []const u8, related: ?*Element, bubbling: bool, ctx: HoverContext) void {
+    const modifiers = ctx.modifiers;
+    const related_target = if (related) |r| r.asEventTarget() else null;
     const mouse_event = MouseEvent.initTrusted(comptime .wrap(mouse_typ), .{
         .bubbles = bubbling,
         .cancelable = bubbling,
@@ -356,7 +366,7 @@ fn commonClickTarget(down: *Element, up: *Element) *Element {
 }
 
 pub fn moveSequence(frame: *Frame, target: *Element, g: Gesture) !void {
-    updateHoverTarget(frame, target, .{ .x = g.x, .y = g.y, .buttons = g.buttons_down, .modifiers = g.modifiers });
+    updateHoverTarget(frame, target, HoverContext{ .x = g.x, .y = g.y, .buttons = g.buttons_down, .modifiers = g.modifiers });
     // A move changes no button: https://www.w3.org/TR/pointerevents3/#the-button-property
     var pg = g;
     pg.button = -1;
@@ -619,6 +629,8 @@ pub const TouchContact = struct {
     start: Touch.Point,
     pointer_id: i32,
     tap_count: u32 = 1,
+    // WebDriver chose the target, which then stands in for every hit-test.
+    pinned: bool = false,
     suppress_mouse: bool = false,
     start_prevented: bool = false,
     phase: Phase = .slop,
@@ -641,11 +653,14 @@ pub const TouchContact = struct {
 
     /// A released contact reports a 1x1 point; a cancelled one keeps its
     /// geometry.
-    fn gesture(self: TouchContact, point: Touch.Point, phase: enum { down, up, cancel }, modifiers: Modifiers) Gesture {
+    fn gesture(self: TouchContact, point: Touch.Point, phase: enum { down, move, up, cancel }, modifiers: Modifiers) Gesture {
         const released = phase == .up;
         return .{
-            .button = if (phase == .cancel) -1 else mouse_button.main,
-            .buttons_down = if (phase == .down) 1 else 0,
+            .button = switch (phase) {
+                .down, .up => mouse_button.main,
+                .move, .cancel => -1,
+            },
+            .buttons_down = if (phase == .down or phase == .move) 1 else 0,
             .click_count = self.tap_count,
             .x = point.x,
             .y = point.y,
@@ -687,6 +702,14 @@ pub const LastTap = struct {
     pinned: ?*Element,
 };
 
+pub const TouchInput = struct {
+    // Single-touch, so at most one.
+    contact: ?TouchContact = null,
+    next_pointer_id: i32 = first_touch_pointer_id,
+    // The last tap that activated, for counting the next one.
+    last_tap: ?LastTap = null,
+};
+
 const TouchDispatch = struct {
     modifiers: Modifiers = .{},
     // A scrolling contact's touch events aren't cancelable.
@@ -696,6 +719,7 @@ const TouchDispatch = struct {
 /// Fires the touch event on `target` (no hit-test); returns whether
 /// preventDefault() cancelled it.
 fn dispatchTouchEvent(frame: *Frame, target: *Element, typ: TouchType, point: Touch.Point, opts: TouchDispatch) !bool {
+    const owner = target.ownerFrame(frame) orelse frame;
     const event: *TouchEvent = try .initTrustedWithTouch(@tagName(typ), .{
         .bubbles = true,
         .composed = true,
@@ -703,7 +727,7 @@ fn dispatchTouchEvent(frame: *Frame, target: *Element, typ: TouchType, point: To
         .ctrlKey = opts.modifiers.ctrl,
         .metaKey = opts.modifiers.meta,
         .shiftKey = opts.modifiers.shift,
-    }, target, point, frame);
+    }, target, point, owner);
 
     // touchcancel is never cancelable per spec; the others follow the same
     // passive-listener-dependent rule as wheel (see EventManager).
@@ -711,43 +735,45 @@ fn dispatchTouchEvent(frame: *Frame, target: *Element, typ: TouchType, point: To
         event.asEvent()._cancelable_unless_passive = true;
     }
 
-    return frame._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
+    return owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
 }
 
 /// A point that misses every element falls back to the document element, as
 /// WebDriver's pointerMove does, rather than dropping the contact. `target`
 /// replaces the hit-test for WebDriver, whose actions have no viewport point.
 pub fn touchStart(frame: *Frame, target: ?*Element, point: Touch.Point, modifiers: Modifiers) !void {
-    const page = frame.page;
-    if (page.input_touch_contact != null) {
+    const touch = &frame.page.input_touch;
+    if (touch.contact != null) {
         return;
     }
+    const owner = if (target) |el| el.ownerFrame(frame) orelse frame else frame;
     const resolved = target orelse
-        (try frame.window._document.elementFromPoint(point.x, point.y, frame)) orelse
-        frame.window._document.getDocumentElement() orelse return;
+        (try owner.window._document.elementFromPoint(point.x, point.y, owner)) orelse
+        owner.window._document.getDocumentElement() orelse return;
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame touch", .{
-            .url = frame.url,
+            .url = owner.url,
             .node = resolved,
             .x = point.x,
             .y = point.y,
-            .type = frame._type,
+            .type = owner._type,
         });
     }
     var contact: TouchContact = .{
         .target = resolved,
         .point = point,
         .start = point,
-        .pointer_id = page.input_touch_next_pointer_id,
-        .tap_count = nextTapCount(page.input_last_tap, point, target),
+        .pointer_id = touch.next_pointer_id,
+        .tap_count = nextTapCount(touch.last_tap, point, target),
+        .pinned = target != null,
     };
-    page.input_last_tap = null;
-    page.input_touch_next_pointer_id = if (contact.pointer_id == std.math.maxInt(i32)) first_touch_pointer_id else contact.pointer_id + 1;
+    touch.last_tap = null;
+    touch.next_pointer_id = if (contact.pointer_id == std.math.maxInt(i32)) first_touch_pointer_id else contact.pointer_id + 1;
     const g = contact.gesture(point, .down, modifiers);
-    dispatchBoundaryEvents(frame, null, resolved, TouchBoundary{ .g = g });
-    contact.suppress_mouse = try emitPointer(frame, resolved, "pointerdown", g, 0);
-    contact.start_prevented = try dispatchTouchEvent(frame, resolved, .touchstart, point, .{ .modifiers = modifiers });
-    page.input_touch_contact = contact;
+    dispatchBoundaryEvents(owner, null, resolved, TouchBoundary{ .g = g });
+    contact.suppress_mouse = try emitPointer(owner, resolved, "pointerdown", g, 0);
+    contact.start_prevented = try dispatchTouchEvent(owner, resolved, .touchstart, point, .{ .modifiers = modifiers });
+    touch.contact = contact;
 }
 
 /// Taps count 1, 2, 3, then start over, as in Chrome.
@@ -767,8 +793,9 @@ fn nextTapCount(last_tap: ?LastTap, start: Touch.Point, pinned: ?*Element) u32 {
 /// A drag the page doesn't cancel scrolls: its touch events stop being
 /// cancelable, and where touch-action allows the pan the pointer is cancelled.
 pub fn touchMove(frame: *Frame, over: ?*Element, point: Touch.Point, modifiers: Modifiers) !void {
-    const page = frame.page;
-    var contact = page.input_touch_contact orelse return;
+    const touch = &frame.page.input_touch;
+    var contact = touch.contact orelse return;
+    const owner = contact.target.ownerFrame(frame) orelse frame;
     contact.point = point;
     const dx = point.x - contact.start.x;
     const dy = point.y - contact.start.y;
@@ -777,26 +804,24 @@ pub fn touchMove(frame: *Frame, over: ?*Element, point: Touch.Point, modifiers: 
     if (leaves_slop) {
         contact.phase = .drag;
     }
-    var g = contact.gesture(point, .down, modifiers);
-    g.button = -1;
     if (contact.phase != .pan) {
-        _ = try emitPointer(frame, contact.target, "pointermove", g, 0);
+        _ = try emitPointer(owner, contact.target, "pointermove", contact.gesture(point, .move, modifiers), 0);
     }
     if (contact.phase == .slop) {
-        page.input_touch_contact = contact;
+        touch.contact = contact;
         return;
     }
-    const prevented = try dispatchTouchEvent(frame, contact.target, .touchmove, point, contact.dispatch(modifiers));
+    const prevented = try dispatchTouchEvent(owner, contact.target, .touchmove, point, contact.dispatch(modifiers));
     if (leaves_slop and !prevented and !contact.start_prevented) {
         contact.phase = .scroll;
-        if (allowsPan(frame, contact.target, dx, dy)) {
+        if (allowsPan(owner, contact.target, dx, dy)) {
             contact.phase = .pan;
             const cg = contact.gesture(point, .cancel, modifiers);
-            _ = try emitPointer(frame, contact.target, "pointercancel", cg, 0);
-            dispatchBoundaryEvents(frame, contact.target, null, TouchBoundary{ .g = cg });
+            _ = try emitPointer(owner, contact.target, "pointercancel", cg, 0);
+            dispatchBoundaryEvents(owner, contact.target, null, TouchBoundary{ .g = cg });
         }
     }
-    page.input_touch_contact = contact;
+    touch.contact = contact;
 }
 
 /// Whether `target`'s effective touch-action allows a pan in the drag's
@@ -816,70 +841,101 @@ pub fn touchHover(frame: *Frame, target: *Element, modifiers: Modifiers) !void {
         .button = -1,
         .modifiers = modifiers,
         .pointer_type = "touch",
-        .pointer_id = frame.page.input_touch_next_pointer_id,
+        .pointer_id = frame.page.input_touch.next_pointer_id,
     }, 0);
 }
 
 /// Puppeteer sends the released point and Chrome dispatches there; Playwright
 /// sends none, so the stored contact is used. The compatibility mouse events
-/// hit-test the release point; `compat_target` replaces that for WebDriver.
-pub fn touchEnd(frame: *Frame, point: ?Touch.Point, modifiers: Modifiers, compat_target: ?*Element) !void {
-    const contact = frame.page.input_touch_contact orelse return;
+/// hit-test the release point, unless WebDriver pinned the target.
+pub fn touchEnd(frame: *Frame, point: ?Touch.Point, modifiers: Modifiers) !void {
+    const touch = &frame.page.input_touch;
+    const contact = touch.contact orelse return;
+    const owner = contact.target.ownerFrame(frame) orelse frame;
     // Cleared before dispatch so a throwing listener can't leave a stale
     // contact blocking every later touchStart.
-    frame.page.input_touch_contact = null;
+    touch.contact = null;
+    const pinned: ?*Element = if (contact.pinned) contact.target else null;
     const lift = point orelse contact.point;
 
     const g = contact.gesture(lift, .up, modifiers);
     if (contact.phase != .pan) {
-        _ = try emitPointer(frame, contact.target, "pointerup", g, 0);
-        dispatchBoundaryEvents(frame, contact.target, null, TouchBoundary{ .g = g });
+        _ = try emitPointer(owner, contact.target, "pointerup", g, 0);
+        dispatchBoundaryEvents(owner, contact.target, null, TouchBoundary{ .g = g });
     }
-    const prevented = try dispatchTouchEvent(frame, contact.target, .touchend, lift, contact.dispatch(modifiers));
+    const prevented = try dispatchTouchEvent(owner, contact.target, .touchend, lift, contact.dispatch(modifiers));
     if (contact.start_prevented or contact.phase != .slop or prevented) return;
-    frame.page.input_last_tap = .{
+    touch.last_tap = .{
         .count = contact.tap_count,
         .x = contact.start.x,
         .y = contact.start.y,
         .released_ms = lp.datetime.milliTimestamp(.boot),
-        .pinned = compat_target,
+        .pinned = pinned,
     };
 
-    var target = try touchCompatTarget(frame, lift, compat_target) orelse return;
-    updateHoverTarget(frame, target, .{ .x = lift.x, .y = lift.y, .modifiers = modifiers, .with_pointer = false });
+    var target = try touchCompatTarget(owner, lift, pinned) orelse return;
+    updateHoverTarget(owner, target, CompatHover{ .ctx = .{ .x = lift.x, .y = lift.y, .modifiers = modifiers } });
     if (contact.suppress_mouse) {
-        return mouseUpAndClick(frame, target, g, true, target);
+        return mouseUpAndClick(owner, target, g, true, target);
     }
 
     // Each listener can replace the element under the finger, so every
     // compatibility event hit-tests again, as Chrome does.
-    target = try touchCompatTarget(frame, lift, compat_target) orelse return;
-    _ = try emitMouse(frame, target, "mousemove", g, 0);
-    const down_target = try touchCompatTarget(frame, lift, compat_target) orelse return;
+    target = try touchCompatTarget(owner, lift, pinned) orelse return;
+    _ = try emitMouse(owner, target, "mousemove", g, 0);
+    const down_target = try touchCompatTarget(owner, lift, pinned) orelse return;
     var dg = g;
     dg.buttons_down = 1;
-    try mouseDown(frame, down_target, dg);
-    const up_target = try touchCompatTarget(frame, lift, compat_target) orelse return;
+    try mouseDown(owner, down_target, dg);
+    const up_target = try touchCompatTarget(owner, lift, pinned) orelse return;
     // Chrome drops the click when mousedown's target is removed before the
     // release.
     const click_target = if (down_target.asNode().isConnected()) commonClickTarget(down_target, up_target) else null;
-    try mouseUpAndClick(frame, up_target, g, false, click_target);
+    try mouseUpAndClick(owner, up_target, g, false, click_target);
 }
 
 pub fn touchCancel(frame: *Frame, modifiers: Modifiers) !void {
-    const contact = frame.page.input_touch_contact orelse return;
-    frame.page.input_touch_contact = null;
+    const touch = &frame.page.input_touch;
+    const contact = touch.contact orelse return;
+    const owner = contact.target.ownerFrame(frame) orelse frame;
+    touch.contact = null;
     if (contact.phase != .pan) {
         const g = contact.gesture(contact.point, .cancel, modifiers);
-        _ = try emitPointer(frame, contact.target, "pointercancel", g, 0);
-        dispatchBoundaryEvents(frame, contact.target, null, TouchBoundary{ .g = g });
+        _ = try emitPointer(owner, contact.target, "pointercancel", g, 0);
+        dispatchBoundaryEvents(owner, contact.target, null, TouchBoundary{ .g = g });
     }
-    _ = try dispatchTouchEvent(frame, contact.target, .touchcancel, contact.point, .{ .modifiers = modifiers });
+    _ = try dispatchTouchEvent(owner, contact.target, .touchcancel, contact.point, .{ .modifiers = modifiers });
 }
 
 fn touchCompatTarget(frame: *Frame, point: Touch.Point, pinned: ?*Element) !?*Element {
     if (pinned) |el| return el;
     return frame.window._document.elementFromPoint(point.x, point.y, frame);
+}
+
+/// Drops the page's input state on `frame`'s elements, which are going away.
+pub fn forgetFrame(frame: *Frame) void {
+    const page = frame.page;
+    if (page.input_hover_target) |el| {
+        if (el.ownerFrame(frame) == frame) {
+            page.input_hover_target = null;
+        }
+    }
+    if (page.input_pointer.down_target) |el| {
+        if (el.ownerFrame(frame) == frame) {
+            page.input_pointer.reset();
+        }
+    }
+    const touch = &page.input_touch;
+    if (touch.contact) |contact| {
+        if (contact.target.ownerFrame(frame) == frame) {
+            touch.contact = null;
+        }
+    }
+    if (touch.last_tap) |tap| {
+        if (tap.pinned) |el| if (el.ownerFrame(frame) == frame) {
+            touch.last_tap = null;
+        };
+    }
 }
 
 /// Whether the element has a click activation behavior that handleClick

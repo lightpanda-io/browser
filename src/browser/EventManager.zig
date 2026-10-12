@@ -303,7 +303,9 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
     if (node_path_len > 0) {
         const last = path_buffer[node_path_len - 1];
         if (event._needs_retargeting) {
-            if (rootIsShadowRoot(getAdjustedTarget(event._dispatch_target, last))) {
+            if (rootIsShadowRoot(getAdjustedTarget(event._dispatch_target, last)) or
+                rootIsShadowRoot(getAdjustedTarget(original_touch, last)))
+            {
                 clear_targets = true;
             }
         }
@@ -313,9 +315,6 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
                     clear_targets = true;
                 }
             }
-        }
-        if (event._needs_retargeting and rootIsShadowRoot(getAdjustedTarget(original_touch, last))) {
-            clear_targets = true;
         }
     }
 

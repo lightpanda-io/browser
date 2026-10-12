@@ -251,18 +251,11 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             }
             const el = target orelse continue;
             if (is_touch) {
-                if (frame.page.input_touch_contact) |contact| {
-                    // Touch implicitly captures the original down target.
-                    const owner = contact.target.ownerFrame(frame) orelse continue;
-                    Frame.user_input.touchMove(owner, el, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
-                        log.debug(.app, "webdriver touch", .{ .err = err });
-                    };
-                } else {
-                    const owner = el.ownerFrame(frame) orelse continue;
-                    Frame.user_input.touchHover(owner, el, frame.page.input_modifiers) catch |err| {
-                        log.debug(.app, "webdriver touch", .{ .err = err });
-                    };
-                }
+                const moved = if (frame.page.input_touch.contact != null)
+                    Frame.user_input.touchMove(frame, el, .{ .x = 0, .y = 0 }, frame.page.input_modifiers)
+                else
+                    Frame.user_input.touchHover(frame, el, frame.page.input_modifiers);
+                moved catch |err| log.debug(.app, "webdriver touch", .{ .err = err });
                 continue;
             }
             Frame.user_input.moveSequence(frame, el, .{
@@ -272,8 +265,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
         } else if (action_type.eql(comptime .wrap("pointerDown"))) {
             const el = target orelse continue;
             if (is_touch) {
-                const owner = el.ownerFrame(frame) orelse continue;
-                Frame.user_input.touchStart(owner, el, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
+                Frame.user_input.touchStart(frame, el, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
                     log.debug(.app, "webdriver touch", .{ .err = err });
                 };
                 continue;
@@ -291,9 +283,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             }) catch {};
         } else if (action_type.eql(comptime .wrap("pointerUp"))) {
             if (is_touch) {
-                const contact = frame.page.input_touch_contact orelse continue;
-                const owner = contact.target.ownerFrame(frame) orelse continue;
-                Frame.user_input.touchEnd(owner, null, frame.page.input_modifiers, contact.target) catch |err| {
+                Frame.user_input.touchEnd(frame, null, frame.page.input_modifiers) catch |err| {
                     log.debug(.app, "webdriver touch", .{ .err = err });
                 };
                 continue;

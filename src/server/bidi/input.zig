@@ -344,7 +344,7 @@ const ParseError = error{
 const SourceActions = struct {
     id: []const u8,
     type: Source.Kind,
-    parameters: ?std.json.Value = null,
+    parameters: ?struct { pointerType: enum { mouse, pen, touch } = .mouse } = null,
     actions: []const std.json.Value,
 };
 
@@ -382,7 +382,7 @@ fn parseTicks(bidi: *BiDi, arena: Allocator, actions: []const std.json.Value) Pa
         const sa = std.json.parseFromValueLeaky(SourceActions, arena, value, .{ .ignore_unknown_fields = true }) catch {
             return error.InvalidActions;
         };
-        const source = try state.findOrCreate(allocator, sa.id, sa.type, isTouch(sa.parameters));
+        const source = try state.findOrCreate(allocator, sa.id, sa.type, if (sa.parameters) |p| p.pointerType == .touch else false);
 
         const parsed = try arena.alloc(Action, sa.actions.len);
         for (sa.actions, parsed) |raw, *action| {
@@ -405,13 +405,6 @@ fn parseTicks(bidi: *BiDi, arena: Allocator, actions: []const std.json.Value) Pa
         tick.* = row.items;
     }
     return ticks;
-}
-
-fn isTouch(parameters: ?std.json.Value) bool {
-    const params = parameters orelse return false;
-    if (params != .object) return false;
-    const pointer_type = params.object.get("pointerType") orelse return false;
-    return pointer_type == .string and std.mem.eql(u8, pointer_type.string, "touch");
 }
 
 // `arena` outlives the command: an action can run after its json is gone.
@@ -595,7 +588,7 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
             const i = std.mem.findScalar(u8, pointer.pressed.items, button) orelse return;
             _ = pointer.pressed.orderedRemove(i);
             if (pointer.touch) {
-                return user_input.touchEnd(frame, .{ .x = pointer.x, .y = pointer.y }, .{}, null);
+                return user_input.touchEnd(frame, .{ .x = pointer.x, .y = pointer.y }, .{});
             }
             try user_input.triggerMouseRelease(frame, pointer.x, pointer.y, button, pointer.click_count);
         },
