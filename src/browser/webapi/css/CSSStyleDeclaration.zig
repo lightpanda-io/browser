@@ -989,7 +989,6 @@ const initial_values = std.StaticStringMap([]const u8).initComptime(.{
     .{ "letter-spacing", "normal" },
     .{ "word-spacing", "0px" },
     .{ "text-indent", "0px" },
-    .{ "position", "static" },
     .{ "top", "auto" },
     .{ "right", "auto" },
     .{ "bottom", "auto" },

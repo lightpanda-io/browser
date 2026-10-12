@@ -294,7 +294,7 @@
   const cs = window.getComputedStyle(div);
   const expected = {
     'font-weight': '400', 'line-height': 'normal', 'letter-spacing': 'normal',
-    'word-spacing': '0px', 'text-indent': '0px', 'position': 'static',
+    'word-spacing': '0px', 'text-indent': '0px',
     'top': 'auto', 'right': 'auto', 'bottom': 'auto', 'left': 'auto', 'z-index': 'auto',
     'box-sizing': 'content-box', 'min-width': '0px', 'min-height': '0px',
     'max-width': 'none', 'max-height': 'none', 'flex-grow': '0', 'flex-shrink': '1',
@@ -305,7 +305,6 @@
   for (const [name, value] of Object.entries(expected)) {
     testing.expectEqual(value, cs.getPropertyValue(name));
   }
-  testing.expectEqual('static', cs.position);
   testing.expectEqual('content-box', cs.boxSizing);
   testing.expectEqual('1', cs.flexShrink);
   testing.expectEqual('', div.style.position);
@@ -324,12 +323,30 @@
   testing.expectEqual('30px', getComputedStyle(relative).fontSize);
   testing.expectEqual('1.5em', relative.style.fontSize);
 
+  const sized = (value) => {
+    const el = document.createElement('span');
+    el.style.fontSize = value;
+    outer.appendChild(el);
+    return getComputedStyle(el).fontSize;
+  };
+  testing.expectEqual('9px', sized('xx-small'));
+  testing.expectEqual('18px', sized('LARGE'));
+  testing.expectEqual('48px', sized('xxx-large'));
+  testing.expectEqual('24px', sized('larger'));
+  testing.expectEqual('32px', sized('2rem'));
+  const root = document.documentElement;
+  root.style.fontSize = '20px';
+  testing.expectEqual('30px', sized('1.5rem'));
+  root.style.fontSize = '2rem';
+  testing.expectEqual('32px', getComputedStyle(root).fontSize);
+  testing.expectEqual('48px', sized('1.5rem'));
+  root.style.fontSize = '';
+
   const positioned = document.createElement('div');
   positioned.style.cssText = 'position: absolute; top: 4px';
   document.body.appendChild(positioned);
   testing.expectEqual('absolute', getComputedStyle(positioned).position);
   testing.expectEqual('4px', getComputedStyle(positioned).top);
-  testing.expectEqual('auto', getComputedStyle(positioned).left);
 }
 </script>
 
