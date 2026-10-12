@@ -479,17 +479,8 @@ pub fn deinit(self: *Frame) void {
 
     // The Page outlives an iframe or popup that re-navigates: don't leave its
     // pointer state on this document's elements.
+    user_input.forgetFrame(self);
     const page = self.page;
-    if (page.input_hover_target) |el| {
-        if (el.ownerFrame(self) == self) {
-            page.input_hover_target = null;
-        }
-    }
-    if (page.input_pointer.down_target) |el| {
-        if (el.ownerFrame(self) == self) {
-            page.input_pointer.reset();
-        }
-    }
 
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame.deinit", .{ .url = self.url, .type = self._type });

@@ -196,6 +196,9 @@ input_modifiers: if (lp.build_config.wpt_extensions) @import("frame/user_input.z
 // The element the synthetic pointer is currently over
 input_hover_target: ?*Element = null,
 
+// Touch contact and tap state; see user_input.TouchInput.
+input_touch: @import("frame/user_input.zig").TouchInput = .{},
+
 // Per-gesture button state for the synthetic mouse pointer; see
 // user_input.PointerButtons.
 input_pointer: @import("frame/user_input.zig").PointerButtons = .{},
