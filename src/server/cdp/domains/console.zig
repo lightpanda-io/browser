@@ -38,14 +38,14 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 }
 
 fn enable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try bc.consoleEnable();
+    const target = try cmd.target();
+    try target.consoleEnable();
     return cmd.sendResult(null, .{});
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    bc.consoleDisable();
+    const target = try cmd.target();
+    target.consoleDisable();
     return cmd.sendResult(null, .{});
 }
 
@@ -58,8 +58,8 @@ const ConsoleMessage = struct {
     columns: ?u32 = null,
 };
 
-pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.ConsoleMessage) !void {
-    const session_id = bc.session_id orelse return;
+pub fn consoleMessage(arena: Allocator, target: *CDP.Target, event: *const Notification.ConsoleMessage) !void {
+    const session_id = target.session_id orelse return;
 
     // format values
     var aw: std.Io.Writer.Allocating = .init(arena);
@@ -69,7 +69,7 @@ pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
         try v.format(w);
     }
 
-    return bc.cdp.sendEvent("Console.messageAdded", ConsoleMessage{
+    return target.cdp.sendEvent("Console.messageAdded", ConsoleMessage{
         .source = @tagName(event.source),
         .level = @tagName(event.type),
         .text = aw.written(),

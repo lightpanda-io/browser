@@ -138,15 +138,15 @@ fn getSemanticTree(cmd: anytype) !void {
     };
     const params = (try cmd.params(Params)) orelse Params{};
 
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const root = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const root = target.mainFrame() orelse return error.FrameNotLoaded;
 
     const dom_node = if (params.backendNodeId) |nodeId|
-        (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
+        (target.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
     else
         root.document.asNode();
 
-    const st = SemanticTree.init(cmd.arena, dom_node, &bc.node_registry, root, .{
+    const st = SemanticTree.init(cmd.arena, dom_node, &target.node_registry, root, .{
         .prune = params.prune orelse true,
         .interactive_only = params.interactiveOnly orelse false,
         .max_depth = params.maxDepth orelse std.math.maxInt(u32) - 1,
@@ -179,12 +179,12 @@ fn dump(cmd: anytype) !void {
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const target = blk: {
+    const root = blk: {
         if (params.backendNodeId) |id| {
-            break :blk (bc.node_registry.lookup_by_id.get(id) orelse return error.InvalidNodeId).dom;
+            break :blk (target.node_registry.lookup_by_id.get(id) orelse return error.InvalidNodeId).dom;
         }
         if (params.selector) |selector| {
             const el = Selector.querySelector(frame.document.asNode(), selector, frame) catch return error.InvalidParams;
@@ -193,7 +193,7 @@ fn dump(cmd: anytype) !void {
         break :blk frame.document.asNode();
     };
 
-    const state = try lp.RenderTree.resolve(cmd.arena, target, params.strip, frame);
+    const state = try lp.RenderTree.resolve(cmd.arena, root, params.strip, frame);
 
     switch (params.format) {
         .html, .markdown => {
@@ -231,11 +231,11 @@ fn getMarkdown(cmd: anytype) !void {
     };
     const params = (try cmd.params(Params)) orelse Params{};
 
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
     const dom_node = if (params.nodeId) |nodeId|
-        (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
+        (target.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
     else
         frame.document.asNode();
 
@@ -254,17 +254,17 @@ fn getInteractiveElements(cmd: anytype) !void {
     };
     const params = (try cmd.params(Params)) orelse Params{};
 
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const main_frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const main_frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
     const root = if (params.nodeId) |nodeId|
-        (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
+        (target.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
     else
         main_frame.document.asNode();
     const frame = root.ownerFrame(main_frame) orelse return error.InvalidNodeId;
 
     const elements = try interactive.collectInteractiveElements(root, cmd.arena, frame);
-    try interactive.registerNodes(elements, &bc.node_registry);
+    try interactive.registerNodes(elements, &target.node_registry);
 
     return cmd.sendResult(.{
         .elements = elements,
@@ -277,11 +277,11 @@ fn getNodeDetails(cmd: anytype) !void {
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const root = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const root = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = (bc.node_registry.lookup_by_id.get(params.backendNodeId) orelse return error.InvalidNodeId).dom;
-    const st = SemanticTree.init(cmd.arena, node, &bc.node_registry, root, .{}) catch return error.InvalidNodeId;
+    const node = (target.node_registry.lookup_by_id.get(params.backendNodeId) orelse return error.InvalidNodeId).dom;
+    const st = SemanticTree.init(cmd.arena, node, &target.node_registry, root, .{}) catch return error.InvalidNodeId;
     const details = st.nodeDetails() catch return error.InternalError;
 
     return cmd.sendResult(.{
@@ -290,8 +290,8 @@ fn getNodeDetails(cmd: anytype) !void {
 }
 
 fn getStructuredData(cmd: anytype) !void {
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
     const data = try structured_data.collectStructuredData(
         frame.document.asNode(),
@@ -309,9 +309,9 @@ fn getStructuredData(cmd: anytype) !void {
 // has been fetched for the host — note this is the case unless `obey_robots`
 // is enabled, since the robots layer is what populates the store.
 fn getContentSignal(cmd: anytype) !void {
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
-    const network = bc.cdp.browser.http_client.network;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
+    const network = target.cdp.browser.http_client.network;
 
     const empty: []const Robots.ContentSignal = &.{};
     const robots_url = lp.URL.getRobotsUrl(cmd.arena, frame.url) catch {
@@ -326,8 +326,8 @@ fn getContentSignal(cmd: anytype) !void {
 }
 
 fn getPageStatus(cmd: anytype) !void {
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
     const status = &frame.page.status;
 
     return cmd.sendResult(.{
@@ -346,8 +346,8 @@ fn getPageStatus(cmd: anytype) !void {
 }
 
 fn detectForms(cmd: anytype) !void {
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
     const forms_data = try lp.forms.collectForms(
         cmd.arena,
@@ -355,7 +355,7 @@ fn detectForms(cmd: anytype) !void {
         frame,
     );
 
-    try lp.forms.registerNodes(forms_data, &bc.node_registry);
+    try lp.forms.registerNodes(forms_data, &target.node_registry);
 
     return cmd.sendResult(.{
         .forms = forms_data,
@@ -369,11 +369,11 @@ fn clickNode(cmd: anytype) !void {
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
     const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
-    const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
+    const node = target.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
 
     lp.actions.click(node.dom, frame) catch |err| return mapActionError(err);
 
@@ -395,11 +395,11 @@ fn fillNode(cmd: anytype) !void {
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
     const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
-    const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
+    const node = target.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
 
     lp.actions.fill(node.dom, params.text, frame) catch |err| return mapActionError(err);
 
@@ -415,12 +415,12 @@ fn scrollNode(cmd: anytype) !void {
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
     const maybe_node_id = params.nodeId orelse params.backendNodeId;
     const target_node: ?*DOMNode = if (maybe_node_id) |node_id|
-        (bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId).dom
+        (target.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId).dom
     else
         null;
 
@@ -428,7 +428,7 @@ fn scrollNode(cmd: anytype) !void {
 
     const target_id: ?NodeRegistry.Id = switch (result.target) {
         .window => null,
-        .node, .container => |scrolled| (try bc.node_registry.register(scrolled)).id,
+        .node, .container => |scrolled| (try target.node_registry.register(scrolled)).id,
     };
     return cmd.sendResult(.{ .backendNodeId = target_id, .x = result.x, .y = result.y }, .{});
 }
@@ -440,19 +440,19 @@ fn waitForSelector(cmd: anytype) !void {
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
     const timeout_ms = params.timeout orelse lp.tools.defaultWaitTimeout(frame);
     const selector_z = try cmd.arena.dupeSentinel(u8, params.selector, 0);
 
-    const node = lp.actions.waitForSelector(selector_z, timeout_ms, frame._frame_id, bc.session) catch |err| {
+    const node = lp.actions.waitForSelector(selector_z, timeout_ms, frame._frame_id, target.session) catch |err| {
         if (err == error.InvalidSelector) return error.InvalidParam;
         if (err == error.Timeout) return error.InternalError;
         return error.InternalError;
     };
 
-    const registered = try bc.node_registry.register(node);
+    const registered = try target.node_registry.register(node);
     return cmd.sendResult(.{
         .backendNodeId = registered.id,
     }, .{});
@@ -467,12 +467,12 @@ fn waitUntil(cmd: anytype) !void {
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
     const timeout_ms = params.timeout orelse lp.tools.defaultWaitTimeout(frame);
 
-    var runner = bc.session.runner(.{});
+    var runner = target.session.runner(.{});
     const result = try runner.waitForFrameResult(frame._frame_id, timeout_ms, .{ .until = params.until });
     if (result == .timeout) {
         return error.Timeout;
@@ -510,7 +510,8 @@ fn handleJavaScriptDialog(cmd: anytype) !void {
         promptText: ?[]const u8 = null,
     })) orelse return error.InvalidParam;
 
-    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const target = try cmd.target();
+    const bc = target.bc;
 
     // Duplicate promptText into the BrowserContext arena so it outlives the
     // CDP command's own message arena (the dialog may fire on a later command).
@@ -519,7 +520,7 @@ fn handleJavaScriptDialog(cmd: anytype) !void {
     else
         null;
 
-    bc.pending_dialog_response = .{
+    target.pending_dialog_response = .{
         .accept = params.accept,
         .prompt_text = prompt_text,
     };
@@ -673,13 +674,13 @@ test "cdp.lp: semantic tree and node details read the node's own frame" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-T", .url = "cdp/semantic_tree_iframe.html", .target_id = "FID-000000000T".* });
-    const root = bc.mainFrame() orelse unreachable;
+    const root = bc.firstTarget().?.mainFrame() orelse unreachable;
     const child = root.child_frames.items[0];
 
     const html = (child.document.getDocumentElement() orelse unreachable).asNode();
     const input = (try child.document.querySelector(.wrap("input"), child)).?.asNode();
-    const html_id = (try bc.node_registry.register(html)).id;
-    const input_id = (try bc.node_registry.register(input)).id;
+    const html_id = (try bc.firstTarget().?.node_registry.register(html)).id;
+    const input_id = (try bc.firstTarget().?.node_registry.register(input)).id;
 
     try ctx.processMessage(.{ .id = 1, .method = "LP.getSemanticTree", .params = .{ .backendNodeId = html_id, .format = "text", .prune = false } });
     const tree = (try dumpReply(&ctx, 1)).get("result").?.object.get("semanticTree").?.string;
@@ -702,7 +703,7 @@ test "cdp.lp: semantic tree and node details read the node's own frame" {
 
     // A document with no frame has no styles or layout to describe.
     const frameless = try root._factory.genericDocument(.{});
-    const frameless_id = (try bc.node_registry.register(frameless.asNode())).id;
+    const frameless_id = (try bc.firstTarget().?.node_registry.register(frameless.asNode())).id;
     try ctx.processMessage(.{ .id = 3, .method = "LP.getSemanticTree", .params = .{ .backendNodeId = frameless_id } });
     try ctx.expectSentError(-31998, "InvalidNodeId", .{ .id = 3 });
     try ctx.processMessage(.{ .id = 4, .method = "LP.getNodeDetails", .params = .{ .backendNodeId = frameless_id } });
@@ -730,11 +731,11 @@ test "cdp.lp: getInteractiveElements reads the node's own frame" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-T", .url = "cdp/interactive_iframe.html", .target_id = "FID-000000000T".* });
-    const root = bc.mainFrame() orelse unreachable;
+    const root = bc.firstTarget().?.mainFrame() orelse unreachable;
     const child = root.child_frames.items[0];
 
     const html = (child.document.getDocumentElement() orelse unreachable).asNode();
-    const html_id = (try bc.node_registry.register(html)).id;
+    const html_id = (try bc.firstTarget().?.node_registry.register(html)).id;
 
     try ctx.processMessage(.{ .id = 1, .method = "LP.getInteractiveElements", .params = .{ .nodeId = html_id } });
     const elements = (try dumpReply(&ctx, 1)).get("result").?.object.get("elements").?.array.items;
@@ -860,7 +861,7 @@ test "cdp.lp: action tools" {
 
     // Test Click
     const btn = frame.document.getElementById("btn").?.asNode();
-    const btn_id = (try bc.node_registry.register(btn)).id;
+    const btn_id = (try bc.firstTarget().?.node_registry.register(btn)).id;
     try ctx.processMessage(.{
         .id = 1,
         .method = "LP.clickNode",
@@ -869,7 +870,7 @@ test "cdp.lp: action tools" {
 
     // Test Fill Input
     const inp = frame.document.getElementById("inp").?.asNode();
-    const inp_id = (try bc.node_registry.register(inp)).id;
+    const inp_id = (try bc.firstTarget().?.node_registry.register(inp)).id;
     try ctx.processMessage(.{
         .id = 2,
         .method = "LP.fillNode",
@@ -878,7 +879,7 @@ test "cdp.lp: action tools" {
 
     // Test Fill Select
     const sel = frame.document.getElementById("sel").?.asNode();
-    const sel_id = (try bc.node_registry.register(sel)).id;
+    const sel_id = (try bc.firstTarget().?.node_registry.register(sel)).id;
     try ctx.processMessage(.{
         .id = 3,
         .method = "LP.fillNode",
@@ -887,7 +888,7 @@ test "cdp.lp: action tools" {
 
     // Test Scroll
     const scrollbox = frame.document.getElementById("scrollbox").?.asNode();
-    const scrollbox_id = (try bc.node_registry.register(scrollbox)).id;
+    const scrollbox_id = (try bc.firstTarget().?.node_registry.register(scrollbox)).id;
     try ctx.processMessage(.{
         .id = 4,
         .method = "LP.scrollNode",
@@ -897,9 +898,9 @@ test "cdp.lp: action tools" {
 
     // A leaf inside a scroll container scrolls the container, not the leaf.
     const leaf = frame.document.getElementById("innerleaf").?.asNode();
-    const leaf_id = (try bc.node_registry.register(leaf)).id;
+    const leaf_id = (try bc.firstTarget().?.node_registry.register(leaf)).id;
     const outer = frame.document.getElementById("outerscroll").?.asNode();
-    const outer_id = (try bc.node_registry.register(outer)).id;
+    const outer_id = (try bc.firstTarget().?.node_registry.register(outer)).id;
     try ctx.processMessage(.{
         .id = 5,
         .method = "LP.scrollNode",
@@ -1019,7 +1020,7 @@ test "cdp.lp: handleJavaScriptDialog accepts/dismisses without an open dialog" {
     {
         // Without a BrowserContext: error (matches other LP handlers' shape).
         try ctx.processMessage(.{ .id = 1, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = true } });
-        try ctx.expectSentError(-31998, "NoBrowserContext", .{ .id = 1 });
+        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 1 });
     }
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-D1", .url = "cdp/dialog.html", .target_id = "FID-000000000X".* });
@@ -1053,7 +1054,7 @@ test "cdp.lp: handleJavaScriptDialog controls confirm/prompt/alert return values
 
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-D2", .url = "cdp/dialog.html", .target_id = "FID-000000000X".* });
 
-    const frame = bc.mainFrame() orelse unreachable;
+    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();

@@ -98,10 +98,10 @@ fn pauseNotSupported(cmd: *CDP.Command) !void {
 }
 
 fn sendInspector(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
 
     // the result to return is handled directly by the inspector.
-    try bc.callInspector(cmd);
+    try target.callInspector(cmd);
 }
 
 const testing = @import("../testing.zig");
@@ -130,7 +130,7 @@ test "cdp.debugger: scriptParsed is sent to the session that enabled it" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-DBG2", .url = "hi.html", .target_id = "FID-00000DBG02".*, .session_id = "SID-PRIMARY" });
-    _ = try bc.attachSession("SID-AUX", null);
+    _ = try bc.attachSession(bc.firstTarget().?, "SID-AUX", null);
 
     try ctx.processMessage(.{ .id = 10, .method = "Debugger.enable", .sessionId = "SID-AUX" });
     try ctx.processMessage(.{ .id = 11, .method = "Runtime.evaluate", .sessionId = "SID-AUX", .params = .{ .expression = "1 + 1\n//# sourceURL=dbg-test.js" } });

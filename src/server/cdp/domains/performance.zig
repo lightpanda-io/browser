@@ -48,15 +48,15 @@ const Metric = struct {
 // nodes, DOMParser documents, ...), which we don't track, so they're left out
 // too rather than undercounted.
 fn getMetrics(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const stats = bc.session.browser.env.isolate.getHeapStatistics();
+    const target = try cmd.target();
+    const stats = target.session.browser.env.isolate.getHeapStatistics();
     const now_us: f64 = @floatFromInt(lp.datetime.microTimestamp(.boot));
 
     var buf: [5]Metric = undefined;
     var metrics: std.ArrayList(Metric) = .initBuffer(&buf);
     metrics.appendAssumeCapacity(.{ .name = "Timestamp", .value = now_us / std.time.us_per_s });
 
-    if (bc.mainPage()) |page| {
+    if (target.mainPage()) |page| {
         var frames = countFrames(&page.frame);
         for (page.popups.items) |popup| {
             frames += countFrames(popup);
@@ -100,7 +100,7 @@ test "cdp.performance: getMetrics" {
     try testing.expectEqual(1, findMetric(before, "Frames"));
 
     {
-        const frame = bc.mainFrame() orelse unreachable;
+        const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
         defer ls.deinit();
