@@ -445,7 +445,7 @@ fn getResponseBody(cmd: *CDP.Command) !void {
 }
 
 // Encodes straight into the outgoing message, no intermediate buffer.
-const Base64Body = struct {
+pub const Base64Body = struct {
     data: []const u8,
 
     pub fn jsonStringify(self: Base64Body, jws: *std.json.Stringify) std.Io.Writer.Error!void {
