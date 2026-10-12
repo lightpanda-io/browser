@@ -152,7 +152,9 @@ pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
     self._proto.releaseListeners();
     if (self._upload) |upload| {
         upload._proto.releaseListeners();
+        page.event_listeners.removeTarget(upload.asEventTarget());
     }
+    page.event_listeners.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
@@ -933,4 +935,42 @@ test "WebApi: XHR" {
 
 test "WebApi: XHR in worker" {
     try testing.htmlRunner("net/xhr_worker.html", .{});
+}
+
+test "WebApi: XHR listeners are dropped when the XHR is freed" {
+    // A freed XHR's address gets reused by a new one, which must not inherit
+    // the old one's listeners.
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec(
+            \\globalThis.fired = 0;
+            \\for (let i = 0; i < 200; i++) {
+            \\  new XMLHttpRequest().addEventListener('foo', () => fired++);
+            \\  new XMLHttpRequest().upload.addEventListener('foo', () => fired++);
+            \\}
+        , null);
+    }
+
+    // Not env.memoryPressureNotification: it skips small heaps.
+    const isolate = testing.test_session.browser.env.isolate;
+    for (0..3) |_| {
+        isolate.memoryPressureNotification(.critical);
+    }
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const fired = try ls.local.exec(
+        \\for (let i = 0; i < 200; i++) {
+        \\  new XMLHttpRequest().dispatchEvent(new Event('foo'));
+        \\  new XMLHttpRequest().upload.dispatchEvent(new Event('foo'));
+        \\}
+        \\fired;
+    , null);
+    try testing.expectEqual(0, try fired.toF64());
 }

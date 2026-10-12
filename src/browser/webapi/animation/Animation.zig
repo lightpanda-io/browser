@@ -68,7 +68,8 @@ pub fn init(frame: *Frame) !*Animation {
     });
 }
 
-pub fn deinit(self: *Animation, _: *Page) void {
+pub fn deinit(self: *Animation, page: *Page) void {
+    page.event_listeners.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
