@@ -1770,10 +1770,6 @@ fn urlBasename(arena: Allocator, url: []const u8) !?[]const u8 {
     return try arena.dupe(u8, name);
 }
 
-fn isUtf16Encoding(charset: []const u8) bool {
-    return std.mem.eql(u8, charset, "UTF-16LE") or std.mem.eql(u8, charset, "UTF-16BE");
-}
-
 fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     var self: *Frame = @ptrCast(@alignCast(transfer.req.ctx));
 
@@ -1835,7 +1831,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
                 const info = h5e.encoding_for_label(charset_str.ptr, charset_str.len);
                 if (info.isValid()) {
                     const name = info.name();
-                    self.charset = if (html_prescan_found_charset and isUtf16Encoding(name)) "UTF-8" else name;
+                    self.charset = if (html_prescan_found_charset and info.isUtf16()) "UTF-8" else name;
                 }
                 self._parse_state = .{ .html = .{
                     .buffer = .empty,
@@ -2705,12 +2701,11 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     // scratch-list pattern in `CSSStyleSheet.replaceSync`. Keeping
     // `_href` consistent with what the sheet actually contains is the
     // minimum.
-    const content_type: ?Mime = for (response.headers) |header| {
-        if (std.ascii.eqlIgnoreCase(header.name, "content-type")) {
-            break Mime.parse(header.value) catch null;
-        }
-    } else null;
-    const protocol_charset = if (content_type) |*mime| (if (mime.is_default_charset) null else mime.charsetString()) else null;
+    const content_type: ?Mime = if (HttpClient.findHeader(response.headers, "content-type")) |value|
+        Mime.parse(value) catch null
+    else
+        null;
+    const protocol_charset = if (content_type) |*mime| mime.explicitCharset() else null;
     const text = try css_charset.decode(arena.allocator(), response.body.items, protocol_charset, self.charset);
     sheet.replaceSync(text, self) catch |err| {
         log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });

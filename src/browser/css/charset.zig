@@ -32,18 +32,15 @@ const Allocator = std.mem.Allocator;
 pub fn decode(allocator: Allocator, bytes: []const u8, protocol_charset: ?[]const u8, environment_charset: []const u8) ![]const u8 {
     const encoding = fallbackEncoding(bytes, protocol_charset, environment_charset);
 
-    // The decoder sniffs the BOM itself, but the fast path must not keep one.
-    const has_bom = std.mem.startsWith(u8, bytes, "\xEF\xBB\xBF") or
-        std.mem.startsWith(u8, bytes, "\xFE\xFF") or
-        std.mem.startsWith(u8, bytes, "\xFF\xFE");
-    if (!has_bom and std.mem.eql(u8, encoding.name(), "UTF-8") and std.unicode.utf8ValidateSlice(bytes)) {
+    // A UTF-16 BOM is never valid UTF-8, so only the UTF-8 one can slip
+    // through the fast path; the decoder drops it.
+    if (std.mem.eql(u8, encoding.name(), "UTF-8") and
+        !std.mem.startsWith(u8, bytes, "\xEF\xBB\xBF") and
+        std.unicode.utf8ValidateSlice(bytes))
+    {
         return bytes;
     }
-
-    const handle = encoding.handle.?;
-    const out = try allocator.alloc(u8, h5e.encoding_max_utf8_buffer_length(handle, bytes.len));
-    const result = h5e.encoding_decode(handle, bytes.ptr, bytes.len, out.ptr, out.len, 1);
-    return out[0..result.bytes_written];
+    return h5e.decodeToUtf8(allocator, encoding.handle.?, bytes);
 }
 
 /// https://drafts.csswg.org/css-syntax/#determine-the-fallback-encoding
@@ -55,11 +52,7 @@ fn fallbackEncoding(bytes: []const u8, protocol_charset: ?[]const u8, environmen
 
     if (charsetRuleLabel(bytes)) |label| {
         const info = h5e.encoding_for_label(label.ptr, label.len);
-        if (info.isValid()) {
-            const name = info.name();
-            if (!std.mem.eql(u8, name, "UTF-16BE") and !std.mem.eql(u8, name, "UTF-16LE")) return info;
-            return utf8();
-        }
+        if (info.isValid()) return if (info.isUtf16()) utf8() else info;
     }
 
     const info = h5e.encoding_for_label(environment_charset.ptr, environment_charset.len);

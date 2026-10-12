@@ -176,6 +176,11 @@ pub fn charsetString(mime: *const Mime) []const u8 {
     return mime.charset[0..mime.charset_len];
 }
 
+/// The charset parameter, if the input gave one.
+pub fn explicitCharset(mime: *const Mime) ?[]const u8 {
+    return if (mime.is_default_charset) null else mime.charsetString();
+}
+
 pub fn parse(input: []const u8) !Mime {
     if (input.len > 255) {
         return error.TooBig;

@@ -333,7 +333,7 @@ fn byteToDecimalDigit(b: u8) ?u32 {
     return if (std.ascii.isDigit(b)) b - '0' else null;
 }
 
-// Up to 6 hex digits.
+/// Up to 6 hex digits.
 fn consumeHexDigits(self: *Tokenizer) void {
     var digits: u32 = 0;
     while (digits < 6 and !self.isEof() and std.ascii.isHex(self.nextByteUnchecked())) {
