@@ -854,8 +854,8 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         });
 
         if (self.parent == null) {
-            session.navigation._current_navigation_kind = opts.kind;
-            try session.navigation.commitNavigation(self);
+            session.navigationFor(self)._current_navigation_kind = opts.kind;
+            try session.navigationFor(self).commitNavigation(self);
         }
 
         self.documentIsComplete();
@@ -952,7 +952,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     // Record telemetry for navigation
     self.recordNavigateTelemetry(std.ascii.startsWithIgnoreCase(self.url, "https://"));
 
-    session.navigation._current_navigation_kind = opts.kind;
+    session.navigationFor(self)._current_navigation_kind = opts.kind;
 
     transfer.submit() catch |err| {
         log.debug(.frame, "navigate request", .{ .url = self.url, .err = err, .type = self._type });
@@ -1092,7 +1092,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         });
 
         if (target.parent == null) {
-            try session.navigation.updateEntries(target.url, opts.kind, target, true);
+            try session.navigationFor(target).updateEntries(target.url, opts.kind, target, true);
         }
 
         // `:target` matches off the fragment, which just changed.
@@ -1994,7 +1994,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
     }
 
     //We need to handle different navigation types differently.
-    try self._session.navigation.commitNavigation(self);
+    try self._session.navigationFor(self).commitNavigation(self);
 
     if (self._pending_content_type) |content_type| {
         self.document._content_type = content_type;

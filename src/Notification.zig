@@ -139,7 +139,10 @@ const Events = union(enum) {
 };
 pub const EventType = std.meta.FieldEnum(Events);
 
-pub const FrameRemove = struct {};
+pub const FrameRemove = struct {
+    // Root frame id of the Page being removed.
+    frame_id: u32,
+};
 
 pub const FrameNavigate = struct {
     req_id: u32,
