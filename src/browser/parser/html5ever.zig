@@ -248,6 +248,30 @@ pub const EncodingInfo = extern struct {
     }
 };
 
+/// The encoding `label` names, if it names one.
+pub fn encodingFor(label: ?[]const u8) ?EncodingInfo {
+    const l = label orelse return null;
+    const info = encoding_for_label(l.ptr, l.len);
+    return if (info.isValid()) info else null;
+}
+
+pub fn utf8() EncodingInfo {
+    return encodingFor("utf-8").?;
+}
+
+/// `decodeToUtf8`, except that `input` is returned as is when it is already
+/// valid UTF-8 without a BOM and `encoding` is UTF-8.
+pub fn asUtf8(allocator: std.mem.Allocator, encoding: EncodingInfo, input: []const u8) ![]const u8 {
+    // A UTF-16 BOM is never valid UTF-8, so only the UTF-8 one needs a check.
+    if (std.mem.eql(u8, encoding.name(), "UTF-8") and
+        !std.mem.startsWith(u8, input, "\xEF\xBB\xBF") and
+        std.unicode.utf8ValidateSlice(input))
+    {
+        return input;
+    }
+    return decodeToUtf8(allocator, encoding.handle.?, input);
+}
+
 /// Decodes `input` from the encoding `handle` names into UTF-8. A BOM
 /// switches to the encoding it marks and is dropped.
 pub fn decodeToUtf8(allocator: std.mem.Allocator, handle: *anyopaque, input: []const u8) ![]const u8 {
