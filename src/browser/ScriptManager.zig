@@ -376,7 +376,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 // There was a preloaded script, we borrow it's source and status
                 consumed_preload = pre;
                 script.source = pre.source;
-                script.charset = pre.charset;
+                script.encoding = pre.encoding;
                 script.status = pre.status;
                 script.complete = true;
             } else {
@@ -402,7 +402,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 // has to outlive this call, up to script.deinit().
                 script.source_arena = response.arena;
                 script.source = .{ .remote = response.body };
-                try script.setContentType(HttpClient.findHeader(response.headers, "content-type"));
+                script.setContentType(HttpClient.findHeader(response.headers, "content-type"));
                 script.status = response.status;
                 script.complete = true;
             }

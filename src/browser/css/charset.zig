@@ -24,20 +24,21 @@ const std = @import("std");
 const h5e = @import("../parser/html5ever.zig");
 
 const Allocator = std.mem.Allocator;
+const EncodingInfo = h5e.EncodingInfo;
 
 /// Decodes `bytes` to UTF-8. A BOM wins, then `protocol_charset` (the
 /// Content-Type charset), then a leading `@charset` rule, then
 /// `environment_charset` (the document's encoding). Malformed sequences
 /// become U+FFFD. Returns `bytes` itself when it is already valid UTF-8.
 pub fn decode(allocator: Allocator, bytes: []const u8, protocol_charset: ?[]const u8, environment_charset: []const u8) ![]const u8 {
-    return h5e.asUtf8(allocator, fallbackEncoding(bytes, protocol_charset, environment_charset), bytes);
+    return h5e.validUtf8(allocator, fallbackEncoding(bytes, protocol_charset, environment_charset), bytes);
 }
 
 /// https://drafts.csswg.org/css-syntax/#determine-the-fallback-encoding
-fn fallbackEncoding(bytes: []const u8, protocol_charset: ?[]const u8, environment_charset: []const u8) h5e.EncodingInfo {
-    if (h5e.encodingFor(protocol_charset)) |info| return info;
-    if (h5e.encodingFor(charsetRuleLabel(bytes))) |info| return if (info.isUtf16()) h5e.utf8() else info;
-    return h5e.encodingFor(environment_charset) orelse h5e.utf8();
+fn fallbackEncoding(bytes: []const u8, protocol_charset: ?[]const u8, environment_charset: []const u8) EncodingInfo {
+    if (EncodingInfo.forLabel(protocol_charset)) |info| return info;
+    if (EncodingInfo.forLabel(charsetRuleLabel(bytes))) |info| return if (info.isUtf16()) .utf8() else info;
+    return EncodingInfo.forLabel(environment_charset) orelse .utf8();
 }
 
 /// The label of a `@charset "<label>";` rule opening the first 1024 bytes,

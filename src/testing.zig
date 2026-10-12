@@ -1200,9 +1200,10 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
-    if (std.mem.startsWith(u8, path, "/scripts/latin1/") or std.mem.startsWith(u8, path, "/scripts/latin1-header/")) {
+    const declares_charset = std.mem.startsWith(u8, path, "/scripts/latin1-header/");
+    if (declares_charset or std.mem.startsWith(u8, path, "/scripts/latin1/")) {
         const body = try std.fmt.allocPrint(req_allocator, "window['{s}'] = 'caf\xE9';", .{std.fs.path.stem(path)});
-        const content_type = if (std.mem.startsWith(u8, path, "/scripts/latin1/")) "text/javascript" else "text/javascript; charset=iso-8859-1";
+        const content_type = if (declares_charset) "text/javascript; charset=iso-8859-1" else "text/javascript";
         return req.respond(body, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = content_type },
