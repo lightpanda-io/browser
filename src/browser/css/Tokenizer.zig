@@ -281,15 +281,17 @@ fn hasNonAsciiAt(self: *const Tokenizer, offset: usize) bool {
 fn isIdentStart(self: *Tokenizer) bool {
     if (self.isEof()) return false;
 
+    var offset: usize = 0;
     var b = self.nextByteUnchecked();
     if (b == '-') {
+        offset = 1;
         b = if (self.hasAtLeast(1)) self.byteAt(1) else return false;
         if (b == '-') return true; // --custom-property
     }
 
     return switch (b) {
         'a'...'z', 'A'...'Z', '_', 0x0 => true,
-        '\\' => !self.hasNewlineAt(1),
+        '\\' => !self.hasNewlineAt(offset + 1),
         else => b > 0x7F, // not is ascii
     };
 }
@@ -584,7 +586,7 @@ fn consumeNumeric(self: *Tokenizer) Token {
             };
 
             self.advance(2);
-        } else if (self.hasAtLeast(2) and std.ascii.isDigit(self.byteAt(2))) {
+        } else if (self.hasAtLeast(1) and std.ascii.isDigit(self.byteAt(1))) {
             self.advance(1);
         } else {
             break :blk;
@@ -949,4 +951,30 @@ test "url: bad-url swallows through escape but stops at )" {
         .{ .bad_url = "foo\"\\)bar)" },
         .{ .ident = "x" },
     });
+}
+
+test "number: single-digit exponent" {
+    try expectTokensEqual("1e5", &.{.{ .number = .{ .has_sign = false, .int_value = null, .value = 100000 } }});
+    try expectTokensEqual("2E3px", &.{.{ .dimension = .{ .has_sign = false, .int_value = null, .value = 2000, .unit = "px" } }});
+    try expectTokensEqual("1e-5", &.{.{ .number = .{ .has_sign = false, .int_value = null, .value = 1e-5 } }});
+}
+
+test "number: e without digits is a unit" {
+    try expectTokensEqual("1em", &.{.{ .dimension = .{ .has_sign = false, .int_value = 1, .value = 1, .unit = "em" } }});
+    try expectTokensEqual("1e", &.{.{ .dimension = .{ .has_sign = false, .int_value = 1, .value = 1, .unit = "e" } }});
+    try expectTokensEqual("1e+x", &.{
+        .{ .dimension = .{ .has_sign = false, .int_value = 1, .value = 1, .unit = "e" } },
+        .{ .delim = '+' },
+        .{ .ident = "x" },
+    });
+}
+
+test "ident: hyphen before an escaped newline is a delim" {
+    try expectTokensEqual("-\\\nx", &.{
+        .{ .delim = '-' },
+        .{ .delim = '\\' },
+        .{ .white_space = "\n" },
+        .{ .ident = "x" },
+    });
+    try expectTokensEqual("-\\41", &.{.{ .ident = "-\\41" }});
 }
