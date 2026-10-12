@@ -165,26 +165,19 @@ pub fn collectBodyBytes(self: *ReadableStream, arena: std.mem.Allocator) ![]cons
     var buf = std.Io.Writer.Allocating.init(arena);
     const queue = &self._controller._queue;
     for (queue.items) |chunk| {
-        const bytes: []const u8 = switch (chunk) {
-            .string => |s| s,
-            .uint8array => |arr| arr.values,
-            .js_value => |global| blk: {
-                const value = local.toLocal(global);
-                // toStringSmart falls back to toString(), which would turn a
-                // stray number or object into "42" / "[object Object]" bytes.
-                if (value.isString() == null and !value.isTypedArray() and
-                    !value.isArrayBufferView() and !value.isArrayBuffer())
-                {
-                    return error.TypeError;
-                }
-                break :blk try value.toStringSmart();
-            },
-        };
-        try buf.writer.writeAll(bytes);
+        const value = local.toLocal(chunk);
+        // toStringSmart falls back to toString(), which would turn a
+        // stray number or object into "42" / "[object Object]" bytes.
+        if (value.isString() == null and !value.isTypedArray() and
+            !value.isArrayBufferView() and !value.isArrayBuffer())
+        {
+            return error.TypeError;
+        }
+        try buf.writer.writeAll(try value.toStringSmart());
     }
 
     self._collected = true;
-    queue.clearRetainingCapacity();
+    self._controller.clearQueue();
     return buf.written();
 }
 
@@ -280,7 +273,7 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, exec: *const Execution
     }
 
     self._state = .closed;
-    self._controller._queue.clearRetainingCapacity();
+    self._controller.clearQueue();
 
     const result = ReadableStreamDefaultReader.ReadResult{
         .done = true,
@@ -288,6 +281,7 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, exec: *const Execution
     };
     for (self._controller._pending_reads.items) |r| {
         local.toLocal(r).resolve("stream cancelled", result);
+        r.release();
     }
     self._controller._pending_reads.clearRetainingCapacity();
     resolver.resolve("ReadableStream.cancel", {});
