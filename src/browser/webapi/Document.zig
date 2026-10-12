@@ -899,7 +899,7 @@ fn importNode(self: *const Document, node: *Node, deep_: ?bool, frame: *Frame) !
 }
 
 pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    try validateDocumentNodes(self, nodes, false);
+    try validateDocumentNodes(self, nodes);
 
     const parent = self.asNode();
     frame.domChanged();
@@ -923,7 +923,7 @@ pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !v
 }
 
 pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    try validateDocumentNodes(self, nodes, false);
+    try validateDocumentNodes(self, nodes);
 
     const parent = self.asNode();
     frame.domChanged();
@@ -966,7 +966,6 @@ pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !
 }
 
 pub fn replaceChildren(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    try validateDocumentNodes(self, nodes, false);
     return self.asNode().replaceChildren(nodes, frame);
 }
 
@@ -1397,22 +1396,17 @@ fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
 // - At most one DocumentType child
 // - No Document, Attribute, or Text nodes
 // - Only Element, DocumentType, Comment, and ProcessingInstruction are allowed
-// When replacing=true, existing children are not counted (for replaceChildren)
-fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText, comptime replacing: bool) !void {
+fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText) !void {
     const parent = self.asNode();
 
-    // Check existing elements and doctypes (unless we're replacing all children)
     var has_element = false;
     var has_doctype = false;
-
-    if (!replacing) {
-        var it = parent.childrenIterator();
-        while (it.next()) |child| {
-            if (child._type == .element) {
-                has_element = true;
-            } else if (child._type == .document_type) {
-                has_doctype = true;
-            }
+    var it = parent.childrenIterator();
+    while (it.next()) |child| {
+        if (child._type == .element) {
+            has_element = true;
+        } else if (child._type == .document_type) {
+            has_doctype = true;
         }
     }
 
