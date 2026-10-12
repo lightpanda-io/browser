@@ -1069,8 +1069,14 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
 
     if (is_fragment_navigation) {
         // Re-navigating to the exact current URL: since the fragment didn't
-        // change, no hashchange and no new history entry either.
+        // change, no hashchange and no new history entry either. It's still a
+        // fragment navigation, which Chrome reports.
         if (std.mem.eql(u8, target.url, resolved_url)) {
+            session.notification.dispatch(.frame_navigated_within_document, &.{
+                .url = target.url,
+                .frame_id = target._frame_id,
+                .navigation_type = .fragment,
+            });
             arena.release();
             return;
         }
@@ -1082,6 +1088,12 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         location.acquireRef();
         target.window._location.releaseRef(target.page);
         target.window._location = location;
+
+        session.notification.dispatch(.frame_navigated_within_document, &.{
+            .url = target.url,
+            .frame_id = target._frame_id,
+            .navigation_type = .fragment,
+        });
 
         if (target.parent == null) {
             try session.navigation.updateEntries(target.url, opts.kind, target, true);

@@ -2920,3 +2920,127 @@ test "cdp.frame: history.pushState emits Page.navigatedWithinDocument" {
         .url = "http://127.0.0.1:9582/next",
     }, .{});
 }
+
+test "cdp.frame: a fragment navigation emits Page.navigatedWithinDocument" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("location.hash = 'a'", null);
+    }
+
+    // Chrome reports location.hash (and same-document anchor clicks) as a
+    // "fragment" navigation.
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "fragment",
+        .url = "http://127.0.0.1:9582/src/browser/tests/hi.html#a",
+    }, .{});
+}
+
+test "cdp.frame: a same-document history traversal emits Page.navigatedWithinDocument" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("history.pushState({}, '', '/next'); history.back()", null);
+    }
+
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "historyApi",
+        .url = "http://127.0.0.1:9582/next",
+    }, .{});
+    // Going back to the pushState entry stays in the document. Chrome reports
+    // a traversal as "fragment" whatever the entry's URL.
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "fragment",
+        .url = "http://127.0.0.1:9582/src/browser/tests/hi.html",
+    }, .{});
+}
+
+test "cdp.frame: a fragment navigation to the current URL emits Page.navigatedWithinDocument" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        // Setting location.hash to the current fragment doesn't navigate, but
+        // navigating to the current URL does.
+        _ = try ls.local.exec("location.hash = 'a'; location.hash = 'a'; location.href = '#a'", null);
+    }
+
+    try expectNavigatedWithinDocument(&ctx, &.{
+        "http://127.0.0.1:9582/src/browser/tests/hi.html#a",
+        "http://127.0.0.1:9582/src/browser/tests/hi.html#a",
+    });
+}
+
+test "cdp.frame: Page.navigatedWithinDocument precedes navigations from listeners" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec(
+            \\navigation.addEventListener('currententrychange', () => {
+            \\  if (location.hash === '#a') location.hash = 'b';
+            \\});
+            \\navigation.addEventListener('navigatesuccess', () => {
+            \\  location.hash = 'd';
+            \\}, { once: true });
+            \\location.hash = 'a';
+            \\navigation.navigate('#c');
+        , null);
+    }
+
+    try expectNavigatedWithinDocument(&ctx, &.{
+        "http://127.0.0.1:9582/src/browser/tests/hi.html#a",
+        "http://127.0.0.1:9582/src/browser/tests/hi.html#b",
+        "http://127.0.0.1:9582/src/browser/tests/hi.html#c",
+        "http://127.0.0.1:9582/src/browser/tests/hi.html#d",
+    });
+}
+
+// The subset matcher can't check order or count; look at the events directly.
+fn expectNavigatedWithinDocument(ctx: *testing.TestContext, expected: []const []const u8) !void {
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{ .url = expected[expected.len - 1] }, .{});
+
+    var i: usize = 0;
+    for (ctx.received.items) |received| {
+        const method = received.object.get("method") orelse continue;
+        if (!std.mem.eql(u8, method.string, "Page.navigatedWithinDocument")) continue;
+        try testing.expect(i < expected.len);
+        const url = received.object.get("params").?.object.get("url").?.string;
+        try testing.expectEqualSlices(u8, expected[i], url);
+        i += 1;
+    }
+    try testing.expectEqual(expected.len, i);
+}

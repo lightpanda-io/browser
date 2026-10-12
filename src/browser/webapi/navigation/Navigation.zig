@@ -423,17 +423,25 @@ pub fn navigateInner(
         new_url = try arena.dupeSentinel(u8, new_url, 0);
     }
 
-    // Captured before the switch overwrites frame.url in the same_document
-    // branches; used to queue the hashchange once below.
+    // Captured before a same-document navigation overwrites frame.url; used
+    // to queue the hashchange once below.
     const old_url = frame.url;
 
     const previous = self.getCurrentEntry();
 
+    if (is_same_document and kind != .reload) {
+        frame.url = new_url;
+
+        frame._session.notification.dispatch(.frame_navigated_within_document, &.{
+            .url = new_url,
+            .frame_id = frame._frame_id,
+            .navigation_type = .fragment,
+        });
+    }
+
     switch (kind) {
         .push => |state| {
             if (is_same_document) {
-                frame.url = new_url;
-
                 committed.resolve("navigation push", {});
                 // todo: Fire navigate event
                 _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, frame, true);
@@ -444,8 +452,6 @@ pub fn navigateInner(
         },
         .replace => |state| {
             if (is_same_document) {
-                frame.url = new_url;
-
                 committed.resolve("navigation replace", {});
                 // todo: Fire navigate event
                 _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, frame, true);
@@ -458,7 +464,6 @@ pub fn navigateInner(
             self._index = index;
 
             if (is_same_document) {
-                frame.url = new_url;
                 try frame.window._location._url.setHref(new_url, &frame.js.execution);
                 // `:target` matches off the fragment, which might have just changed.
                 frame.styleChanged();
