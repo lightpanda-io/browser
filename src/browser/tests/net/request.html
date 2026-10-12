@@ -503,6 +503,129 @@
   testing.expectEqual('https://example.com/1023', requests[1023].url);
 </script>
 
+<script id=body type=module>
+  const state = await testing.async();
+
+  // No body: `body` is null, and getting it twice stays null.
+  const req1 = new Request('https://example.com');
+  const body1a = req1.body;
+  const body1b = req1.body;
+
+  // A body yields a ReadableStream, stable across repeated reads.
+  const req2 = new Request('https://example.com', { method: 'POST', body: 'hello world' });
+  const body2a = req2.body;
+  const body2b = req2.body;
+  const sameStream2 = body2a === body2b;
+  const lockedBefore2 = body2a.locked;
+  const text2 = await req2.text();
+  const lockedAfter2 = body2a.locked;
+
+  // Locking the stream directly is reflected in bodyUsed.
+  const req3 = new Request('https://example.com', { method: 'POST', body: 'hello' });
+  const usedBefore3 = req3.bodyUsed;
+  req3.body.getReader();
+  const usedAfterLock3 = req3.bodyUsed;
+
+  // An empty body is a closed (not null) stream.
+  const req4 = new Request('https://example.com', { method: 'POST', body: '' });
+  const body4 = req4.body;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(null, body1a);
+    testing.expectEqual(null, body1b);
+
+    testing.expectTrue(body2a instanceof ReadableStream);
+    testing.expectTrue(sameStream2);
+    testing.expectFalse(lockedBefore2);
+    testing.expectEqual('hello world', text2);
+    testing.expectTrue(lockedAfter2);
+
+    testing.expectFalse(usedBefore3);
+    testing.expectFalse(usedAfterLock3);
+
+    testing.expectTrue(body4 instanceof ReadableStream);
+  });
+</script>
+
+<script id=text_stream type=module>
+  const state = await testing.async();
+
+  async function readAllChunks(stream) {
+    const reader = stream.getReader();
+    const chunks = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    return chunks;
+  }
+
+  const existsOnPrototype = 'textStream' in Request.prototype;
+  const isFunction = typeof Request.prototype.textStream === 'function';
+
+  const req1 = new Request('https://example.com', { method: 'POST', body: 'hello world' });
+  const usedBefore1 = req1.bodyUsed;
+  const stream1 = req1.textStream();
+  const isReadableStream1 = stream1 instanceof ReadableStream;
+  const usedAfter1 = req1.bodyUsed;
+  const chunks1 = await readAllChunks(stream1);
+
+  // Already consumed: throws synchronously.
+  const req2 = new Request('https://example.com', { method: 'POST', body: 'hello' });
+  await req2.text();
+  let rejected2 = false;
+  try { req2.textStream(); } catch (e) { rejected2 = e instanceof TypeError; }
+
+  // Locked via body.getReader(): throws synchronously.
+  const req3 = new Request('https://example.com', { method: 'POST', body: 'hello' });
+  req3.body.getReader();
+  let rejected3 = false;
+  try { req3.textStream(); } catch (e) { rejected3 = e instanceof TypeError; }
+
+  // No body: never marks used, every call returns a fresh empty stream.
+  const req4 = new Request('https://example.com');
+  const usedBefore4 = req4.bodyUsed;
+  const stream4a = req4.textStream();
+  const usedAfterFirst4 = req4.bodyUsed;
+  const stream4b = req4.textStream();
+  const differentStreams4 = stream4a !== stream4b;
+  const chunks4a = await readAllChunks(stream4a);
+  const chunks4b = await readAllChunks(stream4b);
+
+  // Decodes as UTF-8 regardless of a charset in Content-Type.
+  const utf16leBytes = new Uint8Array([0x68, 0x00, 0x65, 0x00, 0x6c, 0x00, 0x6c, 0x00, 0x6f, 0x00]);
+  const req5 = new Request('https://example.com', {
+    method: 'POST',
+    body: utf16leBytes,
+    headers: { 'Content-Type': 'text/plain; charset=utf-16le' },
+  });
+  const chunks5 = await readAllChunks(req5.textStream());
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectTrue(existsOnPrototype);
+    testing.expectTrue(isFunction);
+
+    testing.expectFalse(usedBefore1);
+    testing.expectTrue(isReadableStream1);
+    testing.expectTrue(usedAfter1);
+    testing.expectEqual('hello world', chunks1.join(''));
+
+    testing.expectTrue(rejected2);
+    testing.expectTrue(rejected3);
+
+    testing.expectFalse(usedBefore4);
+    testing.expectFalse(usedAfterFirst4);
+    testing.expectTrue(differentStreams4);
+    testing.expectEqual(0, chunks4a.length);
+    testing.expectEqual(0, chunks4b.length);
+
+    testing.expectEqual('h\0e\0l\0l\0o\0', chunks5.join(''));
+  });
+</script>
+
 <script id=method_errors>
   // Forbidden methods and invalid tokens throw a TypeError.
   for (const method of ['CONNECT', 'trace', 'TRACK', 'IN VALID']) {
