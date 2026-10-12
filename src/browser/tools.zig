@@ -376,6 +376,28 @@ pub const Tool = enum {
         };
     }
 
+    /// Reference-docs section (`zig build docs`). Exhaustive so a new tool
+    /// can't ship undocumented.
+    pub fn group(self: Tool) Group {
+        return switch (self) {
+            .goto, .search => .navigation,
+            .markdown, .html, .screenshot, .tree, .links, .nodeDetails, .findElement, .interactiveElements, .structuredData, .detectForms => .reading,
+            .extract, .evaluate => .extraction,
+            .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => .interaction,
+            .waitForSelector, .waitForScript, .waitForState => .waiting,
+            .getUrl, .getCookies, .getEnv, .consoleLogs => .state,
+        };
+    }
+
+    pub const Group = enum {
+        navigation,
+        reading,
+        extraction,
+        interaction,
+        waiting,
+        state,
+    };
+
     /// Per-tool LLM-facing metadata. Tool identity (name + predicates) lives
     /// on the enclosing `Tool` enum; this struct just carries the strings.
     pub const Definition = struct {
@@ -507,21 +529,25 @@ pub const Tool = enum {
             .extract => .{
                 .description =
                 \\Extract structured data from the current page (navigate first). `schema` is a JSON object (passed as a string) mapping output field names to CSS-selector specs. It is NOT a JSON Schema — no "type"/"properties" wrappers; the keys ARE your output fields. Value shapes:
-                \\  "<sel>"                                → first match's text (trimmed; null if no match)
-                \\  ["<sel>"]                              → every match's text (string[])
-                \\  {"selector":"<sel>","attr":"<name>"}   → first match's attribute value (href/src resolved to absolute URLs)
-                \\  [{"selector":"<sel>","attr":"<name>"}] → every match's attribute (string[])
-                \\  [{"selector":"<sel>","fields":{…}}]    → one object per match; field selectors resolve relative to that match and accept any shape above ("" = the match's own text; nest arrays for per-item sub-lists)
+                \\```text
+                \\"<sel>"                                → first match's text (trimmed; null if no match)
+                \\["<sel>"]                              → every match's text (string[])
+                \\{"selector":"<sel>","attr":"<name>"}   → first match's attribute value (href/src resolved to absolute URLs)
+                \\[{"selector":"<sel>","attr":"<name>"}] → every match's attribute (string[])
+                \\[{"selector":"<sel>","fields":{…}}]    → one object per match; field selectors resolve relative to that match and accept any shape above ("" = the match's own text; nest arrays for per-item sub-lists)
+                \\```
                 \\Add "limit": N inside any array's object spec to cap matches.
                 \\Every extracted value is a string or null — parse numbers downstream. An empty array is a valid result, but if ALL top-level keys miss, the call errors: inspect the page (tree/markdown) and retry with corrected selectors.
                 \\Finish data tasks with extract — it is the only read recorded as a replayable `extract(...)` script call; answers lifted from `markdown` text in chat are not.
                 \\
                 \\Examples (schema → result):
-                \\  {"karma": "#karma"} → {"karma":"42"}
-                \\  {"items": [".story .title"]} → {"items":["Title 1","Title 2"]}
-                \\  {"top3": [{"selector":".story .title","limit":3}]} → {"top3":["A","B","C"]}
-                \\  {"links": [{"selector":"a.title","attr":"href"}]} → {"links":["https://site/a","https://site/b"]}
-                \\  {"stories": [{"selector":".athing","fields":{"title":".titleline","rank":".rank"}}]} → {"stories":[{"title":"Foo","rank":"1"}]}
+                \\```text
+                \\{"karma": "#karma"} → {"karma":"42"}
+                \\{"items": [".story .title"]} → {"items":["Title 1","Title 2"]}
+                \\{"top3": [{"selector":".story .title","limit":3}]} → {"top3":["A","B","C"]}
+                \\{"links": [{"selector":"a.title","attr":"href"}]} → {"links":["https://site/a","https://site/b"]}
+                \\{"stories": [{"selector":".athing","fields":{"title":".titleline","rank":".rank"}}]} → {"stories":[{"title":"Foo","rank":"1"}]}
+                \\```
                 ,
                 .summary = "Extract structured data via a CSS-selector schema",
                 .input_schema = minify(

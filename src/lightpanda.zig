@@ -71,6 +71,7 @@ const Selector = @import("browser/webapi/selector/Selector.zig");
 
 pub const Agent = @import("agent/Agent.zig");
 pub const skill = @import("script/skill.zig");
+pub const docs = @import("docs.zig");
 pub const Recorder = @import("script/Recorder.zig");
 pub const Runtime = @import("script/Runtime.zig");
 pub const Schema = @import("script/Schema.zig");
