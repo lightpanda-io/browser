@@ -1787,6 +1787,11 @@ pub fn tagJsonArray(comptime E: type) []const u8 {
 }
 
 test "Config: parseArgs --load-resources defaults stylesheets on for mcp and agent" {
+    // Parsing agent mode lowers the global log level, which other tests in
+    // this process expect log lines from.
+    const saved_log_opts = log.opts;
+    defer log.opts = saved_log_opts;
+
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
