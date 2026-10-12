@@ -518,7 +518,7 @@ pub const Locator = union(enum) {
                     .tag_name => true,
                     .link_text, .partial_link_text => |needle| blk: {
                         // an <a> outside HTML has no rendered text
-                        if (element.getTag() != .anchor) {
+                        if (element.getTag() != .a) {
                             break :blk false;
                         }
                         text.clearRetainingCapacity();

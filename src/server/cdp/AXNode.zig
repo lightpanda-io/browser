@@ -347,7 +347,7 @@ pub const Writer = struct {
                         if (uri.len == 0) return;
                         try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
                     },
-                    .anchor => {
+                    .a => {
                         const a = el.as(DOMNode.Element.Html.Anchor);
                         const uri = try a.getHref(self.frame);
                         if (uri.len == 0) return;
@@ -462,7 +462,6 @@ pub const Writer = struct {
                         try self.writeAXProperty(.{ .name = .orientation, .value = .{ .token = "horizontal" } }, w);
                     },
                     .li => {
-                        // Calculate level by counting list ancestors (ul, ol, menu)
                         var level: usize = 0;
                         var current = dom_node._parent;
                         while (current) |node| {
@@ -477,7 +476,9 @@ pub const Writer = struct {
                             }
                             current = node._parent;
                         }
-                        try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = level } }, w);
+                        // As far as I can see, chrome reports a min of 1, even
+                        // for a list without ul/ol/menu parent.
+                        try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = @max(level, 1) } }, w);
                     },
                     else => {},
                 }
@@ -821,7 +822,7 @@ const AXRole = enum(u8) {
                     .datalist => .listbox,
 
                     // Interactive Elements
-                    .anchor, .area => {
+                    .a, .area => {
                         if (el.getAttributeInterned("href") == null) {
                             return .none;
                         }

@@ -630,7 +630,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         // and :visited matches nothing.
         .link, .any_link => {
             const tag = el.getTag();
-            if (tag != .anchor and tag != .area) return false;
+            if (tag != .a and tag != .area) return false;
             return el.hasAttributeInterned("href");
         },
         .visited => return false,
