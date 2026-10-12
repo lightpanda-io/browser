@@ -224,7 +224,7 @@ pub extern "c" fn xml5ever_parse_document(
 ) void;
 
 // General encoding api
-const EncodingInfo = extern struct {
+pub const EncodingInfo = extern struct {
     found: u8,
     handle: ?*anyopaque,
     name_len: usize,

@@ -35,6 +35,7 @@ const h5e = @import("parser/html5ever.zig");
 const CustomElementReactions = @import("CustomElementReactions.zig");
 
 const URL = @import("URL.zig");
+const css_charset = @import("css/charset.zig");
 const referrer = @import("referrer.zig");
 const Blob = @import("webapi/Blob.zig");
 const FileList = @import("webapi/FileList.zig");
@@ -2660,7 +2661,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     sm.is_evaluating = true;
     defer sm.endEvaluationWindow(was_evaluating);
 
-    var response = transfer.submitSync(.{}) catch |err| {
+    var response = transfer.submitSync(.{ .copy_headers = true }) catch |err| {
         log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
@@ -2704,7 +2705,14 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     // scratch-list pattern in `CSSStyleSheet.replaceSync`. Keeping
     // `_href` consistent with what the sheet actually contains is the
     // minimum.
-    sheet.replaceSync(response.body.items, self) catch |err| {
+    const content_type: ?Mime = for (response.headers) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "content-type")) {
+            break Mime.parse(header.value) catch null;
+        }
+    } else null;
+    const protocol_charset = if (content_type) |*mime| (if (mime.is_default_charset) null else mime.charsetString()) else null;
+    const text = try css_charset.decode(arena.allocator(), response.body.items, protocol_charset, self.charset);
+    sheet.replaceSync(text, self) catch |err| {
         log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
