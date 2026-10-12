@@ -378,7 +378,12 @@ pub const Writer = struct {
                                     try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
                                 }
                                 try self.writeAXProperty(.{ .name = .multiline, .value = .{ .boolean = false } }, w);
-                                try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = el.hasAttributeInterned("readonly") } }, w);
+                                // Readonly is set to false if the field is disabled, disregarding the readonly attribute.
+                                if (is_disabled == false) {
+                                    try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = false } }, w);
+                                } else {
+                                    try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = is_readonly } }, w);
+                                }
                                 try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeInterned("required") } }, w);
                             },
                             .search => {
