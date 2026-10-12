@@ -719,27 +719,13 @@ pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
     if (self._type == .document) {
         return null;
     }
-
-    // An attribute node follows its element (including across adoption).
-    if (self._type == .attribute) {
-        if (self.subtype(Element.Attribute)._element) |element| {
-            return element.asNode().ownerDocument(frame);
-        }
-    }
-
-    // The table is the browser's, so any frame of it will do.
-    return frame._session.browser.documents.get(self._owner);
+    return self.getDocument(frame);
 }
 
 // The spec's "node document": every node has one, a document's is itself.
 // `frame` only reaches the registry; any frame will do.
 pub fn getDocument(self: *const Node, frame: *const Frame) *Document {
-    if (self._type == .document) {
-        return self.subtype(Document);
-    }
-    const doc = self.ownerDocument(frame);
-    lp.assert(doc != null, "null node document", .{ .type = self.getNodeType() });
-    return doc.?;
+    return frame.documents.get(self._owner);
 }
 
 // Returns the Frame that owns this node's tree, or null when the node's
