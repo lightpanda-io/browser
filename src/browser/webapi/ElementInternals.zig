@@ -207,23 +207,8 @@ fn getLabels(self: *const ElementInternals, frame: *Frame) !js.Array {
     return Label.getControlLabels(self.asElement(), frame);
 }
 
-// Barred from constraint validation: disabled, readonly, or inside a datalist.
-pub fn willValidate(self: *const ElementInternals) bool {
-    const element = self.asElement();
-    if (element.isDisabled()) {
-        return false;
-    }
-    if (element.hasAttributeSafe(comptime .wrap("readonly"))) {
-        return false;
-    }
-    var node = element.asNode()._parent;
-    while (node) |n| : (node = n._parent) {
-        const el = n.is(Element) orelse continue;
-        if (el.getTag() == .datalist) {
-            return false;
-        }
-    }
-    return true;
+fn willValidate(self: *const ElementInternals) bool {
+    return self._host.willValidate();
 }
 
 fn getWillValidate(self: *const ElementInternals) !bool {

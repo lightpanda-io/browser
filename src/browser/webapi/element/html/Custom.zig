@@ -61,6 +61,25 @@ pub fn isFormAssociated(self: *const Custom) bool {
     return definition.form_associated;
 }
 
+// Barred from constraint validation: disabled, readonly, or inside a datalist.
+pub fn willValidate(self: *Custom) bool {
+    const element = self.asElement();
+    if (element.isDisabled()) {
+        return false;
+    }
+    if (element.hasAttributeSafe(comptime .wrap("readonly"))) {
+        return false;
+    }
+    var node = element.asNode()._parent;
+    while (node) |n| : (node = n._parent) {
+        const el = n.is(Element) orelse continue;
+        if (el.getTag() == .datalist) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Reactions are queued via enqueue* and fired via fireReaction at the outer
 // CEReactions boundary (set up by the JS bridge, the parser pump, etc.).
 //

@@ -771,11 +771,11 @@ fn isCustomValid(custom: *Node.Element.Html.Custom) ?bool {
         // matches neither:valid nor :invalid
         return null;
     }
-    const internals = custom._internals orelse return true;
-    if (internals.willValidate() == false) {
+    if (custom.willValidate() == false) {
         // matches neither:valid nor :invalid
         return null;
     }
+    const internals = custom._internals orelse return true;
     return internals._flags.any() == false;
 }
 

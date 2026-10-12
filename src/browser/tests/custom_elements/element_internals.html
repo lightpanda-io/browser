@@ -211,6 +211,20 @@
   const datalist = document.createElement('datalist');
   datalist.appendChild(control);
   testing.expectFalse(control.i.willValidate);
+
+  // barred without ever attaching internals
+  customElements.define('ei-bare', class extends HTMLElement {
+    static formAssociated = true;
+  });
+  const bare = document.createElement('ei-bare');
+  testing.expectTrue(bare.matches(':valid'));
+  bare.setAttribute('disabled', '');
+  testing.expectFalse(bare.matches(':valid'));
+  testing.expectFalse(bare.matches(':invalid'));
+  bare.removeAttribute('disabled');
+  bare.setAttribute('readonly', '');
+  testing.expectFalse(bare.matches(':valid'));
+  testing.expectFalse(bare.matches(':invalid'));
 }
 </script>
 
