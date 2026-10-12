@@ -33,6 +33,7 @@ const ReadableStream = @import("../streams/ReadableStream.zig");
 const Headers = @import("Headers.zig");
 const FormData = @import("FormData.zig");
 const body_init = @import("body_init.zig");
+const TextDecoderStream = @import("../encoding/TextDecoderStream.zig");
 
 const Execution = js.Execution;
 const BodyInit = body_init.BodyInit;
@@ -45,6 +46,7 @@ _method: http.Method,
 _headers: ?*Headers,
 _body: ?[]const u8,
 _body_stream: ?*ReadableStream = null, // drained into `_body` on first use.
+_body_view: ?*ReadableStream = null, // lazily-created, exposed via the `body` getter
 _arena: *lp.Arena,
 _cache: Cache,
 _credentials: Credentials,
@@ -336,26 +338,82 @@ pub fn bodyBytes(self: *Request) !?[]const u8 {
     return self._body;
 }
 
+// A TypeError if the body is disturbed or its exposed `body` stream is locked.
+fn checkUnusable(self: *const Request, local: *const js.Local) !void {
+    if (self._body_used) {
+        return local.typeError("Body has already been read");
+    }
+    const stream = self._body_view orelse return;
+    if (stream._disturbed or stream.getLocked()) {
+        return local.typeError("Body is disturbed or locked");
+    }
+}
+
+// A consumed body's stream stays locked and disturbed.
+fn lockStream(stream: *ReadableStream, exec: *const Execution) !void {
+    _ = try stream.getReader(exec);
+    stream._disturbed = true;
+}
+
 // Marks a present body consumed and returns it
-fn consume(self: *Request, local: *const js.Local) ![]const u8 {
+fn consume(self: *Request, exec: *const Execution) ![]const u8 {
+    const local = exec.js.local.?;
     if (self._body == null and self._body_stream == null) {
         return "";
     }
 
-    if (self._body_used) {
-        return local.typeError("Body has already been read");
-    }
+    try self.checkUnusable(local);
     const body = self.bodyBytes() catch |err| switch (err) {
         error.TypeError => return local.typeError("Failed to read ReadableStream body"),
         else => return err,
     };
     self._body_used = true;
+    if (self._body_view) |stream| {
+        try lockStream(stream, exec);
+    }
     return body orelse "";
+}
+
+// https://fetch.spec.whatwg.org/#dom-body-body
+pub fn getBody(self: *Request, exec: *const Execution) !?*ReadableStream {
+    const body = try self.bodyBytes() orelse return null;
+    if (self._body_view) |stream| {
+        return stream;
+    }
+    const stream = blk: {
+        if (body.len == 0) {
+            const stream = try ReadableStream.init(null, null, exec);
+            try stream._controller.close();
+            break :blk stream;
+        }
+        break :blk try ReadableStream.initWithData(body, exec);
+    };
+    self._body_view = stream;
+    if (self._body_used) {
+        try lockStream(stream, exec);
+    }
+    return stream;
+}
+
+// Returns a ReadableStream that decodes the body as UTF-8.
+pub fn textStream(self: *Request, exec: *const Execution) !*ReadableStream {
+    const local = exec.js.local.?;
+    try self.checkUnusable(local);
+
+    const byte_stream = try self.getBody(exec) orelse {
+        const stream = try ReadableStream.init(null, null, exec);
+        try stream._controller.close();
+        return stream;
+    };
+    self._body_used = true;
+
+    const decoder = try TextDecoderStream.init(null, null, exec);
+    return byte_stream.pipeThrough(.{ .readable = decoder.getReadable(), .writable = decoder.getWritable() }, exec);
 }
 
 pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    const body = try self.consume(local);
+    const body = try self.consume(exec);
 
     const headers = try self.getHeaders(exec);
     const content_type = try headers.get("content-type", exec) orelse "";
@@ -366,13 +424,13 @@ pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
 
 pub fn text(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    const body = try self.consume(local);
+    const body = try self.consume(exec);
     return local.resolvePromise(body_init.stripUtf8Bom(body));
 }
 
 pub fn json(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    const body = try self.consume(local);
+    const body = try self.consume(exec);
 
     const value = local.parseJSON(body_init.stripUtf8Bom(body)) catch {
         return local.rejectPromise(.{ .syntax_error = "failed to parse" });
@@ -382,20 +440,20 @@ pub fn json(self: *Request, exec: *const Execution) !js.Promise {
 
 pub fn arrayBuffer(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    const body = try self.consume(local);
+    const body = try self.consume(exec);
     return local.resolvePromise(js.ArrayBuffer{ .values = body });
 }
 
 pub fn bytes(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    const body = try self.consume(local);
+    const body = try self.consume(exec);
     return local.resolvePromise(js.TypedArray(u8){ .values = body });
 }
 
 pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
     // Per Fetch, a null body acts as an empty byte sequence.
-    const body = try self.consume(local);
+    const body = try self.consume(exec);
 
     const headers = try self.getHeaders(exec);
     const content_type = try headers.get("content-type", exec);
@@ -478,12 +536,14 @@ pub const JsApi = struct {
     pub const mode = bridge.accessor(Request.getMode, null, .{});
     pub const signal = bridge.accessor(Request.getSignal, null, .{});
     pub const bodyUsed = bridge.accessor(Request.getBodyUsed, null, .{});
+    pub const body = bridge.accessor(Request.getBody, null, .{});
     pub const blob = bridge.function(Request.blob, .{});
     pub const text = bridge.function(Request.text, .{});
     pub const json = bridge.function(Request.json, .{});
     pub const arrayBuffer = bridge.function(Request.arrayBuffer, .{});
     pub const bytes = bridge.function(Request.bytes, .{});
     pub const formData = bridge.function(Request.formData, .{});
+    pub const textStream = bridge.function(Request.textStream, .{});
     pub const clone = bridge.function(Request.clone, .{});
     pub const referrer = bridge.accessor(Request.getReferrer, null, .{});
     pub const referrerPolicy = bridge.accessor(Request.getReferrerPolicy, null, .{});
