@@ -601,6 +601,8 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
 
     frame.page.recordJsError(error.JsException);
 
+    const location = err.errorLocation(frame.call_arena) catch js.Value.ErrorLocation{};
+
     const target = self.asEventTarget();
     if (!frame._event_manager.hasDirectListeners(target, "error", self._on_error)) {
         if (comptime lp.IS_TEST == false) {
@@ -608,7 +610,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
                 .message = err.toStringSlice() catch "Unknown error",
             });
         }
-        notifyExceptionThrown(err, frame);
+        notifyExceptionThrown(err, location, frame);
         return;
     }
 
@@ -618,6 +620,9 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.persist(),
         .message = err.toStringSlice() catch "Unknown error",
+        .filename = location.url,
+        .lineno = location.line,
+        .colno = location.column,
         .bubbles = false,
         .cancelable = true,
     }, frame.page);
@@ -669,16 +674,17 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
         }
     }
     if (!event._prevent_default) {
-        notifyExceptionThrown(err, frame);
+        notifyExceptionThrown(err, location, frame);
     }
 }
 
 // An error event left uncancelled leaves the exception "uncaught": CDP
 // clients learn about it through Runtime.exceptionThrown.
-fn notifyExceptionThrown(err: js.Value, frame: *Frame) void {
+fn notifyExceptionThrown(err: js.Value, location: js.Value.ErrorLocation, frame: *Frame) void {
     frame._session.notification.dispatch(.exception_thrown, &.{
         .timestamp = lp.datetime.timestamp(.boot),
         .value = err,
+        .location = location,
     });
 }
 

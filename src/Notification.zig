@@ -378,6 +378,7 @@ pub const ConsoleMessage = struct {
 pub const ExceptionThrown = struct {
     timestamp: u64,
     value: js.Value,
+    location: js.Value.ErrorLocation,
 };
 
 pub fn init(allocator: Allocator) !*Notification {

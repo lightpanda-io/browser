@@ -518,6 +518,9 @@ pub const BrowserContext = struct {
     // can use the existing Frame/js.Context as-is.
     main_world_touched: bool = false,
 
+    // Runtime.exceptionThrown's exceptionDetails.exceptionId.
+    next_exception_id: u32 = 1,
+
     // Scripts registered via Page.addScriptToEvaluateOnNewDocument.
     // Evaluated in each new document after navigation completes.
     scripts_on_new_document: std.ArrayList(ScriptOnNewDocument) = .empty,

@@ -20,7 +20,6 @@ const std = @import("std");
 
 const CDP = @import("../CDP.zig");
 const js = @import("../../../browser/js/js.zig");
-const v8 = js.v8;
 const Notification = @import("../../../Notification.zig");
 const repeat = @import("../../../string.zig").repeat;
 
@@ -179,8 +178,6 @@ const ExceptionDetails = struct {
     executionContextId: i32,
 };
 
-var next_exception_id: std.atomic.Value(u32) = .init(1);
-
 pub fn exceptionThrown(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.ExceptionThrown) !void {
     // Like consoleAPICalled: the primary session's inspector mints the handle.
     const session_id = bc.session_id orelse return;
@@ -204,35 +201,19 @@ pub fn exceptionThrown(arena: Allocator, bc: *CDP.BrowserContext, event: *const 
     };
     try exception.setPrimitive(arena, value);
 
-    // Where the exception was thrown. V8's line is 1-based, CDP's 0-based.
-    var line: u32 = 0;
-    var column: u32 = 0;
-    var url: ?[]const u8 = null;
-    if (v8.v8__Exception__CreateMessage(ls.local.isolate.handle, value.handle)) |message| {
-        const l = v8.v8__Message__GetLineNumber(message, ls.local.handle);
-        if (l > 0) {
-            line = @intCast(l - 1);
-        }
-        const c = v8.v8__Message__GetStartColumn(message);
-        if (c > 0) {
-            column = @intCast(c);
-        }
-        if (v8.v8__Message__GetScriptResourceName(message)) |name| {
-            const name_value = js.Value{ .local = &ls.local, .handle = name };
-            if (name_value.isString()) |str| {
-                url = try str.toSliceWithAlloc(arena);
-            }
-        }
-    }
+    // The location is 1-based, CDP's is 0-based.
+    const location = event.location;
+    const exception_id = bc.next_exception_id;
+    bc.next_exception_id += 1;
 
     return bc.cdp.sendEvent("Runtime.exceptionThrown", .{
         .timestamp = event.timestamp,
         .exceptionDetails = ExceptionDetails{
-            .exceptionId = next_exception_id.fetchAdd(1, .monotonic),
+            .exceptionId = exception_id,
             .text = "Uncaught",
-            .lineNumber = line,
-            .columnNumber = column,
-            .url = url,
+            .lineNumber = location.line -| 1,
+            .columnNumber = location.column -| 1,
+            .url = if (location.url.len == 0) null else location.url,
             .exception = exception,
             .executionContextId = bc.inspector().getContextId(&ls.local),
         },
@@ -351,6 +332,30 @@ test "cdp.runtime: an uncaught exception emits Runtime.exceptionThrown" {
             .text = "Uncaught",
             .exception = .{ .type = "object", .subtype = "error", .className = "TypeError" },
         },
+    }, .{});
+}
+
+test "cdp.runtime: Runtime.exceptionThrown locates an Error where it was created" {
+    testing.silenceLog(&.{.js});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC3", .url = "hi.html", .target_id = "FID-000000EXC3".* });
+    try ctx.processMessage(.{ .id = 62, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec(
+        \\const unused = 1;
+        \\const err = new Error('here');
+        \\reportError(err);
+    , "exc.js");
+
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{ .lineNumber = 1, .columnNumber = 12, .url = "exc.js" },
     }, .{});
 }
 
