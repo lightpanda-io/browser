@@ -23,7 +23,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 pub fn main(init: std.process.Init) !void {
-    // usage: docs <outdir>
     var args = std.process.Args.Iterator.init(init.minimal.args);
     _ = args.next(); // executable name
     const out_path = args.next() orelse {

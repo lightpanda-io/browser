@@ -396,28 +396,6 @@ pub const Tool = enum {
         interaction,
         waiting,
         state,
-
-        pub fn title(self: Group) []const u8 {
-            return switch (self) {
-                .navigation => "Navigation and search",
-                .reading => "Reading the page",
-                .extraction => "Data extraction and scripting",
-                .interaction => "Interacting with the page",
-                .waiting => "Waiting",
-                .state => "State and debugging",
-            };
-        }
-
-        pub fn intro(self: Group) []const u8 {
-            return switch (self) {
-                .navigation => "These tools bring a page into the browser.",
-                .reading => "These tools read the loaded page without modifying it.",
-                .extraction => "These tools return structured results from the loaded page.",
-                .interaction => "These tools dispatch real DOM events on the page.",
-                .waiting => "These tools block until the page reaches a condition.",
-                .state => "These tools inspect browser state outside the DOM.",
-            };
-        }
     };
 
     /// Per-tool LLM-facing metadata. Tool identity (name + predicates) lives

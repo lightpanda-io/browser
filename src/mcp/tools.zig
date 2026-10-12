@@ -12,7 +12,7 @@ const McpTool = protocol.Tool;
 /// Convert browser tool_defs to MCP wire-protocol tools (comptime).
 /// Tool identity comes from the `BrowserTool` tag — `tool_defs` only
 /// carries the LLM-facing description and JSON schema.
-const browser_tool_list = blk: {
+pub const browser_tool_list = blk: {
     const field_names = @typeInfo(BrowserTool).@"enum".field_names;
     var tools: [field_names.len]McpTool = undefined;
     for (browser_tools.tool_defs, field_names, 0..) |td, field_name, i| {
@@ -124,7 +124,7 @@ pub const extra_tools = [_]McpTool{
     },
 };
 
-pub const all_tools = browser_tool_list ++ extra_tools;
+const all_tools = browser_tool_list ++ extra_tools;
 
 /// Tools that bypass the browser-tool dispatch and have their own handlers.
 /// Values are telemetry wire ids, kept clear of `browser_tools.Tool`'s.

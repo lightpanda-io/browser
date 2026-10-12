@@ -24,7 +24,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const Schema = @import("script/Schema.zig");
+const Schema = lp.Schema;
 const SlashCommand = @import("agent/SlashCommand.zig");
 const mcp_tools = @import("mcp/tools.zig");
 const mcp_resources = @import("mcp/resources.zig");
@@ -49,53 +49,49 @@ const browser_tools_page = "/reference/browser-tools";
 
 /// Every browser tool, grouped, with its full description and parameters.
 /// The MCP and agent partials link here instead of repeating it.
-pub fn writeBrowserTools(w: *Writer) Writer.Error!void {
+fn writeBrowserTools(w: *Writer) Writer.Error!void {
     try w.writeAll(banner);
     for (std.enums.values(Tool.Group)) |g| {
-        try w.print("## {s}\n\n{s}\n\n| Tool | Summary |\n|---|---|\n", .{ g.title(), g.intro() });
-        for (std.enums.values(Tool)) |t| {
-            if (t.group() != g) continue;
-            try w.print("| [`{s}`](", .{@tagName(t)});
-            try writeAnchor(w, "", @tagName(t));
-            try w.writeAll(") | ");
-            try writeCell(w, t.definition().summary);
-            try w.writeAll(" |\n");
+        try writeGroupHeading(w, g, "| Tool | Summary |\n|---|---|\n");
+        for (Schema.all()) |*s| {
+            if (s.tool.group() != g) continue;
+            try w.print("| [`{s}`]({f}) | {f} |\n", .{ s.tool_name, Anchor{ .name = s.tool_name }, Cell{ .s = s.summary } });
         }
         try w.writeAll("\n");
 
-        for (std.enums.values(Tool)) |t| {
-            if (t.group() != g) continue;
-            const def = t.definition();
-            try w.print("### {s}\n\n", .{@tagName(t)});
-            try writeText(w, def.description);
+        for (Schema.all()) |*s| {
+            if (s.tool.group() != g) continue;
+            try w.print("### {s}\n\n", .{s.tool_name});
+            try writeText(w, s.description);
             try w.writeAll("\n\n");
-            try writeParams(w, def.input_schema);
-            try writeTraits(w, t);
+            try writeParams(w, s.parameters);
+            const traits = [_]Flag{
+                .{ s.tool.isRecorded(), "Recorded in saved scripts." },
+                .{ s.tool.navigatesToUrl(), "Navigates first when given `url`." },
+                .{ s.tool.reportsPageState(), "Reports the resulting page state (`url`, `httpStatus`, `title`)." },
+            };
+            if (try writeFlags(w, &traits, " ")) try w.writeAll("\n\n");
         }
     }
 }
 
 /// The MCP view: titles and hints per browser tool, plus the MCP-only tools
 /// and resources in full.
-pub fn writeMcpTools(w: *Writer) Writer.Error!void {
+fn writeMcpTools(w: *Writer) Writer.Error!void {
     try w.writeAll(banner);
-    const browser_list = mcp_tools.all_tools[0 .. mcp_tools.all_tools.len - mcp_tools.extra_tools.len];
     for (std.enums.values(Tool.Group)) |g| {
-        try w.print("## {s}\n\n{s}\n\n| Tool | Title | Hints |\n|---|---|---|\n", .{ g.title(), g.intro() });
-        for (std.enums.values(Tool), browser_list) |t, mt| {
+        try writeGroupHeading(w, g, "| Tool | Title | Hints |\n|---|---|---|\n");
+        for (std.enums.values(Tool), mcp_tools.browser_tool_list) |t, mt| {
             if (t.group() != g) continue;
-            std.debug.assert(std.mem.eql(u8, @tagName(t), mt.name));
-            try w.print("| [`{s}`](", .{mt.name});
-            try writeAnchor(w, browser_tools_page, mt.name);
-            try w.writeAll(") | ");
-            try writeCell(w, mt.title orelse "");
-            try w.writeAll(" | ");
+            try w.print("| [`{s}`]({f}) | {f} | ", .{ mt.name, Anchor{ .page = browser_tools_page, .name = mt.name }, Cell{ .s = mt.title orelse "" } });
             try writeHints(w, mt);
             try w.writeAll(" |\n");
         }
         try w.writeAll("\n");
     }
 
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
     try w.writeAll("## MCP-only tools\n\nThese tools exist only in the MCP server, not in the agent or in scripts.\n\n");
     for (mcp_tools.extra_tools) |mt| {
         try w.print("### {s}\n\n", .{mt.name});
@@ -106,7 +102,10 @@ pub fn writeMcpTools(w: *Writer) Writer.Error!void {
         }
         try writeText(w, mt.description orelse "");
         try w.writeAll("\n\n");
-        try writeParams(w, mt.inputSchema);
+        const schema = std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), mt.inputSchema, .{}) catch |err| {
+            std.debug.panic("invalid input schema for MCP tool '{s}': {s}", .{ mt.name, @errorName(err) });
+        };
+        try writeParams(w, schema);
         try w.writeAll("Hints: ");
         try writeHints(w, mt);
         try w.writeAll("\n\n");
@@ -114,63 +113,52 @@ pub fn writeMcpTools(w: *Writer) Writer.Error!void {
 
     try w.writeAll("## Resources\n\nRead with `resources/read`.\n\n| URI | MIME type | Description |\n|---|---|---|\n");
     for (mcp_resources.resource_list) |r| {
-        try w.print("| `{s}` | `{s}` | ", .{ r.uri, r.mimeType orelse "" });
-        try writeCell(w, r.description orelse r.name);
-        try w.writeAll(" |\n");
+        try w.print("| `{s}` | `{s}` | {f} |\n", .{ r.uri, r.mimeType orelse "", Cell{ .s = r.description orelse r.name } });
     }
 }
 
 /// The agent REPL's slash commands: meta, LLM-prompt, and one per browser
 /// tool in the `key=value` syntax the REPL parses.
-pub fn writeAgentCommands(w: *Writer) Writer.Error!void {
+fn writeAgentCommands(w: *Writer) Writer.Error!void {
     try w.writeAll(banner);
     try w.writeAll("### Meta commands\n\nThese commands configure the REPL and never reach the model.\n\n| Command | Description |\n|---|---|\n");
     for (SlashCommand.meta_commands) |m| {
         try w.print("| `/{s}", .{m.name});
-        if (m.hint.len > 0) {
-            try w.writeAll(" ");
-            try writeCellRaw(w, m.hint);
-        }
-        try w.writeAll("` | ");
-        try writeCell(w, m.description);
-        try w.writeAll(" |\n");
+        if (m.hint.len > 0) try w.print(" {f}", .{Cell{ .s = m.hint, .in_code = true }});
+        try w.print("` | {f} |\n", .{Cell{ .s = m.description }});
     }
 
     try w.writeAll("\n### LLM commands\n\nThese commands send a prebuilt prompt to the model, so they need a provider.\n\n| Command | Description |\n|---|---|\n");
     for (SlashCommand.llm_commands) |row| {
-        try w.print("| `/{s}` | ", .{row.name});
-        try writeCell(w, row.description);
-        try w.writeAll(" |\n");
+        try w.print("| `/{s}` | {f} |\n", .{ row.name, Cell{ .s = row.description } });
     }
 
     try w.writeAll("\n### Browser commands\n\nEvery browser tool runs directly as a slash command, with no model call. A lone required argument can be passed positionally; the rest take `key=value` or a JSON object.\n\n| Command | Description |\n|---|---|\n");
-    const schemas = Schema.all();
     for (std.enums.values(Tool.Group)) |g| {
-        for (schemas) |*s| {
+        for (Schema.all()) |*s| {
             if (s.tool.group() != g) continue;
             try w.print("| [`/{s}", .{s.tool_name});
-            for (s.hints) |h| {
-                try w.writeAll(" ");
-                try writeCellRaw(w, h.fragment);
-            }
-            try w.writeAll("`](");
-            try writeAnchor(w, browser_tools_page, s.tool_name);
-            try w.writeAll(") | ");
-            try writeCell(w, s.summary);
-            try w.writeAll(" |\n");
+            for (s.hints) |h| try w.print(" {f}", .{Cell{ .s = h.fragment, .in_code = true }});
+            try w.print("`]({f}) | {f} |\n", .{ Anchor{ .page = browser_tools_page, .name = s.tool_name }, Cell{ .s = s.summary } });
         }
     }
 }
 
-/// An `Argument | Type | Required | Description` table for a JSON Schema
-/// object. Panics on malformed JSON: the schemas are comptime constants.
-fn writeParams(w: *Writer, input_schema: []const u8) Writer.Error!void {
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-    defer arena.deinit();
-    const schema = std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), input_schema, .{}) catch |err| {
-        std.debug.panic("invalid tool input schema: {s}", .{@errorName(err)});
+fn writeGroupHeading(w: *Writer, g: Tool.Group, table_head: []const u8) Writer.Error!void {
+    const title, const scope = switch (g) {
+        .navigation => .{ "Navigation and search", "bring a page into the browser" },
+        .reading => .{ "Reading the page", "read the loaded page without modifying it" },
+        .extraction => .{ "Data extraction and scripting", "return structured results from the loaded page" },
+        .interaction => .{ "Interacting with the page", "dispatch real DOM events on the page" },
+        .waiting => .{ "Waiting", "block until the page reaches a condition" },
+        .state => .{ "State and debugging", "inspect browser state outside the DOM" },
     };
+    try w.print("## {s}\n\nThese tools {s}.\n\n{s}", .{ title, scope, table_head });
+}
 
+/// An `Argument | Type | Required | Description` table for a JSON Schema
+/// object.
+fn writeParams(w: *Writer, schema: std.json.Value) Writer.Error!void {
     const props = schema.object.get("properties") orelse return w.writeAll("No arguments.\n\n");
     if (props.object.count() == 0) return w.writeAll("No arguments.\n\n");
     const required: []const std.json.Value = if (schema.object.get("required")) |r| r.array.items else &.{};
@@ -186,7 +174,7 @@ fn writeParams(w: *Writer, input_schema: []const u8) Writer.Error!void {
 
         var sep: []const u8 = "";
         if (prop.get("description")) |d| {
-            try writeCell(w, d.string);
+            try w.print("{f}", .{Cell{ .s = d.string }});
             sep = " ";
         }
         if (prop.get("enum")) |values| {
@@ -218,13 +206,6 @@ fn writeParams(w: *Writer, input_schema: []const u8) Writer.Error!void {
     try w.writeAll("\n");
 }
 
-/// Nextra slugs headings in lowercase, so `### nodeDetails` is
-/// `#nodedetails`.
-fn writeAnchor(w: *Writer, page: []const u8, name: []const u8) Writer.Error!void {
-    try w.print("{s}#", .{page});
-    for (name) |c| try w.writeByte(std.ascii.toLower(c));
-}
-
 fn writeType(w: *Writer, prop: std.json.ObjectMap) Writer.Error!void {
     const ty = prop.get("type") orelse return w.writeAll("any");
     if (std.mem.eql(u8, ty.string, "array")) {
@@ -241,40 +222,56 @@ fn isRequired(required: []const std.json.Value, name: []const u8) bool {
     return false;
 }
 
-fn writeTraits(w: *Writer, t: Tool) Writer.Error!void {
-    const traits = [_]struct { bool, []const u8 }{
-        .{ t.isRecorded(), "Recorded in saved scripts." },
-        .{ t.navigatesToUrl(), "Navigates first when given `url`." },
-        .{ t.reportsPageState(), "Reports the resulting page state (`url`, `httpStatus`, `title`)." },
-    };
-    var first = true;
-    for (traits) |trait| {
-        if (!trait[0]) continue;
-        if (!first) try w.writeAll(" ");
-        try w.writeAll(trait[1]);
-        first = false;
-    }
-    if (!first) try w.writeAll("\n\n");
-}
-
 fn writeHints(w: *Writer, mt: protocol.Tool) Writer.Error!void {
     const a = mt.annotations orelse protocol.ToolAnnotations{};
-    const hints = [_]struct { bool, []const u8 }{
+    const hints = [_]Flag{
         .{ a.readOnlyHint, "read-only" },
-        .{ !a.readOnlyHint and a.destructiveHint, "destructive" },
+        .{ a.destructiveHint, "destructive" },
         .{ a.idempotentHint, "idempotent" },
         .{ a.openWorldHint, "open-world" },
         .{ mt.outputSchema != null, "page state" },
     };
-    var first = true;
-    for (hints) |hint| {
-        if (!hint[0]) continue;
-        if (!first) try w.writeAll(", ");
-        try w.writeAll(hint[1]);
-        first = false;
-    }
-    if (first) try w.writeAll("—");
+    if (!try writeFlags(w, &hints, ", ")) try w.writeAll("—");
 }
+
+const Flag = struct { bool, []const u8 };
+
+/// Writes the labels of the set flags, separated by `sep`. Returns whether
+/// any was set.
+fn writeFlags(w: *Writer, flags: []const Flag, sep: []const u8) Writer.Error!bool {
+    var wrote = false;
+    for (flags) |flag| {
+        if (!flag[0]) continue;
+        if (wrote) try w.writeAll(sep);
+        try w.writeAll(flag[1]);
+        wrote = true;
+    }
+    return wrote;
+}
+
+/// A link target to a tool's heading. Nextra slugs headings in lowercase, so
+/// `### nodeDetails` is `#nodedetails`.
+const Anchor = struct {
+    page: []const u8 = "",
+    name: []const u8,
+
+    pub fn format(self: Anchor, w: *Writer) Writer.Error!void {
+        try w.print("{s}#", .{self.page});
+        for (self.name) |c| try w.writeByte(std.ascii.toLower(c));
+    }
+};
+
+/// Text for a GFM table cell: `|` ends the cell even inside a code span, and
+/// a newline ends the row. `in_code` is for text already inside a code span.
+const Cell = struct {
+    s: []const u8,
+    in_code: bool = false,
+
+    pub fn format(self: Cell, w: *Writer) Writer.Error!void {
+        if (self.in_code) return writeCode(w, self.s, true);
+        try writeEscaped(w, self.s, true);
+    }
+};
 
 /// Prose for MDX: outside code spans, `<` would open JSX and `{` an
 /// expression. Tool descriptions are written for models, so a run of
@@ -305,14 +302,8 @@ fn writeText(w: *Writer, s: []const u8) Writer.Error!void {
     if (in_fence) try w.writeAll("\n```");
 }
 
-/// Like `writeText`, for a GFM table cell: `|` ends the cell even inside a
-/// code span, and a newline ends the row.
-fn writeCell(w: *Writer, s: []const u8) Writer.Error!void {
-    try writeEscaped(w, s, true);
-}
-
-/// A table cell already inside a code span.
-fn writeCellRaw(w: *Writer, s: []const u8) Writer.Error!void {
+fn writeCode(w: *Writer, s: []const u8, cell: bool) Writer.Error!void {
+    if (!cell) return w.writeAll(s);
     for (s) |c| switch (c) {
         '|' => try w.writeAll("\\|"),
         else => try w.writeByte(c),
@@ -325,19 +316,13 @@ fn writeEscaped(w: *Writer, s: []const u8, cell: bool) Writer.Error!void {
         if (s[i] == '`') {
             const run_end = std.mem.findNonePos(u8, s, i, "`") orelse s.len;
             const fence = s[i..run_end];
-            if (std.mem.findPos(u8, s, run_end, fence)) |close| {
-                try w.writeAll(fence);
-                if (cell) {
-                    try writeCellRaw(w, s[run_end..close]);
-                } else {
-                    try w.writeAll(s[run_end..close]);
-                }
-                try w.writeAll(fence);
-                i = close + fence.len;
-                continue;
-            }
             try w.writeAll(fence);
             i = run_end;
+            if (std.mem.findPos(u8, s, run_end, fence)) |close| {
+                try writeCode(w, s[run_end..close], cell);
+                try w.writeAll(fence);
+                i = close + fence.len;
+            }
             continue;
         }
         switch (s[i]) {
@@ -354,15 +339,15 @@ fn writeEscaped(w: *Writer, s: []const u8, cell: bool) Writer.Error!void {
 
 const testing = std.testing;
 
-fn render(partial: Partial) ![]u8 {
+fn render(write: *const fn (w: *Writer) Writer.Error!void) ![]u8 {
     var aw: Writer.Allocating = .init(testing.allocator);
     errdefer aw.deinit();
-    try partial.write(&aw.writer);
+    try write(&aw.writer);
     return aw.toOwnedSlice();
 }
 
 test "docs: browser-tools documents every tool exactly once" {
-    const out = try render(partials[0]);
+    const out = try render(writeBrowserTools);
     defer testing.allocator.free(out);
     for (std.enums.values(Tool)) |t| {
         var buf: [64]u8 = undefined;
@@ -372,9 +357,9 @@ test "docs: browser-tools documents every tool exactly once" {
 }
 
 test "docs: mcp-tools lists every MCP tool and resource" {
-    const out = try render(partials[1]);
+    const out = try render(writeMcpTools);
     defer testing.allocator.free(out);
-    for (mcp_tools.all_tools) |mt| {
+    for (mcp_tools.browser_tool_list ++ mcp_tools.extra_tools) |mt| {
         var row_buf: [64]u8 = undefined;
         var heading_buf: [64]u8 = undefined;
         const row = try std.mem.print(&row_buf, "| [`{s}`]", .{mt.name});
@@ -387,7 +372,7 @@ test "docs: mcp-tools lists every MCP tool and resource" {
 }
 
 test "docs: agent-commands covers every slash command" {
-    const out = try render(partials[2]);
+    const out = try render(writeAgentCommands);
     defer testing.allocator.free(out);
     for (SlashCommand.all_names) |name| {
         var buf: [64]u8 = undefined;
@@ -400,7 +385,7 @@ test "docs: agent-commands covers every slash command" {
 test "docs: escaping leaves code spans alone" {
     var aw: Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try writeCell(&aw.writer, "a <b> {c} `x|<y>{}` d|e\nf `open");
+    try aw.writer.print("{f}", .{Cell{ .s = "a <b> {c} `x|<y>{}` d|e\nf `open" }});
     try testing.expectEqualStrings("a &lt;b> \\{c\\} `x\\|<y>{}` d\\|e f `open", aw.written());
 }
 

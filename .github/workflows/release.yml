@@ -65,7 +65,8 @@ jobs:
 
       # Reference partials for the docs site, pulled daily by its
       # browser-reference workflow. A debug build: the output doesn't depend
-      # on the optimize mode and the self-hosted backend compiles it fastest.
+      # on the optimize mode, it compiles far faster than ReleaseFast, and its
+      # flags match the snapshot step's so the C deps come from the cache.
       - name: docs reference
         if: matrix.arch == 'x86_64'
         run: |
