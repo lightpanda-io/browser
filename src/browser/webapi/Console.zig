@@ -234,7 +234,7 @@ pub const JsApi = struct {
 
         // Per the console spec, members are own properties of the namespace
         // object, so Object.entries(console) returns them.
-        pub const own_properties = true;
+        pub const namespace = true;
 
         pub const class_string = "console";
 

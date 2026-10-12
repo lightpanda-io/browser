@@ -197,7 +197,7 @@ pub const JsApi = struct {
 
         // Per the CSSOM spec, CSS is a namespace object — members are own
         // properties so Object.entries(CSS) returns them.
-        pub const own_properties = true;
+        pub const namespace = true;
 
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
