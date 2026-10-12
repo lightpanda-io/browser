@@ -1557,14 +1557,26 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
     const notify = Frame.observers.hasMutationObservers(frame);
     const removed = try self.removeAllChildrenCollecting(notify, frame);
 
-    // Append new children
+    const parent_owner = self.ownerDocument(frame) orelse self.as(Document);
     for (children_to_add.items) |child| {
+        const child_owner = child.ownerDocument(frame);
+        const adopting_to_new_document = child_owner != null and child_owner.? != parent_owner;
+
         var previous_root: ?*Node = null;
         if (child._parent) |previous_parent| {
             previous_root = child.getRootNode(.{});
-            frame.removeNode(previous_parent, child, .{ .reconnect_to = self });
+            frame.removeNode(previous_parent, child, .{
+                .reconnect_to = if (adopting_to_new_document) null else self,
+            });
         }
-        try frame.appendNode(self, child, .{ .previous_root = previous_root, .notify_observers = false });
+        if (adopting_to_new_document) {
+            try frame.adoptNodeTree(child, child_owner.?, parent_owner);
+        }
+        try frame.appendNode(self, child, .{
+            .previous_root = previous_root,
+            .adopting_to_new_document = adopting_to_new_document,
+            .notify_observers = false,
+        });
     }
 
     if (notify and (removed.items.len > 0 or children_to_add.items.len > 0)) {

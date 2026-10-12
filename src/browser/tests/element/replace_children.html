@@ -137,3 +137,21 @@
     testing.expectEqual(0, div1.childNodes.length);
   }
 </script>
+
+<script id=replace_children_adopts>
+  {
+    // Nodes from another document are adopted, as appendChild does.
+    const other = document.implementation.createHTMLDocument("other");
+    const node = other.createElement('div');
+    const frag = other.createDocumentFragment();
+    const fragChild = other.createElement('span');
+    frag.appendChild(fragChild);
+    const host = document.getElementById('test');
+
+    host.replaceChildren(node, frag);
+
+    testing.expectEqual(document, node.ownerDocument);
+    testing.expectEqual(document, fragChild.ownerDocument);
+    testing.expectEqual(true, document.documentElement.scrollWidth > 0);
+  }
+</script>
