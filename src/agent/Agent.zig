@@ -246,6 +246,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
             return error.InvalidFilename;
         }
     }
+    if (opts.trace_results and opts.trace == null) {
+        log.fatal(.app, "conflicting flags", .{
+            .hint = "--trace-results adds result text to the --trace file; pass --trace too",
+        });
+        return error.ConflictingFlags;
+    }
     if (opts.no_llm and opts.provider != null) {
         log.warn(.app, "ignoring --provider", .{ .reason = "--no-llm takes precedence" });
     }
@@ -382,7 +388,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     errdefer if (self.ai_client) |c| c.deinit(allocator);
 
     if (opts.trace) |path| {
-        self.trace = Trace.create(allocator, path) catch |err| {
+        self.trace = Trace.create(allocator, path, opts.trace_results) catch |err| {
             log.fatal(.app, "cannot write trace", .{ .path = path, .err = err });
             return err;
         };
