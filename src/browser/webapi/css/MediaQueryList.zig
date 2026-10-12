@@ -35,7 +35,6 @@ _frame: *Frame,
 _media: []const u8,
 // What listeners last observed; `change` fires when the viewport flips it.
 _matches: bool,
-_on_change: ?js.Function.Global = null,
 
 pub fn init(query: []const u8, frame: *Frame) !*MediaQueryList {
     const media = try frame.dupeString(query);
@@ -71,7 +70,7 @@ pub fn viewportChanged(self: *MediaQueryList) void {
     self._matches = matches;
 
     const frame = self._frame;
-    if (!frame.hasDirectListeners(self.asEventTarget(), "change", self._on_change)) return;
+    if (!frame.hasDirectListeners(self.asEventTarget(), "change")) return;
     self.dispatchChange(matches) catch |err| {
         log.debug(.browser, "matchMedia change", .{ .err = err, .media = self._media });
     };
@@ -83,13 +82,7 @@ fn dispatchChange(self: *MediaQueryList, matches: bool) !void {
         .matches = matches,
         .media = self._media,
     }, frame);
-    try frame.dispatch(self.asEventTarget(), event.asEvent(), self._on_change, .{ .context = "MediaQueryList change" });
-}
-
-// The property handler for a JS-side dispatchEvent (see EventManager.dispatch).
-pub fn inlineHandler(self: *const MediaQueryList, typ: lp.String) ?js.Function.Global {
-    if (typ.eql(comptime .wrap("change"))) return self._on_change;
-    return null;
+    try frame.dispatch(self.asEventTarget(), event.asEvent(), .{ .context = "MediaQueryList change" });
 }
 
 pub fn addListener(self: *MediaQueryList, cb_: ?js.Function, exec: *js.Execution) !void {
@@ -100,14 +93,6 @@ pub fn addListener(self: *MediaQueryList, cb_: ?js.Function, exec: *js.Execution
 pub fn removeListener(self: *MediaQueryList, cb_: ?js.Function, exec: *js.Execution) !void {
     const cb = cb_ orelse return;
     try self._proto.removeEventListener("change", .{ .value = .{ .function = cb } }, null, exec);
-}
-
-fn getOnChange(self: *const MediaQueryList) ?js.Function.Global {
-    return self._on_change;
-}
-
-fn setOnChange(self: *MediaQueryList, cb: ?js.Function.Global) void {
-    self._on_change = cb;
 }
 
 pub const JsApi = struct {
@@ -123,7 +108,7 @@ pub const JsApi = struct {
     pub const matches = bridge.accessor(MediaQueryList.getMatches, null, .{});
     pub const addListener = bridge.function(MediaQueryList.addListener, .{});
     pub const removeListener = bridge.function(MediaQueryList.removeListener, .{});
-    pub const onchange = bridge.accessor(MediaQueryList.getOnChange, MediaQueryList.setOnChange, .{});
+    pub const onchange = EventTarget.handlerAccessor(MediaQueryList, "change");
 };
 
 const testing = @import("../../../testing.zig");

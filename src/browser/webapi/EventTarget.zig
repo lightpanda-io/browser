@@ -67,11 +67,7 @@ const EventTarget = @This();
 
 pub const _prototype_root = true;
 
-// `global_event_handlers.Key` reuses the low 3 bits of an EventTarget pointer,
-// so the type has to stay 8-byte aligned even though the tag is a single byte.
-// This costs nothing in a chain: EventTarget is always at offset 0 and every
-// subtype that follows it is itself 8-aligned.
-_type: Type align(8),
+_type: Type,
 
 pub const Type = enum(u8) {
     abort_signal,
@@ -206,9 +202,35 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
             defer _ = event.releaseRef(frame.page);
             try frame._event_manager.dispatch(self, event);
         },
-        .worker => |wgs| try wgs.dispatch(self, event, null, .{}),
+        .worker => |wgs| try wgs.dispatch(self, event, .{}),
     }
     return !event._cancelable or !event._prevent_default;
+}
+
+pub const HandlerValue = union(enum) {
+    func: js.Function.Global,
+    anything: js.Value, // accept anything and when not callable, sets to null
+
+    pub fn function(value: ?HandlerValue) ?js.Function.Global {
+        return switch (value orelse return null) {
+            .func => |func| func,
+            .anything => null,
+        };
+    }
+};
+
+// Create a get and set accessor for on* handlers
+pub fn handlerAccessor(comptime T: type, comptime typ: []const u8) js.bridge.Accessor {
+    const H = struct {
+        fn get(self: *T, exec: *js.Execution) ?js.Function.Global {
+            return exec.getHandler(self.asEventTarget(), typ);
+        }
+
+        fn set(self: *T, value: ?HandlerValue, exec: *js.Execution) !void {
+            return exec.setHandler(self.asEventTarget(), typ, HandlerValue.function(value));
+        }
+    };
+    return js.Bridge(T).accessor(H.get, H.set, .{});
 }
 
 const AddEventListenerOptions = union(enum) {
@@ -422,8 +444,7 @@ test "WebApi: EventTarget" {
     testing.silenceLog(&.{ .js, .event });
 
     // we create thousands of these per frame. Nothing should bloat it.
-    // The tag is 1 byte; the rest is the align(8) that `Key.fuse` depends on.
-    try testing.expectEqual(8, @sizeOf(EventTarget));
-    try testing.expectEqual(8, @alignOf(EventTarget));
+    // (fine to go up to 8, since it'll always be padded to that)
+    try testing.expectEqual(1, @sizeOf(EventTarget));
     try testing.htmlRunner("events.html", .{});
 }

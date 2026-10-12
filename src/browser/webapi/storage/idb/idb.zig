@@ -71,21 +71,6 @@ pub fn cachedKeyPathJs(cache: *?*js.GlobalSlot, txn: *IDBTransaction, kp: ?Key.K
     return Key.keyPathToJs(local, kp);
 }
 
-// An on* event-handler attribute setter. The bridge can hand the setter either
-// a function (store it) or any other value (clears it).
-pub const FunctionSetter = union(enum) {
-    func: js.Function.Global,
-    anything: js.Value,
-};
-
-pub fn functionFromSetter(setter: ?FunctionSetter) ?js.Function.Global {
-    const s = setter orelse return null;
-    return switch (s) {
-        .func => |f| f,
-        .anything => null,
-    };
-}
-
 const testing = @import("../../../../testing.zig");
 test "WebApi: IndexedDB" {
     try testing.htmlRunner("indexeddb.html", .{});

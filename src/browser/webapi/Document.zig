@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const idna = @import("../../sys/idna.zig");
 const public_suffix_list = @import("../../data/public_suffix_list.zig");
 
+const EventTarget = @import("EventTarget.zig");
 const URL = @import("../URL.zig");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
@@ -98,36 +99,6 @@ _open_popovers: std.ArrayList(*Element) = .empty,
 // document.open/close/write/writeln must throw InvalidStateError.
 _throw_on_dynamic_markup_insertion_counter: u32 = 0,
 
-_on_selectionchange: ?js.Function.Global = null,
-
-fn getOnSelectionChange(self: *Document) ?js.Function.Global {
-    return self._on_selectionchange;
-}
-
-fn setOnSelectionChange(self: *Document, listener: ?js.Function) !void {
-    if (listener) |listen| {
-        self._on_selectionchange = try listen.persistWithThis(self);
-    } else {
-        self._on_selectionchange = null;
-    }
-}
-
-// Stored in the frame's attribute-listener map (like element and ShadowRoot
-// property handlers), which the dispatch propagation path consults for any
-// event target.
-fn getOnClick(self: *Document, frame: *Frame) ?js.Function.Global {
-    return (self._frame orelse frame)._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = .onclick });
-}
-
-fn setOnClick(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    const owner = self._frame orelse frame;
-    if (Window.getFunctionFromSetter(setter)) |cb| {
-        try owner._event_target_attr_listeners.put(owner.page_arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
-    } else {
-        _ = owner._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onclick });
-    }
-}
-
 pub const Type = union(enum) {
     generic,
     html: *HTMLDocument,
@@ -159,7 +130,7 @@ pub fn asNode(self: *Document) *Node {
     return self._proto;
 }
 
-pub fn asEventTarget(self: *Document) *@import("EventTarget.zig") {
+pub fn asEventTarget(self: *Document) *EventTarget {
     return self._proto.asEventTarget();
 }
 
@@ -1653,12 +1624,12 @@ pub const JsApi = struct {
         return Sanitizer.parseHTML(html, options, false, frame);
     }
 
-    pub const onselectionchange = bridge.accessor(Document.getOnSelectionChange, Document.setOnSelectionChange, .{});
-    pub const onclick = bridge.accessor(Document.getOnClick, Document.setOnClick, .{});
-    pub const ontouchstart = bridge.accessor(handlerAccessor(.ontouchstart).get, handlerAccessor(.ontouchstart).set, .{});
-    pub const ontouchend = bridge.accessor(handlerAccessor(.ontouchend).get, handlerAccessor(.ontouchend).set, .{});
-    pub const ontouchmove = bridge.accessor(handlerAccessor(.ontouchmove).get, handlerAccessor(.ontouchmove).set, .{});
-    pub const ontouchcancel = bridge.accessor(handlerAccessor(.ontouchcancel).get, handlerAccessor(.ontouchcancel).set, .{});
+    pub const onselectionchange = EventTarget.handlerAccessor(Document, "selectionchange");
+    pub const onclick = EventTarget.handlerAccessor(Document, "click");
+    pub const ontouchstart = EventTarget.handlerAccessor(Document, "touchstart");
+    pub const ontouchend = EventTarget.handlerAccessor(Document, "touchend");
+    pub const ontouchmove = EventTarget.handlerAccessor(Document, "touchmove");
+    pub const ontouchcancel = EventTarget.handlerAccessor(Document, "touchcancel");
     pub const URL = bridge.accessor(Document.getURL, null, .{});
     pub const location = bridge.accessor(Document.getLocation, Document.setLocation, .{});
     pub const documentURI = bridge.accessor(Document.getURL, null, .{});
@@ -1745,26 +1716,6 @@ pub const JsApi = struct {
     pub const compatMode = bridge.accessor(Document.getCompatMode, null, .{});
     pub const lastModified = bridge.accessor(Document.getLastModified, null, .{});
     pub const referrer = bridge.accessor(Document.getReferrer, null, .{});
-
-    // Generates a getter/setter pair backed by the frame's attribute-listener
-    // map, like onclick above, for other document event handler properties.
-    fn handlerAccessor(comptime handler: @import("global_event_handlers.zig").Handler) type {
-        return struct {
-            pub fn get(self: *Document, frame: *Frame) ?js.Function.Global {
-                const owner = self._frame orelse frame;
-                return owner._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = handler });
-            }
-
-            pub fn set(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-                const owner = self._frame orelse frame;
-                if (Window.getFunctionFromSetter(setter)) |cb| {
-                    try owner._event_target_attr_listeners.put(owner.page_arena, .{ .target = self.asEventTarget(), .handler = handler }, cb);
-                } else {
-                    _ = owner._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = handler });
-                }
-            }
-        };
-    }
 };
 
 const testing = @import("../../testing.zig");

@@ -76,7 +76,6 @@ _type: Type = .generic,
 _aborted: bool = false,
 _is_dependent: bool = false,
 _reason: Reason = .undefined,
-_on_abort: ?js.Function.Global = null,
 _dependents: std.ArrayList(Dependend) = .empty,
 _source_signals: std.ArrayList(*AbortSignal) = .empty,
 
@@ -97,14 +96,6 @@ pub fn getAborted(self: *const AbortSignal) bool {
 
 fn getReason(self: *const AbortSignal) Reason {
     return self._reason;
-}
-
-fn getOnAbort(self: *const AbortSignal) ?js.Function.Global {
-    return self._on_abort;
-}
-
-fn setOnAbort(self: *AbortSignal, cb: ?js.Function.Global) !void {
-    self._on_abort = cb;
 }
 
 pub fn asEventTarget(self: *AbortSignal) *EventTarget {
@@ -176,10 +167,9 @@ pub fn removeDependent(self: *AbortSignal, dep: Dependend) void {
 
 fn dispatchAbortEvent(self: *AbortSignal, exec: *const Execution) !void {
     const target = self.asEventTarget();
-    const on_abort = self._on_abort;
-    if (exec.hasDirectListeners(target, "abort", on_abort)) {
+    if (exec.hasDirectListeners(target, "abort")) {
         const event = try Event.initTrusted(comptime .wrap("abort"), .{}, exec.page);
-        try exec.dispatch(target, event, on_abort, .{ .context = "abort signal" });
+        try exec.dispatch(target, event, .{ .context = "abort signal" });
     }
 }
 
@@ -339,7 +329,7 @@ pub const JsApi = struct {
 
     pub const aborted = bridge.accessor(AbortSignal.getAborted, null, .{});
     pub const reason = bridge.accessor(AbortSignal.getReason, null, .{});
-    pub const onabort = bridge.accessor(AbortSignal.getOnAbort, AbortSignal.setOnAbort, .{});
+    pub const onabort = EventTarget.handlerAccessor(AbortSignal, "abort");
     pub const throwIfAborted = bridge.function(AbortSignal.throwIfAborted, .{});
 
     // Static method

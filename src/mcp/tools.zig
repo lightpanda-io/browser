@@ -1635,7 +1635,7 @@ test "MCP - findElement" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"button"}}}
     );
     try testing.expectJson(.{
-        .{ .name = "Click Me", .listeners = &.{ "pointerdown", "mousedown", "pointerup", "mouseup", "click" } },
+        .{ .name = "Click Me", .listeners = &.{ "click", "pointerdown", "mousedown", "pointerup", "mouseup" } },
         .{ .name = "Prevent Default" },
         .{ .name = "Chord" },
         .{ .name = "Disabled", .disabled = true },

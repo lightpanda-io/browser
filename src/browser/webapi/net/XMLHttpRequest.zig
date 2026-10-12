@@ -78,7 +78,6 @@ _response_headers: std.ArrayList(http.Header) = .empty,
 _response_type: ResponseType = .default,
 
 _ready_state: ReadyState = .unsent,
-_on_ready_state_change: ?js.Function.Global = null,
 _with_credentials: bool = false,
 _timeout: u32 = 0,
 
@@ -145,13 +144,7 @@ pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
 
     self.clearResponse(page);
 
-    if (self._on_ready_state_change) |func| {
-        func.release();
-    }
-
-    self._proto.releaseListeners();
     if (self._upload) |upload| {
-        upload._proto.releaseListeners();
         page.event_listeners.removeTarget(upload.asEventTarget());
     }
     page.event_listeners.removeTarget(self.asEventTarget());
@@ -177,20 +170,8 @@ pub fn acquireRef(self: *XMLHttpRequest) void {
     self._rc.acquire();
 }
 
-fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
+pub fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
     return self._proto._proto;
-}
-
-fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function.Global {
-    return self._on_ready_state_change;
-}
-
-fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_ready_state_change = try cb.persistWithThis(self);
-    } else {
-        self._on_ready_state_change = null;
-    }
 }
 
 fn getWithCredentials(self: *const XMLHttpRequest) bool {
@@ -860,9 +841,9 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, exec: *const Execution
     self._ready_state = state;
 
     const target = self.asEventTarget();
-    if (exec.hasDirectListeners(target, "readystatechange", self._on_ready_state_change)) {
+    if (exec.hasDirectListeners(target, "readystatechange")) {
         const event = try Event.initTrusted(.wrap("readystatechange"), .{}, exec.page);
-        try exec.dispatch(target, event, self._on_ready_state_change, .{ .context = "XHR state change" });
+        try exec.dispatch(target, event, .{ .context = "XHR state change" });
     }
 }
 
@@ -894,7 +875,7 @@ pub const JsApi = struct {
     pub const LOADING = bridge.property(@backingInt(XMLHttpRequest.ReadyState.loading), .{ .template = true });
     pub const DONE = bridge.property(@backingInt(XMLHttpRequest.ReadyState.done), .{ .template = true });
 
-    pub const onreadystatechange = bridge.accessor(XMLHttpRequest.getOnReadyStateChange, XMLHttpRequest.setOnReadyStateChange, .{});
+    pub const onreadystatechange = EventTarget.handlerAccessor(XMLHttpRequest, "readystatechange");
     pub const upload = bridge.accessor(XMLHttpRequest.getUpload, null, .{});
     pub const timeout = bridge.accessor(XMLHttpRequest.getTimeout, XMLHttpRequest.setTimeout, .{});
     pub const withCredentials = bridge.accessor(XMLHttpRequest.getWithCredentials, XMLHttpRequest.setWithCredentials, .{});
@@ -952,6 +933,8 @@ test "WebApi: XHR listeners are dropped when the XHR is freed" {
             \\for (let i = 0; i < 200; i++) {
             \\  new XMLHttpRequest().addEventListener('foo', () => fired++);
             \\  new XMLHttpRequest().upload.addEventListener('foo', () => fired++);
+            \\  new XMLHttpRequest().onload = () => fired++;
+            \\  new XMLHttpRequest().upload.onload = () => fired++;
             \\}
         , null);
     }
@@ -969,6 +952,8 @@ test "WebApi: XHR listeners are dropped when the XHR is freed" {
         \\for (let i = 0; i < 200; i++) {
         \\  new XMLHttpRequest().dispatchEvent(new Event('foo'));
         \\  new XMLHttpRequest().upload.dispatchEvent(new Event('foo'));
+        \\  new XMLHttpRequest().dispatchEvent(new Event('load'));
+        \\  new XMLHttpRequest().upload.dispatchEvent(new Event('load'));
         \\}
         \\fired;
     , null);
