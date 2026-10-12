@@ -433,7 +433,8 @@
     \\          Defaults to none enabled.
     \\  --load-resources <RESOURCE>
     \\          Sub-resource to actually request. Can be passed multiple times.
-    \\          Defaults to requesting none of them.
+    \\          Defaults to stylesheet for mcp and agent, and to none of them
+    \\          otherwise. Passing it replaces the default.
     \\          Allowed values:
     \\             iframe      When enabled, <iframe> elements are fully loaded.
     \\
@@ -451,6 +452,8 @@
     \\                         disabled, the Worker constructor still returns a
     \\                         Worker, but no script fetch is initiated and the
     \\                         Worker never runs.
+    \\
+    \\             none        Request none of them, overriding the default.
     \\  --http-cache-dir <PATH>
     \\          Directory used as a filesystem cache for network resources. Omitting
     \\          this disables caching.
