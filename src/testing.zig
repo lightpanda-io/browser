@@ -720,6 +720,16 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/xhr/hang")) {
+        // For asserting a request didn't wait for its response
+        lp.io.sleep(.fromMilliseconds(2000), .awake) catch {};
+        return req.respond("hang", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/xhr_empty")) {
         return req.respond("", .{
             .extra_headers = &.{

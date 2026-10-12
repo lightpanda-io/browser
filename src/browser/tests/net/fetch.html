@@ -328,11 +328,11 @@
       }
     }
 
-    // /xhr/slow takes 100ms: the abort must not wait for it
+    // /xhr/hang takes 2s: the abort must not wait for it
     const c1 = new AbortController();
     setTimeout(() => c1.abort(), 10);
     const start = Date.now();
-    const inflight = await rejection(fetch('http://127.0.0.1:9582/xhr/slow', { signal: c1.signal }));
+    const inflight = await rejection(fetch('http://127.0.0.1:9582/xhr/hang', { signal: c1.signal }));
     const elapsed = Date.now() - start;
 
     const c2 = new AbortController();
@@ -372,7 +372,7 @@
     state.resolve();
     await state.done(() => {
       testing.expectEqual('AbortError', inflight.name);
-      testing.expectTrue(elapsed < 100, 'abort waited for the response: ' + elapsed);
+      testing.expectTrue(elapsed < 1000, 'abort waited for the response: ' + elapsed);
       testing.expectEqual(custom, custom_reason);
       testing.expectEqual('TimeoutError', timeout.name);
       testing.expectEqual('any', any);
