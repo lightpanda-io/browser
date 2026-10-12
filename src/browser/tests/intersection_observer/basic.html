@@ -77,3 +77,29 @@
     });
   }
 </script>
+
+<script id=detached_document type=module>
+  // connected to a document that never renders, reported once adopted into
+  // this one (WPT intersection-observer/target-in-detached-document.html)
+  const state = await testing.async();
+  // WPT's waitForNotification: two frames, then a task
+  const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve))));
+
+  const seen = [];
+  const doc = document.implementation.createHTMLDocument('');
+  const div = doc.body.appendChild(doc.createElement('div'));
+  new IntersectionObserver((entries) => {
+    for (const entry of entries) seen.push(entry.isIntersecting);
+  }).observe(div);
+
+  await nextFrame();
+  const before = seen.slice();
+  document.body.appendChild(div);
+  await nextFrame();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([], before);
+    testing.expectEqual([true], seen);
+  });
+</script>
