@@ -140,7 +140,7 @@ pub fn setHandler(self: *EventManagerBase, target: *EventTarget, typ: []const u8
 }
 
 // An event handler content attribute, compiled on first use. The source must
-// live as long as the page. Currently, the source is always form an attribute
+// live as long as the page. Currently, the source is always from an attribute
 // entry's slice (attribute values are also tied to the page.arena).
 // As always careful not to use String.str() on a stack-allocated String!
 pub fn setHandlerSource(self: *EventManagerBase, target: *EventTarget, typ: []const u8, source: ?[]const u8) !?*Listener {
