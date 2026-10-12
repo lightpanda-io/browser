@@ -89,9 +89,10 @@
   window.reportError('Plain string error');
 
   testing.expectEqual('Plain string error', evt.message);
-  testing.expectEqual('', evt.filename);
-  testing.expectEqual(0, evt.lineno);
-  testing.expectEqual(0, evt.colno);
+  // A non-Error value is located at the reportError call, as in Chrome.
+  testing.expectEqual(true, evt.filename.endsWith('report_error.html'));
+  testing.expectEqual(true, evt.lineno > 0);
+  testing.expectEqual(true, evt.colno > 0);
 }
 </script>
 
@@ -109,6 +110,28 @@
   window.reportError(new Error('Third error'));
 
   testing.expectEqual(3, callCount);
+}
+</script>
+
+<script id=reportErrorErrorLocation>
+{
+  const events = [];
+  const listener = (e) => {
+    e.preventDefault();
+    events.push(e);
+  };
+  window.addEventListener('error', listener);
+
+  // An Error is located where it was created, not where it was reported.
+  const first = new Error('first');
+  const second = new Error('second');
+  window.reportError(second);
+  window.reportError(first);
+  window.removeEventListener('error', listener);
+
+  testing.expectEqual(true, events[0].filename.endsWith('report_error.html'));
+  testing.expectEqual(events[1].lineno + 1, events[0].lineno);
+  testing.expectEqual(18, events[0].colno);
 }
 </script>
 
@@ -145,9 +168,10 @@
 
   testing.expectEqual(true, eventFired);
   testing.expectEqual('error', evt.type);
-  testing.expectEqual('', evt.filename);
-  testing.expectEqual(0, evt.lineno);
-  testing.expectEqual(0, evt.colno);
+  // A non-Error value is located at the reportError call, as in Chrome.
+  testing.expectEqual(true, evt.filename.endsWith('report_error.html'));
+  testing.expectEqual(true, evt.lineno > 0);
+  testing.expectEqual(true, evt.colno > 0);
 }
 </script>
 
@@ -166,9 +190,10 @@
 
   testing.expectEqual(true, eventFired);
   testing.expectEqual('error', evt.type);
-  testing.expectEqual('', evt.filename);
-  testing.expectEqual(0, evt.lineno);
-  testing.expectEqual(0, evt.colno);
+  // A non-Error value is located at the reportError call, as in Chrome.
+  testing.expectEqual(true, evt.filename.endsWith('report_error.html'));
+  testing.expectEqual(true, evt.lineno > 0);
+  testing.expectEqual(true, evt.colno > 0);
 }
 </script>
 
