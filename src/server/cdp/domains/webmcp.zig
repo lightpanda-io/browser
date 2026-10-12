@@ -33,7 +33,7 @@ const ModelContextClient = ModelContext.ModelContextClient;
 
 pub const Invocation = struct {
     id: u32,
-    bc: *CDP.BrowserContext,
+    target: *CDP.Target,
     frame_id: u32,
     name: []const u8,
     canceled: bool = false,
@@ -56,12 +56,12 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 }
 
 fn enable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try bc.webmcpEnable();
+    const target = try cmd.target();
+    try target.webmcpEnable();
 
     // Replay any tools registered before enable. We walk the current
     // frame only; subframes will be added when they register.
-    if (bc.mainFrame()) |frame| {
+    if (target.mainFrame()) |frame| {
         const mc = frame.window.getModelContext();
         const tools = mc.tools();
         if (tools.len > 0) {
@@ -74,7 +74,7 @@ fn enable(cmd: *CDP.Command) !void {
                 .tools = tools,
                 .local = &ls.local,
             };
-            try bc.cdp.sendEvent("WebMCP.toolsAdded", .{ .tools = writer }, .{ .session_id = bc.session_id });
+            try target.cdp.sendEvent("WebMCP.toolsAdded", .{ .tools = writer }, .{ .session_id = target.session_id });
         }
     }
 
@@ -82,8 +82,8 @@ fn enable(cmd: *CDP.Command) !void {
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    bc.webmcpDisable();
+    const target = try cmd.target();
+    target.webmcpDisable();
     return cmd.sendResult(null, .{});
 }
 
@@ -96,9 +96,10 @@ const InvokeToolParams = struct {
 fn invokeTool(cmd: *CDP.Command) !void {
     const params = (try cmd.params(InvokeToolParams)) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
+    const arena = target.arena.allocator();
     const frame_id = try id.parseFrameId(params.frameId);
-    const frame = bc.session.findFrameByFrameId(frame_id) orelse return error.FrameNotFound;
+    const frame = target.session.findFrameByFrameId(frame_id) orelse return error.FrameNotFound;
     const mc = frame.window.getModelContext();
     const tool = mc.findTool(params.toolName) orelse return error.NotFound;
 
@@ -106,21 +107,21 @@ fn invokeTool(cmd: *CDP.Command) !void {
     // `toolInvoked.input` and pass the parsed form into the JS callback.
     const input_str = try std.json.Stringify.valueAlloc(cmd.arena, params.input, .{});
 
-    const inv_id = bc.invocation_id_gen.incr();
+    const inv_id = target.invocation_id_gen.incr();
     const inv_id_str = id.toInvocationId(inv_id);
 
-    const invocation = try bc.arena.create(Invocation);
+    const invocation = try arena.create(Invocation);
     invocation.* = .{
         .id = inv_id,
-        .bc = bc,
+        .target = target,
         .frame_id = frame_id,
-        .name = try bc.arena.dupe(u8, tool.name),
+        .name = try arena.dupe(u8, tool.name),
     };
-    try bc.webmcp_invocations.put(bc.arena, inv_id, invocation);
+    try target.webmcp_invocations.put(arena, inv_id, invocation);
 
     // Send toolInvoked event before we run the JS, so the client sees
     // them in order even if the tool resolves synchronously.
-    const session_id = bc.session_id;
+    const session_id = target.session_id;
     try cmd.sendEvent("WebMCP.toolInvoked", .{
         .toolName = tool.name,
         .frameId = id.toFrameId(frame_id),
@@ -135,7 +136,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
     const local = &ls.local;
 
     const input_value = local.parseJSON(input_str) catch {
-        try respondError(cmd.cdp, bc, invocation, "failed to parse input JSON");
+        try respondError(cmd.cdp, target, invocation, "failed to parse input JSON");
         return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     };
 
@@ -144,13 +145,13 @@ fn invokeTool(cmd: *CDP.Command) !void {
     var caught: js.TryCatch.Caught = .{};
     const result = callback.tryCall(js.Value, .{ input_value, ModelContextClient{} }, &caught) catch {
         const msg = caught.exception orelse "tool threw";
-        try respondError(cmd.cdp, bc, invocation, msg);
+        try respondError(cmd.cdp, target, invocation, msg);
         return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     };
 
     // If the tool returned a non-promise value, settle immediately.
     if (!result.isPromise()) {
-        try respondCompleted(cmd.cdp, bc, invocation, result);
+        try respondCompleted(cmd.cdp, target, invocation, result);
         return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     }
 
@@ -160,7 +161,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
     _ = promise.thenAndCatch(on_fulfilled, on_rejected) catch {
         // If we couldn't chain, settle as error. Map entry will be
         // cleaned up below.
-        try respondError(cmd.cdp, bc, invocation, "promise chain failed");
+        try respondError(cmd.cdp, target, invocation, "promise chain failed");
         return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     };
 
@@ -172,16 +173,16 @@ fn cancelInvocation(cmd: *CDP.Command) !void {
         invocationId: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
 
     const inv_id = CDP.InvocationIdGen.parse(params.invocationId) catch return error.InvalidParams;
-    const entry = bc.webmcp_invocations.fetchRemove(inv_id) orelse return error.NotFound;
+    const entry = target.webmcp_invocations.fetchRemove(inv_id) orelse return error.NotFound;
     entry.value.canceled = true;
 
     try cmd.cdp.sendEvent("WebMCP.toolResponded", .{
         .invocationId = &id.toInvocationId(inv_id),
         .status = "Canceled",
-    }, .{ .session_id = bc.session_id });
+    }, .{ .session_id = target.session_id });
 
     return cmd.sendResult(null, .{});
 }
@@ -191,40 +192,40 @@ fn cancelInvocation(cmd: *CDP.Command) !void {
 // see the invocation go silent on teardown. The V8 promise callbacks become
 // unreachable once the JS context is torn down by browser.closeSession, so
 // we don't need to clear them ourselves.
-pub fn cancelAllPending(bc: *CDP.BrowserContext) void {
-    var it = bc.webmcp_invocations.iterator();
+pub fn cancelAllPending(target: *CDP.Target) void {
+    var it = target.webmcp_invocations.iterator();
     while (it.next()) |entry| {
         const invocation = entry.value_ptr.*;
-        bc.cdp.sendEvent("WebMCP.toolResponded", .{
+        target.cdp.sendEvent("WebMCP.toolResponded", .{
             .invocationId = &id.toInvocationId(invocation.id),
             .status = "Canceled",
-        }, .{ .session_id = bc.session_id }) catch |err| {
+        }, .{ .session_id = target.session_id }) catch |err| {
             log.debug(.cdp, "WebMCP cancelAllPending", .{ .err = err });
         };
     }
-    bc.webmcp_invocations.clearRetainingCapacity();
+    target.webmcp_invocations.clearRetainingCapacity();
 }
 
 fn onPromiseFulfilled(invocation: *Invocation, value: js.Value) anyerror!void {
     // The map is the source of truth for "still active". cancelInvocation
     // removes it from the map and sends Canceled; we drop the late result.
-    if (invocation.bc.webmcp_invocations.fetchRemove(invocation.id) == null) return;
-    respondCompleted(invocation.bc.cdp, invocation.bc, invocation, value) catch |err| {
+    if (invocation.target.webmcp_invocations.fetchRemove(invocation.id) == null) return;
+    respondCompleted(invocation.target.cdp, invocation.target, invocation, value) catch |err| {
         log.debug(.cdp, "WebMCP fulfilled", .{ .err = err });
     };
 }
 
 fn onPromiseRejected(invocation: *Invocation, reason: js.Value) anyerror!void {
-    if (invocation.bc.webmcp_invocations.fetchRemove(invocation.id) == null) return;
+    if (invocation.target.webmcp_invocations.fetchRemove(invocation.id) == null) return;
     const msg = reason.toStringSlice() catch "tool rejected";
-    respondError(invocation.bc.cdp, invocation.bc, invocation, msg) catch |err| {
+    respondError(invocation.target.cdp, invocation.target, invocation, msg) catch |err| {
         log.debug(.cdp, "WebMCP rejected", .{ .err = err });
     };
 }
 
 fn respondCompleted(
     cdp: *CDP,
-    bc: *CDP.BrowserContext,
+    target: *CDP.Target,
     invocation: *Invocation,
     value: js.Value,
 ) !void {
@@ -232,13 +233,13 @@ fn respondCompleted(
         .invocationId = &id.toInvocationId(invocation.id),
         .status = "Completed",
         .output = value,
-    }, .{ .session_id = bc.session_id });
-    _ = bc.webmcp_invocations.remove(invocation.id);
+    }, .{ .session_id = target.session_id });
+    _ = target.webmcp_invocations.remove(invocation.id);
 }
 
 fn respondError(
     cdp: *CDP,
-    bc: *CDP.BrowserContext,
+    target: *CDP.Target,
     invocation: *Invocation,
     err_text: []const u8,
 ) !void {
@@ -246,12 +247,12 @@ fn respondError(
         .invocationId = &id.toInvocationId(invocation.id),
         .status = "Error",
         .errorText = err_text,
-    }, .{ .session_id = bc.session_id });
-    _ = bc.webmcp_invocations.remove(invocation.id);
+    }, .{ .session_id = target.session_id });
+    _ = target.webmcp_invocations.remove(invocation.id);
 }
 
 pub fn onToolAdded(
-    bc: *CDP.BrowserContext,
+    target: *CDP.Target,
     event: *const Notification.ModelContextToolEvent,
 ) !void {
     const global = event.exec.js.global;
@@ -267,21 +268,21 @@ pub fn onToolAdded(
         .tools = &.{event.tool},
         .local = &ls.local,
     };
-    try bc.cdp.sendEvent("WebMCP.toolsAdded", .{
+    try target.cdp.sendEvent("WebMCP.toolsAdded", .{
         .tools = writer,
-    }, .{ .session_id = bc.session_id });
+    }, .{ .session_id = target.session_id });
 }
 
 pub fn onToolRemoved(
-    bc: *CDP.BrowserContext,
+    target: *CDP.Target,
     event: *const Notification.ModelContextToolEvent,
 ) !void {
     const frame_id = event.exec.frameId();
-    try bc.cdp.sendEvent("WebMCP.toolsRemoved", .{
+    try target.cdp.sendEvent("WebMCP.toolsRemoved", .{
         .tools = &.{
             .{ .name = event.tool.name, .frameId = id.toFrameId(frame_id) },
         },
-    }, .{ .session_id = bc.session_id });
+    }, .{ .session_id = target.session_id });
 }
 
 const testing = @import("../testing.zig");
@@ -342,7 +343,7 @@ test "cdp.WebMCP: register fires toolsAdded after enable" {
 
     // Register a fresh tool from JS, expect a new toolsAdded event.
     var ls: js.Local.Scope = undefined;
-    bc.mainFrame().?.js.localScope(&ls);
+    bc.firstTarget().?.mainFrame().?.js.localScope(&ls);
     defer ls.deinit();
     _ = try ls.local.exec(
         \\navigator.modelContext.registerTool({
@@ -367,7 +368,7 @@ test "cdp.WebMCP: invokeTool fires toolInvoked + toolResponded" {
         .target_id = "TID-000000000M".*,
         .url = "cdp/webmcp_fixture.html",
     });
-    const frame_id = id.toFrameId(bc.mainFrame().?._frame_id);
+    const frame_id = id.toFrameId(bc.firstTarget().?.mainFrame().?._frame_id);
 
     try ctx.processMessage(.{ .id = 1, .method = "WebMCP.enable", .session_id = "SID-M" });
     try ctx.expectSentResult(null, .{ .id = 1 });
@@ -407,7 +408,7 @@ test "cdp.WebMCP: invokeTool unknown name" {
         .target_id = "TID-000000000M".*,
         .url = "cdp/webmcp_fixture.html",
     });
-    const frame_id = id.toFrameId(bc.mainFrame().?._frame_id);
+    const frame_id = id.toFrameId(bc.firstTarget().?.mainFrame().?._frame_id);
 
     try ctx.processMessage(.{ .id = 1, .method = "WebMCP.enable", .session_id = "SID-M" });
     try ctx.expectSentResult(null, .{ .id = 1 });
@@ -443,7 +444,7 @@ test "cdp.WebMCP: cancelInvocation" {
 
     // Register a never-settling tool so we have an invocation to cancel.
     var ls: js.Local.Scope = undefined;
-    bc.mainFrame().?.js.localScope(&ls);
+    bc.firstTarget().?.mainFrame().?.js.localScope(&ls);
     defer ls.deinit();
     _ = try ls.local.exec(
         \\navigator.modelContext.registerTool({
@@ -456,7 +457,7 @@ test "cdp.WebMCP: cancelInvocation" {
         .tools = &.{.{ .name = "hang" }},
     }, .{ .session_id = "SID-M" });
 
-    const frame_id = id.toFrameId(bc.mainFrame().?._frame_id);
+    const frame_id = id.toFrameId(bc.firstTarget().?.mainFrame().?._frame_id);
     try ctx.processMessage(.{
         .id = 2,
         .method = "WebMCP.invokeTool",

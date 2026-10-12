@@ -95,11 +95,11 @@ fn getDocument(cmd: *CDP.Command) !void {
         log.debug(.not_implemented, "DOM.getDocument", .{ .param = "pierce" });
     }
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try bc.node_registry.register(frame.window._document.asNode());
-    return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
+    const node = try target.node_registry.register(frame.window._document.asNode());
+    return cmd.sendResult(.{ .root = target.nodeWriter(node, .{ .depth = params.depth }) }, .{});
 }
 
 // Closed set of XPath 1.0 named axes. Matched literally before `::` so
@@ -159,24 +159,24 @@ fn performSearch(cmd: *CDP.Command) !void {
         includeUserAgentShadowDOM: ?bool = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
     const root = frame.window._document.asNode();
 
     if (isXPathQuery(params.query)) {
         const arena = try frame.getArena(.medium, "DOM.performSearch");
         defer arena.release();
         const nodes = try xpath.searchAll(arena.allocator(), root, params.query, frame);
-        return finishSearch(cmd, bc, nodes);
+        return finishSearch(cmd, target, nodes);
     }
 
     const list = try Selector.querySelectorAll(root, params.query, frame);
     defer list.deinit(frame.page);
-    return finishSearch(cmd, bc, list._nodes);
+    return finishSearch(cmd, target, list._nodes);
 }
 
-fn finishSearch(cmd: *CDP.Command, bc: *CDP.BrowserContext, nodes: []const *DOMNode) !void {
-    const search = try bc.node_search_list.create(nodes);
+fn finishSearch(cmd: *CDP.Command, target: *CDP.Target, nodes: []const *DOMNode) !void {
+    const search = try target.node_search_list.create(nodes);
     try dispatchSetChildNodes(cmd, nodes);
     return cmd.sendResult(.{
         .searchId = search.name,
@@ -190,8 +190,8 @@ fn finishSearch(cmd: *CDP.Command, bc: *CDP.BrowserContext, nodes: []const *DOMN
 // We should dispatch a node only if it has never been sent.
 fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
     const arena = cmd.arena;
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
+    const target = try cmd.target();
+    const session_id = target.session_id orelse return error.SessionIdNotLoaded;
 
     var parents: std.ArrayList(*NodeRegistry.Node) = .empty;
     for (dom_nodes) |dom_node| {
@@ -199,8 +199,8 @@ fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
         while (true) {
             const parent_node = current._parent orelse break;
 
-            const node = try bc.node_registry.register(parent_node);
-            if (bc.set_child_nodes_sent.contains(node.id)) {
+            const node = try target.node_registry.register(parent_node);
+            if (target.set_child_nodes_sent.contains(node.id)) {
                 break;
             }
             try parents.append(arena, node);
@@ -222,7 +222,7 @@ fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
         // Although our above loop won't add an already-sent node to `parents`
         // this can still be true because two nodes can share the same parent node
         // so we might have just sent the node a previous iteration of this loop
-        const gop = try bc.set_child_nodes_sent.getOrPut(bc.cdp.allocator, node.id);
+        const gop = try target.set_child_nodes_sent.getOrPut(target.cdp.allocator, node.id);
         if (gop.found_existing) continue;
 
         // If the node has no parent, it's the root node.
@@ -231,11 +231,11 @@ fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
         const dom_parent = node.dom._parent orelse continue;
 
         // Retrieve the parent from the registry.
-        const parent_node = try bc.node_registry.register(dom_parent);
+        const parent_node = try target.node_registry.register(dom_parent);
 
         try cmd.sendEvent("DOM.setChildNodes", .{
             .parentId = parent_node.id,
-            .nodes = .{bc.nodeWriter(node, .{})},
+            .nodes = .{target.nodeWriter(node, .{})},
         }, .{
             .session_id = session_id,
         });
@@ -248,9 +248,9 @@ fn discardSearchResults(cmd: *CDP.Command) !void {
         searchId: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
 
-    bc.node_search_list.remove(params.searchId);
+    target.node_search_list.remove(params.searchId);
     return cmd.sendResult(null, .{});
 }
 
@@ -266,9 +266,9 @@ fn getSearchResults(cmd: *CDP.Command) !void {
         return error.BadIndices;
     }
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
 
-    const search = bc.node_search_list.get(params.searchId) orelse {
+    const search = target.node_search_list.get(params.searchId) orelse {
         return error.SearchResultNotFound;
     };
 
@@ -286,16 +286,16 @@ fn querySelector(cmd: *CDP.Command) !void {
         selector: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
+    const node = target.node_registry.lookup_by_id.get(params.nodeId) orelse {
         return cmd.sendError(-32000, "Could not find node with given id", .{});
     };
 
     const element = try Selector.querySelector(node.dom, params.selector, frame) orelse return error.NodeNotFoundForGivenId;
     const dom_node = element.asNode();
-    const registered_node = try bc.node_registry.register(dom_node);
+    const registered_node = try target.node_registry.register(dom_node);
 
     // Dispatch setChildNodesEvents to inform the client of the subpart of node tree covering the results.
     var array = [1]*DOMNode{dom_node};
@@ -312,10 +312,10 @@ fn querySelectorAll(cmd: *CDP.Command) !void {
         selector: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
+    const node = target.node_registry.lookup_by_id.get(params.nodeId) orelse {
         return cmd.sendError(-32000, "Could not find node with given id", .{});
     };
 
@@ -326,7 +326,7 @@ fn querySelectorAll(cmd: *CDP.Command) !void {
 
     const node_ids = try cmd.arena.alloc(NodeRegistry.Id, nodes.len);
     for (nodes, node_ids) |selected_node, *node_id| {
-        node_id.* = (try bc.node_registry.register(selected_node)).id;
+        node_id.* = (try target.node_registry.register(selected_node)).id;
     }
 
     // Dispatch setChildNodesEvents to inform the client of the subpart of node tree covering the results.
@@ -345,18 +345,18 @@ fn resolveNode(cmd: *CDP.Command) !void {
         executionContextId: ?u32 = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const root = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const root = target.mainFrame() orelse return error.FrameNotLoaded;
 
     const input_node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
-    const node = bc.node_registry.lookup_by_id.get(input_node_id) orelse return error.UnknownNode;
+    const node = target.node_registry.lookup_by_id.get(input_node_id) orelse return error.UnknownNode;
 
     // Chrome resolves into the named context, else into the main world of the
     // node's own document's frame. Drivers adopt a handle found in a child's
     // utility world into that child's main world this way, so the root's
     // contexts are not enough.
     const js_context = if (params.executionContextId) |context_id|
-        findContext(bc, root, context_id) orelse return error.ContextNotFound
+        findContext(target, root, context_id) orelse return error.ContextNotFound
     else
         // orelse root is safe here since there's no frame-specific state being used
         (node.dom.ownerFrame(root) orelse root).js;
@@ -366,7 +366,7 @@ fn resolveNode(cmd: *CDP.Command) !void {
     defer ls.deinit();
 
     // The object id is minted on the command's session; only that session can unwrap it later.
-    const inspector_session = try bc.inspectorSession(cmd.input.session_id);
+    const inspector_session = try target.inspectorSession(cmd.input.session_id);
 
     // node._node is a *DOMNode we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
@@ -389,11 +389,11 @@ fn resolveNode(cmd: *CDP.Command) !void {
 
 // The context the inspector announced under `context_id`: any frame's main
 // world, then any isolated world's per-frame contexts.
-fn findContext(bc: *CDP.BrowserContext, root: *Frame, context_id: u32) ?*js.Context {
+fn findContext(target: *CDP.Target, root: *Frame, context_id: u32) ?*js.Context {
     if (findMainWorldContext(root, context_id)) |js_context| {
         return js_context;
     }
-    for (bc.isolated_worlds.items) |isolated_world| {
+    for (target.isolated_worlds.items) |isolated_world| {
         for (isolated_world.contexts.items) |fc| {
             if (contextIdOf(fc.context) == context_id) {
                 return fc.context;
@@ -434,11 +434,11 @@ fn describeNode(cmd: *CDP.Command) !void {
     if (params.pierce) {
         log.debug(.not_implemented, "DOM.describeNode", .{ .param = "pierce" });
     }
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
 
-    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
+    return cmd.sendResult(.{ .node = target.nodeWriter(node, .{ .depth = params.depth }) }, .{});
 }
 
 // An array of quad vertices, x immediately followed by y for each point, points clock-wise.
@@ -479,8 +479,8 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
     // Only 1 of nodeId, backendNodeId, objectId may be set, but chrome just takes the first non-null
 
     // We retrieve the node to at least check if it exists and is valid.
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const target = try cmd.target();
+    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
     switch (node.dom._type) {
         .element => {
@@ -502,21 +502,21 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
 
 /// `session_id` belongs to the command; a remote object id only resolves on
 /// the inspector session that minted it.
-pub fn getNode(arena: Allocator, bc: *CDP.BrowserContext, session_id: ?[]const u8, node_id: ?NodeRegistry.Id, backend_node_id: ?NodeRegistry.Id, object_id: ?[]const u8) !*NodeRegistry.Node {
+pub fn getNode(arena: Allocator, target: *CDP.Target, session_id: ?[]const u8, node_id: ?NodeRegistry.Id, backend_node_id: ?NodeRegistry.Id, object_id: ?[]const u8) !*NodeRegistry.Node {
     const input_node_id = node_id orelse backend_node_id;
     if (input_node_id) |input_node_id_| {
-        return bc.node_registry.lookup_by_id.get(input_node_id_) orelse return error.NodeNotFound;
+        return target.node_registry.lookup_by_id.get(input_node_id_) orelse return error.NodeNotFound;
     }
     if (object_id) |object_id_| {
-        const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+        const frame = target.mainFrame() orelse return error.FrameNotLoaded;
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
         defer ls.deinit();
 
         // Retrieve the object from which ever context it is in.
-        const inspector_session = try bc.inspectorSession(session_id);
+        const inspector_session = try target.inspectorSession(session_id);
         const parser_node = try inspector_session.getNodePtr(arena, object_id_, &ls.local);
-        return try bc.node_registry.register(@ptrCast(@alignCast(parser_node)));
+        return try target.node_registry.register(@ptrCast(@alignCast(parser_node)));
     }
     return error.MissingParams;
 }
@@ -530,10 +530,10 @@ fn getContentQuads(cmd: *CDP.Command) !void {
         objectId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
     // TODO likely if the following CSS properties are set the quads should be empty
     // visibility: hidden
@@ -556,10 +556,10 @@ fn getBoxModel(cmd: *CDP.Command) !void {
         objectId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
     // TODO implement for document or text
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
@@ -587,15 +587,15 @@ fn requestChildNodes(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     if (params.depth == 0) return error.InvalidParams;
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
-    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
+    const target = try cmd.target();
+    const session_id = target.session_id orelse return error.SessionIdNotLoaded;
+    const node = target.node_registry.lookup_by_id.get(params.nodeId) orelse {
         return error.InvalidNode;
     };
 
     try cmd.sendEvent("DOM.setChildNodes", .{
         .parentId = node.id,
-        .nodes = bc.nodeWriter(node, .{ .depth = params.depth, .exclude_root = true }),
+        .nodes = target.nodeWriter(node, .{ .depth = params.depth, .exclude_root = true }),
     }, .{
         .session_id = session_id,
     });
@@ -608,10 +608,10 @@ fn getFrameOwner(cmd: *CDP.Command) !void {
         frameId: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
     const frame_id = try id.parseFrameId(params.frameId);
 
-    const frame = bc.session.findFrameByFrameId(frame_id) orelse {
+    const frame = target.session.findFrameByFrameId(frame_id) orelse {
         return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
     };
 
@@ -622,7 +622,7 @@ fn getFrameOwner(cmd: *CDP.Command) !void {
         return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
     };
 
-    const node = try bc.node_registry.register(iframe.asNode());
+    const node = try target.node_registry.register(iframe.asNode());
     return cmd.sendResult(.{ .nodeId = node.id, .backendNodeId = node.id }, .{});
 }
 
@@ -637,10 +637,10 @@ fn getOuterHTML(cmd: *CDP.Command) !void {
     if (params.includeShadowDOM) {
         log.debug(.not_implemented, "DOM.getOuterHTML", .{ .param = "includeShadowDOM" });
     }
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
     var aw = std.Io.Writer.Allocating.init(cmd.arena);
     try dump.deep(node.dom, .{}, &aw.writer, frame);
@@ -653,8 +653,8 @@ fn requestNode(cmd: *CDP.Command) !void {
         objectId: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const node = try getNode(cmd.arena, bc, cmd.input.session_id, null, null, params.objectId);
+    const target = try cmd.target();
+    const node = try getNode(cmd.arena, target, cmd.input.session_id, null, null, params.objectId);
 
     return cmd.sendResult(.{ .nodeId = node.id }, .{});
 }
@@ -672,10 +672,10 @@ fn setFileInputFiles(cmd: *CDP.Command) !void {
         objectId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const root = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const root = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
     const input = element.is(Input) orelse return error.NotAnInputElement;
     if (input._input_type != .file) return error.NotAFileInput;
@@ -705,10 +705,10 @@ fn focus(cmd: *CDP.Command) !void {
         objectId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const target = try cmd.target();
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
     if (element.isFocusable(frame) == false) {
         return cmd.sendError(-32000, "Element is not focusable", .{});
@@ -891,7 +891,7 @@ test "cdp.dom: focus makes the node activeElement and routes key events to it" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = bc.firstTarget().?.mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -965,7 +965,7 @@ test "cdp.dom: focus errors on an element that can't take focus" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = bc.firstTarget().?.mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1069,7 +1069,7 @@ test "cdp.dom: setFileInputFiles exposes files to JS" {
         try b.writeStreamingAll(lp.io, "bbbb");
     }
 
-    const frame = bc.mainFrame().?;
+    const frame = bc.firstTarget().?.mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -1203,12 +1203,12 @@ test "cdp.dom: focus and setFileInputFiles fire in the node's own frame" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_iframe.html" });
-    const child = bc.mainFrame().?.child_frames.items[0];
+    const child = bc.firstTarget().?.mainFrame().?.child_frames.items[0];
 
     const text = child.document.getElementById("text", child) orelse unreachable;
     const upload = child.document.getElementById("upload", child) orelse unreachable;
-    const text_node = try bc.node_registry.register(text.asNode());
-    const upload_node = try bc.node_registry.register(upload.asNode());
+    const text_node = try bc.firstTarget().?.node_registry.register(text.asNode());
+    const upload_node = try bc.firstTarget().?.node_registry.register(upload.asNode());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1358,14 +1358,14 @@ test "cdp.dom: resolveNode into a child frame's context" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RN", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
-    const root = bc.mainFrame() orelse unreachable;
+    const root = bc.firstTarget().?.mainFrame() orelse unreachable;
     const child = root.child_frames.items[0];
     const child_main = try mainWorldContextId(bc, child);
     try testing.expect(child_main != try mainWorldContextId(bc, root));
 
     // Register the child's <html> the way DOM.describeNode(objectId) would.
     const html = child.document.getDocumentElement() orelse unreachable;
-    const node = try bc.node_registry.register(html.asNode());
+    const node = try bc.firstTarget().?.node_registry.register(html.asNode());
 
     try ctx.processMessage(.{ .id = 10, .method = "Runtime.enable", .sessionId = "SID-X" });
 
@@ -1406,9 +1406,9 @@ test "cdp.dom: getFrameOwner returns the owner iframe element" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-FO", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
-    const root = bc.mainFrame() orelse unreachable;
+    const root = bc.firstTarget().?.mainFrame() orelse unreachable;
     const child = root.child_frames.items[0];
-    const iframe_node = try bc.node_registry.register(child.iframe.?.asNode());
+    const iframe_node = try bc.firstTarget().?.node_registry.register(child.iframe.?.asNode());
 
     try ctx.processMessage(.{ .id = 10, .method = "DOM.getFrameOwner", .sessionId = "SID-X", .params = .{
         .frameId = &id.toFrameId(child._frame_id),
@@ -1425,7 +1425,7 @@ test "cdp.dom: getFrameOwner returns the owner iframe element" {
     } }, .{ .id = 11 });
 
     // So does the document element, for its own frame.
-    const child_html = try bc.node_registry.register(child.window._document.getDocumentElement().?.asNode());
+    const child_html = try bc.firstTarget().?.node_registry.register(child.window._document.getDocumentElement().?.asNode());
     try ctx.processMessage(.{ .id = 12, .method = "DOM.describeNode", .sessionId = "SID-X", .params = .{
         .backendNodeId = child_html.id,
     } });
@@ -1453,12 +1453,12 @@ test "cdp.dom: remote object ids belong to the session that minted them" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RO", .url = "cdp/dom1.html", .target_id = "FID-000000000R".*, .session_id = "SID-PRIMARY" });
-    _ = try bc.attachSession("SID-AUX", null);
+    _ = try bc.attachSession(bc.firstTarget().?, "SID-AUX", null);
 
-    const root = bc.mainFrame() orelse unreachable;
+    const root = bc.firstTarget().?.mainFrame() orelse unreachable;
     const html = root.document.getDocumentElement() orelse unreachable;
-    const html_node = try bc.node_registry.register(html.asNode());
-    const document_node = try bc.node_registry.register(root.document.asNode());
+    const html_node = try bc.firstTarget().?.node_registry.register(html.asNode());
+    const document_node = try bc.firstTarget().?.node_registry.register(root.document.asNode());
 
     // The auxiliary session mints an id for <html> and resolves it.
     try ctx.processMessage(.{ .id = 20, .method = "DOM.resolveNode", .sessionId = "SID-AUX", .params = .{ .backendNodeId = html_node.id } });

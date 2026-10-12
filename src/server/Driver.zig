@@ -257,9 +257,13 @@ const PageWait = struct {
 fn pageWait(self: *const Driver) ?PageWait {
     switch (self.impl) {
         .cdp => |cdp| {
+            // Any page: the runner ticks every page of the session.
             const bc = &(cdp.browser_context orelse return null);
-            const page = bc.page_handle orelse return null;
-            return .{ .session = bc.session, .frame_id = page.frame_id };
+            for (bc.targets.items) |target| {
+                const page = target.pageHandle() orelse continue;
+                return .{ .session = bc.session, .frame_id = page.frame_id };
+            }
+            return null;
         },
         .bidi => |bidi| {
             const context = bidi.browsing_context orelse return null;

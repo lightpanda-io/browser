@@ -58,12 +58,12 @@ fn getFullAXTree(cmd: *CDP.Command) !void {
     };
     const params: Params = (try cmd.params(Params)) orelse .{};
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const session = bc.session;
+    const target = try cmd.target();
+    const session = target.session;
 
     const frame = blk: {
         const frame_id = params.frameId orelse {
-            break :blk bc.mainFrame() orelse return error.FrameNotLoaded;
+            break :blk target.mainFrame() orelse return error.FrameNotLoaded;
         };
         break :blk session.findFrameByFrameId(try id.parseFrameId(frame_id)) orelse {
             return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
@@ -71,12 +71,12 @@ fn getFullAXTree(cmd: *CDP.Command) !void {
     };
 
     const doc = frame.window._document.asNode();
-    const node = try bc.node_registry.register(doc);
+    const node = try target.node_registry.register(doc);
 
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
 
-    return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{
+    return cmd.sendResult(.{ .nodes = try target.axnodeWriter(temp_arena, node, .{
         .depth = params.depth orelse 0,
     }) }, .{});
 }
@@ -91,14 +91,14 @@ fn queryAXTree(cmd: *CDP.Command) !void {
     };
     const params: Params = (try cmd.params(Params)) orelse .{};
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const node = try dom.getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const target = try cmd.target();
+    const node = try dom.getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
 
-    return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{
+    return cmd.sendResult(.{ .nodes = try target.axnodeWriter(temp_arena, node, .{
         .filter = .{
             .accessible_name = params.accessibleName,
             .role = params.role,
@@ -127,16 +127,16 @@ fn getPartialAXTree(cmd: *CDP.Command) !void {
         });
     }
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const node = try dom.getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const target = try cmd.target();
+    const node = try dom.getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
 
     // No filter: emit the full accessibility subtree rooted at the resolved
     // node, the same shape getFullAXTree produces for the document root.
-    return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{}) }, .{});
+    return cmd.sendResult(.{ .nodes = try target.axnodeWriter(temp_arena, node, .{}) }, .{});
 }
 
 const testing = @import("../testing.zig");

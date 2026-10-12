@@ -270,7 +270,7 @@ test "cdp.Emulation: viewport override fires matchMedia change events" {
     var ctx = try testing.context();
     defer ctx.deinit();
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-MQL", .url = "hi.html", .target_id = "FID-0000000MQL".* });
-    const frame = bc.mainFrame() orelse unreachable;
+    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
 
     {
         var ls: js.Local.Scope = undefined;
@@ -301,7 +301,7 @@ test "cdp.Emulation: setDeviceMetricsOverride screenWidth/screenHeight reach win
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-SCR", .url = "hi.html" });
-    const frame = bc.mainFrame().?;
+    const frame = bc.firstTarget().?.mainFrame().?;
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -420,7 +420,7 @@ test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.langua
     var ctx = try testing.context();
     defer ctx.deinit();
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-AL", .url = "hi.html", .target_id = "FID-00000000AL".* });
-    const frame = bc.mainFrame() orelse unreachable;
+    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
 
     // The default locale reaches both navigator and ICU.
     try expectJs(frame, "navigator.language === 'en-US' && navigator.languages.join() === 'en-US,en'");
@@ -497,7 +497,7 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-DM1" });
     _ = try bc.session.createPage();
-    const page = bc.mainPage().?;
+    const page = bc.firstTarget().?.mainPage().?;
 
     // Defaults to the compile-time viewport before any override.
     try testing.expectEqual(1920, page.getViewport().width);
@@ -580,7 +580,7 @@ test "cdp.Emulation: navigator.geolocation reads the override" {
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
-    const frame = bc.mainFrame() orelse unreachable;
+    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
 
     {
         // Registers the callback synchronously; getCurrentPosition schedules
@@ -605,7 +605,7 @@ test "cdp.Emulation: navigator.geolocation reads the override" {
     // for a loaded page, same primitive Runner.waitForSelector/waitForScript
     // use to pump pending scheduler work under a CDP-loaded page.
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(bc.firstTarget().?.pageHandle().?.frame_id, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -643,7 +643,7 @@ test "cdp.Emulation: navigator.geolocation watchPosition delivers the override" 
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
-    const frame = bc.mainFrame() orelse unreachable;
+    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
 
     {
         var ls: js.Local.Scope = undefined;
@@ -662,7 +662,7 @@ test "cdp.Emulation: navigator.geolocation watchPosition delivers the override" 
     }
 
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(bc.firstTarget().?.pageHandle().?.frame_id, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -707,7 +707,7 @@ test "cdp.Emulation: navigator.geolocation granted without an override is POSITI
 // Runs getCurrentPosition, pumps the scheduler, and returns the code the error
 // callback saw (0 if the success callback ran instead).
 fn errorCodeFor(bc: *CDP.BrowserContext) !i32 {
-    const frame = bc.mainFrame() orelse unreachable;
+    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
 
     {
         var ls: js.Local.Scope = undefined;
@@ -724,7 +724,7 @@ fn errorCodeFor(bc: *CDP.BrowserContext) !i32 {
     }
 
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(bc.firstTarget().?.pageHandle().?.frame_id, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -754,7 +754,7 @@ test "cdp.Emulation: navigator.geolocation errors PERMISSION_DENIED when permiss
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
-    const frame = bc.mainFrame() orelse unreachable;
+    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
 
     {
         // Registers the callback synchronously; getCurrentPosition schedules
@@ -778,7 +778,7 @@ test "cdp.Emulation: navigator.geolocation errors PERMISSION_DENIED when permiss
     // for a loaded page, same primitive Runner.waitForSelector/waitForScript
     // use to pump pending scheduler work under a CDP-loaded page.
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(bc.firstTarget().?.pageHandle().?.frame_id, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
