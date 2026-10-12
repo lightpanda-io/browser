@@ -151,7 +151,7 @@ pub fn setHandlerSource(self: *EventManagerBase, target: *EventTarget, typ: []co
 pub fn getHandler(self: *EventManagerBase, ctx: *js.Context, target: *EventTarget, typ: []const u8) ?js.Function.Global {
     const list = self.getListeners(target, .wrap(typ)) orelse return null;
     const listener = findHandler(list) orelse return null;
-    return listener.compileHandler(ctx);
+    return listener.compileHandler(ctx, target);
 }
 
 fn setHandlerFunction(self: *EventManagerBase, target: *EventTarget, typ: []const u8, function: ?Function) !?*Listener {
@@ -496,7 +496,7 @@ pub const Listener = struct {
                 };
             },
             .handler, .handler_source => {
-                const handler = self.compileHandler(local.ctx) orelse return;
+                const handler = self.compileHandler(local.ctx, event._current_target.?) orelse return;
                 try runHandler(local.toLocal(handler), local, event, context);
             },
             .object => |obj_global| {
@@ -545,7 +545,7 @@ pub const Listener = struct {
         }
     }
 
-    fn compileHandler(self: *Listener, ctx: *js.Context) ?js.Function.Global {
+    fn compileHandler(self: *Listener, ctx: *js.Context, target: *EventTarget) ?js.Function.Global {
         switch (self.function) {
             .handler => |h| return h,
             .handler_source => |source| {
@@ -559,8 +559,16 @@ pub const Listener = struct {
                 try_catch.init(&ls.local);
                 defer try_catch.deinit();
 
+                // window.onerror (incl. <body onerror>) gets the decomposed
+                // ErrorEvent: see runHandler.
+                const is_window_error = target._type == .window and self.typ.eql(comptime .wrap("error"));
+                const compiled = if (is_window_error)
+                    ls.local.compileFunction(source, &.{ "event", "source", "lineno", "colno", "error" }, &.{})
+                else
+                    ls.local.compileFunction(source, &.{"event"}, &.{});
+
                 const handler: ?js.Function.Global = blk: {
-                    const func = ls.local.compileFunction(source, &.{"event"}, &.{}) catch |err| {
+                    const func = compiled catch |err| {
                         log.debug(.js, "event handler source", .{ .source = source, .err = err });
                         reportException(&try_catch, &ls.local);
                         break :blk null;
