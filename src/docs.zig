@@ -273,33 +273,10 @@ const Cell = struct {
     }
 };
 
-/// Prose for MDX: outside code spans, `<` would open JSX and `{` an
-/// expression. Tool descriptions are written for models, so a run of
-/// indented lines after a line ending in `:` is an aligned listing (extract's
-/// value shapes), kept verbatim in a fence instead of reflowing.
+/// Prose for MDX: outside code spans and fences, `<` would open JSX and `{`
+/// an expression.
 fn writeText(w: *Writer, s: []const u8) Writer.Error!void {
-    var lines = std.mem.splitScalar(u8, s, '\n');
-    var prev: []const u8 = "";
-    var in_fence = false;
-    var first = true;
-    while (lines.next()) |line| : (first = false) {
-        const indented = std.mem.startsWith(u8, line, "  ");
-        if (!in_fence and indented and std.mem.endsWith(u8, prev, ":")) {
-            try w.writeAll("\n\n```text");
-            in_fence = true;
-        } else if (in_fence and !indented) {
-            try w.writeAll("\n```\n");
-            in_fence = false;
-        }
-        if (!first) try w.writeAll("\n");
-        if (in_fence) {
-            try w.writeAll(line[2..]);
-        } else {
-            try writeEscaped(w, line, false);
-        }
-        prev = line;
-    }
-    if (in_fence) try w.writeAll("\n```");
+    try writeEscaped(w, s, false);
 }
 
 fn writeCode(w: *Writer, s: []const u8, cell: bool) Writer.Error!void {
@@ -389,9 +366,9 @@ test "docs: escaping leaves code spans alone" {
     try testing.expectEqualStrings("a &lt;b> \\{c\\} `x\\|<y>{}` d\\|e f `open", aw.written());
 }
 
-test "docs: an indented listing after a colon is fenced" {
+test "docs: prose keeps fenced blocks verbatim" {
     var aw: Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try writeText(&aw.writer, "Shapes:\n  \"<sel>\" → text\n  {a} → b\nAfter <x>.");
-    try testing.expectEqualStrings("Shapes:\n\n```text\n\"<sel>\" → text\n{a} → b\n```\n\nAfter &lt;x>.", aw.written());
+    try writeText(&aw.writer, "Shapes:\n```text\n\"<sel>\" → {a}\n```\nAfter <x>.");
+    try testing.expectEqualStrings("Shapes:\n```text\n\"<sel>\" → {a}\n```\nAfter &lt;x>.", aw.written());
 }
