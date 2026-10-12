@@ -702,8 +702,10 @@ pub fn httpTimeout(self: *const Config) u31 {
     };
 }
 
+// https://fetch.spec.whatwg.org/#http-redirect-fetch
+// "If request’s redirect count is 20, then return a network error."
 pub fn httpMaxRedirects(_: *const Config) u8 {
-    return 10;
+    return 20;
 }
 
 pub fn httpMaxResponseSize(self: *const Config) ?usize {
