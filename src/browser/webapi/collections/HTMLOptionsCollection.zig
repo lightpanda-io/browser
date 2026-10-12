@@ -21,8 +21,11 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
+
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
+const Select = @import("../element/html/Select.zig");
+
 const HTMLCollection = @import("HTMLCollection.zig");
 
 const HTMLOptionsCollection = @This();
@@ -30,7 +33,7 @@ const HTMLOptionsCollection = @This();
 pub const Proto = HTMLCollection;
 
 _proto: *HTMLCollection,
-_select: *@import("../element/html/Select.zig"),
+_select: *Select,
 
 // The refcount lives on the proto, but the finalizer anchors here so deinit
 // destroys the whole {HTMLCollection, self} chain from its leaf.
@@ -49,6 +52,10 @@ pub fn releaseRef(self: *HTMLOptionsCollection, page: *Page) void {
 // Forward length to HTMLCollection
 pub fn length(self: *HTMLOptionsCollection, frame: *Frame) u32 {
     return self._proto.length(frame);
+}
+
+fn setLength(self: *HTMLOptionsCollection, value: u32, frame: *Frame) !void {
+    return self._select.setLength(value, frame);
 }
 
 // Forward indexed access to HTMLCollection
@@ -106,11 +113,6 @@ pub fn remove(self: *HTMLOptionsCollection, index: i32, frame: *Frame) void {
     }
 }
 
-// Chrome's cap (kMaxListItems): padding up to a huge index would otherwise
-// create that many options. Past it, Chrome ignores the set (with a console
-// warning); Firefox has no cap.
-const max_list_items = 100_000;
-
 // The indexed setter: null removes the option at index; an index past the
 // end pads with blank options and then appends; otherwise the option at
 // index is replaced.
@@ -129,8 +131,8 @@ fn setAtIndex(self: *HTMLOptionsCollection, index: u32, option_: ?*Option, frame
         return;
     }
 
-    if (index >= max_list_items) {
-        lp.log.debug(.js, "select overflow", .{ .max_list_items = max_list_items, .request = index });
+    if (index >= Select.max_list_items) {
+        lp.log.debug(.js, "select overflow", .{ .max_list_items = Select.max_list_items, .request = index });
         return;
     }
 
@@ -142,8 +144,8 @@ fn setAtIndex(self: *HTMLOptionsCollection, index: u32, option_: ?*Option, frame
         const doc = select_node.ownerDocument(frame).?;
         const fragment = (try Node.DocumentFragment.init(doc, frame)).asNode();
         for (len..index) |_| {
-            const blank = try doc.createElementNS("http://www.w3.org/1999/xhtml", "option", frame);
-            _ = try fragment.appendChild(blank.asNode(), frame);
+            const blank = try Frame.node_factory.createElementNS(doc, .html, "option", null);
+            _ = try fragment.appendChild(blank, frame);
         }
         _ = try select_node.appendChild(fragment, frame);
     }
@@ -160,7 +162,7 @@ pub const JsApi = struct {
         pub const manage = false;
     };
 
-    pub const length = bridge.accessor(HTMLOptionsCollection.length, null, .{});
+    pub const length = bridge.accessor(HTMLOptionsCollection.length, setLength, .{ .ce_reactions = true });
 
     // Indexed access
     pub const @"[int]" = bridge.indexedReadWrite(HTMLOptionsCollection.getAtIndex, setAtIndex, null, null, null, .{ .null_as_undefined = true, .ce_reactions = true });
