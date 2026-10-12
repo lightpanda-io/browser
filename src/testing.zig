@@ -1189,6 +1189,27 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    // Latin-1 scripts for page/script_charset.html. /scripts/latin1/<name>.js
+    // and /scripts/latin1-header/<name>.js set window[<name>], the latter
+    // declaring its charset.
+    if (std.mem.eql(u8, path, "/scripts/bom-over-header.js")) {
+        return req.respond("\xEF\xBB\xBFwindow.byBom = 'caf\xC3\xA9';", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/javascript; charset=iso-8859-1" },
+            },
+        });
+    }
+
+    if (std.mem.startsWith(u8, path, "/scripts/latin1/") or std.mem.startsWith(u8, path, "/scripts/latin1-header/")) {
+        const body = try std.fmt.allocPrint(req_allocator, "window['{s}'] = 'caf\xE9';", .{std.fs.path.stem(path)});
+        const content_type = if (std.mem.startsWith(u8, path, "/scripts/latin1/")) "text/javascript" else "text/javascript; charset=iso-8859-1";
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = content_type },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/styles/404.css")) {
         return req.respond("/* unused */", .{
             .status = .not_found,
