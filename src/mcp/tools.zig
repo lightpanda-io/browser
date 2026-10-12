@@ -92,7 +92,8 @@ const session_id_schema = browser_tools.minify(
     \\}
 );
 
-const extra_tools = [_]McpTool{
+/// MCP-only tools, absent from the agent and scripts.
+pub const extra_tools = [_]McpTool{
     .{
         .name = "save",
         .title = "Save the session as an agent script",
@@ -123,7 +124,7 @@ const extra_tools = [_]McpTool{
     },
 };
 
-const all_tools = browser_tool_list ++ extra_tools;
+pub const all_tools = browser_tool_list ++ extra_tools;
 
 /// Tools that bypass the browser-tool dispatch and have their own handlers.
 /// Values are telemetry wire ids, kept clear of `browser_tools.Tool`'s.

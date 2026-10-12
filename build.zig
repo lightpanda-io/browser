@@ -205,6 +205,21 @@ pub fn build(b: *Build) !void {
     }
 
     {
+        // docs-site reference partials
+        const exe = addExe(b, exe_config, "lightpanda-docs", "docs_check", "src/main_docs.zig");
+
+        const run_cmd = b.addRunArtifact(exe);
+        const out_dir = run_cmd.addOutputDirectoryArg2("docs", .{});
+        const install = b.addInstallDirectory(.{
+            .source_dir = out_dir,
+            .install_dir = .prefix,
+            .install_subdir = "docs",
+        });
+        const docs_step = b.step("docs", "Generate reference partials for the docs site (zig-out/docs/*.mdx)");
+        docs_step.dependOn(&install.step);
+    }
+
+    {
         // test
         const tests = b.addTest(.{
             .root_module = lightpanda_module,

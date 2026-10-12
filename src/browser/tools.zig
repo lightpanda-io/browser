@@ -376,6 +376,50 @@ pub const Tool = enum {
         };
     }
 
+    /// Reference-docs section (`zig build docs`). Exhaustive so a new tool
+    /// can't ship undocumented.
+    pub fn group(self: Tool) Group {
+        return switch (self) {
+            .goto, .search => .navigation,
+            .markdown, .html, .screenshot, .tree, .links, .nodeDetails, .findElement, .interactiveElements, .structuredData, .detectForms => .reading,
+            .extract, .evaluate => .extraction,
+            .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => .interaction,
+            .waitForSelector, .waitForScript, .waitForState => .waiting,
+            .getUrl, .getCookies, .getEnv, .consoleLogs => .state,
+        };
+    }
+
+    pub const Group = enum {
+        navigation,
+        reading,
+        extraction,
+        interaction,
+        waiting,
+        state,
+
+        pub fn title(self: Group) []const u8 {
+            return switch (self) {
+                .navigation => "Navigation and search",
+                .reading => "Reading the page",
+                .extraction => "Data extraction and scripting",
+                .interaction => "Interacting with the page",
+                .waiting => "Waiting",
+                .state => "State and debugging",
+            };
+        }
+
+        pub fn intro(self: Group) []const u8 {
+            return switch (self) {
+                .navigation => "These tools bring a page into the browser.",
+                .reading => "These tools read the loaded page without modifying it.",
+                .extraction => "These tools return structured results from the loaded page.",
+                .interaction => "These tools dispatch real DOM events on the page.",
+                .waiting => "These tools block until the page reaches a condition.",
+                .state => "These tools inspect browser state outside the DOM.",
+            };
+        }
+    };
+
     /// Per-tool LLM-facing metadata. Tool identity (name + predicates) lives
     /// on the enclosing `Tool` enum; this struct just carries the strings.
     pub const Definition = struct {
