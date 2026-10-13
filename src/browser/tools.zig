@@ -571,7 +571,8 @@ pub const Tool = enum {
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree. An empty string is treated as omitted." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root. 0 is treated as omitted." },
-                    \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
+                    \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." },
+                    \\    "maxBytes": { "type": "integer", "description": "Optional cap on output size in bytes. Past it, lines are kept by priority (alerts, dialogs, invalid fields and the focused element, then controls and named nodes, then text; list entries breadth-first), and dropped lines are counted in a '[+N more @id]' marker. id is the backendNodeId of the node holding them, often a list item or list that isn't printed itself: call tree with backendNodeId=id to read them." }
                     \\  }
                     \\}
                 ),
@@ -1736,6 +1737,7 @@ fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
         url: ?[:0]const u8 = null,
         backendNodeId: ?u32 = null,
         maxDepth: ?u32 = null,
+        maxBytes: ?u32 = null,
         timeout: ?u32 = null,
     };
     const args = try parseArgsOrDefault(TreeParams, arena, arguments);
@@ -1744,6 +1746,7 @@ fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     const root_node = (try resolveOptionalNode(registry, args.backendNodeId)) orelse page.document.asNode();
     const st = lp.SemanticTree.init(arena, root_node, registry, page, .{
         .max_depth = args.maxDepth orelse std.math.maxInt(u32) - 1,
+        .max_bytes = args.maxBytes,
     }) catch return ToolError.NodeNotFound;
 
     var aw: std.Io.Writer.Allocating = .init(arena);
