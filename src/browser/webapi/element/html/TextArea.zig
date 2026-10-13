@@ -89,6 +89,11 @@ pub fn setValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
     }
 }
 
+pub fn reset(self: *TextArea) void {
+    self._value = null;
+    self._user_edited = false;
+}
+
 pub fn setUserValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
     try self.setValue(value, frame);
     self._user_edited = true;

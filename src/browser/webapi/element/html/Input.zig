@@ -782,6 +782,20 @@ fn changeType(self: *Input, new_type: Type, frame: *Frame) !void {
     }
 }
 
+pub fn reset(self: *Input, frame: *Frame) !void {
+    self._value_dirty = false;
+    self._checked_dirty = false;
+    self._user_edited = false;
+    self._checked = self._default_checked;
+    if (self._input_type.valueMode() == .value) {
+        try self.syncValueFromAttribute(frame);
+    }
+    if (self._files != null) {
+        try self.replaceFiles(&.{}, frame);
+    }
+    frame.styleChanged();
+}
+
 // The value of a non-dirty control in value mode is its sanitized value attribute
 fn syncValueFromAttribute(self: *Input, frame: *Frame) !void {
     const default_value = self._default_value orelse {

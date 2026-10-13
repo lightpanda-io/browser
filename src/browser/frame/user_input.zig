@@ -1114,6 +1114,13 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
                 }
                 return frame.submitForm(element, input.getForm(frame), .{});
             }
+            if (input._input_type == .reset) {
+                if (element.isDisabled()) {
+                    return;
+                }
+                const form = input.getForm(frame) orelse return;
+                return form.reset(frame);
+            }
         },
         .button => {
             const button = html_element.subtype(Element.Html.Button);
@@ -1122,6 +1129,13 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
                     return;
                 }
                 return frame.submitForm(element, button.getForm(frame), .{});
+            }
+            if (std.mem.eql(u8, button.getType(), "reset")) {
+                if (element.isDisabled()) {
+                    return;
+                }
+                const form = button.getForm(frame) orelse return;
+                return form.reset(frame);
             }
         },
         .label => {
