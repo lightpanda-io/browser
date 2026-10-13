@@ -133,7 +133,7 @@ const TextVisitor = struct {
     }
 };
 
-const Priority = enum { critical, named, text };
+const Priority = enum(u3) { critical, heading, named, text, chrome };
 
 const Line = struct {
     id: NodeRegistry.Id,
@@ -150,6 +150,8 @@ const Line = struct {
     hidden: bool,
     // Inside an alert or status message, all of which is critical.
     critical_subtree: bool,
+    // Inside site navigation, all of which ranks last unless critical.
+    chrome_subtree: bool,
     subtree_len: u32 = 1,
     // Printed lines in the subtree, this one included.
     printed_len: u32,
@@ -205,16 +207,18 @@ const LineCollector = struct {
         const inherited = if (self.current) |p| self.lines.items[p].critical_subtree else false;
         const role_scope = critical_roles.get(data.role);
         const critical = inherited or role_scope != null;
+        const chrome = (if (self.current) |p| self.lines.items[p].chrome_subtree else false) or chrome_roles.has(data.role);
         try self.lines.append(self.arena, .{
             .id = data.id,
             .start = @intCast(start),
             .end = @intCast(self.text.written().len),
             .depth = self.depth(),
             .parent = self.current,
-            .priority = if (critical) .critical else own.priority,
+            .priority = if (critical) .critical else if (chrome) .chrome else own.priority,
             .contentful = own.contentful,
             .hidden = own.hidden,
             .critical_subtree = inherited or role_scope == .subtree,
+            .chrome_subtree = chrome,
             .printed_len = @intFromBool(!own.hidden),
         });
         self.current = @intCast(self.lines.items.len - 1);
@@ -237,14 +241,24 @@ const critical_roles = std.StaticStringMap(enum { self, subtree }).initComptime(
     .{ "alertdialog", .self },
 });
 
+// Menus and footers often come before the content, with more links than it.
+// A banner is left out: it holds the search box and the cart.
+const chrome_roles = std.StaticStringMap(void).initComptime(.{
+    .{ "navigation", {} },
+    .{ "complementary", {} },
+    .{ "contentinfo", {} },
+});
+
 fn linePriority(node: *Node, data: *const NodeData, focused: ?*Node) Priority {
     if (focused == node) return .critical;
     if (node.is(Element)) |el| {
         if (std.mem.eql(u8, el.getAttributeSafe(comptime .wrap("aria-invalid")) orelse "", "true")) return .critical;
     }
     if (data.value != null or data.options != null or data.checked != null) return .named;
-    // Controls and headings share a bucket: a record's title is often a heading.
-    if (!std.mem.eql(u8, data.role, "StaticText") and data.name != null and data.name.?.len > 0) return .named;
+    const named = data.name != null and data.name.?.len > 0;
+    // Headings outline the page, and a record's title is often one.
+    if (named and std.mem.eql(u8, data.role, "heading")) return .heading;
+    if (named and !std.mem.eql(u8, data.role, "StaticText")) return .named;
     return .text;
 }
 
@@ -354,8 +368,8 @@ const Budget = struct {
             rank[i] = @max(counter.*, rank[parent]);
             counter.* += 1;
             if (!line.contentful and line.priority != .critical) continue;
-            const r: u64 = @min(rank[i], std.math.maxInt(u30));
-            try keys.append(arena, @as(u64, @backingInt(line.priority)) << 62 | r << 32 | i);
+            const r: u64 = @min(rank[i], std.math.maxInt(u29));
+            try keys.append(arena, @as(u64, @backingInt(line.priority)) << 61 | r << 32 | i);
         }
         std.mem.sort(u64, keys.items, {}, std.sort.asc(u64));
 
@@ -1183,4 +1197,29 @@ test "SemanticTree: maxBytes keeps a dialog, not its text" {
     try testing.expect(out.len <= max_bytes);
     try testing.expect(std.mem.find(u8, out, "dialog 'Your privacy'") != null);
     try testing.expect(std.mem.find(u8, out, "1,042 partners") == null);
+}
+
+test "SemanticTree: maxBytes ranks headings first and navigation last" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/tree_budget_nav.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const max_bytes = 300;
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .max_bytes = max_bytes });
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try st.textStringify(&aw.writer);
+    const out = aw.written();
+
+    try testing.expect(out.len <= max_bytes);
+    try testing.expect(std.mem.find(u8, out, "heading 'Mini PC 128GB'") != null);
+    try testing.expect(std.mem.find(u8, out, "heading 'Warranty'") != null);
+    try testing.expect(std.mem.find(u8, out, "button 'Add to cart'") != null);
+    try testing.expect(std.mem.find(u8, out, "'$3,879.00'") != null);
+    try testing.expect(std.mem.find(u8, out, "Category 1'") == null);
+    try testing.expect(std.mem.find(u8, out, "Footer link 1'") == null);
 }
