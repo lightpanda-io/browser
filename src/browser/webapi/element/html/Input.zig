@@ -111,6 +111,8 @@ _checked: bool = false,
 _checked_dirty: bool = false,
 // Only user edits count for tooLong/tooShort; script and attribute values don't.
 _user_edited: bool = false,
+// The value before the user's first edit since the last change event.
+_value_before_edit: ?[]const u8 = null,
 _input_type: Type = .text,
 _indeterminate: bool = false,
 _custom_validity: ?[]const u8 = null,
@@ -650,6 +652,8 @@ pub const tracksSelection = entry.tracksSelection;
 pub const innerDelete = entry.innerDelete;
 pub const moveCaret = entry.moveCaret;
 pub const caretToEnd = entry.caretToEnd;
+pub const rememberValueBeforeEdit = entry.rememberValueBeforeEdit;
+pub const dispatchChangeIfEdited = entry.dispatchChangeIfEdited;
 pub const CaretMove = entry.CaretMove;
 pub const getSelectionDirection = entry.getSelectionDirection;
 pub const setSelectionStart = entry.setSelectionStart;

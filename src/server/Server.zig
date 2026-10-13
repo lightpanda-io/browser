@@ -2344,7 +2344,7 @@ test "server: HTTP element input" {
         try testing.expectEqual("{\"value\":true}", try elementCommand(&c, &session_id, opt_b, "/selected"));
         const opt_a = try findElement(&c, &session_id, "css selector", "#opt_a");
         try testing.expectEqual("{\"value\":false}", try elementCommand(&c, &session_id, opt_a, "/selected"));
-        try testing.expectEqual("{\"value\":\"blur@area focus@pick click@opt_b input@pick change@pick\"}", try executeSync(&c, &session_id, take_events, "[]"));
+        try testing.expectEqual("{\"value\":\"change@area blur@area focus@pick click@opt_b input@pick change@pick\"}", try executeSync(&c, &session_id, take_events, "[]"));
     }
 
     // a click that navigates is answered once the new page has loaded

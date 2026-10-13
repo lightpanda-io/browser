@@ -154,6 +154,25 @@ pub fn TextEntry(comptime T: type) type {
             try dispatchInputEvent(self, null, input_type, frame);
         }
 
+        pub fn rememberValueBeforeEdit(self: *T, frame: *Frame) !void {
+            if (self._value_before_edit == null) {
+                self._value_before_edit = try frame.page_arena.dupe(u8, self.getValue());
+            }
+        }
+
+        // Commits the user's edits: fires change when they left the value
+        // different, as when the control loses focus or Enter submits it.
+        // https://html.spec.whatwg.org/multipage/input.html#common-input-element-events
+        pub fn dispatchChangeIfEdited(self: *T, frame: *Frame) !void {
+            const before = self._value_before_edit orelse return;
+            self._value_before_edit = null;
+            if (std.mem.eql(u8, before, self.getValue())) {
+                return;
+            }
+            const event = try Event.initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame.page);
+            try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
+        }
+
         // Collapses the selection to the end of the value. Unlike
         // setSelectionRange(), applies to email and number too.
         pub fn caretToEnd(self: *T, frame: *Frame) !void {

@@ -1386,6 +1386,12 @@ fn dispatchBlur(old: *Element, related: ?*EventTarget, frame: *Frame) !void {
     const FocusEvent = @import("event/FocusEvent.zig");
     const old_target = old.asEventTarget();
 
+    if (old.is(Html.Input)) |input| {
+        try input.dispatchChangeIfEdited(frame);
+    } else if (old.is(Html.TextArea)) |textarea| {
+        try textarea.dispatchChangeIfEdited(frame);
+    }
+
     const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = related }, frame);
     try frame._event_manager.dispatch(old_target, blur_event.asEvent());
 

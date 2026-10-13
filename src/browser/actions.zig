@@ -170,7 +170,7 @@ fn fillControl(ctl: anytype, text: []const u8, frame: *Frame) !void {
         if (!edited) {
             return error.ActionFailed;
         }
-        return dispatchTrusted(el, "change", frame);
+        return ctl.dispatchChangeIfEdited(frame);
     }
 
     ctl.setUserValue(text, frame) catch |err| {
