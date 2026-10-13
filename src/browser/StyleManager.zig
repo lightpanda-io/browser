@@ -1305,20 +1305,31 @@ pub const TextTransform = enum(u3) {
             return .none;
         }
 
-        var result: TextTransform = .none;
+        // At most one case keyword, alongside any of the non-case ones.
+        var result: ?TextTransform = null;
+        var any = false;
         var it = std.mem.tokenizeAny(u8, trimmed, &std.ascii.whitespace);
         while (it.next()) |token| {
-            if (std.ascii.eqlIgnoreCase(token, "uppercase")) {
-                result = .uppercase;
-            } else if (std.ascii.eqlIgnoreCase(token, "lowercase")) {
-                result = .lowercase;
-            } else if (std.ascii.eqlIgnoreCase(token, "capitalize")) {
-                result = .capitalize;
-            } else if (!(std.ascii.eqlIgnoreCase(token, "full-width") or std.ascii.eqlIgnoreCase(token, "full-size-kana") or std.ascii.eqlIgnoreCase(token, "math-auto"))) {
+            any = true;
+            const case: TextTransform = if (std.ascii.eqlIgnoreCase(token, "uppercase"))
+                .uppercase
+            else if (std.ascii.eqlIgnoreCase(token, "lowercase"))
+                .lowercase
+            else if (std.ascii.eqlIgnoreCase(token, "capitalize"))
+                .capitalize
+            else if (std.ascii.eqlIgnoreCase(token, "full-width") or std.ascii.eqlIgnoreCase(token, "full-size-kana") or std.ascii.eqlIgnoreCase(token, "math-auto"))
+                continue
+            else
+                return null;
+            if (result != null) {
                 return null;
             }
+            result = case;
         }
-        return result;
+        if (any == false) {
+            return null;
+        }
+        return result orelse .none;
     }
 
     /// The computed-value keyword, as getComputedStyle reports it.

@@ -18,6 +18,7 @@
   .combo { text-transform: uppercase full-width; }
   #id-wins { text-transform: lowercase; }
   .bogus { text-transform: shout; }
+  .two-cases { text-transform: uppercase lowercase; }
 </style>
 
 <span id=inline style="text-transform: uppercase">unavailable</span>
@@ -29,6 +30,7 @@
 <span id=id-wins class=upper>Mixed</span>
 <span id=combo class=combo>wide</span>
 <div class=upper><span id=bogus class=bogus>still upper</span></div>
+<div class=upper><span id=two-cases class=two-cases>still upper</span></div>
 <div class=upper><span id=inline-inherit style="text-transform: inherit">kept</span></div>
 <div class=upper><span id=inline-initial style="text-transform: initial">plain</span></div>
 <span id=plain>Plain Text</span>
@@ -46,6 +48,7 @@
   testing.expectEqual('lowercase', tt('id-wins'));
   testing.expectEqual('uppercase', tt('combo'));
   testing.expectEqual('uppercase', tt('bogus'));
+  testing.expectEqual('uppercase', tt('two-cases'));
   testing.expectEqual('uppercase', tt('inline-inherit'));
   testing.expectEqual('none', tt('inline-initial'));
   testing.expectEqual('none', tt('plain'));
@@ -63,6 +66,7 @@
   testing.expectEqual('mixed', it('id-wins'));
   testing.expectEqual('WIDE', it('combo'));
   testing.expectEqual('STILL UPPER', it('bogus'));
+  testing.expectEqual('STILL UPPER', it('two-cases'));
   testing.expectEqual('KEPT', it('inline-inherit'));
   testing.expectEqual('plain', it('inline-initial'));
   testing.expectEqual('Plain Text', it('plain'));

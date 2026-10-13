@@ -29,7 +29,6 @@ const Window = @import("../Window.zig");
 const Element = @import("../Element.zig");
 const EventTarget = @import("../EventTarget.zig");
 const ElementInternals = @import("../ElementInternals.zig");
-const TextTransform = @import("../../StyleManager.zig").TextTransform;
 const global_event_handlers = @import("../global_event_handlers.zig");
 
 const reflection = @import("reflection.zig");
@@ -104,6 +103,7 @@ pub const UL = @import("html/UL.zig");
 pub const Unknown = @import("html/Unknown.zig");
 
 const log = lp.log;
+const TextTransform = StyleManager.TextTransform;
 
 const HtmlElement = @This();
 
@@ -349,10 +349,12 @@ pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !
 
     var state = InnerTextState{
         .writer = writer,
+        .scratch = .init(frame.local_arena),
         .style_manager = style_manager,
         .preserve = tag == .pre,
         .transform = style_manager.textTransform(el),
     };
+    defer state.scratch.deinit();
     try self.collectInnerText(&state);
 }
 
@@ -707,6 +709,8 @@ pub fn parseInteger(input: []const u8) ?i32 {
 const InnerTextState = struct {
     writer: *std.Io.Writer,
 
+    scratch: std.Io.Writer.Allocating,
+
     // The walk never leaves the root's document, so we can capture the
     // style_manager upfront
     style_manager: *StyleManager,
@@ -858,6 +862,12 @@ fn handleChildElement(
         return;
     }
 
+    const display = innerTextDisplay(he, tag);
+    switch (display) {
+        .skip, .replaced => return,
+        else => {},
+    }
+
     // text-transform inherits, so a child's own value covers its subtree only.
     const parent_transform = state.transform;
     defer state.transform = parent_transform;
@@ -866,11 +876,8 @@ fn handleChildElement(
         state.transform = own_transform;
     }
 
-    switch (innerTextDisplay(he, tag)) {
-        // Not rendered: skip the subtree entirely (script/style/metadata/...).
-        .skip => {},
-        // Replaced/embedded content: the subtree is not rendered.
-        .replaced => {},
+    switch (display) {
+        .skip, .replaced => unreachable,
         .@"inline", .transparent => try he.collectInnerText(state),
         .block => {
             state.requireBreaks(1);
@@ -961,8 +968,8 @@ fn writeText(c: *Node.CData, state: *InnerTextState) !void {
 
     // Every case mapping we apply keeps the UTF-8 length, so the text is
     // rendered to a scratch buffer and mapped in place.
-    var scratch: std.Io.Writer.Allocating = .init(state.style_manager.frame.local_arena);
-    defer scratch.deinit();
+    const scratch = &state.scratch;
+    scratch.clearRetainingCapacity();
     const out = state.writer;
     state.writer = &scratch.writer;
     const rendered = writeRenderedText(c, state);
