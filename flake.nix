@@ -4,15 +4,15 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
 
-    zigPkgs = {
+    zig-flake = {
       url = "github:silversquirl/zig-flake";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    zlsPkg = {
+    zls = {
       url = "github:zigtools/zls/eab2be0fd74443a27662da809b771c4ad0d2afcf";
-      inputs.zig-flake.follows = "zigPkgs";
       inputs.nixpkgs.follows = "nixpkgs";
+      inputs.zig-flake.follows = "zig-flake";
     };
 
     fenix = {
@@ -26,8 +26,8 @@
   outputs =
     {
       nixpkgs,
-      zigPkgs,
-      zlsPkg,
+      zig-flake,
+      zls,
       fenix,
       flake-utils,
       ...
@@ -37,8 +37,8 @@
       let
         overlays = [
           (final: prev: {
-            zig = zigPkgs.packages.${prev.system}."zig_0_17_0";
-            zls = zlsPkg.packages.${prev.system}.default;
+            zig = zig-flake.packages.${prev.system}."zig_0_17_0";
+            zls = zls.packages.${prev.system}.zls;
           })
         ];
 
