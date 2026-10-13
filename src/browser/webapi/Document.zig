@@ -1225,6 +1225,14 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     const doc_node = self.asNode();
 
     {
+        // Erase all event listeners and handlers of the document
+        try frame._event_manager.removeShadowIncludingDescendants(call_frame.local_arena, doc_node);
+        if (frame.document == self) {
+            frame.page.event_listeners.removeTarget(frame.window.asEventTarget());
+        }
+    }
+
+    {
         // Remove all children from document
         var it = doc_node.childrenIterator();
         while (it.next()) |child| {
@@ -1299,7 +1307,7 @@ fn finishScriptCreatedParser(self: *Document, frame: *Frame) !void {
     // iframe written into via document.write), so we can't rely on it.
     frame._script_manager.base.scriptCreatedParseDone();
 
-    frame.documentIsComplete();
+    frame.scriptCreatedParserDone();
 }
 
 fn getFirstElementChild(self: *Document) ?*Element {
