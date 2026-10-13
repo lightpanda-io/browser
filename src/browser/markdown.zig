@@ -20,6 +20,7 @@ const std = @import("std");
 
 const URL = @import("URL.zig");
 const Frame = @import("Frame.zig");
+const Selector = @import("webapi/selector/Selector.zig");
 const RenderTree = @import("RenderTree.zig");
 const StyleManager = @import("StyleManager.zig");
 
@@ -494,6 +495,30 @@ fn writeSource(source: *Node, opts: Opts, writer: *std.Io.Writer) !void {
         if (!lw.truncated) return err;
         try writer.writeAll(truncation_marker);
     };
+}
+
+/// The http(s) URL of the page's `<link rel="alternate" type="text/markdown">`:
+/// the author's own markdown version of the page.
+pub fn alternateUrl(arena: std.mem.Allocator, frame: *Frame) !?[:0]const u8 {
+    const selector = "link[rel~=alternate i][type=\"text/markdown\" i][href]";
+    const link = try Selector.querySelector(frame.document.asNode(), selector, frame) orelse return null;
+    const href = link.getAttributeInterned("href") orelse return null;
+    const url = URL.resolve(arena, frame.base(), href, .{ .encoding = frame.charset }) catch |err| switch (err) {
+        error.TypeError => return null,
+        else => return err,
+    };
+    const protocol = URL.getProtocol(url);
+    if (!std.mem.eql(u8, protocol, "http:") and !std.mem.eql(u8, protocol, "https:")) return null;
+    return url;
+}
+
+/// Whether a followed alternate can stand in for the page: a 2xx
+/// text/markdown response.
+pub fn isAlternateLoaded(frame: *Frame) bool {
+    if (frame._last_navigate_error != null) return false;
+    const status = frame._http_status orelse return false;
+    if (status < 200 or status >= 300) return false;
+    return markdownSource(frame.document.asNode()) != null;
 }
 
 pub fn dump(state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
@@ -991,6 +1016,26 @@ test "browser.markdown: a text/markdown document is written as-is" {
     var capped: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     try dump(.{ .root = frame.window._document.asNode() }, .{ .max_bytes = 7 }, &capped.writer, frame);
     try testing.expectString("# Title" ++ truncation_marker, capped.written());
+}
+
+test "browser.markdown: alternateUrl" {
+    {
+        var page = try testing.pageTest("markdown_alternate.html", .{});
+        defer page.close();
+        const url = try alternateUrl(testing.arena_allocator, page.frame().?);
+        try testing.expectString("http://127.0.0.1:9582/src/browser/tests/markdown_source.md", url.?);
+    }
+    {
+        // Only http(s): a page can't point the reader at a local file.
+        var page = try testing.pageTest("markdown_alternate_file.html", .{});
+        defer page.close();
+        try testing.expect(try alternateUrl(testing.arena_allocator, page.frame().?) == null);
+    }
+    {
+        var page = try testing.pageTest("markdown_flex.html", .{});
+        defer page.close();
+        try testing.expect(try alternateUrl(testing.arena_allocator, page.frame().?) == null);
+    }
 }
 
 // Builds a shadow host <div>, populates its light DOM with `light` and its

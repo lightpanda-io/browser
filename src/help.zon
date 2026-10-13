@@ -136,6 +136,14 @@
     \\          "error" field: null, or the name of the navigation, wait or
     \\          dump failure for that URL. One failed URL does not stop the
     \\          others; the process exits 1 if any URL failed.
+    \\  --markdown-alternate
+    \\          With --dump markdown, when a page links a markdown version of
+    \\          itself (<link rel="alternate" type="text/markdown">), dump that
+    \\          file instead of converting the page. The file is the author's
+    \\          and can differ from the rendered page. Falls back to converting
+    \\          the page when there is no such link or it does not load as
+    \\          markdown. With --json, "url" is where the markdown came from.
+    \\          Defaults to false.
     \\  --metrics
     \\          Write metrics (Prometheus text format) to stdout on exit, after
     \\          any --dump output.

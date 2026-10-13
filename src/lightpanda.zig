@@ -205,6 +205,9 @@ pub const FetchOpts = struct {
     selector: ?[:0]const u8 = null,
     /// Any page with an HTTP status >= 400 fails the fetch with `error.HttpError`.
     fail_on_http_error: bool = false,
+    /// Dump a page's `<link rel="alternate" type="text/markdown">` instead of
+    /// converting the page, when that link loads as markdown.
+    markdown_alternate: bool = false,
     writer: ?*std.Io.Writer = null,
     json: bool = false,
 };
@@ -346,6 +349,11 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         }
     }
 
+    if (opts.markdown_alternate) {
+        const remaining = opts.wait_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
+        try followMarkdownAlternates(session, pages.items, errors, remaining);
+    }
+
     var http_error = false;
     for (pages.items, errors) |page, *err| {
         const frame = page.frame() orelse {
@@ -397,6 +405,44 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
     }
     if (opts.fail_on_http_error and http_error) {
         return error.HttpError;
+    }
+}
+
+/// Loads each page's markdown alternate in a page of its own (same session, so
+/// same cookies, robots and proxy) and swaps it in for the page when it loads
+/// as markdown. Otherwise the page is kept and converted as usual.
+fn followMarkdownAlternates(session: *Session, pages: []Session.PageHandle, errors: []const ?anyerror, timeout_ms: u32) !void {
+    const arena = session.arena.allocator();
+    const alternates = try arena.alloc(?Session.PageHandle, pages.len);
+    var conditions: std.ArrayList(Session.Runner.WaitCondition) = .empty;
+    for (pages, errors, alternates) |page, err, *alternate| {
+        alternate.* = null;
+        if (err != null) continue;
+        const frame = page.frame() orelse continue;
+        const url = try markdown.alternateUrl(arena, frame) orelse continue;
+        const alt = try session.createPage();
+        alt.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } }) catch {
+            alt.close();
+            continue;
+        };
+        alternate.* = alt;
+        try conditions.append(arena, .{ .frame_id = alt.frame_id, .until = .load });
+    }
+    if (conditions.items.len == 0) return;
+
+    var runner = session.runner(.{});
+    _ = try runner.waitResult(timeout_ms, conditions.items);
+
+    for (pages, alternates) |*page, alternate| {
+        const alt = alternate orelse continue;
+        if (alt.frame()) |frame| {
+            if (markdown.isAlternateLoaded(frame)) {
+                page.close();
+                page.* = alt;
+                continue;
+            }
+        }
+        alt.close();
     }
 }
 
@@ -751,6 +797,25 @@ test "fetch: resolveWaitUntil" {
         .networkidle,
         resolveWaitUntil(.{ .dump = .{}, .wait_until = .networkidle, .wait_selector = "#main" }),
     );
+}
+
+test "fetch: followMarkdownAlternates swaps in a page's markdown alternate" {
+    const session = testing.test_session;
+    defer session.closeAllPages();
+
+    var pages = [_]Session.PageHandle{
+        try testing.pageTest("markdown_alternate.html", .{ .wait_until_done = true }),
+        try testing.pageTest("markdown_alternate_html.html", .{ .wait_until_done = true }),
+        try testing.pageTest("markdown_flex.html", .{ .wait_until_done = true }),
+    };
+    var errors = [_]?anyerror{ null, null, null };
+    try followMarkdownAlternates(session, &pages, &errors, 2000);
+
+    const base = "http://127.0.0.1:9582/src/browser/tests/";
+    try testing.expectString(base ++ "markdown_source.md", pages[0].frame().?.url);
+    try testing.expectString(base ++ "markdown_alternate_html.html", pages[1].frame().?.url);
+    try testing.expectString(base ++ "markdown_flex.html", pages[2].frame().?.url);
+    try testing.expectEqual(3, session.pages.items.len);
 }
 
 test {
