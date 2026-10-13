@@ -1394,6 +1394,23 @@ pub fn pendingLoadCompleted(self: *Frame) void {
     }
 }
 
+// A document.open() has been closed. If it was opened after it loaded, it
+// will re-trigger DOMContentLoaded and load.
+pub fn scriptCreatedParserDone(self: *Frame) void {
+    switch (self._load_state) {
+        .parsing, .load => {},
+        .waiting => self._load_state = .parsing,
+        .complete => {
+            self._load_state = .parsing;
+            self._parent_notified = false;
+            // the parent was already released the first time, we don't
+            // want documentIsComplete to re-trigger it.
+            self._delays_parent_load = false;
+        },
+    }
+    self.documentIsComplete();
+}
+
 pub fn documentIsComplete(self: *Frame) void {
     if (self._load_state == .complete) {
         // Ideally, documentIsComplete would only be called once, but with

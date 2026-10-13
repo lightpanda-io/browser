@@ -31,11 +31,12 @@ const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 
 const log = lp.log;
+const Allocator = std.mem.Allocator;
+const Listener = EventManagerBase.Listener;
 
 // Re-export types from EventManagerBase for API compatibility
 pub const RegisterOptions = EventManagerBase.RegisterOptions;
 pub const Callback = EventManagerBase.Callback;
-const Listener = EventManagerBase.Listener;
 
 pub const EventManager = @This();
 
@@ -87,6 +88,25 @@ pub fn getHandler(self: *EventManager, target: *EventTarget, typ: []const u8) ?j
         else => self.frame,
     };
     return self.base.getHandler(frame.js, target, typ);
+}
+
+// Erases the listeners and handlers of the document `root` and its
+// shadow-including descendants (document.open). Detached nodes keep theirs.
+// A connected node belongs to its owner document's tree, so the owner check
+// cheaply skips other documents' nodes before the isConnected walk.
+pub fn removeShadowIncludingDescendants(self: *EventManager, allocator: Allocator, root: *Node) !void {
+    var targets: std.ArrayList(*EventTarget) = .empty;
+    var it = self.base.lookup.keyIterator();
+    while (it.next()) |key| {
+        const target: *EventTarget = @ptrFromInt(key.*);
+        const node = target.is(Node) orelse continue;
+        if (node._owner == root._owner and node.isConnected()) {
+            try targets.append(allocator, target);
+        }
+    }
+    for (targets.items) |target| {
+        self.base.removeTarget(target);
+    }
 }
 
 fn noteListener(self: *EventManager, target: *EventTarget, listener: *const Listener) void {
