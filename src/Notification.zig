@@ -81,6 +81,7 @@ const EventListeners = struct {
     frame_network_idle: List = .{},
     frame_network_almost_idle: List = .{},
     frame_child_frame_created: List = .{},
+    frame_child_frame_detached: List = .{},
     frame_dom_content_loaded: List = .{},
     frame_loaded: List = .{},
     http_request_fail: List = .{},
@@ -113,6 +114,7 @@ const Events = union(enum) {
     frame_network_idle: *const FrameNetworkIdle,
     frame_network_almost_idle: *const FrameNetworkAlmostIdle,
     frame_child_frame_created: *const FrameChildFrameCreated,
+    frame_child_frame_detached: *const FrameChildFrameDetached,
     frame_dom_content_loaded: *const FrameDOMContentLoaded,
     frame_loaded: *const FrameLoaded,
     http_request_fail: *const RequestFail,
@@ -209,6 +211,11 @@ pub const FrameChildFrameCreated = struct {
     loader_id: u32,
     parent_id: u32,
     timestamp: u64,
+};
+
+pub const FrameChildFrameDetached = struct {
+    frame_id: u32,
+    parent_id: u32,
 };
 
 pub const FrameDOMContentLoaded = struct {

@@ -154,6 +154,15 @@ pub const Build = struct {
         if (reprocesses(element, name)) try reload(element, frame);
     }
 
+    /// Removing the iframe destroys its browsing context
+    pub fn disconnected(element: *Element, _: *Frame) !void {
+        const self = element.as(IFrame);
+        self._executed = false;
+        const window = self._window orelse return;
+        self._window = null;
+        try window._frame.discard();
+    }
+
     /// Removing srcdoc falls back to src, removing src to about:blank.
     pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
         if (reprocesses(element, name)) try reload(element, frame);
