@@ -1028,6 +1028,13 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         return;
     }
 
+    if (URL.isFetchable(resolved_url) == false) {
+        log.info(.browser, "navigate unsupported scheme", .{ .url = resolved_url });
+        // don't defer this, the caller is responsible for freeing it on error
+        arena.release();
+        return;
+    }
+
     const session = target._session;
 
     // Per the HTML "navigate" steps, this is a fragment navigation only when
