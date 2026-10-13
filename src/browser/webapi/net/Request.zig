@@ -330,12 +330,13 @@ fn getBodyUsed(self: *const Request) bool {
 }
 
 pub fn bodyBytes(self: *Request) !?[]const u8 {
-    if (self._body_stream) |stream| {
-        // drain the stram on first use, TypeError if it can't.
+    if (self._body) |body| {
+        return body;
+    } else if (self._body_stream) |stream| {
         self._body = try stream.collectBodyBytes(self._arena.allocator());
         self._body_stream = null;
-    }
-    return self._body;
+        return self._body;
+    } else return null;
 }
 
 // A TypeError if the body is disturbed or its exposed `body` stream is locked.
@@ -376,10 +377,23 @@ fn consume(self: *Request, exec: *const Execution) ![]const u8 {
 
 // https://fetch.spec.whatwg.org/#dom-body-body
 pub fn getBody(self: *Request, exec: *const Execution) !?*ReadableStream {
-    const body = try self.bodyBytes() orelse return null;
+    // If we already have a body, we just return that.
     if (self._body_view) |stream| {
         return stream;
     }
+
+    // If our body is a stream, we should just return it.
+    if (self._body_stream) |stream| {
+        self._body_view = stream;
+        if (self._body_used) {
+            try lockStream(stream, exec);
+        }
+
+        return stream;
+    }
+
+    // This creates a new ReadableStream for the other types of body.
+    const body = try self.bodyBytes() orelse return null;
     const stream = blk: {
         if (body.len == 0) {
             const stream = try ReadableStream.init(null, null, exec);

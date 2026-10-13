@@ -632,3 +632,13 @@
     testing.expectError('TypeError', () => new Request('https://example.com/api', { method }));
   }
 </script>
+
+<script id=request_body_matches_stream>
+  const open = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('x')); } });
+  const r1 = new Request('https://example.com', { method: 'POST', body: open, duplex: 'half' });
+  testing.expectTrue(r1.body === open)
+
+  const closed = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('x')); c.close(); } });
+  const r2 = new Request('https://example.com', { method: 'POST', body: closed, duplex: 'half' });
+  testing.expectTrue(r2.body === closed)
+</script>
