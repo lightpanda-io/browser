@@ -3153,6 +3153,7 @@ test "cdp.input: navigating an iframe clears a touch contact on its child docume
     defer ls.deinit();
     _ = try ls.local.compileAndRun("document.querySelector('iframe').src = 'iframe/input_child.html?touch-nav'", null);
     _ = try bc.session.processQueuedNavigation();
+    try testing.expect(std.mem.endsWith(u8, main.child_frames.items[0].url, "?touch-nav"));
     try testing.expect(main.page.input_touch.contact == null);
     // A fresh contact is accepted: aim at the parent's own #text input so the
     // hit-test does not depend on where the iframe is laid out.
@@ -3178,6 +3179,7 @@ test "cdp.input: navigating an iframe keeps a touch contact on the parent docume
     defer ls.deinit();
     _ = try ls.local.compileAndRun("document.querySelector('iframe').src = 'iframe/input_child.html?parent-touch-nav'", null);
     _ = try bc.session.processQueuedNavigation();
+    try testing.expect(std.mem.endsWith(u8, main.child_frames.items[0].url, "?parent-touch-nav"));
     try testing.expect(main.page.input_touch.contact != null);
     try testing.expect(main.page.input_touch.contact.?.target == target);
     try testing.expectEqual(@as(i32, 7), main.page.input_touch.contact.?.point.id);
