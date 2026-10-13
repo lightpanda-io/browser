@@ -255,7 +255,7 @@
 
     await state.done(() => {
       testing.expectEqual(true, abortFired);
-      testing.expectEqual(true, errorFired);
+      testing.expectEqual(false, errorFired);
       testing.expectEqual(true, loadEndFired);
       testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
     });
@@ -285,7 +285,7 @@
 
     await state.done(() => {
       testing.expectEqual(true, abortFired);
-      testing.expectEqual(true, errorFired);
+      testing.expectEqual(false, errorFired);
       testing.expectEqual(true, loadEndFired);
       testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
     });
@@ -315,7 +315,7 @@
 
     await state.done(() => {
       testing.expectEqual(true, abortFired);
-      testing.expectEqual(true, errorFired);
+      testing.expectEqual(false, errorFired);
       testing.expectEqual(true, loadEndFired);
       testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
     });

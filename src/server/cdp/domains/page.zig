@@ -23,6 +23,7 @@ const lp = @import("lightpanda");
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 const target = @import("target.zig");
+const network = @import("network.zig");
 
 const js = @import("../../../browser/js/js.zig");
 const URL = @import("../../../browser/URL.zig");
@@ -638,10 +639,7 @@ pub fn frameNavigateFailed(bc: *CDP.BrowserContext, event: *const Notification.F
         .result = .{
             .frameId = &id.toFrameId(event.frame_id),
             .loaderId = &id.toLoaderId(event.loader_id),
-            .errorText = switch (event.err) {
-                error.TransferCanceled => "net::ERR_ABORTED",
-                else => |err| @errorName(err),
-            },
+            .errorText = network.errorText(event.err),
         },
         .sessionId = session_id,
     }, .{});
@@ -2213,6 +2211,53 @@ test "cdp.page: stopLoading cancels an uncommitted root navigation" {
     defer ls.deinit();
     const v = try ls.local.exec("document.readyState === 'complete'", null);
     try testing.expect(v.toBool());
+}
+
+test "cdp.page: Fetch.failRequest on a script navigation" {
+    testing.silenceLog(&.{.frame});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-FR", .session_id = "SID-FR", .target_id = "TID-FR-0000000".*, .url = "hi.html" });
+    const live = bc.mainPage() orelse unreachable;
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.enable" });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    {
+        // Aborted is a cancel: the live page stays.
+        const frame = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("location.href = 'hi.html?aborted'", null);
+    }
+    try ctx.expectSentEvent("Fetch.requestPaused", .{ .requestId = "INT-0000000001" }, .{});
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.failRequest", .params = .{ .requestId = "INT-0000000001", .errorReason = "Aborted" } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ctx.expectSentEvent("Network.loadingFailed", .{ .errorText = "net::ERR_ABORTED", .canceled = true }, .{});
+    try testing.waitForPage(bc);
+    try testing.expectEqual(null, bc.session.replacementOf(live));
+    try testing.expect(live == bc.mainPage().?);
+
+    {
+        const frame = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("location.href = 'hi.html?failed'", null);
+    }
+    try ctx.expectSentEvent("Fetch.requestPaused", .{ .requestId = "INT-0000000002" }, .{});
+    try ctx.processMessage(.{ .id = 4, .method = "Fetch.failRequest", .params = .{ .requestId = "INT-0000000002", .errorReason = "Failed" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+
+    // Any other reason is a network error: like Chrome, an error document
+    // commits, which a client waiting on the navigation sees.
+    try ctx.expectSentEvent("Network.loadingFailed", .{ .errorText = "net::ERR_FAILED", .canceled = false }, .{});
+    try ctx.expectSentEvent("Page.frameNavigated", .{ .frame = .{ .url = "http://127.0.0.1:9582/src/browser/tests/hi.html?failed" } }, .{});
 }
 
 test "cdp.frame: reload replays POST navigation" {

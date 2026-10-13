@@ -89,22 +89,6 @@ const EnableParam = struct {
     patterns: ?[]RequestPattern = null,
     handleAuthRequests: bool = false,
 };
-const ErrorReason = enum {
-    Failed,
-    Aborted,
-    TimedOut,
-    AccessDenied,
-    ConnectionClosed,
-    ConnectionReset,
-    ConnectionRefused,
-    ConnectionAborted,
-    ConnectionFailed,
-    NameNotResolved,
-    InternetDisconnected,
-    AddressUnreachable,
-    BlockedByClient,
-    BlockedByResponse,
-};
 
 fn commandSessionId(cmd: *CDP.Command, bc: *CDP.BrowserContext) ![]const u8 {
     if (cmd.input.session_id) |session_id| {
@@ -334,7 +318,7 @@ fn failRequest(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INT-{d}"
-        errorReason: ErrorReason,
+        errorReason: network.ErrorReason,
     })) orelse return error.InvalidParams;
 
     const client = &bc.cdp.browser.http_client;
@@ -347,9 +331,7 @@ fn failRequest(cmd: *CDP.Command) !void {
         return cmd.sendResult(null, .{});
     };
 
-    // The client is cancelling the request: consumers see it as a cancel
-    // (XHR fires abort, not error), like any other Transfer.cancel().
-    defer transfer.abortParked(error.TransferCanceled);
+    defer transfer.abortParked(params.errorReason.toError());
 
     log.info(.cdp, "request intercept", .{
         .state = "fail",
