@@ -31,8 +31,6 @@ _id: []const u8 = "",
 _start_time: f64 = 0,
 _end_time: f64 = 0,
 _pause_on_exit: bool = false,
-_on_enter: ?js.Function.Global = null,
-_on_exit: ?js.Function.Global = null,
 
 pub const Type = union(enum) {
     vtt: *@import("VTTCue.zig"),
@@ -74,22 +72,6 @@ fn setPauseOnExit(self: *TextTrackCue, value: bool) void {
     self._pause_on_exit = value;
 }
 
-fn getOnEnter(self: *const TextTrackCue) ?js.Function.Global {
-    return self._on_enter;
-}
-
-fn setOnEnter(self: *TextTrackCue, cb: ?js.Function.Global) !void {
-    self._on_enter = cb;
-}
-
-fn getOnExit(self: *const TextTrackCue) ?js.Function.Global {
-    return self._on_exit;
-}
-
-fn setOnExit(self: *TextTrackCue, cb: ?js.Function.Global) !void {
-    self._on_exit = cb;
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(TextTrackCue);
 
@@ -106,6 +88,6 @@ pub const JsApi = struct {
     pub const startTime = bridge.accessor(TextTrackCue.getStartTime, TextTrackCue.setStartTime, .{});
     pub const endTime = bridge.accessor(TextTrackCue.getEndTime, TextTrackCue.setEndTime, .{});
     pub const pauseOnExit = bridge.accessor(TextTrackCue.getPauseOnExit, TextTrackCue.setPauseOnExit, .{});
-    pub const onenter = bridge.accessor(TextTrackCue.getOnEnter, TextTrackCue.setOnEnter, .{});
-    pub const onexit = bridge.accessor(TextTrackCue.getOnExit, TextTrackCue.setOnExit, .{});
+    pub const onenter = EventTarget.handlerAccessor(TextTrackCue, "enter");
+    pub const onexit = EventTarget.handlerAccessor(TextTrackCue, "exit");
 };

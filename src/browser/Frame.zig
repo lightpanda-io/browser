@@ -70,8 +70,6 @@ const sys_url = @import("../sys/url.zig");
 const HttpClient = @import("../network/HttpClient.zig");
 const GlobalScope = @import("global_scope.zig").GlobalScope;
 
-const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
-
 const framing = @import("frame/framing.zig");
 pub const parse = @import("frame/parse.zig");
 pub const preload = @import("frame/preload.zig");
@@ -119,26 +117,6 @@ _parse_mode: enum { document, fragment, document_write } = .document,
 // Range.createContextualFragment(), whose scripts DO run when the fragment is
 // inserted into a document
 _fragment_scripts_runnable: bool = false,
-
-/// Lazily-created inline event listeners (or listeners provided as attributes).
-/// Avoids bloating all elements with extra function fields for rare usage.
-///
-/// Use this when a listener provided like this:
-///
-/// ```js
-/// img.onload = () => { ... };
-/// ```
-///
-/// Its also used as cache for such cases after lazy evaluation:
-///
-/// ```html
-/// <img onload="(() => { ... })()" />
-/// ```
-///
-/// ```js
-/// img.setAttribute("onload", "(() => { ... })()");
-/// ```
-_event_target_attr_listeners: GlobalEventHandlersLookup = .empty,
 
 // FileLists owned by `<input type=file>` elements. Each holds refs on its
 // File objects (reference counted via their Blob proto); released at teardown.
@@ -1461,12 +1439,12 @@ fn _documentIsComplete(self: *Frame) !void {
 
     // Dispatch window.load event.
     const window_target = self.window.asEventTarget();
-    if (self._event_manager.hasDirectListeners(window_target, "load", self.window._on_load)) {
+    if (self._event_manager.hasDirectListeners(window_target, "load")) {
         const event = try Event.initTrusted(comptime .wrap("load"), .{}, self.page);
         // This event is weird, it's dispatched directly on the window, but
         // with the document as the target.
         event._target = self.document.asEventTarget();
-        try self._event_manager.dispatchDirect(window_target, event, self.window._on_load, .{ .inject_target = false, .context = "page load" });
+        try self._event_manager.dispatchDirect(window_target, event, .{ .inject_target = false, .context = "page load" });
     }
 
     self._session.notification.dispatch(.frame_loaded, &.{
@@ -1476,9 +1454,9 @@ fn _documentIsComplete(self: *Frame) !void {
         .timestamp = lp.datetime.timestamp(.boot),
     });
 
-    if (self._event_manager.hasDirectListeners(window_target, "pageshow", self.window._on_pageshow)) {
+    if (self._event_manager.hasDirectListeners(window_target, "pageshow")) {
         const pageshow_event = (try PageTransitionEvent.initTrusted(comptime .wrap("pageshow"), .{}, self)).asEvent();
-        try self._event_manager.dispatchDirect(window_target, pageshow_event, self.window._on_pageshow, .{ .context = "page show" });
+        try self._event_manager.dispatchDirect(window_target, pageshow_event, .{ .context = "page show" });
     }
 
     if (comptime lp.IS_DEBUG) {
@@ -2562,7 +2540,7 @@ const HashChangeCallback = struct {
 
         const frame = self.frame;
         const target = frame.window.asEventTarget();
-        if (!frame._event_manager.hasDirectListeners(target, "hashchange", frame.window._on_hashchange)) {
+        if (!frame._event_manager.hasDirectListeners(target, "hashchange")) {
             return null;
         }
 
@@ -2570,7 +2548,7 @@ const HashChangeCallback = struct {
             .oldURL = self.old_url,
             .newURL = self.new_url,
         }, frame)).asEvent();
-        try frame._event_manager.dispatchDirect(target, event, frame.window._on_hashchange, .{ .context = "Hash Change" });
+        try frame._event_manager.dispatchDirect(target, event, .{ .context = "Hash Change" });
         return null;
     }
 };
@@ -2738,14 +2716,8 @@ fn dispatchQueuedEvents(self: *Frame) !void {
 
         const element = html_element.asElement();
         switch (queued.kind) {
-            // hasAttributeFunction only sees handlers compiled via property
-            // access; a parsed `onload="..."` attribute is compiled lazily at
-            // dispatch (EventManager.getInlineHandler), so check it raw too.
             .load => {
-                if (has_dom_load_listener or
-                    html_element.hasAttributeFunction(.onload, self) or
-                    element.getAttributeSafe(comptime .wrap("onload")) != null)
-                {
+                if (has_dom_load_listener) {
                     try self.fireElementEvent(element, comptime .wrap("load"));
                 }
             },
@@ -2857,14 +2829,13 @@ pub fn dispatch(
     self: *Frame,
     target: *EventTarget,
     event: *Event,
-    handler: anytype,
     comptime opts: EventManager.DispatchDirectOptions,
 ) !void {
-    return self._event_manager.dispatchDirect(target, event, handler, opts);
+    return self._event_manager.dispatchDirect(target, event, opts);
 }
 
-pub fn hasDirectListeners(self: *Frame, target: *EventTarget, typ: []const u8, handler: anytype) bool {
-    return self._event_manager.hasDirectListeners(target, typ, handler);
+pub fn hasDirectListeners(self: *Frame, target: *EventTarget, typ: []const u8) bool {
+    return self._event_manager.hasDirectListeners(target, typ);
 }
 
 pub fn dupeSSO(self: *Frame, value: []const u8) !String {
@@ -3342,6 +3313,11 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
         self.scheduleFocusFixup() catch |err| {
             log.err(.frame, "scheduleFocusFixup", .{ .err = err, .type = self._type, .url = self.url });
         };
+    } else if (element.is(Element.Html)) |html| {
+        // the stored value: `value` holds a short one inline
+        html.eventHandlerAttributeChanged(name.str(), element.getAttributeSafe(name), self) catch |err| {
+            log.err(.frame, "event handler attribute", .{ .err = err, .type = self._type, .url = self.url });
+        };
     }
 }
 
@@ -3365,6 +3341,10 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
         popover.attributeChanged(element, old_value.str(), null, self);
     } else if (name.eql(comptime .wrap("style"))) {
         self.styleAttributeChanged(element, null);
+    } else if (element.is(Element.Html)) |html| {
+        html.eventHandlerAttributeChanged(name.str(), null, self) catch |err| {
+            log.err(.frame, "event handler attribute", .{ .err = err, .type = self._type, .url = self.url });
+        };
     }
 }
 

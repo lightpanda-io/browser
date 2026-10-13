@@ -358,7 +358,6 @@ fn removePageFromList(self: *Session, page: *Page) void {
 fn tearDownPage(self: *Session, page: *Page) void {
     self.notification.dispatch(.frame_remove, .{});
     self.retire(page);
-    self.navigation.onRemoveFrame();
 }
 
 // Allocate a Page in a free slot, publish it as the active page, and
@@ -993,7 +992,6 @@ pub fn commitPendingPage(self: *Session, replacement: *Page) !void {
     // walkable (node_registry, inspector context group, isolated worlds). OLD
     // is still the live page (index 0); its memory stays alive until step 4.
     self.notification.dispatch(.frame_remove, .{});
-    self.navigation.onRemoveFrame();
 
     // Step 2: register the new page with CDP. `replacement.replaces` is still
     // set, so the session still reports an in-flight nav and CDP's frameCreated

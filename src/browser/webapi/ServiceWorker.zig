@@ -27,7 +27,6 @@ const js = @import("../js/js.zig");
 
 const Event = @import("Event.zig");
 const EventTarget = @import("EventTarget.zig");
-const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 const ServiceWorkerGlobalScope = @import("ServiceWorkerGlobalScope.zig");
 
 const log = lp.log;
@@ -41,7 +40,6 @@ _proto: *EventTarget,
 _exec: *Execution,
 // Null once the scope is gone. Reports as `redundant` in that case
 _scope: ?*ServiceWorkerGlobalScope,
-_on_state_change: ?js.Function.Global = null,
 
 pub const State = enum {
     parsed,
@@ -96,7 +94,7 @@ pub fn postMessage(self: *ServiceWorker, data: js.Value) !void {
 
 pub fn stateChanged(self: *ServiceWorker) void {
     const exec = self._exec;
-    if (exec.hasDirectListeners(self._proto, "statechange", self._on_state_change) == false) {
+    if (exec.hasDirectListeners(self._proto, "statechange") == false) {
         return;
     }
 
@@ -119,14 +117,6 @@ fn scheduleStateChange(self: *ServiceWorker) !void {
         .finalizer = StateChangeCallback.cancelled,
     });
 }
-pub fn getOnStateChange(self: *const ServiceWorker) ?js.Function.Global {
-    return self._on_state_change;
-}
-
-pub fn setOnStateChange(self: *ServiceWorker, setter: ?WorkerGlobalScope.FunctionSetter) void {
-    self._on_state_change = WorkerGlobalScope.getFunctionFromSetter(setter);
-}
-
 const StateChangeCallback = struct {
     arena: *lp.Arena,
     worker: *ServiceWorker,
@@ -147,7 +137,7 @@ const StateChangeCallback = struct {
             .cancelable = false,
         }, exec.page));
 
-        try exec.dispatch(worker._proto, event, worker._on_state_change, .{
+        try exec.dispatch(worker._proto, event, .{
             .context = "ServiceWorker.statechange",
         });
         return null;
@@ -166,5 +156,5 @@ pub const JsApi = struct {
     pub const scriptURL = bridge.accessor(ServiceWorker.getScriptURL, null, .{});
     pub const state = bridge.accessor(ServiceWorker.getState, null, .{});
     pub const postMessage = bridge.function(ServiceWorker.postMessage, .{});
-    pub const onstatechange = bridge.accessor(ServiceWorker.getOnStateChange, ServiceWorker.setOnStateChange, .{});
+    pub const onstatechange = EventTarget.handlerAccessor(ServiceWorker, "statechange");
 };

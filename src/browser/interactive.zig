@@ -283,7 +283,7 @@ pub const ListenerTargetMap = std.AutoHashMapUnmanaged(usize, std.ArrayList([]co
 pub fn buildListenerTargetMap(frame: *Frame, arena: Allocator) !ListenerTargetMap {
     var map = ListenerTargetMap{};
 
-    // addEventListener registrations
+    // Listeners, event handlers (onclick, ...) included
     var it = frame.page.event_listeners.lookup.iterator();
     while (it.next()) |entry| {
         for (entry.value_ptr.items) |*type_listeners| {
@@ -293,15 +293,6 @@ pub fn buildListenerTargetMap(frame: *Frame, arena: Allocator) !ListenerTargetMa
                 try gop.value_ptr.append(arena, type_listeners.typ.str());
             }
         }
-    }
-
-    // Inline handlers (onclick, onmousedown, etc.)
-    var attr_it = frame._event_target_attr_listeners.iterator();
-    while (attr_it.next()) |entry| {
-        const gop = try map.getOrPut(arena, @intFromPtr(entry.key_ptr.target));
-        if (!gop.found_existing) gop.value_ptr.* = .empty;
-        // Strip "on" prefix to get the event type name.
-        try gop.value_ptr.append(arena, @tagName(entry.key_ptr.handler)[2..]);
     }
 
     return map;

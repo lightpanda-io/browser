@@ -64,7 +64,6 @@ _navigation: PerformanceNavigation = .{},
 _event_counts: EventCounts = .{},
 _resource_buffer_size: u32 = DEFAULT_RESOURCE_BUFFER_SIZE,
 _buffer_full_pending: bool = false,
-_on_buffer_full: ?js.Function.Global = null,
 
 // The owner's task scheduler and its main-world Execution, both set by the
 // owner once its JS context exists (Frame builds the Window, and thus this,
@@ -614,7 +613,7 @@ fn scheduleBufferFull(self: *Performance) !void {
     if (self._buffer_full_pending) {
         return;
     }
-    if (self._exec.hasDirectListeners(self.asEventTarget(), BUFFER_FULL, self._on_buffer_full) == false) {
+    if (self._exec.hasDirectListeners(self.asEventTarget(), BUFFER_FULL) == false) {
         return;
     }
     self._buffer_full_pending = true;
@@ -644,7 +643,7 @@ fn fireBufferFull(self: *Performance) !void {
         if (self.canAddResource() == false) {
             const exec = self._exec;
             const event = try Event.initTrusted(.wrap(BUFFER_FULL), .{}, exec.page);
-            try exec.dispatch(self.asEventTarget(), event, self._on_buffer_full, .{
+            try exec.dispatch(self.asEventTarget(), event, .{
                 .context = "Performance.bufferfull",
             });
         }
@@ -663,20 +662,6 @@ fn fireBufferFull(self: *Performance) !void {
             return;
         }
     }
-}
-
-// The property handler for a JS-side dispatchEvent (see EventManager.dispatch).
-pub fn inlineHandler(self: *const Performance, typ: lp.String) ?js.Function.Global {
-    if (typ.eql(.wrap(BUFFER_FULL))) return self._on_buffer_full;
-    return null;
-}
-
-fn getOnResourceTimingBufferFull(self: *const Performance) ?js.Function.Global {
-    return self._on_buffer_full;
-}
-
-fn setOnResourceTimingBufferFull(self: *Performance, cb: ?js.Function.Global) void {
-    self._on_buffer_full = cb;
 }
 
 pub fn scheduleDelivery(self: *Performance) !void {
@@ -796,7 +781,7 @@ pub const JsApi = struct {
     pub const timing = bridge.accessor(Performance.getTiming, null, .{ .exposed = .window });
     pub const navigation = bridge.accessor(Performance.getNavigation, null, .{ .exposed = .window });
     pub const eventCounts = bridge.accessor(Performance.getEventCounts, null, .{ .exposed = .window });
-    pub const onresourcetimingbufferfull = bridge.accessor(Performance.getOnResourceTimingBufferFull, Performance.setOnResourceTimingBufferFull, .{});
+    pub const onresourcetimingbufferfull = EventTarget.handlerAccessor(Performance, "resourcetimingbufferfull");
 };
 
 pub const Entry = struct {

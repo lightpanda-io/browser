@@ -30,6 +30,8 @@ const EventManagerBase = @import("EventManagerBase.zig");
 const Blob = @import("webapi/Blob.zig");
 const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
+const EventTarget = @import("webapi/EventTarget.zig");
+const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
 const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
 const PointList = @import("webapi/svg/PointList.zig");
 const StringList = @import("webapi/svg/StringList.zig");
@@ -169,6 +171,9 @@ finalizer_callbacks: std.AutoHashMapUnmanaged(usize, js.FinalizerCallback) = .em
 // per-frame, but a listener belongs to the target, e.g. a Node, and the Node
 // can be reached and live beyond its Frame.
 event_listeners: EventManagerBase,
+
+// Every live WorkerGlobalScope of this page
+worker_scopes: std.DoublyLinkedList = .{},
 
 // Persisted v8 handles owned by this Page. Handles that outlive the Page are
 // reset on teardown; handles that can be released early are dropped
@@ -508,6 +513,17 @@ fn findPopupBy(self: *Page, comptime field: []const u8, id: u32) ?*Frame {
         }
     }
     return null;
+}
+
+// Called when an EventTarget is eagerly freed. Any listener it installed need
+// to be freed.
+pub fn removeTarget(self: *Page, target: *EventTarget) void {
+    self.event_listeners.removeTarget(target);
+    var node = self.worker_scopes.first;
+    while (node) |n| : (node = n.next) {
+        const wgs: *WorkerGlobalScope = @alignCast(@fieldParentPtr("_page_node", n));
+        wgs._event_manager.removeTarget(target);
+    }
 }
 
 // Snapshots the Execution of every same-origin global in this Page — the root

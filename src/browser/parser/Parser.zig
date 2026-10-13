@@ -665,8 +665,12 @@ fn _addAttrsIfMissingCallback(self: *Parser, node: *Node, attributes: h5e.Attrib
     while (attributes.next()) |attr| {
         const name = attr.name.local.slice();
         const value = attr.value.slice();
-        // putNew only adds if the attribute doesn't already exist
-        try attr_list.putNew(name, value, frame);
+        if (try attr_list.putNew(name, value, frame)) {
+            // attribute didn't previously exist
+            if (element.is(Element.Html)) |html| {
+                try html.eventHandlerAttributeChanged(name, element.getAttributeSafe(.wrap(name)), frame);
+            }
+        }
     }
     element.noteStyleAttribute();
 }

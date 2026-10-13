@@ -330,16 +330,17 @@ pub const List = struct {
     }
 
     // called form our parser, names already lower-cased
-    pub fn putNew(self: *List, name: []const u8, value: []const u8, frame: *Frame) !void {
+    /// Whether the attribute was added.
+    pub fn putNew(self: *List, name: []const u8, value: []const u8, frame: *Frame) !bool {
         if (try self.getEntry(.wrap(name), frame) != null) {
             // When parsing, if there are duplicate names, it isn't valid, and
             // the first is kept
-            return;
+            return false;
         }
         const len = self._len;
         if (len == std.math.maxInt(u16) or name.len > std.math.maxInt(u32) or value.len > std.math.maxInt(u32)) {
             // Bad input. Drop rather than fail the parse
-            return;
+            return false;
         }
 
         try self.ensureUnusedCapacity(1, frame);
@@ -348,6 +349,7 @@ pub const List = struct {
             try frame.dupeString(value),
         );
         self._len = len + 1;
+        return true;
     }
 
     pub fn delete(self: *List, name: String, element: *Element, frame: *Frame) !void {
