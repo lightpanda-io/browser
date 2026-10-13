@@ -1708,6 +1708,9 @@ pub const JsApi = struct {
     pub const defaultView = bridge.accessor(struct {
         fn defaultView(self: *const Document) ?*@import("Window.zig") {
             const frame = self._frame orelse return null;
+            if (frame.window._closed) {
+                return null;
+            }
             return frame.window;
         }
     }.defaultView, null, .{});

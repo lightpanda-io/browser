@@ -675,6 +675,14 @@ pub fn frameChildFrameCreated(bc: *CDP.BrowserContext, event: *const Notificatio
     }
 }
 
+pub fn frameChildFrameDetached(bc: *CDP.BrowserContext, event: *const Notification.FrameChildFrameDetached) !void {
+    const session_id = bc.session_id orelse return;
+    try bc.cdp.sendEvent("Page.frameDetached", .{
+        .frameId = &id.toFrameId(event.frame_id),
+        .reason = "remove",
+    }, .{ .session_id = session_id });
+}
+
 pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.FrameNavigated) !void {
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
@@ -1817,6 +1825,28 @@ test "cdp.frame: frameAttached" {
     try ctx.expectSentEvent("Page.frameAttached", .{
         .frameId = "FID-0000000002",
         .parentFrameId = "FID-0000000001",
+    }, .{ .session_id = "SID-X" });
+}
+
+test "cdp.frame: frameDetached" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-X", .url = "hi.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try ls.local.eval(
+        \\const f = document.createElement('iframe');
+        \\document.body.appendChild(f);
+        \\f.remove();
+    , null);
+
+    try ctx.expectSentEvent("Page.frameDetached", .{
+        .frameId = &id.toFrameId(frame._frame_id + 1),
+        .reason = "remove",
     }, .{ .session_id = "SID-X" });
 }
 

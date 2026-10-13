@@ -51,12 +51,15 @@ generation: u64,
 // considered done.
 blocking: u32,
 
+resets: u32,
+
 pub fn init(allocator: Allocator) Scheduler {
     return .{
         ._sequence = 0,
         .allocator = allocator,
         .generation = 0,
         .blocking = 0,
+        .resets = 0,
         .timed = Queue.initContext({}),
         .immediate = .{},
         .front = .{},
@@ -68,6 +71,7 @@ pub fn deinit(self: *Scheduler) void {
 }
 
 pub fn reset(self: *Scheduler) void {
+    self.resets +%= 1;
     self.finalizeTasks();
     self.blocking = 0;
     self.front.clear();
@@ -126,21 +130,32 @@ pub fn run(self: *Scheduler) !void {
 
         self.generation +%= 1;
 
+        const resets = self.resets;
         const repeat_in_ms = task.callback(task.ctx) catch |err| {
             log.debug(.scheduler, "task.callback", .{ .name = task.name, .err = err });
             continue;
         };
 
         if (repeat_in_ms) |ms| {
-            // Task cannot be repeated immediately, and they should know that
-            if (comptime lp.IS_DEBUG) {
-                std.debug.assert(ms != 0);
+            if (resets != self.resets) {
+                // The task reset its own scheduler. Since it was running,
+                // finalizeTasks skipped over it. (would also be true for a non-
+                // repeating task, but in that case we aren't responsible
+                // for finalizing it.)
+                if (task.finalizer) |func| {
+                    func(task.ctx);
+                }
+            } else {
+                // Task cannot be repeated immediately, and they should know that
+                if (comptime lp.IS_DEBUG) {
+                    std.debug.assert(ms != 0);
+                }
+                // A task that endlessly reschedules itself would keep the page
+                // alive forever, so repeats never block completion.
+                task.blocks_done = false;
+                task.key = self.nextKey(now + ms);
+                try self.timed.push(self.allocator, task);
             }
-            // A task that endlessly reschedules itself would keep the page
-            // alive forever, so repeats never block completion.
-            task.blocks_done = false;
-            task.key = self.nextKey(now + ms);
-            try self.timed.push(self.allocator, task);
         }
 
         now = lp.datetime.milliTimestamp(.boot);

@@ -642,52 +642,16 @@ pub fn close(self: *Window) void {
     // Per spec, close() is only honored on script-opened windows. That
     // maps exactly to membership in page.popups.
     const frame = self._frame;
-    const page = frame.page;
-
-    var popup_index: usize = 0;
-    while (popup_index < page.popups.items.len) : (popup_index += 1) {
-        if (page.popups.items[popup_index] == frame) {
-            break;
-        }
-    } else return;
-
-    self._closed = true;
-
-    // Any live Window holding us as its opener must drop the reference —
-    // our Frame is about to go away, and a stale _frame deref on their
-    // side would crash.
-    for (page.popups.items) |popup| {
-        if (popup.window._opener == self) {
-            popup.window._opener = null;
-        }
+    if (std.mem.findScalar(*Frame, frame.page.popups.items, frame) == null) {
+        return;
     }
-    if (page.frame.window._opener == self) {
-        page.frame.window._opener = null;
-    }
-
-    _ = page.popups.swapRemove(popup_index);
-
-    // Drop any pending queued navigation for this frame.
-    if (frame._queued_navigation != null) {
-        for (page.queued_navigation.items, 0..) |f, i| {
-            if (f == frame) {
-                _ = page.queued_navigation.swapRemove(i);
-                break;
-            }
-        }
-    }
-
-    page.session.idb.detachContext(frame.js);
-    frame.js.scheduler.reset();
-    frame.abortTransfers();
 
     // Do not teardown the frame. The Window can still be referenced in JS
     // (window.open(...) returns the window). It would be nice to be able to
     // free this now (just like it would be nice to be more pro-active about
-    // freeing workers and iframes), but, for now, we don't have the
-    // infrastructure to do this safely so doing it on page tear down is our
-    // only option.
-    page.closed_frames.append(page.arena, frame) catch @panic("OOM");
+    // freeing workers), but, for now, we don't have the infrastructure to do
+    // this safely so doing it on page tear down is our only option.
+    frame.discard() catch @panic("OOM");
 }
 
 pub fn focus(_: *Window) void {}
