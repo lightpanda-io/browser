@@ -27,6 +27,7 @@ const StyleManager = @import("../../StyleManager.zig");
 const reflection = @import("reflection.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
+const ElementInternals = @import("../ElementInternals.zig");
 const global_event_handlers = @import("../global_event_handlers.zig");
 
 const popover = @import("popover.zig");
@@ -137,6 +138,17 @@ pub fn upgradeConstruct(frame: *Frame) !*Element {
     }
     frame._upgrading_consumed = true;
     return node.is(Element) orelse return error.TypeError;
+}
+
+fn attachInternals(self: *HtmlElement, frame: *Frame) !*ElementInternals {
+    const custom = self.is(Custom) orelse return error.NotSupported;
+    const definition = custom._definition orelse return error.NotSupported;
+    if (definition.disable_internals or custom._internals != null) {
+        return error.NotSupported;
+    }
+    const internals = try ElementInternals.init(custom, frame);
+    custom._internals = internals;
+    return internals;
 }
 
 pub const Type = enum(u8) {
@@ -1866,6 +1878,7 @@ pub const JsApi = struct {
     }
     pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .ce_reactions = true });
     pub const click = bridge.function(HtmlElement.click, .{});
+    pub const attachInternals = bridge.function(HtmlElement.attachInternals, .{});
 
     pub const accessKey = bridge.accessor(HtmlElement.getAccessKey, HtmlElement.setAccessKey, .{ .ce_reactions = true });
     pub const autofocus = bridge.accessor(HtmlElement.getAutofocus, HtmlElement.setAutofocus, .{ .ce_reactions = true });

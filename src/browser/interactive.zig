@@ -404,7 +404,12 @@ pub fn isContentRole(role: []const u8) bool {
 
 // ARIA `role` is a space-separated fallback list; the first token wins.
 pub fn explicitRole(el: *Element) ?[]const u8 {
-    const attr = el.getAttributeInterned("role") orelse return null;
+    // ElementInternals.role is a custom element's default role.
+    const attr = el.getAttributeInterned("role") orelse blk: {
+        const custom = el.is(Element.Html.Custom) orelse return null;
+        const internals = custom._internals orelse return null;
+        break :blk internals.getAria("role") orelse return null;
+    };
     var it = std.mem.tokenizeAny(u8, attr, " \t\n\r");
     return it.next();
 }

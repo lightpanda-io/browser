@@ -28,6 +28,7 @@ const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 const collections = @import("../../collections.zig");
 
+const Custom = @import("Custom.zig");
 pub const Input = @import("Input.zig");
 pub const Button = @import("Button.zig");
 pub const Select = @import("Select.zig");
@@ -164,7 +165,7 @@ pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
         }
 
         // The submitter's form owner must be this form element.
-        const submitter_form = getFormOwner(s, frame);
+        const submitter_form = ownerOf(s, frame);
         if (submitter_form == null or submitter_form.? != self) return error.NotFound;
 
         break :blk s;
@@ -221,13 +222,21 @@ pub fn isSubmitButton(element: *Element) bool {
     return false;
 }
 
-/// Returns the form owner of a submittable element (Input or Button).
-fn getFormOwner(element: *Element, frame: *Frame) ?*Form {
-    if (element.is(Input)) |input| {
-        return input.getForm(frame);
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-owner
+pub fn ownerOf(element: *Element, frame: *Frame) ?*Form {
+    // A form attribute is authoritative, even when it names nothing. It
+    // resolves in the control's own tree (shadow root or document), not the
+    // calling realm's.
+    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
+        const form_element = frame.getElementByIdFromNode(element.asNode(), form_id) orelse return null;
+        return form_element.is(Form);
     }
-    if (element.is(Button)) |button| {
-        return button.getForm(frame);
+
+    var node = element.asNode()._parent;
+    while (node) |n| : (node = n._parent) {
+        if (n.is(Element.Html.Form)) |form| {
+            return form;
+        }
     }
     return null;
 }
@@ -287,6 +296,10 @@ fn checkElementValidity(element: *Element, frame: *Frame) !bool {
     if (element.is(Select)) |select| return select.checkValidity(frame);
     if (element.is(TextArea)) |textarea| return textarea.checkValidity(frame);
     if (element.is(Button)) |button| return button.checkValidity(frame);
+    if (element.is(Custom)) |custom| {
+        const internals = custom._internals orelse return true;
+        return internals.checkValidity(frame);
+    }
     return true;
 }
 

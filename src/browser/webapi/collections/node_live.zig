@@ -419,6 +419,7 @@ pub fn NodeLive(comptime mode: Mode) type {
             const html = el.subtype(Element.Html);
             return switch (html._type) {
                 .input, .button, .select, .textarea => true,
+                .custom => html.subtype(Element.Html.Custom).isFormAssociated(),
                 else => false,
             };
         }

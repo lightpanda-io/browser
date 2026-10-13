@@ -580,6 +580,9 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             if (el.is(Node.Element.Html.Form) != null or el.is(Node.Element.Html.FieldSet) != null) {
                 return !hasInvalidDescendant(node, frame);
             }
+            if (el.is(Node.Element.Html.Custom)) |custom| {
+                return isCustomValid(custom) orelse false;
+            }
             return false;
         },
         .invalid => {
@@ -594,6 +597,9 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             }
             if (el.is(Node.Element.Html.Form) != null or el.is(Node.Element.Html.FieldSet) != null) {
                 return hasInvalidDescendant(node, frame);
+            }
+            if (el.is(Node.Element.Html.Custom)) |custom| {
+                return isCustomValid(custom) == false;
             }
             return false;
         },
@@ -766,6 +772,19 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
     }
 }
 
+fn isCustomValid(custom: *Node.Element.Html.Custom) ?bool {
+    if (custom.isFormAssociated() == false) {
+        // matches neither:valid nor :invalid
+        return null;
+    }
+    if (custom.willValidate() == false) {
+        // matches neither:valid nor :invalid
+        return null;
+    }
+    const internals = custom._internals orelse return true;
+    return internals._flags.any() == false;
+}
+
 fn hasInvalidDescendant(parent: *Node, frame: *Frame) bool {
     var child = parent.firstChild();
     while (child) |c| {
@@ -778,6 +797,8 @@ fn hasInvalidDescendant(parent: *Node, frame: *Frame) bool {
                 if (invalid) return true;
             } else if (child_el.is(Node.Element.Html.Select)) |select| {
                 if (select.getRequired() and select.getValue(frame).len == 0) return true;
+            } else if (child_el.is(Node.Element.Html.Custom)) |custom| {
+                if (isCustomValid(custom) == false) return true;
             }
         }
         if (hasInvalidDescendant(c, frame)) return true;

@@ -169,27 +169,7 @@ fn getSelectionEnd(self: *const TextArea) u32 {
 }
 
 pub fn getForm(self: *TextArea, frame: *Frame) ?*Form {
-    const element = self.asElement();
-
-    // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        if (frame.getElementByIdFromNode(element.asNode(), form_id)) |form_element| {
-            return form_element.is(Form);
-        }
-        // form attribute present but invalid - no form owner
-        return null;
-    }
-
-    // No form attribute - traverse ancestors looking for a <form>
-    var node = element.asNode()._parent;
-    while (node) |n| {
-        if (n.is(Element.Html.Form)) |form| {
-            return form;
-        }
-        node = n._parent;
-    }
-
-    return null;
+    return Form.ownerOf(self.asElement(), frame);
 }
 
 fn getLabels(self: *TextArea, frame: *Frame) !js.Array {
