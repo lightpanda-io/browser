@@ -562,7 +562,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
 // Runtime.exceptionThrown.
 pub fn notifyExceptionThrown(err: js.Value, location: js.Value.ErrorLocation, kind: @FieldType(Notification.ExceptionThrown, "kind"), frame: *Frame) void {
     frame._session.notification.dispatch(.exception_thrown, &.{
-        .page_id = frame.page.frame._frame_id,
+        .frame_id = frame._frame_id,
         .timestamp = lp.datetime.timestamp(.boot),
         .value = err,
         .location = location,
@@ -1334,7 +1334,7 @@ pub const JsApi = struct {
         fn alert(_: *const Window, message: ?[]const u8, frame: *Frame) void {
             var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
-                .page_id = frame.page.frame._frame_id,
+                .frame_id = frame._frame_id,
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "alert",
@@ -1348,7 +1348,7 @@ pub const JsApi = struct {
         fn confirm(_: *const Window, message: ?[]const u8, frame: *Frame) bool {
             var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
-                .page_id = frame.page.frame._frame_id,
+                .frame_id = frame._frame_id,
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "confirm",
@@ -1361,7 +1361,7 @@ pub const JsApi = struct {
         fn prompt(_: *const Window, message: ?[]const u8, default_text: ?[]const u8, frame: *Frame) ?[]const u8 {
             var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
-                .page_id = frame.page.frame._frame_id,
+                .frame_id = frame._frame_id,
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "prompt",
