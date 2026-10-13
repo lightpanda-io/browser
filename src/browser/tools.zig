@@ -580,7 +580,8 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "questions": { "type": "string", "description": "JSON string: array of categories, or object of questions (`{}` for every preset)" },
-                    \\    "selector": { "type": "string", "description": "Optional CSS selector to classify a specific element subtree instead of the full page" }
+                    \\    "selector": { "type": "string", "description": "Optional CSS selector to classify a specific element subtree instead of the full page" },
+                    \\    "presets": { "type": "boolean", "description": "Also ask every preset in the same call, each answered under its own name beside the questions. Needs the object form." }
                     \\  },
                     \\  "required": ["questions"]
                     \\}
@@ -2006,12 +2007,16 @@ fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     const Params = struct {
         questions: std.json.Value,
         selector: ?[]const u8 = null,
+        presets: bool = false,
     };
     const args = try parseArgs(Params, arena, arguments);
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
 
     const node = try resolveScope(session, registry, page, args.selector, null);
-    const prepared = lp.classify.prepareQuestions(arena, args.questions) catch |err| switch (err) {
+    const prepared = prepare: {
+        const asked = lp.classify.prepareQuestions(arena, args.questions) catch |err| break :prepare err;
+        break :prepare if (args.presets) lp.classify.addPresets(arena, asked) else asked;
+    } catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return .{ .text = try std.fmt.allocPrint(arena, "classify: invalid questions: {s}", .{@errorName(err)}), .is_error = true },
     };
