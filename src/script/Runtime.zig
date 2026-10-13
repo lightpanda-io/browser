@@ -869,15 +869,14 @@ fn classifyArgs(
         .string, .array, .object => questions,
         else => return error.InvalidArguments,
     });
-    const selector = switch (options orelse return args) {
-        .string => |s| s,
-        .object => |opts| if (opts.get("selector")) |s| switch (s) {
-            .string => |str| str,
-            else => return args,
-        } else return args,
+    switch (options orelse return args) {
+        .string => |selector| try args.object.put(arena, "selector", .{ .string = selector }),
+        .object => |opts| {
+            if (opts.get("selector")) |s| if (s == .string) try args.object.put(arena, "selector", s);
+            if (opts.get("presets")) |p| if (p == .bool) try args.object.put(arena, "presets", p);
+        },
         else => return error.InvalidArguments,
-    };
-    try args.object.put(arena, "selector", .{ .string = selector });
+    }
     return args;
 }
 
@@ -1146,6 +1145,10 @@ test "agent script runtime: page.classify executes presets, categories and struc
         \\const details = await page.classify({ page_type: { question: "What is it?", options: ["product", "catalog"] } });
         \\if (details.page_type.choice !== "product") throw new Error("expected details.page_type.choice === 'product'");
         \\if (details.page_type.confidence !== 0.9) throw new Error("expected details.page_type.confidence === 0.9");
+        \\
+        \\const both = await page.classify({ page_type: { question: "What is it?", options: ["product", "catalog"] } }, { presets: true });
+        \\if (both.page_type.choice !== "product") throw new Error("expected page_type beside the presets");
+        \\if (both.isBlocked !== 0.95) throw new Error("expected isBlocked among the presets, got " + both.isBlocked);
         \\
         \\const scored = await page.classify({ completeness: { question: "How complete?", levels: ["empty", "partial", "full"] } });
         \\if (scored.completeness.level !== "full") throw new Error("expected level === 'full', got " + scored.completeness.level);
