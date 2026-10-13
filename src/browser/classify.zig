@@ -201,12 +201,26 @@ fn stringChoices(arena: std.mem.Allocator, items: []const std.json.Value) Prepar
 
 /// Every preset, keyed by its name: what an empty questions object asks.
 fn preparePresets(arena: std.mem.Allocator) error{OutOfMemory}!PreparedQuestions {
+    return addPresets(arena, .{ .questions = .{}, .kind = .questions_object }) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => unreachable,
+    };
+}
+
+/// `prepared` plus every preset it does not already ask, so one call answers
+/// both: a caller deciding whether a page is worth reading skips a second
+/// round trip for its own questions. Presets need the object form, since a
+/// category array answers with one bare choice.
+pub fn addPresets(arena: std.mem.Allocator, prepared: PreparedQuestions) PrepareError!PreparedQuestions {
+    if (prepared.kind != .questions_object) return error.InvalidQuestionFormat;
     const presets = std.enums.values(Preset);
-    const entries = try arena.alloc(zenai.typesafe.QuestionEntry, presets.len);
-    for (presets, entries) |preset, *entry| {
-        entry.* = .{ .key = @tagName(preset), .value = .noulText(preset.description()) };
+    var entries: std.ArrayList(zenai.typesafe.QuestionEntry) = try .initCapacity(arena, prepared.questions.count() + presets.len);
+    entries.appendSliceAssumeCapacity(prepared.questions.entries);
+    for (presets) |preset| {
+        if (prepared.questions.has(@tagName(preset))) continue;
+        entries.appendAssumeCapacity(.{ .key = @tagName(preset), .value = .noulText(preset.description()) });
     }
-    return .{ .questions = .init(entries), .kind = .questions_object };
+    return .{ .questions = .init(entries.items), .kind = .questions_object };
 }
 
 /// Most of the page `buildState` sends, in bytes.
@@ -337,6 +351,23 @@ test "browser.classify: prepareQuestions empty object asks every preset" {
         try testing.expect(entry.value == .noul);
         try testing.expect(prepared.questions.has(@tagName(preset)));
     }
+}
+
+test "browser.classify: addPresets asks every preset alongside the questions" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const prepared = try prepareQuestions(arena.allocator(), .{ .string = "{\"kind\": [\"a\", \"b\"], \"isPaywall\": \"Is it paywalled?\"}" });
+    const with = try addPresets(arena.allocator(), prepared);
+    const presets = std.enums.values(Preset);
+    // isPaywall is already asked, in the caller's own words.
+    try testing.expectEqual(2 + presets.len - 1, with.questions.count());
+    try testing.expect(with.questions.has("kind"));
+    for (presets) |preset| try testing.expect(with.questions.has(@tagName(preset)));
+    try std.testing.expectEqualStrings("Is it paywalled?", with.questions.get("isPaywall").?.noul.instructions.text);
+
+    const categories = try prepareQuestions(arena.allocator(), .{ .string = "[\"a\", \"b\"]" });
+    try testing.expectError(error.InvalidQuestionFormat, addPresets(arena.allocator(), categories));
 }
 
 test "browser.classify: prepareQuestions rejects an empty array" {
