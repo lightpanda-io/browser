@@ -287,8 +287,7 @@ pub const RequestServedFromCache = struct {
 };
 
 pub const JavascriptDialogOpening = struct {
-    // Root frame id of the Page the dialog opened in.
-    page_id: u32,
+    frame_id: u32,
     url: [:0]const u8,
     message: []const u8,
     dialog_type: []const u8,
@@ -371,9 +370,8 @@ pub const ConsoleMessageType = enum {
 };
 
 pub const ConsoleMessage = struct {
-    // Root frame id of the Page the message comes from (a worker's is its
-    // owner's).
-    page_id: u32,
+    // The root frame of the message's page (a worker's is its owner's).
+    frame_id: u32,
     timestamp: u64,
     source: enum {
         xml,
@@ -399,8 +397,7 @@ pub const ConsoleMessage = struct {
 // listener: what Chrome logs as "Uncaught …" and sends as
 // Runtime.exceptionThrown.
 pub const ExceptionThrown = struct {
-    // Root frame id of the Page the exception was reported to.
-    page_id: u32,
+    frame_id: u32,
     timestamp: u64,
     value: js.Value,
     location: js.Value.ErrorLocation,

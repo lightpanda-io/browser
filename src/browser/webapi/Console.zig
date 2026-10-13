@@ -35,10 +35,10 @@ fn dispatchConsoleMessage(values: []js.Value, console_type: Notification.Console
     const notification = exec.session.notification;
     const ts = lp.datetime.timestamp(.boot);
 
-    const page_id = exec.page.frame._frame_id;
+    const frame_id = exec.page.frame._frame_id;
 
     notification.dispatch(.console_message, &.{
-        .page_id = page_id,
+        .frame_id = frame_id,
         .source = .javascript,
         .type = console_type,
         .values = values,
@@ -46,7 +46,7 @@ fn dispatchConsoleMessage(values: []js.Value, console_type: Notification.Console
     });
 
     notification.dispatch(.runtime_console_message, &.{
-        .page_id = page_id,
+        .frame_id = frame_id,
         .source = .javascript,
         .type = console_type,
         .values = values,

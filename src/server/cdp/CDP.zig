@@ -676,7 +676,7 @@ pub const BrowserContext = struct {
 
     fn onJavascriptDialogOpening(ctx: *anyopaque, msg: *const Notification.JavascriptDialogOpening) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        const target = self.findTargetByFrameId(msg.page_id) orelse return;
+        const target = self.targetForFrame(msg.frame_id) orelse return;
         return @import("domains/page.zig").javascriptDialogOpening(target, msg);
     }
 

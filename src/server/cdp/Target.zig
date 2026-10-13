@@ -719,7 +719,7 @@ fn onHttpRequestServedFromCache(ctx: *anyopaque, msg: *const Notification.Reques
 
 fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
     const self: *Target = @ptrCast(@alignCast(ctx));
-    if (self.frame_id != msg.page_id) return;
+    if (!self.ownsFrame(msg.frame_id)) return;
     const arena = self.bc.acquireNotificationArena();
     defer self.bc.releaseNotificationArena();
     return @import("domains/console.zig").consoleMessage(arena, self, msg);
@@ -727,7 +727,7 @@ fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !v
 
 fn onRuntimeConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
     const self: *Target = @ptrCast(@alignCast(ctx));
-    if (self.frame_id != msg.page_id) return;
+    if (!self.ownsFrame(msg.frame_id)) return;
     const arena = self.bc.acquireNotificationArena();
     defer self.bc.releaseNotificationArena();
     return @import("domains/runtime.zig").consoleMessage(arena, self, msg);
@@ -735,7 +735,7 @@ fn onRuntimeConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMess
 
 fn onExceptionThrown(ctx: *anyopaque, msg: *const Notification.ExceptionThrown) !void {
     const self: *Target = @ptrCast(@alignCast(ctx));
-    if (self.frame_id != msg.page_id) return;
+    if (!self.ownsFrame(msg.frame_id)) return;
     const arena = self.bc.acquireNotificationArena();
     defer self.bc.releaseNotificationArena();
     return @import("domains/runtime.zig").exceptionThrown(arena, self, msg);
