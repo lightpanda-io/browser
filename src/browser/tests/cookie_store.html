@@ -321,7 +321,11 @@
 <script id=change-event-from-document-cookie type=module>
   const state = await testing.async();
   const events = [];
-  const handler = (e) => events.push(e);
+  const handler = (e) => {
+    if ([...e.changed, ...e.deleted].some((c) => c.name === 'ev-from-doc')) {
+      events.push(e);
+    }
+  };
   cookieStore.addEventListener('change', handler);
 
   document.cookie = 'ev-from-doc=v1; path=/';

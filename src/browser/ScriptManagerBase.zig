@@ -969,7 +969,10 @@ pub const Script = struct {
 
         defer if (frame.js.call_depth == 0) {
             local.runMacrotasks(); // also runs microtasks
-            _ = frame.js.scheduler.run() catch |err| {
+            // Only the tasks that are ready now: a chain of 0ms tasks (e.g.
+            // React's scheduler) would otherwise hold the parser up after every
+            // script.
+            _ = frame.js.scheduler.runQueued() catch |err| {
                 log.err(.frame, "scheduler", .{ .err = err });
             };
         };

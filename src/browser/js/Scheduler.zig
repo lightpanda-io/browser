@@ -115,11 +115,26 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
 }
 
 pub fn run(self: *Scheduler) !void {
+    return self.runTasks(.all);
+}
+
+pub fn runQueued(self: *Scheduler) !void {
+    return self.runTasks(.queued);
+}
+
+const RunMode = enum { all, queued };
+
+fn runTasks(self: *Scheduler, comptime mode: RunMode) !void {
     const start = lp.datetime.milliTimestamp(.boot);
     var now = start;
 
-    while (self.popReady(now)) |task_| {
-        var task = task_;
+    var budget: usize = switch (mode) {
+        .all => std.math.maxInt(usize),
+        .queued => self.readyCount(start),
+    };
+
+    while (budget > 0) : (budget -= 1) {
+        var task = self.popReady(if (mode == .queued) start else now) orelse return;
         if (comptime lp.IS_DEBUG) {
             log.debug(.scheduler, "scheduler.runTask", .{ .name = task.name });
         }
@@ -148,6 +163,17 @@ pub fn run(self: *Scheduler) !void {
             return;
         }
     }
+}
+
+fn readyCount(self: *Scheduler, now: u64) usize {
+    var count = self.front.pending().len + self.immediate.pending().len;
+    var it = self.timed.iterator();
+    while (it.next()) |task| {
+        if (task.runAt() <= now) {
+            count += 1;
+        }
+    }
+    return count;
 }
 
 pub fn hasReadyTasks(self: *Scheduler) bool {
@@ -329,6 +355,38 @@ test "Scheduler: due timed tasks run before newer immediates" {
     try testing.expectEqualSlices(u8, &.{ 1, 2 }, ran.items);
 }
 
+test "Scheduler: runQueued runs as many tasks as were ready" {
+    var s = Scheduler.init(testing.arena_allocator);
+    var ran: std.ArrayList(u8) = .empty;
+    var chain: ChainTask = .{ .id = 1, .ran = &ran, .scheduler = &s, .links = 3 };
+    var t2: TestTask = .{ .id = 2, .ran = &ran };
+
+    try s.add(&chain, ChainTask.run, 0, .{});
+    try s.add(&t2, TestTask.run, 0, .{});
+
+    try s.runQueued();
+    try testing.expectEqualSlices(u8, &.{ 1, 2 }, ran.items);
+
+    try s.run();
+    try testing.expectEqualSlices(u8, &.{ 1, 2, 1, 1 }, ran.items);
+}
+
+test "Scheduler: runQueued counts a task that goes first" {
+    var s = Scheduler.init(testing.arena_allocator);
+    var ran: std.ArrayList(u8) = .empty;
+    var yielding: ChainTask = .{ .id = 1, .ran = &ran, .scheduler = &s, .links = 2, .next_front = true };
+    var t2: TestTask = .{ .id = 2, .ran = &ran };
+
+    try s.add(&yielding, ChainTask.run, 0, .{});
+    try s.add(&t2, TestTask.run, 0, .{});
+
+    try s.runQueued();
+    try testing.expectEqualSlices(u8, &.{ 1, 1 }, ran.items);
+
+    try s.runQueued();
+    try testing.expectEqualSlices(u8, &.{ 1, 1, 2 }, ran.items);
+}
+
 test "Scheduler: blocksCompletion" {
     var s = Scheduler.init(testing.arena_allocator);
     var ran: std.ArrayList(u8) = .empty;
@@ -378,5 +436,23 @@ const TestTask = struct {
         try self.ran.append(testing.arena_allocator, self.id);
         defer self.repeat = null;
         return self.repeat;
+    }
+};
+
+const ChainTask = struct {
+    id: u8,
+    ran: *std.ArrayList(u8),
+    scheduler: *Scheduler,
+    links: u8,
+    next_front: bool = false,
+
+    fn run(ptr: *anyopaque) anyerror!?u32 {
+        const self: *ChainTask = @ptrCast(@alignCast(ptr));
+        try self.ran.append(testing.arena_allocator, self.id);
+        if (self.links > 1) {
+            self.links -= 1;
+            try self.scheduler.add(self, ChainTask.run, 0, .{ .front = self.next_front });
+        }
+        return null;
     }
 };

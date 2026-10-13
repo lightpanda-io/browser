@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<script src="../../../testing.js"></script>
+
+<script id=task_chain_start>
+  window.hops = 0;
+  window.timer_ran = false;
+  const channel = new MessageChannel();
+  channel.port1.onmessage = () => {
+    window.hops += 1;
+    if (!window.stop_chain) {
+      channel.port2.postMessage(null);
+    }
+  };
+  channel.port2.postMessage(null);
+  setTimeout(() => { window.timer_ran = true; }, 0);
+  testing.expectEqual(0, window.hops);
+</script>
+
+<script id=ready_tasks_ran>
+  testing.expectEqual(1, window.hops);
+  testing.expectTrue(window.timer_ran);
+</script>
+
+<script id=one_hop_per_script>
+  testing.expectEqual(2, window.hops);
+</script>
+
+<script id=task_chain_stop>
+  testing.expectEqual(3, window.hops);
+  window.stop_chain = true;
+</script>
