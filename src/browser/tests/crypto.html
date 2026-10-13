@@ -125,6 +125,54 @@
   });
 </script>
 
+<script id=rsa-oaep-roundtrip type=module>
+  const state = await testing.async();
+  const { privateKey, publicKey } = await crypto.subtle.generateKey(
+    {
+      name: "RSA-OAEP",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["encrypt", "decrypt"],
+  );
+
+  const plaintext = new TextEncoder().encode("lightpanda rsa-oaep");
+  const ciphertext = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, plaintext);
+  const decrypted = await crypto.subtle.decrypt({ name: "RSA-OAEP" }, privateKey, ciphertext);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, privateKey instanceof CryptoKey);
+    testing.expectEqual(true, publicKey instanceof CryptoKey);
+    testing.expectEqual(2048, publicKey.algorithm.modulusLength);
+    testing.expectEqual(256, ciphertext.byteLength);
+    testing.expectEqual("lightpanda rsa-oaep", new TextDecoder().decode(decrypted));
+  });
+</script>
+
+<script id=rsa-oaep-import type=module>
+  const state = await testing.async();
+  const fromB64 = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  // A throwaway 2048-bit RSA key pair (spki public + pkcs8 private) for the
+  // import path: encrypt with the imported public key, decrypt with the private.
+  const spki = fromB64("MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2J6+FUn6SF2o4+6vj6jbsGfumBrlZIS7OTRmw3sJOzvinrDRQ3hf+TmCgBSHcGbohHTItgB8mfM1MMbsIggYjbNSs+bRhVmbtMFS3GxBsrNt+YvaEMF0C3sdYi6+gWZqJYrfEF/a8HT2+IZQJ5B7PsIOoVPWlDkaLQBPlQDgK0JJQJ+1mOI8dXHz9PaPXB1v9/w3nUpRV6bdy9Iui453XnoY8ajIKy0bzk12160PxZM4vAvrvdmTY12BwkGsim+7iqNlLjU6fJKb4D0766YfroGDPhxd3sDqxLteQeA64oIcqeQzDq89843DS1VeGwv+nrwNHCy3cAmLVaytk4vECQIDAQAB");
+  const pkcs8 = fromB64("MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDYnr4VSfpIXajj7q+PqNuwZ+6YGuVkhLs5NGbDewk7O+KesNFDeF/5OYKAFIdwZuiEdMi2AHyZ8zUwxuwiCBiNs1Kz5tGFWZu0wVLcbEGys235i9oQwXQLex1iLr6BZmolit8QX9rwdPb4hlAnkHs+wg6hU9aUORotAE+VAOArQklAn7WY4jx1cfP09o9cHW/3/DedSlFXpt3L0i6LjndeehjxqMgrLRvOTXbXrQ/Fkzi8C+u92ZNjXYHCQayKb7uKo2UuNTp8kpvgPTvrph+ugYM+HF3ewOrEu15B4Drighyp5DMOrz3zjcNLVV4bC/6evA0cLLdwCYtVrK2Ti8QJAgMBAAECggEAHW4z1SCf6IURFSawo4wFjQoR2IiO8gE2jqcX7ycgMfQI7haH1+ra3zl5CX3AiPzySkyzmEaopyHr8ByWqGkBLP9YFSke/kcWaJB7eYcbxfOq1WSy0+P0qDqp21UOfPY1JbSgadEcJd8+TrWw3i87D2O+KR0C4lB/xe1s4omj6zxuSMOL3igRtu+pSem3e5Wb/lid2OIAskxgt+RiyRSPsajBunhah4WxhY0NQIt5WK0kiNfpd8vz3qVTnF8t5oPPWLvdHIApDHLOkbeX+0XA5XeJojdPgN/vdInuXYoFp/VF6Jc+nAgCOEDI/+JPQ+Jpoy1FJoB5fZimivPvGbXrIQKBgQDup6Y/+zRYIRCN8VpcUBuvQHLbE17UDTrVrSh8fqPJpAWvNPrYZb+tG23cuPec4FIGoadjwiuFgsXs9lXv0qPxcgTyR6l0RzrDWNmt8HvPRrgEIJEwv+BT+heRUecaXHSvG1vCam06MkjgFLvnCJ7hEVCNf4+irhLCNV+J9TnZ4wKBgQDoXR6WdVCDEHz+PBsfzcINbRxyWLPIJmULcngqpeQ3UyrxWXxXR2BKuVrOZq5Dn9XcmP/zZ9u4eCI2Nst4eLlzQIxXDxsj62Y/5yAc9tw4nzTvxPaKf7orBMrRjYSmj9vOrpYIlVjV+cPRBfjxfRonSDf3kWlUS62GFweeDQo+IwKBgQDiMJ8PEOVhiaUJAvEjgQFcLnctT8SWshtLHZy7scNGf2Cr2EjPBFCQnuiXQ+/bDXhwtJHTqNpa5cD1f9ufO0MKuYgaoPToMgJt1y4o/z45C8uojb1OOO1Cakwf/UJN58bnl8R2FSyE9dfAGaalp7P9mM2B7p6SDu3Uh4WPWY6FBQKBgHINgv4HB0XNygxgJFAwBpfgfp4Bu/z6G47K2QDV/HbLc8CTU9zjQ/hpkpDNBaxbv/VPhBJNYCPjk6dYrfasCxrvC/OPjprK6J1lLPYKlX2VZ75oxzqkBxUmfQbul7XJ1vJT74C3Dau5tMvcSpz98uBlKlNyJGkj3EB8/VguvmBRAoGBAJFSOHauuxGtvw64JnMEkUL9vnjuryyH6CcXgSP6SMY58O2KL/nMEGeAYguwrkl5CdoN2zrWr8/I8cr1UrkKHtzsQHrCYlA6LaZaHDUdxCEIyarO7z18ZXzi32HRol1UFjpQTVg2N9t9rGqC2Hg+hg2D0kGJCwf/t8Uydc2tiTh/");
+  const publicKey = await crypto.subtle.importKey("spki", spki, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
+  const privateKey = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["decrypt"]);
+
+  const message = new TextEncoder().encode("imported key path");
+  const ciphertext = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, message);
+  const decrypted = await crypto.subtle.decrypt({ name: "RSA-OAEP" }, privateKey, ciphertext);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(2048, publicKey.algorithm.modulusLength);
+    testing.expectEqual("imported key path", new TextDecoder().decode(decrypted));
+  });
+</script>
+
 <script id=aes-ctr-counter-wrap type=module>
   const state = await testing.async();
   // AES-CTR must increment only the rightmost `length` bits of the counter

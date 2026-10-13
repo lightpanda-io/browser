@@ -61,6 +61,7 @@ pub const Algorithm = struct {
     name: []const u8,
     hash: ?[]const u8 = null,
     named_curve: ?[]const u8 = null,
+    modulus_length: ?u32 = null,
 };
 
 /// https://developer.mozilla.org/en-US/docs/Web/API/CryptoKeyPair
@@ -184,6 +185,7 @@ const AlgorithmReport = union(enum) {
     keyed: struct { name: []const u8, length: u32 },
     hmac: struct { name: []const u8, length: u32, hash: struct { name: []const u8 } },
     ec: struct { name: []const u8, namedCurve: []const u8 },
+    rsa: struct { name: []const u8, modulusLength: u32, hash: struct { name: []const u8 } },
     named: struct { name: []const u8 },
 };
 
@@ -199,6 +201,11 @@ pub fn getAlgorithm(self: *const CryptoKey) AlgorithmReport {
         .ec => .{ .ec = .{
             .name = self._algorithm.name,
             .namedCurve = self._algorithm.named_curve orelse "",
+        } },
+        .rsa => .{ .rsa = .{
+            .name = self._algorithm.name,
+            .modulusLength = self._algorithm.modulus_length orelse 0,
+            .hash = .{ .name = self._algorithm.hash orelse "" },
         } },
         else => .{ .named = .{ .name = self._algorithm.name } },
     };
