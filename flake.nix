@@ -20,6 +20,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    crane = {
+      url = "github:ipetkov/crane";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -29,6 +34,7 @@
       zig-flake,
       zls,
       fenix,
+      crane,
       flake-utils,
       ...
     }:
@@ -47,6 +53,7 @@
         };
 
         rustToolchain = fenix.packages.${system}.stable.toolchain;
+        craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
         # We need crtbeginS.o for building.
         crtFiles = pkgs.runCommand "crt-files" { } ''
@@ -82,9 +89,18 @@
             ];
         };
 
+        lightpanda = pkgs.callPackage ./nix/package.nix {
+          inherit rustToolchain;
+        };
+
       in
       {
         devShells.default = fhs.env;
+
+        packages = {
+          inherit lightpanda;
+          default = lightpanda;
+        };
       }
     );
 }
