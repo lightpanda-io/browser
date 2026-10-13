@@ -2611,7 +2611,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     const element = link.asElement();
 
     // HttpClient will take out a larger arena for the body, if necessary
-    const arena = try session.getArena(.small, "Frame.loadExternalStylesheet");
+    const arena = try session.getArena(.large, "Frame.loadExternalStylesheet");
     defer arena.release();
 
     const resolved = URL.resolve(arena.allocator(), self.base(), href, .{ .encoding = self.charset }) catch |err| {
