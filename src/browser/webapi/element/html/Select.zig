@@ -222,6 +222,24 @@ fn deselectOthers(self: *const Select, keep: *const Option) void {
     }
 }
 
+pub fn reset(self: *Select, frame: *Frame) void {
+    var last_selected: ?*Option = null;
+    var it = OptionIterator.init(self);
+    while (it.next()) |option| {
+        option._selected = option.asElement().hasAttributeInterned("selected");
+        if (option._selected) {
+            last_selected = option;
+        }
+    }
+    if (self.asElement().hasAttributeInterned("multiple") == false) {
+        if (last_selected) |keep| {
+            self.deselectOthers(keep);
+        }
+    }
+    self.resetToDefaultSelection();
+    frame.domChanged();
+}
+
 // HTML's "ask for a reset". Every path that selects an option in a
 // non-multiple select deselects the others, so this only has to handle a
 // menu list left with nothing selected.
