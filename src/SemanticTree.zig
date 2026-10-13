@@ -100,6 +100,10 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
 /// Past `max_bytes`, lines are kept by priority, records round-robin, and
 /// dropped lines are counted in `[more]` markers.
 pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
+    const max_bytes = self.max_bytes orelse {
+        var visitor: TextVisitor = .{ .writer = writer };
+        return self.visitAll(&visitor);
+    };
     var collector: LineCollector = .{
         .arena = self.arena,
         .text = .init(self.arena),
@@ -107,11 +111,27 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
     };
     try self.visitAll(&collector);
     const text = collector.text.written();
-    const max_bytes = self.max_bytes orelse return writer.writeAll(text);
     if (text.len <= max_bytes) return writer.writeAll(text);
     const budget: Budget = Budget.init(self.arena, text, collector.lines.items, max_bytes) catch return error.WriteFailed;
     try budget.render(self.arena, writer);
 }
+
+const TextVisitor = struct {
+    writer: *std.Io.Writer,
+    depth: u32 = 0,
+
+    pub fn visit(self: *TextVisitor, node: *Node, data: *NodeData) !bool {
+        try self.writer.splatByteAll(' ', self.depth);
+        const line = try writeTextLine(self.writer, node, data);
+        try self.writer.writeByte('\n');
+        self.depth += 1;
+        return line.walk_children;
+    }
+
+    pub fn leave(self: *TextVisitor) !void {
+        self.depth -= 1;
+    }
+};
 
 const Priority = enum { critical, named, text };
 
