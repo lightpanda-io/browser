@@ -32,6 +32,7 @@ const ElementInternals = @import("../../ElementInternals.zig");
 const CustomElementDefinition = @import("../../CustomElementDefinition.zig");
 
 const HtmlElement = @import("../Html.zig");
+const Form = @import("Form.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -48,6 +49,8 @@ _upgrade_failed: bool = false, // a failed upgrade is never retried
 _upgrade_in_progress: bool = false,
 _upgrade_candidate: bool = false, // listed in a frame's _undefined_custom_elements
 _internals: ?*ElementInternals = null,
+_form_owner: ?*Form = null, // form-associated element only
+_form_disabled: bool = false, // form-associated element only
 
 pub fn asElement(self: *Custom) *Element {
     return Factory.protoOf(self).asElement();
@@ -78,6 +81,110 @@ pub fn willValidate(self: *Custom) bool {
         }
     }
     return true;
+}
+
+pub fn registerFormAssociated(self: *Custom, frame: *Frame) !void {
+    // @frame.arena
+    try frame._form_associated.append(frame.page_arena, self);
+}
+
+pub fn formStateChanged(self: *Custom, frame: *Frame) void {
+    if (self.isFormAssociated() == false or self._upgrade_in_progress) {
+        return;
+    }
+    const element = self.asElement();
+
+    const owner = Form.ownerOf(element, frame);
+    if (owner != self._form_owner) {
+        // new owner
+        self._form_owner = owner;
+        frame._ce_reactions.enqueueFormAssociated(frame, self, owner) catch |err| {
+            log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
+        };
+    }
+
+    const disabled = element.isDisabled();
+    if (disabled != self._form_disabled) {
+        // disabled state changed
+        self._form_disabled = disabled;
+        frame._ce_reactions.enqueueFormDisabled(frame, self, disabled) catch |err| {
+            log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
+        };
+    }
+}
+
+// `child` was inserted or removed from `parent`. A form-associated element
+// might have changed (e.g. maybe it moved under a disabled fieldset).
+// Only called when the frame has form-associated elements.
+pub fn formTreeChanged(parent: *Node, child: *Node, frame: *Frame) void {
+    // a non-element can't be a container for our custom element
+    const el = child.is(Element) orelse return;
+
+    var has_form = false;
+    if (child.firstChild() == null) {
+        // common case since the parser inserts every element before its children
+        if (el.is(Custom)) |custom| {
+            custom.formStateChanged(frame);
+        } else {
+            has_form = el.getTag() == .form;
+        }
+    } else {
+        var tw = TreeWalker.Full.Elements.init(child, .{});
+        while (tw.next()) |descendant| {
+            if (descendant.is(Custom)) |custom| {
+                custom.formStateChanged(frame);
+            } else if (descendant.getTag() == .form) {
+                has_form = true;
+            }
+        }
+    }
+
+    if (has_form) {
+        formAttributeTargetsChanged(frame);
+    }
+
+    if (el.getTag() == .legend) {
+        const fieldset = parent.is(Element) orelse return;
+        if (fieldset.getTag() == .fieldset) {
+            // legends moving around in a fieldset can alter the state of the form
+            formStateChangedInSubtree(fieldset.asNode(), frame);
+        }
+    }
+}
+
+pub fn formAttributeChanged(element: *Element, name: String, frame: *Frame) void {
+    if (name.eql(comptime .wrap("disabled"))) {
+        if (element.getTag() == .fieldset) {
+            formStateChangedInSubtree(element.asNode(), frame);
+        } else if (element.is(Custom)) |custom| {
+            custom.formStateChanged(frame);
+        }
+    } else if (name.eql(comptime .wrap("form"))) {
+        if (element.is(Custom)) |custom| {
+            custom.formStateChanged(frame);
+        }
+    } else if (name.eql(comptime .wrap("id"))) {
+        formAttributeTargetsChanged(frame);
+    }
+}
+
+fn formStateChangedInSubtree(root: *Node, frame: *Frame) void {
+    var tw = TreeWalker.FullExcludeSelf.Elements.init(root, .{});
+    while (tw.next()) |el| {
+        if (el.is(Custom)) |custom| {
+            custom.formStateChanged(frame);
+        }
+    }
+}
+
+// An id changed or a form came or went: a form attribute can now resolve to
+// a different form.
+fn formAttributeTargetsChanged(frame: *Frame) void {
+    for (frame._form_associated.items) |custom| {
+        if (custom.asElement().hasAttributeSafe(comptime .wrap("form"))) {
+            custom.formStateChanged(frame);
+        }
+    }
 }
 
 // Reactions are queued via enqueue* and fired via fireReaction at the outer
@@ -288,6 +395,9 @@ pub fn fireReaction(reaction: Reaction, frame: *Frame) void {
             }
         },
         .move => |el| invokeCallbackOnElement(el, "move", .{}, frame),
+        .form_associated => |f| f.element.invokeCallback("formAssociatedCallback", .{f.form}, frame),
+        .form_disabled => |f| f.element.invokeCallback("formDisabledCallback", .{f.disabled}, frame),
+        .form_reset => |custom| custom.invokeCallback("formResetCallback", .{}, frame),
     }
 }
 

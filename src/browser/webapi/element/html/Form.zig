@@ -190,6 +190,8 @@ pub fn reset(self: *Form, frame: *Frame) !void {
             textarea.reset();
         } else if (element.is(Output)) |output| {
             try output.reset(frame);
+        } else if (element.is(Custom)) |custom| {
+            try frame._ce_reactions.enqueueFormReset(frame, custom);
         }
     }
 }
