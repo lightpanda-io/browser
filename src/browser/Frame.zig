@@ -4105,7 +4105,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         };
     } else if (URL.isJavascriptUrl(action) == false) {
         // A javascript: action is navigated to as is, without the entries.
-        action = try URL.concatQueryString(arena.allocator(), action, buf.written());
+        action = try URL.setQuery(arena.allocator(), action, buf.written());
     }
 
     // Opened only once the submission goes ahead, so an aborted one leaves

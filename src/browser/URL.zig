@@ -624,28 +624,11 @@ fn buildUrlWithUserInfo(
     }
 }
 
-pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []const u8) ![:0]const u8 {
-    if (query_string.len == 0) {
-        return arena.dupeSentinel(u8, url, 0);
-    }
-
-    var buf: std.ArrayList(u8) = .empty;
-
-    // the most space well need is the url + ('?' or '&') + the query_string + null terminator
-    try buf.ensureTotalCapacityPrecise(arena, url.len + 2 + query_string.len);
-    buf.appendSliceAssumeCapacity(url);
-
-    if (std.mem.findScalar(u8, url, '?')) |index| {
-        const last_index = url.len - 1;
-        if (index != last_index and url[last_index] != '&') {
-            buf.appendAssumeCapacity('&');
-        }
-    } else {
-        buf.appendAssumeCapacity('?');
-    }
-    buf.appendSliceAssumeCapacity(query_string);
-    buf.appendAssumeCapacity(0);
-    return buf.items[0 .. buf.items.len - 1 :0];
+/// Replaces the query of `url` with `query` and keeps its fragment.
+pub fn setQuery(arena: Allocator, url: []const u8, query: []const u8) ![:0]const u8 {
+    const hash_start = std.mem.findScalar(u8, url, '#') orelse url.len;
+    const query_start = std.mem.findScalar(u8, url[0..hash_start], '?') orelse hash_start;
+    return arena.printSentinel("{s}?{s}{s}", .{ url[0..query_start], query, url[hash_start..] }, 0);
 }
 
 pub fn getRobotsUrl(arena: Allocator, url: [:0]const u8) ![:0]const u8 {
@@ -1361,32 +1344,32 @@ test "URL: eqlDocument" {
     }
 }
 
-test "URL: concatQueryString" {
+test "URL: setQuery" {
     const arena = testing.arena_allocator;
 
     {
-        const url = try concatQueryString(arena, "https://www.lightpanda.io/", "");
-        try testing.expectEqual("https://www.lightpanda.io/", url);
+        const url = try setQuery(arena, "https://www.lightpanda.io/", "");
+        try testing.expectEqual("https://www.lightpanda.io/?", url);
     }
 
     {
-        const url = try concatQueryString(arena, "https://www.lightpanda.io/index?", "");
-        try testing.expectEqual("https://www.lightpanda.io/index?", url);
-    }
-
-    {
-        const url = try concatQueryString(arena, "https://www.lightpanda.io/index?", "a=b");
+        const url = try setQuery(arena, "https://www.lightpanda.io/index?", "a=b");
         try testing.expectEqual("https://www.lightpanda.io/index?a=b", url);
     }
 
     {
-        const url = try concatQueryString(arena, "https://www.lightpanda.io/index?1=2", "a=b");
-        try testing.expectEqual("https://www.lightpanda.io/index?1=2&a=b", url);
+        const url = try setQuery(arena, "https://www.lightpanda.io/index?1=2", "a=b");
+        try testing.expectEqual("https://www.lightpanda.io/index?a=b", url);
     }
 
     {
-        const url = try concatQueryString(arena, "https://www.lightpanda.io/index?1=2&", "a=b");
-        try testing.expectEqual("https://www.lightpanda.io/index?1=2&a=b", url);
+        const url = try setQuery(arena, "https://www.lightpanda.io/index#top", "a=b");
+        try testing.expectEqual("https://www.lightpanda.io/index?a=b#top", url);
+    }
+
+    {
+        const url = try setQuery(arena, "https://www.lightpanda.io/index?1=2#top?x", "a=b");
+        try testing.expectEqual("https://www.lightpanda.io/index?a=b#top?x", url);
     }
 }
 
