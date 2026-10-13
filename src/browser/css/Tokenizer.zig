@@ -249,47 +249,20 @@ fn hasNewlineAt(self: *const Tokenizer, offset: usize) bool {
     };
 }
 
-fn hasNonAsciiAt(self: *const Tokenizer, offset: usize) bool {
-    if (!self.hasAtLeast(offset)) return false;
-
-    const byte = self.byteAt(offset);
-    const len_utf8 = std.unicode.utf8ByteSequenceLength(byte) catch return false;
-
-    if (!self.hasAtLeast(offset + len_utf8 - 1)) return false;
-
-    const start = self.position + offset;
-    const bytes = self.slice(start, start + len_utf8);
-
-    const codepoint = std.unicode.utf8Decode(bytes) catch return false;
-
-    // https://drafts.csswg.org/css-syntax/#non-ascii-ident-code-point
-    return switch (codepoint) {
-        '\u{00B7}', '\u{200C}', '\u{200D}', '\u{203F}', '\u{2040}' => true,
-        '\u{00C0}'...'\u{00D6}' => true,
-        '\u{00D8}'...'\u{00F6}' => true,
-        '\u{00F8}'...'\u{037D}' => true,
-        '\u{037F}'...'\u{1FFF}' => true,
-        '\u{2070}'...'\u{218F}' => true,
-        '\u{2C00}'...'\u{2FEF}' => true,
-        '\u{3001}'...'\u{D7FF}' => true,
-        '\u{F900}'...'\u{FDCF}' => true,
-        '\u{FDF0}'...'\u{FFFD}' => true,
-        else => codepoint >= '\u{10000}',
-    };
-}
-
 fn isIdentStart(self: *Tokenizer) bool {
     if (self.isEof()) return false;
 
+    var offset: usize = 0;
     var b = self.nextByteUnchecked();
     if (b == '-') {
+        offset = 1;
         b = if (self.hasAtLeast(1)) self.byteAt(1) else return false;
         if (b == '-') return true; // --custom-property
     }
 
     return switch (b) {
         'a'...'z', 'A'...'Z', '_', 0x0 => true,
-        '\\' => !self.hasNewlineAt(1),
+        '\\' => !self.hasNewlineAt(offset + 1),
         else => b > 0x7F, // not is ascii
     };
 }
@@ -356,35 +329,17 @@ fn consumeComment(self: *Tokenizer) []const u8 {
     return self.sliceFrom(start_position);
 }
 
-fn byteToHexDigit(b: u8) ?u32 {
-    return switch (b) {
-        '0'...'9' => b - '0',
-        'a'...'f' => b - 'a' + 10,
-        'A'...'F' => b - 'A' + 10,
-        else => null,
-    };
-}
-
 fn byteToDecimalDigit(b: u8) ?u32 {
     return if (std.ascii.isDigit(b)) b - '0' else null;
 }
 
-// (value, number of digits up to 6)
+/// Up to 6 hex digits.
 fn consumeHexDigits(self: *Tokenizer) void {
-    var value: u32 = 0;
     var digits: u32 = 0;
-
-    while (digits < 6 and !self.isEof()) {
-        if (byteToHexDigit(self.nextByteUnchecked())) |digit| {
-            value = value * 16 + digit;
-            digits += 1;
-            self.advance(1);
-        } else {
-            break;
-        }
+    while (digits < 6 and !self.isEof() and std.ascii.isHex(self.nextByteUnchecked())) {
+        digits += 1;
+        self.advance(1);
     }
-
-    _ = &value;
 }
 
 // Assumes that the U+005C REVERSE SOLIDUS (\) has already been consumed
@@ -486,13 +441,7 @@ fn consumeName(self: *Tokenizer) []const u8 {
                 // a continuation byte, which advance() asserts against.
                 self.consumeChar();
             },
-            else => {
-                if (self.hasNonAsciiAt(0)) {
-                    self.consumeChar();
-                } else {
-                    break; // ASCII
-                }
-            },
+            else => break,
         }
     }
 
@@ -584,7 +533,7 @@ fn consumeNumeric(self: *Tokenizer) Token {
             };
 
             self.advance(2);
-        } else if (self.hasAtLeast(2) and std.ascii.isDigit(self.byteAt(2))) {
+        } else if (self.hasAtLeast(1) and std.ascii.isDigit(self.byteAt(1))) {
             self.advance(1);
         } else {
             break :blk;
@@ -949,4 +898,30 @@ test "url: bad-url swallows through escape but stops at )" {
         .{ .bad_url = "foo\"\\)bar)" },
         .{ .ident = "x" },
     });
+}
+
+test "number: single-digit exponent" {
+    try expectTokensEqual("1e5", &.{.{ .number = .{ .has_sign = false, .int_value = null, .value = 100000 } }});
+    try expectTokensEqual("2E3px", &.{.{ .dimension = .{ .has_sign = false, .int_value = null, .value = 2000, .unit = "px" } }});
+    try expectTokensEqual("1e-5", &.{.{ .number = .{ .has_sign = false, .int_value = null, .value = 1e-5 } }});
+}
+
+test "number: e without digits is a unit" {
+    try expectTokensEqual("1em", &.{.{ .dimension = .{ .has_sign = false, .int_value = 1, .value = 1, .unit = "em" } }});
+    try expectTokensEqual("1e", &.{.{ .dimension = .{ .has_sign = false, .int_value = 1, .value = 1, .unit = "e" } }});
+    try expectTokensEqual("1e+x", &.{
+        .{ .dimension = .{ .has_sign = false, .int_value = 1, .value = 1, .unit = "e" } },
+        .{ .delim = '+' },
+        .{ .ident = "x" },
+    });
+}
+
+test "ident: hyphen before an escaped newline is a delim" {
+    try expectTokensEqual("-\\\nx", &.{
+        .{ .delim = '-' },
+        .{ .delim = '\\' },
+        .{ .white_space = "\n" },
+        .{ .ident = "x" },
+    });
+    try expectTokensEqual("-\\41", &.{.{ .ident = "-\\41" }});
 }

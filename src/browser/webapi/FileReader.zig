@@ -280,29 +280,14 @@ pub fn decodeText(arena: Allocator, input: []const u8, label_: ?[]const u8, mime
 
     if (handle == null and mime_type.len > 0) {
         if (Mime.parse(mime_type)) |mime| {
-            if (mime.is_default_charset == false) {
-                handle = encodingHandle(mime.charsetString());
+            if (mime.explicitCharset()) |charset| {
+                handle = encodingHandle(charset);
             }
         } else |_| {}
     }
 
     const encoding = handle orelse encodingHandle("utf-8") orelse return arena.dupe(u8, data);
-
-    const max_out = html5ever.encoding_max_utf8_buffer_length(encoding, if (data.len == 0) 4 else data.len);
-    if (max_out == 0) {
-        return "";
-    }
-
-    const out = try arena.alloc(u8, max_out);
-    const result = html5ever.encoding_decode(
-        encoding,
-        if (data.len == 0) null else data.ptr,
-        data.len,
-        out.ptr,
-        out.len,
-        1, // is_last
-    );
-    return out[0..result.bytes_written];
+    return html5ever.decodeToUtf8(arena, encoding, data);
 }
 
 pub fn abort(self: *FileReader) !void {
