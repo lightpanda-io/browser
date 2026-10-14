@@ -10,6 +10,18 @@
   buildInputs ? [ ],
 }:
 let
+  installAction = src + "/.github/actions/install/action.yml";
+  # Same awk Makefile uses to read these defaults, so the two never drift apart.
+  v8VersionFile = pkgs.runCommand "lightpanda-v8-version" { } ''
+    awk -F\' '/^  v8:/{f=1} f&&/default:/{print $2; exit}' ${installAction} > $out
+  '';
+  zigV8TagFile = pkgs.runCommand "lightpanda-zig-v8-tag" { } ''
+    awk -F\' '/^  zig-v8:/{f=1} f&&/default:/{print $2; exit}' ${installAction} > $out
+  '';
+
+  v8Version = lib.removeSuffix "\n" (builtins.readFile v8VersionFile);
+  v8Tag = lib.removeSuffix "\n" (builtins.readFile zigV8TagFile);
+
   v8Archives = {
     aarch64-darwin = {
       platform = "macos_aarch64";
@@ -25,16 +37,13 @@ let
     };
     x86_64-linux = {
       platform = "linux_x86_64";
-      hash = "sha256-qKymFSy10+obJhBH3104QTdq2Oo2DX6VqC9k3HhBdXQ=";
+      hash = "sha256-7tD6GpfYFeL1AA56KRU9YuBu+S0tgKAkWYcBOU6TIss=";
     };
   };
   v8Archive = v8Archives.${stdenv.hostPlatform.system};
 
-  zigV8Tag = "v0.5.7";
-  v8Version = "14.9.207.35";
-
   v8 = fetchurl {
-    url = "https://github.com/lightpanda-io/zig-v8-fork/releases/download/${zigV8Tag}/libc_v8_${v8Version}_${v8Archive.platform}.a";
+    url = "https://github.com/lightpanda-io/zig-v8-fork/releases/download/${v8Tag}/libc_v8_${v8Version}_${v8Archive.platform}.a";
     hash = v8Archive.hash;
   };
 
@@ -56,6 +65,7 @@ let
 in
 zig.makePackage {
   inherit stdenv src zigDeps;
+  __structuredAttrs = true;
   pname = "lightpanda";
   version = "${version}-nix";
 
