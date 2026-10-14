@@ -2593,6 +2593,82 @@ test "cdp.input: dispatchKeyEvent Enter in a field submits through the default b
     }
 }
 
+// Typed text is committed with a change event when the field loses focus or
+// Enter submits it, and only when the value differs. Expectations match Chrome.
+test "cdp.input: typed text fires change on blur and Enter" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.body.innerHTML = '<form id=f><input id=t><textarea id=ta></textarea></form><input id=o>';
+        \\window.events = [];
+        \\for (const id of ['t', 'ta']) {
+        \\  const el = document.getElementById(id);
+        \\  for (const type of ['change', 'blur']) {
+        \\    el.addEventListener(type, () => window.events.push(id + ':' + type + ':' + el.value));
+        \\  }
+        \\}
+        \\document.getElementById('f').addEventListener('submit', (e) => {
+        \\  e.preventDefault();
+        \\  window.events.push('submit');
+        \\});
+        \\window.arm = (id) => {
+        \\  const el = document.getElementById(id);
+        \\  el.focus();
+        \\  el.value = '';
+        \\  window.events = [];
+        \\};
+    , null);
+
+    var id: u32 = 1;
+
+    // typed, then Tab
+    _ = try ls.local.compileAndRun("arm('t')", null);
+    try ctx.processMessage(.{ .id = id, .method = "Input.insertText", .params = .{ .text = "ab" } });
+    id += 1;
+    try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Tab", .code = "Tab" } });
+    id += 1;
+    try testing.expectEqualSlices(u8, "t:change:ab t:blur:ab", try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSlice());
+
+    // typed into a textarea, then focus moves away
+    _ = try ls.local.compileAndRun("arm('ta')", null);
+    try ctx.processMessage(.{ .id = id, .method = "Input.insertText", .params = .{ .text = "x" } });
+    id += 1;
+    _ = try ls.local.compileAndRun("document.getElementById('o').focus()", null);
+    try testing.expectEqualSlices(u8, "ta:change:x ta:blur:x", try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSlice());
+
+    // typed and deleted again: the value is unchanged
+    _ = try ls.local.compileAndRun("arm('t')", null);
+    try ctx.processMessage(.{ .id = id, .method = "Input.insertText", .params = .{ .text = "a" } });
+    id += 1;
+    try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "rawKeyDown", .key = "Backspace", .code = "Backspace" } });
+    id += 1;
+    _ = try ls.local.compileAndRun("document.getElementById('t').blur()", null);
+    try testing.expectEqualSlices(u8, "t:blur:", try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSlice());
+
+    // a value set by script is not a user edit
+    _ = try ls.local.compileAndRun("arm('t'); document.getElementById('t').value = 'js'; document.getElementById('t').blur()", null);
+    try testing.expectEqualSlices(u8, "t:blur:js", try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSlice());
+
+    // Enter commits before the implicit submission, and blur has nothing left to commit
+    _ = try ls.local.compileAndRun("arm('t')", null);
+    try ctx.processMessage(.{ .id = id, .method = "Input.insertText", .params = .{ .text = "q" } });
+    id += 1;
+    try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter" } });
+    id += 1;
+    try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "char", .key = "Enter", .text = "\r" } });
+    id += 1;
+    _ = try ls.local.compileAndRun("document.getElementById('t').blur()", null);
+    try testing.expectEqualSlices(u8, "t:change:q submit t:blur:q", try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSlice());
+}
+
 // Enter on a checkbox or a radio clicks the form's default button like a text
 // field does, but without a default button it never submits the form: only a
 // text field can trigger the submission. Enter on a select never submits.

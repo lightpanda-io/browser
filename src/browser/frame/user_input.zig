@@ -1302,6 +1302,7 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
 
     if (target.is(Element.Html.Input)) |input| {
         if (is_enter) {
+            try input.dispatchChangeIfEdited(frame);
             return implicitFormSubmission(frame, input);
         }
         _ = try applyEdit(frame, input, .{ .insert = text });
@@ -1429,6 +1430,7 @@ pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit) !bool {
         return false;
     }
 
+    try ctl.rememberValueBeforeEdit(frame);
     if (text) |t| {
         try ctl.innerInsert(t, data, input_type, frame);
     } else {
