@@ -92,6 +92,16 @@ const session_id_schema = browser_tools.minify(
     \\}
 );
 
+const run_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "script": { "type": "string", "description": "The agent script source, as `save` writes it or `lightpanda run` takes it." }
+    \\  },
+    \\  "required": ["script"]
+    \\}
+);
+
 /// MCP-only tools, absent from the agent and scripts.
 pub const extra_tools = [_]McpTool{
     .{
@@ -100,6 +110,13 @@ pub const extra_tools = [_]McpTool{
         .annotations = .{ .idempotentHint = true, .openWorldHint = false },
         .description = "Save the session as a reusable Lightpanda agent script. You hold the conversation, so synthesize the `script` yourself — `const page = new Page(); await page.goto(url);` then call the builtins you used as tools (extract, click, fill, …) as methods on `page` with the same object arguments. Keep `$LP_*` placeholders; never inline a resolved secret.\n\n" ++ browser_tools.save_synthesis_prompt ++ "\n\n" ++ browser_tools.save_script_rules,
         .inputSchema = save_schema,
+    },
+    .{
+        .name = "run",
+        .title = "Run an agent script",
+        .annotations = .{},
+        .description = "Run a Lightpanda agent script in this session, as `lightpanda run` does, and return its console output followed by the value it returns. The script drives pages through `const page = new Page(); await page.goto(url);` and the builtins as methods on `page`; `$LP_*` placeholders are resolved. Pages, cookies and storage it leaves stay in the session; script variables do not carry over to the next call. A thrown error or failed step ends the script and is reported as an error after the output so far.",
+        .inputSchema = run_schema,
     },
     .{
         .name = "session_new",
@@ -133,6 +150,7 @@ const ExtraTool = enum(u8) {
     session_new = 201,
     session_list = 202,
     session_close = 203,
+    run = 204,
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -156,6 +174,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
             .session_new => handleSessionNew(server, arena, call_params.arguments),
             .session_list => handleSessionList(server, arena),
             .session_close => handleSessionClose(server, arena, call_params.arguments),
+            .run => handleRun(server, arena, call_params.arguments),
         };
         server.app.telemetry.recordTool(@backingInt(tool), .mcp, switch (result) {
             .ok => .ok,
@@ -253,6 +272,28 @@ fn handleSave(arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult 
     const where = browser_tools.absolutePath(arena, args.path);
     const lines = std.mem.count(u8, script, "\n") + 1;
     return okFmt(arena, "saved {d} line(s) to {s}", .{ lines, where });
+}
+
+fn handleRun(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult {
+    const Args = struct { script: []const u8 };
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch
+        return .{ .invalid_params = "expected { script: string }" };
+
+    const active = server.active_session;
+    const runtime = lp.Runtime.init(server.allocator, server.app, active.session, &active.registry) catch |err|
+        return .{ .fail = @errorName(err) };
+    defer runtime.deinit();
+
+    var output: std.Io.Writer.Allocating = .init(arena);
+    runtime.console_sink = &output.writer;
+
+    const message = runtime.runSource(args.script, "<mcp>") catch
+        return .{ .fail = "out of memory" };
+    if (message) |m| {
+        output.writer.print("{s}\n", .{m}) catch return .{ .fail = "out of memory" };
+        return .{ .fail = output.written() };
+    }
+    return .{ .ok = output.written() };
 }
 
 /// The session tools need a transport that routes by session id (HTTP's
@@ -355,6 +396,7 @@ test "MCP - tools/list carries titles and annotations" {
         .{ .name = "markdown", .title = "Render the page or a subtree as markdown", .read_only = false, .destructive = false },
         .{ .name = "click", .title = "Click an element", .read_only = false, .destructive = true },
         .{ .name = "save", .title = "Save the session as an agent script", .read_only = false, .destructive = true },
+        .{ .name = "run", .title = "Run an agent script", .read_only = false, .destructive = true },
         .{ .name = "session_list", .title = "List browser sessions", .read_only = true, .destructive = false },
     };
 
@@ -1178,6 +1220,95 @@ test "MCP - save writes the script to disk" {
 
     const written = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(4096));
     try std.testing.expectEqualStrings("const page = new Page();\nawait page.goto(\"https://example.com\");\n", written);
+}
+
+test "MCP - run: a script drives the session and returns its output" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nconsole.log('btn:', page.evaluate(\"document.getElementById('btn').textContent\"));\nreturn page.extract({ btn: '#btn' });"}}}
+    );
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .isError = false,
+        .content = &.{.{ .type = "text", .text = "btn: Click Me\n{\"btn\":\"Click Me\"}\n" }},
+    } }, out.written());
+
+    // The page the script opened stays in the session for later tools.
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"getUrl","arguments":{}}}
+    );
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .content = &.{.{ .type = "text", .text = "http://localhost:9582/src/browser/tests/mcp_actions.html" }},
+    } }, out.written());
+}
+
+test "MCP - run: an error ends the script and follows its output" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"console.log('before');\nthrow new Error('boom');\nconsole.log('after');"}}}
+    );
+    const text = try testToolText(aa, out.written());
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
+    try testing.expect(std.mem.startsWith(u8, text, "before\n"));
+    try testing.expect(std.mem.find(u8, text, "boom") != null);
+    try testing.expect(std.mem.find(u8, text, "after") == null);
+
+    // A failed step throws like any other error.
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"new Page().click('#btn');"}}}
+    );
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "call page.goto(url) first") != null);
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run","arguments":{}}}
+    );
+    try testing.expectJson(.{ .id = 3, .@"error" = .{ .code = -32602 } }, out.written());
+}
+
+test "MCP - run: script variables do not carry over between calls" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"globalThis.seen = 1; return typeof seen;"}}}
+    );
+    try testing.expectEqual("number\n", try testToolText(aa, out.written()));
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"return typeof seen;"}}}
+    );
+    try testing.expectEqual("undefined\n", try testToolText(aa, out.written()));
+}
+
+test "MCP - run: acts on the caller's session only" {
+    const aa = testing.arena_allocator;
+    var out_a: std.Io.Writer.Allocating = .init(aa);
+    var a = try Server.init(testing.allocator, testing.test_app, &out_a.writer);
+    defer a.deinit();
+    var out_b: std.Io.Writer.Allocating = .init(aa);
+    var b = try Server.init(testing.allocator, testing.test_app, &out_b.writer);
+    defer b.deinit();
+
+    try router.handleMessage(a, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"await new Page().goto('http://localhost:9582/src/browser/tests/mcp_actions.html');"}}}
+    );
+    try testing.expect(std.mem.find(u8, out_a.written(), "\"isError\":false") != null);
+    try testing.expect(a.active_session.session.currentFrame() != null);
+    try testing.expect(b.active_session.session.currentFrame() == null);
 }
 
 test "MCP - tree rejects stale backendNodeId instead of dumping whole document" {
