@@ -1407,7 +1407,7 @@ fn serveCached(self: *Client, transfer: *Transfer, cached: Cache.CachedResponse,
 
 // Everything the cache needs about this response. Names and values are
 // borrowed from the transfer arena, which outlives the put.
-fn cachePutRequest(transfer: *Transfer, rh: *http.ResponseHead) !?Cache.CachePutRequest {
+fn cachePutRequest(cache: *const Cache, transfer: *Transfer, rh: *http.ResponseHead) !?Cache.CachePutRequest {
     return Cache.tryCache(transfer.arena.allocator(), .{
         .timestamp = lp.datetime.timestamp(.real),
         .url = transfer._cache_key,
@@ -1415,6 +1415,8 @@ fn cachePutRequest(transfer: *Transfer, rh: *http.ResponseHead) !?Cache.CachePut
         .content_type = rh.contentType(),
         .headers = transfer.res.headers,
         .request_headers = try transfer.cacheRequestHeaders(),
+        .shared = cache.shared,
+        .authorized = transfer.findRequestHeader("Authorization") != null,
     });
 }
 
@@ -1440,7 +1442,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
 
     const rh = &(transfer.res.header orelse return);
 
-    const maybe_req = cachePutRequest(transfer, rh) catch |err| {
+    const maybe_req = cachePutRequest(cache, transfer, rh) catch |err| {
         log.warn(.http, "cache eligibility", .{ .err = err });
         return;
     };
@@ -3812,12 +3814,7 @@ pub const Transfer = struct {
             return error.TooManyRedirects;
         }
 
-        if (transfer._cache_intent == .revalidate) {
-            transfer._cache_intent.revalidate.data.deinit();
-            transfer.removeHeader("If-None-Match");
-            transfer.removeHeader("If-Modified-Since");
-        }
-        transfer._cache_intent = .none;
+        transfer.dropCacheIntent();
 
         // resolve the redirect target.
         const url: [:0]const u8 = blk: {
@@ -3920,6 +3917,21 @@ pub const Transfer = struct {
 
     pub fn updateCredentials(self: *Transfer, userpwd: [:0]const u8) void {
         self.req.basic_auth_credentials = userpwd;
+        // A shared cache leaves the retry alone: it carries credentials of
+        // its own and does not go back through the lookup, so its response
+        // is neither stored under the plain URL nor allowed to renew an entry.
+        if (self.client.cache.shared) self.dropCacheIntent();
+    }
+
+    // The response is no longer the cache's business: a revalidation gives
+    // up the stale entry and the conditional headers cacheLookup put on.
+    fn dropCacheIntent(self: *Transfer) void {
+        if (self._cache_intent == .revalidate) {
+            self._cache_intent.revalidate.data.deinit();
+            self.removeHeader("If-None-Match");
+            self.removeHeader("If-Modified-Since");
+        }
+        self._cache_intent = .none;
     }
 
     const RequestHeader = struct {
@@ -6460,6 +6472,7 @@ const TestCache = struct {
 const TestCacheRequest = struct {
     header: ?[2][]const u8 = null, // a request header to set
     jar: ?*Cookie.Jar = null, // credentials included when set
+    notification: ?*Notification = null,
     body: std.ArrayList(u8) = .empty,
     done: bool = false,
     err: ?anyerror = null,
@@ -6482,6 +6495,7 @@ const TestCacheRequest = struct {
             .credentials_mode = if (self.jar != null) .include else .omit,
             .request_mode = .no_cors,
             .resource_type = .xhr,
+            .notification = self.notification,
             // same-site, so the jar's Lax cookies are sent
             .cookie_origin = if (self.jar != null) .{ .url = "http://127.0.0.1:9582/" } else null,
             .ctx = self,
@@ -6721,4 +6735,185 @@ test "HttpClient: the Vary row of a response varying on Authorization holds a di
         try r.run(client, url);
         try testing.expectEqual(step.hit, r.from_cache);
     }
+}
+
+// Stores an entry for url that is stale and carries the validator "v1".
+fn testSeedStale(tc: *TestCache, url: [:0]const u8) !void {
+    try tc.cache.put(.{
+        .url = url,
+        .content_type = "text/plain",
+        .status = 200,
+        .stored_at = lp.datetime.timestamp(.real) - 100,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 0 },
+        .etag = "\"v1\"",
+        .headers = &.{},
+        .vary_headers = &.{},
+    }, "old");
+    try expectCachedAt(tc, url, 0, .revalidate);
+}
+
+// Parks every auth challenge, as the CDP Fetch domain does.
+const TestAuthParker = struct {
+    notification: *Notification,
+
+    fn init() !TestAuthParker {
+        return .{ .notification = try Notification.init(testing.allocator) };
+    }
+
+    fn register(self: *TestAuthParker) !void {
+        try self.notification.register(.http_request_auth_required, self, onAuthRequired);
+    }
+
+    fn deinit(self: *TestAuthParker) void {
+        self.notification.deinit();
+    }
+
+    fn onAuthRequired(_: *anyopaque, msg: *const Notification.RequestAuthRequired) !void {
+        msg.wait_for_interception.* = true;
+    }
+
+    // Starts the request, answers its challenge with credentials, settles it.
+    fn answer(self: *TestAuthParker, client: *Client, r: *TestCacheRequest, url: [:0]const u8) !void {
+        r.notification = self.notification;
+        const transfer = try r.start(client, url);
+        for (0..250) |_| {
+            if (client.intercepted == 1) break;
+            _ = try client.tick(20);
+        } else return error.NeverChallenged;
+        transfer.updateCredentials("u:p");
+        try client.continueTransfer(transfer);
+        try r.settle(client);
+    }
+};
+
+test "HttpClient: a shared cache stores a response to an Authorization request only when it is public" {
+    const client = &testing.test_browser.http_client;
+    var tc = try TestCache.init(client);
+    tc.cache.shared = true;
+    tc.use(client);
+    defer tc.deinit(client);
+    const auth: [2][]const u8 = .{ "Authorization", "Bearer t" };
+
+    // max-age only: not stored
+    {
+        var r: TestCacheRequest = .{ .header = auth };
+        defer r.deinit();
+        try r.run(client, "http://127.0.0.1:9582/cache/max-age");
+    }
+    try expectCachedAt(&tc, "http://127.0.0.1:9582/cache/max-age", 0, .miss);
+
+    // public: stored, and reused for a request without credentials
+    {
+        var r: TestCacheRequest = .{ .header = auth };
+        defer r.deinit();
+        try r.run(client, "http://127.0.0.1:9582/cache/public");
+    }
+    {
+        var r: TestCacheRequest = .{};
+        defer r.deinit();
+        try r.run(client, "http://127.0.0.1:9582/cache/public");
+        try testing.expectEqual(true, r.from_cache);
+    }
+
+    // an Authorization request is looked up as any other
+    {
+        var r: TestCacheRequest = .{};
+        defer r.deinit();
+        try r.run(client, "http://127.0.0.1:9582/cache/max-age");
+    }
+    var r: TestCacheRequest = .{ .header = auth };
+    defer r.deinit();
+    try r.run(client, "http://127.0.0.1:9582/cache/max-age");
+    try testing.expectEqual(true, r.from_cache);
+}
+
+test "HttpClient: without --http-cache-shared, a response to an Authorization request is stored, as before" {
+    const client = &testing.test_browser.http_client;
+    var tc = try TestCache.init(client);
+    tc.use(client);
+    defer tc.deinit(client);
+    const url = "http://127.0.0.1:9582/cache/max-age";
+
+    {
+        var r: TestCacheRequest = .{ .header = .{ "Authorization", "Bearer t" } };
+        defer r.deinit();
+        try r.run(client, url);
+    }
+    try expectCachedAt(&tc, url, 0, .hit);
+    var r: TestCacheRequest = .{ .header = .{ "Authorization", "Bearer t" } };
+    defer r.deinit();
+    try r.run(client, url);
+    try testing.expectEqual(true, r.from_cache);
+}
+
+test "HttpClient: a shared cache does not store a response to an auth retry" {
+    const client = &testing.test_browser.http_client;
+    var tc = try TestCache.init(client);
+    tc.cache.shared = true;
+    tc.use(client);
+    defer tc.deinit(client);
+    var parker = try TestAuthParker.init();
+    defer parker.deinit();
+    try parker.register();
+    const url = "http://127.0.0.1:9582/cache/auth";
+
+    var r: TestCacheRequest = .{};
+    defer r.deinit();
+    try parker.answer(client, &r, url);
+    try testing.expectEqual("secret", r.body.items);
+    try expectCachedAt(&tc, url, 0, .miss);
+}
+
+test "HttpClient: a shared cache does not let an auth retry revalidate or renew a stale entry" {
+    const client = &testing.test_browser.http_client;
+    var tc = try TestCache.init(client);
+    tc.cache.shared = true;
+    tc.use(client);
+    defer tc.deinit(client);
+    var parker = try TestAuthParker.init();
+    defer parker.deinit();
+    try parker.register();
+    const url = "http://127.0.0.1:9582/cache/auth";
+    try testSeedStale(&tc, url);
+
+    // The first attempt was conditional on the stale entry's ETag, and the
+    // server would answer the authenticated one with a 304 for it: the retry
+    // goes out without the validator, so the response is the full 200.
+    var r: TestCacheRequest = .{};
+    defer r.deinit();
+    try parker.answer(client, &r, url);
+    try testing.expectEqual(false, r.from_cache);
+    try testing.expectEqual("secret", r.body.items);
+    // nothing renewed or replaced the entry
+    try expectCachedAt(&tc, url, 0, .revalidate);
+}
+
+test "HttpClient: without --http-cache-shared, an auth retry's response is stored and revalidates, as before" {
+    const client = &testing.test_browser.http_client;
+    var tc = try TestCache.init(client);
+    tc.use(client);
+    defer tc.deinit(client);
+    var parker = try TestAuthParker.init();
+    defer parker.deinit();
+    try parker.register();
+    const url = "http://127.0.0.1:9582/cache/auth";
+
+    {
+        var r: TestCacheRequest = .{};
+        defer r.deinit();
+        try parker.answer(client, &r, url);
+        try testing.expectEqual("secret", r.body.items);
+    }
+    try expectCachedAt(&tc, url, 0, .hit);
+
+    // a stale entry: the retry keeps the validator, the server answers 304,
+    // the stale body is served and the entry renewed
+    try testSeedStale(&tc, url);
+    var r: TestCacheRequest = .{};
+    defer r.deinit();
+    try parker.answer(client, &r, url);
+    try testing.expectEqual(true, r.from_cache);
+    try testing.expectEqual("old", r.body.items);
+    try expectCachedAt(&tc, url, 0, .hit);
 }

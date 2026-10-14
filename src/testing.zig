@@ -1488,6 +1488,52 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/cache/public")) {
+        return req.respond("public body", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Cache-Control", .value = "public, max-age=600" },
+            },
+        });
+    }
+
+    // 401 without an Authorization header; with one, 304 for the validator
+    // "v1" and 200 otherwise.
+    if (std.mem.eql(u8, path, "/cache/auth")) {
+        var authorized = false;
+        var if_none_match: ?[]const u8 = null;
+        var it = req.iterateHeaders();
+        while (it.next()) |h| {
+            if (std.ascii.eqlIgnoreCase(h.name, "authorization")) authorized = true;
+            if (std.ascii.eqlIgnoreCase(h.name, "if-none-match")) if_none_match = h.value;
+        }
+        if (!authorized) {
+            return req.respond("No", .{
+                .status = .unauthorized,
+                .extra_headers = &.{
+                    .{ .name = "WWW-Authenticate", .value = "Basic realm=\"test\"" },
+                },
+            });
+        }
+        if (if_none_match) |v| if (std.mem.eql(u8, v, "\"v1\"")) {
+            return req.respond("", .{
+                .status = .not_modified,
+                .extra_headers = &.{
+                    .{ .name = "ETag", .value = "\"v1\"" },
+                    .{ .name = "Cache-Control", .value = "max-age=600" },
+                },
+            });
+        };
+        // public: a shared cache may store it, so only the retry's dropped
+        // cache intent keeps it out
+        return req.respond("secret", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Cache-Control", .value = "public, max-age=600" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/cache/vary-cookie")) {
         return req.respond("varied", .{
             .extra_headers = &.{
