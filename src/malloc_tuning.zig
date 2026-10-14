@@ -102,7 +102,9 @@ test "malloc_tuning: glibc env overrides" {
 }
 
 test "malloc_tuning: trim returns the free memory below a live chunk" {
-    if (comptime !is_glibc) {
+    // TSan replaces malloc/free with its own allocator: glibc's arenas, and
+    // so malloc_trim, never see the blocks.
+    if (comptime !is_glibc or builtin.sanitize_thread) {
         return error.SkipZigTest;
     }
 
