@@ -37,17 +37,14 @@ pub fn write(self: *WritableStreamDefaultWriter, chunk: js.Value, exec: *const E
         return local.typeError("Writer has been released");
     };
 
-    switch (stream._state) {
-        .writable => {},
-        .errored => {
-            const resolver = local.createPromiseResolver();
-            stream._stored_error.?.reject("WritableStreamDefaultWriter.write", resolver);
-            return resolver.promise();
-        },
-        .closed => return local.typeError("Stream is not writable"),
+    if (stream._state != .writable) {
+        return rejectNotWritable(stream, local);
     }
 
-    try stream.writeChunk(chunk, exec);
+    stream.writeChunk(chunk, exec) catch |err| switch (err) {
+        error.StreamError => return rejectNotWritable(stream, local),
+        else => return err,
+    };
 
     return local.resolvePromise(.{});
 }
@@ -59,12 +56,27 @@ pub fn close(self: *WritableStreamDefaultWriter, exec: *const Execution) !js.Pro
     };
 
     if (stream._state != .writable) {
-        return local.typeError("Stream is not writable");
+        return rejectNotWritable(stream, local);
     }
 
-    try stream.closeStream(exec);
+    stream.closeStream(exec) catch |err| switch (err) {
+        error.StreamError => return rejectNotWritable(stream, local),
+        else => return err,
+    };
 
     return local.resolvePromise(.{});
+}
+
+/// An errored stream rejects with what it errored with; a closed one with a TypeError.
+fn rejectNotWritable(stream: *const WritableStream, local: *const js.Local) !js.Promise {
+    switch (stream._state) {
+        .writable, .closed => return local.typeError("Stream is not writable"),
+        .errored => {
+            const resolver = local.createPromiseResolver();
+            resolver.reject("WritableStreamDefaultWriter", stream._stored_error.?);
+            return resolver.promise();
+        },
+    }
 }
 
 pub fn releaseLock(self: *WritableStreamDefaultWriter) void {

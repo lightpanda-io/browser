@@ -224,10 +224,17 @@
   const write = await rejection(writer.write(noise(200 * 1024)));
   const next_write = await rejection(writer.write(new Uint8Array([1])));
 
+  // The flush always has output (the gzip trailer), so close() fails too.
+  const closing = new CompressionStream('gzip');
+  const closing_writer = closing.writable.getWriter();
+  await closing.readable.cancel();
+  const close = await rejection(closing_writer.close());
+
   state.resolve();
   await state.done(() => {
     testing.expectEqual('TypeError', write);
     testing.expectEqual('TypeError', next_write);
+    testing.expectEqual('TypeError', close);
   });
 </script>
 

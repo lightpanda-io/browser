@@ -172,10 +172,14 @@
   const writer = ts.writable.getWriter();
   const reader = ts.readable.getReader();
   await writer.write('a').catch(() => {});
-  const errors = [await reader.read().catch((e) => e), await writer.write('b').catch((e) => e)];
+  const errors = [
+    await reader.read().catch((e) => e),
+    await writer.write('b').catch((e) => e),
+    await writer.close().catch((e) => e),
+  ];
 
   state.resolve();
   await state.done(() => {
-    testing.expectEqual([true, true], errors.map((e) => e === err));
+    testing.expectEqual([true, true, true], errors.map((e) => e === err));
   });
 </script>

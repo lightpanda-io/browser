@@ -54,7 +54,7 @@ pub fn read(self: *ReadableStreamDefaultReader, exec: *const Execution) !js.Prom
 
     if (stream._state == .errored) {
         const resolver = local.createPromiseResolver();
-        stream._stored_error.?.reject("ReadableStreamDefaultReader.read", resolver);
+        resolver.reject("ReadableStreamDefaultReader.read", stream._stored_error.?);
         return resolver.promise();
     }
 

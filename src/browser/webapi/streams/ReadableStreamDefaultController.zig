@@ -206,36 +206,39 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
 }
 
 pub fn doError(self: *ReadableStreamDefaultController, reason: ?js.Value) !void {
-    return self.fail(try .fromJs(reason));
+    var ls: js.Local.Scope = undefined;
+    self._execution.js.localScope(&ls);
+    defer ls.deinit();
+
+    const local = &ls.local;
+    return self.fail(local, reason orelse .{ .local = local, .handle = local.isolate.initUndefined() });
 }
 
 pub fn typeError(self: *ReadableStreamDefaultController, message: []const u8) !void {
-    return self.fail(.{ .type_error = try self._arena.dupe(u8, message) });
+    var ls: js.Local.Scope = undefined;
+    self._execution.js.localScope(&ls);
+    defer ls.deinit();
+
+    const local = &ls.local;
+    return self.fail(local, .{ .local = local, .handle = local.isolate.createTypeError(message) });
 }
 
-fn fail(self: *ReadableStreamDefaultController, err: ReadableStream.StoredError) !void {
+/// Errors the stream. Pending and later reads reject with `reason` itself.
+pub fn fail(self: *ReadableStreamDefaultController, local: *const js.Local, reason: js.Value) !void {
     const stream = self._stream;
     if (stream._state != .readable) {
         return;
     }
 
+    stream._stored_error = try reason.persist();
     stream._state = .errored;
-    stream._stored_error = err;
     self.clearQueue();
 
     // Rejecting runs page JS, which can reach the list too.
     const pending_reads = self._pending_reads;
     self._pending_reads = .empty;
-    if (pending_reads.items.len == 0) {
-        return;
-    }
-
-    var ls: js.Local.Scope = undefined;
-    self._execution.js.localScope(&ls);
-    defer ls.deinit();
-
     for (pending_reads.items) |resolver| {
-        stream._stored_error.?.reject("stream error", ls.toLocal(resolver));
+        local.toLocal(resolver).reject("stream error", reason);
         resolver.release();
     }
 }

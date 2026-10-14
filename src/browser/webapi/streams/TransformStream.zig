@@ -211,11 +211,9 @@ pub const TransformStreamDefaultController = struct {
         try self._stream._readable._controller.enqueueValue(value);
     }
 
-    /// Errors both sides of the stream. The writable side goes first; erroring
-    /// it runs no JS, while rejecting the readable's pending reads does.
-    fn doError(self: *TransformStreamDefaultController, reason: ?js.Value) !void {
-        try self._stream._writable._controller.doError(reason);
-        try self._stream._readable._controller.doError(reason);
+    fn doError(self: *TransformStreamDefaultController, reason: ?js.Value, exec: *const Execution) !void {
+        const local = exec.js.local.?;
+        return self.fail(local, reason orelse .{ .local = local, .handle = local.isolate.initUndefined() });
     }
 
     /// Errors both sides with the same TypeError object.
@@ -225,7 +223,14 @@ pub const TransformStreamDefaultController = struct {
         defer ls.deinit();
 
         const local = &ls.local;
-        return self.doError(.{ .local = local, .handle = local.isolate.createTypeError(message) });
+        return self.fail(local, .{ .local = local, .handle = local.isolate.createTypeError(message) });
+    }
+
+    /// Errors both sides of the stream. The writable side goes first; erroring
+    /// it runs no JS, while rejecting the readable's pending reads does.
+    fn fail(self: *TransformStreamDefaultController, local: *const js.Local, reason: js.Value) !void {
+        try self._stream._writable._controller.fail(reason);
+        try self._stream._readable._controller.fail(local, reason);
     }
 
     pub fn terminate(self: *TransformStreamDefaultController) !void {

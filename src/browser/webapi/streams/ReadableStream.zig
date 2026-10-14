@@ -43,47 +43,12 @@ pub const State = enum {
     errored,
 };
 
-/// Why a stream errored; WritableStream uses it too.
-pub const StoredError = union(enum) {
-    /// What page JS errored the stream with, e.g. controller.error(e).
-    js_val: js.Value.Global,
-    type_error: []const u8,
-    undefined,
-
-    pub fn fromJs(value_: ?js.Value) !StoredError {
-        const value = value_ orelse return .undefined;
-        if (value.isUndefined()) {
-            return .undefined;
-        }
-        return .{ .js_val = try value.persist() };
-    }
-
-    pub fn toJs(self: *StoredError, local: *const js.Local) !js.Value {
-        switch (self.*) {
-            .js_val => |global| return local.toLocal(global),
-            .undefined => return .{ .local = local, .handle = local.isolate.initUndefined() },
-            .type_error => |message| {
-                const value: js.Value = .{ .local = local, .handle = local.isolate.createTypeError(message) };
-                self.* = .{ .js_val = try value.persist() };
-                return value;
-            },
-        }
-    }
-
-    pub fn reject(self: *StoredError, comptime source: []const u8, resolver: js.PromiseResolver) void {
-        const value = self.toJs(resolver.local) catch {
-            resolver.rejectError(source, .{ .type_error = "Stream errored" });
-            return;
-        };
-        resolver.reject(source, value);
-    }
-};
-
 _state: State,
 _execution: *const Execution,
 _reader: ?*ReadableStreamDefaultReader,
 _controller: *ReadableStreamDefaultController,
-_stored_error: ?StoredError,
+/// What the stream errored with, e.g. the `e` of controller.error(e).
+_stored_error: ?js.Value.Global,
 _pull_fn: ?js.Function.Global = null,
 _pulling: bool = false,
 _pull_again: bool = false,
@@ -288,7 +253,7 @@ pub fn cancel(self: *ReadableStream, reason: ?js.Value, exec: *const Execution) 
         },
         .errored => {
             const resolver = local.createPromiseResolver();
-            self._stored_error.?.reject("ReadableStream.cancel", resolver);
+            resolver.reject("ReadableStream.cancel", self._stored_error.?);
             return resolver.promise();
         },
     }

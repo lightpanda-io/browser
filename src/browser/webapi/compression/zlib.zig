@@ -97,7 +97,7 @@ pub fn Deflate(comptime mode: enum(u1) { compress, decompress }) type {
         fn fail(self: *Deflate(mode), controller: *TransformStream.DefaultController, message: []const u8) !void {
             self.end();
             try controller.typeError(message);
-            return self.exec.js.typeError(message);
+            return error.StreamError;
         }
 
         const FeedError = error{ StreamNotReadable, OutOfMemory, CreateObjectFailure, HasJunkData, InvalidData };
