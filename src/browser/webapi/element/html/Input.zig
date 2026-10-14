@@ -771,6 +771,8 @@ fn changeType(self: *Input, new_type: Type, frame: *Frame) !void {
             // Sanitize the current value according to the new type
             if (self._value) |current_value| {
                 self._value = try self.sanitizeValue(false, current_value, frame);
+            } else {
+                try self.syncValueFromAttribute(frame);
             }
         } else {
             self._value_dirty = false;
@@ -802,11 +804,24 @@ pub fn reset(self: *Input, frame: *Frame) !void {
 
 // The value of a non-dirty control in value mode is its sanitized value attribute
 fn syncValueFromAttribute(self: *Input, frame: *Frame) !void {
-    const default_value = self._default_value orelse {
-        self._value = null;
-        return;
+    const default_value = self._default_value orelse switch (self._input_type) {
+        // These sanitize the empty string to a default (midpoint, #000000)
+        .range, .color => "",
+        else => {
+            self._value = null;
+            return;
+        },
     };
     self._value = try self.sanitizeValue(false, default_value, frame);
+}
+
+// A range value depends on min, max and step, so it is sanitized again when they change
+fn resanitizeRange(self: *Input, frame: *Frame) !void {
+    if (self._input_type != .range) {
+        return;
+    }
+    const current = self._value orelse return;
+    self._value = try self.sanitizeValue(false, current, frame);
 }
 
 /// Sanitize the value according to the current input type
@@ -1612,10 +1627,11 @@ pub const Build = struct {
     }
 
     pub fn attributeChange(element: *Element, name: String, value: String, frame: *Frame) !void {
-        const attribute = std.meta.stringToEnum(enum { type, value, checked }, name.str()) orelse return;
+        const attribute = std.meta.stringToEnum(enum { type, value, checked, min, max, step }, name.str()) orelse return;
         const self = element.as(Input);
         switch (attribute) {
             .type => try self.changeType(Type.fromString(value.str()), frame),
+            .min, .max, .step => try self.resanitizeRange(frame),
             .value => {
                 self._default_value = try frame.page_arena.dupe(u8, value.str());
                 if (self._value_dirty == false and self._input_type.valueMode() == .value) {
@@ -1637,14 +1653,15 @@ pub const Build = struct {
     }
 
     pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
-        const attribute = std.meta.stringToEnum(enum { type, value, checked }, name.str()) orelse return;
+        const attribute = std.meta.stringToEnum(enum { type, value, checked, min, max, step }, name.str()) orelse return;
         const self = element.as(Input);
         switch (attribute) {
             .type => try self.changeType(.text, frame),
+            .min, .max, .step => try self.resanitizeRange(frame),
             .value => {
                 self._default_value = null;
                 if (self._value_dirty == false and self._input_type.valueMode() == .value) {
-                    self._value = null;
+                    try self.syncValueFromAttribute(frame);
                 }
             },
             .checked => {
