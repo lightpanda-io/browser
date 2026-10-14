@@ -438,6 +438,7 @@ const Open = struct {
     // for the children's xpath index
     tag_counts: std.StringArrayHashMapUnmanaged(usize) = .empty,
     name: ?[]const u8, // The children's parent_name
+    invisible: bool, // visibility:hidden, so its text children are too
     xpath_len: usize,
     // Whether the visitor gets a `leave()` once the children are done.
     opened: bool,
@@ -447,7 +448,7 @@ fn walk(self: @This(), ctx: *WalkContext, visitor: anytype) !void {
     var stack: std.ArrayList(Open) = .empty;
     defer stack.deinit(self.arena);
 
-    try self.visitNode(ctx, &stack, self.dom_node, null, visitor, 1);
+    try self.visitNode(ctx, &stack, self.dom_node, null, false, visitor, 1);
     while (stack.items.len > 0) {
         // Everything read from `top` is read before visitNode, which can grow (move) the stack.
         const top = &stack.items[stack.items.len - 1];
@@ -464,7 +465,7 @@ fn walk(self: @This(), ctx: *WalkContext, visitor: anytype) !void {
             }
             gop.value_ptr.* += 1;
 
-            try self.visitNode(ctx, &stack, child, top.name, visitor, gop.value_ptr.*);
+            try self.visitNode(ctx, &stack, child, top.name, top.invisible, visitor, gop.value_ptr.*);
             continue;
         }
 
@@ -483,13 +484,16 @@ fn visitNode(
     stack: *std.ArrayList(Open),
     node: *Node,
     parent_name: ?[]const u8,
+    parent_invisible: bool,
     visitor: anytype,
     index: usize,
 ) !void {
     const current_depth = stack.items.len;
     if (current_depth > self.max_depth) return;
 
-    // 1. Skip non-content nodes
+    // 1. Skip non-content nodes. An invisible element is passed through, not
+    // cut: a descendant can be visible again.
+    var invisible = false;
     if (node.is(Element)) |el| {
         const tag = el.getTag();
         if (tag.isMetadata() or tag == .svg) return;
@@ -499,14 +503,17 @@ fn visitNode(
 
         // Not just the element's own display: a slotted element inherits
         // from its slot, which this light-tree walk never visits.
-        if (self.frame._style_manager.isHidden(el, .{})) {
-            return;
+        switch (self.frame._style_manager.rendering(el)) {
+            .none => return,
+            .invisible => invisible = true,
+            .visible => {},
         }
 
         if (el.is(Element.Html)) |html_el| {
             if (html_el.getHidden()) return;
         }
     } else if (node.is(CData.Text)) |text_node| {
+        if (parent_invisible) return;
         const text = text_node.ownData();
         if (isAllWhitespace(text)) {
             return;
@@ -526,7 +533,10 @@ fn visitNode(
     var checked: ?bool = null;
     var tag_name: []const u8 = "text";
 
-    if (node.is(Element)) |el| {
+    if (invisible) {
+        // Never printed: skip reading its value and interactivity.
+        tag_name = node.as(Element).getTagNameLower();
+    } else if (node.is(Element)) |el| {
         tag_name = el.getTagNameLower();
 
         if (el.is(Element.Html.Input)) |input| {
@@ -573,13 +583,15 @@ fn visitNode(
     // This prevents token bloat and ensures their StaticText children aren't incorrectly pruned.
     // We ignore interactivity because a generic wrapper with an event listener still shouldn't hoist all text.
     // Not computing it also keeps a deep chain of containers from being O(depth²).
-    const name = if (structural and !has_explicit_label)
+    const name = if (invisible or (structural and !has_explicit_label))
         null
     else
         try axn.getName(self.frame, self.arena, ctx.label_index);
 
     var should_visit = true;
-    if (self.interactive_only) {
+    if (invisible) {
+        should_visit = false;
+    } else if (self.interactive_only) {
         var keep = false;
         if (interactive.isInteractiveRole(role)) {
             keep = true;
@@ -633,6 +645,7 @@ fn visitNode(
     try stack.append(self.arena, .{
         .next_child = if (should_walk_children) node._first_child else null,
         .name = name,
+        .invisible = invisible,
         .xpath_len = initial_xpath_len,
         .opened = opened,
     });
@@ -1118,6 +1131,30 @@ test "SemanticTree: a slotted element inherits its slot's display" {
 
     try testing.expect(std.mem.find(u8, aw.written(), "slotted-shown") != null);
     try testing.expect(std.mem.find(u8, aw.written(), "slotted-hidden") == null);
+}
+
+test "SemanticTree: visibility:hidden drops the element, not a visible descendant" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/visibility_hidden.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    for ([_]bool{ false, true }) |prune| {
+        const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = prune });
+
+        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer aw.deinit();
+        try st.textStringify(&aw.writer);
+        const text = aw.written();
+
+        try testing.expect(std.mem.find(u8, text, "We use cookies") == null);
+        try testing.expect(std.mem.find(u8, text, "Accept all") == null);
+        try testing.expect(std.mem.find(u8, text, "Inherited hidden") == null);
+        try testing.expect(std.mem.find(u8, text, "Shown again") != null);
+        try testing.expect(std.mem.find(u8, text, "Page content") != null);
+    }
 }
 
 test "SemanticTree: deep nesting doesn't overflow the native stack" {
