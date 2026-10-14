@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<form id=form><select id=select><option>a<option>b</select></form>
+
+<script id=sameSetAsHTMLElement>
+{
+  // Window and Document include GlobalEventHandlers, like HTMLElement.
+  // Window leaves out the DocumentAndElementEventHandlers (copy, cut, paste),
+  // the fullscreen handlers (Element and Document only) and the touch ones.
+  const notOnWindow = [
+    'oncopy', 'oncut', 'onpaste',
+    'onfullscreenchange', 'onfullscreenerror',
+    'ontouchcancel', 'ontouchend', 'ontouchmove', 'ontouchstart',
+  ];
+  const names = Object.getOwnPropertyNames(HTMLElement.prototype)
+    .filter((n) => n.startsWith('on'));
+
+  testing.expectEqual([], names.filter((n) => !(n in document)));
+  testing.expectEqual([], names.filter((n) => !notOnWindow.includes(n) && !(n in window)));
+  testing.expectEqual([], notOnWindow.filter((n) => n in window));
+}
+</script>
+
+<script id=featureDetection>
+  // What libraries read once at load to decide whether change and submit bubble.
+  testing.expectEqual(true, 'onchange' in window);
+  testing.expectEqual(true, 'onsubmit' in window);
+  testing.expectEqual(true, 'oninput' in window);
+  testing.expectEqual(true, 'onkeydown' in window);
+  testing.expectEqual(true, 'onchange' in document);
+  testing.expectEqual(true, 'onsubmit' in document);
+</script>
+
+<script id=handlersRunForBubblingEvents>
+{
+  const seen = [];
+  testing.expectEqual(null, window.onchange);
+  testing.expectEqual(null, document.onchange);
+
+  window.onchange = function (e) { seen.push(['window', this === window, e.target.id]); };
+  document.onchange = function (e) { seen.push(['document', this === document, e.target.id]); };
+  testing.expectEqual('function', typeof window.onchange);
+  testing.expectEqual('function', typeof document.onchange);
+
+  $('#select').dispatchEvent(new Event('change', { bubbles: true }));
+  testing.expectEqual([['document', true, 'select'], ['window', true, 'select']], seen);
+
+  window.onchange = null;
+  document.onchange = 'not a function';
+  testing.expectEqual(null, window.onchange);
+  testing.expectEqual(null, document.onchange);
+
+  $('#select').dispatchEvent(new Event('change', { bubbles: true }));
+  testing.expectEqual(2, seen.length);
+}
+</script>
+
+<script id=returnFalseCancels>
+{
+  window.onsubmit = function () { return false; };
+  const e = new Event('submit', { bubbles: true, cancelable: true });
+  $('#form').dispatchEvent(e);
+  testing.expectEqual(true, e.defaultPrevented);
+  window.onsubmit = null;
+}
+</script>
