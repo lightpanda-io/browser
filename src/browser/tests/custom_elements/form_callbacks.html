@@ -99,6 +99,52 @@ customElements.define('fc-control', FcControl);
 }
 </script>
 
+<script id="move_before">
+{
+  // an atomic move never exposes the detached state
+  const container = document.getElementById('container');
+  container.innerHTML = '<form id="mb_f1"><div></div><div></div><fc-control form="mb_f1"></fc-control></form><form id="mb_f2"><fc-control></fc-control></form>';
+  const [f1, f2] = container.querySelectorAll('form');
+  const [div1, div2] = f1.querySelectorAll('div');
+  const [with_attr, control] = container.querySelectorAll('fc-control');
+  testing.expectEqual([f2], control.forms);
+  testing.expectEqual([f1], with_attr.forms);
+
+  div1.moveBefore(with_attr, null);
+  testing.expectEqual([f1], with_attr.forms);
+
+  f1.moveBefore(control, null);
+  testing.expectEqual([f2, f1], control.forms);
+
+  div2.moveBefore(control, null);
+  testing.expectEqual([f2, f1], control.forms);
+  container.innerHTML = '';
+}
+
+{
+  const container = document.getElementById('container');
+  container.innerHTML = '<fieldset disabled><legend></legend><legend><fc-control></fc-control></legend></fieldset><div></div>';
+  const fieldset = container.querySelector('fieldset');
+  const div = container.querySelector('div');
+  const [first, second] = fieldset.querySelectorAll('legend');
+  const control = container.querySelector('fc-control');
+  testing.expectEqual([true], control.disabled);
+
+  // moved out of the fieldset: the control's legend becomes the first one
+  div.moveBefore(first, null);
+  testing.expectEqual([true, false], control.disabled);
+
+  // moved back in front
+  fieldset.moveBefore(first, second);
+  testing.expectEqual([true, false, true], control.disabled);
+
+  // reordered within the same fieldset
+  fieldset.moveBefore(second, first);
+  testing.expectEqual([true, false, true, false], control.disabled);
+  container.innerHTML = '';
+}
+</script>
+
 <script id="disabled">
 {
   const control = new FcControl();

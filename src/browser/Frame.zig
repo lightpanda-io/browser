@@ -2955,6 +2955,8 @@ const RemoveNodeOpts = struct {
     reconnect_to: ?*Node,
     // Set to false when the caller queues its own combined mutation record
     notify_observers: bool = true,
+    // The node will be re-inserted right away, the detached must not be observed
+    move: bool = false,
 };
 
 pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpts) void {
@@ -2986,7 +2988,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     child._parent = null;
 
     // deferred: the id maps are only updated further down
-    defer if (self._form_associated.items.len != 0) {
+    defer if (opts.move == false and self._form_associated.items.len != 0) {
         Element.Html.Custom.formTreeChanged(parent, child, self);
     };
 

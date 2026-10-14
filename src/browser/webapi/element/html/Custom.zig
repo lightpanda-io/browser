@@ -143,12 +143,19 @@ pub fn formTreeChanged(parent: *Node, child: *Node, frame: *Frame) void {
         formAttributeTargetsChanged(frame);
     }
 
-    if (el.getTag() == .legend) {
-        const fieldset = parent.is(Element) orelse return;
-        if (fieldset.getTag() == .fieldset) {
-            // legends moving around in a fieldset can alter the state of the form
-            formStateChangedInSubtree(fieldset.asNode(), frame);
-        }
+    formLegendMoved(parent, child, frame);
+}
+
+// `child` was inserted into or removed from `parent`. Legends moving around in
+// a fieldset can alter the disabled state of its other descendants.
+pub fn formLegendMoved(parent: *Node, child: *Node, frame: *Frame) void {
+    const el = child.is(Element) orelse return;
+    if (el.getTag() != .legend) {
+        return;
+    }
+    const fieldset = parent.is(Element) orelse return;
+    if (fieldset.getTag() == .fieldset) {
+        formStateChangedInSubtree(fieldset.asNode(), frame);
     }
 }
 
