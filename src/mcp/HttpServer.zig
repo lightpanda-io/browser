@@ -135,7 +135,7 @@ app: *App,
 
 // Blocking listener owned by run(); -1 until bound. stop() unblocks the
 // accept from another thread.
-listener: posix.socket_t = -1,
+listener: std.atomic.Value(posix.socket_t) = .init(-1),
 shutting_down: std.atomic.Value(bool) = .init(false),
 
 // Registration happens in onAccept — the same (accept) thread deinit runs
@@ -315,7 +315,7 @@ pub fn run(self: *HttpServer, address: sys_net.IpAddress) !void {
     // --port 0 asks the OS for an ephemeral port; log the one we actually got.
     log.note(.mcp, "mcp http server running", .{ .address = try sys_net.boundAddress(listener) });
 
-    self.listener = listener;
+    self.listener.store(listener, .release);
     // On non-Linux stop() closes the listener itself to unblock accept.
     defer if (builtin.target.os.tag == .linux) {
         _ = std.c.close(listener);
@@ -341,8 +341,8 @@ pub fn run(self: *HttpServer, address: sys_net.IpAddress) !void {
 pub fn stop(self: *HttpServer) void {
     self.shutting_down.store(true, .release);
     switch (builtin.target.os.tag) {
-        .linux => sys_net.shutdown(self.listener, .recv) catch {},
-        else => _ = std.c.close(self.listener),
+        .linux => sys_net.shutdown(self.listener.load(.acquire), .recv) catch {},
+        else => _ = std.c.close(self.listener.load(.acquire)),
     }
 }
 
@@ -664,7 +664,8 @@ test "HttpServer - sessions run on their own threads" {
     var port: u16 = 0;
     while (port == 0) {
         lp.io.sleep(.fromMilliseconds(5), .awake) catch {};
-        if (http.listener != -1) port = (sys_net.boundAddress(http.listener) catch continue).getPort();
+        const listener = http.listener.load(.acquire);
+        if (listener != -1) port = (sys_net.boundAddress(listener) catch continue).getPort();
     }
 
     // A page that takes 1.5s to load in one session...
