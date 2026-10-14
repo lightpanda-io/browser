@@ -1,0 +1,6 @@
+<!doctype html>
+<title></title>
+<img id="attr" src="a.png" onload="document.title += 'attr;'">
+<img id="none" src="b.png">
+<img id="prop" src="c.png">
+<script>document.getElementById('prop').onload = () => document.title += 'prop;';</script>

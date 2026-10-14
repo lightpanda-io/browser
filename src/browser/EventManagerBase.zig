@@ -431,6 +431,11 @@ pub fn hasDirectListeners(self: *EventManagerBase, target: *EventTarget, typ: []
     return self.hasListeners(target, typ);
 }
 
+pub fn hasHandler(self: *EventManagerBase, target: *EventTarget, typ: []const u8) bool {
+    const list = self.getListeners(target, .wrap(typ)) orelse return false;
+    return findHandler(list) != null;
+}
+
 fn findListener(list: *const std.DoublyLinkedList, callback: Callback, capture: bool) ?*Listener {
     var node = list.first;
     while (node) |n| {

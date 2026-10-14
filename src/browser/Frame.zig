@@ -2818,7 +2818,7 @@ fn dispatchQueuedEvents(self: *Frame) !void {
         const element = html_element.asElement();
         switch (queued.kind) {
             .load => {
-                if (has_dom_load_listener) {
+                if (has_dom_load_listener or self._event_manager.hasHandler(element.asEventTarget(), "load")) {
                     try self.fireElementEvent(element, comptime .wrap("load"));
                 }
             },
@@ -4432,6 +4432,18 @@ test "Frame: cancelling navigation does not revive an aborted parser" {
     , null);
     try testing.expectEqual("Original", try (try ls.local.exec("document.title", null)).toStringSlice());
     try testing.expectEqual(null, frame.document._script_created_parser);
+}
+
+test "Frame: an onload handler does not dispatch load to other elements" {
+    const page = try testing.pageTest("fixtures/load_handler_only.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    try testing.expectString("attr;prop;", (try frame.getTitle()).?);
+    try testing.expectEqual(false, frame._event_manager.has_dom_load_listener);
+
+    const none = frame.document.getElementById("none", frame).?;
+    try testing.expectEqual(false, frame._event_manager.hasHandler(none.asEventTarget(), "load"));
 }
 
 test "Frame: static immediate meta refresh navigates" {

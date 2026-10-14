@@ -113,6 +113,15 @@ fn noteListener(self: *EventManager, target: *EventTarget, listener: *const List
     if (target._type == .node and listener.typ.eql(comptime .wrap("load"))) {
         // optimization so that we avoid firing load for things (e.g. images)
         // if there's no load listener regsitered (which is pretty common).
+        switch (listener.function) {
+            .handler, .handler_source => {
+                // Handlers are non-capture and load never bubbles. We don't
+                // need to set the frame-wide has_dom_load_listener. Instead, we
+                // can check this element eplicitly.
+                return;
+            },
+            .value, .object => {},
+        }
         // A frameless document's node (createHTMLDocument, DOMParser) can be
         // adopted into the caller's document later and load there.
         const owner = target.subtype(Node).ownerFrame(self.frame) orelse self.frame;
@@ -174,6 +183,10 @@ pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, 
 /// Use this to avoid creating an event when there are no listeners.
 pub fn hasDirectListeners(self: *EventManager, target: *EventTarget, typ: []const u8) bool {
     return self.base.hasDirectListeners(target, typ);
+}
+
+pub fn hasHandler(self: *EventManager, target: *EventTarget, typ: []const u8) bool {
+    return self.base.hasHandler(target, typ);
 }
 
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
