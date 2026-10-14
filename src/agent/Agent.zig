@@ -1275,10 +1275,11 @@ fn abortSave(self: *Agent, baseline: usize, reason: []const u8) void {
     self.failSave(reason);
 }
 
-/// Save synthesis warrants more reasoning than a normal turn. `.none` stays off
-/// so users can opt out on models that reject `reasoning_effort` (e.g. Mistral).
+/// Save synthesis warrants more reasoning than a normal turn. `.null` and
+/// `.none` are kept as chosen.
 fn bumpedEffort(effort: Config.Effort) Config.Effort {
     return switch (effort) {
+        .null => .null,
         .none => .none,
         .minimal => .low,
         .low => .medium,
@@ -1926,8 +1927,11 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 .max_tokens = 4096,
                 .tool_choice = .none,
                 // .low caps thinking so reasoning models still emit an answer;
-                // `.none` stays off to opt out on models that reject it.
-                .effort = if (self.effort == .none) .none else .low,
+                // `.null` and `.none` are kept as chosen.
+                .effort = switch (self.effort) {
+                    .null, .none => self.effort,
+                    else => .low,
+                },
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
                 .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
                 .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
