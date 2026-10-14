@@ -67,7 +67,6 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .setPauseOnExceptions => return setPauseOnExceptions(cmd),
         .pause,
         .pauseOnAsyncCall,
-        .@"resume",
         .stepInto,
         .stepOver,
         .stepOut,
@@ -164,7 +163,6 @@ test "cdp.debugger: pause commands are rejected" {
     for ([_][]const u8{
         "Debugger.pause",
         "Debugger.pauseOnAsyncCall",
-        "Debugger.resume",
         "Debugger.stepInto",
         "Debugger.stepOver",
         "Debugger.stepOut",
