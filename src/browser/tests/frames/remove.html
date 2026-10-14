@@ -144,3 +144,24 @@
     });
   }
 </script>
+
+<!-- removed by its own window load handler: discard already released the
+     parent, the rest of the load steps must not notify it again -->
+<script id=removed_by_own_load_handler type=module>
+  {
+    const state = await testing.async();
+
+    const f = document.createElement('iframe');
+    window.removeLoadingFrame = () => {
+      f.remove();
+      setTimeout(() => state.resolve(), 10);
+    };
+    f.srcdoc = '<script>onload = () => parent.removeLoadingFrame();<\/script>';
+    document.body.appendChild(f);
+
+    await state.done(() => {
+      delete window.removeLoadingFrame;
+      testing.expectEqual(null, f.contentWindow);
+    });
+  }
+</script>

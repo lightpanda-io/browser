@@ -416,7 +416,8 @@ pub const Streaming = struct {
         while (true) {
             try self.feed(input);
             if (self.pending_input.items.len == 0) {
-                return;
+                // document.write's text must be visible when it returns,
+                return self.parser.flushPendingText();
             }
             // Scripts that ran during the feed queued more markup via
             // re-entrant read(). This swaps the buffers, and ensures that

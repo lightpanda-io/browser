@@ -82,3 +82,76 @@
     });
   }
 </script>
+
+<script id=close_from_load_handler type=module>
+  {
+    const state = await testing.async();
+
+    // Each window load opens, writes + closes again: the next load must be
+    // queued, not fired from within close() (which recursed, and crashed on
+    // the write).
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    const cw = iframe.contentWindow;
+    let depth = 0;
+    let max_depth = 0;
+    let count = 0;
+
+    const rewrite = () => {
+      const doc = cw.document;
+      doc.open();
+      // open() erased the window's listeners
+      cw.addEventListener('load', onload);
+      doc.write('<b id=n>' + count + '</b>');
+      doc.close();
+    };
+    const onload = () => {
+      depth += 1;
+      max_depth = Math.max(max_depth, depth);
+      count += 1;
+      if (count < 3) {
+        rewrite();
+      } else {
+        state.resolve();
+      }
+      depth -= 1;
+    };
+    setTimeout(rewrite, 5);
+
+    await state.done(() => {
+      testing.expectEqual(1, max_depth);
+      testing.expectEqual(3, count);
+      testing.expectEqual('2', cw.document.getElementById('n').textContent);
+    });
+  }
+</script>
+
+<!--
+  https://html.spec.whatwg.org/multipage/iframe-embed-object.html#iframe-load-event-steps
+  open() from within the iframe element's load event mutes its later ones.
+-->
+<script id=open_during_iframe_load_mutes type=module>
+  {
+    const state = await testing.async();
+
+    const iframe = document.createElement('iframe');
+    let loads = 0;
+    let window_loads = 0;
+    iframe.addEventListener('load', () => {
+      loads += 1;
+      if (loads > 1) return;
+      const doc = iframe.contentDocument;
+      doc.open();
+      iframe.contentWindow.addEventListener('load', () => window_loads += 1);
+      doc.write('<p>muted</p>');
+      doc.close();
+      setTimeout(() => state.resolve(), 10);
+    });
+    document.body.appendChild(iframe);
+
+    await state.done(() => {
+      testing.expectEqual(1, loads);
+      testing.expectEqual(1, window_loads);
+    });
+  }
+</script>

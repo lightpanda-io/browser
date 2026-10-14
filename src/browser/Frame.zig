@@ -452,7 +452,16 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
 }
 
 pub fn deinit(self: *Frame) void {
+    // open/write become no-ops.
+    self.document._navigated_away = true;
     for (self.child_frames.items) |frame| {
+        // The <iframe> outlives its frame in our (now inactive) document:
+        // removing it later must not discard the freed frame.
+        if (frame.iframe) |iframe| {
+            // the <iframe> outlives it frame. If the <iframe> is removed again,
+            // don't try to free the frame again.
+            iframe._window = null;
+        }
         frame.deinit();
     }
 
@@ -1440,15 +1449,9 @@ fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void
     const entered = self.js.enter(&hs);
     defer entered.exit();
 
-    blk: {
-        const event = Event.initTrusted(comptime .wrap("load"), .{}, self.page) catch |err| {
-            log.err(.frame, "iframe event init", .{ .err = err, .url = iframe.srcAttribute() });
-            break :blk;
-        };
-        self._event_manager.dispatch(iframe.asNode().asEventTarget(), event) catch |err| {
-            log.debug(.js, "iframe onload", .{ .err = err, .url = iframe.srcAttribute() });
-        };
-    }
+    self.fireIFrameLoad(iframe) catch |err| {
+        log.debug(.js, "iframe onload", .{ .err = err, .url = iframe.srcAttribute() });
+    };
 
     if (delays_load) {
         self.pendingLoadCompleted();
@@ -1467,16 +1470,29 @@ pub fn pendingLoadCompleted(self: *Frame) void {
 
 // A document.open() has been closed. If it was opened after it loaded, it
 // will re-trigger DOMContentLoaded and load.
-pub fn scriptCreatedParserDone(self: *Frame) void {
+pub fn scriptCreatedParserDone(self: *Frame) !void {
     switch (self._load_state) {
         .parsing, .load => {},
         .waiting => self._load_state = .parsing,
         .complete => {
-            self._load_state = .parsing;
-            self._parent_notified = false;
-            // the parent was already released the first time, we don't
-            // want documentIsComplete to re-trigger it.
-            self._delays_parent_load = false;
+            // Queued, as in Chrome: firing from within document.close() lets
+            // a load handler that writes + closes again recurse into itself.
+            return self.js.scheduler.add(self, struct {
+                fn run(ctx: *anyopaque) !?u32 {
+                    const f: *Frame = @ptrCast(@alignCast(ctx));
+                    // re-opened since: its own close() queues the events
+                    if (f.document._script_created_parser != null) {
+                        return null;
+                    }
+                    f._load_state = .parsing;
+                    f._parent_notified = false;
+                    // the parent was already released the first time, we don't
+                    // want documentIsComplete to re-trigger it.
+                    f._delays_parent_load = false;
+                    f.documentIsComplete();
+                    return null;
+                }
+            }.run, 0, .{ .name = "frame.scriptCreatedParserDone" });
         },
     }
     self.documentIsComplete();
@@ -1534,6 +1550,12 @@ fn _documentIsComplete(self: *Frame) !void {
         // with the document as the target.
         event._target = self.document.asEventTarget();
         try self._event_manager.dispatchDirect(window_target, event, .{ .inject_target = false, .context = "page load" });
+    }
+
+    if (self.window._closed) {
+        // discarded by its own load handler: no longer active, and discard()
+        // released the parent already
+        return;
     }
 
     self._session.notification.dispatch(.frame_loaded, &.{
@@ -2792,6 +2814,20 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     try self.fireElementEvent(element, comptime .wrap("load"));
 }
 
+// https://html.spec.whatwg.org/multipage/iframe-embed-object.html#iframe-load-event-steps
+// A document.open() from within this event mutes the element's later loads.
+fn fireIFrameLoad(self: *Frame, iframe: *IFrame) !void {
+    const child_doc = if (iframe._window) |w| w._frame.document else null;
+    if (child_doc) |doc| {
+        if (doc._mute_iframe_load) return;
+        doc._iframe_load_in_progress = true;
+    }
+    defer if (child_doc) |doc| {
+        doc._iframe_load_in_progress = false;
+    };
+    try self.fireElementEvent(iframe.asElement(), comptime .wrap("load"));
+}
+
 fn fireElementEvent(self: *Frame, el: *Element, name: String) !void {
     const event = try Event.initTrusted(name, .{}, self.page);
     try self._event_manager.dispatch(el.asEventTarget(), event);
@@ -2819,7 +2855,11 @@ fn dispatchQueuedEvents(self: *Frame) !void {
         switch (queued.kind) {
             .load => {
                 if (has_dom_load_listener or self._event_manager.hasHandler(element.asEventTarget(), "load")) {
-                    try self.fireElementEvent(element, comptime .wrap("load"));
+                    if (html_element.is(IFrame)) |iframe| {
+                        try self.fireIFrameLoad(iframe);
+                    } else {
+                        try self.fireElementEvent(element, comptime .wrap("load"));
+                    }
                 }
             },
             .@"error" => {
