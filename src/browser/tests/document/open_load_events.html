@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<iframe id=loaded src="about:blank"></iframe>
+
+<script id=open_close_fires_load_events type=module>
+  {
+    const state = await testing.async();
+
+    const cw = $('#loaded').contentWindow;
+    const doc = cw.document;
+    const events = [];
+
+    // registered before open(): erased by it
+    cw.addEventListener('load', () => events.push('old window load'));
+    cw.onload = () => events.push('old window onload');
+    doc.addEventListener('DOMContentLoaded', () => events.push('old dcl'));
+    doc.onreadystatechange = () => events.push('old readystatechange');
+
+    // descendants, shadow trees included, lose theirs; detached nodes don't
+    const child = doc.body.appendChild(doc.createElement('div'));
+    child.addEventListener('ping', () => events.push('old child'));
+    const shadowChild = child.attachShadow({ mode: 'open' }).appendChild(doc.createElement('span'));
+    shadowChild.addEventListener('ping', () => events.push('old shadow child'));
+    const detached = doc.createElement('div');
+    detached.addEventListener('ping', () => events.push('detached'));
+
+    // after parsing, so open() clears the document
+    setTimeout(() => {
+      doc.open();
+      testing.expectEqual('loading', doc.readyState);
+
+      child.dispatchEvent(new cw.Event('ping'));
+      shadowChild.dispatchEvent(new cw.Event('ping'));
+      detached.dispatchEvent(new cw.Event('ping'));
+
+      doc.addEventListener('readystatechange', () => events.push('readystatechange ' + doc.readyState));
+      doc.addEventListener('DOMContentLoaded', () => events.push('dcl'));
+      cw.addEventListener('load', () => events.push('window load'));
+
+      doc.write('<p id=written>hello</p>');
+      doc.close();
+
+      setTimeout(() => state.resolve(), 10);
+    }, 5);
+
+    await state.done(() => {
+      testing.expectEqual('hello', doc.getElementById('written').textContent);
+      testing.expectEqual('complete', doc.readyState);
+      testing.expectEqual([
+        'detached',
+        'readystatechange interactive',
+        'dcl',
+        'readystatechange complete',
+        'window load',
+      ], events);
+    });
+  }
+</script>
+
+<script id=open_close_on_fresh_iframe type=module>
+  {
+    const state = await testing.async();
+
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    const cw = iframe.contentWindow;
+    const doc = cw.document;
+    const events = [];
+
+    doc.open();
+    doc.addEventListener('DOMContentLoaded', () => events.push('dcl'));
+    cw.addEventListener('load', () => events.push('window load'));
+    doc.write('<p id=written>fresh</p>');
+    doc.close();
+
+    setTimeout(() => state.resolve(), 10);
+
+    await state.done(() => {
+      testing.expectEqual('fresh', doc.getElementById('written').textContent);
+      testing.expectEqual(['dcl', 'window load'], events);
+    });
+  }
+</script>

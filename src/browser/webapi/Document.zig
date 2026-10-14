@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const idna = @import("../../sys/idna.zig");
 const public_suffix_list = @import("../../data/public_suffix_list.zig");
 
+const EventTarget = @import("EventTarget.zig");
 const URL = @import("../URL.zig");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
@@ -98,36 +99,6 @@ _open_popovers: std.ArrayList(*Element) = .empty,
 // document.open/close/write/writeln must throw InvalidStateError.
 _throw_on_dynamic_markup_insertion_counter: u32 = 0,
 
-_on_selectionchange: ?js.Function.Global = null,
-
-fn getOnSelectionChange(self: *Document) ?js.Function.Global {
-    return self._on_selectionchange;
-}
-
-fn setOnSelectionChange(self: *Document, listener: ?js.Function) !void {
-    if (listener) |listen| {
-        self._on_selectionchange = try listen.persistWithThis(self);
-    } else {
-        self._on_selectionchange = null;
-    }
-}
-
-// Stored in the frame's attribute-listener map (like element and ShadowRoot
-// property handlers), which the dispatch propagation path consults for any
-// event target.
-fn getOnClick(self: *Document, frame: *Frame) ?js.Function.Global {
-    return (self._frame orelse frame)._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = .onclick });
-}
-
-fn setOnClick(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    const owner = self._frame orelse frame;
-    if (Window.getFunctionFromSetter(setter)) |cb| {
-        try owner._event_target_attr_listeners.put(owner.page_arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
-    } else {
-        _ = owner._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onclick });
-    }
-}
-
 pub const Type = union(enum) {
     generic,
     html: *HTMLDocument,
@@ -159,7 +130,7 @@ pub fn asNode(self: *Document) *Node {
     return self._proto;
 }
 
-pub fn asEventTarget(self: *Document) *@import("EventTarget.zig") {
+pub fn asEventTarget(self: *Document) *EventTarget {
     return self._proto.asEventTarget();
 }
 
@@ -899,7 +870,7 @@ fn importNode(self: *const Document, node: *Node, deep_: ?bool, frame: *Frame) !
 }
 
 pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    try validateDocumentNodes(self, nodes, false);
+    try validateDocumentNodes(self, nodes);
 
     const parent = self.asNode();
     frame.domChanged();
@@ -923,7 +894,7 @@ pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !v
 }
 
 pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    try validateDocumentNodes(self, nodes, false);
+    try validateDocumentNodes(self, nodes);
 
     const parent = self.asNode();
     frame.domChanged();
@@ -966,7 +937,6 @@ pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !
 }
 
 pub fn replaceChildren(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    try validateDocumentNodes(self, nodes, false);
     return self.asNode().replaceChildren(nodes, frame);
 }
 
@@ -1020,7 +990,9 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
         preorder_index += 1;
         if (node.is(Element)) |element| {
             hidden = hidden or style_manager.hasDisplayNone(element);
-            if (!hidden) {
+            // Unlike display:none, a child can opt back in, so the subtree is
+            // still walked.
+            if (!hidden and style_manager.isHitTestable(element)) {
                 if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
                     if (ignore_x) {
                         topmost = element;
@@ -1050,9 +1022,13 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
 fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *Element {
     // Get topmost element
     var current: ?*Element = (try self.elementFromPoint(x, y, frame)) orelse return &.{};
+    const style_manager = &(self.asNode().ownerFrame(frame) orelse return &.{})._style_manager;
     var result: std.ArrayList(*Element) = .empty;
     while (current) |el| {
-        try result.append(frame.local_arena, el);
+        // Chrome always ends the list with the root element.
+        if (el.parentElement() == null or style_manager.isHitTestable(el)) {
+            try result.append(frame.local_arena, el);
+        }
         current = el.parentElement();
     }
     return result.items;
@@ -1249,6 +1225,14 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     const doc_node = self.asNode();
 
     {
+        // Erase all event listeners and handlers of the document
+        try frame._event_manager.removeShadowIncludingDescendants(call_frame.local_arena, doc_node);
+        if (frame.document == self) {
+            frame.page.event_listeners.removeTarget(frame.window.asEventTarget());
+        }
+    }
+
+    {
         // Remove all children from document
         var it = doc_node.childrenIterator();
         while (it.next()) |child| {
@@ -1323,7 +1307,7 @@ fn finishScriptCreatedParser(self: *Document, frame: *Frame) !void {
     // iframe written into via document.write), so we can't rely on it.
     frame._script_manager.base.scriptCreatedParseDone();
 
-    frame.documentIsComplete();
+    frame.scriptCreatedParserDone();
 }
 
 fn getFirstElementChild(self: *Document) ?*Element {
@@ -1391,22 +1375,17 @@ fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
 // - At most one DocumentType child
 // - No Document, Attribute, or Text nodes
 // - Only Element, DocumentType, Comment, and ProcessingInstruction are allowed
-// When replacing=true, existing children are not counted (for replaceChildren)
-fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText, comptime replacing: bool) !void {
+fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText) !void {
     const parent = self.asNode();
 
-    // Check existing elements and doctypes (unless we're replacing all children)
     var has_element = false;
     var has_doctype = false;
-
-    if (!replacing) {
-        var it = parent.childrenIterator();
-        while (it.next()) |child| {
-            if (child._type == .element) {
-                has_element = true;
-            } else if (child._type == .document_type) {
-                has_doctype = true;
-            }
+    var it = parent.childrenIterator();
+    while (it.next()) |child| {
+        if (child._type == .element) {
+            has_element = true;
+        } else if (child._type == .document_type) {
+            has_doctype = true;
         }
     }
 
@@ -1653,12 +1632,12 @@ pub const JsApi = struct {
         return Sanitizer.parseHTML(html, options, false, frame);
     }
 
-    pub const onselectionchange = bridge.accessor(Document.getOnSelectionChange, Document.setOnSelectionChange, .{});
-    pub const onclick = bridge.accessor(Document.getOnClick, Document.setOnClick, .{});
-    pub const ontouchstart = bridge.accessor(handlerAccessor(.ontouchstart).get, handlerAccessor(.ontouchstart).set, .{});
-    pub const ontouchend = bridge.accessor(handlerAccessor(.ontouchend).get, handlerAccessor(.ontouchend).set, .{});
-    pub const ontouchmove = bridge.accessor(handlerAccessor(.ontouchmove).get, handlerAccessor(.ontouchmove).set, .{});
-    pub const ontouchcancel = bridge.accessor(handlerAccessor(.ontouchcancel).get, handlerAccessor(.ontouchcancel).set, .{});
+    pub const onselectionchange = EventTarget.handlerAccessor(Document, "selectionchange");
+    pub const onclick = EventTarget.handlerAccessor(Document, "click");
+    pub const ontouchstart = EventTarget.handlerAccessor(Document, "touchstart");
+    pub const ontouchend = EventTarget.handlerAccessor(Document, "touchend");
+    pub const ontouchmove = EventTarget.handlerAccessor(Document, "touchmove");
+    pub const ontouchcancel = EventTarget.handlerAccessor(Document, "touchcancel");
     pub const URL = bridge.accessor(Document.getURL, null, .{});
     pub const location = bridge.accessor(Document.getLocation, Document.setLocation, .{});
     pub const documentURI = bridge.accessor(Document.getURL, null, .{});
@@ -1729,6 +1708,9 @@ pub const JsApi = struct {
     pub const defaultView = bridge.accessor(struct {
         fn defaultView(self: *const Document) ?*@import("Window.zig") {
             const frame = self._frame orelse return null;
+            if (frame.window._closed) {
+                return null;
+            }
             return frame.window;
         }
     }.defaultView, null, .{});
@@ -1745,26 +1727,6 @@ pub const JsApi = struct {
     pub const compatMode = bridge.accessor(Document.getCompatMode, null, .{});
     pub const lastModified = bridge.accessor(Document.getLastModified, null, .{});
     pub const referrer = bridge.accessor(Document.getReferrer, null, .{});
-
-    // Generates a getter/setter pair backed by the frame's attribute-listener
-    // map, like onclick above, for other document event handler properties.
-    fn handlerAccessor(comptime handler: @import("global_event_handlers.zig").Handler) type {
-        return struct {
-            pub fn get(self: *Document, frame: *Frame) ?js.Function.Global {
-                const owner = self._frame orelse frame;
-                return owner._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = handler });
-            }
-
-            pub fn set(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-                const owner = self._frame orelse frame;
-                if (Window.getFunctionFromSetter(setter)) |cb| {
-                    try owner._event_target_attr_listeners.put(owner.page_arena, .{ .target = self.asEventTarget(), .handler = handler }, cb);
-                } else {
-                    _ = owner._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = handler });
-                }
-            }
-        };
-    }
 };
 
 const testing = @import("../../testing.zig");

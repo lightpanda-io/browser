@@ -79,7 +79,8 @@ pub fn init(title: []const u8, options_: ?Options, exec: *const Execution) !*Not
     });
 }
 
-pub fn deinit(self: *Notification, _: *Page) void {
+pub fn deinit(self: *Notification, page: *Page) void {
+    page.removeTarget(self._proto);
     self._arena.release();
 }
 

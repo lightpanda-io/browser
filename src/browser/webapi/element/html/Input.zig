@@ -122,20 +122,6 @@ _selection_start: u32 = 0,
 _selection_end: u32 = 0,
 _selection_direction: Selection.SelectionDirection = .none,
 
-_on_selectionchange: ?js.Function.Global = null,
-
-fn getOnSelectionChange(self: *Input) ?js.Function.Global {
-    return self._on_selectionchange;
-}
-
-fn setOnSelectionChange(self: *Input, listener: ?js.Function) !void {
-    if (listener) |listen| {
-        self._on_selectionchange = try listen.persistWithThis(self);
-    } else {
-        self._on_selectionchange = null;
-    }
-}
-
 pub fn asElement(self: *Input) *Element {
     return Factory.protoOf(self).asElement();
 }
@@ -719,31 +705,7 @@ fn getList(self: *Input, frame: *Frame) ?*HtmlElement.DataList {
 }
 
 pub fn getForm(self: *Input, frame: *Frame) ?*Form {
-    const element = self.asElement();
-
-    // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        // form= resolves in the control's own tree (shadow root or document),
-        // not the calling realm's. @constCast: getElementByIdFromNode wants a
-        // mutable *Node but doesn't mutate it (same idiom as radioGroupIterator);
-        // keeping getForm const avoids a wide validity-path const cascade.
-        if (frame.getElementByIdFromNode(element.asNode(), form_id)) |form_element| {
-            return form_element.is(Form);
-        }
-        // form attribute present but invalid - no form owner
-        return null;
-    }
-
-    // No form attribute - traverse ancestors looking for a <form>
-    var node = element.asConstNode()._parent;
-    while (node) |n| {
-        if (n.is(Element.Html.Form)) |form| {
-            return form;
-        }
-        node = n._parent;
-    }
-
-    return null;
+    return Form.ownerOf(self.asElement(), frame);
 }
 
 // Form submission attribute overrides
@@ -818,6 +780,20 @@ fn changeType(self: *Input, new_type: Type, frame: *Frame) !void {
         },
         .filename => self._value = null,
     }
+}
+
+pub fn reset(self: *Input, frame: *Frame) !void {
+    self._value_dirty = false;
+    self._checked_dirty = false;
+    self._user_edited = false;
+    self._checked = self._default_checked;
+    if (self._input_type.valueMode() == .value) {
+        try self.syncValueFromAttribute(frame);
+    }
+    if (self._files != null) {
+        try self.replaceFiles(&.{}, frame);
+    }
+    frame.styleChanged();
 }
 
 // The value of a non-dirty control in value mode is its sanitized value attribute
@@ -1549,7 +1525,6 @@ pub const JsApi = struct {
         return self.setValue(try js_value.toZig([]const u8), frame);
     }
 
-    pub const onselectionchange = bridge.accessor(Input.getOnSelectionChange, Input.setOnSelectionChange, .{});
     pub const @"type" = bridge.accessor(Input.getType, Input.setType, .{ .ce_reactions = true });
     pub const value = bridge.accessor(Input.getValueForJS, setValueFromJS, .{ .ce_reactions = true });
     pub const valueAsNumber = bridge.accessor(Input.getValueAsNumber, Input.setValueAsNumber, .{});

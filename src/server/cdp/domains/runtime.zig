@@ -168,6 +168,58 @@ pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     }, .{ .session_id = session_id });
 }
 
+const ExceptionDetails = struct {
+    exceptionId: u32,
+    text: []const u8,
+    lineNumber: u32,
+    columnNumber: u32,
+    url: ?[]const u8,
+    exception: RemoteObject,
+    executionContextId: i32,
+};
+
+pub fn exceptionThrown(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.ExceptionThrown) !void {
+    // Like consoleAPICalled: the primary session's inspector mints the handle.
+    const session_id = bc.session_id orelse return;
+    const inspector_session = try bc.inspectorSession(session_id);
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const value = event.value;
+    const remote_object = try inspector_session.getRemoteObject(&ls.local, "", value);
+    defer remote_object.deinit();
+
+    var exception = RemoteObject{
+        .type = try remote_object.getType(arena),
+        .subtype = try remote_object.getSubtype(arena),
+        .className = try remote_object.getClassName(arena),
+        .description = try remote_object.getDescription(arena),
+        .objectId = try remote_object.getObjectId(arena),
+    };
+    try exception.setPrimitive(arena, value);
+
+    // The location is 1-based, CDP's is 0-based.
+    const location = event.location;
+    const exception_id = bc.next_exception_id;
+    bc.next_exception_id += 1;
+
+    return bc.cdp.sendEvent("Runtime.exceptionThrown", .{
+        .timestamp = event.timestamp,
+        .exceptionDetails = ExceptionDetails{
+            .exceptionId = exception_id,
+            .text = "Uncaught",
+            .lineNumber = location.line -| 1,
+            .columnNumber = location.column -| 1,
+            .url = if (location.url.len == 0) null else location.url,
+            .exception = exception,
+            .executionContextId = bc.inspector().getContextId(&ls.local),
+        },
+    }, .{ .session_id = session_id });
+}
+
 const testing = @import("../testing.zig");
 
 test "cdp.runtime: inspector-handled methods pass through" {
@@ -253,6 +305,87 @@ test "cdp.runtime: inspector events go to the session that enabled them" {
     try ctx.expectSentEvent("Runtime.executionContextCreated", .{ .context = .{ .auxData = .{ .isDefault = true, .type = "default" } } }, .{ .session_id = "SID-PRIMARY" });
     try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.executionContextCreated", "SID-AUX"));
     try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.executionContextCreated", "SID-PRIMARY"));
+}
+
+test "cdp.runtime: an uncaught exception emits Runtime.exceptionThrown" {
+    testing.silenceLog(&.{.js});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC", .url = "hi.html", .target_id = "FID-0000000EXC".* });
+    try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    // An inline handler's exception is reported to the window and nothing
+    // cancels it: uncaught.
+    _ = try ls.local.exec(
+        \\document.body.setAttribute('onclick', "throw new TypeError('boom')");
+        \\document.body.click();
+    , null);
+
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{
+            .text = "Uncaught",
+            .exception = .{ .type = "object", .subtype = "error", .className = "TypeError" },
+        },
+    }, .{});
+}
+
+test "cdp.runtime: Runtime.exceptionThrown locates an Error where it was created" {
+    testing.silenceLog(&.{.js});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC3", .url = "hi.html", .target_id = "FID-000000EXC3".* });
+    try ctx.processMessage(.{ .id = 62, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec(
+        \\const unused = 1;
+        \\const err = new Error('here');
+        \\reportError(err);
+    , "exc.js");
+
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{ .lineNumber = 1, .columnNumber = 12, .url = "exc.js" },
+    }, .{});
+}
+
+test "cdp.runtime: an exception whose error event is cancelled is not reported" {
+    testing.silenceLog(&.{.js});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC2", .url = "hi.html", .target_id = "FID-000000EXC2".* });
+    try ctx.processMessage(.{ .id = 61, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    // preventDefault() on the error event marks the exception handled, as
+    // in Chrome; only the second report is uncaught.
+    _ = try ls.local.exec(
+        \\const quiet = (e) => e.preventDefault();
+        \\window.addEventListener('error', quiet);
+        \\reportError('quiet');
+        \\window.removeEventListener('error', quiet);
+        \\reportError('loud');
+    , null);
+
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{ .exception = .{ .type = "string", .value = "loud" } },
+    }, .{});
+    try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
 }
 
 test "cdp.runtime: consoleAPICalled type matches the console method" {

@@ -48,8 +48,6 @@ _timeline: ?js.Object.Global = null,
 _ready_resolver: ?js.PromiseResolver.Global = null,
 _finished_resolver: ?js.PromiseResolver.Global = null,
 _startTime: ?f64 = null,
-_onFinish: ?js.Function.Global = null,
-_onCancel: ?js.Function.Global = null,
 _playState: PlayState = .idle,
 
 // Fake the animation by passing the states:
@@ -68,7 +66,8 @@ pub fn init(frame: *Frame) !*Animation {
     });
 }
 
-pub fn deinit(self: *Animation, _: *Page) void {
+pub fn deinit(self: *Animation, page: *Page) void {
+    page.event_listeners.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
@@ -157,35 +156,20 @@ fn queuePlaybackEvent(self: *Animation, comptime typ: PlaybackEventType) !void {
         fn run(ctx: *anyopaque) !?u32 {
             const animation: *Animation = @ptrCast(@alignCast(ctx));
             defer animation.releaseRef(animation._frame.page);
-            const handler = switch (typ) {
-                .finish => animation._onFinish,
-                .cancel => animation._onCancel,
-            };
-            try animation.dispatchPlaybackEvent(comptime .wrap(@tagName(typ)), handler);
+            try animation.dispatchPlaybackEvent(comptime .wrap(@tagName(typ)));
             return null;
         }
     }.run, 0, .{ .name = "animation." ++ @tagName(typ), .finalizer = Animation.cancelled });
 }
 
-fn dispatchPlaybackEvent(self: *Animation, typ: lp.String, handler: ?js.Function.Global) !void {
+fn dispatchPlaybackEvent(self: *Animation, typ: lp.String) !void {
     const frame = self._frame;
     const target = self.asEventTarget();
-    if (frame.hasDirectListeners(target, typ.str(), handler) == false) {
+    if (frame.hasDirectListeners(target, typ.str()) == false) {
         return;
     }
     const event = try AnimationPlaybackEvent.initTrusted(typ, null, frame);
-    return frame.dispatch(target, event.asEvent(), handler, .{ .context = "Animation" });
-}
-
-// The property handler for a JS-side dispatchEvent (see EventManager.dispatch).
-pub fn inlineHandler(self: *const Animation, typ: lp.String) ?js.Function.Global {
-    if (typ.eql(comptime .wrap("finish"))) {
-        return self._onFinish;
-    }
-    if (typ.eql(comptime .wrap("cancel"))) {
-        return self._onCancel;
-    }
-    return null;
+    return frame.dispatch(target, event.asEvent(), .{ .context = "Animation" });
 }
 
 pub fn reverse(_: *Animation) void {
@@ -243,10 +227,6 @@ fn setStartTime(self: *Animation, value: ?f64, frame: *Frame) !void {
     return self.play(frame);
 }
 
-fn getOnFinish(self: *const Animation) ?js.Function.Global {
-    return self._onFinish;
-}
-
 // callback function transitioning from a state to another
 fn update(ctx: *anyopaque) !?u32 {
     const self: *Animation = @ptrCast(@alignCast(ctx));
@@ -265,23 +245,11 @@ fn update(ctx: *anyopaque) !?u32 {
             if (self._finished_resolver) |resolver| {
                 ls.toLocal(resolver).resolve("Animation.getFinished", self);
             }
-            try self.dispatchPlaybackEvent(comptime .wrap("finish"), self._onFinish);
+            try self.dispatchPlaybackEvent(comptime .wrap("finish"));
         },
         .idle, .paused, .finished => {},
     }
     return null;
-}
-
-fn setOnFinish(self: *Animation, cb: ?js.Function.Global) !void {
-    self._onFinish = cb;
-}
-
-fn getOnCancel(self: *const Animation) ?js.Function.Global {
-    return self._onCancel;
-}
-
-fn setOnCancel(self: *Animation, cb: ?js.Function.Global) !void {
-    self._onCancel = cb;
 }
 
 fn playState(self: *const Animation) []const u8 {
@@ -309,8 +277,8 @@ pub const JsApi = struct {
     pub const effect = bridge.accessor(Animation.getEffect, Animation.setEffect, .{});
     pub const timeline = bridge.accessor(Animation.getTimeline, Animation.setTimeline, .{});
     pub const startTime = bridge.accessor(Animation.getStartTime, Animation.setStartTime, .{});
-    pub const onfinish = bridge.accessor(Animation.getOnFinish, Animation.setOnFinish, .{});
-    pub const oncancel = bridge.accessor(Animation.getOnCancel, Animation.setOnCancel, .{});
+    pub const onfinish = EventTarget.handlerAccessor(Animation, "finish");
+    pub const oncancel = EventTarget.handlerAccessor(Animation, "cancel");
 };
 
 const testing = @import("../../../testing.zig");

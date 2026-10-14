@@ -241,28 +241,6 @@ pub fn parentElement(self: *const Node) ?*Element {
     return parent.is(Element);
 }
 
-// Validates that a node can be inserted as a child of parent.
-fn validateNodeInsertion(parent: *Node, node: *Node) !void {
-    // Check if parent is a valid type to have children
-    if (parent._type != .document and parent._type != .element and parent._type != .document_fragment) {
-        return error.HierarchyError;
-    }
-
-    // Check if node contains parent (would create a cycle)
-    if (node.isHostIncludingInclusiveAncestorOf(parent)) {
-        return error.HierarchyError;
-    }
-
-    if (node._type == .attribute) {
-        return error.HierarchyError;
-    }
-
-    // Doctype nodes can only be inserted into a Document
-    if (node._type == .document_type and parent._type != .document) {
-        return error.HierarchyError;
-    }
-}
-
 // DOM "ensure pre-insert validity" (and its replaceChild variant), with the
 // checks in spec order: parent type, cycle, child-parent (NotFoundError),
 // node type, then the document-parent structure rules.
@@ -719,27 +697,13 @@ pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
     if (self._type == .document) {
         return null;
     }
-
-    // An attribute node follows its element (including across adoption).
-    if (self._type == .attribute) {
-        if (self.subtype(Element.Attribute)._element) |element| {
-            return element.asNode().ownerDocument(frame);
-        }
-    }
-
-    // The table is the browser's, so any frame of it will do.
-    return frame._session.browser.documents.get(self._owner);
+    return self.getDocument(frame);
 }
 
 // The spec's "node document": every node has one, a document's is itself.
 // `frame` only reaches the registry; any frame will do.
 pub fn getDocument(self: *const Node, frame: *const Frame) *Document {
-    if (self._type == .document) {
-        return self.subtype(Document);
-    }
-    const doc = self.ownerDocument(frame);
-    lp.assert(doc != null, "null node document", .{ .type = self.getNodeType() });
-    return doc.?;
+    return frame.documents.get(self._owner);
 }
 
 // Returns the Frame that owns this node's tree, or null when the node's
@@ -1541,48 +1505,79 @@ pub fn prependNodes(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void
 }
 
 /// Shared implementation of replaceChildren for Element, Document, and DocumentFragment.
-/// Validates all nodes, removes existing children, then appends new children.
 pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void {
-    // First pass: validate all nodes and collect them
-    // We need to collect because DocumentFragments contribute their children, not themselves
-    var children_to_add: std.ArrayList(*Node) = .empty;
-
-    for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(self.getDocument(frame));
-
-        // DocumentFragments contribute their children, not themselves
-        if (child.is(DocumentFragment)) |frag| {
-            var frag_it = frag.asNode().childrenIterator();
-            while (frag_it.next()) |frag_child| {
-                try validateNodeInsertion(self, frag_child);
-                try children_to_add.append(frame.call_arena, frag_child);
-            }
-        } else {
-            try validateNodeInsertion(self, child);
-            try children_to_add.append(frame.call_arena, child);
+    if (nodes.len > 1) {
+        // Several nodes are converted into a fragment first, as append and
+        // prepend do: a node passed twice is inserted once, and nodes taken
+        // from this parent don't leave a removal record behind.
+        const fragment = try DocumentFragment.init(self.getDocument(frame), frame);
+        const fragment_node = fragment.asNode();
+        defer if (fragment_node.firstChild() == null) frame._factory.destroy(fragment);
+        for (nodes) |node_or_text| {
+            const child = try node_or_text.toNode(self.getDocument(frame));
+            _ = try fragment_node.appendChild(child, frame);
         }
+        return self.replaceAll(fragment_node, frame);
+    }
+    const node = if (nodes.len == 1) try nodes[0].toNode(self.getDocument(frame)) else null;
+    return self.replaceAll(node, frame);
+}
+
+// DOM "replace all": observers get one combined record with every removed
+// and added node, so per-node notification is suppressed.
+fn replaceAll(self: *Node, node_: ?*Node, frame: *Frame) !void {
+    if (node_) |node| {
+        try ensurePreInsertValidity(self, node, null, .insert);
     }
 
     frame.domChanged();
-
-    // Per the "replace all" algorithm, observers get one combined mutation
-    // record with all removed and added nodes, so per-node notification is
-    // suppressed here.
     const notify = Frame.observers.hasMutationObservers(frame);
-    const removed = try self.removeAllChildrenCollecting(notify, frame);
 
-    // Append new children
-    for (children_to_add.items) |child| {
-        var previous_root: ?*Node = null;
-        if (child._parent) |previous_parent| {
-            previous_root = child.getRootNode(.{});
-            frame.removeNode(previous_parent, child, .{ .reconnect_to = self });
+    var added: std.ArrayList(*Node) = .empty;
+    if (notify) {
+        if (node_) |node| {
+            if (node.is(DocumentFragment)) |_| {
+                var it = node.childrenIterator();
+                while (it.next()) |child| {
+                    try added.append(frame.call_arena, child);
+                }
+            } else {
+                try added.append(frame.call_arena, node);
+            }
         }
-        try frame.appendNode(self, child, .{ .previous_root = previous_root, .notify_observers = false });
     }
 
-    if (notify and (removed.items.len > 0 or children_to_add.items.len > 0)) {
-        Frame.observers.notifyChildListChange(frame, self, children_to_add.items, removed.items, null, null);
+    const removed = try self.removeAllChildrenCollecting(notify, frame);
+
+    if (node_) |node| {
+        if (node.is(DocumentFragment)) |_| {
+            try frame.moveAllChildren(node, self, null, .silent_parent);
+        } else {
+            // A Document can't be inserted, so every other node has an owner.
+            const child_owner = node.ownerDocument(frame).?;
+            const parent_owner = self.ownerDocument(frame) orelse self.as(Document);
+            const adopting = child_owner != parent_owner;
+
+            var previous_root: ?*Node = null;
+            if (node._parent) |previous_parent| {
+                previous_root = node.getRootNode(.{});
+                frame.removeNode(previous_parent, node, .{
+                    .reconnect_to = if (adopting) null else self,
+                });
+            }
+            if (adopting) {
+                try frame.adoptNodeTree(node, child_owner, parent_owner);
+            }
+            try frame.appendNode(self, node, .{
+                .previous_root = previous_root,
+                .adopting_to_new_document = adopting,
+                .notify_observers = false,
+            });
+        }
+    }
+
+    if (notify and (removed.items.len > 0 or added.items.len > 0)) {
+        Frame.observers.notifyChildListChange(frame, self, added.items, removed.items, null, null);
     }
 }
 

@@ -33,6 +33,22 @@
 }
 
 {
+    class FancyLink extends HTMLAnchorElement {}
+    customElements.define('fancy-link', FancyLink, { extends: 'a' });
+
+    const a = document.createElement('a', { is: 'fancy-link' });
+    testing.expectEqual(true, a instanceof FancyLink);
+    testing.expectEqual('A', a.tagName);
+
+    // internal Tag groupings aren't element names
+    for (const name of ['anchor', 'heading', 'media']) {
+        testing.expectError('NotSupportedError', () => {
+            customElements.define('bad-extends-' + name, class extends HTMLElement {}, { extends: name });
+        });
+    }
+}
+
+{
     class FancyParagraph extends HTMLElement {}
     customElements.define('fancy-paragraph', FancyParagraph, { extends: 'p' });
 

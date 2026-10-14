@@ -32,14 +32,43 @@ const Output = @This();
 
 pub const Proto = HtmlElement;
 
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
+_default_value_override: ?[]const u8 = null,
 
 pub fn asElement(self: *Output) *Element {
     return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Output) *Node {
     return self.asElement().asNode();
+}
+
+fn getValue(self: *Output, frame: *Frame) ![]const u8 {
+    return self.asNode().getTextContentAlloc(frame.local_arena);
+}
+
+fn setValue(self: *Output, value: []const u8, frame: *Frame) !void {
+    if (self._default_value_override == null) {
+        const text = try self.asNode().getTextContentAlloc(frame.local_arena);
+        self._default_value_override = try frame.dupeString(text);
+    }
+    try self.asNode().setTextContent(value, frame);
+}
+
+fn getDefaultValue(self: *Output, frame: *Frame) ![]const u8 {
+    return self._default_value_override orelse self.getValue(frame);
+}
+
+fn setDefaultValue(self: *Output, value: []const u8, frame: *Frame) !void {
+    if (self._default_value_override == null) {
+        return self.asNode().setTextContent(value, frame);
+    }
+    self._default_value_override = try frame.dupeString(value);
+}
+
+pub fn reset(self: *Output, frame: *Frame) !void {
+    const default_value = try self.getDefaultValue(frame);
+    try self.asNode().setTextContent(default_value, frame);
+    self._default_value_override = null;
 }
 
 fn getLabels(self: *Output, frame: *Frame) !js.Array {
@@ -72,6 +101,8 @@ pub const JsApi = struct {
     pub const name = reflect.string("name");
     pub const @"type" = bridge.property("output", .{ .template = false, .readonly = true });
 
+    pub const value = bridge.accessor(Output.getValue, Output.setValue, .{ .ce_reactions = true });
+    pub const defaultValue = bridge.accessor(Output.getDefaultValue, Output.setDefaultValue, .{ .ce_reactions = true });
     pub const labels = bridge.accessor(Output.getLabels, null, .{});
     pub const htmlFor = bridge.accessor(Output.getHtmlFor, Output.setHtmlFor, .{ .null_as_undefined = true, .ce_reactions = true });
 };

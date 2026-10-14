@@ -126,9 +126,9 @@ fn goInner(delta: i32, frame: *Frame) !void {
 // history entry. `state` is the entry's serialized state.
 pub fn firePopState(frame: *Frame, state: ?[]const u8) !void {
     const target = frame.window.asEventTarget();
-    if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
+    if (frame._event_manager.hasDirectListeners(target, "popstate")) {
         const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = state }, frame)).asEvent();
-        try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
+        try frame._event_manager.dispatchDirect(target, event, .{ .context = "Pop State" });
     }
 }
 

@@ -19,13 +19,16 @@
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#the-constraint-validation-api
 
 const js = @import("../../../js/js.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Element = @import("../../Element.zig");
+const ElementInternals = @import("../../ElementInternals.zig");
+
 const Input = @import("Input.zig");
 const Select = @import("Select.zig");
-const TextArea = @import("TextArea.zig");
 const Button = @import("Button.zig");
-const Frame = @import("../../../Frame.zig");
+const Custom = @import("Custom.zig");
+const TextArea = @import("TextArea.zig");
 
 const ValidityState = @This();
 
@@ -35,6 +38,7 @@ const ValidityState = @This();
 _owner: *Element,
 
 fn getValueMissing(self: *const ValidityState, frame: *Frame) bool {
+    if (self.customFlags()) |flags| return flags.valueMissing;
     if (self._owner.is(Input)) |input| return input.suffersValueMissing(frame);
     if (self._owner.is(Select)) |select| return select.suffersValueMissing();
     if (self._owner.is(TextArea)) |textarea| return textarea.suffersValueMissing();
@@ -42,46 +46,52 @@ fn getValueMissing(self: *const ValidityState, frame: *Frame) bool {
 }
 
 fn getTypeMismatch(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.typeMismatch;
     if (self._owner.is(Input)) |input| return input.suffersTypeMismatch();
     return false;
 }
 
 fn getPatternMismatch(self: *const ValidityState, frame: *Frame) bool {
+    if (self.customFlags()) |flags| return flags.patternMismatch;
     if (self._owner.is(Input)) |input| return input.suffersPatternMismatch(frame);
     return false;
 }
 
 fn getTooLong(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.tooLong;
     if (self._owner.is(Input)) |input| return input.suffersTooLong();
     if (self._owner.is(TextArea)) |textarea| return textarea.suffersTooLong();
     return false;
 }
 
 fn getTooShort(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.tooShort;
     if (self._owner.is(Input)) |input| return input.suffersTooShort();
     if (self._owner.is(TextArea)) |textarea| return textarea.suffersTooShort();
     return false;
 }
 
 fn getRangeUnderflow(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.rangeUnderflow;
     if (self._owner.is(Input)) |input| return input.suffersRangeUnderflow();
     return false;
 }
 
 fn getRangeOverflow(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.rangeOverflow;
     if (self._owner.is(Input)) |input| return input.suffersRangeOverflow();
     return false;
 }
 
 fn getStepMismatch(self: *const ValidityState) bool {
-    _ = self;
+    if (self.customFlags()) |flags| return flags.stepMismatch;
     // Step matching is not implemented yet (PR #2280 begins step rounding for
     // <input type=range>). Returning false keeps well-formed values valid.
     return false;
 }
 
 fn getBadInput(self: *const ValidityState) bool {
-    _ = self;
+    if (self.customFlags()) |flags| return flags.badInput;
     // badInput flips when the UA cannot convert a user-typed string (e.g. the
     // user typed "abc" into <input type=number>). Headless Lightpanda receives
     // values via attributes or JS assignment, never raw keystrokes — there is
@@ -90,6 +100,7 @@ fn getBadInput(self: *const ValidityState) bool {
 }
 
 fn getCustomError(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.customError;
     if (self._owner.is(Input)) |input| return input.hasCustomValidity();
     if (self._owner.is(Select)) |select| return select.hasCustomValidity();
     if (self._owner.is(TextArea)) |textarea| return textarea.hasCustomValidity();
@@ -98,6 +109,7 @@ fn getCustomError(self: *const ValidityState) bool {
 }
 
 pub fn getValid(self: *const ValidityState, frame: *Frame) bool {
+    if (self.customFlags()) |flags| return !flags.any();
     return !self.getValueMissing(frame) and
         !self.getTypeMismatch() and
         !self.getPatternMismatch(frame) and
@@ -108,6 +120,14 @@ pub fn getValid(self: *const ValidityState, frame: *Frame) bool {
         !self.getStepMismatch() and
         !self.getBadInput() and
         !self.getCustomError();
+}
+
+// A form-associated custom element's flags are whatever its ElementInternals
+// last passed to setValidity().
+fn customFlags(self: *const ValidityState) ?ElementInternals.ValidityFlags {
+    const custom = self._owner.is(Custom) orelse return null;
+    const internals = custom._internals orelse return .{};
+    return internals._flags;
 }
 
 pub const JsApi = struct {

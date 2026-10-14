@@ -24,6 +24,7 @@ const Mime = @import("Mime.zig");
 const Page = @import("Page.zig");
 const Factory = @import("Factory.zig");
 const Session = @import("Session.zig");
+const DocumentRegistry = @import("DocumentRegistry.zig");
 const EventManager = @import("EventManager.zig");
 const ScriptManager = @import("ScriptManager.zig");
 const StyleManager = @import("StyleManager.zig");
@@ -34,6 +35,7 @@ const h5e = @import("parser/html5ever.zig");
 const CustomElementReactions = @import("CustomElementReactions.zig");
 
 const URL = @import("URL.zig");
+const css_charset = @import("css/charset.zig");
 const referrer = @import("referrer.zig");
 const Blob = @import("webapi/Blob.zig");
 const FileList = @import("webapi/FileList.zig");
@@ -70,8 +72,6 @@ const sys_url = @import("../sys/url.zig");
 const HttpClient = @import("../network/HttpClient.zig");
 const GlobalScope = @import("global_scope.zig").GlobalScope;
 
-const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
-
 const framing = @import("frame/framing.zig");
 pub const parse = @import("frame/parse.zig");
 pub const preload = @import("frame/preload.zig");
@@ -106,6 +106,10 @@ page: *Page,
 
 _session: *Session,
 
+// Node.getDocument is called a lot. Reference this here, from the Browser, to
+// avoid the _session.browser.documents jumps.
+documents: *DocumentRegistry,
+
 _event_manager: EventManager,
 
 _parse_mode: enum { document, fragment, document_write } = .document,
@@ -115,26 +119,6 @@ _parse_mode: enum { document, fragment, document_write } = .document,
 // Range.createContextualFragment(), whose scripts DO run when the fragment is
 // inserted into a document
 _fragment_scripts_runnable: bool = false,
-
-/// Lazily-created inline event listeners (or listeners provided as attributes).
-/// Avoids bloating all elements with extra function fields for rare usage.
-///
-/// Use this when a listener provided like this:
-///
-/// ```js
-/// img.onload = () => { ... };
-/// ```
-///
-/// Its also used as cache for such cases after lazy evaluation:
-///
-/// ```html
-/// <img onload="(() => { ... })()" />
-/// ```
-///
-/// ```js
-/// img.setAttribute("onload", "(() => { ... })()");
-/// ```
-_event_target_attr_listeners: GlobalEventHandlersLookup = .empty,
 
 // FileLists owned by `<input type=file>` elements. Each holds refs on its
 // File objects (reference counted via their Blob proto); released at teardown.
@@ -378,6 +362,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         .local_arena = local_arena.allocator(),
         ._frame_id = frame_id,
         ._session = session,
+        .documents = &session.browser.documents,
         ._loader_id = loader_id,
         ._history_document_id = loader_id,
         ._factory = factory,
@@ -474,17 +459,8 @@ pub fn deinit(self: *Frame) void {
 
     // The Page outlives an iframe or popup that re-navigates: don't leave its
     // pointer state on this document's elements.
+    user_input.forgetFrame(self);
     const page = self.page;
-    if (page.input_hover_target) |el| {
-        if (el.ownerFrame(self) == self) {
-            page.input_hover_target = null;
-        }
-    }
-    if (page.input_pointer.down_target) |el| {
-        if (el.ownerFrame(self) == self) {
-            page.input_pointer.reset();
-        }
-    }
 
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame.deinit", .{ .url = self.url, .type = self._type });
@@ -671,6 +647,12 @@ pub fn getArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) !*lp.A
 
 pub fn getPinnedArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
     return self._session.getPinnedArena(size_or_bucket, debug);
+}
+
+fn sameOrigin(a: *const Frame, b: *const Frame) bool {
+    const a_origin = a.origin orelse return false;
+    const b_origin = b.origin orelse return false;
+    return std.mem.eql(u8, a_origin, b_origin);
 }
 
 pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
@@ -986,9 +968,6 @@ fn recordNavigateTelemetry(self: *Frame, tls: bool) void {
 // as the caller almost certainly doesn't expect the frame to go away during the
 // call. So, we schedule the navigation for the next tick.
 pub fn scheduleNavigation(self: *Frame, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
-    if (self.canScheduleNavigation(std.meta.activeTag(nt)) == false) {
-        return;
-    }
     const arena = try self._session.getArena(.small, "scheduleNavigation");
     errdefer arena.release();
     return self.scheduleNavigationWithArena(arena, request_url, opts, nt);
@@ -1030,6 +1009,33 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         .iframe => |iframe| iframe._window.?._frame, // only an frame with existing content (i.e. a window) can be navigated
     };
 
+    // The competing navigation, if any, is queued on the target, which isn't
+    // the originator when a script navigates another frame.
+    if (target.canScheduleNavigation(std.meta.activeTag(nt)) == false) {
+        // don't defer this, the caller is responsible for freeing it on error
+        arena.release();
+        return;
+    }
+
+    // A javascript: URL is not fetched: its script runs in the target's
+    // document, and only for an initiator of the same origin.
+    // https://html.spec.whatwg.org/multipage/browsing-the-web.html#navigate
+    if (std.mem.startsWith(u8, resolved_url, "javascript:")) {
+        if (target == originator or sameOrigin(originator, target)) {
+            try user_input.runJavascriptUrl(target, resolved_url["javascript:".len..]);
+        }
+        // don't defer this, the caller is responsible for freeing it on error
+        arena.release();
+        return;
+    }
+
+    if (URL.isFetchable(resolved_url) == false) {
+        log.info(.browser, "navigate unsupported scheme", .{ .url = resolved_url });
+        // don't defer this, the caller is responsible for freeing it on error
+        arena.release();
+        return;
+    }
+
     const session = target._session;
 
     // Per the HTML "navigate" steps, this is a fragment navigation only when
@@ -1047,8 +1053,14 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
 
     if (is_fragment_navigation) {
         // Re-navigating to the exact current URL: since the fragment didn't
-        // change, no hashchange and no new history entry either.
+        // change, no hashchange and no new history entry either. It's still a
+        // fragment navigation, which Chrome reports.
         if (std.mem.eql(u8, target.url, resolved_url)) {
+            session.notification.dispatch(.frame_navigated_within_document, &.{
+                .url = target.url,
+                .frame_id = target._frame_id,
+                .navigation_type = .fragment,
+            });
             arena.release();
             return;
         }
@@ -1060,6 +1072,12 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         location.acquireRef();
         target.window._location.releaseRef(target.page);
         target.window._location = location;
+
+        session.notification.dispatch(.frame_navigated_within_document, &.{
+            .url = target.url,
+            .frame_id = target._frame_id,
+            .navigation_type = .fragment,
+        });
 
         if (target.parent == null) {
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
@@ -1188,6 +1206,70 @@ pub fn abortTransfers(self: *Frame) void {
     }
     const http_client = &self._session.browser.http_client;
     http_client.abortOwner(&self._http_owner);
+}
+
+// Frame was removed from the document, or a popup is closed. Since the window
+// and frame can still be referenced (in Zig and in JS), it isn't a complete
+// teardown, but we do need it to stop running.
+pub fn discard(self: *Frame) !void {
+    const page = self.page;
+    try page.closed_frames.ensureUnusedCapacity(page.arena, 1);
+
+    if (self.parent) |parent| {
+        // this is an iframe
+        if (self._parent_notified == false and self._delays_parent_load) {
+            try parent.js.scheduler.add(parent, struct {
+                fn run(ctx: *anyopaque) !?u32 {
+                    // the parent no longer waits for us, don't run this
+                    // synchronously, we're almost certainly in some JS call
+                    const p: *Frame = @ptrCast(@alignCast(ctx));
+                    p.pendingLoadCompleted();
+                    return null;
+                }
+            }.run, 0, .{ .name = "frame.discardedChildLoaded" });
+        }
+        if (std.mem.findScalar(*Frame, parent.child_frames.items, self)) |idx| {
+            // ordered, to keep child_frames_sorted valid
+            _ = parent.child_frames.orderedRemove(idx);
+        }
+        self._session.notification.dispatch(.frame_child_frame_detached, &.{
+            .parent_id = parent._frame_id,
+            .frame_id = self._frame_id,
+        });
+    } else if (std.mem.findScalar(*Frame, page.popups.items, self)) |idx| {
+        // this was a popup
+        _ = page.popups.swapRemove(idx);
+    }
+    self._parent_notified = true;
+
+    const window = self.window;
+    for (page.popups.items) |popup| {
+        if (popup.window._opener == window) {
+            popup.window._opener = null;
+        }
+    }
+    if (page.frame.window._opener == window) {
+        page.frame.window._opener = null;
+    }
+
+    self.neuter();
+    self.abortTransfers();
+    page.closed_frames.appendAssumeCapacity(self);
+}
+
+fn neuter(self: *Frame) void {
+    for (self.child_frames.items) |child| {
+        // we're not loading anymore, so nothing to notify
+        child._parent_notified = true;
+        child.neuter();
+    }
+    self.window._closed = true;
+    self.abortDocumentLoad();
+    self.cancelQueuedNavigation();
+    user_input.forgetFrame(self);
+    self._session.idb.detachContext(self.js);
+    self.js.scheduler.reset();
+    self.window._timers.reset();
 }
 
 pub fn stopLoading(self: *Frame) void {
@@ -1388,6 +1470,23 @@ pub fn pendingLoadCompleted(self: *Frame) void {
     }
 }
 
+// A document.open() has been closed. If it was opened after it loaded, it
+// will re-trigger DOMContentLoaded and load.
+pub fn scriptCreatedParserDone(self: *Frame) void {
+    switch (self._load_state) {
+        .parsing, .load => {},
+        .waiting => self._load_state = .parsing,
+        .complete => {
+            self._load_state = .parsing;
+            self._parent_notified = false;
+            // the parent was already released the first time, we don't
+            // want documentIsComplete to re-trigger it.
+            self._delays_parent_load = false;
+        },
+    }
+    self.documentIsComplete();
+}
+
 pub fn documentIsComplete(self: *Frame) void {
     if (self._load_state == .complete) {
         // Ideally, documentIsComplete would only be called once, but with
@@ -1434,12 +1533,12 @@ fn _documentIsComplete(self: *Frame) !void {
 
     // Dispatch window.load event.
     const window_target = self.window.asEventTarget();
-    if (self._event_manager.hasDirectListeners(window_target, "load", self.window._on_load)) {
+    if (self._event_manager.hasDirectListeners(window_target, "load")) {
         const event = try Event.initTrusted(comptime .wrap("load"), .{}, self.page);
         // This event is weird, it's dispatched directly on the window, but
         // with the document as the target.
         event._target = self.document.asEventTarget();
-        try self._event_manager.dispatchDirect(window_target, event, self.window._on_load, .{ .inject_target = false, .context = "page load" });
+        try self._event_manager.dispatchDirect(window_target, event, .{ .inject_target = false, .context = "page load" });
     }
 
     self._session.notification.dispatch(.frame_loaded, &.{
@@ -1449,9 +1548,9 @@ fn _documentIsComplete(self: *Frame) !void {
         .timestamp = lp.datetime.timestamp(.boot),
     });
 
-    if (self._event_manager.hasDirectListeners(window_target, "pageshow", self.window._on_pageshow)) {
+    if (self._event_manager.hasDirectListeners(window_target, "pageshow")) {
         const pageshow_event = (try PageTransitionEvent.initTrusted(comptime .wrap("pageshow"), .{}, self)).asEvent();
-        try self._event_manager.dispatchDirect(window_target, pageshow_event, self.window._on_pageshow, .{ .context = "page show" });
+        try self._event_manager.dispatchDirect(window_target, pageshow_event, .{ .context = "page show" });
     }
 
     if (comptime lp.IS_DEBUG) {
@@ -1742,10 +1841,6 @@ fn urlBasename(arena: Allocator, url: []const u8) !?[]const u8 {
     return try arena.dupe(u8, name);
 }
 
-fn isUtf16Encoding(charset: []const u8) bool {
-    return std.mem.eql(u8, charset, "UTF-16LE") or std.mem.eql(u8, charset, "UTF-16BE");
-}
-
 fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     var self: *Frame = @ptrCast(@alignCast(transfer.req.ctx));
 
@@ -1807,7 +1902,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
                 const info = h5e.encoding_for_label(charset_str.ptr, charset_str.len);
                 if (info.isValid()) {
                     const name = info.name();
-                    self.charset = if (html_prescan_found_charset and isUtf16Encoding(name)) "UTF-8" else name;
+                    self.charset = if (html_prescan_found_charset and info.isUtf16()) "UTF-8" else name;
                 }
                 self._parse_state = .{ .html = .{
                     .buffer = .empty,
@@ -2080,7 +2175,7 @@ fn errorPageNavigated(self: *Frame) !void {
 }
 
 pub fn isGoingAway(self: *const Frame) bool {
-    return self.js.env.terminatePending() or self.hasQueuedNavigation();
+    return self.window._closed or self.js.env.terminatePending() or self.hasQueuedNavigation();
 }
 
 fn hasQueuedNavigation(self: *const Frame) bool {
@@ -2222,6 +2317,11 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         .referrer_policy = self.referrer_policy,
         .initiator_origin = self.origin,
     }) catch |err| {
+        if (new_frame.window._closed) {
+            // A script (e.g. in a srcdoc) removed the iframe while navigating:
+            // the frame was discarded, page.closed_frames owns it now.
+            return;
+        }
         // extra defensive..maybe navigate added a new frame, and the index it
         // was added at was removed. Or maybe this frame was removed somehow
         // (which I don't think is possible)
@@ -2235,6 +2335,11 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         iframe._window = null;
         return error.IFrameLoadError;
     };
+
+    if (new_frame.window._closed) {
+        // discarded while navigating, it's no longer in child_frames
+        return;
+    }
 
     // window[N] is based on document order. We appended above and rely on
     // child_frames_sorted to tell window.getFrame whether it has to sort.
@@ -2535,7 +2640,7 @@ const HashChangeCallback = struct {
 
         const frame = self.frame;
         const target = frame.window.asEventTarget();
-        if (!frame._event_manager.hasDirectListeners(target, "hashchange", frame.window._on_hashchange)) {
+        if (!frame._event_manager.hasDirectListeners(target, "hashchange")) {
             return null;
         }
 
@@ -2543,7 +2648,7 @@ const HashChangeCallback = struct {
             .oldURL = self.old_url,
             .newURL = self.new_url,
         }, frame)).asEvent();
-        try frame._event_manager.dispatchDirect(target, event, frame.window._on_hashchange, .{ .context = "Hash Change" });
+        try frame._event_manager.dispatchDirect(target, event, .{ .context = "Hash Change" });
         return null;
     }
 };
@@ -2587,7 +2692,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     const element = link.asElement();
 
     // HttpClient will take out a larger arena for the body, if necessary
-    const arena = try session.getArena(.small, "Frame.loadExternalStylesheet");
+    const arena = try session.getArena(.large, "Frame.loadExternalStylesheet");
     defer arena.release();
 
     const resolved = URL.resolve(arena.allocator(), self.base(), href, .{ .encoding = self.charset }) catch |err| {
@@ -2633,7 +2738,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     sm.is_evaluating = true;
     defer sm.endEvaluationWindow(was_evaluating);
 
-    var response = transfer.submitSync(.{}) catch |err| {
+    var response = transfer.submitSync(.{ .copy_headers = true }) catch |err| {
         log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
@@ -2677,7 +2782,13 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     // scratch-list pattern in `CSSStyleSheet.replaceSync`. Keeping
     // `_href` consistent with what the sheet actually contains is the
     // minimum.
-    sheet.replaceSync(response.body.items, self) catch |err| {
+    const content_type: ?Mime = if (HttpClient.findHeader(response.headers, "content-type")) |value|
+        Mime.parse(value) catch null
+    else
+        null;
+    const protocol_charset = if (content_type) |*mime| mime.explicitCharset() else null;
+    const text = try css_charset.decode(arena.allocator(), response.body.items, protocol_charset, self.charset);
+    sheet.replaceSync(text, self) catch |err| {
         log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
@@ -2711,14 +2822,8 @@ fn dispatchQueuedEvents(self: *Frame) !void {
 
         const element = html_element.asElement();
         switch (queued.kind) {
-            // hasAttributeFunction only sees handlers compiled via property
-            // access; a parsed `onload="..."` attribute is compiled lazily at
-            // dispatch (EventManager.getInlineHandler), so check it raw too.
             .load => {
-                if (has_dom_load_listener or
-                    html_element.hasAttributeFunction(.onload, self) or
-                    element.getAttributeSafe(comptime .wrap("onload")) != null)
-                {
+                if (has_dom_load_listener or self._event_manager.hasHandler(element.asEventTarget(), "load")) {
                     try self.fireElementEvent(element, comptime .wrap("load"));
                 }
             },
@@ -2800,6 +2905,7 @@ pub fn adoptNodeTree(self: *Frame, node: *Node, old_owner: *Document, new_owner:
 
     // Per spec, adopted steps run on each element after its document is set.
     if (node.is(Element)) |el| {
+        el._attributes.adopt(node._owner, self);
         Element.Html.Custom.enqueueAdoptedCallbackOnElement(el, old_owner, new_owner, self);
 
         // The shadow tree follows its host across documents: re-own it and
@@ -2829,14 +2935,13 @@ pub fn dispatch(
     self: *Frame,
     target: *EventTarget,
     event: *Event,
-    handler: anytype,
     comptime opts: EventManager.DispatchDirectOptions,
 ) !void {
-    return self._event_manager.dispatchDirect(target, event, handler, opts);
+    return self._event_manager.dispatchDirect(target, event, opts);
 }
 
-pub fn hasDirectListeners(self: *Frame, target: *EventTarget, typ: []const u8, handler: anytype) bool {
-    return self._event_manager.hasDirectListeners(target, typ, handler);
+pub fn hasDirectListeners(self: *Frame, target: *EventTarget, typ: []const u8) bool {
+    return self._event_manager.hasDirectListeners(target, typ);
 }
 
 pub fn dupeSSO(self: *Frame, value: []const u8) !String {
@@ -3314,6 +3419,11 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
         self.scheduleFocusFixup() catch |err| {
             log.err(.frame, "scheduleFocusFixup", .{ .err = err, .type = self._type, .url = self.url });
         };
+    } else if (element.is(Element.Html)) |html| {
+        // the stored value: `value` holds a short one inline
+        html.eventHandlerAttributeChanged(name.str(), element.getAttributeSafe(name), self) catch |err| {
+            log.err(.frame, "event handler attribute", .{ .err = err, .type = self._type, .url = self.url });
+        };
     }
 }
 
@@ -3337,6 +3447,10 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
         popover.attributeChanged(element, old_value.str(), null, self);
     } else if (name.eql(comptime .wrap("style"))) {
         self.styleAttributeChanged(element, null);
+    } else if (element.is(Element.Html)) |html| {
+        html.eventHandlerAttributeChanged(name.str(), null, self) catch |err| {
+            log.err(.frame, "event handler attribute", .{ .err = err, .type = self._type, .url = self.url });
+        };
     }
 }
 
@@ -3822,10 +3936,6 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         return;
     }
 
-    if (self.canScheduleNavigation(.form) == false) {
-        return;
-    }
-
     const form_element = form.asElement();
 
     const submit_button: ?*Element = blk: {
@@ -3848,6 +3958,10 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         };
         break :blk self.resolveTargetFrame(target_name);
     };
+
+    if (target == .frame and target.frame.canScheduleNavigation(.form) == false) {
+        return;
+    }
 
     if (submit_opts.fire_event) {
         // Prevent a submit on the form from firing while we're submit the form.
@@ -3994,7 +4108,8 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
             // resolved encoding (accept-charset or document charset).
             .plaintext => try arena.allocator().printSentinel("Content-Type: text/plain; charset={s}", .{charset}, 0),
         };
-    } else {
+    } else if (URL.isJavascriptUrl(action) == false) {
+        // A javascript: action is navigated to as is, without the entries.
         action = try URL.concatQueryString(arena.allocator(), action, buf.written());
     }
 
@@ -4178,7 +4293,7 @@ test "Frame: superseded documents omit DOMContentLoaded and load" {
 }
 
 test "Frame: pending or discarded replacements do not resume old load events" {
-    for ([_]bool{ false, true }) |discard| {
+    for ([_]bool{ false, true }) |discard_replacement| {
         const page = try testing.pageTest("hi.html", .{});
         defer page.close();
         const frame = page.frame().?;
@@ -4195,12 +4310,12 @@ test "Frame: pending or discarded replacements do not resume old load events" {
         frame.document._ready_state = .loading;
         try frame._session.initiateRootNavigation(frame._frame_id, "http://127.0.0.1:9582/src/browser/tests/hi.html?replacement", .{});
         const replacement = frame.page.replacement.?;
-        if (discard) frame._session.discardPendingPage(replacement);
+        if (discard_replacement) frame._session.discardPendingPage(replacement);
         try testing.expectEqual(null, frame._queued_navigation);
         frame.documentIsComplete();
         const events = try ls.local.exec("events.join('|')", null);
         try testing.expectEqual("complete", try events.toStringSlice());
-        if (!discard) frame._session.discardPendingPage(replacement);
+        if (!discard_replacement) frame._session.discardPendingPage(replacement);
     }
 }
 
@@ -4322,6 +4437,18 @@ test "Frame: cancelling navigation does not revive an aborted parser" {
     , null);
     try testing.expectEqual("Original", try (try ls.local.exec("document.title", null)).toStringSlice());
     try testing.expectEqual(null, frame.document._script_created_parser);
+}
+
+test "Frame: an onload handler does not dispatch load to other elements" {
+    const page = try testing.pageTest("fixtures/load_handler_only.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    try testing.expectString("attr;prop;", (try frame.getTitle()).?);
+    try testing.expectEqual(false, frame._event_manager.has_dom_load_listener);
+
+    const none = frame.document.getElementById("none", frame).?;
+    try testing.expectEqual(false, frame._event_manager.hasHandler(none.asEventTarget(), "load"));
 }
 
 test "Frame: static immediate meta refresh navigates" {

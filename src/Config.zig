@@ -231,11 +231,14 @@ pub const HttpVersion = enum {
     @"1.1",
 };
 
-pub const LoadResources = packed struct(u4) {
+pub const LoadResources = packed struct(u5) {
     image: bool = false,
     iframe: bool = false,
     worker: bool = false,
     stylesheet: bool = false,
+    // Only marks the option as given, so `--load-resources none` turns off a
+    // mode's default.
+    none: bool = false,
 };
 
 pub const ExperimentalFeatures = packed struct(u2) {
@@ -470,6 +473,7 @@ const Commands = cli.Builder(.{
             .{ .name = "system_prompt", .type = ?[:0]const u8 },
             .{ .name = "task", .type = ?[]const u8 },
             .{ .name = "trace", .type = ?[]const u8 },
+            .{ .name = "trace_results", .type = bool },
             .{ .name = "save", .type = ?[]const u8 },
             .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true },
             .{ .name = "verbosity", .type = ?AgentVerbosity },
@@ -528,6 +532,15 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
             if (@hasField(@TypeOf(m.*), "enable_external_stylesheets")) {
                 if (m.enable_external_stylesheets) {
                     // map deprecated property onto updated one
+                    m.load_resources.stylesheet = true;
+                }
+            }
+            // The agent-facing modes read visibility, which is wrong without
+            // external stylesheets: a menu hidden by an author class looks
+            // open. An explicit --load-resources replaces this default.
+            if (@hasField(@TypeOf(m.*), "load_resources")) {
+                const given = m.load_resources != LoadResources{};
+                if (!given and (config.command == .mcp or config.command == .agent)) {
                     m.load_resources.stylesheet = true;
                 }
             }
@@ -702,8 +715,10 @@ pub fn httpTimeout(self: *const Config) u31 {
     };
 }
 
+// https://fetch.spec.whatwg.org/#http-redirect-fetch
+// "If request’s redirect count is 20, then return a network error."
 pub fn httpMaxRedirects(_: *const Config) u8 {
-    return 10;
+    return 20;
 }
 
 pub fn httpMaxResponseSize(self: *const Config) ?usize {
@@ -1771,4 +1786,28 @@ pub fn tagJsonArray(comptime E: type) []const u8 {
         s = s ++ (if (i == 0) "\"" else ",\"") ++ field_name ++ "\"";
     }
     return s ++ "]";
+}
+
+test "Config: parseArgs --load-resources defaults stylesheets on for mcp and agent" {
+    // Parsing agent mode lowers the global log level, which other tests in
+    // this process expect log lines from.
+    const saved_log_opts = log.opts;
+    defer log.opts = saved_log_opts;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const cases = [_]struct { argv: []const [*:0]const u8, stylesheet: bool, image: bool }{
+        .{ .argv = &.{ "lightpanda", "mcp" }, .stylesheet = true, .image = false },
+        .{ .argv = &.{ "lightpanda", "agent", "--no-llm" }, .stylesheet = true, .image = false },
+        .{ .argv = &.{ "lightpanda", "fetch", "https://example.com" }, .stylesheet = false, .image = false },
+        .{ .argv = &.{ "lightpanda", "mcp", "--load-resources", "none" }, .stylesheet = false, .image = false },
+        .{ .argv = &.{ "lightpanda", "mcp", "--load-resources", "image" }, .stylesheet = false, .image = true },
+    };
+    for (cases) |case| {
+        const config = try parseArgs(arena.allocator(), .{ .vector = case.argv });
+        const resources = config.loadResources();
+        try std.testing.expectEqual(case.stylesheet, resources.stylesheet);
+        try std.testing.expectEqual(case.image, resources.image);
+    }
 }

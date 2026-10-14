@@ -325,7 +325,7 @@ fn createSnapshotContext(
         @setEvalBranchQuota(10_000);
         const template_index = comptime bridge.JsApiLookup.getId(JsApi);
         const func = v8.v8__FunctionTemplate__GetFunction(templates[template_index], context);
-        if (@hasDecl(JsApi.Meta, "name")) {
+        if (@hasDecl(JsApi.Meta, "name") and comptime isNamespace(JsApi) == false) {
             const name = JsApi.Meta.name;
             const v8_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
             var maybe_result: v8.MaybeBool = undefined;
@@ -788,6 +788,11 @@ fn inheritsFromHtmlElement(comptime JsApi: type) bool {
     return bridge.inheritsOrIs(JsApi, HtmlElement.JsApi);
 }
 
+// Web IDL namespace (CSS, console)
+fn isNamespace(comptime JsApi: type) bool {
+    return @hasDecl(JsApi.Meta, "namespace") and JsApi.Meta.namespace;
+}
+
 const Unforgeable = struct {
     Owner: type,
     name: [:0]const u8,
@@ -802,7 +807,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
     // Namespace objects (e.g. console) expose their members as own properties
     // of each instance rather than via the prototype, so Object.entries(...)
     // returns them. See https://console.spec.whatwg.org/#console-namespace.
-    const own_properties = @hasDecl(JsApi.Meta, "own_properties") and JsApi.Meta.own_properties;
+    const own_properties = isNamespace(JsApi);
     const member_template = if (own_properties) instance else prototype;
 
     const decl_names = @typeInfo(JsApi).@"struct".decl_names;

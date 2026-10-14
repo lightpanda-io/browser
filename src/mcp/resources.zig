@@ -6,7 +6,7 @@ const log = lp.log;
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
 
-const resource_list = [_]protocol.Resource{
+pub const resource_list = [_]protocol.Resource{
     .{
         .uri = "mcp://page/html",
         .name = "Page HTML",

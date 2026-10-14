@@ -18,7 +18,6 @@
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
-const Frame = @import("../../../Frame.zig");
 const Factory = @import("../../../Factory.zig");
 
 const Node = @import("../../Node.zig");
@@ -26,8 +25,6 @@ const Window = @import("../../Window.zig");
 const Element = @import("../../Element.zig");
 
 const HtmlElement = @import("../Html.zig");
-
-const String = lp.String;
 
 const FrameSet = @This();
 
@@ -41,59 +38,6 @@ pub fn asElement(self: *FrameSet) *Element {
 }
 pub fn asNode(self: *FrameSet) *Node {
     return self.asElement().asNode();
-}
-
-// Special-case: the "window-reflecting body element event handler set"
-// (blur, error, focus, load, resize, scroll) are aliases for the Window's
-// event handlers, on frameset elements just like on body elements.
-
-// The aliased Window is the one of the element's node document's frame — not
-// the caller's frame, which differs when a same-origin script reaches into
-// another frame (e.g. the parent setting a handler on a child frameset).
-fn reflectedWindow(self: *FrameSet, frame: *Frame) ?*Window {
-    return (self.asElement().ownerFrame(frame) orelse return null).window;
-}
-
-fn getOnBlur(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return (self.reflectedWindow(frame) orelse return null)._on_blur;
-}
-fn setOnBlur(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    (self.reflectedWindow(frame) orelse return)._on_blur = Window.getFunctionFromSetter(setter);
-}
-
-fn getOnError(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return (self.reflectedWindow(frame) orelse return null)._on_error;
-}
-fn setOnError(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    (self.reflectedWindow(frame) orelse return)._on_error = Window.getFunctionFromSetter(setter);
-}
-
-fn getOnFocus(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return (self.reflectedWindow(frame) orelse return null)._on_focus;
-}
-fn setOnFocus(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    (self.reflectedWindow(frame) orelse return)._on_focus = Window.getFunctionFromSetter(setter);
-}
-
-fn getOnLoad(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return (self.reflectedWindow(frame) orelse return null)._on_load;
-}
-fn setOnLoad(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    (self.reflectedWindow(frame) orelse return)._on_load = Window.getFunctionFromSetter(setter);
-}
-
-fn getOnResize(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return (self.reflectedWindow(frame) orelse return null)._on_resize;
-}
-fn setOnResize(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    (self.reflectedWindow(frame) orelse return)._on_resize = Window.getFunctionFromSetter(setter);
-}
-
-fn getOnScroll(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return (self.reflectedWindow(frame) orelse return null)._on_scroll;
-}
-fn setOnScroll(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    (self.reflectedWindow(frame) orelse return)._on_scroll = Window.getFunctionFromSetter(setter);
 }
 
 pub const JsApi = struct {
@@ -110,38 +54,12 @@ pub const JsApi = struct {
     pub const cols = reflect.string("cols");
     pub const rows = reflect.string("rows");
 
-    pub const onblur = bridge.accessor(getOnBlur, setOnBlur, .{ .null_as_undefined = false });
-    pub const onerror = bridge.accessor(getOnError, setOnError, .{ .null_as_undefined = false });
-    pub const onfocus = bridge.accessor(getOnFocus, setOnFocus, .{ .null_as_undefined = false });
-    pub const onload = bridge.accessor(getOnLoad, setOnLoad, .{ .null_as_undefined = false });
-    pub const onresize = bridge.accessor(getOnResize, setOnResize, .{ .null_as_undefined = false });
-    pub const onscroll = bridge.accessor(getOnScroll, setOnScroll, .{ .null_as_undefined = false });
-};
-
-pub const Build = struct {
-    const window_reflecting_attributes = [_][]const u8{
-        "onblur", "onerror", "onfocus", "onload", "onresize", "onscroll",
-    };
-
-    pub fn complete(node: *Node, frame: *Frame) !void {
-        const el = node.as(Element);
-        const owner = node.ownerFrame(frame) orelse return;
-        inline for (window_reflecting_attributes) |attr| {
-            if (el.getAttributeSafe(comptime .wrap(attr))) |value| {
-                owner.window.setWindowReflectingHandlerFromAttribute(comptime .wrap(attr), value, owner);
-            }
-        }
-    }
-
-    pub fn attributeChange(el: *Element, name: String, value: String, frame: *Frame) !void {
-        const owner = el.ownerFrame(frame) orelse return;
-        owner.window.setWindowReflectingHandlerFromAttribute(name, value.str(), owner);
-    }
-
-    pub fn attributeRemove(el: *Element, name: String, frame: *Frame) !void {
-        const owner = el.ownerFrame(frame) orelse return;
-        owner.window.setWindowReflectingHandlerFromAttribute(name, null, owner);
-    }
+    pub const onblur = Window.reflectingHandlerAccessor(FrameSet, "blur");
+    pub const onerror = Window.reflectingHandlerAccessor(FrameSet, "error");
+    pub const onfocus = Window.reflectingHandlerAccessor(FrameSet, "focus");
+    pub const onload = Window.reflectingHandlerAccessor(FrameSet, "load");
+    pub const onresize = Window.reflectingHandlerAccessor(FrameSet, "resize");
+    pub const onscroll = Window.reflectingHandlerAccessor(FrameSet, "scroll");
 };
 
 const testing = @import("../../../../testing.zig");

@@ -720,6 +720,16 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/xhr/hang")) {
+        // For asserting a request didn't wait for its response
+        lp.io.sleep(.fromMilliseconds(2000), .awake) catch {};
+        return req.respond("hang", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/xhr_empty")) {
         return req.respond("", .{
             .extra_headers = &.{
@@ -1147,6 +1157,32 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         // mutating link.href must replace the cached sheet's rules in place,
         // not append a new entry to document.styleSheets.
         return req.respond(".ext-hide-2 { display: none; }", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
+    // Latin-1 sheets for css/stylesheet_charset.html: undecoded, the 0xE9
+    // swallows the bytes after it and the rule that follows is lost.
+    if (std.mem.eql(u8, path, "/styles/latin1-header.css")) {
+        return req.respond("/* caf\xE9 */ .by-header { display: none; --name: \"caf\xE9\"; }", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css; charset=iso-8859-1" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/styles/latin1-at-charset.css")) {
+        return req.respond("@charset \"windows-1252\"; /* caf\xE9 */ .by-at-charset { display: none; }", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/styles/truncated-utf8.css")) {
+        return req.respond(".before-truncated { display: none; } \xE2", .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/css" },
             },

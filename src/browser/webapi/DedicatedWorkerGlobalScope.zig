@@ -28,6 +28,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 
+const EventTarget = @import("EventTarget.zig");
 const Worker = @import("Worker.zig");
 const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 
@@ -40,8 +41,6 @@ pub const Proto = WorkerGlobalScope;
 _proto: *WorkerGlobalScope,
 _worker: *Worker,
 _closed: bool = false,
-_on_message: ?js.Function.Global = null,
-_on_messageerror: ?js.Function.Global = null,
 
 // Messages received before the worker script finished evaluating. Per the
 // HTML spec, postMessage'd data is buffered while the worker is loading
@@ -84,22 +83,6 @@ pub fn close(self: *DedicatedWorkerGlobalScope) void {
     self._proto._session.idb.detachContext(self._proto.js);
     self._proto.js.scheduler.reset();
     self._closed = true;
-}
-
-fn getOnMessage(self: *const DedicatedWorkerGlobalScope) ?js.Function.Global {
-    return self._on_message;
-}
-
-fn setOnMessage(self: *DedicatedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
-    self._on_message = WorkerGlobalScope.getFunctionFromSetter(setter);
-}
-
-fn getOnMessageError(self: *const DedicatedWorkerGlobalScope) ?js.Function.Global {
-    return self._on_messageerror;
-}
-
-fn setOnMessageError(self: *DedicatedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
-    self._on_messageerror = WorkerGlobalScope.getFunctionFromSetter(setter);
 }
 
 pub fn requestAnimationFrame(self: *DedicatedWorkerGlobalScope, cb: js.Function.Global, exec: *js.Execution) !u32 {
@@ -206,22 +189,19 @@ const ReceiveMessageCallback = struct {
 
         // If data is null, structured clone failed - fire messageerror
         if (self.data == null) {
-            const on_messageerror = worker_scope._on_messageerror;
-            if (!wsg._event_manager.hasDirectListeners(target, "messageerror", on_messageerror)) {
+            if (!wsg._event_manager.hasDirectListeners(target, "messageerror")) {
                 return null;
             }
             const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
                 .bubbles = false,
                 .cancelable = false,
             }, wsg.page)).asEvent();
-            try wsg.dispatch(target, event, on_messageerror, .{});
+            try wsg.dispatch(target, event, .{});
             return null;
         }
 
-        const on_message = worker_scope._on_message;
-
         // Check if there are any listeners before creating the event
-        if (!wsg._event_manager.hasDirectListeners(target, "message", on_message)) {
+        if (!wsg._event_manager.hasDirectListeners(target, "message")) {
             self.data.?.release();
             return null;
         }
@@ -231,10 +211,14 @@ const ReceiveMessageCallback = struct {
             .bubbles = false,
             .cancelable = false,
         }, wsg.page)).asEvent();
-        try wsg.dispatch(target, event, on_message, .{});
+        try wsg.dispatch(target, event, .{});
         return null;
     }
 };
+
+pub fn asEventTarget(self: *DedicatedWorkerGlobalScope) *EventTarget {
+    return self._proto.asEventTarget();
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DedicatedWorkerGlobalScope);
@@ -247,8 +231,8 @@ pub const JsApi = struct {
 
     pub const postMessage = bridge.function(DedicatedWorkerGlobalScope.postMessage, .{});
     pub const close = bridge.function(DedicatedWorkerGlobalScope.close, .{});
-    pub const onmessage = bridge.accessor(DedicatedWorkerGlobalScope.getOnMessage, DedicatedWorkerGlobalScope.setOnMessage, .{});
-    pub const onmessageerror = bridge.accessor(DedicatedWorkerGlobalScope.getOnMessageError, DedicatedWorkerGlobalScope.setOnMessageError, .{});
+    pub const onmessage = EventTarget.handlerAccessor(DedicatedWorkerGlobalScope, "message");
+    pub const onmessageerror = EventTarget.handlerAccessor(DedicatedWorkerGlobalScope, "messageerror");
     pub const requestAnimationFrame = bridge.function(DedicatedWorkerGlobalScope.requestAnimationFrame, .{});
     pub const cancelAnimationFrame = bridge.function(DedicatedWorkerGlobalScope.cancelAnimationFrame, .{});
 };

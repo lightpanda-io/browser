@@ -1081,7 +1081,6 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
     else
         lp.String.wrap(attr_name);
 
-    var case_insensitive = false;
     _ = self.skipSpaces();
 
     // Unexpected EOF closes all open constructs per CSS Syntax, so a
@@ -1094,7 +1093,7 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
             .name = name,
             .matcher = .presence,
             .original_name = .wrap(attr_name),
-            .case_insensitive = case_insensitive,
+            .value_case = .sensitive,
         };
     }
 
@@ -1105,14 +1104,15 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
     _ = self.skipSpaces();
 
     // Parse optional case-sensitivity flag
+    var value_case: Selector.AttributeValueCase = if (case_insensitive_html_attributes.has(name.str())) .html_legacy else .sensitive;
     if (std.ascii.toLower(self.peek()) == 'i') {
         self.input = self.input[1..];
-        case_insensitive = true;
+        value_case = .insensitive;
         _ = self.skipSpaces();
     } else if (std.ascii.toLower(self.peek()) == 's') {
         // 's' flag means case-sensitive (explicit)
         self.input = self.input[1..];
-        case_insensitive = false;
+        value_case = .sensitive;
         _ = self.skipSpaces();
     }
 
@@ -1137,9 +1137,61 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         .name = name,
         .matcher = matcher,
         .original_name = .wrap(attr_name),
-        .case_insensitive = case_insensitive,
+        .value_case = value_case,
     };
 }
+
+// Attributes whose values match ASCII case-insensitively on HTML elements
+// unless the selector has an `s` flag.
+// https://html.spec.whatwg.org/multipage/semantics-other.html#case-sensitivity-of-selectors
+const case_insensitive_html_attributes = std.StaticStringMap(void).initComptime(.{
+    .{ "accept", {} },
+    .{ "accept-charset", {} },
+    .{ "align", {} },
+    .{ "alink", {} },
+    .{ "axis", {} },
+    .{ "bgcolor", {} },
+    .{ "charset", {} },
+    .{ "checked", {} },
+    .{ "clear", {} },
+    .{ "codetype", {} },
+    .{ "color", {} },
+    .{ "compact", {} },
+    .{ "declare", {} },
+    .{ "defer", {} },
+    .{ "dir", {} },
+    .{ "direction", {} },
+    .{ "disabled", {} },
+    .{ "enctype", {} },
+    .{ "face", {} },
+    .{ "frame", {} },
+    .{ "hreflang", {} },
+    .{ "http-equiv", {} },
+    .{ "lang", {} },
+    .{ "language", {} },
+    .{ "link", {} },
+    .{ "media", {} },
+    .{ "method", {} },
+    .{ "multiple", {} },
+    .{ "nohref", {} },
+    .{ "noresize", {} },
+    .{ "noshade", {} },
+    .{ "nowrap", {} },
+    .{ "readonly", {} },
+    .{ "rel", {} },
+    .{ "rev", {} },
+    .{ "rules", {} },
+    .{ "scope", {} },
+    .{ "scrolling", {} },
+    .{ "selected", {} },
+    .{ "shape", {} },
+    .{ "target", {} },
+    .{ "text", {} },
+    .{ "type", {} },
+    .{ "valign", {} },
+    .{ "valuetype", {} },
+    .{ "vlink", {} },
+});
 
 fn attributeName(self: *Parser, arena: Allocator) ![]const u8 {
     const input = self.input;

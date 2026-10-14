@@ -65,6 +65,7 @@ fn isLabelable(el: *Element) bool {
     return switch (html._type) {
         .button, .meter, .output, .progress, .select, .textarea => true,
         .input => html.subtype(HtmlElement.Input)._input_type != .hidden,
+        .custom => html.subtype(HtmlElement.Custom).isFormAssociated(),
         else => false,
     };
 }

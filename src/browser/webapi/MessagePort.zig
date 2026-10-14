@@ -38,8 +38,6 @@ _proto: *EventTarget,
 _exec: *Execution,
 _enabled: bool = false,
 _closed: bool = false,
-_on_message: ?js.Function.Global = null,
-_on_message_error: ?js.Function.Global = null,
 _entangled_port: ?*MessagePort = null,
 
 // queued message received before the port is started.
@@ -142,25 +140,6 @@ pub fn close(self: *MessagePort) void {
     self._entangled_port = null;
 }
 
-fn getOnMessage(self: *const MessagePort) ?js.Function.Global {
-    return self._on_message;
-}
-
-fn setOnMessage(self: *MessagePort, cb: ?js.Function.Global) !void {
-    self._on_message = cb;
-    if (cb != null) {
-        self.start();
-    }
-}
-
-fn getOnMessageError(self: *const MessagePort) ?js.Function.Global {
-    return self._on_message_error;
-}
-
-fn setOnMessageError(self: *MessagePort, cb: ?js.Function.Global) !void {
-    self._on_message_error = cb;
-}
-
 // Queues delivery of `message` (a clone already living in this port's
 // context) on this port's scheduler.
 fn scheduleDelivery(self: *MessagePort, message: js.Value.Global) !void {
@@ -208,7 +187,7 @@ const DeliverCallback = struct {
         }
 
         const target = port.asEventTarget();
-        if (!exec.hasDirectListeners(target, "message", port._on_message)) {
+        if (!exec.hasDirectListeners(target, "message")) {
             self.message.release();
             return null;
         }
@@ -223,13 +202,26 @@ const DeliverCallback = struct {
             return null;
         }).asEvent();
 
-        exec.dispatch(target, event, port._on_message, .{ .context = "MessagePort message" }) catch |err| {
+        exec.dispatch(target, event, .{ .context = "MessagePort message" }) catch |err| {
             log.debug(.dom, "MessagePort.postMessage", .{ .err = err });
         };
 
         return null;
     }
 };
+
+fn getOnMessage(self: *MessagePort, exec: *js.Execution) ?js.Function.Global {
+    return exec.getHandler(self.asEventTarget(), "message");
+}
+
+// Setting onmessage implicitly starts the port (unlike addEventListener).
+fn setOnMessage(self: *MessagePort, value: ?EventTarget.HandlerValue, exec: *js.Execution) !void {
+    const cb = EventTarget.HandlerValue.function(value);
+    try exec.setHandler(self.asEventTarget(), "message", cb);
+    if (cb != null) {
+        self.start();
+    }
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(MessagePort);
@@ -245,5 +237,5 @@ pub const JsApi = struct {
     pub const close = bridge.function(MessagePort.close, .{});
 
     pub const onmessage = bridge.accessor(MessagePort.getOnMessage, MessagePort.setOnMessage, .{});
-    pub const onmessageerror = bridge.accessor(MessagePort.getOnMessageError, MessagePort.setOnMessageError, .{});
+    pub const onmessageerror = EventTarget.handlerAccessor(MessagePort, "messageerror");
 };

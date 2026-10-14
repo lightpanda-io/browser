@@ -310,22 +310,37 @@ pub const List = struct {
 
         const name = try self.put(attribute._name, attribute._value, element, frame);
         attribute._element = element;
+        attribute.asNode()._owner = element.asNode()._owner;
         const page = frame.page;
         try page.attribute_lookup.put(page.arena, .{ .list = self, .name = name.ptr }, attribute);
         return existing_attribute;
     }
 
+    // An Attr's node document follows its element's: re-own the ones handed out
+    pub fn adopt(self: *const List, owner: u32, frame: *const Frame) void {
+        const lookup = &frame.page.attribute_lookup;
+        if (lookup.count() == 0) {
+            return;
+        }
+        for (self.entries()) |*entry| {
+            if (lookup.get(.{ .list = self, .name = entry._name_ptr })) |attr| {
+                attr.asNode()._owner = owner;
+            }
+        }
+    }
+
     // called form our parser, names already lower-cased
-    pub fn putNew(self: *List, name: []const u8, value: []const u8, frame: *Frame) !void {
+    /// Whether the attribute was added.
+    pub fn putNew(self: *List, name: []const u8, value: []const u8, frame: *Frame) !bool {
         if (try self.getEntry(.wrap(name), frame) != null) {
             // When parsing, if there are duplicate names, it isn't valid, and
             // the first is kept
-            return;
+            return false;
         }
         const len = self._len;
         if (len == std.math.maxInt(u16) or name.len > std.math.maxInt(u32) or value.len > std.math.maxInt(u32)) {
             // Bad input. Drop rather than fail the parse
-            return;
+            return false;
         }
 
         try self.ensureUnusedCapacity(1, frame);
@@ -334,6 +349,7 @@ pub const List = struct {
             try frame.dupeString(value),
         );
         self._len = len + 1;
+        return true;
     }
 
     pub fn delete(self: *List, name: String, element: *Element, frame: *Frame) !void {

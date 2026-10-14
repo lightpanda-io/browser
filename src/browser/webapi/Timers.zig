@@ -155,6 +155,12 @@ pub fn schedule(
     return timer_id;
 }
 
+// The scheduler was reset, which finalized every pending callback.
+pub fn reset(self: *Timers) void {
+    self._callbacks.clearRetainingCapacity();
+    self._repeating = 0;
+}
+
 pub fn clear(self: *Timers, id: u32) void {
     var sc = self._callbacks.fetchRemove(id) orelse return;
     if (sc.value.repeat_ms != null) {

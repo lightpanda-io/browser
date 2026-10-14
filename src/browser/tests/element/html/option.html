@@ -25,6 +25,19 @@
   testing.expectEqual('changed', $('#opt1').value)
 </script>
 
+<script id="value_ignore">
+  {
+    var opt = document.createElement('option');
+    opt.innerHTML = 'A<script>var x=1<\/script>B';
+    testing.expectEqual('AB', opt.text);
+    testing.expectEqual('AB', opt.value);
+
+    opt.innerHTML = 'A<span><script>z<\/script><\/span><style>s<\/style>D';
+    testing.expectEqual('AsD', opt.text);
+    testing.expectEqual('AsD', opt.value);
+  }
+</script>
+
 <script id="value_set_attribute">
   {
     const option = document.createElement('option')

@@ -316,8 +316,12 @@
     \\          Write one JSON line per step to PATH: each model call (latency,
     \\          input, cached and output tokens) and each tool call (arguments,
     \\          latency, result size, page URL and HTTP status), then a summary.
-    \\          Arguments keep their $LP_* placeholders; results are not written.
-    \\          Overwrites PATH if it exists.
+    \\          Arguments keep their $LP_* placeholders; results are not written
+    \\          unless --trace-results is set. Overwrites PATH if it exists.
+    \\  --trace-results
+    \\          Also write each tool result's text to the --trace file, as the
+    \\          model received it. Pages can be large and may hold personal
+    \\          data, so this is off by default. Requires --trace.
     \\  --url <URL>
     \\          Open this page before the first turn. With --task it saves the
     \\          model a turn spent navigating; with --save the opening
@@ -429,7 +433,8 @@
     \\          Defaults to none enabled.
     \\  --load-resources <RESOURCE>
     \\          Sub-resource to actually request. Can be passed multiple times.
-    \\          Defaults to requesting none of them.
+    \\          Defaults to stylesheet for mcp and agent, and to none of them
+    \\          otherwise. Passing it replaces the default.
     \\          Allowed values:
     \\             iframe      When enabled, <iframe> elements are fully loaded.
     \\
@@ -447,6 +452,8 @@
     \\                         disabled, the Worker constructor still returns a
     \\                         Worker, but no script fetch is initiated and the
     \\                         Worker never runs.
+    \\
+    \\             none        Request none of them, overriding the default.
     \\  --http-cache-dir <PATH>
     \\          Directory used as a filesystem cache for network resources. Omitting
     \\          this disables caching.

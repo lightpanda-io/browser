@@ -160,7 +160,8 @@ const JsonCookie = struct {
             .value = value,
             .domain = domain,
             .path = path,
-            .expires = self.expires,
+            // A session cookie is written with expires: -1.
+            .expires = if (self.expires) |e| (if (e < 0) null else e) else null,
             .secure = self.secure orelse false,
             .http_only = self.httpOnly orelse false,
             .same_site = same_site orelse .lax,
@@ -430,4 +431,24 @@ test "cookies: load JSON accepts CDP SameSite casing" {
     const cookie = try parsed[0].toCookie(std.testing.allocator);
     defer cookie.deinit();
     try std.testing.expectEqual(Cookie.SameSite.lax, cookie.same_site);
+}
+
+test "cookies: load JSON keeps a session cookie with expires -1" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // Puppeteer's page.cookies() and CDP getCookies write a session cookie
+    // with expires: -1.
+    const parsed = try std.json.parseFromSliceLeaky(
+        []const JsonCookie,
+        arena.allocator(),
+        "[{\"name\":\"sid\",\"value\":\"1\",\"domain\":\"example.com\",\"expires\":-1,\"session\":true}]",
+        .{ .ignore_unknown_fields = true },
+    );
+
+    var jar = Cookie.Jar.init(std.testing.allocator, null);
+    defer jar.deinit();
+    try jar.add(try parsed[0].toCookie(jar.allocator), lp.datetime.timestamp(.real), true);
+    try std.testing.expectEqual(1, jar.cookies.items.len);
+    try std.testing.expectEqual(null, jar.cookies.items[0].expires);
 }

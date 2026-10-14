@@ -20,6 +20,7 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 
 const dump = @import("../dump.zig");
+const EventTarget = @import("EventTarget.zig");
 const Frame = @import("../Frame.zig");
 
 const Node = @import("Node.zig");
@@ -58,6 +59,7 @@ _slot_assignment: SlotAssignment,
 _clonable: bool,
 _serializable: bool,
 _declarative: bool,
+_available_to_internals: bool = false,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .{},
 _removed_ids: std.StringHashMapUnmanaged(void) = .{},
 _adopted_style_sheets: ?js.Object.Global = null,
@@ -121,18 +123,6 @@ pub fn setHTMLUnsafe(self: *ShadowRoot, html: []const u8, options: ?Sanitizer.Op
 
 pub fn getHTML(self: *ShadowRoot, opts: dump.Opts.Shadow.Declarative, writer: *std.Io.Writer, frame: *Frame) !void {
     return dump.getHTML(self.asNode(), opts, writer, frame);
-}
-
-fn getOnSlotChange(self: *ShadowRoot, frame: *Frame) ?js.Function.Global {
-    return frame._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = .onslotchange });
-}
-
-fn setOnSlotChange(self: *ShadowRoot, callback: ?js.Function.Global, frame: *Frame) !void {
-    if (callback) |cb| {
-        try frame._event_target_attr_listeners.put(frame.page_arena, .{ .target = self.asEventTarget(), .handler = .onslotchange }, cb);
-    } else {
-        _ = frame._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onslotchange });
-    }
 }
 
 pub fn getActiveElement(self: *ShadowRoot, frame: *Frame) ?*Element {
@@ -240,7 +230,7 @@ pub const JsApi = struct {
         }, &buf.writer, frame);
         return buf.written();
     }
-    pub const onslotchange = bridge.accessor(ShadowRoot.getOnSlotChange, ShadowRoot.setOnSlotChange, .{});
+    pub const onslotchange = EventTarget.handlerAccessor(ShadowRoot, "slotchange");
 };
 
 const testing = @import("../../testing.zig");

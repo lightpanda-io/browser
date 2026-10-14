@@ -40,7 +40,9 @@
     count("ns");
     console.countReset("ns");
 
-    testing.expectEqual(true, true);
+    // a namespace has no interface object
+    testing.expectEqual('undefined', typeof Console);
+    testing.expectEqual(false, 'Console' in window);
 </script>
 
 <script id=shapes>

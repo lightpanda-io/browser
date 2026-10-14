@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="container"></div>
+<x-pre-shadow></x-pre-shadow>
+<x-declarative><template shadowrootmode="open"><span></span></template></x-declarative>
+
+<script id="attach">
+{
+  class PlainEl extends HTMLElement {}
+  customElements.define('ei-plain', PlainEl);
+
+  const el = new PlainEl();
+  const internals = el.attachInternals();
+  testing.expectTrue(internals instanceof ElementInternals);
+  testing.expectError('NotSupportedError', () => el.attachInternals());
+
+  const parsed = document.getElementById('container');
+  parsed.innerHTML = '<ei-plain></ei-plain>';
+  testing.expectTrue(parsed.firstChild.attachInternals() instanceof ElementInternals);
+
+  testing.expectError('NotSupportedError', () => document.createElement('div').attachInternals());
+  testing.expectError('NotSupportedError', () => document.createElement('ei-undefined').attachInternals());
+
+  class BuiltIn extends HTMLDivElement {}
+  customElements.define('ei-builtin', BuiltIn, { extends: 'div' });
+  testing.expectError('NotSupportedError', () => document.createElement('div', { is: 'ei-builtin' }).attachInternals());
+
+  class Disabled extends HTMLElement {
+    static disabledFeatures = ['internals'];
+  }
+  customElements.define('ei-disabled', Disabled);
+  testing.expectError('NotSupportedError', () => new Disabled().attachInternals());
+}
+
+{
+  // defined, but not yet upgraded
+  const el = document.createElement('ei-later');
+  customElements.define('ei-later', class extends HTMLElement {});
+  testing.expectError('NotSupportedError', () => el.attachInternals());
+  customElements.upgrade(el);
+  testing.expectTrue(el.attachInternals() instanceof ElementInternals);
+}
+</script>
+
+<script id="not_form_associated">
+{
+  class NotFA extends HTMLElement {}
+  customElements.define('ei-not-fa', NotFA);
+  const i = new NotFA().attachInternals();
+  testing.expectError('NotSupportedError', () => i.setFormValue(''));
+  testing.expectError('NotSupportedError', () => i.form);
+  testing.expectError('NotSupportedError', () => i.setValidity({}));
+  testing.expectError('NotSupportedError', () => i.willValidate);
+  testing.expectError('NotSupportedError', () => i.validity);
+  testing.expectError('NotSupportedError', () => i.validationMessage);
+  testing.expectError('NotSupportedError', () => i.checkValidity());
+  testing.expectError('NotSupportedError', () => i.reportValidity());
+  testing.expectError('NotSupportedError', () => i.labels);
+
+  // ARIA and states work on any custom element
+  testing.expectEqual(null, i.role);
+  i.role = 'checkbox';
+  i.ariaLabel = 'Accept';
+  testing.expectEqual('checkbox', i.role);
+  testing.expectEqual('Accept', i.ariaLabel);
+  i.ariaLabel = null;
+  testing.expectEqual(null, i.ariaLabel);
+}
+</script>
+
+<script id="shadow_root">
+{
+  customElements.define('ei-shadow', class extends HTMLElement {
+    constructor() {
+      super();
+      this.i = this.attachInternals();
+      testing.expectEqual(null, this.i.shadowRoot);
+      this.s = this.attachShadow({ mode: 'closed' });
+    }
+  });
+  const el = document.createElement('ei-shadow');
+  testing.expectEqual(el.s, el.i.shadowRoot);
+
+  // attached before the element was defined: not revealed
+  const pre = document.querySelector('x-pre-shadow');
+  pre.attachShadow({ mode: 'closed' });
+  customElements.define('x-pre-shadow', class extends HTMLElement {
+    constructor() {
+      super();
+      this.i = this.attachInternals();
+    }
+  });
+  testing.expectEqual(null, pre.i.shadowRoot);
+
+  // declarative shadow roots are always available
+  const decl = document.querySelector('x-declarative');
+  customElements.define('x-declarative', class extends HTMLElement {
+    constructor() {
+      super();
+      this.i = this.attachInternals();
+    }
+  });
+  testing.expectEqual(decl.shadowRoot, decl.i.shadowRoot);
+}
+</script>
+
+<script id="states">
+{
+  customElements.define('ei-states', class extends HTMLElement {
+    constructor() {
+      super();
+      this.i = this.attachInternals();
+    }
+  });
+  const i = document.createElement('ei-states').i;
+  const states = i.states;
+  testing.expectTrue(states instanceof CustomStateSet);
+  testing.expectEqual(states, i.states);
+  testing.expectEqual(0, states.size);
+
+  states.add('a');
+  states.add('b');
+  states.add('a');
+  testing.expectEqual(2, states.size);
+  testing.expectTrue(states.has('a'));
+  testing.expectEqual(['a', 'b'], [...states]);
+
+  testing.expectTrue(states.delete('a'));
+  testing.expectFalse(states.delete('a'));
+  states.add('a');
+  testing.expectEqual(['b', 'a'], [...states.values()]);
+  testing.expectEqual([['b', 'b'], ['a', 'a']], [...states.entries()]);
+
+  const seen = [];
+  states.forEach((v, k, s) => seen.push(v, k, s === states));
+  testing.expectEqual(['b', 'b', true, 'a', 'a', true], seen);
+
+  // live iteration, like a Set
+  states.clear();
+  states.add('1');
+  states.add('2');
+  states.add('3');
+  let it = states.values();
+  states.delete('1');
+  testing.expectEqual('2', it.next().value);
+  states.clear();
+  testing.expectTrue(it.next().done);
+  states.add('4');
+  testing.expectTrue(it.next().done);
+
+  // churn while no iterator is held
+  for (let n = 0; n < 50; n++) {
+    states.add('x');
+    states.delete('x');
+  }
+  testing.expectEqual(['4'], [...states]);
+}
+</script>
+
+<script id="validity">
+{
+  class Control extends HTMLElement {
+    static formAssociated = true;
+    constructor() {
+      super();
+      this.i = this.attachInternals();
+    }
+  }
+  customElements.define('ei-control', Control);
+
+  const control = new Control();
+  const validity = control.i.validity;
+  testing.expectEqual(validity, control.i.validity);
+  testing.expectTrue(validity.valid);
+  testing.expectTrue(control.i.willValidate);
+
+  let invalid = 0;
+  control.addEventListener('invalid', () => invalid++);
+  testing.expectTrue(control.i.checkValidity());
+
+  control.i.setValidity({ valueMissing: true }, 'missing');
+  testing.expectTrue(validity.valueMissing);
+  testing.expectFalse(validity.customError);
+  testing.expectFalse(validity.valid);
+  testing.expectEqual('missing', control.i.validationMessage);
+  testing.expectTrue(control.matches(':invalid'));
+  testing.expectFalse(control.i.checkValidity());
+  testing.expectFalse(control.i.reportValidity());
+  testing.expectEqual(2, invalid);
+
+  testing.expectError('TypeError', () => control.i.setValidity({ customError: true }));
+  testing.expectError('NotFoundError', () => control.i.setValidity({ customError: true }, 'x', document.body));
+  control.i.setValidity({ customError: true }, 'x', control);
+
+  control.i.setValidity({}, 'ignored');
+  testing.expectTrue(validity.valid);
+  testing.expectTrue(control.matches(':valid'));
+  testing.expectEqual('', control.i.validationMessage);
+
+  control.setAttribute('readonly', '');
+  testing.expectFalse(control.i.willValidate);
+  control.removeAttribute('readonly');
+
+  const fieldset = document.createElement('fieldset');
+  fieldset.disabled = true;
+  fieldset.appendChild(control);
+  testing.expectFalse(control.i.willValidate);
+  testing.expectTrue(control.matches(':disabled'));
+
+  const datalist = document.createElement('datalist');
+  datalist.appendChild(control);
+  testing.expectFalse(control.i.willValidate);
+
+  // barred without ever attaching internals
+  customElements.define('ei-bare', class extends HTMLElement {
+    static formAssociated = true;
+  });
+  const bare = document.createElement('ei-bare');
+  testing.expectTrue(bare.matches(':valid'));
+  bare.setAttribute('disabled', '');
+  testing.expectFalse(bare.matches(':valid'));
+  testing.expectFalse(bare.matches(':invalid'));
+  bare.removeAttribute('disabled');
+  bare.setAttribute('readonly', '');
+  testing.expectFalse(bare.matches(':valid'));
+  testing.expectFalse(bare.matches(':invalid'));
+}
+</script>
+
+<script id="form">
+{
+  const container = document.getElementById('container');
+  container.innerHTML = `
+    <label for="c1">One</label>
+    <form id="f">
+      <input name="before" value="b">
+      <ei-control id="c1" name="c1"></ei-control>
+      <ei-control id="c2"></ei-control>
+      <ei-control id="c3" name="c3" disabled></ei-control>
+      <ei-plain name="plain"></ei-plain>
+      <input name="after" value="a">
+    </form>`;
+  const form = document.getElementById('f');
+  const c1 = document.getElementById('c1');
+  const c2 = document.getElementById('c2');
+  const c3 = document.getElementById('c3');
+
+  testing.expectEqual(form, c1.i.form);
+  testing.expectEqual(null, new (customElements.get("ei-control"))().i.form);
+  testing.expectEqual(c1, document.querySelector('label').control);
+  testing.expectEqual(1, c1.i.labels.length);
+  testing.expectEqual(5, form.elements.length);
+  testing.expectEqual(c1, form.elements.namedItem('c1'));
+
+  // no value yet
+  testing.expectEqual([['before', 'b'], ['after', 'a']], [...new FormData(form)]);
+
+  c1.i.setFormValue('one');
+  c3.i.setFormValue('three');
+  testing.expectEqual([['before', 'b'], ['c1', 'one'], ['after', 'a']], [...new FormData(form)]);
+
+  c1.i.setFormValue(null);
+  testing.expectEqual([['before', 'b'], ['after', 'a']], [...new FormData(form)]);
+
+  // a FormData value brings its own names, even without a name attribute
+  const fd = new FormData();
+  fd.append('x', '1');
+  fd.append('y', '2');
+  c2.i.setFormValue(fd);
+  fd.append('z', '3');
+  testing.expectEqual([['before', 'b'], ['x', '1'], ['y', '2'], ['after', 'a']], [...new FormData(form)]);
+
+  const file = new File(['abc'], 'a.txt');
+  c1.i.setFormValue(file);
+  testing.expectEqual(['before', 'c1', 'x', 'y', 'after'], [...new FormData(form).keys()]);
+
+  c1.i.setFormValue(undefined);
+  c2.i.setFormValue(null);
+
+  // owner form validation
+  testing.expectTrue(form.checkValidity());
+  c1.i.setValidity({ valueMissing: true }, 'required');
+  testing.expectFalse(form.checkValidity());
+  testing.expectTrue(form.matches(':invalid'));
+  c1.i.setValidity({});
+  testing.expectTrue(form.checkValidity());
+}
+</script>
+
+<script id="role">
+{
+  customElements.define('ei-role', class extends HTMLElement {
+    constructor() {
+      super();
+      this.attachInternals().role = 'button';
+    }
+  });
+  const el = document.createElement('ei-role');
+  testing.expectEqual(null, el.getAttribute('role'));
+  testing.expectEqual(null, el.role);
+}
+</script>

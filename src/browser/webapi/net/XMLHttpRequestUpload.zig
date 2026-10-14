@@ -37,10 +37,6 @@ pub const Proto = XMLHttpRequestEventTarget;
 _proto: *XMLHttpRequestEventTarget,
 _xhr: *XMLHttpRequest,
 
-// pub fn deinit(self: *XMLHttpRequestUpload, _: *Page) void {
-//     self._proto.releaseListeners();
-// }
-
 pub fn releaseRef(self: *XMLHttpRequestUpload, page: *Page) void {
     self._xhr.releaseRef(page);
 }
