@@ -155,8 +155,16 @@ pub fn TextEntry(comptime T: type) type {
         }
 
         pub fn rememberValueBeforeEdit(self: *T, frame: *Frame) !void {
-            if (self._value_before_edit == null) {
-                self._value_before_edit = try frame.page_arena.dupe(u8, self.getValue());
+            if (self._value_before_edit != null) {
+                return;
+            }
+            const value = self.getValue();
+            // _value is never mutated in place, so it can be kept as is. A
+            // textarea without one shows its text child's data, which can change.
+            if (@hasField(T, "_input_type") or self._value != null) {
+                self._value_before_edit = value;
+            } else {
+                self._value_before_edit = try frame.page_arena.dupe(u8, value);
             }
         }
 
