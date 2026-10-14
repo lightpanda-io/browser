@@ -454,7 +454,7 @@
 <script id=stored_error type=module>
   const state = await testing.async();
 
-  // read(), cancel(), write() and close() reject with whatever
+  // read(), cancel(), write(), close() and closed reject with whatever
   // controller.error() was given.
   const errored = new ReadableStream({ start(c) { c.error('err!'); } }).getReader();
   const no_reason = new ReadableStream({ start(c) { c.error(); } }).getReader();
@@ -467,10 +467,11 @@
     await errored_sink.write('a').catch((e) => e),
     await errored_sink.close().catch((e) => e),
     await no_reason_sink.close().then(() => 'resolved', (e) => e),
+    await errored_sink.closed.catch((e) => e),
   ];
 
   state.resolve();
   await state.done(() => {
-    testing.expectEqual(['err!', 'err!', undefined, 'err!', 'err!', undefined], results);
+    testing.expectEqual(['err!', 'err!', undefined, 'err!', 'err!', undefined, 'err!'], results);
   });
 </script>
