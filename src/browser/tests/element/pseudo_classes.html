@@ -192,3 +192,47 @@
     testing.expectEqual('39,40', texts('#of_type_custom_many > :last-of-type'));
 }
 </script>
+
+<div id=checked1>
+    <input type=checkbox name=cb0 value=cb0-1>
+</div>
+
+<div id=checked2>
+    <input type=checkbox name=cb1 value=cb1-1>
+    <input type=checkbox name=cb1 value=cb1-2 checked>
+</div>
+
+<div id=checked3>
+    <select>
+        <option value=sel1-1>
+        <option value=sel1-2 selected>
+    </select>
+</div>
+
+<div id=checked4>
+    <select>
+        <option value=sel2-1>
+        <option value=sel2-2>
+    </select>
+</div>
+
+<script id="checked">
+{
+    testing.expectEqual(null, $('#checked1').querySelector(':checked'));
+    testing.expectEqual('cb1-2', $('#checked2').querySelector(':checked')?.value);
+
+    {
+        const s = $('#checked3 select');
+        testing.expectEqual('sel1-2', s.querySelector(':checked')?.value);
+        s.value = 'sel1-1'
+        testing.expectEqual('sel1-1', s.querySelector(':checked')?.value);
+        testing.expectEqual(true, s.options[0].matches(':checked'));
+        testing.expectEqual(false, s.options[1].matches(':checked'));
+
+        s.options[1].selected = true;
+        testing.expectEqual('sel1-2', s.querySelector('option:checked')?.value);
+    }
+
+    testing.expectEqual('sel2-1', $('#checked4').querySelector(':checked')?.value);
+}
+</script>

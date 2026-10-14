@@ -104,8 +104,9 @@
 
 <script id=deep_nesting>
 {
-  // The descendant, following and preceding axes used to recurse per level.
-  const depth = 100000;
+  // The descendant, following and preceding axes used to recurse per level,
+  // which overflowed an 8MB stack at a depth of about 35000 in debug builds.
+  const depth = 50000;
   // Built bottom-up: appending under a deep parent walks its ancestors.
   const chain = (prefix) => {
     let top = document.createElement('div');

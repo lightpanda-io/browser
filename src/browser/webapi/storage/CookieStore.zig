@@ -36,7 +36,6 @@ const CookieStore = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
-_on_change: ?js.Function.Global = null,
 _exec: ?*Execution = null,
 
 pub fn asEventTarget(self: *CookieStore) *EventTarget {
@@ -92,7 +91,7 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
     // Rechecked in ChangeCallback.run, but between now and then, a listener
     // could be added which should NOT get this event (because it wasn't addded
     // at this point).
-    if (!exec.hasDirectListeners(self.asEventTarget(), "change", self._on_change)) {
+    if (!exec.hasDirectListeners(self.asEventTarget(), "change")) {
         return;
     }
 
@@ -158,7 +157,7 @@ const ChangeCallback = struct {
         const target = cs.asEventTarget();
 
         // Skip event construction when nobody is listening.
-        if (!exec.hasDirectListeners(target, "change", cs._on_change)) {
+        if (!exec.hasDirectListeners(target, "change")) {
             return null;
         }
 
@@ -173,32 +172,12 @@ const ChangeCallback = struct {
             .same_site = self.same_site,
         }, exec);
 
-        try exec.dispatch(target, event.asEvent(), cs._on_change, .{
+        try exec.dispatch(target, event.asEvent(), .{
             .context = "CookieStore.change",
         });
 
         return null;
     }
-};
-
-fn getOnChange(self: *const CookieStore) ?js.Function.Global {
-    return self._on_change;
-}
-
-fn setOnChange(self: *CookieStore, setter: ?FunctionSetter) void {
-    const s = setter orelse {
-        self._on_change = null;
-        return;
-    };
-    self._on_change = switch (s) {
-        .func => |f| f,
-        .anything => null,
-    };
-}
-
-const FunctionSetter = union(enum) {
-    func: js.Function.Global,
-    anything: js.Value,
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/CookieStore/get
@@ -446,6 +425,9 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
         if (std.mem.findScalar(u8, init.value, '=') != null) {
             return error.InvalidCookieName;
         }
+        if (Cookie.hasHiddenPrefix(init.value)) {
+            return error.InvalidCookieName;
+        }
     }
 
     // Reject inputs the cookie model can't represent. `=` is allowed in
@@ -495,31 +477,10 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
     // marks any cookie written from a trustworthy origin as Secure.
     const secure = trustworthy or init.sameSite == .none;
 
-    // The `__Http-` and `__Host-Http-` prefixes are reserved for HTTP-state
-    // cookies; the (script) CookieStore API can never set them, on any origin.
-    if (std.ascii.startsWithIgnoreCase(init.name, "__Http-") or std.ascii.startsWithIgnoreCase(init.name, "__Host-Http-")) {
-        return error.InvalidPrefixedCookie;
-    }
-
-    // Cookie-name-prefix rules — match Cookie.parse, case-insensitive to
-    // catch impersonation attempts (e.g. "__HoSt-").
-    // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-cookie-name-prefixes
-    if (std.ascii.startsWithIgnoreCase(init.name, "__Host-")) {
-        if (!trustworthy) {
-            return error.InvalidPrefixedCookie;
-        }
-        if (init.domain) |d| {
-            if (d.len > 0) {
-                return error.InvalidPrefixedCookie;
-            }
-        }
-
+    // Script can't set HttpOnly, so __Http- and __Host-Http- never pass.
+    if (Cookie.prefixOf(init.name)) |prefix| {
         const resolved_path = try Cookie.parsePath(exec.local_arena, url, init.path);
-        if (std.mem.eql(u8, resolved_path, "/") == false) {
-            return error.InvalidPrefixedCookie;
-        }
-    } else if (std.ascii.startsWithIgnoreCase(init.name, "__Secure-")) {
-        if (!trustworthy) {
+        if (!prefix.allows(trustworthy, false, if (init.domain) |d| d.len > 0 else false, resolved_path)) {
             return error.InvalidPrefixedCookie;
         }
     }
@@ -587,7 +548,7 @@ pub const JsApi = struct {
     pub const getAll = bridge.function(CookieStore.getAll, .{});
     pub const set = bridge.function(CookieStore.set, .{});
     pub const delete = bridge.function(CookieStore.delete, .{});
-    pub const onchange = bridge.accessor(CookieStore.getOnChange, CookieStore.setOnChange, .{});
+    pub const onchange = EventTarget.handlerAccessor(CookieStore, "change");
 };
 
 // CookieListItem is an plain JavaScript object, not an interface. The bridge

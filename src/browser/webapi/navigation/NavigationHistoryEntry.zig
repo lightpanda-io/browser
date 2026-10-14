@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const URL = @import("../URL.zig");
 const NavigationState = @import("root.zig").NavigationState;
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
@@ -34,10 +33,12 @@ _id: []const u8,
 _key: []const u8,
 _url: ?[:0]const u8,
 _state: NavigationState,
+// The document this entry belongs to (Frame._history_document_id). Entries
+// created by pushState/replaceState or a fragment navigation share their
+// document's id; traversing between them stays in that document.
+_document_id: u32,
 
-_on_dispose: ?js.Function.Global = null,
-
-fn asEventTarget(self: *NavigationHistoryEntry) *EventTarget {
+pub fn asEventTarget(self: *NavigationHistoryEntry) *EventTarget {
     return self._proto;
 }
 
@@ -61,9 +62,12 @@ pub fn key(self: *const NavigationHistoryEntry) []const u8 {
     return self._key;
 }
 
-fn sameDocument(self: *const NavigationHistoryEntry, frame: *Frame) bool {
-    const got_url = self._url orelse return false;
-    return URL.eqlDocument(got_url, frame.base());
+// https://html.spec.whatwg.org/multipage/browsing-the-web.html#traverse-the-history
+// Same document means the entry's document is the frame's current one, not
+// that the URLs match: pushState can change the path or query of an entry
+// without leaving its document.
+pub fn sameDocument(self: *const NavigationHistoryEntry, frame: *Frame) bool {
+    return self._document_id == frame._history_document_id;
 }
 
 pub fn url(self: *const NavigationHistoryEntry) ?[:0]const u8 {
@@ -83,23 +87,10 @@ pub fn getState(self: *const NavigationHistoryEntry, frame: *Frame) !StateReturn
 }
 
 pub fn fireDispose(self: *NavigationHistoryEntry, frame: *Frame) !void {
-    if (!frame.hasDirectListeners(self.asEventTarget(), "dispose", self._on_dispose)) return;
+    if (!frame.hasDirectListeners(self.asEventTarget(), "dispose")) return;
 
     const event = try Event.initTrusted(comptime .wrap("dispose"), .{}, frame.page);
-    try frame.dispatch(self.asEventTarget(), event, self._on_dispose, .{ .context = "NavigationHistoryEntry" });
-}
-
-fn getOnDispose(self: *const NavigationHistoryEntry) ?js.Function.Global {
-    return self._on_dispose;
-}
-
-fn setOnDispose(self: *NavigationHistoryEntry, cb_: ?js.Function) !void {
-    if (self._on_dispose) |od| od.release();
-    if (cb_) |cb| {
-        self._on_dispose = try cb.persistWithThis(self);
-    } else {
-        self._on_dispose = null;
-    }
+    try frame.dispatch(self.asEventTarget(), event, .{ .context = "NavigationHistoryEntry" });
 }
 
 pub const JsApi = struct {
@@ -117,9 +108,5 @@ pub const JsApi = struct {
     pub const sameDocument = bridge.accessor(NavigationHistoryEntry.sameDocument, null, .{});
     pub const url = bridge.accessor(NavigationHistoryEntry.url, null, .{});
     pub const getState = bridge.function(NavigationHistoryEntry.getState, .{});
-    pub const ondispose = bridge.accessor(
-        NavigationHistoryEntry.getOnDispose,
-        NavigationHistoryEntry.setOnDispose,
-        .{},
-    );
+    pub const ondispose = EventTarget.handlerAccessor(NavigationHistoryEntry, "dispose");
 };

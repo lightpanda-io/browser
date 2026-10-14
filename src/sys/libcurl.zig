@@ -232,6 +232,8 @@ const CurlOption = enum(c.CURLoption) {
     opensocket_data = c.CURLOPT_OPENSOCKETDATA,
     ssl_ctx_function = c.CURLOPT_SSL_CTX_FUNCTION,
     ssl_ctx_data = c.CURLOPT_SSL_CTX_DATA,
+    ssl_ec_curves = c.CURLOPT_SSL_EC_CURVES,
+    connect_to = c.CURLOPT_CONNECT_TO,
 };
 
 pub const CurlHttpVersion = enum(c_long) {
@@ -638,9 +640,12 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .user_pwd,
         .proxy_user_pwd,
         .copy_post_fields,
+        .ssl_ec_curves,
         => @as(?[*]const u8, value),
 
-        .http_header => @as(?*CurlSList, value),
+        .http_header,
+        .connect_to,
+        => @as(?*CurlSList, value),
 
         .private,
         .header_data,

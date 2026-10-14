@@ -23,8 +23,12 @@ const Frame = @import("../Frame.zig");
 const Node = @import("Node.zig");
 const Document = @import("Document.zig");
 const Element = @import("Element.zig");
+const Window = @import("Window.zig");
 const DocumentType = @import("DocumentType.zig");
+const TreeWalker = @import("TreeWalker.zig");
 const collections = @import("collections.zig");
+
+const NodeLive = collections.NodeLive;
 
 const HTMLDocument = @This();
 
@@ -99,7 +103,7 @@ pub fn getTitle(self: *HTMLDocument, frame: *Frame) ![]const u8 {
     // Search the entire document for the first <title> element
     const root = self._proto.getDocumentElement() orelse return "";
     const title_element = blk: {
-        var walker = @import("TreeWalker.zig").Full.init(root.asNode(), .{});
+        var walker = TreeWalker.Full.init(root.asNode(), .{});
         while (walker.next()) |node| {
             if (node.is(Element.Html.Title)) |title| {
                 break :blk title;
@@ -234,7 +238,7 @@ fn getDocType(self: *HTMLDocument, frame: *Frame) !*DocumentType {
         return dt;
     }
 
-    var tw = @import("TreeWalker.zig").Full.init(self.asNode(), .{});
+    var tw = TreeWalker.Full.init(self.asNode(), .{});
     while (tw.next()) |node| {
         if (node._type == .document_type) {
             self._document_type = node.as(DocumentType);
@@ -249,6 +253,70 @@ fn getDocType(self: *HTMLDocument, frame: *Frame) !*DocumentType {
         ._system_id = "",
     });
     return self._document_type.?;
+}
+
+const NamedItemResult = union(enum) {
+    window: Window.Access,
+    element: *Element,
+    collection: NodeLive(.document_named),
+};
+fn namedItem(self: *HTMLDocument, name: []const u8, frame: *Frame) !?NamedItemResult {
+    if (name.len == 0) {
+        return null;
+    }
+
+    var tw = TreeWalker.FullExcludeSelf.Elements.init(self.asNode(), .{});
+    const first = findNamed(&tw, name) orelse return null;
+    if (findNamed(&tw, name) != null) {
+        // we found more than one, we return an HTMLCollection
+        return .{ .collection = NodeLive(.document_named).init(self.asNode(), try frame.dupeString(name), frame) };
+    }
+
+    if (first.is(Element.Html.IFrame)) |iframe| {
+        const iframe_window = iframe._window orelse return null;
+        return .{ .window = Window.Access.init(frame.window, iframe_window) };
+    }
+    return .{ .element = first };
+}
+
+fn findNamed(tw: *TreeWalker.FullExcludeSelf.Elements, name: []const u8) ?*Element {
+    while (tw.next()) |el| {
+        if (isNamed(el, name)) {
+            return el;
+        }
+    }
+    return null;
+}
+
+pub fn isNamed(el: *Element, name: []const u8) bool {
+    const html = el.is(Element.Html) orelse return false;
+    switch (html._type) {
+        .embed, .form, .iframe => {},
+        .img => {
+            const name_attr = el.getName() orelse return false;
+            if (name_attr.len == 0) {
+                return false;
+            }
+
+            if (std.mem.eql(u8, name_attr, name)) {
+                return true;
+            }
+
+            // img is weird, it can only match by id when it has a non-empty name
+            const id = el.getId() orelse return false;
+            return std.mem.eql(u8, id, name);
+        },
+        .object => {
+            if (el.getId()) |id| {
+                if (std.mem.eql(u8, id, name)) {
+                    return true;
+                }
+            }
+        },
+        else => return false,
+    }
+    const name_attr = el.getName() orelse return false;
+    return std.mem.eql(u8, name_attr, name);
 }
 
 pub const JsApi = struct {
@@ -305,4 +373,18 @@ pub const JsApi = struct {
     pub const currentScript = bridge.accessor(HTMLDocument.getCurrentScript, null, .{});
     pub const all = bridge.accessor(HTMLDocument.getAll, null, .{});
     pub const doctype = bridge.accessor(HTMLDocument.getDocType, null, .{});
+
+    pub const @"[str]" = bridge.namedIndexed(HTMLDocument.namedItem, null, null, null, struct {
+        fn query(self: *HTMLDocument, name: []const u8) !u32 {
+            if (name.len == 0) {
+                return error.NotHandled;
+            }
+
+            var tw = TreeWalker.FullExcludeSelf.Elements.init(self.asNode(), .{});
+            if (findNamed(&tw, name) == null) {
+                return error.NotHandled;
+            }
+            return js.v8.None;
+        }
+    }.query, .{ .null_as_undefined = true });
 };

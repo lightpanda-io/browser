@@ -19,6 +19,9 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const repeat = @import("string.zig").repeat;
+const http = @import("network/http.zig");
+const sys_net = @import("sys/net.zig");
+const libcurl = @import("sys/libcurl.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -39,6 +42,12 @@ pub const arena_allocator = arena_instance.allocator();
 
 pub fn reset() void {
     _ = arena_instance.reset(.retain_capacity);
+}
+
+/// Path of `name` inside a std.testing.tmpDir, relative to the cwd like the
+/// tmpDir itself, since some tools refuse absolute paths.
+pub fn tmpPath(tmp: *const std.testing.TmpDir, name: []const u8) ![:0]const u8 {
+    return std.Io.Dir.path.joinZ(arena_allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, name });
 }
 
 const App = @import("App.zig");
@@ -448,6 +457,11 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
     var wait_ms: u32 = timeout_ms;
     var timer: std.Io.Timestamp = .now(lp.io, .boot);
     while (true) {
+        const sleep_ms: usize = switch (try runner.tickForFrame(page.frame_id, 20, .{ .until = .done })) {
+            .done => @min(test_session.browser.msToNextTask() orelse 20, 20), // could be at BLOCKING_NESTING, so wait a bit more
+            .ok => |next_ms| @min(next_ms, 20),
+        };
+
         var try_catch: js.TryCatch = undefined;
         try_catch.init(&ls.local);
         defer try_catch.deinit();
@@ -464,10 +478,6 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
         if (js_val.isTrue()) {
             return;
         }
-        const sleep_ms: usize = switch (try runner.tickForFrame(page.frame_id, 20, .{ .until = .done })) {
-            .done => @min(test_session.browser.msToNextTask() orelse 20, 20), // could be at BLOCKING_NESTING, so wait a bit more
-            .ok => |next_ms| @min(next_ms, 20),
-        };
 
         const lap: std.Io.Timestamp = .now(lp.io, .boot);
         const ms_elapsed: u64 = @intCast(timer.durationTo(lap).toMilliseconds());
@@ -517,6 +527,7 @@ const TestWSServer = @import("TestWSServer.zig");
 const TestHTTPServer = @import("TestHTTPServer.zig");
 
 pub var test_cdp_server: ?*Server = null;
+pub var test_cdp_port: u16 = 0;
 var test_cdp_server_thread: ?std.Thread = null;
 var test_http_server: ?TestHTTPServer = null;
 var test_http_server_thread: ?std.Thread = null;
@@ -536,6 +547,21 @@ test "tests:beforeAll" {
     log.opts.format = .pretty;
 
     const test_allocator = @import("root").tracking_allocator;
+
+    // Before App.init: its connection pool picks up the routes as it's built.
+    {
+        var wg: lp.WaitGroup = .{};
+        wg.startMany(2);
+
+        test_http_server = TestHTTPServer.init(testHTTPHandler);
+        test_http_server_thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
+
+        test_ws_server = TestWSServer.init();
+        test_ws_server_thread = try std.Thread.spawn(.{}, TestWSServer.run, .{ &test_ws_server.?, &wg });
+
+        wg.wait();
+        try routeTestPorts();
+    }
 
     test_config = try Config.init(test_allocator, "test", .{
         .serve = .{
@@ -559,20 +585,31 @@ test "tests:beforeAll" {
 
     test_session = try test_browser.newSession(test_notification);
 
-    var wg: lp.WaitGroup = .{};
-    wg.startMany(3);
-
-    test_cdp_server_thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
-
-    test_http_server = TestHTTPServer.init(testHTTPHandler);
-    test_http_server_thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
-
-    test_ws_server = TestWSServer.init();
-    test_ws_server_thread = try std.Thread.spawn(.{}, TestWSServer.run, .{ &test_ws_server.?, &wg });
-
-    // need to wait for the servers to be listening, else tests will fail because
+    // need to wait for the server to be listening, else tests will fail because
     // they aren't able to connect.
+    var wg: lp.WaitGroup = .{};
+    wg.start();
+    test_cdp_server_thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
     wg.wait();
+}
+
+/// Fixtures address the test servers by fixed ports, but each test process
+/// binds ephemeral ones so that several can run at once.
+fn routeTestPorts() !void {
+    const routes = [_]struct { u16, u16 }{
+        .{ 9582, test_http_server.?.listener.?.socket.address.getPort() },
+        .{ 9584, test_ws_server.?.port },
+    };
+
+    var list: ?*libcurl.CurlSList = null;
+    errdefer libcurl.curl_slist_free_all(list);
+    for (routes) |route| {
+        const port, const real_port = route;
+        // an empty host matches any, so both 127.0.0.1 and localhost
+        const entry = try arena_allocator.printSentinel(":{d}:127.0.0.1:{d}", .{ port, real_port }, 0);
+        list = libcurl.curl_slist_append(list, entry) orelse return error.OutOfMemory;
+    }
+    http.test_connect_to = list;
 }
 
 test "tests:afterAll" {
@@ -611,16 +648,21 @@ test "tests:afterAll" {
     test_browser.deinit();
     test_notification.deinit();
     test_app.deinit();
+    // curl keeps the list, not a copy: free it once no handle is left
+    libcurl.curl_slist_free_all(http.test_connect_to);
+    http.test_connect_to = null;
     test_config.deinit(@import("root").tracking_allocator);
 }
 
 fn serveCDP(wg: *lp.WaitGroup) !void {
-    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 9583);
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
 
     test_cdp_server = Server.init(test_app, address) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
+
+    test_cdp_port = (try sys_net.boundAddress(test_cdp_server.?.listener)).getPort();
     test_cdp_server.?.protocols = .{ .cdp = true, .webdriver = true };
     wg.finish();
 
@@ -649,6 +691,10 @@ fn origin(req: *std.http.Server.Request) ?[]const u8 {
 }
 
 fn testHTTPHandler(req: *std.http.Server.Request) !void {
+    var arena: std.heap.ArenaAllocator = .init(std.heap.c_allocator);
+    defer arena.deinit();
+    const req_allocator = arena.allocator();
+
     const path = req.head.target;
 
     if (std.mem.eql(u8, path, "/")) {
@@ -671,6 +717,16 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         // Long enough for a timer scheduled by the requester to fire first.
         lp.io.sleep(.fromMilliseconds(100), .awake) catch {};
         return req.respond("slow", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/hang")) {
+        // For asserting a request didn't wait for its response
+        lp.io.sleep(.fromMilliseconds(2000), .awake) catch {};
+        return req.respond("hang", .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/plain" },
             },
@@ -900,6 +956,16 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/challenge/vercel")) {
+        return req.respond("<title>Vercel Security Checkpoint</title>", .{
+            .status = .too_many_requests,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                .{ .name = "x-vercel-mitigated", .value = "challenge" },
+            },
+        });
+    }
+
     if (std.mem.startsWith(u8, path, "/status/")) {
         const code = try std.fmt.parseInt(u16, path["/status/".len..], 10);
         return req.respond("", .{ .status = @fromBackingInt(@intCast(code)) });
@@ -909,6 +975,17 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond("", .{
             .status = .service_unavailable,
             .reason = "HOUSTON WE HAVE A",
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/duplicate_headers")) {
+        return req.respond("", .{
+            .extra_headers = &.{
+                .{ .name = "X-B", .value = "1" },
+                .{ .name = "X-A", .value = "a" },
+                .{ .name = "X-B", .value = "2, 3" },
+                .{ .name = "X_C", .value = "c" },
+            },
         });
     }
 
@@ -1089,6 +1166,32 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    // Latin-1 sheets for css/stylesheet_charset.html: undecoded, the 0xE9
+    // swallows the bytes after it and the rule that follows is lost.
+    if (std.mem.eql(u8, path, "/styles/latin1-header.css")) {
+        return req.respond("/* caf\xE9 */ .by-header { display: none; --name: \"caf\xE9\"; }", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css; charset=iso-8859-1" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/styles/latin1-at-charset.css")) {
+        return req.respond("@charset \"windows-1252\"; /* caf\xE9 */ .by-at-charset { display: none; }", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/styles/truncated-utf8.css")) {
+        return req.respond(".before-truncated { display: none; } \xE2", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/styles/404.css")) {
         return req.respond("/* unused */", .{
             .status = .not_found,
@@ -1098,14 +1201,29 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/styles/large.css")) {
+        // Over 2 MiB, with the rule under test last.
+        const chunk = ".pad { color: #abcdef; } "; // 25 bytes
+        const tail = ".large-hide { display: none; }";
+        const repeats = 5 * 1024 * 1024 / 2 / chunk.len;
+        var body = try std.ArrayList(u8).initCapacity(req_allocator, chunk.len * repeats + tail.len);
+        for (0..repeats) |_| body.appendSliceAssumeCapacity(chunk);
+        body.appendSliceAssumeCapacity(tail);
+        return req.respond(body.items, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/styles/oversize.css")) {
-        // Body that exceeds Frame.MAX_STYLESHEET_BYTES (2 MiB) — written as a
+        // Body that exceeds Frame.MAX_STYLESHEET_BYTES — written as a
         // long sequence of valid declarations so the response itself parses
         // fine and the error path is exercised by the size cap, not by a
         // CSS parse failure.
         const chunk = ".pad { color: #abcdef; } "; // 25 bytes
-        const repeats = (2 * 1024 * 1024 / chunk.len) + 1024;
-        var body = try std.ArrayList(u8).initCapacity(arena_allocator, chunk.len * repeats);
+        const repeats = (Frame.MAX_STYLESHEET_BYTES / chunk.len) + 1024;
+        var body = try std.ArrayList(u8).initCapacity(req_allocator, chunk.len * repeats);
         for (0..repeats) |_| body.appendSliceAssumeCapacity(chunk);
         return req.respond(body.items, .{
             .extra_headers = &.{
@@ -1121,7 +1239,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     if (std.mem.eql(u8, path, "/images/ok.png")) {
         // > HttpClient.Request.PARTIAL_DRAIN_MAX. The synthetic PNG
         // header advertises 1000 x 750 pixels; no bitmap is decoded.
-        const body = try arena_allocator.alloc(u8, 16 * 1024 + 1);
+        const body = try req_allocator.alloc(u8, 16 * 1024 + 1);
         @memset(body, 'x');
         @memcpy(body[0..24], "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x03\xe8\x00\x00\x02\xee");
         return req.respond(body, .{
@@ -1134,7 +1252,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     // startsWith, not eql: a caller can append a query string to get distinct
     // URLs (and so distinct transfers) off this one route.
     if (std.mem.startsWith(u8, path, "/images/small.png")) {
-        const body = try arena_allocator.alloc(u8, 1024);
+        const body = try req_allocator.alloc(u8, 1024);
         @memset(body, 'x');
         @memcpy(body[0..24], "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x01\x40\x00\x00\x00\xf0");
         return req.respond(body, .{
@@ -1248,12 +1366,26 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         // a request actually sent rather than just on its status.
         var body_buf: [4096]u8 = undefined;
         const body = if (req.head.method.requestHasBody())
-            try req.readerExpectNone(&body_buf).allocRemaining(arena_allocator, .limited(body_buf.len))
+            try req.readerExpectNone(&body_buf).allocRemaining(req_allocator, .limited(body_buf.len))
         else
             "";
         return req.respond(body, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/echo_brotli")) {
+        // Echo the request body back as `Content-Encoding: br`, so the HTTP
+        // client decodes it; checks CompressionStream('brotli') output with a
+        // decoder that isn't ours.
+        var body_buf: [4096]u8 = undefined;
+        const body = try req.readerExpectNone(&body_buf).allocRemaining(req_allocator, .limited(4 * 1024 * 1024));
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/octet-stream" },
+                .{ .name = "Content-Encoding", .value = "br" },
             },
         });
     }

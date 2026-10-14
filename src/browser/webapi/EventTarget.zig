@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
 const EventManager = @import("../EventManager.zig");
 
@@ -54,6 +55,8 @@ const MediaQueryList = @import("css/MediaQueryList.zig");
 
 const TextTrackCue = @import("media/TextTrackCue.zig");
 
+const Animation = @import("animation/Animation.zig");
+
 const Navigation = @import("navigation/Navigation.zig");
 const NavigationHistoryEntry = @import("navigation/NavigationHistoryEntry.zig");
 const XMLHttpRequestEventTarget = @import("net/XMLHttpRequestEventTarget.zig");
@@ -64,14 +67,11 @@ const EventTarget = @This();
 
 pub const _prototype_root = true;
 
-// `global_event_handlers.Key` reuses the low 3 bits of an EventTarget pointer,
-// so the type has to stay 8-byte aligned even though the tag is a single byte.
-// This costs nothing in a chain: EventTarget is always at offset 0 and every
-// subtype that follows it is itself 8-aligned.
-_type: Type align(8),
+_type: Type,
 
 pub const Type = enum(u8) {
     abort_signal,
+    animation,
     broadcast_channel,
     cookie_store,
     event_source,
@@ -108,6 +108,7 @@ pub const Type = enum(u8) {
 pub fn Subtype(comptime tag: Type) type {
     return switch (tag) {
         .abort_signal => AbortSignal,
+        .animation => Animation,
         .broadcast_channel => BroadcastChannel,
         .cookie_store => CookieStore,
         .event_source => EventSource,
@@ -186,14 +187,50 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
     event._is_trusted = false;
 
     switch (exec.js.global) {
-        .frame => |frame| {
+        .frame => |caller| {
+            // a Node's or Window's event disaptches in its own frame. It
+            // doens't matter where dispatchEvent was called.
+            const frame: *Frame = switch (self._type) {
+                .node => self.subtype(Node).ownerFrame(caller) orelse caller,
+                .window => blk: {
+                    const window = self.subtype(Window);
+                    break :blk if (window._closed) caller else window._frame;
+                },
+                else => caller,
+            };
             event.acquireRef();
             defer _ = event.releaseRef(frame.page);
             try frame._event_manager.dispatch(self, event);
         },
-        .worker => |wgs| try wgs.dispatch(self, event, null, .{}),
+        .worker => |wgs| try wgs.dispatch(self, event, .{}),
     }
     return !event._cancelable or !event._prevent_default;
+}
+
+pub const HandlerValue = union(enum) {
+    func: js.Function.Global,
+    anything: js.Value, // accept anything and when not callable, sets to null
+
+    pub fn function(value: ?HandlerValue) ?js.Function.Global {
+        return switch (value orelse return null) {
+            .func => |func| func,
+            .anything => null,
+        };
+    }
+};
+
+// Create a get and set accessor for on* handlers
+pub fn handlerAccessor(comptime T: type, comptime typ: []const u8) js.bridge.Accessor {
+    const H = struct {
+        fn get(self: *T, exec: *js.Execution) ?js.Function.Global {
+            return exec.getHandler(self.asEventTarget(), typ);
+        }
+
+        fn set(self: *T, value: ?HandlerValue, exec: *js.Execution) !void {
+            return exec.setHandler(self.asEventTarget(), typ, HandlerValue.function(value));
+        }
+    };
+    return js.Bridge(T).accessor(H.get, H.set, .{});
 }
 
 const AddEventListenerOptions = union(enum) {
@@ -328,6 +365,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .worker_global_scope => writer.writeAll("<WorkerGlobalScope>"),
         .xhr => writer.writeAll("<XMLHttpRequestEventTarget>"),
         .abort_signal => writer.writeAll("<AbortSignal>"),
+        .animation => writer.writeAll("<Animation>"),
         .media_query_list => writer.writeAll("<MediaQueryList>"),
         .message_port => writer.writeAll("<MessagePort>"),
         .broadcast_channel => writer.writeAll("<BroadcastChannel>"),
@@ -352,6 +390,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
 pub fn toString(self: *EventTarget) []const u8 {
     return switch (self._type) {
         .abort_signal => return "[object AbortSignal]",
+        .animation => return "[object Animation]",
         .broadcast_channel => return "[object BroadcastChannel]",
         .cookie_store => return "[object CookieStore]",
         .event_source => return "[object EventSource]",
@@ -405,8 +444,7 @@ test "WebApi: EventTarget" {
     testing.silenceLog(&.{ .js, .event });
 
     // we create thousands of these per frame. Nothing should bloat it.
-    // The tag is 1 byte; the rest is the align(8) that `Key.fuse` depends on.
-    try testing.expectEqual(8, @sizeOf(EventTarget));
-    try testing.expectEqual(8, @alignOf(EventTarget));
+    // (fine to go up to 8, since it'll always be padded to that)
+    try testing.expectEqual(1, @sizeOf(EventTarget));
     try testing.htmlRunner("events.html", .{});
 }

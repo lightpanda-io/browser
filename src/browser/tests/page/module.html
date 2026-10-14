@@ -87,3 +87,27 @@
 
 <!-- this used to crash -->
 <script type=module src=modules/self_async.js></script>
+
+<!-- these used to crash: a microtask checkpoint while a sibling module evaluated
+let a top-level-await module finish before its still-evaluating parent -->
+<script id=tla-checkpoint-resolve type=module>
+  import "./modules/tla.js?resolve";
+  import "./modules/checkpoint-resolve.js";
+  testing.expectEqual(true, customElements.get('x-tla-checkpoint') !== undefined);
+</script>
+
+<script id=tla-checkpoint-dispatch type=module>
+  import "./modules/tla.js?dispatch";
+  import "./modules/checkpoint-dispatch.js";
+  testing.expectEqual(true, true);
+</script>
+
+<script type=module>
+  import "./modules/tla.js?import";
+  import "./modules/checkpoint-import.js";
+</script>
+
+<script type=module>
+  import "./modules/tla.js?reject";
+  import "./modules/checkpoint-reject.js";
+</script>

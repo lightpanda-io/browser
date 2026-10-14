@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 
+const EventTarget = @import("EventTarget.zig");
 const Frame = @import("../Frame.zig");
 const Transfer = @import("../../network/HttpClient.zig").Transfer;
 
@@ -51,8 +52,6 @@ _script_loaded: bool = false,
 _script_arena: ?*lp.Arena = null,
 _script_buffer: std.ArrayList(u8) = .empty,
 _http_transfer: ?*Transfer = null,
-
-_on_connect: ?js.Function.Global = null,
 
 // Ports pending connnection, created before the initial script finished
 _pending_connects: std.ArrayList(*MessagePort) = .empty,
@@ -180,14 +179,6 @@ pub fn close(self: *SharedWorkerGlobalScope) void {
     self._proto._session.idb.detachContext(self._proto.js);
     self._proto.js.scheduler.reset();
     self._closed = true;
-}
-
-fn getOnConnect(self: *const SharedWorkerGlobalScope) ?js.Function.Global {
-    return self._on_connect;
-}
-
-fn setOnConnect(self: *SharedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
-    self._on_connect = WorkerGlobalScope.getFunctionFromSetter(setter);
 }
 
 fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
@@ -367,8 +358,7 @@ const ConnectCallback = struct {
         const wgs = worker_scope._proto;
         const target = wgs.asEventTarget();
 
-        const on_connect = worker_scope._on_connect;
-        if (!wgs._event_manager.hasDirectListeners(target, "connect", on_connect)) {
+        if (!wgs._event_manager.hasDirectListeners(target, "connect")) {
             return null;
         }
 
@@ -382,10 +372,14 @@ const ConnectCallback = struct {
             .cancelable = false,
         }, wgs.page)).asEvent();
 
-        try wgs.dispatch(target, event, on_connect, .{ .context = "shared worker connect" });
+        try wgs.dispatch(target, event, .{ .context = "shared worker connect" });
         return null;
     }
 };
+
+pub fn asEventTarget(self: *SharedWorkerGlobalScope) *EventTarget {
+    return self._proto.asEventTarget();
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(SharedWorkerGlobalScope);
@@ -398,5 +392,5 @@ pub const JsApi = struct {
 
     pub const name = bridge.accessor(SharedWorkerGlobalScope.getName, null, .{});
     pub const close = bridge.function(SharedWorkerGlobalScope.close, .{});
-    pub const onconnect = bridge.accessor(SharedWorkerGlobalScope.getOnConnect, SharedWorkerGlobalScope.setOnConnect, .{});
+    pub const onconnect = EventTarget.handlerAccessor(SharedWorkerGlobalScope, "connect");
 };

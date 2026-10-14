@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 
 const Frame = @import("../../browser/Frame.zig");
 const Node = @import("../../browser/webapi/Node.zig");
-const KeyboardEvent = @import("../../browser/webapi/event/KeyboardEvent.zig");
+const keyboard = @import("../../browser/frame/keyboard.zig");
 
 const BiDi = @import("BiDi.zig");
 const remote_value = @import("remote_value.zig");
@@ -163,26 +163,22 @@ pub const State = struct {
         return null;
     }
 
-    fn findOrCreate(self: *State, allocator: Allocator, id: []const u8, kind: Source.Kind) !usize {
+    fn findOrCreate(self: *State, allocator: Allocator, id: []const u8, kind: Source.Kind, touch: bool) !usize {
         if (self.find(id)) |i| {
-            if (self.sources.items[i].kind != kind) {
+            const source = &self.sources.items[i];
+            if (source.kind != kind or source.pointer.touch != touch) {
                 return error.SourceKindMismatch;
             }
             return i;
         }
         const owned = try allocator.dupe(u8, id);
         errdefer allocator.free(owned);
-        try self.sources.append(allocator, .{ .id = owned, .kind = kind });
+        try self.sources.append(allocator, .{ .id = owned, .kind = kind, .pointer = .{ .touch = touch } });
         return self.sources.items.len - 1;
     }
 };
 
-const Modifiers = struct {
-    alt: bool = false,
-    ctrl: bool = false,
-    meta: bool = false,
-    shift: bool = false,
-};
+const Modifiers = user_input.Modifiers;
 
 const Source = struct {
     id: []const u8,
@@ -199,6 +195,9 @@ const Source = struct {
     };
 
     const PointerState = struct {
+        // pointerType "touch": a single contact, through the same touch
+        // sequence as CDP and testdriver. "pen" is treated as a mouse.
+        touch: bool = false,
         x: f64 = 0,
         y: f64 = 0,
         // DOM button numbers, in press order
@@ -345,7 +344,7 @@ const ParseError = error{
 const SourceActions = struct {
     id: []const u8,
     type: Source.Kind,
-    parameters: ?std.json.Value = null,
+    parameters: ?struct { pointerType: enum { mouse, pen, touch } = .mouse } = null,
     actions: []const std.json.Value,
 };
 
@@ -383,7 +382,7 @@ fn parseTicks(bidi: *BiDi, arena: Allocator, actions: []const std.json.Value) Pa
         const sa = std.json.parseFromValueLeaky(SourceActions, arena, value, .{ .ignore_unknown_fields = true }) catch {
             return error.InvalidActions;
         };
-        const source = try state.findOrCreate(allocator, sa.id, sa.type);
+        const source = try state.findOrCreate(allocator, sa.id, sa.type, if (sa.parameters) |p| p.pointerType == .touch else false);
 
         const parsed = try arena.alloc(Action, sa.actions.len);
         for (sa.actions, parsed) |raw, *action| {
@@ -466,15 +465,7 @@ fn keyValue(obj: std.json.ObjectMap) ParseError!u21 {
         .string => |s| s,
         else => return error.InvalidField,
     };
-    // one code point, no more, no less
-    if (str.len == 0) {
-        return error.InvalidKeyValue;
-    }
-    const len = std.unicode.utf8ByteSequenceLength(str[0]) catch return error.InvalidKeyValue;
-    if (str.len != len) {
-        return error.InvalidKeyValue;
-    }
-    return std.unicode.utf8Decode(str) catch return error.InvalidKeyValue;
+    return keyboard.singleCodepoint(str) orelse error.InvalidKeyValue;
 }
 
 fn buttonField(obj: std.json.ObjectMap) ParseError!u8 {
@@ -557,21 +548,17 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
         .pause => {},
         .key_down => |cp| {
             const key = &source.key;
-            const info = keyInfo(cp, key.modifiers.shift);
-            setModifier(&key.modifiers, info.modifier, true);
             if (std.mem.findScalar(u21, key.pressed.items, cp) == null) {
                 try key.pressed.append(allocator, cp);
             }
-            try dispatchKey(frame, "keydown", &info, &key.modifiers);
+            try keyboard.keyAction(frame, cp, .down, &key.modifiers);
         },
         .key_up => |cp| {
             const key = &source.key;
-            const info = keyInfo(cp, key.modifiers.shift);
-            setModifier(&key.modifiers, info.modifier, false);
             if (std.mem.findScalar(u21, key.pressed.items, cp)) |i| {
                 _ = key.pressed.orderedRemove(i);
             }
-            try dispatchKey(frame, "keyup", &info, &key.modifiers);
+            try keyboard.keyAction(frame, cp, .up, &key.modifiers);
         },
         .pointer_down => |button| {
             const pointer = &source.pointer;
@@ -579,6 +566,9 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
                 return; // already down; the spec makes this a no-op
             }
             try pointer.pressed.append(allocator, button);
+            if (pointer.touch) {
+                return user_input.touchStart(frame, null, .{ .x = pointer.x, .y = pointer.y }, .{});
+            }
 
             // A press of the same button near the last click, soon enough
             // after it, counts up
@@ -597,6 +587,9 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
             const pointer = &source.pointer;
             const i = std.mem.findScalar(u8, pointer.pressed.items, button) orelse return;
             _ = pointer.pressed.orderedRemove(i);
+            if (pointer.touch) {
+                return user_input.touchEnd(frame, .{ .x = pointer.x, .y = pointer.y }, .{});
+            }
             try user_input.triggerMouseRelease(frame, pointer.x, pointer.y, button, pointer.click_count);
         },
         .pointer_move => |move| {
@@ -604,6 +597,10 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
             const target = try resolveOrigin(bidi, frame, source, move.origin, move.x, move.y);
             pointer.x = target.x;
             pointer.y = target.y;
+            if (pointer.touch) {
+                // A finger that isn't down has nothing to move.
+                return user_input.touchMove(frame, null, .{ .x = target.x, .y = target.y }, .{});
+            }
             try user_input.triggerMouseMove(frame, target.x, target.y);
         },
         .scroll => |scroll| {
@@ -634,21 +631,18 @@ pub fn typeText(frame: *Frame, text: []const u8) !void {
             continue;
         }
 
-        const info = keyInfo(cp, modifiers.shift);
-        if (info.modifier == null) {
-            try dispatchKey(frame, "keydown", &info, &modifiers);
-            try dispatchKey(frame, "keyup", &info, &modifiers);
+        if (keyboard.webdriverKey(cp, false).modifier == null) {
+            try keyboard.keyAction(frame, cp, .down, &modifiers);
+            try keyboard.keyAction(frame, cp, .up, &modifiers);
             continue;
         }
 
         if (std.mem.findScalar(u21, held.items, cp)) |i| {
             _ = held.orderedRemove(i);
-            setModifier(&modifiers, info.modifier, false);
-            try dispatchKey(frame, "keyup", &info, &modifiers);
+            try keyboard.keyAction(frame, cp, .up, &modifiers);
         } else {
             held.appendAssumeCapacity(cp);
-            setModifier(&modifiers, info.modifier, true);
-            try dispatchKey(frame, "keydown", &info, &modifiers);
+            try keyboard.keyAction(frame, cp, .down, &modifiers);
         }
     }
     try releaseHeld(frame, &held, &modifiers);
@@ -657,9 +651,7 @@ pub fn typeText(frame: *Frame, text: []const u8) !void {
 // in reverse press order
 fn releaseHeld(frame: *Frame, held: *std.ArrayList(u21), modifiers: *Modifiers) !void {
     while (held.pop()) |cp| {
-        const info = keyInfo(cp, modifiers.shift);
-        setModifier(modifiers, info.modifier, false);
-        try dispatchKey(frame, "keyup", &info, modifiers);
+        try keyboard.keyAction(frame, cp, .up, modifiers);
     }
 }
 
@@ -679,217 +671,6 @@ fn resolveOrigin(bidi: *BiDi, frame: *Frame, source: *const Source, origin: Orig
             return .{ .x = rect.x + rect.width / 2 + x, .y = rect.y + rect.height / 2 + y };
         },
     }
-}
-
-fn dispatchKey(frame: *Frame, comptime typ: []const u8, info: *const KeyInfo, modifiers: *const Modifiers) !void {
-    var buf: [4]u8 = undefined;
-    const key: []const u8 = switch (info.key) {
-        .name => |name| name,
-        .char => |cp| buf[0 .. std.unicode.utf8Encode(cp, &buf) catch unreachable],
-    };
-    const event = try KeyboardEvent.initTrusted(comptime .wrap(typ), .{
-        .key = key,
-        .code = info.code,
-        .location = info.location,
-        .altKey = modifiers.alt,
-        .ctrlKey = modifiers.ctrl,
-        .metaKey = modifiers.meta,
-        .shiftKey = modifiers.shift,
-    }, frame);
-    if (comptime std.mem.eql(u8, typ, "keydown")) {
-        _ = try user_input.triggerKeyDown(frame, event, user_input.textForKey(event));
-    } else {
-        try user_input.triggerKeyUp(frame, event);
-    }
-}
-
-fn setModifier(modifiers: *Modifiers, which: ?Modifier, down: bool) void {
-    switch (which orelse return) {
-        .alt => modifiers.alt = down,
-        .ctrl => modifiers.ctrl = down,
-        .meta => modifiers.meta = down,
-        .shift => modifiers.shift = down,
-    }
-}
-
-const Modifier = enum { alt, ctrl, meta, shift };
-
-const KeyInfo = struct {
-    // a named key, or the character itself
-    key: union(enum) { name: []const u8, char: u21 },
-    code: []const u8,
-    location: u32 = 0,
-    modifier: ?Modifier = null,
-};
-
-// WebDriver's key table: the Private Use Area - names the
-// non-printing keys, anything else is the character itself.
-// https://w3c.github.io/webdriver/#keyboard-actions
-fn keyInfo(cp: u21, shift: bool) KeyInfo {
-    if (cp >= 0xE000 and cp <= 0xE05D) {
-        return specialKey(cp);
-    }
-
-    const char: u21 = if (shift and cp < 128) shiftedAscii(@intCast(cp)) else cp;
-    return .{ .key = .{ .char = char }, .code = asciiCode(cp) };
-}
-
-fn specialKey(cp: u21) KeyInfo {
-    const k = struct {
-        fn k(key: []const u8, code: []const u8) KeyInfo {
-            return .{ .key = .{ .name = key }, .code = code };
-        }
-        fn m(key: []const u8, code: []const u8, location: u32, modifier: Modifier) KeyInfo {
-            return .{ .key = .{ .name = key }, .code = code, .location = location, .modifier = modifier };
-        }
-        fn n(key: []const u8, code: []const u8) KeyInfo {
-            return .{ .key = .{ .name = key }, .code = code, .location = 3 };
-        }
-    };
-    return switch (cp) {
-        0xE000 => k.k("Unidentified", ""),
-        0xE001 => k.k("Cancel", "Abort"),
-        0xE002 => k.k("Help", "Help"),
-        0xE003 => k.k("Backspace", "Backspace"),
-        0xE004 => k.k("Tab", "Tab"),
-        0xE005 => k.k("Clear", "NumLock"),
-        0xE006 => k.k("Enter", "Enter"),
-        0xE007 => k.n("Enter", "NumpadEnter"),
-        0xE008 => k.m("Shift", "ShiftLeft", 1, .shift),
-        0xE009 => k.m("Control", "ControlLeft", 1, .ctrl),
-        0xE00A => k.m("Alt", "AltLeft", 1, .alt),
-        0xE00B => k.k("Pause", "Pause"),
-        0xE00C => k.k("Escape", "Escape"),
-        0xE00D => k.k(" ", "Space"),
-        0xE00E => k.k("PageUp", "PageUp"),
-        0xE00F => k.k("PageDown", "PageDown"),
-        0xE010 => k.k("End", "End"),
-        0xE011 => k.k("Home", "Home"),
-        0xE012 => k.k("ArrowLeft", "ArrowLeft"),
-        0xE013 => k.k("ArrowUp", "ArrowUp"),
-        0xE014 => k.k("ArrowRight", "ArrowRight"),
-        0xE015 => k.k("ArrowDown", "ArrowDown"),
-        0xE016 => k.k("Insert", "Insert"),
-        0xE017 => k.k("Delete", "Delete"),
-        0xE018 => k.k(";", "Semicolon"),
-        0xE019 => k.k("=", "Equal"),
-        0xE01A => k.n("0", "Numpad0"),
-        0xE01B => k.n("1", "Numpad1"),
-        0xE01C => k.n("2", "Numpad2"),
-        0xE01D => k.n("3", "Numpad3"),
-        0xE01E => k.n("4", "Numpad4"),
-        0xE01F => k.n("5", "Numpad5"),
-        0xE020 => k.n("6", "Numpad6"),
-        0xE021 => k.n("7", "Numpad7"),
-        0xE022 => k.n("8", "Numpad8"),
-        0xE023 => k.n("9", "Numpad9"),
-        0xE024 => k.n("*", "NumpadMultiply"),
-        0xE025 => k.n("+", "NumpadAdd"),
-        0xE026 => k.n(",", "NumpadComma"),
-        0xE027 => k.n("-", "NumpadSubtract"),
-        0xE028 => k.n(".", "NumpadDecimal"),
-        0xE029 => k.n("/", "NumpadDivide"),
-        0xE031 => k.k("F1", "F1"),
-        0xE032 => k.k("F2", "F2"),
-        0xE033 => k.k("F3", "F3"),
-        0xE034 => k.k("F4", "F4"),
-        0xE035 => k.k("F5", "F5"),
-        0xE036 => k.k("F6", "F6"),
-        0xE037 => k.k("F7", "F7"),
-        0xE038 => k.k("F8", "F8"),
-        0xE039 => k.k("F9", "F9"),
-        0xE03A => k.k("F10", "F10"),
-        0xE03B => k.k("F11", "F11"),
-        0xE03C => k.k("F12", "F12"),
-        0xE03D => k.m("Meta", "MetaLeft", 1, .meta),
-        0xE040 => k.k("ZenkakuHankaku", ""),
-        0xE050 => k.m("Shift", "ShiftRight", 2, .shift),
-        0xE051 => k.m("Control", "ControlRight", 2, .ctrl),
-        0xE052 => k.m("Alt", "AltRight", 2, .alt),
-        0xE053 => k.m("Meta", "MetaRight", 2, .meta),
-        0xE054 => k.n("PageUp", "Numpad9"),
-        0xE055 => k.n("PageDown", "Numpad3"),
-        0xE056 => k.n("End", "Numpad1"),
-        0xE057 => k.n("Home", "Numpad7"),
-        0xE058 => k.n("ArrowLeft", "Numpad4"),
-        0xE059 => k.n("ArrowUp", "Numpad8"),
-        0xE05A => k.n("ArrowRight", "Numpad6"),
-        0xE05B => k.n("ArrowDown", "Numpad2"),
-        0xE05C => k.n("Insert", "Numpad0"),
-        0xE05D => k.n("Delete", "NumpadDecimal"),
-        else => k.k("Unidentified", ""),
-    };
-}
-
-// slices into this literal are always valid
-const key_codes = "KeyAKeyBKeyCKeyDKeyEKeyFKeyGKeyHKeyIKeyJKeyKKeyLKeyMKeyNKeyOKeyPKeyQKeyRKeySKeyTKeyUKeyVKeyWKeyXKeyYKeyZ";
-const digit_codes = "Digit0Digit1Digit2Digit3Digit4Digit5Digit6Digit7Digit8Digit9";
-
-// The `code` of a printable character on a US layout.
-fn asciiCode(cp: u21) []const u8 {
-    if (cp >= 128) {
-        return "";
-    }
-    const c: u8 = @intCast(cp);
-    return switch (c) {
-        'a'...'z' => key_codes[(c - 'a') * 4 ..][0..4],
-        'A'...'Z' => key_codes[(c - 'A') * 4 ..][0..4],
-        '0'...'9' => digit_codes[(c - '0') * 6 ..][0..6],
-        ' ' => "Space",
-        '\n', '\r' => "Enter",
-        '\t' => "Tab",
-        '`', '~' => "Backquote",
-        '-', '_' => "Minus",
-        '=', '+' => "Equal",
-        '[', '{' => "BracketLeft",
-        ']', '}' => "BracketRight",
-        '\\', '|' => "Backslash",
-        ';', ':' => "Semicolon",
-        '\'', '"' => "Quote",
-        ',', '<' => "Comma",
-        '.', '>' => "Period",
-        '/', '?' => "Slash",
-        '!' => "Digit1",
-        '@' => "Digit2",
-        '#' => "Digit3",
-        '$' => "Digit4",
-        '%' => "Digit5",
-        '^' => "Digit6",
-        '&' => "Digit7",
-        '*' => "Digit8",
-        '(' => "Digit9",
-        ')' => "Digit0",
-        else => "",
-    };
-}
-
-// What a held Shift turns a US-layout key into.
-fn shiftedAscii(c: u8) u8 {
-    return switch (c) {
-        'a'...'z' => std.ascii.toUpper(c),
-        '`' => '~',
-        '1' => '!',
-        '2' => '@',
-        '3' => '#',
-        '4' => '$',
-        '5' => '%',
-        '6' => '^',
-        '7' => '&',
-        '8' => '*',
-        '9' => '(',
-        '0' => ')',
-        '-' => '_',
-        '=' => '+',
-        '[' => '{',
-        ']' => '}',
-        '\\' => '|',
-        ';' => ':',
-        '\'' => '"',
-        ',' => '<',
-        '.' => '>',
-        '/' => '?',
-        else => c,
-    };
 }
 
 fn errorCode(err: anyerror) []const u8 {
@@ -1012,6 +793,186 @@ test "bidi.input: click via element origin" {
         .type = "string",
         .value = "mousedown@btn mouseup@btn click@btn",
     } }, .{ .id = 9 });
+}
+
+test "bidi.input: touch tap" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const context_id = try ctx.createContext(.{ .url = "bidi/input.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = context_id, .locator = .{ .type = "css", .value = "#btn" } },
+    });
+    try ctx.expectSentResult(.{ .nodes = .{.{ .sharedId = "1" }} }, .{ .id = 1 });
+
+    try evaluate(&ctx, 2, context_id,
+        \\for (const t of ['pointerdown', 'pointerup', 'pointercancel', 'touchstart', 'touchmove', 'touchend']) {
+        \\  document.addEventListener(t, (e) => window.events.push(t + ':' + (e.pointerType ?? e.changedTouches[0].target.id)));
+        \\}
+        \\'ok'
+    );
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "string", .value = "ok" } }, .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "finger",
+            .parameters = .{ .pointerType = "touch" },
+            .actions = .{
+                .{ .type = "pointerMove", .x = 0, .y = 0, .origin = .{ .type = "element", .element = .{ .sharedId = "1" } } },
+                .{ .type = "pointerDown", .button = 0 },
+                .{ .type = "pointerUp", .button = 0 },
+            },
+        }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try evaluate(&ctx, 4, context_id, "window.events.join(' ')");
+    try ctx.expectSentResult(.{ .type = "success", .result = .{
+        .type = "string",
+        .value = "pointerdown:touch touchstart:btn pointerup:touch touchend:btn mousemove@btn mousedown@btn mouseup@btn click@btn",
+    } }, .{ .id = 4 });
+
+    // A drag past the slop scrolls: the touch events go on, but the pointer is
+    // cancelled and nothing clicks.
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "finger",
+            .parameters = .{ .pointerType = "touch" },
+            .actions = .{
+                .{ .type = "pointerDown", .button = 0 },
+                .{ .type = "pointerMove", .x = 40, .y = 0, .origin = "pointer" },
+                .{ .type = "pointerUp", .button = 0 },
+            },
+        }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try evaluate(&ctx, 6, context_id, "window.events.slice(8).join(' ')");
+    try ctx.expectSentResult(.{ .type = "success", .result = .{
+        .type = "string",
+        .value = "pointerdown:touch touchstart:btn touchmove:btn pointercancel:touch touchend:btn",
+    } }, .{ .id = 6 });
+
+    // The source's pointerType is fixed once it exists.
+    try ctx.processMessage(.{
+        .id = 7,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "finger",
+            .actions = .{.{ .type = "pointerDown", .button = 0 }},
+        }} },
+    });
+    try ctx.expectSentError("invalid argument", "input source id already used with a different type", .{ .id = 7 });
+}
+
+test "bidi.input: touch releaseActions lifts a held finger and allows a fresh tap" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const context_id = try ctx.createContext(.{ .url = "bidi/input.html" });
+    try ctx.processMessage(.{ .id = 1, .method = "browsingContext.locateNodes", .params = .{ .context = context_id, .locator = .{ .type = "css", .value = "#btn" } } });
+    try ctx.expectSentResult(.{ .nodes = .{.{ .sharedId = "1" }} }, .{ .id = 1 });
+    try evaluate(&ctx, 2, context_id,
+        \\window.touchLog = [];
+        \\for (const type of ['pointerdown', 'pointerup', 'touchstart', 'touchend', 'click']) {
+        \\  document.addEventListener(type, e => touchLog.push(type + ':' + (e.pointerType ?? e.target.id)));
+        \\}
+        \\'ok'
+    );
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "string", .value = "ok" } }, .{ .id = 2 });
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "finger",
+            .parameters = .{ .pointerType = "touch" },
+            .actions = .{
+                .{ .type = "pointerMove", .x = 0, .y = 0, .origin = .{ .type = "element", .element = .{ .sharedId = "1" } } },
+                .{ .type = "pointerDown", .button = 0 },
+            },
+        }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    const frame = try ctx.frame();
+    try testing.expect(frame.page.input_touch.contact != null);
+    try ctx.processMessage(.{ .id = 4, .method = "input.releaseActions", .params = .{ .context = context_id } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expect(frame.page.input_touch.contact == null);
+    try testing.expectEqual(@as(usize, 0), ctx.bidi().input_state.sources.items.len);
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "finger",
+            .parameters = .{ .pointerType = "touch" },
+            .actions = .{
+                .{ .type = "pointerMove", .x = 0, .y = 0, .origin = .{ .type = "element", .element = .{ .sharedId = "1" } } },
+                .{ .type = "pointerDown", .button = 0 },
+                .{ .type = "pointerUp", .button = 0 },
+            },
+        }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try evaluate(&ctx, 6, context_id, "touchLog.join(' ')");
+    try ctx.expectSentResult(.{ .type = "success", .result = .{
+        .type = "string",
+        .value = "pointerdown:touch touchstart:btn pointerup:touch touchend:btn click:touch pointerdown:touch touchstart:btn pointerup:touch touchend:btn click:touch",
+    } }, .{ .id = 6 });
+}
+
+test "bidi.input: later releases of a three-button chord report detail 0" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const context_id = try ctx.createContext(.{ .url = "bidi/input.html" });
+
+    try evaluate(&ctx, 1, context_id,
+        \\window.releases = [];
+        \\for (const type of ['mouseup', 'click', 'auxclick', 'dblclick']) {
+        \\  document.addEventListener(type, e => releases.push(`${e.type}:${e.button}:${e.buttons}:${e.detail}`));
+        \\}
+        \\'ready'
+    );
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "string", .value = "ready" } }, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = context_id, .locator = .{ .type = "css", .value = "#btn" } },
+    });
+    try ctx.expectSentResult(.{ .nodes = .{.{ .sharedId = "1" }} }, .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "mouse",
+            .actions = .{
+                .{ .type = "pointerMove", .x = 0, .y = 0, .origin = .{ .type = "element", .element = .{ .sharedId = "1" } } },
+                .{ .type = "pointerDown", .button = 0 },
+                .{ .type = "pointerDown", .button = 2 },
+                .{ .type = "pointerDown", .button = 1 },
+                .{ .type = "pointerUp", .button = 2 },
+                .{ .type = "pointerUp", .button = 1 },
+                .{ .type = "pointerUp", .button = 0 },
+            },
+        }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    try evaluate(&ctx, 4, context_id, "window.releases.join(' ')");
+    try ctx.expectSentResult(.{ .type = "success", .result = .{
+        .type = "string",
+        .value = "mouseup:2:5:1 auxclick:2:5:1 mouseup:1:1:0 mouseup:0:0:0",
+    } }, .{ .id = 4 });
 }
 
 test "bidi.input: keys and modifiers" {

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<form name="form1" id="f1">
+  <input name="field" value="hello">
+</form>
+<form name="dup" id="dup1"></form>
+<img name="dup" id="dup2">
+<img name="pic" id="img_by_id">
+<img id="img_no_name">
+<object id="obj_by_id"></object>
+<div name="not_named"></div>
+<form name="getElementById"></form>
+<iframe name="frame1" srcdoc="<p>hi</p>"></iframe>
+
+<script id=single>
+{
+  const form = document.forms.namedItem('form1');
+  testing.expectEqual(form, document.form1);
+  testing.expectEqual(form, document['form1']);
+  testing.expectEqual('hello', document.form1.field.value);
+  testing.expectTrue('form1' in document);
+  testing.expectFalse(Object.keys(document).includes('form1'));
+}
+</script>
+
+<script id=filter>
+{
+  testing.expectEqual($('#img_by_id'), document.pic);
+  // an img is also named by its id, but only when it has a name
+  testing.expectEqual($('#img_by_id'), document.img_by_id);
+  testing.expectEqual(undefined, document.img_no_name);
+  testing.expectEqual($('#obj_by_id'), document.obj_by_id);
+  testing.expectEqual(undefined, document.not_named);
+  testing.expectEqual(undefined, document.nope);
+  testing.expectFalse('nope' in document);
+  testing.expectFalse('not_named' in document);
+}
+</script>
+
+<script id=builtins>
+  testing.expectEqual('function', typeof document.getElementById);
+</script>
+
+<script id=multiple>
+{
+  const dup = document.dup;
+  testing.expectTrue(dup instanceof HTMLCollection);
+  testing.expectEqual(2, dup.length);
+  testing.expectEqual($('#dup1'), dup[0]);
+  testing.expectEqual($('#dup2'), dup[1]);
+
+  // live
+  const extra = document.createElement('embed');
+  extra.name = 'dup';
+  document.body.appendChild(extra);
+  testing.expectEqual(3, dup.length);
+  testing.expectEqual(extra, dup[2]);
+  extra.remove();
+  testing.expectEqual(2, dup.length);
+}
+</script>
+
+<script id=dynamic>
+{
+  testing.expectEqual(undefined, document.later);
+  const form = document.createElement('form');
+  form.name = 'later';
+  document.body.appendChild(form);
+  testing.expectEqual(form, document.later);
+  form.remove();
+  testing.expectEqual(undefined, document.later);
+}
+</script>
+
+<script id=iframe>
+  testing.onload(() => {
+    testing.expectEqual(document.querySelector('iframe').contentWindow, document.frame1);
+  });
+</script>

@@ -30,6 +30,7 @@ const StorageManager = @import("StorageManager.zig");
 const NavigatorUAData = @import("NavigatorUAData.zig");
 const Geolocation = @import("geolocation/Geolocation.zig");
 const ServiceWorkerContainer = @import("ServiceWorkerContainer.zig");
+const LockManager = @import("LockManager.zig");
 
 const Navigator = @This();
 
@@ -48,6 +49,7 @@ _geolocation: ?*Geolocation = null,
 _storage: StorageManager = .{},
 _ua_data: NavigatorUAData = .{},
 _service_worker: ?*ServiceWorkerContainer = null,
+_locks: ?*LockManager = null,
 
 pub const init: Navigator = .{};
 
@@ -176,6 +178,15 @@ fn getServiceWorker(self: *Navigator, frame: *Frame) !*ServiceWorkerContainer {
     return sw;
 }
 
+fn getLocks(self: *Navigator, exec: *Execution) !*LockManager {
+    if (self._locks) |l| {
+        return l;
+    }
+    const l = try exec._factory.create(LockManager{});
+    self._locks = l;
+    return l;
+}
+
 fn getUserAgentData(self: *Navigator) *NavigatorUAData {
     return &self._ua_data;
 }
@@ -284,6 +295,7 @@ pub const JsApi = struct {
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
     pub const serviceWorker = bridge.accessor(Navigator.getServiceWorker, null, .{});
+    pub const locks = bridge.accessor(Navigator.getLocks, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
     pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{});

@@ -78,7 +78,7 @@ pub fn show(el: *Element, frame: *Frame) !void {
         }
     }
 
-    try frame.document._open_popovers.append(frame.arena, el);
+    try frame.document._open_popovers.append(frame.page_arena, el);
     frame.domChanged();
     _ = try fireToggle(el, comptime .wrap("toggle"), "closed", "open", false, frame);
 }

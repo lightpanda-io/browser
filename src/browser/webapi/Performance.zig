@@ -57,12 +57,14 @@ _entries: std.ArrayList(*Entry) = .empty,
 // resources has its own cap, so it's split from entries (it's also potentially
 // polled more)
 _resources: std.ArrayList(*Entry) = .empty,
+// Entries that arrive while the buffer is full. Get copied into _resources
+// if a handler makes room.
+_secondary_resources: std.ArrayList(*Entry) = .empty,
 _timing: PerformanceTiming = .{},
 _navigation: PerformanceNavigation = .{},
 _event_counts: EventCounts = .{},
 _resource_buffer_size: u32 = DEFAULT_RESOURCE_BUFFER_SIZE,
 _buffer_full_pending: bool = false,
-_on_buffer_full: ?js.Function.Global = null,
 
 // The owner's task scheduler and its main-world Execution, both set by the
 // owner once its JS context exists (Frame builds the Window, and thus this,
@@ -290,10 +292,13 @@ const ResourceInfo = struct {
 };
 
 pub fn addResource(self: *Performance, info: ResourceInfo) !void {
-    const buffer_full = self._resources.items.len >= self._resource_buffer_size;
-    if (buffer_full) {
+    var buffer: ?*std.ArrayList(*Entry) = &self._resources;
+    if (self._buffer_full_pending or self.canAddResource() == false) {
         try self.scheduleBufferFull();
-        if (self.hasObserverFor(.resource) == false) {
+        buffer = if (self._buffer_full_pending) &self._secondary_resources else null;
+        if (buffer == null and self.hasObserverFor(.resource) == false) {
+            // There's no listener, so nothing can copy from our secondary, so
+            // we just drop it
             return;
         }
     }
@@ -339,9 +344,13 @@ pub fn addResource(self: *Performance, info: ResourceInfo) !void {
     rt._proto._type = .{ .resource = rt };
     // Observers see every entry; only the buffer has a cap.
     try self.notifyObservers(rt._proto);
-    if (!buffer_full) {
-        try self.insertOrdered(&self._resources, rt._proto);
+    if (buffer) |b| {
+        try self.insertOrdered(b, rt._proto);
     }
+}
+
+fn canAddResource(self: *const Performance) bool {
+    return self._resources.items.len < self._resource_buffer_size;
 }
 
 fn gated(self: *const Performance, allow: bool, micros: u64) f64 {
@@ -599,16 +608,13 @@ fn hasObserverFor(self: *const Performance, kind: Entry.Type.Enum) bool {
     return false;
 }
 
-// https://w3c.github.io/resource-timing/#dfn-fire-a-buffer-full-event
 // The event is queued rather than fired inline: addResource runs from the
-// HTTP layer, with no JS on the stack. We have no secondary buffer, so an
-// entry that overflows is dropped instead of being copied back in by a
-// handler that calls clearResourceTimings.
+// HTTP layer, with no JS on the stack.
 fn scheduleBufferFull(self: *Performance) !void {
     if (self._buffer_full_pending) {
         return;
     }
-    if (self._exec.hasDirectListeners(self.asEventTarget(), BUFFER_FULL, self._on_buffer_full) == false) {
+    if (self._exec.hasDirectListeners(self.asEventTarget(), BUFFER_FULL) == false) {
         return;
     }
     self._buffer_full_pending = true;
@@ -618,13 +624,10 @@ fn scheduleBufferFull(self: *Performance) !void {
         struct {
             fn run(_self: *anyopaque) anyerror!?u32 {
                 const perf: *Performance = @ptrCast(@alignCast(_self));
-                perf._buffer_full_pending = false;
-
-                const exec = perf._exec;
-                const event = try Event.initTrusted(.wrap(BUFFER_FULL), .{}, exec.page);
-                try exec.dispatch(perf.asEventTarget(), event, perf._on_buffer_full, .{
-                    .context = "Performance.bufferfull",
-                });
+                // only reset _after_ the handler runs, so that entries that get
+                // added go to the secondary buffer
+                defer perf._buffer_full_pending = false;
+                try perf.fireBufferFull();
                 return null;
             }
         }.run,
@@ -633,18 +636,33 @@ fn scheduleBufferFull(self: *Performance) !void {
     );
 }
 
-// The property handler for a JS-side dispatchEvent (see EventManager.dispatch).
-pub fn inlineHandler(self: *const Performance, typ: lp.String) ?js.Function.Global {
-    if (typ.eql(.wrap(BUFFER_FULL))) return self._on_buffer_full;
-    return null;
-}
+// https://w3c.github.io/resource-timing/#dfn-fire-a-buffer-full-event
+fn fireBufferFull(self: *Performance) !void {
+    const secondary = &self._secondary_resources;
+    while (secondary.items.len > 0) {
+        const excess_before = secondary.items.len;
+        if (self.canAddResource() == false) {
+            const exec = self._exec;
+            const event = try Event.initTrusted(.wrap(BUFFER_FULL), .{}, exec.page);
+            try exec.dispatch(self.asEventTarget(), event, .{
+                .context = "Performance.bufferfull",
+            });
+        }
+        {
+            // copy the secondary buffers
+            var copied: usize = 0;
+            while (copied < secondary.items.len and self.canAddResource()) : (copied += 1) {
+                try self.insertOrdered(&self._resources, secondary.items[copied]);
+            }
+            secondary.replaceRangeAssumeCapacity(0, copied, &.{});
+        }
 
-fn getOnResourceTimingBufferFull(self: *const Performance) ?js.Function.Global {
-    return self._on_buffer_full;
-}
-
-fn setOnResourceTimingBufferFull(self: *Performance, cb: ?js.Function.Global) void {
-    self._on_buffer_full = cb;
+        if (secondary.items.len >= excess_before) {
+            // The handler didn't make room for any of them, give up
+            secondary.clearRetainingCapacity();
+            return;
+        }
+    }
 }
 
 pub fn scheduleDelivery(self: *Performance) !void {
@@ -680,7 +698,11 @@ pub fn scheduleDelivery(self: *Performance) !void {
                 while (i < perf._observers.items.len) : (i += 1) {
                     const observer = perf._observers.items[i];
                     if (observer.hasRecords()) {
-                        try observer.dispatch();
+                        observer.dispatch() catch |err| {
+                            if (err == error.ExecutionTerminated) {
+                                return err;
+                            }
+                        };
                     }
                 }
                 return null;
@@ -760,7 +782,7 @@ pub const JsApi = struct {
     pub const timing = bridge.accessor(Performance.getTiming, null, .{ .exposed = .window });
     pub const navigation = bridge.accessor(Performance.getNavigation, null, .{ .exposed = .window });
     pub const eventCounts = bridge.accessor(Performance.getEventCounts, null, .{ .exposed = .window });
-    pub const onresourcetimingbufferfull = bridge.accessor(Performance.getOnResourceTimingBufferFull, Performance.setOnResourceTimingBufferFull, .{});
+    pub const onresourcetimingbufferfull = EventTarget.handlerAccessor(Performance, "resourcetimingbufferfull");
 };
 
 pub const Entry = struct {

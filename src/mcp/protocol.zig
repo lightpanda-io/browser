@@ -66,6 +66,22 @@ const InitializeParams = struct {
     clientInfo: Implementation,
 };
 
+/// `clientInfo.name` from `initialize` params, or null when absent or malformed.
+pub fn clientName(params: ?std.json.Value) ?[]const u8 {
+    const obj = switch (params orelse return null) {
+        .object => |o| o,
+        else => return null,
+    };
+    const info = switch (obj.get("clientInfo") orelse return null) {
+        .object => |o| o,
+        else => return null,
+    };
+    return switch (info.get("name") orelse return null) {
+        .string => |s| s,
+        else => null,
+    };
+}
+
 const Capabilities = struct {
     experimental: ?std.json.Value = null,
     roots: ?RootsCapability = null,
@@ -279,6 +295,8 @@ test "MCP.protocol - request parsing" {
     try testing.expectString("2024-11-05", init_params.value.protocolVersion);
     try testing.expectString("test-client", init_params.value.clientInfo.name);
     try testing.expectString("1.0.0", init_params.value.clientInfo.version);
+    try testing.expectString("test-client", clientName(req.params).?);
+    try testing.expect(clientName(null) == null);
 }
 
 test "MCP.protocol - ping request parsing" {

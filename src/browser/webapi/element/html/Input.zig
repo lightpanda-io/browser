@@ -111,6 +111,8 @@ _checked: bool = false,
 _checked_dirty: bool = false,
 // Only user edits count for tooLong/tooShort; script and attribute values don't.
 _user_edited: bool = false,
+// The value before the user's first edit since the last change event.
+_value_before_edit: ?[]const u8 = null,
 _input_type: Type = .text,
 _indeterminate: bool = false,
 _custom_validity: ?[]const u8 = null,
@@ -121,20 +123,6 @@ _files: ?*FileList = null,
 _selection_start: u32 = 0,
 _selection_end: u32 = 0,
 _selection_direction: Selection.SelectionDirection = .none,
-
-_on_selectionchange: ?js.Function.Global = null,
-
-fn getOnSelectionChange(self: *Input) ?js.Function.Global {
-    return self._on_selectionchange;
-}
-
-fn setOnSelectionChange(self: *Input, listener: ?js.Function) !void {
-    if (listener) |listen| {
-        self._on_selectionchange = try listen.persistWithThis(self);
-    } else {
-        self._on_selectionchange = null;
-    }
-}
 
 pub fn asElement(self: *Input) *Element {
     return Factory.protoOf(self).asElement();
@@ -335,7 +323,7 @@ fn replaceFiles(self: *Input, files: []const *File, frame: *Frame) !void {
     }
 
     const fl = try self.ensureFileList(frame);
-    const dupe = try frame.arena.dupe(*File, files);
+    const dupe = try frame.page_arena.dupe(*File, files);
 
     for (dupe) |file| {
         file._proto.acquireRef();
@@ -470,7 +458,7 @@ pub fn suffersPatternMismatch(self: *const Input, frame: *Frame) bool {
     defer try_catch.deinit();
 
     const wrapped = frame.call_arena.print("^(?:{s})$", .{pattern}) catch return false;
-    const re = js.RegExp.init(&ls.local, wrapped, js.RegExp.Flag.unicode_sets) catch return false;
+    const re = js.RegExp.init(&ls.local, wrapped, .{ .flags = js.RegExp.Flag.unicode_sets }) catch return false;
     const matched = re.match(value) catch return false;
 
     return !matched;
@@ -660,15 +648,26 @@ const entry = text_entry.TextEntry(Input);
 pub const select = entry.select;
 pub const innerInsert = entry.innerInsert;
 pub const acceptsTextEntry = entry.acceptsTextEntry;
-const tracksSelection = entry.tracksSelection;
+pub const tracksSelection = entry.tracksSelection;
 pub const innerDelete = entry.innerDelete;
 pub const moveCaret = entry.moveCaret;
 pub const caretToEnd = entry.caretToEnd;
+pub const rememberValueBeforeEdit = entry.rememberValueBeforeEdit;
+pub const dispatchChangeIfEdited = entry.dispatchChangeIfEdited;
 pub const CaretMove = entry.CaretMove;
 pub const getSelectionDirection = entry.getSelectionDirection;
 pub const setSelectionStart = entry.setSelectionStart;
 pub const setSelectionEnd = entry.setSelectionEnd;
 pub const setSelectionRange = entry.setSelectionRange;
+
+/// https://html.spec.whatwg.org/multipage/input.html#attr-input-readonly
+pub fn readonlyApplies(self: *const Input) bool {
+    return switch (self._input_type) {
+        .text, .password, .email, .url, .tel, .search, .number => true,
+        .date, .time, .@"datetime-local", .month, .week => true,
+        else => false,
+    };
+}
 
 pub fn selectionAvailable(self: *const Input) bool {
     switch (self._input_type) {
@@ -710,31 +709,7 @@ fn getList(self: *Input, frame: *Frame) ?*HtmlElement.DataList {
 }
 
 pub fn getForm(self: *Input, frame: *Frame) ?*Form {
-    const element = self.asElement();
-
-    // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        // form= resolves in the control's own tree (shadow root or document),
-        // not the calling realm's. @constCast: getElementByIdFromNode wants a
-        // mutable *Node but doesn't mutate it (same idiom as radioGroupIterator);
-        // keeping getForm const avoids a wide validity-path const cascade.
-        if (frame.getElementByIdFromNode(element.asNode(), form_id)) |form_element| {
-            return form_element.is(Form);
-        }
-        // form attribute present but invalid - no form owner
-        return null;
-    }
-
-    // No form attribute - traverse ancestors looking for a <form>
-    var node = element.asConstNode()._parent;
-    while (node) |n| {
-        if (n.is(Element.Html.Form)) |form| {
-            return form;
-        }
-        node = n._parent;
-    }
-
-    return null;
+    return Form.ownerOf(self.asElement(), frame);
 }
 
 // Form submission attribute overrides
@@ -811,6 +786,20 @@ fn changeType(self: *Input, new_type: Type, frame: *Frame) !void {
     }
 }
 
+pub fn reset(self: *Input, frame: *Frame) !void {
+    self._value_dirty = false;
+    self._checked_dirty = false;
+    self._user_edited = false;
+    self._checked = self._default_checked;
+    if (self._input_type.valueMode() == .value) {
+        try self.syncValueFromAttribute(frame);
+    }
+    if (self._files != null) {
+        try self.replaceFiles(&.{}, frame);
+    }
+    frame.styleChanged();
+}
+
 // The value of a non-dirty control in value mode is its sanitized value attribute
 fn syncValueFromAttribute(self: *Input, frame: *Frame) !void {
     const default_value = self._default_value orelse {
@@ -829,7 +818,7 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
                     break :blk if (comptime dupe) try frame.dupeString(value) else value;
                 };
 
-                var result = try frame.arena.alloc(u8, value.len);
+                var result = try frame.page_arena.alloc(u8, value.len);
                 @memcpy(result[0..first], value[0..first]);
 
                 var i: usize = first;
@@ -851,7 +840,7 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
         .month => return if (isValidMonth(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
         .week => return if (isValidWeek(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
         .time => return if (isValidTime(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
-        .@"datetime-local" => return try sanitizeDatetimeLocal(dupe, value, frame.arena),
+        .@"datetime-local" => return try sanitizeDatetimeLocal(dupe, value, frame.page_arena),
         .number => return if (isValidFloatingPoint(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
         .range => {
             const value_attr = self.asConstElement().getAttributeInterned("value") orelse "";
@@ -873,7 +862,7 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
                 }
 
                 // Normalize to lowercase per spec
-                const result = try frame.arena.alloc(u8, 7);
+                const result = try frame.page_arena.alloc(u8, 7);
                 result[0] = '#';
                 for (value[1..], 1..) |c, j| {
                     result[j] = std.ascii.toLower(c);
@@ -1382,7 +1371,7 @@ fn sanitizeRange(
         0;
 
     if (!isValidFloatingPoint(value)) {
-        return try formatFloat(frame.arena, snapToStep(min + (max - min) / 2, min, max, step_base, step_attr));
+        return try formatFloat(frame.page_arena, snapToStep(min + (max - min) / 2, min, max, step_base, step_attr));
     }
 
     const v0 = std.fmt.parseFloat(f64, value) catch unreachable; // grammar already validated
@@ -1395,7 +1384,7 @@ fn sanitizeRange(
         // assignments like `el.value = "1.0"` round-trip without canonicalizing.
         return if (comptime dupe) try frame.dupeString(value) else value;
     }
-    return try formatFloat(frame.arena, snapped);
+    return try formatFloat(frame.page_arena, snapped);
 }
 
 /// Snap `value` (already clamped to `[min, max]`) to the nearest value on the
@@ -1540,7 +1529,6 @@ pub const JsApi = struct {
         return self.setValue(try js_value.toZig([]const u8), frame);
     }
 
-    pub const onselectionchange = bridge.accessor(Input.getOnSelectionChange, Input.setOnSelectionChange, .{});
     pub const @"type" = bridge.accessor(Input.getType, Input.setType, .{ .ce_reactions = true });
     pub const value = bridge.accessor(Input.getValueForJS, setValueFromJS, .{ .ce_reactions = true });
     pub const valueAsNumber = bridge.accessor(Input.getValueAsNumber, Input.setValueAsNumber, .{});
@@ -1629,7 +1617,7 @@ pub const Build = struct {
         switch (attribute) {
             .type => try self.changeType(Type.fromString(value.str()), frame),
             .value => {
-                self._default_value = try frame.arena.dupe(u8, value.str());
+                self._default_value = try frame.page_arena.dupe(u8, value.str());
                 if (self._value_dirty == false and self._input_type.valueMode() == .value) {
                     try self.syncValueFromAttribute(frame);
                 }

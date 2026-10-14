@@ -33,7 +33,6 @@ pub const Proto = AbortSignal;
 _proto: *AbortSignal,
 _priority: Scheduler.Priority,
 _priority_changing: bool = false,
-_on_prioritychange: ?js.Function.Global = null,
 
 pub fn init(priority: Scheduler.Priority, exec: *const Execution) !*TaskSignal {
     return exec._factory.taskSignal(TaskSignal{
@@ -54,14 +53,6 @@ fn getPriority(self: *const TaskSignal) Scheduler.Priority {
     return self._priority;
 }
 
-fn getOnPriorityChange(self: *const TaskSignal) ?js.Function.Global {
-    return self._on_prioritychange;
-}
-
-fn setOnPriorityChange(self: *TaskSignal, cb: ?js.Function.Global) !void {
-    self._on_prioritychange = cb;
-}
-
 pub fn setPriority(self: *TaskSignal, priority: Scheduler.Priority, exec: *const Execution) !void {
     if (self._priority_changing) {
         // re-entrant priority changes (from a prioritychange listener) throw.
@@ -77,10 +68,9 @@ pub fn setPriority(self: *TaskSignal, priority: Scheduler.Priority, exec: *const
     self._priority = priority;
 
     const target = self.asEventTarget();
-    const on_prioritychange = self._on_prioritychange;
-    if (exec.hasDirectListeners(target, "prioritychange", on_prioritychange)) {
+    if (exec.hasDirectListeners(target, "prioritychange")) {
         const event = try TaskPriorityChangeEvent.initTrusted(.{ .previousPriority = previous }, exec.page);
-        try exec.dispatch(target, event.asEvent(), on_prioritychange, .{ .context = "task signal" });
+        try exec.dispatch(target, event.asEvent(), .{ .context = "task signal" });
     }
 }
 
@@ -95,5 +85,5 @@ pub const JsApi = struct {
     };
 
     pub const priority = bridge.accessor(TaskSignal.getPriority, null, .{});
-    pub const onprioritychange = bridge.accessor(TaskSignal.getOnPriorityChange, TaskSignal.setOnPriorityChange, .{});
+    pub const onprioritychange = EventTarget.handlerAccessor(TaskSignal, "prioritychange");
 };

@@ -34,6 +34,11 @@
   }
 </script>
 
+<script id="type">
+  testing.expectEqual('fieldset', $('#fs1').type);
+  testing.expectEqual('fieldset', document.createElement('fieldset').type);
+</script>
+
 <fieldset id="fs-off" disabled>
   <legend><input id="in-legend" type="text"></legend>
   <input id="in-body" type="text">

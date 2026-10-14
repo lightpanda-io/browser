@@ -101,7 +101,7 @@
             }
         }
         customElements.define('my-clone_element_a', MyCloneElementA);
-        const original = document.createElement('my-clone_element_a');
+        const original = new MyCloneElementA();
          $('#clone_container').cloneNode(true);
         testing.expectEqual(2, calls);
     }
@@ -122,8 +122,8 @@
             }
         }
         customElements.define('my-clone_element_b', MyCloneElementB);
-        document.createElement('my-clone_element_b');
-        document.createElement('my-clone_element_b');
+        new MyCloneElementB();
+        new MyCloneElementB();
         testing.expectEqual(2, calls);
         $('#clone_siblings_container').cloneNode(true);
         testing.expectEqual(4, calls);
@@ -147,7 +147,7 @@
 
         // Create a DocumentFragment with a custom element
         const fragment = document.createDocumentFragment();
-        const customEl = document.createElement('my-fragment-clone-element');
+        const customEl = new MyFragmentCloneElement();
         fragment.appendChild(customEl);
 
         // Clone the fragment - this should trigger the crash
@@ -173,7 +173,7 @@
 
         // Create a container with a custom element
         const container = document.createElement('div');
-        const customEl = document.createElement('my-range-clone-element');
+        const customEl = new MyRangeCloneElement();
         container.appendChild(customEl);
 
         // Create a range that includes the custom element

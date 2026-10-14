@@ -96,10 +96,6 @@ _close_reason: []const u8 = "",
 _protocol: []const u8 = "",
 
 // Event handlers
-_on_open: ?js.Function.Global = null,
-_on_message: ?js.Function.Global = null,
-_on_error: ?js.Function.Global = null,
-_on_close: ?js.Function.Global = null,
 
 const ReadyState = enum(u8) {
     connecting = 0,
@@ -288,19 +284,6 @@ fn isBlockedPort(url: [:0]const u8) bool {
 pub fn deinit(self: *WebSocket, page: *Page) void {
     self.releaseTransport();
 
-    if (self._on_open) |func| {
-        func.release();
-    }
-    if (self._on_message) |func| {
-        func.release();
-    }
-    if (self._on_error) |func| {
-        func.release();
-    }
-    if (self._on_close) |func| {
-        func.release();
-    }
-
     for (self._send_queue.items) |msg| {
         msg.deinit(page);
     }
@@ -309,6 +292,7 @@ pub fn deinit(self: *WebSocket, page: *Page) void {
         arena.release();
     }
 
+    page.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
@@ -320,7 +304,7 @@ pub fn acquireRef(self: *WebSocket) void {
     self._rc.acquire();
 }
 
-fn asEventTarget(self: *WebSocket) *EventTarget {
+pub fn asEventTarget(self: *WebSocket) *EventTarget {
     return self._proto;
 }
 
@@ -687,65 +671,13 @@ fn setBinaryType(self: *WebSocket, value: []const u8) void {
     }
 }
 
-fn getOnOpen(self: *const WebSocket) ?js.Function.Global {
-    return self._on_open;
-}
-
-fn setOnOpen(self: *WebSocket, cb_: ?js.Function) !void {
-    if (self._on_open) |old| old.release();
-    if (cb_) |cb| {
-        self._on_open = try cb.persistWithThis(self);
-    } else {
-        self._on_open = null;
-    }
-}
-
-fn getOnMessage(self: *const WebSocket) ?js.Function.Global {
-    return self._on_message;
-}
-
-fn setOnMessage(self: *WebSocket, cb_: ?js.Function) !void {
-    if (self._on_message) |old| old.release();
-    if (cb_) |cb| {
-        self._on_message = try cb.persistWithThis(self);
-    } else {
-        self._on_message = null;
-    }
-}
-
-fn getOnError(self: *const WebSocket) ?js.Function.Global {
-    return self._on_error;
-}
-
-fn setOnError(self: *WebSocket, cb_: ?js.Function) !void {
-    if (self._on_error) |old| old.release();
-    if (cb_) |cb| {
-        self._on_error = try cb.persistWithThis(self);
-    } else {
-        self._on_error = null;
-    }
-}
-
-fn getOnClose(self: *const WebSocket) ?js.Function.Global {
-    return self._on_close;
-}
-
-fn setOnClose(self: *WebSocket, cb_: ?js.Function) !void {
-    if (self._on_close) |old| old.release();
-    if (cb_) |cb| {
-        self._on_close = try cb.persistWithThis(self);
-    } else {
-        self._on_close = null;
-    }
-}
-
 fn dispatchOpenEvent(self: *WebSocket) !void {
     const exec = self._exec;
     const target = self.asEventTarget();
 
-    if (exec.hasDirectListeners(target, "open", self._on_open)) {
+    if (exec.hasDirectListeners(target, "open")) {
         const event = try Event.initTrusted(comptime .wrap("open"), .{}, exec.page);
-        try exec.dispatch(target, event, self._on_open, .{ .context = "WebSocket open" });
+        try exec.dispatch(target, event, .{ .context = "WebSocket open" });
     }
 }
 
@@ -753,7 +685,7 @@ fn dispatchMessageEvent(self: *WebSocket, data: []const u8, frame_type: http.WsF
     const exec = self._exec;
     const target = self.asEventTarget();
 
-    if (exec.hasDirectListeners(target, "message", self._on_message)) {
+    if (exec.hasDirectListeners(target, "message")) {
         const msg_data: MessageEvent.Data = if (frame_type == .binary)
             switch (self._binary_type) {
                 .arraybuffer => .{ .arraybuffer = .{ .values = data } },
@@ -770,7 +702,7 @@ fn dispatchMessageEvent(self: *WebSocket, data: []const u8, frame_type: http.WsF
             .data = msg_data,
             .origin = "",
         }, exec.page);
-        try exec.dispatch(target, event.asEvent(), self._on_message, .{ .context = "WebSocket message" });
+        try exec.dispatch(target, event.asEvent(), .{ .context = "WebSocket message" });
     }
 }
 
@@ -778,9 +710,9 @@ fn dispatchErrorEvent(self: *WebSocket) !void {
     const exec = self._exec;
     const target = self.asEventTarget();
 
-    if (exec.hasDirectListeners(target, "error", self._on_error)) {
+    if (exec.hasDirectListeners(target, "error")) {
         const event = try Event.initTrusted(comptime .wrap("error"), .{}, exec.page);
-        try exec.dispatch(target, event, self._on_error, .{ .context = "WebSocket error" });
+        try exec.dispatch(target, event, .{ .context = "WebSocket error" });
     }
 }
 
@@ -788,13 +720,13 @@ fn dispatchCloseEvent(self: *WebSocket, code: u16, reason: []const u8, was_clean
     const exec = self._exec;
     const target = self.asEventTarget();
 
-    if (exec.hasDirectListeners(target, "close", self._on_close)) {
+    if (exec.hasDirectListeners(target, "close")) {
         const event = try CloseEvent.initTrusted(comptime .wrap("close"), .{
             .code = code,
             .reason = reason,
             .wasClean = was_clean,
         }, exec.page);
-        try exec.dispatch(target, event.asEvent(), self._on_close, .{ .context = "WebSocket close" });
+        try exec.dispatch(target, event.asEvent(), .{ .context = "WebSocket close" });
     }
 }
 
@@ -1044,10 +976,10 @@ pub const JsApi = struct {
     pub const protocol = bridge.accessor(WebSocket.getProtocol, null, .{});
     pub const extensions = bridge.property("", .{ .template = false });
 
-    pub const onopen = bridge.accessor(WebSocket.getOnOpen, WebSocket.setOnOpen, .{});
-    pub const onmessage = bridge.accessor(WebSocket.getOnMessage, WebSocket.setOnMessage, .{});
-    pub const onerror = bridge.accessor(WebSocket.getOnError, WebSocket.setOnError, .{});
-    pub const onclose = bridge.accessor(WebSocket.getOnClose, WebSocket.setOnClose, .{});
+    pub const onopen = EventTarget.handlerAccessor(WebSocket, "open");
+    pub const onmessage = EventTarget.handlerAccessor(WebSocket, "message");
+    pub const onerror = EventTarget.handlerAccessor(WebSocket, "error");
+    pub const onclose = EventTarget.handlerAccessor(WebSocket, "close");
 
     pub const send = bridge.function(WebSocket.send, .{});
     pub const close = bridge.function(WebSocket.close, .{});

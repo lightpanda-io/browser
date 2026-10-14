@@ -19,6 +19,7 @@
 
 const std = @import("std");
 const URL = @import("URL.zig");
+const Mime = @import("Mime.zig");
 const base64 = @import("webapi/encoding/base64.zig");
 
 const Allocator = std.mem.Allocator;
@@ -33,10 +34,11 @@ pub fn parse(arena: Allocator, url: []const u8) !Parsed {
         return error.InvalidDataUrl;
     }
 
-    const after = url["data:".len..];
+    // The fragment is not part of the data.
+    const after = url["data:".len .. std.mem.findScalar(u8, url, '#') orelse url.len];
 
     const comma = std.mem.findScalarPos(u8, after, 0, ',') orelse return error.InvalidDataUrl;
-    var meta = std.mem.trim(u8, after[0..comma], &std.ascii.whitespace);
+    var meta = std.mem.trim(u8, after[0..comma], ascii_whitespace);
     const encoded_body = after[comma + 1 ..];
 
     // A trailing ";" + optional spaces + "base64" selects base64 decoding.
@@ -50,12 +52,11 @@ pub fn parse(arena: Allocator, url: []const u8) !Parsed {
         break :blk true;
     };
 
-    var content_type: []const u8 = meta;
+    // e.g. "data:;charset=utf-8,x" -> "text/plain;charset=utf-8"
+    const mime_type = if (std.mem.startsWith(u8, meta, ";")) try arena.print("text/plain{s}", .{meta}) else meta;
+    var content_type = try Mime.serialize(arena, mime_type);
     if (content_type.len == 0) {
         content_type = "text/plain;charset=US-ASCII";
-    } else if (content_type[0] == ';') {
-        // e.g. "data:;charset=utf-8,x" -> "text/plain;charset=utf-8"
-        content_type = try arena.print("text/plain{s}", .{content_type});
     }
 
     const body_text = try URL.unescape(arena, encoded_body);
@@ -63,6 +64,9 @@ pub fn parse(arena: Allocator, url: []const u8) !Parsed {
 
     return .{ .content_type = content_type, .body = body };
 }
+
+// https://infra.spec.whatwg.org/#ascii-whitespace (unlike std.ascii.whitespace, no VT)
+const ascii_whitespace = "\t\n\x0c\r ";
 
 fn base64Decode(arena: Allocator, input: []const u8) ![]const u8 {
     // Forgiving-base64 decode — https://infra.spec.whatwg.org/#forgiving-base64-decode.
@@ -121,4 +125,30 @@ test "data_url: empty body" {
 
 test "data_url: missing comma is an error" {
     try std.testing.expectError(error.InvalidDataUrl, parse(testing.arena_allocator, "data:text/plain"));
+}
+
+test "data_url: fragment is stripped" {
+    const r = try parse(testing.arena_allocator, "data:,X#X");
+    try testing.expectString("X", r.body);
+    try std.testing.expectError(error.InvalidDataUrl, parse(testing.arena_allocator, "data:#,X"));
+}
+
+test "data_url: mime type is parsed and serialized" {
+    const expectContentType = struct {
+        fn call(url: []const u8, expected: []const u8) !void {
+            try testing.expectString(expected, (try parse(testing.arena_allocator, url)).content_type);
+        }
+    }.call;
+
+    try expectContentType("data:IMAGE/gif;CHARSET=x,X", "image/gif;charset=x");
+    try expectContentType("data:text/plain;,X", "text/plain");
+    try expectContentType("data:; charset=x,X", "text/plain;charset=x");
+    try expectContentType("data:;charset=\"x\",X", "text/plain;charset=x");
+    try expectContentType("data:x/x;base64;charset=x;base64,WA", "x/x;charset=x");
+
+    // An invalid mime type falls back to the default.
+    try expectContentType("data:X,X", "text/plain;charset=US-ASCII");
+    try expectContentType("data:text / html,X", "text/plain;charset=US-ASCII");
+    try expectContentType("data://test/,X", "text/plain;charset=US-ASCII");
+    try expectContentType("data:%3Bbase64,WA", "text/plain;charset=US-ASCII");
 }

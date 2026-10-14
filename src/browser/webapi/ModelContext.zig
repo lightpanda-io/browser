@@ -99,7 +99,7 @@ pub fn registerTool(
         }
     }
 
-    const arena = exec.arena;
+    const arena = exec.page_arena;
     const entry = try arena.create(Tool);
     entry.* = .{
         .ctx = self,

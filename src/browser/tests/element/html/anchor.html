@@ -188,6 +188,24 @@
 }
 </script>
 
+<script id=anchor_question_mark_in_fragment>
+{
+  let a = document.createElement('a');
+  a.href = 'https://example.com/app#/item?id=5';
+  testing.expectEqual('', a.search);
+  testing.expectEqual('#/item?id=5', a.hash);
+
+  a.pathname = '/other';
+  testing.expectEqual('https://example.com/other#/item?id=5', a.href);
+
+  a.hash = '#top';
+  testing.expectEqual('https://example.com/other#top', a.href);
+
+  a.href = 'https://example.com/app?q=1#/item?id=5';
+  testing.expectEqual('?q=1', a.search);
+}
+</script>
+
 <script id=anchor_name_attribute>
 {
   let a = document.createElement('a');

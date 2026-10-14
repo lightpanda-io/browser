@@ -87,7 +87,7 @@ pub const State = struct {
             self.font_len = @intCast(value.len);
             self.font_overflow = null;
         } else {
-            self.font_overflow = try exec.arena.dupe(u8, value);
+            self.font_overflow = try exec.page_arena.dupe(u8, value);
         }
         self.font_size = size;
     }
@@ -115,7 +115,7 @@ pub const State = struct {
             self.dash_overflow = null;
             return;
         }
-        const dash = try exec.arena.alloc(f64, len);
+        const dash = try exec.page_arena.alloc(f64, len);
         for (0..repeat) |i| @memcpy(dash[i * segments.len ..][0..segments.len], segments);
         self.dash_overflow = dash;
     }

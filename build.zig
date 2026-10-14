@@ -189,20 +189,8 @@ pub fn build(b: *Build) !void {
         run_step.dependOn(&run_cmd.step);
     }
 
-    {
-        // skills generator
-        const exe = addExe(b, exe_config, "lightpanda-skills", "skills_check", "src/main_skills.zig");
-
-        const run_cmd = b.addRunArtifact(exe);
-        const out_dir = run_cmd.addOutputDirectoryArg2("skills", .{});
-        const install = b.addInstallDirectory(.{
-            .source_dir = out_dir,
-            .install_dir = .prefix,
-            .install_subdir = "skills",
-        });
-        const skills_step = b.step("skills", "Generate LLM skill docs (zig-out/skills/<name>/SKILL.md)");
-        skills_step.dependOn(&install.step);
-    }
+    addGenerator(b, exe_config, "skills", "Generate LLM skill docs (zig-out/skills/<name>/SKILL.md)");
+    addGenerator(b, exe_config, "docs", "Generate reference partials for the docs site (zig-out/docs/*.mdx)");
 
     {
         // test
@@ -232,6 +220,20 @@ const ExeConfig = struct {
     sanitize_c: ?std.zig.SanitizeC,
     sanitize_thread: bool,
 };
+
+/// A `zig build <name>` step that runs `src/main_<name>.zig` with an output
+/// directory and installs what it writes to `zig-out/<name>`.
+fn addGenerator(b: *Build, config: ExeConfig, comptime name: []const u8, description: []const u8) void {
+    const exe = addExe(b, config, "lightpanda-" ++ name, name ++ "_check", "src/main_" ++ name ++ ".zig");
+    const run_cmd = b.addRunArtifact(exe);
+    const out_dir = run_cmd.addOutputDirectoryArg2(name, .{});
+    const install = b.addInstallDirectory(.{
+        .source_dir = out_dir,
+        .install_dir = .prefix,
+        .install_subdir = name,
+    });
+    b.step(name, description).dependOn(&install.step);
+}
 
 fn addExe(b: *Build, config: ExeConfig, name: []const u8, check_name: []const u8, root_source_file: []const u8) *Build.Step.Compile {
     const exe = b.addExecutable(.{
@@ -526,11 +528,20 @@ fn linkCurl(b: *Build, mod: *Build.Module, deps: Deps, is_tsan: bool, section: b
     translator.addIncludePath(dep.path("include"));
     mod.addImport("curl", translator.mod);
 
+    // zlib and brotli are linked to curl for their installed headers, and to
+    // mod since Compression Streams call them directly.
     const zlib = buildZlib(b, deps.target, deps.optimize, is_tsan, section);
     curl.root_module.linkLibrary(zlib);
+    mod.linkLibrary(zlib);
 
     const brotli = buildBrotli(b, deps.target, deps.optimize, is_tsan, section);
-    for (brotli) |lib| curl.root_module.linkLibrary(lib);
+    inline for (brotli) |lib| {
+        curl.root_module.linkLibrary(lib);
+        mod.linkLibrary(lib);
+    }
+
+    const zstd = buildZstd(b, deps.target, deps.optimize, is_tsan, section);
+    curl.root_module.linkLibrary(zstd);
 
     const nghttp2 = buildNghttp2(b, deps.target, deps.optimize, is_tsan, section);
     curl.root_module.linkLibrary(nghttp2);
@@ -627,6 +638,34 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optim
     return .{ brotlicmn, brotlidec, brotlienc };
 }
 
+fn buildZstd(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimize, is_tsan: bool, section: bool) *Build.Step.Compile {
+    const dep = b.dependency("zstd", .{});
+
+    const mod = cLibModule(b, target, optimize, is_tsan);
+    const lib = sectionize(b.addLibrary(.{ .name = "zstd", .root_module = mod }), section);
+    lib.installHeader(dep.path("lib/zstd.h"), "zstd.h");
+    lib.installHeader(dep.path("lib/zstd_errors.h"), "zstd_errors.h");
+    // curl only decodes, so the compressor is left out.
+    mod.addCSourceFiles(.{
+        .root = dep.path("lib"),
+        .flags = &.{
+            // RFC 9659 caps the zstd content coding's window at 8MB, as Chrome does.
+            "-DZSTD_MAXWINDOWSIZE_DEFAULT=(1<<23)",
+        },
+        .files = &.{
+            "common/debug.c",                    "common/entropy_common.c",
+            "common/error_private.c",            "common/fse_decompress.c",
+            "common/xxhash.c",                   "common/zstd_common.c",
+            "decompress/huf_decompress.c",       "decompress/zstd_ddict.c",
+            "decompress/zstd_decompress.c",      "decompress/zstd_decompress_block.c",
+            // Empty unless the x86_64 BMI2 fast path is enabled.
+            "decompress/huf_decompress_amd64.S",
+        },
+    });
+
+    return lib;
+}
+
 fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimize, section: bool) [2]*Build.Step.Compile {
     const dep = b.dependency("boringssl-zig", .{
         .target = target,
@@ -721,6 +760,7 @@ fn buildCurl(
     const config = .{
         .HAVE_LIBZ = true,
         .HAVE_BROTLI = true,
+        .HAVE_ZSTD = true,
         .USE_NGHTTP2 = true,
 
         .USE_OPENSSL = true,

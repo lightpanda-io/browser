@@ -38,7 +38,6 @@ const IDBVersionChangeEvent = @import("IDBVersionChangeEvent.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
-const FunctionSetter = idb.FunctionSetter;
 
 const IDBRequest = @This();
 
@@ -60,10 +59,6 @@ _result: Result = .{ .none = js.Undefined{} },
 // whether or not we own th result value, if we do, we can free it once we know
 // it cannot be used
 _result_owned: bool = false,
-
-_on_success: ?js.Function.Global = null,
-_on_error: ?js.Function.Global = null,
-_on_upgrade_needed: ?js.Function.Global = null,
 
 const ReadyState = enum {
     pending,
@@ -232,7 +227,7 @@ pub fn fireUpgradeNeeded(self: *IDBRequest, exec: *Execution, old_version: u64, 
     event.asEvent().acquireRef();
     defer _ = event.asEvent().releaseRef(exec.page);
 
-    try exec.dispatch(self.asEventTarget(), event.asEvent(), self._on_upgrade_needed, .{ .context = "IDBRequest.upgradeneeded" });
+    try exec.dispatch(self.asEventTarget(), event.asEvent(), .{ .context = "IDBRequest.upgradeneeded" });
 
     // A throwing listener aborts the upgrade (after every listener ran).
     if (event.asEvent()._listeners_did_throw) {
@@ -254,7 +249,7 @@ pub fn fireSuccess(self: *IDBRequest, exec: *Execution) !void {
     event.acquireRef();
     defer event.releaseRef(exec.page);
 
-    try exec.dispatch(self.asEventTarget(), event, self._on_success, .{ .context = "IDBRequest.success" });
+    try exec.dispatch(self.asEventTarget(), event, .{ .context = "IDBRequest.success" });
 
     if (event._listeners_did_throw) blk: {
         // if the event threw, we must abort
@@ -287,14 +282,14 @@ fn fireError(self: *IDBRequest, exec: *Execution) !void {
     event._target = et;
     event._dispatch_target = et;
 
-    try exec.dispatch(et, event, self._on_error, .{ .context = "IDBRequest.error", .inject_target = false });
+    try exec.dispatch(et, event, .{ .context = "IDBRequest.error", .inject_target = false });
     if (txn) |tx| {
         if (!event._stop_propagation) {
-            try exec.dispatch(tx.asEventTarget(), event, tx._on_error, .{ .context = "IDBTransaction.error", .inject_target = false });
+            try exec.dispatch(tx.asEventTarget(), event, .{ .context = "IDBTransaction.error", .inject_target = false });
         }
         if (!event._stop_propagation) {
             const db = tx._db;
-            try exec.dispatch(db.asEventTarget(), event, db._on_error, .{ .context = "IDBDatabase.error", .inject_target = false });
+            try exec.dispatch(db.asEventTarget(), event, .{ .context = "IDBDatabase.error", .inject_target = false });
         }
 
         // Don't re-abort a transaction that's already finishing — the AbortError
@@ -367,38 +362,6 @@ fn getError(self: *const IDBRequest) !?DOMException {
         else => err,
     };
     return DOMException.fromError(mapped) orelse DOMException.init(null, "UnknownError");
-}
-
-fn getOnSuccess(self: *const IDBRequest) ?js.Function.Global {
-    return self._on_success;
-}
-
-fn setOnSuccess(self: *IDBRequest, setter: ?FunctionSetter) void {
-    self._on_success = getFunctionFromSetter(setter);
-}
-
-fn getOnError(self: *const IDBRequest) ?js.Function.Global {
-    return self._on_error;
-}
-
-fn setOnError(self: *IDBRequest, setter: ?FunctionSetter) void {
-    self._on_error = getFunctionFromSetter(setter);
-}
-
-pub fn getOnUpgradeNeeded(self: *const IDBRequest) ?js.Function.Global {
-    return self._on_upgrade_needed;
-}
-
-pub fn setOnUpgradeNeeded(self: *IDBRequest, setter: ?FunctionSetter) void {
-    self._on_upgrade_needed = getFunctionFromSetter(setter);
-}
-
-fn getFunctionFromSetter(setter: ?FunctionSetter) ?js.Function.Global {
-    const s = setter orelse return null;
-    return switch (s) {
-        .func => |f| f,
-        .anything => null,
-    };
 }
 
 // A database operation, captured when a request method is called and run later.
@@ -510,6 +473,6 @@ pub const JsApi = struct {
     pub const source = bridge.accessor(IDBRequest.getSource, null, .{});
     pub const transaction = bridge.accessor(IDBRequest.getTransaction, null, .{});
     pub const @"error" = bridge.accessor(IDBRequest.getError, null, .{});
-    pub const onsuccess = bridge.accessor(IDBRequest.getOnSuccess, IDBRequest.setOnSuccess, .{});
-    pub const onerror = bridge.accessor(IDBRequest.getOnError, IDBRequest.setOnError, .{});
+    pub const onsuccess = EventTarget.handlerAccessor(IDBRequest, "success");
+    pub const onerror = EventTarget.handlerAccessor(IDBRequest, "error");
 };

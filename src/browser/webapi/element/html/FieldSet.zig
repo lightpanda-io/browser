@@ -52,6 +52,7 @@ pub const JsApi = struct {
 
     pub const disabled = reflect.boolean("disabled");
     pub const name = reflect.string("name");
+    pub const @"type" = bridge.property("fieldset", .{ .template = false, .readonly = true });
 };
 
 const testing = @import("../../../../testing.zig");

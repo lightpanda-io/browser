@@ -54,7 +54,7 @@ pub fn stop(self: *TestHTTPServer) void {
 }
 
 pub fn run(self: *TestHTTPServer, wg: *lp.WaitGroup) !void {
-    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 9582);
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
 
     self.listener = try address.listen(lp.io, .{ .reuse_address = true });
     var listener = &self.listener.?;
@@ -156,6 +156,10 @@ fn getContentType(file_path: []const u8) []const u8 {
 
     if (std.mem.endsWith(u8, file_path, ".htm")) {
         return "text/html";
+    }
+
+    if (std.mem.endsWith(u8, file_path, ".txt")) {
+        return "text/plain";
     }
 
     if (std.mem.endsWith(u8, file_path, ".xml")) {

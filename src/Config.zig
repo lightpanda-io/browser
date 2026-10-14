@@ -231,11 +231,14 @@ pub const HttpVersion = enum {
     @"1.1",
 };
 
-pub const LoadResources = packed struct(u4) {
+pub const LoadResources = packed struct(u5) {
     image: bool = false,
     iframe: bool = false,
     worker: bool = false,
     stylesheet: bool = false,
+    // Only marks the option as given, so `--load-resources none` turns off a
+    // mode's default.
+    none: bool = false,
 };
 
 pub const ExperimentalFeatures = packed struct(u2) {
@@ -272,6 +275,9 @@ const CommonOptions = .{
     .{ .name = "user_agent_suffix", .type = ?[]const u8 },
     .{ .name = "http_cache_dir", .type = ?[]const u8 },
     .{ .name = "http_cache_entry_limit", .type = ?u32, .default = 1000 },
+    .{ .name = "http_debug", .type = bool },
+    .{ .name = "http_curves", .type = ?[:0]const u8, .validator = httpCurvesValidator },
+    .{ .name = "render_font", .type = []const u8, .multiple = true },
     .{ .name = "web_bot_auth_key_file", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_keyid", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_domain", .type = ?[]const u8 },
@@ -467,6 +473,8 @@ const Commands = cli.Builder(.{
             .{ .name = "base_url", .type = ?[:0]const u8 },
             .{ .name = "system_prompt", .type = ?[:0]const u8 },
             .{ .name = "task", .type = ?[]const u8 },
+            .{ .name = "trace", .type = ?[]const u8 },
+            .{ .name = "trace_results", .type = bool },
             .{ .name = "save", .type = ?[]const u8 },
             .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true },
             .{ .name = "verbosity", .type = ?AgentVerbosity },
@@ -525,6 +533,15 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
             if (@hasField(@TypeOf(m.*), "enable_external_stylesheets")) {
                 if (m.enable_external_stylesheets) {
                     // map deprecated property onto updated one
+                    m.load_resources.stylesheet = true;
+                }
+            }
+            // The agent-facing modes read visibility, which is wrong without
+            // external stylesheets: a menu hidden by an author class looks
+            // open. An explicit --load-resources replaces this default.
+            if (@hasField(@TypeOf(m.*), "load_resources")) {
+                const given = m.load_resources != LoadResources{};
+                if (!given and (config.command == .mcp or config.command == .agent)) {
                     m.load_resources.stylesheet = true;
                 }
             }
@@ -706,8 +723,10 @@ pub fn httpTimeout(self: *const Config) u31 {
     };
 }
 
+// https://fetch.spec.whatwg.org/#http-redirect-fetch
+// "If request’s redirect count is 20, then return a network error."
 pub fn httpMaxRedirects(_: *const Config) u8 {
-    return 10;
+    return 20;
 }
 
 pub fn httpMaxResponseSize(self: *const Config) ?usize {
@@ -782,6 +801,27 @@ pub fn httpCacheDir(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn httpDebug(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_debug,
+        else => false,
+    };
+}
+
+pub fn httpCurves(self: *const Config) ?[:0]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_curves,
+        else => null,
+    };
+}
+
+pub fn renderFonts(self: *const Config) []const []const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.render_font.items,
+        else => &.{},
+    };
+}
+
 pub fn httpCacheEntryLimit(self: *const Config) u32 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_entry_limit.?,
@@ -816,6 +856,16 @@ pub fn advertiseHost(self: *const Config) []const u8 {
         .serve => |opts| opts.advertise_host orelse advertiseHostFallback(opts.host),
         .mcp => "127.0.0.1",
         else => unreachable,
+    };
+}
+
+// The --advertise-host value when the operator set one. Unlike
+// advertiseHost() there is no fallback: only an explicit choice may widen the
+// WebSocket Host check (see isAllowedHost in server/http.zig).
+pub fn explicitAdvertiseHost(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        .serve => |opts| opts.advertise_host,
+        else => null,
     };
 }
 
@@ -1665,6 +1715,21 @@ fn timezoneValidator(allocator: Allocator, args: *std.process.Args.Iterator, fie
     field.* = try allocator.dupeSentinel(u8, str, 0);
 }
 
+// libcurl only stores the string; BoringSSL parses it at handshake time, so
+// a bad name would fail every request with a misleading SslCipher error.
+fn httpCurvesValidator(allocator: Allocator, args: *std.process.Args.Iterator, field: *?[:0]const u8) !void {
+    const str = args.next() orelse return error.MissingArgument;
+
+    const ctx = crypto.SSL_CTX_new(crypto.TLS_method()) orelse return error.OutOfMemory;
+    defer crypto.SSL_CTX_free(ctx);
+
+    if (crypto.SSL_CTX_set1_curves_list(ctx, str) != 1) {
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-curves", .value = str, .hint = "must be a colon-separated list such as X25519MLKEM768:X25519:P-256:P-384" });
+        return error.InvalidArgument;
+    }
+    field.* = try allocator.dupeSentinel(u8, str, 0);
+}
+
 /// A BCP 47 tag restricted to what ICU and the Accept-Language derivation
 /// need: a 2-3 letter language followed by 2-8 character alphanumeric subtags.
 pub fn validateLocale(tag: []const u8) !void {
@@ -1746,5 +1811,29 @@ test "Config: parseArgs --virtual-time-budget-ms" {
         const proc_args: std.process.Args = .{ .vector = &argv };
         const config = try parseArgs(arena.allocator(), proc_args);
         try std.testing.expectEqual(null, config.virtualTimeBudgetMs());
+    }
+}
+
+test "Config: parseArgs --load-resources defaults stylesheets on for mcp and agent" {
+    // Parsing agent mode lowers the global log level, which other tests in
+    // this process expect log lines from.
+    const saved_log_opts = log.opts;
+    defer log.opts = saved_log_opts;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const cases = [_]struct { argv: []const [*:0]const u8, stylesheet: bool, image: bool }{
+        .{ .argv = &.{ "lightpanda", "mcp" }, .stylesheet = true, .image = false },
+        .{ .argv = &.{ "lightpanda", "agent", "--no-llm" }, .stylesheet = true, .image = false },
+        .{ .argv = &.{ "lightpanda", "fetch", "https://example.com" }, .stylesheet = false, .image = false },
+        .{ .argv = &.{ "lightpanda", "mcp", "--load-resources", "none" }, .stylesheet = false, .image = false },
+        .{ .argv = &.{ "lightpanda", "mcp", "--load-resources", "image" }, .stylesheet = false, .image = true },
+    };
+    for (cases) |case| {
+        const config = try parseArgs(arena.allocator(), .{ .vector = case.argv });
+        const resources = config.loadResources();
+        try std.testing.expectEqual(case.stylesheet, resources.stylesheet);
+        try std.testing.expectEqual(case.image, resources.image);
     }
 }

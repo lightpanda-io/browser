@@ -74,11 +74,10 @@ _response_mime: ?Mime = null,
 _override_mime_raw: ?[]const u8 = null,
 _response_mime_raw: ?[]const u8 = null,
 _response_xml: ?*Node.Document = null,
-_response_headers: std.ArrayList([]const u8) = .empty,
+_response_headers: std.ArrayList(http.Header) = .empty,
 _response_type: ResponseType = .default,
 
 _ready_state: ReadyState = .unsent,
-_on_ready_state_change: ?js.Function.Global = null,
 _with_credentials: bool = false,
 _timeout: u32 = 0,
 
@@ -145,14 +144,10 @@ pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
 
     self.clearResponse(page);
 
-    if (self._on_ready_state_change) |func| {
-        func.release();
-    }
-
-    self._proto.releaseListeners();
     if (self._upload) |upload| {
-        upload._proto.releaseListeners();
+        page.removeTarget(upload.asEventTarget());
     }
+    page.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
@@ -175,20 +170,8 @@ pub fn acquireRef(self: *XMLHttpRequest) void {
     self._rc.acquire();
 }
 
-fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
+pub fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
     return self._proto._proto;
-}
-
-fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function.Global {
-    return self._on_ready_state_change;
-}
-
-fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_ready_state_change = try cb.persistWithThis(self);
-    } else {
-        self._on_ready_state_change = null;
-    }
 }
 
 fn getWithCredentials(self: *const XMLHttpRequest) bool {
@@ -457,22 +440,35 @@ fn getReadyState(self: *const XMLHttpRequest) u32 {
     return @backingInt(self._ready_state);
 }
 
-pub fn getResponseHeader(self: *const XMLHttpRequest, name: []const u8) ?[]const u8 {
-    for (self._response_headers.items) |entry| {
-        if (entry.len <= name.len) {
-            continue;
+// Headers are sorted by name, so all values for `name` are contiguous.
+fn getResponseHeader(self: *const XMLHttpRequest, name: []const u8, exec: *const Execution) !?[]const u8 {
+    const items = self._response_headers.items;
+    const start = for (items, 0..) |hdr, i| {
+        if (std.ascii.eqlIgnoreCase(name, hdr.name)) {
+            break i;
         }
-        if (std.ascii.eqlIgnoreCase(name, entry[0..name.len]) == false) {
-            continue;
-        }
-        if (entry[name.len] != ':') {
-            continue;
-        }
-        return std.mem.trimStart(u8, entry[name.len + 1 ..], " ");
+    } else return null;
+
+    var end = start + 1;
+    while (end < items.len and std.mem.eql(u8, items[end].name, items[start].name)) {
+        end += 1;
     }
-    return null;
+    if (end - start == 1) {
+        return items[start].value;
+    }
+
+    var buf: std.Io.Writer.Allocating = .init(exec.local_arena);
+    for (items[start..end], 0..) |hdr, i| {
+        if (i > 0) {
+            try buf.writer.writeAll(", ");
+        }
+        try buf.writer.writeAll(hdr.value);
+    }
+    return buf.written();
 }
 
+// Should return sorted and combined. They are already sorted, so combining
+// is easy.
 fn getAllResponseHeaders(self: *const XMLHttpRequest, exec: *const Execution) ![]const u8 {
     if (self._ready_state != .done) {
         // MDN says this should return null, but it seems to return an empty string
@@ -480,9 +476,18 @@ fn getAllResponseHeaders(self: *const XMLHttpRequest, exec: *const Execution) ![
         return "";
     }
 
-    var buf = std.Io.Writer.Allocating.init(exec.local_arena);
-    for (self._response_headers.items) |entry| {
-        try buf.writer.writeAll(entry);
+    var buf: std.Io.Writer.Allocating = .init(exec.local_arena);
+    for (self._response_headers.items, 0..) |hdr, i| {
+        if (i > 0 and std.mem.eql(u8, hdr.name, self._response_headers.items[i - 1].name)) {
+            try buf.writer.print(", {s}", .{hdr.value});
+            continue;
+        }
+        if (i > 0) {
+            try buf.writer.writeAll("\r\n");
+        }
+        try buf.writer.print("{s}: {s}", .{ hdr.name, hdr.value });
+    }
+    if (self._response_headers.items.len > 0) {
         try buf.writer.writeAll("\r\n");
     }
     return buf.written();
@@ -655,13 +660,31 @@ fn applyContentType(self: *XMLHttpRequest, content_type: []const u8) !void {
 }
 
 fn applyResponseHeaders(self: *XMLHttpRequest, headers: []const http.Header) !void {
+    const allocator = self._arena.allocator();
     for (headers) |hdr| {
         if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
             continue;
         }
-        const joined = try self._arena.allocator().print("{s}: {s}", .{ hdr.name, hdr.value });
-        try self._response_headers.append(self._arena.allocator(), joined);
+        try self._response_headers.append(allocator, .{
+            .name = try allocator.dupe(u8, hdr.name),
+            .value = try allocator.dupe(u8, hdr.value),
+        });
     }
+
+    // Comparison is by uppercased name...so things like _ sort after letters.
+    std.mem.sort(http.Header, self._response_headers.items, {}, struct {
+        fn lessThan(_: void, a: http.Header, b: http.Header) bool {
+            const len = @min(a.name.len, b.name.len);
+            for (a.name[0..len], b.name[0..len]) |ca, cb| {
+                const ua = std.ascii.toUpper(ca);
+                const ub = std.ascii.toUpper(cb);
+                if (ua != ub) {
+                    return ua < ub;
+                }
+            }
+            return a.name.len < b.name.len;
+        }
+    }.lessThan);
 }
 
 fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
@@ -796,8 +819,7 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
             try self._proto.dispatch(.abort, null, exec);
         } else if (is_timeout) {
             try self._proto.dispatch(.timeout, null, exec);
-        }
-        if (!is_timeout) {
+        } else {
             try self._proto.dispatch(.err, null, exec);
         }
         try self._proto.dispatch(.load_end, null, exec);
@@ -818,9 +840,9 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, exec: *const Execution
     self._ready_state = state;
 
     const target = self.asEventTarget();
-    if (exec.hasDirectListeners(target, "readystatechange", self._on_ready_state_change)) {
+    if (exec.hasDirectListeners(target, "readystatechange")) {
         const event = try Event.initTrusted(.wrap("readystatechange"), .{}, exec.page);
-        try exec.dispatch(target, event, self._on_ready_state_change, .{ .context = "XHR state change" });
+        try exec.dispatch(target, event, .{ .context = "XHR state change" });
     }
 }
 
@@ -852,7 +874,7 @@ pub const JsApi = struct {
     pub const LOADING = bridge.property(@backingInt(XMLHttpRequest.ReadyState.loading), .{ .template = true });
     pub const DONE = bridge.property(@backingInt(XMLHttpRequest.ReadyState.done), .{ .template = true });
 
-    pub const onreadystatechange = bridge.accessor(XMLHttpRequest.getOnReadyStateChange, XMLHttpRequest.setOnReadyStateChange, .{});
+    pub const onreadystatechange = EventTarget.handlerAccessor(XMLHttpRequest, "readystatechange");
     pub const upload = bridge.accessor(XMLHttpRequest.getUpload, null, .{});
     pub const timeout = bridge.accessor(XMLHttpRequest.getTimeout, XMLHttpRequest.setTimeout, .{});
     pub const withCredentials = bridge.accessor(XMLHttpRequest.getWithCredentials, XMLHttpRequest.setWithCredentials, .{});
@@ -893,4 +915,94 @@ test "WebApi: XHR" {
 
 test "WebApi: XHR in worker" {
     try testing.htmlRunner("net/xhr_worker.html", .{});
+}
+
+test "WebApi: XHR listeners are dropped when the XHR is freed" {
+    // A freed XHR's address gets reused by a new one, which must not inherit
+    // the old one's listeners.
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec(
+            \\globalThis.fired = 0;
+            \\for (let i = 0; i < 200; i++) {
+            \\  new XMLHttpRequest().addEventListener('foo', () => fired++);
+            \\  new XMLHttpRequest().upload.addEventListener('foo', () => fired++);
+            \\  new XMLHttpRequest().onload = () => fired++;
+            \\  new XMLHttpRequest().upload.onload = () => fired++;
+            \\}
+        , null);
+    }
+
+    // Not env.memoryPressureNotification: it skips small heaps.
+    const isolate = testing.test_session.browser.env.isolate;
+    for (0..3) |_| {
+        isolate.memoryPressureNotification(.critical);
+    }
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const fired = try ls.local.exec(
+        \\for (let i = 0; i < 200; i++) {
+        \\  new XMLHttpRequest().dispatchEvent(new Event('foo'));
+        \\  new XMLHttpRequest().upload.dispatchEvent(new Event('foo'));
+        \\  new XMLHttpRequest().dispatchEvent(new Event('load'));
+        \\  new XMLHttpRequest().upload.dispatchEvent(new Event('load'));
+        \\}
+        \\fired;
+    , null);
+    try testing.expectEqual(0, try fired.toF64());
+}
+
+test "WebApi: worker XHR listeners are dropped when the XHR is freed" {
+    // Same as above, but in a worker, whose listeners live in its own store.
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    // Navigate the frame first to avoid CORS blocking request for the worker.
+    try frame.navigate("http://localhost:9582/", .{});
+    try testing.waitForFrame();
+
+    const worker = try @import("../Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", null, frame);
+    const ctx = worker._worker_scope._proto.js;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        ctx.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec(
+            \\globalThis.fired = 0;
+            \\for (let i = 0; i < 200; i++) {
+            \\  new XMLHttpRequest().addEventListener('foo', () => fired++);
+            \\  new XMLHttpRequest().upload.addEventListener('foo', () => fired++);
+            \\  new XMLHttpRequest().onload = () => fired++;
+            \\  new XMLHttpRequest().upload.onload = () => fired++;
+            \\}
+        , null);
+    }
+
+    // Not env.memoryPressureNotification: it skips small heaps.
+    const isolate = testing.test_session.browser.env.isolate;
+    for (0..3) |_| {
+        isolate.memoryPressureNotification(.critical);
+    }
+
+    var ls: js.Local.Scope = undefined;
+    ctx.localScope(&ls);
+    defer ls.deinit();
+    const fired = try ls.local.exec(
+        \\for (let i = 0; i < 200; i++) {
+        \\  new XMLHttpRequest().dispatchEvent(new Event('foo'));
+        \\  new XMLHttpRequest().upload.dispatchEvent(new Event('foo'));
+        \\  new XMLHttpRequest().dispatchEvent(new Event('load'));
+        \\  new XMLHttpRequest().upload.dispatchEvent(new Event('load'));
+        \\}
+        \\fired;
+    , null);
+    try testing.expectEqual(0, try fired.toF64());
 }

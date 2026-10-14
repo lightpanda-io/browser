@@ -140,9 +140,9 @@ fn _assignSlottables(slot: *Slot, frame: *Frame) !void {
         }
     }
     slot._assigned.clearRetainingCapacity();
-    try slot._assigned.appendSlice(frame.arena, slottables.items);
+    try slot._assigned.appendSlice(frame.page_arena, slottables.items);
     for (slottables.items) |node| {
-        try page._assigned_slots.put(page.frame_arena, node, slot);
+        try page._assigned_slots.put(page.arena, node, slot);
         node._flags.assigned_slot = true;
     }
 }

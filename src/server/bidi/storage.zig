@@ -44,73 +44,20 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
     }
 }
 
-// A cookie as a driver hands it over.
-pub const Spec = struct {
-    name: []const u8,
-    value: []const u8,
-    domain: ?[]const u8 = null,
-    path: ?[]const u8 = null,
-    secure: bool = false,
-    http_only: bool = false,
-    expiry: ?u64 = null, // seconds since the epoch, null for a session cookie
-    same_site: ?Cookie.SameSite = null, // null: unspecified, Lax by default
-};
-
-pub fn add(jar: *Cookie.Jar, spec: Spec, url: ?[:0]const u8) !void {
-    const cookie: Cookie = blk: {
-        if (isValidPart(spec.name, "=;") == false or isValidPart(spec.value, ";") == false) {
-            return error.UnableToSetCookie;
-        }
-        if (spec.same_site == .none and spec.secure == false) {
-            // the store refuses SameSite=None without Secure, as Set-Cookie does
-            return error.UnableToSetCookie;
-        }
-
-        var arena = std.heap.ArenaAllocator.init(jar.allocator);
-        errdefer arena.deinit();
-        const a = arena.allocator();
-
-        // Allocate before the struct literal copies `arena` into the result.
-        const name = try a.dupe(u8, spec.name);
-        const value = try a.dupe(u8, spec.value);
-        const domain = Cookie.parseDomain(a, url, spec.domain) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return error.InvalidDomain,
-        };
-        const path = Cookie.parsePath(a, null, spec.path) catch return error.OutOfMemory;
-
-        break :blk .{
-            .arena = arena,
-            .name = name,
-            .value = value,
-            .domain = domain,
-            .path = path,
-            .expires = if (spec.expiry) |expiry| @floatFromInt(expiry) else null,
-            .secure = spec.secure,
-            .http_only = spec.http_only,
-            .same_site = spec.same_site orelse .lax,
-            .same_site_default = spec.same_site == null,
-        };
+pub fn add(jar: *Cookie.Jar, fields: Cookie.Fields, url: ?[:0]const u8) !void {
+    if (fields.same_site == .none and fields.secure == false) {
+        // the store refuses SameSite=None without Secure, as Set-Cookie does
+        return error.UnableToSetCookie;
+    }
+    const cookie = Cookie.fromFields(jar.allocator, url, fields) catch |err| switch (err) {
+        error.OutOfMemory, error.InvalidDomain => |e| return e,
+        error.InvalidCookie => return error.UnableToSetCookie,
     };
 
     jar.add(cookie, lp.datetime.timestamp(.real), true) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.UnableToSetCookie,
     };
-}
-
-// What Cookie.parse accepts, minus the separators a Cookie header would
-// read differently.
-fn isValidPart(part: []const u8, comptime separators: []const u8) bool {
-    for (part) |c| {
-        if ((c < 32 and c != '\t') or c > 126) {
-            return false;
-        }
-        if (std.mem.findScalar(u8, separators, c) != null) {
-            return false;
-        }
-    }
-    return true;
 }
 
 // The cookies a navigation to `url` would carry, HttpOnly ones included:
@@ -359,21 +306,21 @@ fn setCookie(cmd: *BiDi.Command) !void {
 
     const c = p.cookie;
     const value = c.value.decode(cmd.arena) catch return cmd.sendError("invalid argument", "invalid cookie.value");
-    const spec: Spec = .{
+    const fields: Cookie.Fields = .{
         .name = c.name,
         .value = value,
         .domain = c.domain,
         .path = c.path,
         .secure = c.secure,
         .http_only = c.httpOnly,
-        .expiry = c.expiry,
+        .expires = if (c.expiry) |expiry| @floatFromInt(expiry) else null,
         .same_site = if (c.sameSite) |same_site| switch (same_site) {
             .default => null,
             inline else => |tag| @field(Cookie.SameSite, @tagName(tag)),
         } else null,
     };
 
-    add(&cmd.bidi.user_context.session.cookie_jar, spec, null) catch |err| switch (err) {
+    add(&cmd.bidi.user_context.session.cookie_jar, fields, null) catch |err| switch (err) {
         error.OutOfMemory => return err,
         error.InvalidDomain, error.UnableToSetCookie => return cmd.sendError("unable to set cookie", @errorName(err)),
     };

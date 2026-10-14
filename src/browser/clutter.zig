@@ -132,7 +132,7 @@ const Stats = struct {
     table_parts: bool = false,
     has_data_table: bool = false,
 
-    // A direct child that keeps a <div> from reading as a paragraph.
+    // A descendant that keeps a <div> from reading as a paragraph.
     block_child: bool = false,
     data_table: bool = false,
 
@@ -289,7 +289,7 @@ const Pass = struct {
                 switch (tag) {
                     // Unlike readability: without href, <a> is a placeholder
                     // (tag chips, JS buttons), and its text is not link text.
-                    .anchor => if (el.getAttributeSafe(comptime .wrap("href"))) |href| {
+                    .a => if (el.getAttributeSafe(comptime .wrap("href"))) |href| {
                         inner.in_link = true;
                         inner.hash_link = href.len > 0 and href[0] == '#';
                     },
@@ -328,7 +328,7 @@ const Pass = struct {
                 parent.add(st);
                 parent.countSelf(countedAs(tag, st), 1);
                 parent.textish += if (isTextish(tag)) st.text else st.textish;
-                if (blocksParagraph(tag)) {
+                if (blocksParagraph(tag) or st.block_child) {
                     parent.block_child = true;
                 }
             },
@@ -337,7 +337,7 @@ const Pass = struct {
 
     fn isUnlikely(self: *const Pass, el: *Element, tag: Element.Tag, ctx: Ctx) ?Rule {
         if (self.flags.unlikelys == false) return null;
-        if (tag != .body and tag != .anchor and !ctx.in_table and !ctx.in_code) {
+        if (tag != .body and tag != .a and !ctx.in_table and !ctx.in_code) {
             const names = self.classAndId(el);
             if (containsAny(names, &unlikely) and !containsAny(names, &maybe_candidate)) {
                 return .unlikely;
@@ -584,7 +584,7 @@ const Pass = struct {
         if (self.flags.clean == false) return null;
         switch (tag) {
             .form, .fieldset, .table, .ul, .ol => {},
-            // A <div> without block children is a paragraph to readability.
+            // A <div> without block descendants is a paragraph to readability.
             .div => if (st.block_child == false) return null,
             else => return null,
         }

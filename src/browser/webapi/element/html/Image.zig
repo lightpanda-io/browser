@@ -147,12 +147,12 @@ fn imageAddedCallback(self: *Image, frame: *Frame) !void {
 
     // If image loading not desired, we just do fake "load" event.
     if (frame._session.load_resources.image == false) {
-        return frame.queueLoad(Factory.protoOf(self));
+        return frame.queueImageEvent(self, .load);
     }
 
     Frame.resource_load.image(frame, self, src) catch |err| {
         log.debug(.http, "image fetch", .{ .err = err, .src = src });
-        return frame.queueElementEvent(Factory.protoOf(self), .@"error");
+        return frame.queueImageEvent(self, .@"error");
     };
 }
 
@@ -444,6 +444,10 @@ test "WebApi: HTML.Image" {
 
 test "WebApi: HTML.Image srcset" {
     try testing.htmlRunner("element/html/image_srcset.html", .{});
+}
+
+test "WebApi: HTML.Image frameless load listener" {
+    try testing.htmlRunner("element/html/image_frameless_load.html", .{});
 }
 
 test "WebApi: HTML.Image fetch" {

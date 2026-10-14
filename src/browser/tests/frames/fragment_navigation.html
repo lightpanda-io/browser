@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!-- Per the HTML "navigate" algorithm, a navigation only short-circuits to a
+     fragment navigation when it has no document resource (no POST body), the
+     URL equals the current URL excluding fragments AND the URL's fragment is
+     non-null. Anything else is a real navigation, even when only the current
+     URL's fragment differs.
+     https://html.spec.whatwg.org/multipage/browsing-the-web.html#navigate -->
+
+<script>
+  // Loads /echo_method (which reports the request method) in a fresh named
+  // iframe, at a URL with a fragment. In the wild the fragment usually comes
+  // from a page script tracking a UI step (history.pushState(null, null,
+  // "#select-spot")); the navigation sees the same current URL either way.
+  function loadFrame(name, src) {
+    return new Promise((resolve) => {
+      const frame = document.createElement('iframe');
+      frame.name = name;
+      frame.onload = () => {
+        // Skip the load of the initial about:blank document.
+        if (frame.contentWindow.location.pathname !== '/echo_method') return;
+        frame.onload = null;
+        resolve(frame);
+      };
+      frame.src = src;
+      document.body.appendChild(frame);
+    });
+  }
+</script>
+
+<script id=post_same_url_without_fragment type=module>
+  {
+    const state = await testing.async();
+    const frame = await loadFrame('post_frame', '/echo_method#select-spot');
+    testing.expectEqual('#select-spot', frame.contentWindow.location.hash);
+    const initial_document = frame.contentDocument;
+
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.action = '/echo_method';
+    form.target = 'post_frame';
+    form.innerHTML = '<input name=spot value=42>';
+    document.body.appendChild(form);
+
+    let submit_events = 0;
+    form.addEventListener('submit', () => submit_events += 1);
+    frame.onload = () => state.resolve();
+    form.requestSubmit();
+
+    await state.done(() => {
+      testing.expectEqual(1, submit_events);
+      testing.expectEqual(false, frame.contentDocument === initial_document);
+      testing.expectEqual('method=POST', frame.contentDocument.body.textContent);
+      testing.expectEqual('', frame.contentWindow.location.hash);
+    });
+  }
+</script>
+
+<script id=post_exact_current_url type=module>
+  {
+    // A POST to the exact current URL, fragment included, still has a
+    // document resource: it must be sent, not dropped as a no-op.
+    const state = await testing.async();
+    const frame = await loadFrame('post_exact_frame', '/echo_method#select-spot');
+    testing.expectEqual('#select-spot', frame.contentWindow.location.hash);
+    const initial_document = frame.contentDocument;
+
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.action = '/echo_method#select-spot';
+    form.target = 'post_exact_frame';
+    document.body.appendChild(form);
+
+    frame.onload = () => state.resolve();
+    form.submit();
+
+    await state.done(() => {
+      testing.expectEqual(false, frame.contentDocument === initial_document);
+      testing.expectEqual('method=POST', frame.contentDocument.body.textContent);
+    });
+  }
+</script>
+
+<script id=get_same_url_without_fragment type=module>
+  {
+    // Same URL with the fragment dropped: the target URL's fragment is null,
+    // so this reloads the document.
+    const state = await testing.async();
+    const frame = await loadFrame('get_frame', '/echo_method#a');
+    testing.expectEqual('#a', frame.contentWindow.location.hash);
+    const initial_document = frame.contentDocument;
+
+    const link = document.createElement('a');
+    link.href = '/echo_method';
+    link.target = 'get_frame';
+    document.body.appendChild(link);
+
+    frame.onload = () => state.resolve();
+    link.click();
+
+    await state.done(() => {
+      testing.expectEqual(false, frame.contentDocument === initial_document);
+      testing.expectEqual('method=GET', frame.contentDocument.body.textContent);
+      testing.expectEqual('', frame.contentWindow.location.hash);
+    });
+  }
+</script>
+
+<script id=get_other_fragment type=module>
+  {
+    // Same URL with another fragment: a fragment navigation, the document
+    // stays and hashchange fires.
+    const state = await testing.async();
+    const frame = await loadFrame('fragment_frame', '/echo_method#a');
+    testing.expectEqual('#a', frame.contentWindow.location.hash);
+    const initial_document = frame.contentDocument;
+
+    let loads = 0;
+    frame.onload = () => loads += 1;
+    frame.contentWindow.onhashchange = () => state.resolve();
+
+    const link = document.createElement('a');
+    link.href = '/echo_method#b';
+    link.target = 'fragment_frame';
+    document.body.appendChild(link);
+    link.click();
+
+    await state.done(() => {
+      testing.expectEqual(0, loads);
+      testing.expectEqual(true, frame.contentDocument === initial_document);
+      testing.expectEqual('#b', frame.contentWindow.location.hash);
+    });
+  }
+</script>

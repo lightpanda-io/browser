@@ -621,7 +621,7 @@ pub fn localTime(ts: i64) !LibcTm {
     return tm;
 }
 
-const LibcTm = extern struct {
+pub const LibcTm = extern struct {
     tm_sec: c_int,
     tm_min: c_int,
     tm_hour: c_int,

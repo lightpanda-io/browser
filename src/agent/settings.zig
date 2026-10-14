@@ -453,6 +453,20 @@ test "parseRemembered: search_engine field round-trips" {
     try testing.expect(remembered.search_engine == .brave);
 }
 
+test "parseRemembered: effort .null round-trips as a value, not an absent field" {
+    var buf: [256]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try std.zon.stringify.serialize(Remembered{ .model = "m", .effort = .null }, .{}, &w);
+    var src: [257]u8 = undefined;
+    @memcpy(src[0..w.buffered().len], w.buffered());
+    src[w.buffered().len] = 0;
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const remembered = parseRemembered(testing.allocator, arena.allocator(), src[0..w.buffered().len :0]).?;
+    try testing.expect(remembered.effort.? == .null);
+}
+
 test "resolveSearchEngine: default auto, remembered wins" {
     try testing.expect(resolveSearchEngine(null) == .auto);
     try testing.expect(resolveSearchEngine(.{ .model = "m", .search_engine = null }) == .auto);

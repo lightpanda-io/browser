@@ -46,8 +46,3 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(Comment.init, .{});
 };
-
-const testing = @import("../../../testing.zig");
-test "WebApi: CData.Text" {
-    try testing.htmlRunner("cdata/comment.html", .{});
-}

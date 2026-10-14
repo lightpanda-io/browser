@@ -425,6 +425,13 @@ fn clearUrlBlocklist(self: *Client) void {
     }
 }
 
+/// Whether a `--block-urls` pattern (or CDP `Network.setBlockedURLs`)
+/// matches `url`. The search tool uses it to drop results the browser would
+/// refuse to open anyway.
+pub fn blocksUrl(self: *const Client, url: []const u8) bool {
+    return if (self.url_blocklist) |*blocklist| blocklist.isBlocked(url) else false;
+}
+
 /// Every reason a request is refused before it reaches the network:
 /// `--block-urls` patterns and the `--adblock-lists` filters both land here
 /// so that no call site can apply one without the other.
@@ -1295,7 +1302,12 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     // we can cause issues for the script (e.g. we respond with a 200 from our
     // cache, the server repaints the page because it didn't get the correct 304
     // that the upstream would have returned).
-    if (transfer.findRequestHeader("If-None-Match") != null or transfer.findRequestHeader("If-Modified-Since") != null) {
+    if (transfer.findRequestHeader("If-None-Match") != null or
+        transfer.findRequestHeader("If-Modified-Since") != null or
+        transfer.findRequestHeader("If-Unmodified-Since") != null or
+        transfer.findRequestHeader("If-Match") != null or
+        transfer.findRequestHeader("If-Range") != null)
+    {
         return false;
     }
 
@@ -1322,7 +1334,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     switch (cache_result) {
         .hit => |cached| {
             lp.metrics.http_cache.incr(.hit);
-            try transfer.bufferCached(cached, .local);
+            try self.serveCached(transfer, cached, .local);
             return true;
         },
         .revalidate => |cached| {
@@ -1379,8 +1391,16 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
     };
 
     lp.metrics.http_cache.incr(.revalidated);
-    try transfer.bufferCached(stale, .validated);
+    try self.serveCached(transfer, stale, .validated);
     return true;
+}
+
+fn serveCached(self: *Client, transfer: *Transfer, cached: Cache.CachedResponse, cache_state: ResourceTiming.CacheState) !void {
+    const body = transfer.setCachedResponse(cached, cache_state);
+    if (self.interceptResponse(transfer, .{ .cached = body })) {
+        return;
+    }
+    try transfer.bufferEvents(body);
 }
 
 // Everything the cache needs about this response. Names and values are
@@ -1686,6 +1706,8 @@ fn isTerminal(msg: *Inbox.Message) bool {
 
 fn isFetchInterceptionMethod(method: []const u8) bool {
     return std.mem.eql(u8, method, "Fetch.continueRequest") or
+        std.mem.eql(u8, method, "Fetch.continueResponse") or
+        std.mem.eql(u8, method, "Fetch.getResponseBody") or
         std.mem.eql(u8, method, "Fetch.failRequest") or
         std.mem.eql(u8, method, "Fetch.fulfillRequest") or
         std.mem.eql(u8, method, "Fetch.continueWithAuth");
@@ -1872,22 +1894,22 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                     try transfer.materializeResponse(msg.conn, .{ .check_content_length = false });
                     if (self.enforceCorsResponse(msg, transfer)) return true;
 
-                    try transfer.handleRedirect(location.value);
-
-                    if (!transfer.req.internal) {
-                        lp.metrics.http_redirects.incr();
-                    }
+                    // location.value is curl-owned and dies with the conn.
+                    const owned_location = try transfer.arena.dupe(u8, location.value);
 
                     // The multi should keep this alive. Releasing it now makes
                     // it so we can re-enter the pipeline and keeps the code
-                    // streamlined.
+                    // streamlined. Everything the redirect needs is
+                    // materialized on the transfer.
                     self.removeConn(msg.conn);
                     transfer._conn = null;
-                    transfer.state = .created;
 
-                    // We have to restart (.redirect == .start) the whole
-                    // pipeline, rechecking the cache/robot/ratelimit/...
-                    try self.pipeline(transfer, .redirect);
+                    if (self.interceptResponse(transfer, .{ .redirect = owned_location })) {
+                        return false;
+                    }
+
+                    transfer.state = .created;
+                    try self.followRedirect(transfer, owned_location);
                     return true;
                 },
                 // error_callback surfaces this as a TypeError.
@@ -1910,6 +1932,9 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 
     if (effective_err != null and !is_conn_close_recv) {
         const err = transfer.res.callback_error orelse effective_err.?;
+        // A failure the consumer caused (abort, cancel) is not a network
+        // failure to offer for interception.
+        const offer = http.errorReason(err) != .aborted;
         if (try transfer.deliversHeaderBeforeError(msg.conn)) {
             try transfer.materializeResponse(msg.conn, .{ .check_content_length = false });
             if (self.enforceCorsResponse(msg, transfer)) {
@@ -1917,11 +1942,17 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             }
             self.removeConn(msg.conn);
             transfer._conn = null;
+            if (offer and self.interceptResponse(transfer, .{ .failed = .{ .err = err, .header_first = true } })) {
+                return false;
+            }
             try transfer.bufferHeaderThenError(err);
             return true;
         }
         self.removeConn(msg.conn);
         transfer._conn = null;
+        if (offer and self.interceptResponse(transfer, .{ .failed = .{ .err = err, .header_first = false } })) {
+            return false;
+        }
         transfer.failAsync(err);
         return true;
     }
@@ -1942,14 +1973,63 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     self.removeConn(msg.conn);
     transfer._conn = null;
 
+    // A revalidation (304) is not offered directly: what it delivers is the
+    // cached body
+    const not_modified = transfer._cache_intent == .revalidate and transfer.res.header.?.status == 304;
+    if (not_modified == false and self.interceptResponse(transfer, .final)) {
+        return false;
+    }
+
+    try self.deliverResponse(transfer);
+    return true;
+}
+
+// CDP Fetch response-stage interception: offer a completed transfer (its conn
+// already released) to CDP. True when CDP took it: the transfer is parked
+// until continueInterceptedResponse, fulfillIntercepted or abortParked.
+fn interceptResponse(self: *Client, transfer: *Transfer, pause: Transfer.ResponsePause) bool {
+    if (transfer.res.stream.started) {
+        // A stream (EventSource) has already delivered its header and data.
+        return false;
+    }
+    transfer._response_pause = pause;
+    var wait_for_interception = false;
+    transfer.notify(
+        .http_response_intercept,
+        &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception },
+    );
+    if (!wait_for_interception) {
+        return false;
+    }
+    self.intercepted += 1;
+    transfer.state = .{ .parked = .intercept_response };
+    return true;
+}
+
+// Follow a materialized redirect response: point the transfer at the
+// redirect target and restart the whole pipeline (.redirect == .start),
+// rechecking the cache/robot/ratelimit/...
+fn followRedirect(self: *Client, transfer: *Transfer, location: []const u8) !void {
+    try transfer.handleRedirect(location);
+
+    if (!transfer.req.internal) {
+        lp.metrics.http_redirects.incr();
+    }
+
+    try self.pipeline(transfer, .redirect);
+}
+
+// The tail of a completed, materialized response: settle the cache and buffer
+// the events for dispatch. Runs straight from processOneMessage, or from
+// continueInterceptedResponse once CDP releases a response-stage pause.
+fn deliverResponse(self: *Client, transfer: *Transfer) !void {
     if (try self.cacheRevalidated(transfer)) {
-        return true;
+        return;
     }
     self.cacheStore(transfer);
 
     transfer._content_length = transfer.getContentLength() orelse 0;
     try transfer.bufferEvents(transfer.res.buffer.items);
-    return true;
 }
 
 // Commit a configured conn to the multi handle. On error the conn is left
@@ -2187,6 +2267,40 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
         transfer.abortPipelineError(err);
         return err;
     };
+}
+
+// CDP Fetch.continueResponse (or continueRequest on a response-stage pause):
+// release what the transfer is holding, unchanged — deliver the response,
+// follow the redirect, or report the network failure.
+pub fn continueInterceptedResponse(self: *Client, transfer: *Transfer) !void {
+    if (comptime lp.IS_DEBUG) {
+        lp.assert(self.intercepted > 0, "Client.continueInterceptedResponse", .{ .value = self.intercepted });
+    }
+
+    transfer.unpark();
+    switch (transfer._response_pause) {
+        .final => self.deliverResponse(transfer) catch |err| {
+            transfer.abortPipelineError(err);
+            return err;
+        },
+        .cached => |body| transfer.bufferEvents(body) catch |err| {
+            transfer.abortPipelineError(err);
+            return err;
+        },
+        .redirect => |location| self.followRedirect(transfer, location) catch |err| {
+            transfer.abortPipelineError(err);
+            return err;
+        },
+        .failed => |failure| {
+            if (!failure.header_first) {
+                return transfer.failAsync(failure.err);
+            }
+            transfer.bufferHeaderThenError(failure.err) catch |err| {
+                transfer.abortPipelineError(err);
+                return err;
+            };
+        },
+    }
 }
 
 // CDP Fetch.continueRequest: resume a transfer parked at the interception
@@ -2489,6 +2603,11 @@ pub const Transfer = struct {
     // What the cache wants from this transfer's response.
     _cache_intent: CacheIntent = .none,
 
+    // What a response-stage CDP pause (.intercept_response) is holding, and so
+    // what releasing it unchanged does: deliver the response, follow the
+    // redirect, or fail with the network error.
+    _response_pause: ResponsePause = .final,
+
     // Cache key captured at lookup time (req.url before any redirect
     // rewrote it). Only meaningful while _cache_intent != .none.
     _cache_key: [:0]const u8 = "",
@@ -2607,11 +2726,38 @@ pub const Transfer = struct {
         // waiting for continueWithAuth.
         intercept_auth,
 
+        // CDP Fetch interception, response phase: processOneMessage completed
+        // the transfer (headers and body are materialized, the conn is
+        // released) and holds it before delivery, waiting for
+        // continueResponse / continueRequest / fulfillRequest / failRequest.
+        intercept_response,
+
         // RobotsGate holds the transfer pending a robots.txt fetch.
         robots,
 
         // CorsGate holds the tranfer pending a CORS preflight.
         cors,
+    };
+
+    pub const ResponsePause = union(enum) {
+        // A final response, delivered to the consumer on continue.
+        final,
+        // A response served from the HTTP cache (a hit, or the stored copy a
+        // 304 renewed), with its arena-owned body; delivered on continue.
+        cached: []const u8,
+        // A redirect response; the arena-owned Location is followed on continue.
+        redirect: []const u8,
+        // A network failure; on continue it is reported exactly as it would
+        // have been without the pause.
+        failed: Failure,
+
+        pub const Failure = struct {
+            err: anyerror,
+            // The consumer asked for the header before a body error
+            // (Request.header_before_body_error) and the header arrived:
+            // deliver it, then the error.
+            header_first: bool,
+        };
     };
 
     pub const HeaderResult = enum {
@@ -2629,11 +2775,11 @@ pub const Transfer = struct {
     }
 
     // Gate-facing: take the transfer out of .parked and return it to
-    // the request flow (.created). This assumes pre-inflight handling (i.e. the
-    // transfer was in .created before being parked). This is true today, but
-    // could become false if Request Interception ever supports the "response"
-    // requestStage (although, to support this, I think the safety of transfers
-    // post-perform would need to be improved),
+    // the request flow (.created). A transfer parked before it went inflight
+    // re-enters the pipeline from here. One parked after completion
+    // (.intercept_auth, .intercept_response) holds no conn: its response is
+    // already materialized, so resuming it only buffers events, which
+    // scheduleDispatch accepts from .created.
     pub fn unpark(self: *Transfer) void {
         lp.assert(self.state == .parked, "Transfer.unpark", .{ .state = self.state });
         self.leaveIntercept();
@@ -2648,7 +2794,7 @@ pub const Transfer = struct {
         }
         switch (self.state.parked) {
             .robots, .cors => {},
-            .intercept_request, .intercept_auth => {
+            .intercept_request, .intercept_auth, .intercept_response => {
                 lp.assert(self.client.intercepted > 0, "Transfer.leaveIntercept", .{ .value = self.client.intercepted });
                 self.client.intercepted -= 1;
             },
@@ -2792,7 +2938,7 @@ pub const Transfer = struct {
             switch (self.state.parked) {
                 .cors => self.client.cors.remove(self),
                 .robots => self.client.robots.remove(self),
-                .intercept_auth, .intercept_request => {},
+                .intercept_auth, .intercept_request, .intercept_response => {},
             }
         }
 
@@ -3386,9 +3532,10 @@ pub const Transfer = struct {
         }
     }
 
-    // Serve a cache entry as this transfer's response. Takes ownership of
-    // `cached` (file-backed bodies are read into the arena and closed).
-    fn bufferCached(self: *Transfer, cached: Cache.CachedResponse, cache_state: ResourceTiming.CacheState) !void {
+    // Make a cache entry this transfer's response, returning its body.
+    // Takes ownership of `cached` (file-backed bodies are read into the
+    // arena and closed).
+    fn setCachedResponse(self: *Transfer, cached: Cache.CachedResponse, cache_state: ResourceTiming.CacheState) []const u8 {
         const body: []const u8 = switch (cached.data) {
             .buffer => |b| b,
         };
@@ -3398,7 +3545,7 @@ pub const Transfer = struct {
         self._from_cache = true;
         self._timing.cache = cache_state;
         self._content_length = body.len;
-        try self.bufferEvents(body);
+        return body;
     }
 
     // Materialize an interceptor-supplied response (CDP fulfillRequest).
@@ -3425,6 +3572,8 @@ pub const Transfer = struct {
 
         self.setResponseHead(status, content_type);
         self.setResponseHeaders(headers);
+        // It may replace a cached response paused at the response stage.
+        self._from_cache = false;
         self._content_length = owned_body.len;
         try self.bufferEvents(owned_body);
     }
@@ -3617,9 +3766,12 @@ pub const Transfer = struct {
         self.req.url = url;
     }
 
+    // Reads only the materialized redirect response (res.header, res.headers),
+    // never the conn, so it runs the same whether the conn was just released
+    // or the transfer sat parked for a CDP response-stage interception.
     fn handleRedirect(transfer: *Transfer, location: []const u8) !void {
         const req = &transfer.req;
-        const conn = transfer._conn.?;
+        const head = transfer.res.header orelse return error.MissingResponseHead;
 
         // Cookies were applied while materializing the redirect response.
 
@@ -3627,23 +3779,20 @@ pub const Transfer = struct {
         // remaining hops.
         if (req.referrer_policy != null) {
             // referrer-policy is re-applied on every hop.
-            var i: usize = 0;
-            while (conn.getResponseHeader("referrer-policy", i)) |hdr| : (i += 1) {
+            for (transfer.res.headers) |hdr| {
+                if (!std.mem.eql(u8, hdr.name, "referrer-policy")) {
+                    continue;
+                }
                 if (referrer.parseHeader(hdr.value)) |policy| {
                     req.referrer_policy = policy;
-                }
-                if (i >= hdr.amount) {
-                    break;
                 }
             }
         }
 
-        // base_url and location are owned by curl; applyRedirectTarget resolves a
-        // fresh arena-owned copy that gets stored in transfer.req.url.
-        const base_url = try conn.getEffectiveUrl();
-        const status = try conn.getResponseCode();
+        // applyRedirectTarget resolves a fresh arena-owned copy of the target
+        // that gets stored in transfer.req.url.
         transfer.redirectTiming(transfer.res.headers);
-        try transfer.applyRedirectTarget(std.mem.span(base_url), location, status);
+        try transfer.applyRedirectTarget(std.mem.span(head.url), location, head.status);
     }
 
     // Called above (in handleRedirect) and by a CDP fulfill request which redirects
@@ -4557,8 +4706,10 @@ const AdBlocker = @import("adblock/AdBlocker.zig");
 // exercises are ever set, by initTestClient or by the test itself.
 var test_network: Network = undefined;
 
-test "HttpClient: isFetchInterceptionMethod matches the four Fetch methods" {
+test "HttpClient: isFetchInterceptionMethod matches the Fetch interception methods" {
     try testing.expect(isFetchInterceptionMethod("Fetch.continueRequest"));
+    try testing.expect(isFetchInterceptionMethod("Fetch.continueResponse"));
+    try testing.expect(isFetchInterceptionMethod("Fetch.getResponseBody"));
     try testing.expect(isFetchInterceptionMethod("Fetch.failRequest"));
     try testing.expect(isFetchInterceptionMethod("Fetch.fulfillRequest"));
     try testing.expect(isFetchInterceptionMethod("Fetch.continueWithAuth"));

@@ -19,7 +19,6 @@
 const js = @import("../../js/js.zig");
 
 const ReadableStream = @import("ReadableStream.zig");
-const ReadableStreamDefaultController = @import("ReadableStreamDefaultController.zig");
 
 const Execution = js.Execution;
 
@@ -42,17 +41,7 @@ pub const ReadResult = struct {
     // Done like this so that we can properly return undefined in some cases
     const Chunk = union(enum) {
         empty,
-        string: []const u8,
-        uint8array: js.TypedArray(u8),
-        js_value: js.Value.Global,
-
-        pub fn fromChunk(chunk: ReadableStreamDefaultController.Chunk) Chunk {
-            return switch (chunk) {
-                .string => |s| .{ .string = s },
-                .uint8array => |arr| .{ .uint8array = arr },
-                .js_value => |val| .{ .js_value = val },
-            };
-        }
+        value: js.Value,
     };
 };
 
@@ -64,14 +53,16 @@ pub fn read(self: *ReadableStreamDefaultReader, exec: *const Execution) !js.Prom
     stream._disturbed = true;
 
     if (stream._state == .errored) {
-        //const err = stream._stored_error orelse "Stream errored";
-        return local.rejectPromise(.{ .type_error = "Stream errored" });
+        const resolver = local.createPromiseResolver();
+        resolver.reject("ReadableStreamDefaultReader.read", stream._stored_error.?);
+        return resolver.promise();
     }
 
     if (stream._controller.dequeue()) |chunk| {
+        defer chunk.release();
         const result = ReadResult{
             .done = false,
-            .value = .fromChunk(chunk),
+            .value = .{ .value = local.toLocal(chunk) },
         };
         return local.resolvePromise(result);
     }
@@ -95,7 +86,7 @@ pub fn releaseLock(self: *ReadableStreamDefaultReader) void {
     }
 }
 
-pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?[]const u8, exec: *const Execution) !js.Promise {
+pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?js.Value, exec: *const Execution) !js.Promise {
     const stream = self._stream orelse {
         return exec.js.typeError("Reader has been released");
     };

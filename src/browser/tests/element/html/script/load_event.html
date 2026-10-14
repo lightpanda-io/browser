@@ -27,6 +27,14 @@
 
 <!-- an inline script that throws reports to window.onerror, it does not fire
      an error event at its element -->
+<script>
+  window.addEventListener('error', (e) => {
+    const msg = e.error?.message;
+    if (msg === 'deliberate' || msg === 'external script that throws still fires load, not error') {
+      e.preventDefault();
+    }
+  });
+</script>
 <script>throw new Error('deliberate');</script>
 
 <script id=inline_fires_nothing>

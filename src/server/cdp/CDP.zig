@@ -67,6 +67,10 @@ allocator: Allocator,
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
 
+// Target.setDiscoverTargets: when true, page target changes are reported
+// via Target.targetInfoChanged.
+target_discover: bool = false,
+
 session_id_gen: SessionIdGen = .{},
 browser_session_id_gen: BrowserSessionIdGen = .{},
 browser_context_id_gen: BrowserContextIdGen = .{},
@@ -262,6 +266,13 @@ fn dispatchStartupCommand(command: *Command, method: []const u8) !void {
         return dispatchCommand(command, method);
     }
 
+    // The placeholder session has no page behind it: an empty
+    // result would look like success while nothing happened.
+    // Say so, and point at the way to get a real target.
+    if (std.mem.eql(u8, method, "Page.navigate")) {
+        return command.sendError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{});
+    }
+
     return command.sendResult(null, .{});
 }
 
@@ -311,6 +322,7 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
         },
         8 => switch (@as(u64, @bitCast(domain[0..8].*))) {
             asUint(u64, "Security") => return @import("domains/security.zig").processMessage(command),
+            asUint(u64, "Debugger") => return @import("domains/debugger.zig").processMessage(command),
             else => {},
         },
         9 => switch (@as(u72, @bitCast(domain[0..9].*))) {
@@ -507,6 +519,9 @@ pub const BrowserContext = struct {
     // can use the existing Frame/js.Context as-is.
     main_world_touched: bool = false,
 
+    // Runtime.exceptionThrown's exceptionDetails.exceptionId.
+    next_exception_id: u32 = 1,
+
     // Scripts registered via Page.addScriptToEvaluateOnNewDocument.
     // Evaluated in each new document after navigation completes.
     scripts_on_new_document: std.ArrayList(ScriptOnNewDocument) = .empty,
@@ -596,6 +611,7 @@ pub const BrowserContext = struct {
         try notification.register(.frame_navigated_within_document, self, onFrameNavigatedWithinDocument);
         try notification.register(.frame_navigate_failed, self, onFrameNavigateFailed);
         try notification.register(.frame_child_frame_created, self, onFrameChildFrameCreated);
+        try notification.register(.frame_child_frame_detached, self, onFrameChildFrameDetached);
         try notification.register(.frame_destroyed, self, onFrameDestroyed);
         try notification.register(.frame_dom_content_loaded, self, onFrameDOMContentLoaded);
         try notification.register(.frame_loaded, self, onFrameLoaded);
@@ -750,6 +766,7 @@ pub const BrowserContext = struct {
             .label_index = label_index,
             .temp_arena = temp_arena,
             .filter = opts.filter,
+            .depth = opts.depth,
         };
     }
 
@@ -858,6 +875,7 @@ pub const BrowserContext = struct {
         try self.intercept_state.setPatterns(patterns);
         self.fetch_session_id = session_id;
         try self.notification.register(.http_request_intercept, self, onHttpRequestIntercept);
+        try self.notification.register(.http_response_intercept, self, onHttpResponseIntercept);
         if (authRequests) {
             try self.notification.register(.http_request_auth_required, self, onHttpRequestAuthRequired);
         }
@@ -904,6 +922,7 @@ pub const BrowserContext = struct {
 
     fn fetchDisable(self: *BrowserContext) void {
         self.notification.unregister(.http_request_intercept, self);
+        self.notification.unregister(.http_response_intercept, self);
         self.notification.unregister(.http_request_auth_required, self);
         self.intercept_state.clearPatterns();
         self.fetch_session_id = null;
@@ -931,10 +950,12 @@ pub const BrowserContext = struct {
 
     pub fn runtimeEnable(self: *BrowserContext) !void {
         try self.notification.register(.runtime_console_message, self, onRuntimeConsoleMessage);
+        try self.notification.register(.exception_thrown, self, onExceptionThrown);
     }
 
     pub fn runtimeDisable(self: *BrowserContext) void {
         self.notification.unregister(.runtime_console_message, self);
+        self.notification.unregister(.exception_thrown, self);
     }
 
     // Registers for the download notifications dispatched by Frame when a
@@ -1026,6 +1047,11 @@ pub const BrowserContext = struct {
         return @import("domains/page.zig").frameChildFrameCreated(self, msg);
     }
 
+    fn onFrameChildFrameDetached(ctx: *anyopaque, msg: *const Notification.FrameChildFrameDetached) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/page.zig").frameChildFrameDetached(self, msg);
+    }
+
     fn onFrameNetworkIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkIdle) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameNetworkIdle(self, msg);
@@ -1060,6 +1086,13 @@ pub const BrowserContext = struct {
         const arena = self.acquireNotificationArena();
         defer self.releaseNotificationArena();
         try @import("domains/fetch.zig").requestIntercept(arena, self, msg);
+    }
+
+    fn onHttpResponseIntercept(ctx: *anyopaque, msg: *const Notification.ResponseIntercept) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        const arena = self.acquireNotificationArena();
+        defer self.releaseNotificationArena();
+        try @import("domains/fetch.zig").responseIntercept(arena, self, msg);
     }
 
     fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
@@ -1177,6 +1210,13 @@ pub const BrowserContext = struct {
         const arena = self.acquireNotificationArena();
         defer self.releaseNotificationArena();
         return @import("domains/runtime.zig").consoleMessage(arena, self, msg);
+    }
+
+    fn onExceptionThrown(ctx: *anyopaque, msg: *const Notification.ExceptionThrown) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        const arena = self.acquireNotificationArena();
+        defer self.releaseNotificationArena();
+        return @import("domains/runtime.zig").exceptionThrown(arena, self, msg);
     }
 
     fn acquireNotificationArena(self: *BrowserContext) Allocator {
@@ -1674,6 +1714,19 @@ test "cdp: STARTUP sessionId" {
         try ctx.processMessage(.{ .id = 4, .method = "Hi", .sessionId = "STARTUP" });
         try ctx.expectSentResult(null, .{ .id = 4, .index = 2, .session_id = "STARTUP" });
     }
+}
+
+test "cdp: Page.navigate on the STARTUP session returns -32000" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Page.navigate",
+        .sessionId = "STARTUP",
+        .params = .{ .url = "https://example.com" },
+    });
+    try ctx.expectSentError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{ .id = 1 });
 }
 
 test "cdp: disconnect latches so the worker keeps exiting" {

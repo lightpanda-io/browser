@@ -1155,6 +1155,8 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/element/html/UL.zig"),
     @import("../webapi/element/html/Unknown.zig"),
     @import("../webapi/element/html/ValidityState.zig"),
+    @import("../webapi/ElementInternals.zig"),
+    @import("../webapi/CustomStateSet.zig"),
     @import("../webapi/element/Svg.zig"),
     @import("../webapi/element/svg/Generic.zig"),
     @import("../webapi/element/svg/Graphics.zig"),
@@ -1210,6 +1212,8 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/encoding/TextEncoder.zig"),
     @import("../webapi/encoding/TextEncoderStream.zig"),
     @import("../webapi/encoding/TextDecoderStream.zig"),
+    @import("../webapi/compression/CompressionStream.zig"),
+    @import("../webapi/compression/DecompressionStream.zig"),
     @import("../webapi/Event.zig"),
     @import("../webapi/event/CompositionEvent.zig"),
     @import("../webapi/event/CustomEvent.zig"),
@@ -1221,12 +1225,15 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/event/PopStateEvent.zig"),
     @import("../webapi/event/HashChangeEvent.zig"),
     @import("../webapi/event/MediaQueryListEvent.zig"),
+    @import("../webapi/event/AnimationPlaybackEvent.zig"),
     @import("../webapi/event/BeforeUnloadEvent.zig"),
     @import("../webapi/event/StorageEvent.zig"),
     @import("../webapi/event/DeviceMotionEvent.zig"),
     @import("../webapi/event/GamepadEvent.zig"),
     @import("../webapi/event/DeviceOrientationEvent.zig"),
     @import("../webapi/event/TouchEvent.zig"),
+    @import("../webapi/event/Touch.zig"),
+    @import("../webapi/event/TouchList.zig"),
     @import("../webapi/event/UIEvent.zig"),
     @import("../webapi/event/MouseEvent.zig"),
     @import("../webapi/event/PointerEvent.zig"),
@@ -1327,6 +1334,8 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/XPathEvaluator.zig"),
     @import("../webapi/collections/DOMStringList.zig"),
     @import("../webapi/Sanitizer.zig"),
+    @import("../webapi/Lock.zig"),
+    @import("../webapi/LockManager.zig"),
 });
 
 // APIs available on EVERY worker global — dedicated, shared and service. This
@@ -1380,6 +1389,8 @@ const worker_common_apis = [_]type{
     @import("../webapi/streams/WritableStreamDefaultController.zig"),
     @import("../webapi/encoding/TextEncoderStream.zig"),
     @import("../webapi/encoding/TextDecoderStream.zig"),
+    @import("../webapi/compression/CompressionStream.zig"),
+    @import("../webapi/compression/DecompressionStream.zig"),
     @import("../webapi/AbortSignal.zig"),
     @import("../webapi/AbortController.zig"),
     @import("../webapi/Scheduler.zig"),
@@ -1410,6 +1421,8 @@ const worker_common_apis = [_]type{
     @import("../webapi/MessageChannel.zig"),
     @import("../webapi/MessagePort.zig"),
     @import("../webapi/collections/DOMStringList.zig"),
+    @import("../webapi/Lock.zig"),
+    @import("../webapi/LockManager.zig"),
 };
 
 // Additionally available on a dedicated or shared worker, but NOT on a service

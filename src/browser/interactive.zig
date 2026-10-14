@@ -283,24 +283,16 @@ pub const ListenerTargetMap = std.AutoHashMapUnmanaged(usize, std.ArrayList([]co
 pub fn buildListenerTargetMap(frame: *Frame, arena: Allocator) !ListenerTargetMap {
     var map = ListenerTargetMap{};
 
-    // addEventListener registrations
-    var it = frame._event_manager.base.lookup.iterator();
+    // Listeners, event handlers (onclick, ...) included
+    var it = frame.page.event_listeners.lookup.iterator();
     while (it.next()) |entry| {
-        const list = entry.value_ptr.*;
-        if (list.first != null) {
-            const gop = try map.getOrPut(arena, entry.key_ptr.event_target);
-            if (!gop.found_existing) gop.value_ptr.* = .empty;
-            try gop.value_ptr.append(arena, entry.key_ptr.type_string.str());
+        for (entry.value_ptr.items) |*type_listeners| {
+            if (type_listeners.list.first != null) {
+                const gop = try map.getOrPut(arena, entry.key_ptr.*);
+                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                try gop.value_ptr.append(arena, type_listeners.typ.str());
+            }
         }
-    }
-
-    // Inline handlers (onclick, onmousedown, etc.)
-    var attr_it = frame._event_target_attr_listeners.iterator();
-    while (attr_it.next()) |entry| {
-        const gop = try map.getOrPut(arena, @intFromPtr(entry.key_ptr.target));
-        if (!gop.found_existing) gop.value_ptr.* = .empty;
-        // Strip "on" prefix to get the event type name.
-        try gop.value_ptr.append(arena, @tagName(entry.key_ptr.handler)[2..]);
     }
 
     return map;
@@ -317,7 +309,7 @@ pub fn classifyInteractivity(
     // 1. Native interactive by tag
     switch (el.getTag()) {
         .button, .summary, .details, .select, .textarea => return .native,
-        .anchor, .area => {
+        .a, .area => {
             if (el.getAttributeInterned("href") != null) return .native;
         },
         .input => {
@@ -403,7 +395,12 @@ pub fn isContentRole(role: []const u8) bool {
 
 // ARIA `role` is a space-separated fallback list; the first token wins.
 pub fn explicitRole(el: *Element) ?[]const u8 {
-    const attr = el.getAttributeInterned("role") orelse return null;
+    // ElementInternals.role is a custom element's default role.
+    const attr = el.getAttributeInterned("role") orelse blk: {
+        const custom = el.is(Element.Html.Custom) orelse return null;
+        const internals = custom._internals orelse return null;
+        break :blk internals.getAria("role") orelse return null;
+    };
     var it = std.mem.tokenizeAny(u8, attr, " \t\n\r");
     return it.next();
 }

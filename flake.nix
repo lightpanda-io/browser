@@ -10,10 +10,9 @@
     };
 
     zlsPkg = {
-      url = "github:zigtools/zls/0.16.0";
+      url = "github:zigtools/zls/eab2be0fd74443a27662da809b771c4ad0d2afcf";
       inputs.zig-flake.follows = "zigPkgs";
       inputs.nixpkgs.follows = "nixpkgs";
-
     };
 
     fenix = {
@@ -38,7 +37,7 @@
       let
         overlays = [
           (final: prev: {
-            zig = zigPkgs.packages.${prev.system}."zig_0_16_0";
+            zig = zigPkgs.packages.${prev.system}."zig_0_17_0";
             zls = zlsPkg.packages.${prev.system}.default;
           })
         ];

@@ -163,6 +163,23 @@
 }
 </script>
 
+<script id="superseded-src-fires-one-load">
+{
+  // Only the source the img ends up with fires load, as when a newer src
+  // aborts the fetch of an older one.
+  const img = document.createElement("img");
+  const events = [];
+  img.addEventListener("load", () => events.push(img.getAttribute("src")));
+  document.body.appendChild(img);
+  img.src = "a.png";
+  img.removeAttribute("src");
+  img.src = "b.png";
+  img.src = "c.png";
+
+  testing.onload(() => testing.expectEqual("c.png", events.join(",")));
+}
+</script>
+
 <script id=url_encode>
   {
     let img = document.createElement('img');

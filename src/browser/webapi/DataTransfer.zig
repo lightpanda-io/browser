@@ -201,10 +201,10 @@ fn rebuildFiles(self: *DataTransfer, frame: *Frame) !void {
     var files: std.ArrayList(*File) = .empty;
     for (self._items.items) |it| {
         if (it._kind == .file) {
-            try files.append(frame.arena, it._payload.file);
+            try files.append(frame.page_arena, it._payload.file);
         }
     }
-    self._files._files = try files.toOwnedSlice(frame.arena);
+    self._files._files = try files.toOwnedSlice(frame.page_arena);
 }
 
 // --- accessors ---

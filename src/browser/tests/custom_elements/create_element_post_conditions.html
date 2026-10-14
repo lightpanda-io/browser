@@ -36,7 +36,9 @@
         }
         customElements.define('ce-adds-child', AddsChild);
 
-        const el = document.createElement('ce-adds-child');
+        let el;
+        const errors = testing.withReportedErrors(() => el = document.createElement('ce-adds-child'));
+        testing.expectEqual(['NotSupportedError'], errors.map((e) => e.name));
         testing.expectEqual(true, el instanceof HTMLUnknownElement);
         testing.expectEqual('ce-adds-child', el.localName);
     }
@@ -70,7 +72,10 @@
         }
         customElements.define('ce-adds-attribute', AddsAttribute);
 
-        testing.expectEqual(true, document.createElement('ce-adds-attribute') instanceof HTMLUnknownElement);
+        let el;
+        const errors = testing.withReportedErrors(() => el = document.createElement('ce-adds-attribute'));
+        testing.expectEqual(['NotSupportedError'], errors.map((e) => e.name));
+        testing.expectEqual(true, el instanceof HTMLUnknownElement);
     }
 </script>
 
@@ -88,49 +93,85 @@
         }
         customElements.define('ce-attaches-self', AttachesSelf);
 
-        const el = document.createElement('ce-attaches-self');
+        let el;
+        const errors = testing.withReportedErrors(() => el = document.createElement('ce-attaches-self'));
+        testing.expectEqual(['NotSupportedError'], errors.map((e) => e.name));
         testing.expectEqual(true, el instanceof HTMLUnknownElement);
         testing.expectEqual(null, el.parentNode);
     }
 </script>
 
+<!-- Same thing, but driven through the document parser, which constructs
+     synchronously: the fallback element is what gets inserted. -->
+<div id="parser_attaches_self_host"></div>
+<script>
+    class ParserAttachesSelf extends HTMLElement {
+        constructor() {
+            super();
+            document.getElementById('parser_attaches_self_host').appendChild(this);
+        }
+    }
+    customElements.define('ce-parser-attaches-self', ParserAttachesSelf);
+    window.parserReported = [];
+    window.parserOnError = (e) => {
+        parserReported.push(e.error.name);
+        e.preventDefault();
+    };
+    window.addEventListener('error', parserOnError);
+</script>
+<div id="parser_attaches_self_container"><ce-parser-attaches-self></ce-parser-attaches-self></div>
 <script id="parser_falls_back_without_crashing">
     {
-        // Same thing, but driven through the fragment parser rather than
-        // createElement: the fallback element is what gets inserted.
-        const host = document.createElement('div');
-        class ParserAttachesSelf extends HTMLElement {
-            constructor() {
-                super();
-                host.appendChild(this);
-            }
-        }
-        customElements.define('ce-parser-attaches-self', ParserAttachesSelf);
-
-        const container = document.createElement('div');
-        container.innerHTML = '<ce-parser-attaches-self></ce-parser-attaches-self>';
+        window.removeEventListener('error', parserOnError);
+        testing.expectEqual(['NotSupportedError'], parserReported);
+        const container = document.getElementById('parser_attaches_self_container');
         testing.expectEqual(1, container.children.length);
         testing.expectEqual(true, container.firstElementChild instanceof HTMLUnknownElement);
     }
 </script>
 
+<script id="fragment_parser_upgrades_instead">
+    {
+        // The fragment parser creates the element undefined and upgrades it
+        // once inserted, where attaching itself elsewhere is allowed.
+        const host = document.getElementById('parser_attaches_self_host');
+        host.replaceChildren();
+        const container = document.createElement('div');
+        const errors = testing.withReportedErrors(() => {
+            container.innerHTML = '<ce-parser-attaches-self></ce-parser-attaches-self>';
+        });
+        testing.expectEqual([], errors);
+        testing.expectEqual(0, container.children.length);
+        testing.expectEqual(true, host.firstElementChild instanceof ParserAttachesSelf);
+    }
+</script>
+
+<script>
+    window.seenTitle = 'unset';
+    class ObservesAttribute extends HTMLElement {
+        static get observedAttributes() { return ['title']; }
+        constructor() {
+            super();
+            seenTitle = this.getAttribute('title');
+        }
+    }
+    customElements.define('ce-observes-attribute', ObservesAttribute);
+</script>
+<ce-observes-attribute id="observes_attribute" title="after"></ce-observes-attribute>
 <script id="attributes_applied_after_constructor">
     {
         // The constructor must not observe the token's attributes; they are
         // applied afterwards, which is also what enqueues their reactions.
-        let seen = 'unset';
-        class ObservesAttribute extends HTMLElement {
-            static get observedAttributes() { return ['title']; }
-            constructor() {
-                super();
-                seen = this.getAttribute('title');
-            }
-        }
-        customElements.define('ce-observes-attribute', ObservesAttribute);
+        testing.expectEqual(null, seenTitle);
+        testing.expectEqual('after', document.getElementById('observes_attribute').getAttribute('title'));
+    }
+</script>
 
+<script id="fragment_parser_upgrade_sees_attributes">
+    {
+        // An upgrade runs the constructor on the element as parsed.
         const container = document.createElement('div');
-        container.innerHTML = '<ce-observes-attribute title="after"></ce-observes-attribute>';
-        testing.expectEqual(null, seen);
-        testing.expectEqual('after', container.firstElementChild.getAttribute('title'));
+        container.innerHTML = '<ce-observes-attribute title="parsed"></ce-observes-attribute>';
+        testing.expectEqual('parsed', seenTitle);
     }
 </script>

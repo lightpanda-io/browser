@@ -81,6 +81,7 @@ const EventListeners = struct {
     frame_network_idle: List = .{},
     frame_network_almost_idle: List = .{},
     frame_child_frame_created: List = .{},
+    frame_child_frame_detached: List = .{},
     frame_dom_content_loaded: List = .{},
     frame_loaded: List = .{},
     http_request_fail: List = .{},
@@ -88,12 +89,14 @@ const EventListeners = struct {
     http_request_intercept: List = .{},
     http_request_done: List = .{},
     http_request_auth_required: List = .{},
+    http_response_intercept: List = .{},
     http_request_served_from_cache: List = .{},
     http_response_data: List = .{},
     http_response_header_done: List = .{},
     javascript_dialog_opening: List = .{},
     console_message: List = .{},
     runtime_console_message: List = .{},
+    exception_thrown: List = .{},
     model_context_tool_added: List = .{},
     model_context_tool_removed: List = .{},
     cookie_changed: List = .{},
@@ -113,12 +116,14 @@ const Events = union(enum) {
     frame_network_idle: *const FrameNetworkIdle,
     frame_network_almost_idle: *const FrameNetworkAlmostIdle,
     frame_child_frame_created: *const FrameChildFrameCreated,
+    frame_child_frame_detached: *const FrameChildFrameDetached,
     frame_dom_content_loaded: *const FrameDOMContentLoaded,
     frame_loaded: *const FrameLoaded,
     http_request_fail: *const RequestFail,
     http_request_start: *const RequestStart,
     http_request_intercept: *const RequestIntercept,
     http_request_auth_required: *const RequestAuthRequired,
+    http_response_intercept: *const ResponseIntercept,
     http_request_served_from_cache: *const RequestServedFromCache,
     http_request_done: *const RequestDone,
     http_response_data: *const ResponseData,
@@ -126,6 +131,7 @@ const Events = union(enum) {
     javascript_dialog_opening: *const JavascriptDialogOpening,
     console_message: *const ConsoleMessage,
     runtime_console_message: *const ConsoleMessage,
+    exception_thrown: *const ExceptionThrown,
     model_context_tool_added: *const ModelContextToolEvent,
     model_context_tool_removed: *const ModelContextToolEvent,
     cookie_changed: *const CookieChanged,
@@ -211,6 +217,11 @@ pub const FrameChildFrameCreated = struct {
     timestamp: u64,
 };
 
+pub const FrameChildFrameDetached = struct {
+    frame_id: u32,
+    parent_id: u32,
+};
+
 pub const FrameDOMContentLoaded = struct {
     req_id: u32,
     frame_id: u32,
@@ -236,6 +247,12 @@ pub const RequestIntercept = struct {
 };
 
 pub const RequestAuthRequired = struct {
+    transfer: *Transfer,
+    wait_for_interception: *bool,
+};
+
+// A final response or a redirect which has not be delivered to its consumer yet.
+pub const ResponseIntercept = struct {
     transfer: *Transfer,
     wait_for_interception: *bool,
 };
@@ -372,6 +389,15 @@ pub const ConsoleMessage = struct {
     url: ?[]const u8 = null,
     line: ?u32 = null,
     columns: ?u32 = null,
+};
+
+// An uncaught exception reported to a window and not cancelled by an "error"
+// listener: what Chrome logs as "Uncaught …" and sends as
+// Runtime.exceptionThrown.
+pub const ExceptionThrown = struct {
+    timestamp: u64,
+    value: js.Value,
+    location: js.Value.ErrorLocation,
 };
 
 pub fn init(allocator: Allocator) !*Notification {

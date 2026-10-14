@@ -48,23 +48,7 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, exec: *const Execution) !Text
     }
 
     const opts = opts_ orelse InitOpts{};
-    const decodeFn: TransformStream.ZigTransformFn = blk: {
-        if (opts.ignoreBOM) {
-            break :blk struct {
-                fn decode(controller: *TransformStream.DefaultController, chunk: js.Value) !void {
-                    return decodeTransform(controller, chunk, true);
-                }
-            }.decode;
-        } else {
-            break :blk struct {
-                fn decode(controller: *TransformStream.DefaultController, chunk: js.Value) !void {
-                    return decodeTransform(controller, chunk, false);
-                }
-            }.decode;
-        }
-    };
-
-    const transform = try TransformStream.initWithZigTransform(decodeFn, exec);
+    const transform = try TransformStream.initWithZigTransformer(.{ .text_decoder = .{ .ignore_bom = opts.ignoreBOM } }, exec);
 
     return .{
         ._transform = transform,
@@ -73,7 +57,7 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, exec: *const Execution) !Text
     };
 }
 
-fn decodeTransform(controller: *TransformStream.DefaultController, chunk: js.Value, ignoreBOM: bool) !void {
+pub fn decodeTransform(controller: *TransformStream.DefaultController, chunk: js.Value, ignoreBOM: bool) !void {
     // chunk should be a Uint8Array; decode it as UTF-8 string
     const typed_array = try chunk.toZig(js.TypedArray(u8));
     var input = typed_array.values;
