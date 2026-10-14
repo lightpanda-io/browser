@@ -19,15 +19,12 @@
 //! HTTP (MCP "Streamable HTTP") transport for the browser-tools MCP server.
 //!
 //! Lets many clients drive one process, each on its own browsing session.
-//! Threading rule: V8 isolates are thread-affine, so each session lives on
-//! its own worker thread, which owns that session's `Server` and does all of
-//! its browser work. Sessions run in parallel: one waiting on a slow page or
-//! a remote API never holds up another. Connection threads never touch a
-//! browser; they parse HTTP, marshal a `Job` to the session's worker over its
-//! queue, block on its completion, then write the response. Session routing
-//! follows the `Mcp-Session-Id` header: an `initialize` without one mints a
-//! fresh session (isolation by default); reusing an id joins that session
-//! (sharing on purpose), and an unknown id creates it.
+//! Threading rule: V8 isolates are thread-affine, so each session gets a
+//! worker thread that owns its `Server` and does all of its browser work;
+//! sessions run in parallel. Connection threads never touch a browser: they
+//! queue a `Job` on the session's worker and wait for it. Routing follows
+//! `Mcp-Session-Id`: an `initialize` without one mints a fresh session, an
+//! unknown id creates it, a known one joins it.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -39,7 +36,6 @@ const sys_net = @import("../sys/net.zig");
 const Server = @import("Server.zig");
 const Transport = @import("Transport.zig");
 const router = @import("router.zig");
-const protocol = @import("protocol.zig");
 
 const log = lp.log;
 const posix = std.posix;
@@ -73,16 +69,15 @@ const Queue = struct {
     tail: ?*Job = null,
     closed: bool = false,
 
-    /// False once the queue is closed: the job will never run.
-    fn push(self: *Queue, job: *Job) bool {
+    /// Callers push only to a listed worker, whose queue is still open.
+    fn push(self: *Queue, job: *Job) void {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
-        if (self.closed) return false;
+        std.debug.assert(!self.closed);
         job.next = null;
         if (self.tail) |t| t.next = job else self.head = job;
         self.tail = job;
         self.cond.signal(lp.io);
-        return true;
     }
 
     const Pop = union(enum) { job: *Job, timeout, closed };
@@ -113,46 +108,26 @@ const Queue = struct {
     }
 };
 
-/// One session: its thread, its queue, and (on that thread) its `Server`.
+/// One session: its thread, its queue and, on that thread, its `Server`.
+/// Listed in `workers` until closed; its thread then drains the queue, tears
+/// the session down and frees it.
 const Worker = struct {
     http: *HttpServer,
-    /// Owned. Fixed for the worker's life, so any thread may read it.
     id: []const u8,
     queue: Queue = .{},
-    /// One reference for the directory while listed, one for the thread
-    /// while it runs, and one for each caller between `acquire` and
-    /// `release`. The last one frees the worker.
-    refs: std.atomic.Value(u32) = .init(2),
-    /// Set once the session is up, or has failed to start.
-    ready: std.Io.Event = .unset,
-    failed: bool = false,
-
-    /// Where the session was after its last call, for `session_list`.
-    url_mutex: std.Io.Mutex = .init,
+    /// Guarded by `workers_mutex`, for `session_list`.
     url: ?[]const u8 = null,
+};
 
-    fn release(self: *Worker) void {
-        if (self.refs.fetchSub(1, .acq_rel) != 1) return;
-        const allocator = self.http.allocator;
-        if (self.url) |url| allocator.free(url);
-        allocator.free(self.id);
-        allocator.destroy(self);
-    }
+/// How the default session reports whether it came up.
+const Start = struct {
+    done: std.Io.Event = .unset,
+    ok: bool = false,
+};
 
-    fn publishUrl(self: *Worker, url: ?[]const u8) void {
-        const allocator = self.http.allocator;
-        const copy: ?[]const u8 = if (url) |u| allocator.dupe(u8, u) catch null else null;
-        self.url_mutex.lockUncancelable(lp.io);
-        defer self.url_mutex.unlock(lp.io);
-        if (self.url) |old| allocator.free(old);
-        self.url = copy;
-    }
-
-    fn urlInto(self: *Worker, arena: std.mem.Allocator) !?[]const u8 {
-        self.url_mutex.lockUncancelable(lp.io);
-        defer self.url_mutex.unlock(lp.io);
-        return if (self.url) |url| try arena.dupe(u8, url) else null;
-    }
+pub const SessionInfo = struct {
+    id: []const u8,
+    url: ?[]const u8,
 };
 
 allocator: std.mem.Allocator,
@@ -170,17 +145,14 @@ active_conns: std.atomic.Value(u32) = .init(0),
 conn_mutex: std.Io.Mutex = .init,
 conns: std.ArrayList(posix.socket_t) = .empty,
 
-// The sessions, by id. A worker leaves the map when its session closes; its
-// thread drains the queue and exits on its own.
 workers_mutex: std.Io.Mutex = .init,
 workers: std.StringHashMapUnmanaged(*Worker) = .empty,
-/// Monotonic counter backing minted session ids (`s1`, `s2`, …).
+/// Backs minted session ids (`s1`, `s2`, …).
 session_seq: u32 = 0,
-/// Worker threads still running; deinit waits for none.
-live_workers: std.atomic.Value(u32) = .init(0),
+worker_wg: lp.WaitGroup = .{},
 
-/// Create the server and start the default session's worker. Returns once
-/// that session is up (or errors if it failed to initialize).
+/// Create the server and start the default session. Returns once that
+/// session is up (or errors if it failed to initialize).
 pub fn init(allocator: std.mem.Allocator, app: *App) !*HttpServer {
     const self = try allocator.create(HttpServer);
     errdefer allocator.destroy(self);
@@ -190,11 +162,15 @@ pub fn init(allocator: std.mem.Allocator, app: *App) !*HttpServer {
     };
     errdefer self.workers.deinit(allocator);
 
-    const default = try self.acquire(Server.default_session_id);
-    defer default.release();
-    default.ready.waitUncancelable(lp.io);
-    if (default.failed) {
-        self.waitForWorkers();
+    var start: Start = .{};
+    {
+        self.workers_mutex.lockUncancelable(lp.io);
+        defer self.workers_mutex.unlock(lp.io);
+        _ = try self.spawnLocked(Server.default_session_id, &start);
+    }
+    start.done.waitUncancelable(lp.io);
+    if (!start.ok) {
+        self.worker_wg.wait();
         return error.WorkerInitFailed;
     }
     return self;
@@ -220,39 +196,75 @@ pub fn deinit(self: *HttpServer) void {
         self.workers_mutex.lockUncancelable(lp.io);
         defer self.workers_mutex.unlock(lp.io);
         var it = self.workers.valueIterator();
-        while (it.next()) |worker| {
-            worker.*.queue.close();
-            worker.*.release();
-        }
+        while (it.next()) |worker| worker.*.queue.close();
         self.workers.clearRetainingCapacity();
     }
-    self.waitForWorkers();
+    self.worker_wg.wait();
 
     self.workers.deinit(self.allocator);
     self.conns.deinit(self.allocator);
     self.allocator.destroy(self);
 }
 
-fn waitForWorkers(self: *HttpServer) void {
-    while (self.live_workers.load(.acquire) > 0) {
-        lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
-    }
-}
-
-/// The worker for session `id`, created (and its thread started) on first
-/// use. The caller holds a reference until `release`.
-fn acquire(self: *HttpServer, id: []const u8) !*Worker {
+/// Queue `job` on session `id` (null mints a new one), starting the session
+/// on first use. Returns the id it went to, in `arena`.
+fn submit(self: *HttpServer, arena: std.mem.Allocator, id: ?[]const u8, job: *Job) ![]const u8 {
     self.workers_mutex.lockUncancelable(lp.io);
     defer self.workers_mutex.unlock(lp.io);
-    return self.acquireLocked(id);
+    const worker = try self.findOrSpawnLocked(id);
+    worker.queue.push(job);
+    return arena.dupe(u8, worker.id);
 }
 
-fn acquireLocked(self: *HttpServer, id: []const u8) !*Worker {
-    if (self.workers.get(id)) |existing| {
-        _ = existing.refs.fetchAdd(1, .monotonic);
-        return existing;
-    }
+/// For `session_new`: the session named `name` (null mints one), started if
+/// new. Returns its id, in `arena`.
+pub fn createSession(self: *HttpServer, arena: std.mem.Allocator, name: ?[]const u8) ![]const u8 {
+    self.workers_mutex.lockUncancelable(lp.io);
+    defer self.workers_mutex.unlock(lp.io);
+    const worker = try self.findOrSpawnLocked(name);
+    return arena.dupe(u8, worker.id);
+}
 
+pub fn listSessions(self: *HttpServer, arena: std.mem.Allocator) ![]SessionInfo {
+    self.workers_mutex.lockUncancelable(lp.io);
+    defer self.workers_mutex.unlock(lp.io);
+    const list = try arena.alloc(SessionInfo, self.workers.count());
+    var it = self.workers.valueIterator();
+    for (list) |*entry| {
+        const worker = it.next().?.*;
+        entry.* = .{
+            .id = try arena.dupe(u8, worker.id),
+            .url = if (worker.url) |url| try arena.dupe(u8, url) else null,
+        };
+    }
+    return list;
+}
+
+/// Close session `id`: calls already queued still run, then its thread tears
+/// it down. False if there is no such session. The default lives as long as
+/// the process.
+pub fn closeSession(self: *HttpServer, id: []const u8) bool {
+    if (Server.isDefault(id)) return false;
+    self.workers_mutex.lockUncancelable(lp.io);
+    defer self.workers_mutex.unlock(lp.io);
+    const worker = self.workers.get(id) orelse return false;
+    self.removeLocked(worker);
+    return true;
+}
+
+fn findOrSpawnLocked(self: *HttpServer, id: ?[]const u8) !*Worker {
+    if (id) |name| {
+        return self.workers.get(name) orelse self.spawnLocked(name, null);
+    }
+    var buf: [16]u8 = undefined;
+    while (true) {
+        self.session_seq += 1;
+        const candidate = std.fmt.bufPrint(&buf, "s{d}", .{self.session_seq}) catch unreachable;
+        if (!self.workers.contains(candidate)) return self.spawnLocked(candidate, null);
+    }
+}
+
+fn spawnLocked(self: *HttpServer, id: []const u8, start: ?*Start) !*Worker {
     const worker = try self.allocator.create(Worker);
     errdefer self.allocator.destroy(worker);
     const owned_id = try self.allocator.dupe(u8, id);
@@ -262,87 +274,26 @@ fn acquireLocked(self: *HttpServer, id: []const u8) !*Worker {
     try self.workers.put(self.allocator, owned_id, worker);
     errdefer _ = self.workers.remove(owned_id);
 
-    _ = self.live_workers.fetchAdd(1, .acq_rel);
-    errdefer _ = self.live_workers.fetchSub(1, .acq_rel);
-    const thread = try std.Thread.spawn(.{}, runWorker, .{worker});
+    self.worker_wg.start();
+    errdefer self.worker_wg.finish();
+    const thread = try std.Thread.spawn(.{}, runWorker, .{ worker, start });
     thread.detach();
-
-    _ = worker.refs.fetchAdd(1, .monotonic);
     return worker;
 }
 
-/// A new session under a fresh id (`s1`, `s2`, …).
-fn mint(self: *HttpServer) !*Worker {
-    self.workers_mutex.lockUncancelable(lp.io);
-    defer self.workers_mutex.unlock(lp.io);
-    var buf: [16]u8 = undefined;
-    while (true) {
-        self.session_seq += 1;
-        const candidate = std.fmt.bufPrint(&buf, "s{d}", .{self.session_seq}) catch unreachable;
-        if (!self.workers.contains(candidate)) return self.acquireLocked(candidate);
-    }
-}
-
-/// Close session `id`: it takes no new calls, finishes the ones queued, and
-/// its thread tears it down. False if there is no such session. The default
-/// session lives for the whole process.
-fn closeSession(self: *HttpServer, id: []const u8) bool {
-    if (Server.isDefault(id)) return false;
-    const worker = blk: {
-        self.workers_mutex.lockUncancelable(lp.io);
-        defer self.workers_mutex.unlock(lp.io);
-        const kv = self.workers.fetchRemove(id) orelse return false;
-        break :blk kv.value;
-    };
+fn removeLocked(self: *HttpServer, worker: *Worker) void {
+    // Not a newer session that took the same id after this one closed.
+    if (self.workers.get(worker.id) == worker) _ = self.workers.remove(worker.id);
     worker.queue.close();
-    worker.release();
-    return true;
 }
 
-/// Drop `worker` from the map if it is still the one listed under its id.
-fn unlist(self: *HttpServer, worker: *Worker) void {
+fn publishUrl(self: *HttpServer, worker: *Worker, url: ?[]const u8) void {
     self.workers_mutex.lockUncancelable(lp.io);
     defer self.workers_mutex.unlock(lp.io);
-    if (self.workers.get(worker.id) != worker) return;
-    _ = self.workers.remove(worker.id);
-    worker.queue.close();
-    worker.release();
-}
-
-fn directory(self: *HttpServer) Server.Directory {
-    return .{
-        .context = self,
-        .createFn = directoryCreate,
-        .listFn = directoryList,
-        .closeFn = directoryClose,
-    };
-}
-
-fn directoryCreate(context: *anyopaque, arena: std.mem.Allocator, name: ?[]const u8) anyerror![]const u8 {
-    const self: *HttpServer = @ptrCast(@alignCast(context));
-    const worker = if (name) |n| try self.acquire(n) else try self.mint();
-    defer worker.release();
-    return arena.dupe(u8, worker.id);
-}
-
-fn directoryList(context: *anyopaque, arena: std.mem.Allocator) anyerror![]const Server.SessionInfo {
-    const self: *HttpServer = @ptrCast(@alignCast(context));
-    self.workers_mutex.lockUncancelable(lp.io);
-    defer self.workers_mutex.unlock(lp.io);
-    var list: std.ArrayList(Server.SessionInfo) = try .initCapacity(arena, self.workers.count());
-    var it = self.workers.valueIterator();
-    while (it.next()) |worker| {
-        list.appendAssumeCapacity(.{
-            .id = try arena.dupe(u8, worker.*.id),
-            .url = try worker.*.urlInto(arena),
-        });
-    }
-    return list.items;
-}
-
-fn directoryClose(context: *anyopaque, id: []const u8) bool {
-    const self: *HttpServer = @ptrCast(@alignCast(context));
-    return self.closeSession(id);
+    const old = worker.url;
+    if (old != null and url != null and std.mem.eql(u8, old.?, url.?)) return;
+    worker.url = if (url) |u| self.allocator.dupe(u8, u) catch null else null;
+    if (old) |o| self.allocator.free(o);
 }
 
 /// Accept MCP-over-HTTP connections until stop() (e.g. from the signal
@@ -427,10 +378,14 @@ fn unregister(self: *HttpServer, socket: posix.socket_t) void {
     }
 }
 
-fn runWorker(worker: *Worker) void {
+fn runWorker(worker: *Worker, start: ?*Start) void {
     const self = worker.http;
-    defer _ = self.live_workers.fetchSub(1, .acq_rel);
-    defer worker.release();
+    defer self.worker_wg.finish();
+    defer {
+        if (worker.url) |url| self.allocator.free(url);
+        self.allocator.free(worker.id);
+        self.allocator.destroy(worker);
+    }
 
     var placeholder: std.Io.Writer.Allocating = .init(self.allocator);
     defer placeholder.deinit();
@@ -438,24 +393,20 @@ fn runWorker(worker: *Worker) void {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
 
-    const server = Server.initSession(self.allocator, self.app, &placeholder.writer, worker.id) catch |err| {
+    const server: ?*Server = Server.initSession(self.allocator, self.app, &placeholder.writer, worker.id) catch |err| blk: {
         log.err(.mcp, "mcp session init", .{ .err = err, .session = worker.id });
-        worker.failed = true;
-        worker.ready.set(lp.io);
-        // Calls already queued, or racing the unlisting, get an error reply.
-        self.unlist(worker);
-        while (true) switch (worker.queue.pop(0)) {
-            .job => |job| {
-                _ = arena.reset(.retain_capacity);
-                reject(arena.allocator(), job, "session failed to start");
-            },
-            .timeout => continue,
-            .closed => return,
-        };
+        // Calls already queued get an error reply; no new ones arrive.
+        self.workers_mutex.lockUncancelable(lp.io);
+        defer self.workers_mutex.unlock(lp.io);
+        self.removeLocked(worker);
+        break :blk null;
     };
-    defer server.deinit();
-    server.directory = self.directory();
-    worker.ready.set(lp.io);
+    defer if (server) |s| s.deinit();
+    if (server) |s| s.directory = self;
+    if (start) |st| {
+        st.ok = server != null;
+        st.done.set(lp.io);
+    }
 
     // Drain queued jobs before pumping idle work: idle() ticks the session
     // (blocking up to 25ms), so pumping between every two jobs would cap
@@ -465,45 +416,46 @@ fn runWorker(worker: *Worker) void {
         const job = switch (worker.queue.pop(wait_ms)) {
             .job => |job| job,
             .timeout => {
-                wait_ms = server.idle();
+                wait_ms = if (server) |s| s.idle() else 0;
                 continue;
             },
             .closed => break,
         };
+        defer job.done.set(lp.io);
         _ = arena.reset(.retain_capacity);
-        server.transport.retarget(job.out);
-        router.handleMessage(server, arena.allocator(), job.body) catch |err| {
+        const s = server orelse {
+            reject(arena.allocator(), job, "session failed to start");
+            continue;
+        };
+        s.transport.retarget(job.out);
+        router.handleMessage(s, arena.allocator(), job.body) catch |err| {
             log.err(.mcp, "mcp handle", .{ .err = err });
         };
-        worker.publishUrl(if (server.active_session.session.currentFrame()) |frame| frame.url else null);
-        job.done.set(lp.io);
+        self.publishUrl(worker, if (s.active_session.session.currentFrame()) |frame| frame.url else null);
         wait_ms = 0;
     }
 }
 
 /// Answer a call the session can't run with a JSON-RPC error.
 fn reject(arena: std.mem.Allocator, job: *Job, message: []const u8) void {
-    defer job.done.set(lp.io);
     const Peek = struct { id: ?std.json.Value = null };
     const peek = std.json.parseFromSliceLeaky(Peek, arena, job.body, .{ .ignore_unknown_fields = true }) catch Peek{};
     // A notification (no id) gets no reply.
     const id = peek.id orelse return;
-    std.json.Stringify.value(protocol.Response{
-        .id = id,
-        .@"error" = .{ .code = @backingInt(protocol.ErrorCode.InternalError), .message = message },
-    }, .{ .emit_null_optional_fields = false }, job.out) catch return;
-    job.out.writeByte('\n') catch {};
+    var transport: Transport = .init(arena, job.out);
+    defer transport.deinit();
+    transport.sendError(id, .InternalError, message) catch {};
 }
 
-/// Decide which session a request targets. An explicit `Mcp-Session-Id`
-/// wins; otherwise `initialize` mints a new session and everything else
-/// falls back to the default. The caller holds a reference until `release`.
-fn route(self: *HttpServer, arena: std.mem.Allocator, session_id: ?[]const u8, body: []const u8) !*Worker {
+/// The session a request targets: an explicit `Mcp-Session-Id` wins;
+/// otherwise `initialize` mints a new one (null) and everything else goes to
+/// the default.
+fn target(arena: std.mem.Allocator, session_id: ?[]const u8, body: []const u8) ?[]const u8 {
     if (session_id) |sid| {
-        if (sid.len > 0) return self.acquire(sid);
+        if (sid.len > 0) return sid;
     }
-    if (isInitialize(arena, body)) return self.mint();
-    return self.acquire(Server.default_session_id);
+    if (isInitialize(arena, body)) return null;
+    return Server.default_session_id;
 }
 
 fn isInitialize(arena: std.mem.Allocator, body: []const u8) bool {
@@ -581,24 +533,17 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
         return request.respond("", .{ .status = .accepted, .keep_alive = keep_alive });
     }
 
-    const worker = self.route(arena, session_id, body) catch |err| {
+    var job: Job = .{ .body = body, .out = out };
+    const routed = self.submit(arena, target(arena, session_id, body), &job) catch |err| {
         log.err(.mcp, "mcp session routing", .{ .err = err });
         return request.respond("", .{ .status = .internal_server_error, .keep_alive = false });
     };
-    defer worker.release();
-
-    var job: Job = .{ .body = body, .out = out };
-    if (worker.queue.push(&job)) {
-        job.done.waitUncancelable(lp.io);
-    } else {
-        // Closed between routing and pushing.
-        reject(arena, &job, "session closed");
-    }
+    job.done.waitUncancelable(lp.io);
 
     const resp = out.buffered();
     const headers = [_]std.http.Header{
         .{ .name = "content-type", .value = "application/json" },
-        .{ .name = "mcp-session-id", .value = worker.id },
+        .{ .name = "mcp-session-id", .value = routed },
     };
     return request.respond(resp, .{
         // An empty body means a notification: 202, no content.

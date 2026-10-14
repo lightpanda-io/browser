@@ -26,6 +26,7 @@ const router = @import("router.zig");
 const protocol = @import("protocol.zig");
 const resources = @import("resources.zig");
 const Transport = @import("Transport.zig");
+const HttpServer = @import("HttpServer.zig");
 
 const Self = @This();
 
@@ -37,58 +38,24 @@ pub const default_session_id = "default";
 allocator: std.mem.Allocator,
 app: *App,
 
-/// The one session this server drives. The HTTP transport runs a server per
-/// session, each on its own thread, so a slow call in one session never
-/// holds up another.
+/// The one session this server drives; the HTTP transport runs one server
+/// per session.
 active_session: *lp.ToolSession,
 /// `default`, or the name the HTTP transport gave this session.
 session_id: []const u8,
-/// How the session tools reach the other sessions. Only the HTTP transport
-/// can route a request to a named session (`Mcp-Session-Id`), so over stdio
-/// it is null and those tools are refused.
-directory: ?Directory = null,
+/// The HTTP transport, for the session tools. Null over stdio, where a
+/// request can't name a session, so those tools are refused.
+directory: ?*HttpServer = null,
 transport: Transport,
-
-/// The HTTP transport's sessions, for the session tools. Safe to call from
-/// any session's thread.
-pub const Directory = struct {
-    context: *anyopaque,
-    createFn: *const fn (context: *anyopaque, arena: std.mem.Allocator, name: ?[]const u8) anyerror![]const u8,
-    listFn: *const fn (context: *anyopaque, arena: std.mem.Allocator) anyerror![]const SessionInfo,
-    closeFn: *const fn (context: *anyopaque, id: []const u8) bool,
-
-    /// Create the session named `name` (or a fresh id when null), or find the
-    /// existing one. Returns its id, in `arena`.
-    pub fn create(self: Directory, arena: std.mem.Allocator, name: ?[]const u8) ![]const u8 {
-        return self.createFn(self.context, arena, name);
-    }
-
-    pub fn list(self: Directory, arena: std.mem.Allocator) ![]const SessionInfo {
-        return self.listFn(self.context, arena);
-    }
-
-    /// False if there is no such session.
-    pub fn close(self: Directory, id: []const u8) bool {
-        return self.closeFn(self.context, id);
-    }
-};
-
-pub const SessionInfo = struct {
-    id: []const u8,
-    url: ?[]const u8,
-};
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer) !*Self {
     return initSession(allocator, app, writer, default_session_id);
 }
 
-/// A server for the session named `id`, which is duped.
+/// A server for the session named `id`, which must outlive it.
 pub fn initSession(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer, id: []const u8) !*Self {
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
-
-    const owned_id = try allocator.dupe(u8, id);
-    errdefer allocator.free(owned_id);
 
     // Heap-allocated and never moved: `Browser` registers self-pointers.
     const entry = try allocator.create(lp.ToolSession);
@@ -110,7 +77,7 @@ pub fn initSession(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writ
         .allocator = allocator,
         .app = app,
         .active_session = entry,
-        .session_id = owned_id,
+        .session_id = id,
         .transport = .init(allocator, writer),
     };
     return self;
@@ -126,7 +93,6 @@ pub fn deinit(self: *Self) void {
     entry.enterIsolate();
     entry.deinit();
     self.allocator.destroy(entry);
-    self.allocator.free(self.session_id);
 
     self.transport.deinit();
     self.allocator.destroy(self);

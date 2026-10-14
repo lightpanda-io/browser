@@ -267,7 +267,7 @@ fn handleSessionNew(server: *Server, arena: std.mem.Allocator, arguments: ?std.j
         return .{ .invalid_params = "expected { name?: string }" };
 
     const requested: ?[]const u8 = if (args.name) |n| (if (n.len > 0) n else null) else null;
-    const sid = directory.create(arena, requested) catch |err|
+    const sid = directory.createSession(arena, requested) catch |err|
         return .{ .fail = @errorName(err) };
 
     return okFmt(arena, "session {s}", .{sid});
@@ -275,11 +275,10 @@ fn handleSessionNew(server: *Server, arena: std.mem.Allocator, arguments: ?std.j
 
 fn handleSessionList(server: *Server, arena: std.mem.Allocator) ExtraResult {
     const directory = server.directory orelse return multi_session_required;
-    const list = directory.list(arena) catch return .{ .fail = "out of memory" };
+    const list = directory.listSessions(arena) catch return .{ .fail = "out of memory" };
 
-    // The directory knows where the others were after their last call; this
-    // session may have moved since.
-    for (@constCast(list)) |*entry| {
+    // The others are as of their last call; this one is live.
+    for (list) |*entry| {
         if (std.mem.eql(u8, entry.id, server.session_id)) {
             entry.url = if (server.active_session.session.currentFrame()) |frame| frame.url else null;
         }
@@ -299,12 +298,11 @@ fn handleSessionClose(server: *Server, arena: std.mem.Allocator, arguments: ?std
     if (Server.isDefault(args.id)) {
         return .{ .fail = "the default session cannot be closed" };
     }
-    // Closing the session serving this very call would tear down the isolate
-    // mid-dispatch; require the client to be elsewhere first.
+    // A client closes its own session with DELETE.
     if (std.mem.eql(u8, args.id, server.session_id)) {
         return .{ .fail = "cannot close the session you are attached to" };
     }
-    if (!directory.close(args.id)) {
+    if (!directory.closeSession(args.id)) {
         return .{ .fail = "no such session" };
     }
 
