@@ -141,11 +141,8 @@ fn initStyleRule(selector: []const u8, block: []const u8, depth: u8, frame: *Fra
             .rule => |r| try initStyleRule(r.selector, r.block, depth + 1, frame),
             .at_rule => |a| try CSSRule.initAtRule(atRuleTypeFor(a.keyword), a.text, frame),
         };
-        const rules = style_rule._rules orelse blk: {
-            const rules = try CSSRuleList.init(frame);
-            style_rule._rules = rules;
-            break :blk rules;
-        };
+        // Created on the first nested rule: `_rules` stays null without one.
+        const rules = try style_rule.getCssRules(frame);
         try rules.insert(rules.length(), nested, frame);
     }
     return style_rule._proto;

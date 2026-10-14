@@ -566,30 +566,47 @@ fn consumeNestedRule(stream: *TokenStream, input: []const u8) ?StyleRule {
     return null;
 }
 
+/// Upper bound on a resolved nested selector, in bytes. Each `&` copies the
+/// whole parent, so `& &` nested N deep doubles the text N times: a hostile
+/// stylesheet would reach gigabytes well within MAX_AT_RULE_NESTING. A rule
+/// whose selector would outgrow this is dropped instead.
+pub const MAX_NESTED_SELECTOR_LEN: usize = 64 * 1024;
+
 /// Resolve the selector list of a style rule nested in `parent` (CSS Nesting
-/// §3): each `&` becomes `:is(<parent>)`, and a selector without one is
-/// relative to the parent, as if it started with `& `. Using `:is()` keeps
-/// the spec's specificity (the most specific parent selector) and lets a
-/// parent selector list stand in for a single `&`. Selectors are split on
-/// the commas outside parentheses and brackets; tokens are copied verbatim.
-pub fn resolveNestedSelector(allocator: std.mem.Allocator, parent: []const u8, nested: []const u8) ![]const u8 {
+/// §3): each `&` becomes `:is(<parent>)`, and a relative selector (one that
+/// starts with a combinator, or has no `&`) is prefixed with `:is(<parent>) `.
+/// Using `:is()` keeps the spec's specificity (the most specific parent
+/// selector) and lets a parent selector list stand in for a single `&`.
+/// Selectors are split on the commas outside parentheses and brackets; tokens
+/// are copied verbatim. Returns null when the result would exceed
+/// MAX_NESTED_SELECTOR_LEN.
+pub fn resolveNestedSelector(allocator: std.mem.Allocator, parent: []const u8, nested: []const u8) !?[]const u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     var stream = TokenStream.init(nested);
 
-    // Start of the current complex selector in `out`, and whether it holds
-    // an `&` yet. Each selector is written as it streams by, and the parent is
-    // inserted at `selector_start` when it turns out to have no `&`.
+    // Start of the current complex selector in `out`, whether it holds an `&`
+    // yet, and whether it starts with a combinator. Each selector is written
+    // as it streams by, and the parent is inserted at `selector_start` when it
+    // turns out to be relative.
     var selector_start: usize = 0;
     var has_nesting = false;
+    var starts_with_combinator = false;
     var pending_space = false;
+    // A comment with no whitespace on either side separates tokens without
+    // being a descendant combinator: it is kept rather than turned into one.
+    var pending_comment: ?[]const u8 = null;
     var depth: usize = 0;
 
     while (true) {
+        if (out.items.len > MAX_NESTED_SELECTOR_LEN) {
+            out.deinit(allocator);
+            return null;
+        }
         const span = stream.next();
         const at_comma = if (span) |sp| depth == 0 and sp.token == .comma else true;
         if (at_comma) {
-            if (out.items.len > selector_start and !has_nesting) {
+            if (out.items.len > selector_start and (starts_with_combinator or !has_nesting)) {
                 // Inserted back to front, to read `:is(<parent>) <selector>`.
                 try out.insertSlice(allocator, selector_start, ") ");
                 try out.insertSlice(allocator, selector_start, parent);
@@ -603,18 +620,39 @@ pub fn resolveNestedSelector(allocator: std.mem.Allocator, parent: []const u8, n
             }
             selector_start = out.items.len;
             has_nesting = false;
+            starts_with_combinator = false;
             pending_space = false;
+            pending_comment = null;
             continue;
         }
 
         const sp = span.?;
-        if (isWhitespaceOrComment(sp.token)) {
-            pending_space = out.items.len > selector_start;
-            continue;
+        switch (sp.token) {
+            .white_space => {
+                pending_space = out.items.len > selector_start;
+                pending_comment = null;
+                continue;
+            },
+            .comment => {
+                if (!pending_space and out.items.len > selector_start) {
+                    pending_comment = nested[sp.start..sp.end];
+                }
+                continue;
+            },
+            else => {},
         }
         if (pending_space) {
             try out.append(allocator, ' ');
-            pending_space = false;
+        } else if (pending_comment) |comment| {
+            try out.appendSlice(allocator, comment);
+        }
+        pending_space = false;
+        pending_comment = null;
+        if (out.items.len == selector_start) {
+            starts_with_combinator = switch (sp.token) {
+                .delim => |c| c == '>' or c == '+' or c == '~',
+                else => false,
+            };
         }
         updateDepth(sp.token, &depth);
         switch (sp.token) {
@@ -630,7 +668,11 @@ pub fn resolveNestedSelector(allocator: std.mem.Allocator, parent: []const u8, n
         try out.appendSlice(allocator, nested[sp.start..sp.end]);
     }
 
-    return out.toOwnedSlice(allocator);
+    if (out.items.len > MAX_NESTED_SELECTOR_LEN) {
+        out.deinit(allocator);
+        return null;
+    }
+    return try out.toOwnedSlice(allocator);
 }
 
 const testing = std.testing;
@@ -794,8 +836,32 @@ test "resolveNestedSelector" {
         .{ .parent = ".a", .nested = "&.b, .c ,  :is(.d, .e)", .want = ":is(.a).b, :is(.a) .c, :is(.a) :is(.d, .e)" },
         .{ .parent = ".a", .nested = "[data-x='&']", .want = ":is(.a) [data-x='&']" },
         .{ .parent = ".a", .nested = "  /* c */ &  .b  ", .want = ":is(.a) .b" },
+        // A selector starting with a combinator is relative even with an `&`.
+        .{ .parent = ".a", .nested = "> .x &", .want = ":is(.a) > .x :is(.a)" },
+        // A comment between two tokens is not a descendant combinator.
+        .{ .parent = ".a", .nested = "&/* c */.b", .want = ":is(.a)/* c */.b" },
+        .{ .parent = ".a", .nested = "& /* c */.b", .want = ":is(.a) .b" },
     };
     for (cases) |c| {
-        try testing.expectEqualStrings(c.want, try resolveNestedSelector(allocator, c.parent, c.nested));
+        const got = try resolveNestedSelector(allocator, c.parent, c.nested) orelse return error.TooLong;
+        try testing.expectEqualStrings(c.want, got);
     }
+}
+
+test "resolveNestedSelector: `& &` stops doubling at the cap" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // Each level doubles the selector: without the cap, 32 levels would be
+    // tens of gigabytes.
+    var selector: []const u8 = ".a";
+    var levels: usize = 0;
+    while (try resolveNestedSelector(allocator, selector, "& &")) |resolved| {
+        try testing.expect(resolved.len <= MAX_NESTED_SELECTOR_LEN);
+        selector = resolved;
+        levels += 1;
+        try testing.expect(levels < 32);
+    }
+    try testing.expect(levels > 0);
 }
