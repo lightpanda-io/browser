@@ -1478,6 +1478,16 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    // HTTP cache tests (HttpClient.zig)
+    if (std.mem.eql(u8, path, "/cache/max-age")) {
+        return req.respond("cached body", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Cache-Control", .value = "max-age=600" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/download/report.csv")) {
         // A file download: Content-Disposition: attachment drives the
         // Browser.setDownloadBehavior path (issue #2701).

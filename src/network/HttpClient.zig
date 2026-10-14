@@ -1303,6 +1303,14 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         return false;
     }
 
+    // A request for part of the body, or one whose URL carries credentials
+    // (userinfo, which curl sends as Basic auth), is neither answered from
+    // nor written to the cache: a stored 200 is not the range, and the key
+    // would write the credentials into the cache.
+    if (transfer.findRequestHeader("Range") != null or URL.hasCredentials(req.url)) {
+        return false;
+    }
+
     const arena = transfer.arena;
 
     // Redirects rewrite req.url; the entry must be stored/renewed under the
@@ -6376,4 +6384,176 @@ test "HttpClient: bodyless status announcing a body" {
     try testing.expectEqual(false, Transfer.announcesBody("Content-Length: 0\r\n"));
     try testing.expectEqual(false, Transfer.announcesBody("Content-Type: text/html\r\n"));
     try testing.expectEqual(false, Transfer.announcesBody("\r\n"));
+}
+
+const SqliteCache = @import("cache/SqliteCache.zig");
+
+// A memory cache owned by a test, swapped in for the test client's.
+const TestCache = struct {
+    cache: Cache,
+    saved: *Cache,
+
+    fn init(client: *Client) !TestCache {
+        return .{
+            .cache = .{ .kind = .{ .sqlite = try SqliteCache.init(testing.allocator, .memory, 0) } },
+            .saved = client.cache,
+        };
+    }
+
+    // Call once the TestCache is at its final address.
+    fn use(self: *TestCache, client: *Client) void {
+        client.cache = &self.cache;
+    }
+
+    fn deinit(self: *TestCache, client: *Client) void {
+        client.cache = self.saved;
+        self.cache.deinit();
+    }
+};
+
+// One GET through a client, settled.
+const TestCacheRequest = struct {
+    header: ?[2][]const u8 = null, // a request header to set
+    body: std.ArrayList(u8) = .empty,
+    done: bool = false,
+    err: ?anyerror = null,
+    from_cache: bool = false,
+
+    fn deinit(self: *TestCacheRequest) void {
+        self.body.deinit(testing.allocator);
+    }
+
+    fn run(self: *TestCacheRequest, client: *Client, url: [:0]const u8) !void {
+        _ = try self.start(client, url);
+        try self.settle(client);
+    }
+
+    fn start(self: *TestCacheRequest, client: *Client, url: [:0]const u8) !*Transfer {
+        const transfer = try client.newRequest(.{
+            .method = .GET,
+            .url = url,
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
+            .resource_type = .xhr,
+            .ctx = self,
+            .header_callback = headerCallback,
+            .data_callback = dataCallback,
+            .done_callback = doneCallback,
+            .error_callback = errorCallback,
+            .shutdown_callback = noopShutdown,
+        }, null);
+        {
+            errdefer transfer.deinit();
+            if (self.header) |h| try transfer.setHeader(h[0], h[1], .{});
+        }
+        try transfer.submit();
+        return transfer;
+    }
+
+    fn settle(self: *TestCacheRequest, client: *Client) !void {
+        for (0..250) |_| {
+            if (self.done or self.err != null) break;
+            _ = try client.tick(20);
+        } else return error.NeverSettled;
+        // The delivering tick retired the transfer; the next one releases it.
+        _ = try client.tick(0);
+        if (self.err) |e| return e;
+    }
+
+    fn headerCallback(transfer: *Transfer) !Transfer.HeaderResult {
+        const self: *TestCacheRequest = @ptrCast(@alignCast(transfer.req.ctx));
+        self.from_cache = transfer._from_cache;
+        return .proceed;
+    }
+
+    fn dataCallback(transfer: *Transfer, data: []const u8) !void {
+        const self: *TestCacheRequest = @ptrCast(@alignCast(transfer.req.ctx));
+        try self.body.appendSlice(testing.allocator, data);
+    }
+
+    fn doneCallback(ctx: *anyopaque) !void {
+        const self: *TestCacheRequest = @ptrCast(@alignCast(ctx));
+        self.done = true;
+    }
+
+    fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+        const self: *TestCacheRequest = @ptrCast(@alignCast(ctx));
+        self.err = err;
+    }
+};
+
+// What the test's cache answers for url, offset_s seconds from now.
+fn expectCachedAt(tc: *TestCache, url: []const u8, offset_s: u64, want: std.meta.Tag(Cache.CacheGetResult)) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const got = try tc.cache.get(arena.allocator(), .{
+        .url = url,
+        .timestamp = lp.datetime.timestamp(.real) + offset_s,
+        .request_headers = &.{},
+    });
+    try testing.expectEqual(want, std.meta.activeTag(got));
+}
+
+test "HttpClient: a Range request bypasses the cache" {
+    const client = &testing.test_browser.http_client;
+    var tc = try TestCache.init(client);
+    tc.use(client);
+    defer tc.deinit(client);
+    const url = "http://127.0.0.1:9582/cache/max-age";
+
+    // carrying Range: not stored
+    {
+        var r: TestCacheRequest = .{ .header = .{ "Range", "bytes=0-3" } };
+        defer r.deinit();
+        try r.run(client, url);
+    }
+    try expectCachedAt(&tc, url, 0, .miss);
+
+    // a plain request stores it
+    {
+        var r: TestCacheRequest = .{};
+        defer r.deinit();
+        try r.run(client, url);
+        try testing.expectEqual(false, r.from_cache);
+    }
+
+    // carrying Range: never served from it
+    {
+        var r: TestCacheRequest = .{ .header = .{ "Range", "bytes=0-3" } };
+        defer r.deinit();
+        try r.run(client, url);
+        try testing.expectEqual(false, r.from_cache);
+    }
+
+    // control: a plain request is a hit
+    var r: TestCacheRequest = .{};
+    defer r.deinit();
+    try r.run(client, url);
+    try testing.expectEqual(true, r.from_cache);
+}
+
+test "HttpClient: a URL with userinfo bypasses the cache" {
+    const client = &testing.test_browser.http_client;
+    var tc = try TestCache.init(client);
+    tc.use(client);
+    defer tc.deinit(client);
+
+    {
+        var r: TestCacheRequest = .{};
+        defer r.deinit();
+        try r.run(client, "http://u:p@127.0.0.1:9582/cache/max-age");
+    }
+    try expectCachedAt(&tc, "http://u:p@127.0.0.1:9582/cache/max-age", 0, .miss);
+    try expectCachedAt(&tc, "http://127.0.0.1:9582/cache/max-age", 0, .miss);
+
+    {
+        var r: TestCacheRequest = .{};
+        defer r.deinit();
+        try r.run(client, "http://127.0.0.1:9582/cache/max-age");
+    }
+    var r: TestCacheRequest = .{};
+    defer r.deinit();
+    try r.run(client, "http://u:p@127.0.0.1:9582/cache/max-age");
+    try testing.expectEqual(false, r.from_cache);
 }
