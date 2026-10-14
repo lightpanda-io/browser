@@ -642,3 +642,17 @@
   const r2 = new Request('https://example.com', { method: 'POST', body: closed, duplex: 'half' });
   testing.expectTrue(r2.body === closed)
 </script>
+
+<script id=request_body_stream_after_consume type=module>
+  const state = await testing.async();
+  const s = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('x')); c.close(); } });
+  const r = new Request('https://example.com', { method: 'POST', body: s, duplex: 'half' });
+  const text = await r.text();
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('x', text);
+    testing.expectTrue(r.body === s);
+    testing.expectTrue(s.locked);
+    testing.expectTrue(r.bodyUsed);
+  });
+</script>

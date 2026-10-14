@@ -335,6 +335,10 @@ pub fn bodyBytes(self: *Request) !?[]const u8 {
     } else if (self._body_stream) |stream| {
         self._body = try stream.collectBodyBytes(self._arena.allocator());
         self._body_stream = null;
+        // `body` keeps returning the original stream once it's drained.
+        if (self._body_view == null) {
+            self._body_view = stream;
+        }
         return self._body;
     } else return null;
 }
