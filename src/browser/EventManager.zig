@@ -31,11 +31,12 @@ const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 
 const log = lp.log;
+const Allocator = std.mem.Allocator;
+const Listener = EventManagerBase.Listener;
 
 // Re-export types from EventManagerBase for API compatibility
 pub const RegisterOptions = EventManagerBase.RegisterOptions;
 pub const Callback = EventManagerBase.Callback;
-const Listener = EventManagerBase.Listener;
 
 pub const EventManager = @This();
 
@@ -89,10 +90,38 @@ pub fn getHandler(self: *EventManager, target: *EventTarget, typ: []const u8) ?j
     return self.base.getHandler(frame.js, target, typ);
 }
 
+// Erases the listeners and handlers of the document `root` and its
+// shadow-including descendants (document.open). Detached nodes keep theirs.
+// A connected node belongs to its owner document's tree, so the owner check
+// cheaply skips other documents' nodes before the isConnected walk.
+pub fn removeShadowIncludingDescendants(self: *EventManager, allocator: Allocator, root: *Node) !void {
+    var targets: std.ArrayList(*EventTarget) = .empty;
+    var it = self.base.lookup.keyIterator();
+    while (it.next()) |key| {
+        const target: *EventTarget = @ptrFromInt(key.*);
+        const node = target.is(Node) orelse continue;
+        if (node._owner == root._owner and node.isConnected()) {
+            try targets.append(allocator, target);
+        }
+    }
+    for (targets.items) |target| {
+        self.base.removeTarget(target);
+    }
+}
+
 fn noteListener(self: *EventManager, target: *EventTarget, listener: *const Listener) void {
     if (target._type == .node and listener.typ.eql(comptime .wrap("load"))) {
         // optimization so that we avoid firing load for things (e.g. images)
         // if there's no load listener regsitered (which is pretty common).
+        switch (listener.function) {
+            .handler, .handler_source => {
+                // Handlers are non-capture and load never bubbles. We don't
+                // need to set the frame-wide has_dom_load_listener. Instead, we
+                // can check this element eplicitly.
+                return;
+            },
+            .value, .object => {},
+        }
         // A frameless document's node (createHTMLDocument, DOMParser) can be
         // adopted into the caller's document later and load there.
         const owner = target.subtype(Node).ownerFrame(self.frame) orelse self.frame;
@@ -154,6 +183,10 @@ pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, 
 /// Use this to avoid creating an event when there are no listeners.
 pub fn hasDirectListeners(self: *EventManager, target: *EventTarget, typ: []const u8) bool {
     return self.base.hasDirectListeners(target, typ);
+}
+
+pub fn hasHandler(self: *EventManager, target: *EventTarget, typ: []const u8) bool {
+    return self.base.hasHandler(target, typ);
 }
 
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {

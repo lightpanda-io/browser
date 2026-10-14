@@ -781,3 +781,81 @@
   testing.expectEqual('TypeError', caught)
 }
 </script>
+
+<form id="reset_form">
+  <input id="reset_text" value="a">
+  <input id="reset_checkbox" type="checkbox" checked>
+  <textarea id="reset_textarea">t</textarea>
+  <output id="reset_output">o</output>
+  <select id="reset_select"><option>1</option><option selected>2</option></select>
+  <input id="reset_input_button" type="reset">
+  <button id="reset_button" type="reset"></button>
+</form>
+
+<script id="reset">
+{
+  const form = $('#reset_form')
+  const text = $('#reset_text')
+  const checkbox = $('#reset_checkbox')
+  const textarea = $('#reset_textarea')
+  const select = $('#reset_select')
+  const output = $('#reset_output')
+  const dirty = () => {
+    text.value = 'b'
+    checkbox.checked = false
+    textarea.value = 'u'
+    select.selectedIndex = 0
+    output.value = 'p'
+  }
+  const expectReset = () => {
+    testing.expectEqual('a', text.value)
+    testing.expectTrue(checkbox.checked)
+    testing.expectEqual('t', textarea.value)
+    testing.expectEqual(1, select.selectedIndex)
+    testing.expectEqual('o', output.value)
+    // reset clears the default value override
+    testing.expectEqual('o', output.defaultValue)
+    output.defaultValue = 'o'
+    testing.expectEqual('o', output.textContent)
+  }
+
+  let events = 0
+  form.addEventListener('reset', (e) => {
+    events += 1
+    testing.expectTrue(e.isTrusted)
+    testing.expectTrue(e.cancelable)
+  })
+
+  dirty()
+  form.reset()
+  testing.expectEqual(1, events)
+  expectReset()
+
+  dirty()
+  $('#reset_input_button').click()
+  testing.expectEqual(2, events)
+  expectReset()
+
+  dirty()
+  $('#reset_button').click()
+  testing.expectEqual(3, events)
+  expectReset()
+
+  // a canceled reset event leaves the controls alone
+  const cancel = (e) => e.preventDefault()
+  form.addEventListener('reset', cancel)
+  text.value = 'b'
+  form.reset()
+  testing.expectEqual(4, events)
+  testing.expectEqual('b', text.value)
+  form.removeEventListener('reset', cancel)
+
+  // reset from within a reset listener is a no-op
+  let nested = 0
+  const reenter = () => { nested += 1; form.reset() }
+  form.addEventListener('reset', reenter)
+  form.reset()
+  testing.expectEqual(1, nested)
+  form.removeEventListener('reset', reenter)
+}
+</script>

@@ -1953,9 +1953,12 @@ fn inheritsKeyword(value: []const u8) bool {
 }
 
 /// An inherited boolean property's declared value: inner null for an explicit
-/// inherit, outer null for an invalid value, which the cascade drops.
+/// inherit, outer null for an invalid value, which the cascade drops. No UA
+/// style sets these properties, so revert also rolls back to inheriting.
 fn parseInheritedFlag(value: []const u8, comptime on: []const []const u8, comptime off: []const []const u8) ??bool {
-    if (inheritsKeyword(value)) return @as(?bool, null);
+    if (inheritsKeyword(value) or std.ascii.eqlIgnoreCase(value, "revert") or std.ascii.eqlIgnoreCase(value, "revert-layer")) {
+        return @as(?bool, null);
+    }
     inline for (on) |keyword| {
         if (std.ascii.eqlIgnoreCase(value, keyword)) return true;
     }
@@ -2449,6 +2452,34 @@ test "StyleManager: memo: a descendant overrides inherited visibility and pointe
     try u.setStyle("visibility: bogus; pointer-events: bogus", frame);
     try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(u));
     try testing.expectEqual(true, sm.hasPointerEventsNone(u));
+}
+
+test "StyleManager: revert on visibility and pointer-events inherits" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class=\"x\"></div><div class=\"x\"></div>");
+    const a = body.firstChild().?.as(Element);
+    const b = a.asNode().nextSibling().?.as(Element);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".x { visibility: hidden; pointer-events: none }", frame);
+    _ = try body.insertBefore(style_el.asNode(), a.asNode(), frame);
+
+    // No UA style sets either property, so the inline revert beats the class
+    // and inherits the body's values, instead of being dropped as invalid.
+    try a.setStyle("visibility: revert; pointer-events: revert", frame);
+    try b.setStyle("visibility: REVERT-LAYER; pointer-events: revert-layer", frame);
+    for ([_]*Element{ a, b }) |el| {
+        try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(el));
+        try testing.expectEqual(false, sm.hasPointerEventsNone(el));
+    }
 }
 
 // Every element of a deep chain probed in document order, the shape of an

@@ -31,6 +31,7 @@ const ReadableStream = @import("../streams/ReadableStream.zig");
 const Headers = @import("Headers.zig");
 const FormData = @import("FormData.zig");
 const body_init = @import("body_init.zig");
+const TextDecoderStream = @import("../encoding/TextDecoderStream.zig");
 
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
@@ -434,6 +435,23 @@ pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
     return self.consumeAs(.form_data, exec);
 }
 
+// Returns a ReadableStream<string> that decodes the body as UTF-8, ignoring
+// any Content-Type charset (Fetch's non-standard streaming text accessor).
+pub fn textStream(self: *Response, exec: *const Execution) !*ReadableStream {
+    const local = exec.js.local.?;
+    try self.checkUnusable(local);
+
+    const byte_stream = try self.getBody(exec) orelse {
+        const stream = try ReadableStream.init(null, null, exec);
+        try stream._controller.close();
+        return stream;
+    };
+    self._body_used = true;
+
+    const decoder = try TextDecoderStream.init(null, null, exec);
+    return byte_stream.pipeThrough(.{ .readable = decoder.getReadable(), .writable = decoder.getWritable() }, exec);
+}
+
 const Package = enum { array_buffer, bytes, text, json, blob, form_data };
 
 // a byte body is packaged right away, a stream body once it has been drained.
@@ -658,6 +676,7 @@ pub const JsApi = struct {
     pub const blob = bridge.function(Response.blob, .{});
     pub const bytes = bridge.function(Response.bytes, .{});
     pub const formData = bridge.function(Response.formData, .{});
+    pub const textStream = bridge.function(Response.textStream, .{});
     pub const clone = bridge.function(Response.clone, .{});
 };
 

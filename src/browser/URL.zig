@@ -150,6 +150,16 @@ pub fn isJavascriptUrl(url: []const u8) bool {
     return std.ascii.startsWithIgnoreCase(url[i..], "javascript:");
 }
 
+pub fn isFetchable(url: []const u8) bool {
+    const protocol = getProtocol(url);
+    inline for (.{ "about:", "blob:", "data:", "file:", "http:", "https:" }) |scheme| {
+        if (std.ascii.eqlIgnoreCase(protocol, scheme)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 pub fn isCompleteHTTPUrl(url: []const u8) bool {
     if (url.len < 3) { // Minimum is "x://"
         return false;
@@ -741,6 +751,20 @@ test "URL: isAboutBlank" {
     try testing.expectEqual(false, isAboutBlank("about"));
     try testing.expectEqual(false, isAboutBlank("http://example.com/about:blank"));
     try testing.expectEqual(false, isAboutBlank("https://example.com/blob:x"));
+}
+
+test "URL: isFetchable" {
+    try testing.expectEqual(true, isFetchable("http://example.com/mailto:x"));
+    try testing.expectEqual(true, isFetchable("HTTPS://example.com"));
+    try testing.expectEqual(true, isFetchable("about:blank"));
+    try testing.expectEqual(true, isFetchable("blob:http://example.com/1"));
+    try testing.expectEqual(true, isFetchable("data:text/html,x"));
+    try testing.expectEqual(true, isFetchable("file:///tmp/x"));
+
+    try testing.expectEqual(false, isFetchable("mailto:a@example.com"));
+    try testing.expectEqual(false, isFetchable("TEL:+15555550100"));
+    try testing.expectEqual(false, isFetchable("ftp://example.com"));
+    try testing.expectEqual(false, isFetchable("example.com"));
 }
 
 test "URL: resolve regression (#1093)" {

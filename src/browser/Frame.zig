@@ -1028,6 +1028,13 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         return;
     }
 
+    if (URL.isFetchable(resolved_url) == false) {
+        log.info(.browser, "navigate unsupported scheme", .{ .url = resolved_url });
+        // don't defer this, the caller is responsible for freeing it on error
+        arena.release();
+        return;
+    }
+
     const session = target._session;
 
     // Per the HTML "navigate" steps, this is a fragment navigation only when
@@ -1194,6 +1201,70 @@ pub fn abortTransfers(self: *Frame) void {
     }
     const http_client = &self._session.browser.http_client;
     http_client.abortOwner(&self._http_owner);
+}
+
+// Frame was removed from the document, or a popup is closed. Since the window
+// and frame can still be referenced (in Zig and in JS), it isn't a complete
+// teardown, but we do need it to stop running.
+pub fn discard(self: *Frame) !void {
+    const page = self.page;
+    try page.closed_frames.ensureUnusedCapacity(page.arena, 1);
+
+    if (self.parent) |parent| {
+        // this is an iframe
+        if (self._parent_notified == false and self._delays_parent_load) {
+            try parent.js.scheduler.add(parent, struct {
+                fn run(ctx: *anyopaque) !?u32 {
+                    // the parent no longer waits for us, don't run this
+                    // synchronously, we're almost certainly in some JS call
+                    const p: *Frame = @ptrCast(@alignCast(ctx));
+                    p.pendingLoadCompleted();
+                    return null;
+                }
+            }.run, 0, .{ .name = "frame.discardedChildLoaded" });
+        }
+        if (std.mem.findScalar(*Frame, parent.child_frames.items, self)) |idx| {
+            // ordered, to keep child_frames_sorted valid
+            _ = parent.child_frames.orderedRemove(idx);
+        }
+        self._session.notification.dispatch(.frame_child_frame_detached, &.{
+            .parent_id = parent._frame_id,
+            .frame_id = self._frame_id,
+        });
+    } else if (std.mem.findScalar(*Frame, page.popups.items, self)) |idx| {
+        // this was a popup
+        _ = page.popups.swapRemove(idx);
+    }
+    self._parent_notified = true;
+
+    const window = self.window;
+    for (page.popups.items) |popup| {
+        if (popup.window._opener == window) {
+            popup.window._opener = null;
+        }
+    }
+    if (page.frame.window._opener == window) {
+        page.frame.window._opener = null;
+    }
+
+    self.neuter();
+    self.abortTransfers();
+    page.closed_frames.appendAssumeCapacity(self);
+}
+
+fn neuter(self: *Frame) void {
+    for (self.child_frames.items) |child| {
+        // we're not loading anymore, so nothing to notify
+        child._parent_notified = true;
+        child.neuter();
+    }
+    self.window._closed = true;
+    self.abortDocumentLoad();
+    self.cancelQueuedNavigation();
+    user_input.forgetFrame(self);
+    self._session.idb.detachContext(self.js);
+    self.js.scheduler.reset();
+    self.window._timers.reset();
 }
 
 pub fn stopLoading(self: *Frame) void {
@@ -1392,6 +1463,23 @@ pub fn pendingLoadCompleted(self: *Frame) void {
     } else {
         self._pending_loads = pending_loads - 1;
     }
+}
+
+// A document.open() has been closed. If it was opened after it loaded, it
+// will re-trigger DOMContentLoaded and load.
+pub fn scriptCreatedParserDone(self: *Frame) void {
+    switch (self._load_state) {
+        .parsing, .load => {},
+        .waiting => self._load_state = .parsing,
+        .complete => {
+            self._load_state = .parsing;
+            self._parent_notified = false;
+            // the parent was already released the first time, we don't
+            // want documentIsComplete to re-trigger it.
+            self._delays_parent_load = false;
+        },
+    }
+    self.documentIsComplete();
 }
 
 pub fn documentIsComplete(self: *Frame) void {
@@ -2082,7 +2170,7 @@ fn errorPageNavigated(self: *Frame) !void {
 }
 
 pub fn isGoingAway(self: *const Frame) bool {
-    return self.js.env.terminatePending() or self.hasQueuedNavigation();
+    return self.window._closed or self.js.env.terminatePending() or self.hasQueuedNavigation();
 }
 
 fn hasQueuedNavigation(self: *const Frame) bool {
@@ -2224,6 +2312,11 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         .referrer_policy = self.referrer_policy,
         .initiator_origin = self.origin,
     }) catch |err| {
+        if (new_frame.window._closed) {
+            // A script (e.g. in a srcdoc) removed the iframe while navigating:
+            // the frame was discarded, page.closed_frames owns it now.
+            return;
+        }
         // extra defensive..maybe navigate added a new frame, and the index it
         // was added at was removed. Or maybe this frame was removed somehow
         // (which I don't think is possible)
@@ -2237,6 +2330,11 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         iframe._window = null;
         return error.IFrameLoadError;
     };
+
+    if (new_frame.window._closed) {
+        // discarded while navigating, it's no longer in child_frames
+        return;
+    }
 
     // window[N] is based on document order. We appended above and rely on
     // child_frames_sorted to tell window.getFrame whether it has to sort.
@@ -2720,7 +2818,7 @@ fn dispatchQueuedEvents(self: *Frame) !void {
         const element = html_element.asElement();
         switch (queued.kind) {
             .load => {
-                if (has_dom_load_listener) {
+                if (has_dom_load_listener or self._event_manager.hasHandler(element.asEventTarget(), "load")) {
                     try self.fireElementEvent(element, comptime .wrap("load"));
                 }
             },
@@ -4190,7 +4288,7 @@ test "Frame: superseded documents omit DOMContentLoaded and load" {
 }
 
 test "Frame: pending or discarded replacements do not resume old load events" {
-    for ([_]bool{ false, true }) |discard| {
+    for ([_]bool{ false, true }) |discard_replacement| {
         const page = try testing.pageTest("hi.html", .{});
         defer page.close();
         const frame = page.frame().?;
@@ -4207,12 +4305,12 @@ test "Frame: pending or discarded replacements do not resume old load events" {
         frame.document._ready_state = .loading;
         try frame._session.initiateRootNavigation(frame._frame_id, "http://127.0.0.1:9582/src/browser/tests/hi.html?replacement", .{});
         const replacement = frame.page.replacement.?;
-        if (discard) frame._session.discardPendingPage(replacement);
+        if (discard_replacement) frame._session.discardPendingPage(replacement);
         try testing.expectEqual(null, frame._queued_navigation);
         frame.documentIsComplete();
         const events = try ls.local.exec("events.join('|')", null);
         try testing.expectEqual("complete", try events.toStringSlice());
-        if (!discard) frame._session.discardPendingPage(replacement);
+        if (!discard_replacement) frame._session.discardPendingPage(replacement);
     }
 }
 
@@ -4334,6 +4432,18 @@ test "Frame: cancelling navigation does not revive an aborted parser" {
     , null);
     try testing.expectEqual("Original", try (try ls.local.exec("document.title", null)).toStringSlice());
     try testing.expectEqual(null, frame.document._script_created_parser);
+}
+
+test "Frame: an onload handler does not dispatch load to other elements" {
+    const page = try testing.pageTest("fixtures/load_handler_only.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    try testing.expectString("attr;prop;", (try frame.getTitle()).?);
+    try testing.expectEqual(false, frame._event_manager.has_dom_load_listener);
+
+    const none = frame.document.getElementById("none", frame).?;
+    try testing.expectEqual(false, frame._event_manager.hasHandler(none.asEventTarget(), "load"));
 }
 
 test "Frame: static immediate meta refresh navigates" {

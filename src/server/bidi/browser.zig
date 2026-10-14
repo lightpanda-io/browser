@@ -29,6 +29,7 @@ const log = lp.log;
 pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
     const command = std.meta.stringToEnum(enum {
         close,
+        getClientWindows,
         getUserContexts,
         createUserContext,
         removeUserContext,
@@ -36,6 +37,7 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
 
     switch (command) {
         .close => return close(cmd),
+        .getClientWindows => return getClientWindows(cmd),
         .getUserContexts => return getUserContexts(cmd),
         .createUserContext => return createUserContext(cmd),
         .removeUserContext => return removeUserContext(cmd),
@@ -48,6 +50,33 @@ fn close(cmd: *BiDi.Command) !void {
     const bidi = cmd.bidi;
     const arena = try bidi.browser.arena_pool.acquire(.tiny, "bidi browser close");
     bidi.inbox.push(arena, .quit);
+}
+
+const ClientWindowInfo = struct {
+    active: bool,
+    clientWindow: []const u8,
+    state: []const u8,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+};
+
+fn getClientWindows(cmd: *BiDi.Command) !void {
+    const bidi = cmd.bidi;
+    if (bidi.browsing_context == null) {
+        return cmd.sendResult(.{ .clientWindows = &[_]ClientWindowInfo{} });
+    }
+    const viewport = bidi.browser.getViewport();
+    return cmd.sendResult(.{ .clientWindows = &[_]ClientWindowInfo{.{
+        .active = true,
+        .clientWindow = browsing_context.client_window,
+        .state = "normal",
+        .x = 0,
+        .y = 0,
+        .width = viewport.width,
+        .height = viewport.height,
+    }} });
 }
 
 const UserContextInfo = struct { userContext: []const u8 };
@@ -204,4 +233,36 @@ test "bidi.browser: user contexts" {
     // With a page open in the default, its Session can't be swapped out.
     try ctx.processMessage(.{ .id = 14, .method = "browser.createUserContext", .params = struct {}{} });
     try ctx.expectSentError("unsupported operation", null, .{ .id = 14 });
+}
+
+test "bidi.browser: client windows" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.startSession();
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "session.subscribe",
+        .params = .{ .events = .{"browsingContext"} },
+    });
+
+    try ctx.processMessage(.{ .id = 2, .method = "browser.getClientWindows" });
+    try ctx.expectSentResult(.{ .clientWindows = .{} }, .{ .id = 2 });
+
+    try ctx.processMessage(.{ .id = 3, .method = "browsingContext.create", .params = .{ .type = "tab" } });
+    try ctx.expectSentEvent("browsingContext.contextCreated", .{ .clientWindow = "default" });
+
+    try ctx.processMessage(.{ .id = 4, .method = "browsingContext.getTree" });
+    try ctx.expectSentResult(.{ .contexts = .{.{ .clientWindow = "default" }} }, .{ .id = 4 });
+
+    try ctx.processMessage(.{ .id = 5, .method = "browser.getClientWindows" });
+    try ctx.expectSentResult(.{ .clientWindows = .{.{
+        .active = true,
+        .clientWindow = "default",
+        .state = "normal",
+        .x = 0,
+        .y = 0,
+        .width = 1920,
+        .height = 1080,
+    }} }, .{ .id = 5 });
 }

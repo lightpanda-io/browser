@@ -23,6 +23,7 @@ const lp = @import("lightpanda");
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 const target = @import("target.zig");
+const network = @import("network.zig");
 
 const js = @import("../../../browser/js/js.zig");
 const URL = @import("../../../browser/URL.zig");
@@ -638,10 +639,7 @@ pub fn frameNavigateFailed(bc: *CDP.BrowserContext, event: *const Notification.F
         .result = .{
             .frameId = &id.toFrameId(event.frame_id),
             .loaderId = &id.toLoaderId(event.loader_id),
-            .errorText = switch (event.err) {
-                error.TransferCanceled => "net::ERR_ABORTED",
-                else => |err| @errorName(err),
-            },
+            .errorText = network.errorText(event.err),
         },
         .sessionId = session_id,
     }, .{});
@@ -673,6 +671,14 @@ pub fn frameChildFrameCreated(bc: *CDP.BrowserContext, event: *const Notificatio
             .timestamp = event.timestamp,
         }, .{ .session_id = session_id });
     }
+}
+
+pub fn frameChildFrameDetached(bc: *CDP.BrowserContext, event: *const Notification.FrameChildFrameDetached) !void {
+    const session_id = bc.session_id orelse return;
+    try bc.cdp.sendEvent("Page.frameDetached", .{
+        .frameId = &id.toFrameId(event.frame_id),
+        .reason = "remove",
+    }, .{ .session_id = session_id });
 }
 
 pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.FrameNavigated) !void {
@@ -1820,6 +1826,28 @@ test "cdp.frame: frameAttached" {
     }, .{ .session_id = "SID-X" });
 }
 
+test "cdp.frame: frameDetached" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-X", .url = "hi.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try ls.local.eval(
+        \\const f = document.createElement('iframe');
+        \\document.body.appendChild(f);
+        \\f.remove();
+    , null);
+
+    try ctx.expectSentEvent("Page.frameDetached", .{
+        .frameId = &id.toFrameId(frame._frame_id + 1),
+        .reason = "remove",
+    }, .{ .session_id = "SID-X" });
+}
+
 test "cdp.frame: child navigation preserves node registry" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -2183,6 +2211,53 @@ test "cdp.page: stopLoading cancels an uncommitted root navigation" {
     defer ls.deinit();
     const v = try ls.local.exec("document.readyState === 'complete'", null);
     try testing.expect(v.toBool());
+}
+
+test "cdp.page: Fetch.failRequest on a script navigation" {
+    testing.silenceLog(&.{.frame});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-FR", .session_id = "SID-FR", .target_id = "TID-FR-0000000".*, .url = "hi.html" });
+    const live = bc.mainPage() orelse unreachable;
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.enable" });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    {
+        // Aborted is a cancel: the live page stays.
+        const frame = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("location.href = 'hi.html?aborted'", null);
+    }
+    try ctx.expectSentEvent("Fetch.requestPaused", .{ .requestId = "INT-0000000001" }, .{});
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.failRequest", .params = .{ .requestId = "INT-0000000001", .errorReason = "Aborted" } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ctx.expectSentEvent("Network.loadingFailed", .{ .errorText = "net::ERR_ABORTED", .canceled = true }, .{});
+    try testing.waitForPage(bc);
+    try testing.expectEqual(null, bc.session.replacementOf(live));
+    try testing.expect(live == bc.mainPage().?);
+
+    {
+        const frame = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("location.href = 'hi.html?failed'", null);
+    }
+    try ctx.expectSentEvent("Fetch.requestPaused", .{ .requestId = "INT-0000000002" }, .{});
+    try ctx.processMessage(.{ .id = 4, .method = "Fetch.failRequest", .params = .{ .requestId = "INT-0000000002", .errorReason = "Failed" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+
+    // Any other reason is a network error: like Chrome, an error document
+    // commits, which a client waiting on the navigation sees.
+    try ctx.expectSentEvent("Network.loadingFailed", .{ .errorText = "net::ERR_FAILED", .canceled = false }, .{});
+    try ctx.expectSentEvent("Page.frameNavigated", .{ .frame = .{ .url = "http://127.0.0.1:9582/src/browser/tests/hi.html?failed" } }, .{});
 }
 
 test "cdp.frame: reload replays POST navigation" {

@@ -322,6 +322,7 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
         },
         8 => switch (@as(u64, @bitCast(domain[0..8].*))) {
             asUint(u64, "Security") => return @import("domains/security.zig").processMessage(command),
+            asUint(u64, "Debugger") => return @import("domains/debugger.zig").processMessage(command),
             else => {},
         },
         9 => switch (@as(u72, @bitCast(domain[0..9].*))) {
@@ -609,6 +610,7 @@ pub const BrowserContext = struct {
         try notification.register(.frame_navigated_within_document, self, onFrameNavigatedWithinDocument);
         try notification.register(.frame_navigate_failed, self, onFrameNavigateFailed);
         try notification.register(.frame_child_frame_created, self, onFrameChildFrameCreated);
+        try notification.register(.frame_child_frame_detached, self, onFrameChildFrameDetached);
         try notification.register(.frame_destroyed, self, onFrameDestroyed);
         try notification.register(.frame_dom_content_loaded, self, onFrameDOMContentLoaded);
         try notification.register(.frame_loaded, self, onFrameLoaded);
@@ -1034,6 +1036,11 @@ pub const BrowserContext = struct {
     fn onFrameChildFrameCreated(ctx: *anyopaque, msg: *const Notification.FrameChildFrameCreated) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameChildFrameCreated(self, msg);
+    }
+
+    fn onFrameChildFrameDetached(ctx: *anyopaque, msg: *const Notification.FrameChildFrameDetached) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/page.zig").frameChildFrameDetached(self, msg);
     }
 
     fn onFrameNetworkIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkIdle) !void {
