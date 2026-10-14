@@ -3093,6 +3093,101 @@ test "cdp.input: re-navigating an iframe drops the pointer state on its elements
     try testing.expectEqual(0, page.input_pointer.held);
 }
 
+test "cdp.input: a rejected touchEnd keeps the touch contact and an empty touchEnd recovers it" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun(
+        \\window.touchLog = [];
+        \\for (const type of ['touchstart', 'touchend']) {
+        \\  document.addEventListener(type, e => touchLog.push(type + ':' + e.changedTouches[0].identifier));
+        \\}
+    , null);
+    const x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x", null)).toF64();
+    const y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y", null)).toF64();
+    try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchTouchEvent", .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y, .id = 7 }} } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    const original = frame.page.input_touch.contact.?;
+    // Single-contact policy: Chrome ignores the unknown-id touchEnd and opens
+    // a second contact on the touchStart. Both rejections below are deliberate
+    // and must leave contact 7 untouched.
+    try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchTouchEvent", .params = .{ .type = "touchEnd", .touchPoints = &.{.{ .x = x + 30, .y = y, .id = 8 }} } });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 2 });
+    try ctx.processMessage(.{ .id = 3, .method = "Input.dispatchTouchEvent", .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x + 30, .y = y, .id = 8 }} } });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 3 });
+    try testing.expect(frame.page.input_touch.contact.?.target == original.target);
+    try testing.expectEqual(original.point.id, frame.page.input_touch.contact.?.point.id);
+    try testing.expectEqual(original.point.x, frame.page.input_touch.contact.?.point.x);
+    try testing.expectEqual(original.point.y, frame.page.input_touch.contact.?.point.y);
+    try testing.expectEqual(original.pointer_id, frame.page.input_touch.contact.?.pointer_id);
+    try testing.expect((try ls.local.compileAndRun("touchLog.join(',') === 'touchstart:7'", null)).isTrue());
+    try ctx.processMessage(.{ .id = 4, .method = "Input.dispatchTouchEvent", .params = .{ .type = "touchEnd", .touchPoints = &.{} } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expect(frame.page.input_touch.contact == null);
+    try ctx.processMessage(.{ .id = 5, .method = "Input.dispatchTouchEvent", .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y, .id = 8 }} } });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try ctx.processMessage(.{ .id = 6, .method = "Input.dispatchTouchEvent", .params = .{ .type = "touchEnd", .touchPoints = &.{} } });
+    try ctx.expectSentResult(null, .{ .id = 6 });
+    try testing.expect((try ls.local.compileAndRun("touchLog.join(',') === 'touchstart:7,touchend:7,touchstart:8,touchend:8'", null)).isTrue());
+}
+
+test "cdp.input: navigating an iframe clears a touch contact on its child document" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .url = "cdp/input_iframe.html" });
+    const main = bc.mainFrame().?;
+    const child = main.child_frames.items[0];
+    const target = child.document.getElementById("text", child) orelse unreachable;
+    // CDP currently hit-tests only the main frame; seed the child contact
+    // directly to exercise frame teardown independently of iframe routing.
+    // Chrome keeps such a contact alive across the navigation (a later
+    // touchEnd still ends it); clearing it here is Lightpanda's teardown rule.
+    try Frame.user_input.touchStart(child, target, .{ .x = 10, .y = 20, .id = 7 }, .{});
+    try testing.expect(main.page.input_touch.contact.?.target == target);
+    var ls: lp.js.Local.Scope = undefined;
+    main.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun("document.querySelector('iframe').src = 'iframe/input_child.html?touch-nav'", null);
+    _ = try bc.session.processQueuedNavigation();
+    try testing.expect(std.mem.endsWith(u8, main.child_frames.items[0].url, "?touch-nav"));
+    try testing.expect(main.page.input_touch.contact == null);
+    // A fresh contact is accepted: aim at the parent's own #text input so the
+    // hit-test does not depend on where the iframe is laid out.
+    const x = try (try ls.local.compileAndRun("document.getElementById('text').getBoundingClientRect().x", null)).toF64();
+    const y = try (try ls.local.compileAndRun("document.getElementById('text').getBoundingClientRect().y", null)).toF64();
+    try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchTouchEvent", .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y, .id = 8 }} } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expectEqual(@as(i32, 8), main.page.input_touch.contact.?.point.id);
+    try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchTouchEvent", .params = .{ .type = "touchEnd", .touchPoints = &.{} } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expect(main.page.input_touch.contact == null);
+}
+
+test "cdp.input: navigating an iframe keeps a touch contact on the parent document" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .url = "cdp/input_iframe.html" });
+    const main = bc.mainFrame().?;
+    const target = main.document.getDocumentElement().?;
+    try Frame.user_input.touchStart(main, target, .{ .x = 300, .y = 300, .id = 7 }, .{});
+    var ls: lp.js.Local.Scope = undefined;
+    main.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun("document.querySelector('iframe').src = 'iframe/input_child.html?parent-touch-nav'", null);
+    _ = try bc.session.processQueuedNavigation();
+    try testing.expect(std.mem.endsWith(u8, main.child_frames.items[0].url, "?parent-touch-nav"));
+    try testing.expect(main.page.input_touch.contact != null);
+    try testing.expect(main.page.input_touch.contact.?.target == target);
+    try testing.expectEqual(@as(i32, 7), main.page.input_touch.contact.?.point.id);
+    try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchTouchEvent", .params = .{ .type = "touchEnd", .touchPoints = &.{} } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expect(main.page.input_touch.contact == null);
+}
+
 test "cdp.input: mouse activation rechecks disabled state between events" {
     var ctx = try testing.context();
     defer ctx.deinit();

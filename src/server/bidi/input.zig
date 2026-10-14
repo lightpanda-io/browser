@@ -872,6 +872,62 @@ test "bidi.input: touch tap" {
     try ctx.expectSentError("invalid argument", "input source id already used with a different type", .{ .id = 7 });
 }
 
+test "bidi.input: touch releaseActions lifts a held finger and allows a fresh tap" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const context_id = try ctx.createContext(.{ .url = "bidi/input.html" });
+    try ctx.processMessage(.{ .id = 1, .method = "browsingContext.locateNodes", .params = .{ .context = context_id, .locator = .{ .type = "css", .value = "#btn" } } });
+    try ctx.expectSentResult(.{ .nodes = .{.{ .sharedId = "1" }} }, .{ .id = 1 });
+    try evaluate(&ctx, 2, context_id,
+        \\window.touchLog = [];
+        \\for (const type of ['pointerdown', 'pointerup', 'touchstart', 'touchend', 'click']) {
+        \\  document.addEventListener(type, e => touchLog.push(type + ':' + (e.pointerType ?? e.target.id)));
+        \\}
+        \\'ok'
+    );
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "string", .value = "ok" } }, .{ .id = 2 });
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "finger",
+            .parameters = .{ .pointerType = "touch" },
+            .actions = .{
+                .{ .type = "pointerMove", .x = 0, .y = 0, .origin = .{ .type = "element", .element = .{ .sharedId = "1" } } },
+                .{ .type = "pointerDown", .button = 0 },
+            },
+        }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    const frame = try ctx.frame();
+    try testing.expect(frame.page.input_touch.contact != null);
+    try ctx.processMessage(.{ .id = 4, .method = "input.releaseActions", .params = .{ .context = context_id } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expect(frame.page.input_touch.contact == null);
+    try testing.expectEqual(@as(usize, 0), ctx.bidi().input_state.sources.items.len);
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "input.performActions",
+        .params = .{ .context = context_id, .actions = .{.{
+            .type = "pointer",
+            .id = "finger",
+            .parameters = .{ .pointerType = "touch" },
+            .actions = .{
+                .{ .type = "pointerMove", .x = 0, .y = 0, .origin = .{ .type = "element", .element = .{ .sharedId = "1" } } },
+                .{ .type = "pointerDown", .button = 0 },
+                .{ .type = "pointerUp", .button = 0 },
+            },
+        }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try evaluate(&ctx, 6, context_id, "touchLog.join(' ')");
+    try ctx.expectSentResult(.{ .type = "success", .result = .{
+        .type = "string",
+        .value = "pointerdown:touch touchstart:btn pointerup:touch touchend:btn click:touch pointerdown:touch touchstart:btn pointerup:touch touchend:btn click:touch",
+    } }, .{ .id = 6 });
+}
+
 test "bidi.input: later releases of a three-button chord report detail 0" {
     var ctx = try testing.context();
     defer ctx.deinit();
