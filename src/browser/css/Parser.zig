@@ -383,8 +383,8 @@ const Rule = union(enum) {
 
 /// An item of a style rule's block. With CSS Nesting, a block holds style
 /// rules and at-rules next to its declarations. A nested style rule's
-/// selector is its raw source (`&.active`, `> li`), not yet resolved against
-/// the enclosing rule's selector.
+/// selector is its raw source (`&.active`, `> li`); `resolveNestedSelector`
+/// resolves it against the enclosing rule's selector.
 pub const BlockItem = union(enum) {
     declaration: Declaration,
     rule: StyleRule,
@@ -566,6 +566,73 @@ fn consumeNestedRule(stream: *TokenStream, input: []const u8) ?StyleRule {
     return null;
 }
 
+/// Resolve the selector list of a style rule nested in `parent` (CSS Nesting
+/// §3): each `&` becomes `:is(<parent>)`, and a selector without one is
+/// relative to the parent, as if it started with `& `. Using `:is()` keeps
+/// the spec's specificity (the most specific parent selector) and lets a
+/// parent selector list stand in for a single `&`. Selectors are split on
+/// the commas outside parentheses and brackets; tokens are copied verbatim.
+pub fn resolveNestedSelector(allocator: std.mem.Allocator, parent: []const u8, nested: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var stream = TokenStream.init(nested);
+
+    // Start of the current complex selector in `out`, and whether it holds
+    // an `&` yet. Each selector is written as it streams by, and the parent is
+    // inserted at `selector_start` when it turns out to have no `&`.
+    var selector_start: usize = 0;
+    var has_nesting = false;
+    var pending_space = false;
+    var depth: usize = 0;
+
+    while (true) {
+        const span = stream.next();
+        const at_comma = if (span) |sp| depth == 0 and sp.token == .comma else true;
+        if (at_comma) {
+            if (out.items.len > selector_start and !has_nesting) {
+                // Inserted back to front, to read `:is(<parent>) <selector>`.
+                try out.insertSlice(allocator, selector_start, ") ");
+                try out.insertSlice(allocator, selector_start, parent);
+                try out.insertSlice(allocator, selector_start, ":is(");
+            }
+            if (span == null) {
+                break;
+            }
+            if (out.items.len > selector_start) {
+                try out.appendSlice(allocator, ", ");
+            }
+            selector_start = out.items.len;
+            has_nesting = false;
+            pending_space = false;
+            continue;
+        }
+
+        const sp = span.?;
+        if (isWhitespaceOrComment(sp.token)) {
+            pending_space = out.items.len > selector_start;
+            continue;
+        }
+        if (pending_space) {
+            try out.append(allocator, ' ');
+            pending_space = false;
+        }
+        updateDepth(sp.token, &depth);
+        switch (sp.token) {
+            .delim => |c| if (c == '&') {
+                try out.appendSlice(allocator, ":is(");
+                try out.appendSlice(allocator, parent);
+                try out.append(allocator, ')');
+                has_nesting = true;
+                continue;
+            },
+            else => {},
+        }
+        try out.appendSlice(allocator, nested[sp.start..sp.end]);
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
 const testing = std.testing;
 
 test "RulesIterator: single rule" {
@@ -709,4 +776,26 @@ test "DeclarationsIterator: a declarations list has no nested rules" {
     try testing.expectEqualStrings("margin", item.declaration.name);
 
     try testing.expectEqual(null, it.nextItem());
+}
+
+test "resolveNestedSelector" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const cases = [_]struct { parent: []const u8, nested: []const u8, want: []const u8 }{
+        .{ .parent = ".a", .nested = "&.b", .want = ":is(.a).b" },
+        .{ .parent = ".a", .nested = ".b", .want = ":is(.a) .b" },
+        .{ .parent = ".a", .nested = "> li", .want = ":is(.a) > li" },
+        .{ .parent = ".a", .nested = "& + &", .want = ":is(.a) + :is(.a)" },
+        .{ .parent = ".a", .nested = ".x &", .want = ".x :is(.a)" },
+        .{ .parent = ".a", .nested = ":not(&) .b", .want = ":not(:is(.a)) .b" },
+        .{ .parent = ".a, .b", .nested = "&:hover", .want = ":is(.a, .b):hover" },
+        .{ .parent = ".a", .nested = "&.b, .c ,  :is(.d, .e)", .want = ":is(.a).b, :is(.a) .c, :is(.a) :is(.d, .e)" },
+        .{ .parent = ".a", .nested = "[data-x='&']", .want = ":is(.a) [data-x='&']" },
+        .{ .parent = ".a", .nested = "  /* c */ &  .b  ", .want = ":is(.a) .b" },
+    };
+    for (cases) |c| {
+        try testing.expectEqualStrings(c.want, try resolveNestedSelector(allocator, c.parent, c.nested));
+    }
 }
