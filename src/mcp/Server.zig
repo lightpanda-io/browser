@@ -29,142 +29,122 @@ const Transport = @import("Transport.zig");
 
 const Self = @This();
 
-/// Session every un-scoped request lands on. Over stdio there is only ever
-/// this one; the HTTP transport routes to it when a client sends no
+/// The session an un-scoped request lands on: the only one over stdio, and
+/// the one the HTTP transport routes to when a client sends no
 /// `Mcp-Session-Id`.
 pub const default_session_id = "default";
 
 allocator: std.mem.Allocator,
 app: *App,
 
-sessions: std.StringHashMapUnmanaged(*lp.ToolSession) = .empty,
-/// Monotonic counter backing auto-generated session ids (`s1`, `s2`, …).
-session_seq: u32 = 0,
-/// Whether the transport can route a request to a named session. HTTP does
-/// (`Mcp-Session-Id`); over stdio the session tools are refused, since a
-/// session created there could never be addressed.
-multi_session: bool = false,
-/// The session the request currently being handled targets. Safe as a single
-/// field because every request is dispatched on one thread, one at a time;
-/// the transport sets it (via `useSession`) before each dispatch. Tools and
-/// resources read it rather than threading a session through every call.
-active_session: *lp.ToolSession = undefined,
+/// The one session this server drives. The HTTP transport runs a server per
+/// session, each on its own thread, so a slow call in one session never
+/// holds up another.
+active_session: *lp.ToolSession,
+/// `default`, or the name the HTTP transport gave this session.
+session_id: []const u8,
+/// How the session tools reach the other sessions. Only the HTTP transport
+/// can route a request to a named session (`Mcp-Session-Id`), so over stdio
+/// it is null and those tools are refused.
+directory: ?Directory = null,
 transport: Transport,
 
+/// The HTTP transport's sessions, for the session tools. Safe to call from
+/// any session's thread.
+pub const Directory = struct {
+    context: *anyopaque,
+    createFn: *const fn (context: *anyopaque, arena: std.mem.Allocator, name: ?[]const u8) anyerror![]const u8,
+    listFn: *const fn (context: *anyopaque, arena: std.mem.Allocator) anyerror![]const SessionInfo,
+    closeFn: *const fn (context: *anyopaque, id: []const u8) bool,
+
+    /// Create the session named `name` (or a fresh id when null), or find the
+    /// existing one. Returns its id, in `arena`.
+    pub fn create(self: Directory, arena: std.mem.Allocator, name: ?[]const u8) ![]const u8 {
+        return self.createFn(self.context, arena, name);
+    }
+
+    pub fn list(self: Directory, arena: std.mem.Allocator) ![]const SessionInfo {
+        return self.listFn(self.context, arena);
+    }
+
+    /// False if there is no such session.
+    pub fn close(self: Directory, id: []const u8) bool {
+        return self.closeFn(self.context, id);
+    }
+};
+
+pub const SessionInfo = struct {
+    id: []const u8,
+    url: ?[]const u8,
+};
+
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer) !*Self {
+    return initSession(allocator, app, writer, default_session_id);
+}
+
+/// A server for the session named `id`, which is duped.
+pub fn initSession(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer, id: []const u8) !*Self {
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
-    self.* = .{
-        .allocator = allocator,
-        .app = app,
-        .transport = .init(allocator, writer),
-    };
-    errdefer self.transport.deinit();
+    const owned_id = try allocator.dupe(u8, id);
+    errdefer allocator.free(owned_id);
 
-    self.active_session = try self.createSession(default_session_id);
-    return self;
-}
+    // Heap-allocated and never moved: `Browser` registers self-pointers.
+    const entry = try allocator.create(lp.ToolSession);
+    errdefer allocator.destroy(entry);
 
-pub fn deinit(self: *Self) void {
-    var it = self.sessions.iterator();
-    while (it.next()) |kv| self.destroySession(kv.key_ptr.*, kv.value_ptr.*);
-    self.sessions.deinit(self.allocator);
-
-    self.transport.deinit();
-    self.allocator.destroy(self);
-}
-
-/// Create the session named `id`, or return the existing one. The `id` is
-/// duped, so the caller keeps ownership of its slice. Sessions are
-/// heap-allocated and never moved: `Browser` registers self-pointers.
-pub fn createSession(self: *Self, id: []const u8) !*lp.ToolSession {
-    if (self.sessions.get(id)) |existing| return existing;
-
-    const owned_id = try self.allocator.dupe(u8, id);
-    errdefer self.allocator.free(owned_id);
-
-    const entry = try self.allocator.create(lp.ToolSession);
-    errdefer self.allocator.destroy(entry);
-
-    try entry.init(self.app);
+    try entry.init(app);
     errdefer entry.deinit();
 
     // Only the default session is backed by the on-disk cookie file; named
     // sessions start clean so agents stay isolated by default.
     if (isDefault(id)) {
-        if (self.app.config.cookieFile()) |cookie_path| {
+        if (app.config.cookieFile()) |cookie_path| {
             lp.cookies.loadFromFile(entry.session, cookie_path);
         }
     }
-
-    try self.sessions.put(self.allocator, owned_id, entry);
     entry.exitIsolate();
-    return entry;
+
+    self.* = .{
+        .allocator = allocator,
+        .app = app,
+        .active_session = entry,
+        .session_id = owned_id,
+        .transport = .init(allocator, writer),
+    };
+    return self;
 }
 
-fn isDefault(id: []const u8) bool {
-    return std.mem.eql(u8, id, default_session_id);
-}
-
-/// Tear down the session named `id`. Returns false if no such session, or if
-/// it is the default (which lives for the whole process).
-pub fn closeSession(self: *Self, id: []const u8) bool {
-    if (isDefault(id)) return false;
-    const kv = self.sessions.fetchRemove(id) orelse return false;
-    if (self.active_session == kv.value) self.active_session = self.defaultSession();
-    self.destroySession(kv.key, kv.value);
-    return true;
-}
-
-fn destroySession(self: *Self, id: []const u8, entry: *lp.ToolSession) void {
-    if (isDefault(id)) {
+pub fn deinit(self: *Self) void {
+    const entry = self.active_session;
+    if (isDefault(self.session_id)) {
         if (self.app.config.cookieJarFile()) |cookie_jar_path| {
             lp.cookies.saveToFile(&entry.session.cookie_jar, cookie_jar_path);
         }
     }
-
     entry.enterIsolate();
     entry.deinit();
-    self.allocator.free(id);
     self.allocator.destroy(entry);
+    self.allocator.free(self.session_id);
+
+    self.transport.deinit();
+    self.allocator.destroy(self);
 }
 
-/// The session an un-scoped (stdio, or header-less HTTP) request targets.
-pub fn defaultSession(self: *Self) *lp.ToolSession {
-    return self.sessions.get(default_session_id).?;
+pub fn isDefault(id: []const u8) bool {
+    return std.mem.eql(u8, id, default_session_id);
 }
 
-/// Point subsequent tool/resource dispatch at the session named `id`, creating
-/// it on first use. A null or empty `id` selects the default.
-pub fn useSession(self: *Self, id: ?[]const u8) !*lp.ToolSession {
-    const wanted = id orelse "";
-    self.active_session = if (wanted.len == 0) self.defaultSession() else try self.createSession(wanted);
-    return self.active_session;
-}
-
-/// A session id that is not currently in use, formatted into `arena`.
-pub fn nextSessionId(self: *Self, arena: std.mem.Allocator) ![]const u8 {
-    while (true) {
-        self.session_seq += 1;
-        const candidate = try arena.print("s{d}", .{self.session_seq});
-        if (!self.sessions.contains(candidate)) return candidate;
-    }
-}
-
-/// Pump every live session's pending transfers and return the shortest time
-/// the caller may block before pumping again. See `Session.idleSlice`.
+/// Pump the session's pending transfers and return how long the
+/// caller may block before pumping again. See `Session.idleSlice`.
 pub fn idle(self: *Self) u31 {
-    var wait: u31 = std.math.maxInt(u31);
-    var it = self.sessions.valueIterator();
-    while (it.next()) |entry| {
-        // Pumping may resume JS (e.g. a completed script fetch), so it needs
-        // the session's isolate current.
-        entry.*.enterIsolate();
-        wait = @min(wait, entry.*.session.idleSlice());
-        entry.*.exitIsolate();
-    }
-    return wait;
+    // Pumping may resume JS (e.g. a completed script fetch), so it needs
+    // the session's isolate current.
+    const entry = self.active_session;
+    entry.enterIsolate();
+    defer entry.exitIsolate();
+    return entry.session.idleSlice();
 }
 
 pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {

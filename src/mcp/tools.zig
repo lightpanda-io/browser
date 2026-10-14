@@ -261,53 +261,50 @@ fn handleSave(arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult 
 const multi_session_required: ExtraResult = .{ .fail = "multiple sessions require the HTTP transport (start with --port)" };
 
 fn handleSessionNew(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult {
-    if (!server.multi_session) return multi_session_required;
+    const directory = server.directory orelse return multi_session_required;
     const Args = struct { name: ?[]const u8 = null };
     const args = browser_tools.parseArgsOrDefault(Args, arena, arguments) catch
         return .{ .invalid_params = "expected { name?: string }" };
 
     const requested: ?[]const u8 = if (args.name) |n| (if (n.len > 0) n else null) else null;
-    const sid = requested orelse (server.nextSessionId(arena) catch
-        return .{ .fail = "out of memory" });
-
-    _ = server.createSession(sid) catch |err|
+    const sid = directory.create(arena, requested) catch |err|
         return .{ .fail = @errorName(err) };
 
     return okFmt(arena, "session {s}", .{sid});
 }
 
 fn handleSessionList(server: *Server, arena: std.mem.Allocator) ExtraResult {
-    if (!server.multi_session) return multi_session_required;
-    const Entry = struct { id: []const u8, url: ?[]const u8 };
-    var list: std.ArrayList(Entry) = .empty;
+    const directory = server.directory orelse return multi_session_required;
+    const list = directory.list(arena) catch return .{ .fail = "out of memory" };
 
-    var it = server.sessions.iterator();
-    while (it.next()) |kv| {
-        const url: ?[]const u8 = if (kv.value_ptr.*.session.currentFrame()) |frame| frame.url else null;
-        list.append(arena, .{ .id = kv.key_ptr.*, .url = url }) catch
-            return .{ .fail = "out of memory" };
+    // The directory knows where the others were after their last call; this
+    // session may have moved since.
+    for (@constCast(list)) |*entry| {
+        if (std.mem.eql(u8, entry.id, server.session_id)) {
+            entry.url = if (server.active_session.session.currentFrame()) |frame| frame.url else null;
+        }
     }
 
-    const json = std.json.Stringify.valueAlloc(arena, list.items, .{ .emit_null_optional_fields = false }) catch
+    const json = std.json.Stringify.valueAlloc(arena, list, .{ .emit_null_optional_fields = false }) catch
         return .{ .fail = "out of memory" };
     return .{ .ok = json };
 }
 
 fn handleSessionClose(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult {
-    if (!server.multi_session) return multi_session_required;
+    const directory = server.directory orelse return multi_session_required;
     const Args = struct { id: []const u8 };
     const args = browser_tools.parseArgs(Args, arena, arguments) catch
         return .{ .invalid_params = "expected { id: string }" };
 
-    if (std.mem.eql(u8, args.id, Server.default_session_id)) {
+    if (Server.isDefault(args.id)) {
         return .{ .fail = "the default session cannot be closed" };
     }
     // Closing the session serving this very call would tear down the isolate
     // mid-dispatch; require the client to be elsewhere first.
-    if (server.sessions.get(args.id) == server.active_session) {
+    if (std.mem.eql(u8, args.id, server.session_id)) {
         return .{ .fail = "cannot close the session you are attached to" };
     }
-    if (!server.closeSession(args.id)) {
+    if (!directory.close(args.id)) {
         return .{ .fail = "no such session" };
     }
 
@@ -1992,52 +1989,16 @@ test "MCP - waitForState with bad state surfaces rich error" {
     try testing.expect(std.mem.find(u8, written, "isError\":true") != null);
 }
 
-test "MCP - sessions: new, list, attach isolation, close" {
+test "MCP - sessions: refused without a directory (stdio)" {
     const aa = testing.arena_allocator;
     var out: std.Io.Writer.Allocating = .init(aa);
     var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
     defer server.deinit();
-    server.multi_session = true;
 
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_new","arguments":{"name":"a"}}}
     );
-    try testing.expect(std.mem.find(u8, out.written(), "session a") != null);
-    try testing.expect(server.sessions.contains("a"));
-
-    out.clearRetainingCapacity();
-    try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_list"}}
-    );
-    // The listing is JSON nested in the tool-result text, so its quotes are
-    // escaped (\"default\").
-    try testing.expect(std.mem.find(u8, out.written(), "\\\"default\\\"") != null);
-    try testing.expect(std.mem.find(u8, out.written(), "\\\"a\\\"") != null);
-
-    // Routing a request to "a" (as the Mcp-Session-Id header does) and loading
-    // a page there leaves the default untouched, proving the two are isolated.
-    _ = try server.useSession("a");
-    try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"goto","arguments":{"url":"about:blank"}}}
-    );
-    try testing.expect(server.sessions.get("a").?.session.currentFrame() != null);
-    try testing.expect(server.defaultSession().session.currentFrame() == null);
-
-    // Route back to the default before closing "a" (the active session can't be closed).
-    _ = try server.useSession(null);
-
-    out.clearRetainingCapacity();
-    try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"default"}}}
-    );
-    try testing.expect(std.mem.find(u8, out.written(), "cannot be closed") != null);
-
-    out.clearRetainingCapacity();
-    try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"a"}}}
-    );
-    try testing.expect(std.mem.find(u8, out.written(), "closed session a") != null);
-    try testing.expect(!server.sessions.contains("a"));
+    try testing.expect(std.mem.find(u8, out.written(), "require the HTTP transport") != null);
 }
 
 /// The text of a tools/call result, which tools like findElement fill with JSON.
