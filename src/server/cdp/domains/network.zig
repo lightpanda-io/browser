@@ -48,6 +48,76 @@ pub const BufferLimits = struct {
     post_data: usize = max_post_data_size,
 };
 
+// Why Fetch.failRequest fails an intercepted request.
+pub const ErrorReason = enum {
+    Failed,
+    Aborted,
+    TimedOut,
+    AccessDenied,
+    ConnectionClosed,
+    ConnectionReset,
+    ConnectionRefused,
+    ConnectionAborted,
+    ConnectionFailed,
+    NameNotResolved,
+    InternetDisconnected,
+    AddressUnreachable,
+    BlockedByClient,
+    BlockedByResponse,
+
+    const Failure = error{
+        Failed,
+        AccessDenied,
+        ConnectionClosed,
+        ConnectionReset,
+        ConnectionRefused,
+        ConnectionAborted,
+        ConnectionFailed,
+        NameNotResolved,
+        InternetDisconnected,
+        AddressUnreachable,
+        BlockedByClient,
+        BlockedByResponse,
+    };
+
+    pub fn toError(self: ErrorReason) anyerror {
+        return switch (self) {
+            .Aborted => error.TransferCanceled, // Like Chrome, Only abort cancels
+            .TimedOut => error.OperationTimedout,
+            inline else => |reason| @field(Failure, @tagName(reason)),
+        };
+    }
+
+    fn netError(self: ErrorReason) []const u8 {
+        return switch (self) {
+            .Failed => "net::ERR_FAILED",
+            .Aborted => "net::ERR_ABORTED",
+            .TimedOut => "net::ERR_TIMED_OUT",
+            .AccessDenied => "net::ERR_ACCESS_DENIED",
+            .ConnectionClosed => "net::ERR_CONNECTION_CLOSED",
+            .ConnectionReset => "net::ERR_CONNECTION_RESET",
+            .ConnectionRefused => "net::ERR_CONNECTION_REFUSED",
+            .ConnectionAborted => "net::ERR_CONNECTION_ABORTED",
+            .ConnectionFailed => "net::ERR_CONNECTION_FAILED",
+            .NameNotResolved => "net::ERR_NAME_NOT_RESOLVED",
+            .InternetDisconnected => "net::ERR_INTERNET_DISCONNECTED",
+            .AddressUnreachable => "net::ERR_ADDRESS_UNREACHABLE",
+            .BlockedByClient => "net::ERR_BLOCKED_BY_CLIENT",
+            .BlockedByResponse => "net::ERR_BLOCKED_BY_RESPONSE",
+        };
+    }
+};
+
+// Chrome's net error for an ErrorReason's error, else the error's name.
+pub fn errorText(err: anyerror) []const u8 {
+    inline for (comptime std.enums.values(ErrorReason)) |reason| {
+        if (err == reason.toError()) {
+            return reason.netError();
+        }
+    }
+    return @errorName(err);
+}
+
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
@@ -413,7 +483,6 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
 
     // Consumer-side cancel (stopLoading, xhr.abort, AbortController, ...):
     const canceled = msg.err == error.TransferCanceled;
-    const error_text: []const u8 = if (canceled) "net::ERR_ABORTED" else @errorName(msg.err);
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
@@ -421,7 +490,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
         .timestamp = lp.datetime.timestamp(.boot),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
-        .errorText = error_text,
+        .errorText = errorText(msg.err),
         .canceled = canceled,
         .blockedReason = msg.blocked_reason,
     }, .{ .session_id = session_id });
@@ -752,6 +821,14 @@ fn keyFromRequestId(request_id: []const u8) !CDP.BrowserContext.CapturedKey {
 }
 
 const testing = @import("../testing.zig");
+test "cdp.network: errorText" {
+    try testing.expectEqualSlices(u8, "net::ERR_ABORTED", errorText(error.TransferCanceled));
+    try testing.expectEqualSlices(u8, "net::ERR_TIMED_OUT", errorText(error.OperationTimedout));
+    try testing.expectEqualSlices(u8, "net::ERR_FAILED", errorText(ErrorReason.Failed.toError()));
+    try testing.expectEqualSlices(u8, "net::ERR_NAME_NOT_RESOLVED", errorText(ErrorReason.NameNotResolved.toError()));
+    try testing.expectEqualSlices(u8, "CouldntConnect", errorText(error.CouldntConnect));
+}
+
 test "cdp.network emulateNetworkConditions and setBypassServiceWorker" {
     testing.silenceLog(&.{.not_implemented});
     var ctx = try testing.context();

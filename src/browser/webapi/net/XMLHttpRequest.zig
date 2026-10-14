@@ -819,8 +819,7 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
             try self._proto.dispatch(.abort, null, exec);
         } else if (is_timeout) {
             try self._proto.dispatch(.timeout, null, exec);
-        }
-        if (!is_timeout) {
+        } else {
             try self._proto.dispatch(.err, null, exec);
         }
         try self._proto.dispatch(.load_end, null, exec);
