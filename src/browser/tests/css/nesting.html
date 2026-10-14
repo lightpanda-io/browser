@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<head>
+  <script src="../testing.js"></script>
+</head>
+
+<!--
+  CSS Nesting: style rules and conditional at-rules written inside a style
+  rule's block. A nested selector resolves against its parent's: `&` stands
+  for the parent, and a selector without `&` is relative to it (descendant
+  unless it starts with a combinator).
+
+  The first <style> is read through the text path; the rules the scripts
+  insert or replace go through the CSSOM path.
+-->
+
+<style>
+  .card { visibility: hidden; &.ready { visibility: visible; } }
+  .list { .item { display: none; } }
+  .menu { > .entry { display: none; } }
+  .tabs { .label & { display: none; } }
+  .a, .b { &:not(.keep) { display: none; } }
+  /* A declaration after a nested rule still applies. */
+  .after { &.unused { color: red; } display: none; }
+  /* `div:hover {}` looks like a `div: hover` declaration until its block. */
+  .typed { span { display: none; } }
+  .deep { .mid { .leaf { display: none; } } }
+  .media-hit { @media (min-width: 1px) { display: none; .inner { display: none; } } }
+  .media-miss { @media (max-width: 1px) { display: none; } }
+  /* Specificity is the parent's: :is(#by-id) beats the later .weak rule. */
+  #by-id { & { display: none; } }
+  .weak { display: block; }
+</style>
+
+<body>
+  <div id="card" class="card ready">card</div>
+  <div id="card-pending" class="card">pending</div>
+  <div class="list"><span id="item" class="item">item</span></div>
+  <div id="item-outside" class="item">item outside</div>
+  <div class="menu"><div id="entry" class="entry">entry</div><div><div id="entry-deep" class="entry">deep</div></div></div>
+  <div class="label"><div id="tab" class="tabs">tab</div></div>
+  <div id="tab-alone" class="tabs">tab alone</div>
+  <div id="list-a" class="a">a</div>
+  <div id="list-b" class="b">b</div>
+  <div id="list-keep" class="a keep">keep</div>
+  <div id="after" class="after">after</div>
+  <div class="typed"><span id="typed">typed</span></div>
+  <div class="deep"><div class="mid"><div id="leaf" class="leaf">leaf</div></div></div>
+  <div id="media-hit" class="media-hit"><div id="media-inner" class="inner">inner</div></div>
+  <div id="media-miss" class="media-miss">miss</div>
+  <div id="by-id" class="weak">by id</div>
+  <div id="om" class="om hide"><span id="om-inner" class="inner">om inner</span></div>
+  <div id="inserted"><i id="inserted-inner">inserted inner</i></div>
+  <style id="replaced"></style>
+  <style id="dynamic"></style>
+</body>
+
+<script id=nesting_ampersand_compound>
+{
+  testing.expectEqual('visible', getComputedStyle($('#card')).visibility);
+  testing.expectEqual('hidden', getComputedStyle($('#card-pending')).visibility);
+}
+</script>
+
+<script id=nesting_relative_descendant>
+{
+  testing.expectFalse($('#item').checkVisibility());
+  testing.expectTrue($('#item-outside').checkVisibility());
+}
+</script>
+
+<script id=nesting_leading_combinator>
+{
+  testing.expectFalse($('#entry').checkVisibility());
+  testing.expectTrue($('#entry-deep').checkVisibility());
+}
+</script>
+
+<script id=nesting_ampersand_not_first>
+{
+  testing.expectFalse($('#tab').checkVisibility());
+  testing.expectTrue($('#tab-alone').checkVisibility());
+}
+</script>
+
+<script id=nesting_parent_selector_list>
+{
+  testing.expectFalse($('#list-a').checkVisibility());
+  testing.expectFalse($('#list-b').checkVisibility());
+  testing.expectTrue($('#list-keep').checkVisibility());
+}
+</script>
+
+<script id=nesting_declaration_after_rule>
+{
+  testing.expectFalse($('#after').checkVisibility());
+}
+</script>
+
+<script id=nesting_type_selector>
+{
+  testing.expectFalse($('#typed').checkVisibility());
+}
+</script>
+
+<script id=nesting_deep>
+{
+  testing.expectFalse($('#leaf').checkVisibility());
+}
+</script>
+
+<script id=nesting_media>
+{
+  testing.expectFalse($('#media-hit').checkVisibility());
+  testing.expectFalse($('#media-inner').checkVisibility());
+  testing.expectTrue($('#media-miss').checkVisibility());
+}
+</script>
+
+<script id=nesting_specificity>
+{
+  testing.expectFalse($('#by-id').checkVisibility());
+}
+</script>
+
+<script id=nesting_cssom_surface>
+{
+  const rules = document.styleSheets[0].cssRules;
+  testing.expectEqual(12, rules.length);
+
+  const card = rules[0];
+  testing.expectEqual('.card', card.selectorText);
+  testing.expectEqual('hidden', card.style.visibility);
+  testing.expectEqual(1, card.cssRules.length);
+  testing.expectEqual('&.ready', card.cssRules[0].selectorText);
+  testing.expectEqual('visible', card.cssRules[0].style.visibility);
+
+  const media = rules[8];
+  testing.expectEqual(1, media.cssRules.length);
+  testing.expectEqual(4, media.cssRules[0].type);
+
+  testing.expectEqual(0, rules[11].cssRules.length);
+}
+</script>
+
+<script id=nesting_cascade_after_cssom_read>
+{
+  // Reading cssRules makes the cascade come from the CSSOM rules. A rebuild
+  // from them keeps the nested rules.
+  document.styleSheets[0].insertRule('.unrelated { color: red; }', 0);
+  testing.expectEqual('visible', getComputedStyle($('#card')).visibility);
+  testing.expectFalse($('#item').checkVisibility());
+  testing.expectFalse($('#leaf').checkVisibility());
+  testing.expectFalse($('#media-inner').checkVisibility());
+  testing.expectFalse($('#by-id').checkVisibility());
+}
+</script>
+
+<script id=nesting_replace_sync>
+{
+  const sheet = $('#replaced').sheet;
+  sheet.replaceSync('.om { &.hide { display: none; } .inner { visibility: hidden; } }');
+  testing.expectFalse($('#om').checkVisibility());
+  testing.expectEqual('hidden', getComputedStyle($('#om-inner')).visibility);
+  testing.expectEqual(2, sheet.cssRules[0].cssRules.length);
+}
+</script>
+
+<script id=nesting_insert_rule>
+{
+  const sheet = $('#dynamic').sheet;
+  sheet.insertRule('#inserted { & > i { display: none; } }', 0);
+  testing.expectFalse($('#inserted-inner').checkVisibility());
+  testing.expectTrue($('#inserted').checkVisibility());
+  testing.expectEqual('#inserted { & > i { display: none; } }', sheet.cssRules[0].cssText);
+}
+</script>
