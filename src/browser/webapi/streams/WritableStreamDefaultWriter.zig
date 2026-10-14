@@ -92,10 +92,6 @@ pub fn getClosed(self: *WritableStreamDefaultWriter, exec: *const Execution) !js
         return local.typeError("Writer has been released");
     };
 
-    if (stream._state == .closed) {
-        return local.resolvePromise(.{});
-    }
-
     return local.resolvePromise(.{});
 }
 
