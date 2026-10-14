@@ -629,6 +629,19 @@ pub fn isHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptio
     return self.visibilityProps(el).isHidden(options);
 }
 
+pub const Rendering = enum { visible, invisible, none };
+
+/// `.none` hides `el` and its subtree (display:none, here or above).
+/// `.invisible` hides `el` alone: visibility:hidden inherits, but a
+/// descendant can set it back to visible.
+pub fn rendering(self: *StyleManager, el: *Element) Rendering {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .visible;
+    const props = self.visibilityProps(el);
+    if (props.isHidden(.{})) return .none;
+    return if (props.visibility_hidden) .invisible else .visible;
+}
+
 /// The element's own display:none. Use `isHidden` to see if it's hidden by an ancestor
 /// Honors the UA stylesheet rules per HTML Rendering §15.3.1 "Hidden elements".
 pub fn hasDisplayNone(self: *StyleManager, el: *Element) bool {

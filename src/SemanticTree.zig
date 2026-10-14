@@ -438,6 +438,7 @@ const Open = struct {
     // for the children's xpath index
     tag_counts: std.StringArrayHashMapUnmanaged(usize) = .empty,
     name: ?[]const u8, // The children's parent_name
+    invisible: bool, // visibility:hidden, so its text children are too
     xpath_len: usize,
     // Whether the visitor gets a `leave()` once the children are done.
     opened: bool,
@@ -447,7 +448,7 @@ fn walk(self: @This(), ctx: *WalkContext, visitor: anytype) !void {
     var stack: std.ArrayList(Open) = .empty;
     defer stack.deinit(self.arena);
 
-    try self.visitNode(ctx, &stack, self.dom_node, null, visitor, 1);
+    try self.visitNode(ctx, &stack, self.dom_node, null, false, visitor, 1);
     while (stack.items.len > 0) {
         // Everything read from `top` is read before visitNode, which can grow (move) the stack.
         const top = &stack.items[stack.items.len - 1];
@@ -464,7 +465,7 @@ fn walk(self: @This(), ctx: *WalkContext, visitor: anytype) !void {
             }
             gop.value_ptr.* += 1;
 
-            try self.visitNode(ctx, &stack, child, top.name, visitor, gop.value_ptr.*);
+            try self.visitNode(ctx, &stack, child, top.name, top.invisible, visitor, gop.value_ptr.*);
             continue;
         }
 
@@ -483,16 +484,15 @@ fn visitNode(
     stack: *std.ArrayList(Open),
     node: *Node,
     parent_name: ?[]const u8,
+    parent_invisible: bool,
     visitor: anytype,
     index: usize,
 ) !void {
     const current_depth = stack.items.len;
     if (current_depth > self.max_depth) return;
 
-    // 1. Skip non-content nodes
-    // visibility:hidden inherits but a descendant can set it back to
-    // visible, so a hidden element is passed through rather than cut: its
-    // own line and text go, its children still get their say.
+    // 1. Skip non-content nodes. An invisible element is passed through, not
+    // cut: a descendant can be visible again.
     var invisible = false;
     if (node.is(Element)) |el| {
         const tag = el.getTag();
@@ -503,22 +503,21 @@ fn visitNode(
 
         // Not just the element's own display: a slotted element inherits
         // from its slot, which this light-tree walk never visits.
-        if (self.frame._style_manager.isHidden(el, .{})) {
-            return;
+        switch (self.frame._style_manager.rendering(el)) {
+            .none => return,
+            .invisible => invisible = true,
+            .visible => {},
         }
 
         if (el.is(Element.Html)) |html_el| {
             if (html_el.getHidden()) return;
         }
-        invisible = self.frame._style_manager.hasVisibilityHiddenInherited(el);
     } else if (node.is(CData.Text)) |text_node| {
+        if (parent_invisible) return;
         const text = text_node.ownData();
         if (isAllWhitespace(text)) {
             return;
         }
-        if (node._parent) |parent| if (parent.is(Element)) |parent_el| {
-            if (self.frame._style_manager.hasVisibilityHiddenInherited(parent_el)) return;
-        };
     } else if (node._type != .document and node._type != .document_fragment) {
         return;
     }
@@ -534,7 +533,10 @@ fn visitNode(
     var checked: ?bool = null;
     var tag_name: []const u8 = "text";
 
-    if (node.is(Element)) |el| {
+    if (invisible) {
+        // Never printed: skip reading its value and interactivity.
+        tag_name = node.as(Element).getTagNameLower();
+    } else if (node.is(Element)) |el| {
         tag_name = el.getTagNameLower();
 
         if (el.is(Element.Html.Input)) |input| {
@@ -586,9 +588,9 @@ fn visitNode(
     else
         try axn.getName(self.frame, self.arena, ctx.label_index);
 
-    var should_visit = !invisible;
+    var should_visit = true;
     if (invisible) {
-        // Passed through, as above.
+        should_visit = false;
     } else if (self.interactive_only) {
         var keep = false;
         if (interactive.isInteractiveRole(role)) {
@@ -643,6 +645,7 @@ fn visitNode(
     try stack.append(self.arena, .{
         .next_child = if (should_walk_children) node._first_child else null,
         .name = name,
+        .invisible = invisible,
         .xpath_len = initial_xpath_len,
         .opened = opened,
     });
