@@ -110,7 +110,11 @@
     const f = document.createElement('iframe');
     f.srcdoc = '<script>setInterval(() => { parent.self_removals += 1; frameElement.remove(); }, 5)<\/script>';
     document.body.appendChild(f);
-    setTimeout(() => state.resolve(), 100);
+
+    // wait for the first tick however long the load takes, then leave room
+    // for a second one that must not come
+    const poll = () => window.self_removals > 0 ? setTimeout(() => state.resolve(), 50) : setTimeout(poll, 5);
+    poll();
 
     await state.done(() => {
       testing.expectEqual(1, window.self_removals);
