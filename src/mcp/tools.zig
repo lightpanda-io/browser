@@ -12,7 +12,7 @@ const McpTool = protocol.Tool;
 /// Convert browser tool_defs to MCP wire-protocol tools (comptime).
 /// Tool identity comes from the `BrowserTool` tag — `tool_defs` only
 /// carries the LLM-facing description and JSON schema.
-const browser_tool_list = blk: {
+pub const browser_tool_list = blk: {
     const field_names = @typeInfo(BrowserTool).@"enum".field_names;
     var tools: [field_names.len]McpTool = undefined;
     for (browser_tools.tool_defs, field_names, 0..) |td, field_name, i| {
@@ -92,7 +92,8 @@ const session_id_schema = browser_tools.minify(
     \\}
 );
 
-const extra_tools = [_]McpTool{
+/// MCP-only tools, absent from the agent and scripts.
+pub const extra_tools = [_]McpTool{
     .{
         .name = "save",
         .title = "Save the session as an agent script",
@@ -1170,13 +1171,13 @@ test "MCP - save writes the script to disk" {
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
-    const path = "mcp-save-test-script.js";
-    std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
-    defer std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "script.js");
 
-    const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"save","arguments":{"path":"mcp-save-test-script.js","script":"const page = new Page();\nawait page.goto(\"https://example.com\");"}}}
-    ;
+    const msg = try testing.arena_allocator.print(
+        \\{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"save","arguments":{{"path":"{s}","script":"const page = new Page();\nawait page.goto(\"https://example.com\");"}}}}}}
+    , .{path});
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.find(u8, out.written(), "saved 2 line") != null);
 
@@ -1630,71 +1631,57 @@ test "MCP - findElement" {
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"button"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "Click Me") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"button"}}}
+    );
+    try testing.expectJson(.{
+        .{ .name = "Click Me", .listeners = &.{ "click", "pointerdown", "mousedown", "pointerup", "mouseup" } },
+        .{ .name = "Prevent Default" },
+        .{ .name = "Chord" },
+        .{ .name = "Disabled", .disabled = true },
+    }, try testToolText(aa, out.written()));
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"click"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "Click Me") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"click"}}}
+    );
+    try testing.expectJson(.{.{ .name = "Click Me", .id = "btn" }}, try testToolText(aa, out.written()));
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"slider"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "[]") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"slider"}}}
+    );
+    try testing.expectEqual("[]", try testToolText(aa, out.written()));
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"findElement","arguments":{}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "error") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"findElement","arguments":{}}}
+    );
+    try testing.expectJson(.{ .id = 4, .@"error" = .{ .code = -32602, .message = "InvalidParams" } }, out.written());
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/^PREVENT.*default$/i"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "Prevent Default") != null);
-        try testing.expect(std.mem.find(u8, out.written(), "Click Me") == null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/^PREVENT.*default$/i"}}}
+    );
+    try testing.expectJson(.{.{ .name = "Prevent Default", .id = "btnPreventDefault" }}, try testToolText(aa, out.written()));
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/(/"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
-        try testing.expect(std.mem.find(u8, out.written(), "missing closing parenthesis at offset 1") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/(/"}}}
+    );
+    try testing.expectJson(.{ .id = 6, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "findElement: invalid name regex '(': missing closing parenthesis at offset 1" }},
+    } }, out.written());
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/prevent/g"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
-        try testing.expect(std.mem.find(u8, out.written(), "unsupported regex flag 'g' in '/prevent/g'") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/prevent/g"}}}
+    );
+    try testing.expectJson(.{ .id = 7, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "findElement: unsupported regex flag 'g' in '/prevent/g'" }},
+    } }, out.written());
 }
 
 test "MCP - waitForSelector: existing element" {
@@ -1742,7 +1729,7 @@ test "MCP - waitForSelector: timeout" {
     // Missing element after the timeout surfaces as NodeNotFound, matching
     // the error /hover, /click, etc. produce when their selector misses.
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#nonexistent","timeout":100}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#nonexistent","timeout":20}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expectJson(.{
@@ -1853,12 +1840,12 @@ test "MCP - screenshot: inline image, file, unsafe path" {
     // Inline images are narrowed to the model-facing limit.
     try testing.expect(std.mem.find(u8, out.written(), "PNG, 1280x") != null);
 
-    const path = "mcp-screenshot-test.png";
-    std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
-    defer std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "screenshot.png");
 
     out.clearRetainingCapacity();
-    const to_file = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"screenshot\",\"arguments\":{\"path\":\"" ++ path ++ "\",\"selector\":\"#hoverTarget\"}}}";
+    const to_file = try testing.arena_allocator.print("{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"screenshot\",\"arguments\":{{\"path\":\"{s}\",\"selector\":\"#hoverTarget\"}}}}}}", .{path});
     try router.handleMessage(server, testing.arena_allocator, to_file);
     try testing.expect(std.mem.find(u8, out.written(), "Saved 1920x") != null);
     try testing.expect(std.mem.find(u8, out.written(), "\"type\":\"image\"") == null);
@@ -2051,6 +2038,14 @@ test "MCP - sessions: new, list, attach isolation, close" {
     );
     try testing.expect(std.mem.find(u8, out.written(), "closed session a") != null);
     try testing.expect(!server.sessions.contains("a"));
+}
+
+/// The text of a tools/call result, which tools like findElement fill with JSON.
+fn testToolText(arena: std.mem.Allocator, response: []const u8) ![]const u8 {
+    const Response = struct { result: struct { content: []const struct { text: []const u8 } } };
+    const parsed = try std.json.parseFromSliceLeaky(Response, arena, response, .{ .ignore_unknown_fields = true });
+    try testing.expectEqual(1, parsed.result.content.len);
+    return parsed.result.content[0].text;
 }
 
 fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {

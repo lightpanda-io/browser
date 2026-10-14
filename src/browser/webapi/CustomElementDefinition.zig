@@ -36,8 +36,9 @@ observed_attributes: std.StringHashMapUnmanaged(void) = .{},
 // For autonomous custom elements, this is null
 extends: ?Element.Tag = null,
 
-// when disabledFeatures = ["shadow"], we'll throw if attachShadow is called
 disable_shadow: bool = false,
+disable_internals: bool = false,
+form_associated: bool = false,
 
 pub fn isAttributeObserved(self: *const CustomElementDefinition, name: String) bool {
     return self.observed_attributes.contains(name.str());

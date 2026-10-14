@@ -60,6 +60,35 @@ pub fn isNativeError(self: Value) bool {
     return v8.v8__Value__IsNativeError(self.handle);
 }
 
+pub const ErrorLocation = struct {
+    url: []const u8 = "",
+    line: u32 = 0,
+    column: u32 = 0,
+};
+
+pub fn errorLocation(self: Value, allocator: Allocator) !ErrorLocation {
+    const l = self.local;
+    const message = v8.v8__Exception__CreateMessage(l.isolate.handle, self.handle) orelse return .{};
+
+    var location: ErrorLocation = .{};
+    const line = v8.v8__Message__GetLineNumber(message, l.handle);
+    if (line > 0) {
+        location.line = @intCast(line);
+    }
+    // V8's column is 0-based.
+    const column = v8.v8__Message__GetStartColumn(message);
+    if (column >= 0) {
+        location.column = @intCast(column + 1);
+    }
+    if (v8.v8__Message__GetScriptResourceName(message)) |handle| {
+        const name: Value = .{ .local = l, .handle = handle };
+        if (name.isString()) |str| {
+            location.url = try str.toSliceWithAlloc(allocator);
+        }
+    }
+    return location;
+}
+
 pub fn isNull(self: Value) bool {
     return v8.v8__Value__IsNull(self.handle);
 }

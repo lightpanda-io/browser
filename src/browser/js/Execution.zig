@@ -29,6 +29,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Value = @import("Value.zig");
+const Function = @import("Function.zig");
 const Context = @import("Context.zig");
 const Scheduler = @import("Scheduler.zig");
 const Page = @import("../Page.zig");
@@ -53,7 +54,9 @@ js: *Context,
 
 // Fields named to match Page for generic code (executor._factory works for both)
 buf: []u8,
-arena: Allocator,
+// For a Frame, the Page's arena. For a worker, the worker's own arena (a worker
+// has its own identity map, so nothing it allocates is shared with another realm).
+page_arena: Allocator,
 call_arena: Allocator,
 local_arena: Allocator,
 
@@ -72,7 +75,7 @@ pub fn dupeString(self: *const Execution, value: []const u8) ![]const u8 {
     if (String.intern(value)) |v| {
         return v;
     }
-    return self.arena.dupe(u8, value);
+    return self.page_arena.dupe(u8, value);
 }
 
 pub fn getArena(self: *const Execution, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
@@ -172,18 +175,26 @@ pub fn dispatch(
     self: *const Execution,
     target: *EventTarget,
     event: *Event,
-    handler: anytype,
     comptime opts: EventManagerBase.DispatchDirectOptions,
 ) !void {
-    return self.js.global.dispatch(target, event, handler, opts);
+    return self.js.global.dispatch(target, event, opts);
 }
 
 pub fn reportError(self: *const Execution, err: Value) !void {
     return self.js.global.reportError(err);
 }
 
-pub fn hasDirectListeners(self: *const Execution, target: *EventTarget, typ: []const u8, handler: anytype) bool {
-    return self.js.global.hasDirectListeners(target, typ, handler);
+pub fn hasDirectListeners(self: *const Execution, target: *EventTarget, typ: []const u8) bool {
+    return self.js.global.hasDirectListeners(target, typ);
+}
+
+/// Sets (or, with null, clears) the target's `on<typ>` event handler.
+pub fn setHandler(self: *const Execution, target: *EventTarget, typ: []const u8, handler: ?Function.Global) !void {
+    return self.js.global.setHandler(target, typ, handler);
+}
+
+pub fn getHandler(self: *const Execution, target: *EventTarget, typ: []const u8) ?Function.Global {
+    return self.js.global.getHandler(target, typ);
 }
 
 pub fn performance(self: *const Execution) *Performance {

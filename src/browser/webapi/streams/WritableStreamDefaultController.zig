@@ -31,10 +31,16 @@ pub fn init(stream: *WritableStream, exec: *const Execution) !*WritableStreamDef
     });
 }
 
-pub fn doError(self: *WritableStreamDefaultController, reason: []const u8) void {
+pub fn doError(self: *WritableStreamDefaultController, reason: ?js.Value, exec: *const Execution) !void {
+    const local = exec.js.local.?;
+    return self.fail(reason orelse .{ .local = local, .handle = local.isolate.initUndefined() });
+}
+
+/// Errors the stream. Later writes reject with `reason` itself.
+pub fn fail(self: *WritableStreamDefaultController, reason: js.Value) !void {
     if (self._stream._state != .writable) return;
+    self._stream._stored_error = try reason.persist();
     self._stream._state = .errored;
-    self._stream._stored_error = reason;
 }
 
 pub const JsApi = struct {

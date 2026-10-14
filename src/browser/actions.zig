@@ -163,14 +163,14 @@ fn fillControl(ctl: anytype, text: []const u8, frame: *Frame) !void {
 
     if (ctl.tracksSelection()) {
         try ctl.select(frame);
-        const edited = Frame.user_input.applyEdit(frame, ctl, .{ .insert = text }, .{}) catch |err| {
+        const edited = Frame.user_input.applyEdit(frame, ctl, .{ .insert = text }) catch |err| {
             lp.log.debug(.app, "fill insert failed", .{ .err = err });
             return error.ActionFailed;
         };
         if (!edited) {
             return error.ActionFailed;
         }
-        return dispatchTrusted(el, "change", frame);
+        return ctl.dispatchChangeIfEdited(frame);
     }
 
     ctl.setUserValue(text, frame) catch |err| {

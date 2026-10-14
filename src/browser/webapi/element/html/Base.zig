@@ -99,7 +99,7 @@ fn updateBaseURL(self: *Base, frame: *Frame) !void {
             return;
         }
     }
-    owner.base_url = try owner.arena.dupeSentinel(u8, resolved, 0);
+    owner.base_url = try owner.page_arena.dupeSentinel(u8, resolved, 0);
 }
 
 pub const JsApi = struct {

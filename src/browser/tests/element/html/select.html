@@ -1070,3 +1070,51 @@
   testing.expectEqual(true, s.validity.valueMissing);
 }
 </script>
+
+<script id="length_setter">
+{
+  const s = document.createElement('select');
+  const reset = () => {
+    s.innerHTML = '<option>a</option><optgroup><option>b</option><option>c</option></optgroup><option>d</option>';
+  };
+
+  // Shrinking removes the options past the new length, inside an optgroup too.
+  reset();
+  s.options.length = 2;
+  testing.expectEqual('<option>a</option><optgroup><option>b</option></optgroup>', s.innerHTML);
+
+  // select.length is the same setter.
+  reset();
+  s.length = 1;
+  testing.expectEqual('<option>a</option><optgroup></optgroup>', s.innerHTML);
+
+  // Growing appends blank options to the select, one mutation record each (Chrome).
+  reset();
+  const mo = new MutationObserver(() => {});
+  mo.observe(s, { childList: true, subtree: true });
+  s.options.length = 6;
+  testing.expectEqual(2, mo.takeRecords().length);
+  mo.disconnect();
+  testing.expectEqual(6, s.length);
+  testing.expectEqual('<option>d</option><option></option><option></option>', s.innerHTML.slice(s.innerHTML.indexOf('<option>d')));
+
+  // Removing the selected option resets the selection.
+  reset();
+  s.options[1].selected = true;
+  s.options.length = 1;
+  testing.expectEqual(0, s.selectedIndex);
+
+  // unsigned long conversion; past the cap (and -1 -> 4294967295) is ignored.
+  reset();
+  s.options.length = -1;
+  testing.expectEqual(4, s.length);
+  s.options.length = 100001;
+  testing.expectEqual(4, s.length);
+  s.options.length = 2.9;
+  testing.expectEqual(2, s.length);
+  s.options.length = '3';
+  testing.expectEqual(3, s.length);
+  s.options.length = NaN;
+  testing.expectEqual(0, s.length);
+}
+</script>

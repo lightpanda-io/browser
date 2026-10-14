@@ -379,3 +379,50 @@
     testing.expectEqual({ whole: true, split: true }, results);
   });
 </script>
+
+<script id=stored_type_error type=module>
+  const state = await testing.async();
+
+  // A stream errored by a bad chunk rejects with one TypeError object, on
+  // both sides, starting with the write that failed.
+  const ds = new DecompressionStream('gzip');
+  const writer = ds.writable.getWriter();
+  const reader = ds.readable.getReader();
+  const pending_read = reader.read().catch((e) => e);
+  const errors = [
+    await writer.write('hello').catch((e) => e),
+    await pending_read,
+    await reader.read().catch((e) => e),
+    await reader.cancel().catch((e) => e),
+    await writer.write(new Uint8Array(1)).catch((e) => e),
+    await writer.close().catch((e) => e),
+  ];
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, errors[0] instanceof TypeError);
+    testing.expectEqual([true, true, true, true, true, true], errors.map((e) => e === errors[0]));
+  });
+</script>
+
+<script id=stored_flush_error type=module>
+  const state = await testing.async();
+
+  // Truncated input only fails in close(), which rejects with the TypeError
+  // that both sides errored with.
+  const ds = new DecompressionStream('gzip');
+  const writer = ds.writable.getWriter();
+  await writer.write(new Uint8Array(HELLO.gzip.slice(0, -1)));
+  const close_error = await writer.close().catch((e) => e);
+  const errors = [
+    await ds.readable.getReader().read().catch((e) => e),
+    await writer.write(new Uint8Array(1)).catch((e) => e),
+    await writer.close().catch((e) => e),
+  ];
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, close_error instanceof TypeError);
+    testing.expectEqual([true, true, true], errors.map((e) => e === close_error));
+  });
+</script>

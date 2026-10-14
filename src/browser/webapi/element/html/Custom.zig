@@ -28,6 +28,7 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const Document = @import("../../Document.zig");
 const TreeWalker = @import("../../TreeWalker.zig");
+const ElementInternals = @import("../../ElementInternals.zig");
 const CustomElementDefinition = @import("../../CustomElementDefinition.zig");
 
 const HtmlElement = @import("../Html.zig");
@@ -46,12 +47,37 @@ _disconnected_callback_invoked: bool = false,
 _upgrade_failed: bool = false, // a failed upgrade is never retried
 _upgrade_in_progress: bool = false,
 _upgrade_candidate: bool = false, // listed in a frame's _undefined_custom_elements
+_internals: ?*ElementInternals = null,
 
 pub fn asElement(self: *Custom) *Element {
     return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Custom) *Node {
     return self.asElement().asNode();
+}
+
+pub fn isFormAssociated(self: *const Custom) bool {
+    const definition = self._definition orelse return false;
+    return definition.form_associated;
+}
+
+// Barred from constraint validation: disabled, readonly, or inside a datalist.
+pub fn willValidate(self: *Custom) bool {
+    const element = self.asElement();
+    if (element.isDisabled()) {
+        return false;
+    }
+    if (element.hasAttributeSafe(comptime .wrap("readonly"))) {
+        return false;
+    }
+    var node = element.asNode()._parent;
+    while (node) |n| : (node = n._parent) {
+        const el = n.is(Element) orelse continue;
+        if (el.getTag() == .datalist) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Reactions are queued via enqueue* and fired via fireReaction at the outer
@@ -89,7 +115,7 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
 
             if (!custom._upgrade_candidate) {
                 custom._upgrade_candidate = true;
-                try frame._undefined_custom_elements.append(frame.arena, custom);
+                try frame._undefined_custom_elements.append(frame.page_arena, custom);
             }
             return;
         }
@@ -110,13 +136,13 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
     if (comptime from_parser) {
         // From parser, we know the element is brand new; skip the dedup check.
         try frame._customized_builtin_connected_callback_invoked.put(
-            frame.arena,
+            frame.page_arena,
             element,
             {},
         );
     } else {
         const gop = try frame._customized_builtin_connected_callback_invoked.getOrPut(
-            frame.arena,
+            frame.page_arena,
             element,
         );
         if (gop.found_existing) {
@@ -146,7 +172,7 @@ pub fn enqueueDisconnectedCallbackOnElement(element: *Element, frame: *Frame) vo
     }
 
     const gop = frame._customized_builtin_disconnected_callback_invoked.getOrPut(
-        frame.arena,
+        frame.page_arena,
         element,
     ) catch return;
     if (gop.found_existing) return;

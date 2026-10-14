@@ -125,7 +125,7 @@ pub const Lookup = std.AutoHashMapUnmanaged(Key, *AnimatedEnumeration);
 pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedEnumeration {
     const key: Key = .{ .element = element, .kind = kind };
     const page = frame.page;
-    const gop = try page.svg_animated_enumerations.getOrPut(page.frame_arena, key);
+    const gop = try page.svg_animated_enumerations.getOrPut(page.arena, key);
     if (!gop.found_existing) {
         errdefer _ = page.svg_animated_enumerations.remove(key);
         gop.value_ptr.* = try create(

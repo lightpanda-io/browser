@@ -189,20 +189,8 @@ pub fn build(b: *Build) !void {
         run_step.dependOn(&run_cmd.step);
     }
 
-    {
-        // skills generator
-        const exe = addExe(b, exe_config, "lightpanda-skills", "skills_check", "src/main_skills.zig");
-
-        const run_cmd = b.addRunArtifact(exe);
-        const out_dir = run_cmd.addOutputDirectoryArg2("skills", .{});
-        const install = b.addInstallDirectory(.{
-            .source_dir = out_dir,
-            .install_dir = .prefix,
-            .install_subdir = "skills",
-        });
-        const skills_step = b.step("skills", "Generate LLM skill docs (zig-out/skills/<name>/SKILL.md)");
-        skills_step.dependOn(&install.step);
-    }
+    addGenerator(b, exe_config, "skills", "Generate LLM skill docs (zig-out/skills/<name>/SKILL.md)");
+    addGenerator(b, exe_config, "docs", "Generate reference partials for the docs site (zig-out/docs/*.mdx)");
 
     {
         // test
@@ -232,6 +220,20 @@ const ExeConfig = struct {
     sanitize_c: ?std.zig.SanitizeC,
     sanitize_thread: bool,
 };
+
+/// A `zig build <name>` step that runs `src/main_<name>.zig` with an output
+/// directory and installs what it writes to `zig-out/<name>`.
+fn addGenerator(b: *Build, config: ExeConfig, comptime name: []const u8, description: []const u8) void {
+    const exe = addExe(b, config, "lightpanda-" ++ name, name ++ "_check", "src/main_" ++ name ++ ".zig");
+    const run_cmd = b.addRunArtifact(exe);
+    const out_dir = run_cmd.addOutputDirectoryArg2(name, .{});
+    const install = b.addInstallDirectory(.{
+        .source_dir = out_dir,
+        .install_dir = .prefix,
+        .install_subdir = name,
+    });
+    b.step(name, description).dependOn(&install.step);
+}
 
 fn addExe(b: *Build, config: ExeConfig, name: []const u8, check_name: []const u8, root_source_file: []const u8) *Build.Step.Compile {
     const exe = b.addExecutable(.{

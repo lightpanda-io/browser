@@ -50,12 +50,31 @@ pub fn init(self: *Caller, v8_isolate: *v8.Isolate) bool {
         throwDetachedError(v8_isolate);
         return false;
     };
+    if (refuseIfTerminating(ctx, v8_isolate)) {
+        return false;
+    }
     initWithContext(self, ctx, v8_context);
     return true;
 }
 
 fn throwDetachedError(isolate: *v8.Isolate) void {
-    const message = "Cannot execute in detached context (e.g., navigated-away iframe)";
+    throwError(isolate, "Cannot execute in detached context (e.g., navigated-away iframe)");
+}
+// Terminate only triggers on a v8 stack check. A script that spends it's time
+// in a few huge native calls (e.g. el.innerHTML += el.innerHTML (yes, we've
+// seen that)) never triggers it. So we refuse new native work if we have a
+// pending terminate.
+fn refuseIfTerminating(ctx: *const Context, isolate: *v8.Isolate) bool {
+    const env = ctx.env;
+    if (env.terminatePending() == false) {
+        return false;
+    }
+    env.logPendingReports();
+    throwError(isolate, "Execution is terminating");
+    return true;
+}
+
+fn throwError(isolate: *v8.Isolate, message: []const u8) void {
     const v8_message = v8.v8__String__NewFromUtf8(isolate, message.ptr, v8.kNormal, @intCast(message.len));
     const js_exception = v8.v8__Exception__Error(v8_message);
     _ = v8.v8__Isolate__ThrowException(isolate, js_exception);
@@ -837,6 +856,9 @@ pub const Function = struct {
             throwDetachedError(v8_isolate);
             return;
         };
+        if (refuseIfTerminating(ctx, v8_isolate)) {
+            return;
+        }
         const info = FunctionCallbackInfo{ .handle = info_handle };
 
         var hs: js.HandleScope = undefined;

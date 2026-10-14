@@ -48,7 +48,7 @@ pub const Entry = struct {
     name: String,
     value: Value,
 
-    const Value = union(enum) {
+    pub const Value = union(enum) {
         no_file: void,
         file: *File,
         string: String,
@@ -810,16 +810,42 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
                     continue;
                 }
 
-                const name = element.getName();
-                const x_key = if (name) |n| try arena.print("{s}.x", .{n}) else "x";
-                const y_key = if (name) |n| try arena.print("{s}.y", .{n}) else "y";
+                const name = element.getName() orelse "";
+                const x_key = if (name.len > 0) try arena.print("{s}.x", .{name}) else "x";
+                const y_key = if (name.len > 0) try arena.print("{s}.y", .{name}) else "y";
                 try appendString(&list, arena, x_key, "0");
                 try appendString(&list, arena, y_key, "0");
                 continue;
             }
         }
 
+        if (element.is(Element.Html.Custom)) |custom| {
+            const internals = custom._internals orelse continue;
+            switch (internals._submission) {
+                .none => {},
+                .entries => |list_entries| for (list_entries) |entry| switch (entry.value) {
+                    .string => |s| try appendString(&list, arena, entry.name.str(), s.str()),
+                    .file => |file| try appendFile(&list, arena, entry.name.str(), file),
+                    .no_file => try list.append(arena, .{
+                        .name = try String.init(arena, entry.name.str(), .{}),
+                        .value = .no_file,
+                    }),
+                },
+                .string => |s| if (nonEmptyName(element)) |name| {
+                    try appendString(&list, arena, name, s);
+                },
+                .file => |file| if (nonEmptyName(element)) |name| {
+                    try appendFile(&list, arena, name, file);
+                },
+            }
+            continue;
+        }
+
+        // A missing or empty name excludes the control from the entry list.
         const name = element.getName() orelse continue;
+        if (name.len == 0) {
+            continue;
+        }
         const value = blk: {
             if (element.is(Form.Input)) |input| {
                 const input_type = input._input_type;
@@ -888,6 +914,11 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
         try appendString(&list, arena, name, value);
     }
     return list;
+}
+
+fn nonEmptyName(element: *Element) ?[]const u8 {
+    const name = element.getName() orelse return null;
+    return if (name.len == 0) null else name;
 }
 
 fn appendString(list: *std.ArrayList(Entry), arena: Allocator, name: []const u8, value: []const u8) !void {

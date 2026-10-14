@@ -255,7 +255,7 @@
 
     await state.done(() => {
       testing.expectEqual(true, abortFired);
-      testing.expectEqual(true, errorFired);
+      testing.expectEqual(false, errorFired);
       testing.expectEqual(true, loadEndFired);
       testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
     });
@@ -285,7 +285,7 @@
 
     await state.done(() => {
       testing.expectEqual(true, abortFired);
-      testing.expectEqual(true, errorFired);
+      testing.expectEqual(false, errorFired);
       testing.expectEqual(true, loadEndFired);
       testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
     });
@@ -315,7 +315,7 @@
 
     await state.done(() => {
       testing.expectEqual(true, abortFired);
-      testing.expectEqual(true, errorFired);
+      testing.expectEqual(false, errorFired);
       testing.expectEqual(true, loadEndFired);
       testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
     });
@@ -675,7 +675,7 @@ handler runs, abort() cancels the re-send and no load is delivered.
         req.abort();
         // Long enough for the aborted-but-orphaned re-send to have delivered
         // /xhr/slow (100ms) if abort() failed to cancel it.
-        setTimeout(() => state.resolve(), 250);
+        setTimeout(() => state.resolve(), 150);
       }, 0);
     };
 

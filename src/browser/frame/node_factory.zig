@@ -79,7 +79,7 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                         Element.Html.Quote,
                         namespace,
                         attribute_iterator,
-                        .{ ._tag_name = comptime .wrap("q"), ._tag = .quote },
+                        .{ ._tag_name = comptime .wrap("q"), ._tag = .q },
                     ),
                     's' => return createHtmlElementT(
                         document,
@@ -809,7 +809,7 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                 },
                 else => {},
             }
-            const tag_name = try String.init(frame.arena, name, .{});
+            const tag_name = try String.init(frame.page_arena, name, .{});
 
             // Check if this is a custom element (must have hyphen for HTML namespace)
             const has_hyphen = std.mem.findScalar(u8, name, '-') != null;
@@ -838,7 +838,7 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                         ._upgrade_candidate = creation != .bare_context,
                     });
                     if (creation != .bare_context) {
-                        try realm._undefined_custom_elements.append(realm.arena, node.as(Element).is(Element.Html.Custom).?);
+                        try realm._undefined_custom_elements.append(realm.page_arena, node.as(Element).is(Element.Html.Custom).?);
                     }
                     return node;
                 }
@@ -951,7 +951,7 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
             return createSvgElementT(document, Element.Svg.Generic, name, attribute_iterator, .{ ._tag = tag });
         },
         else => {
-            const tag_name = try String.init(frame.arena, name, .{});
+            const tag_name = try String.init(frame.page_arena, name, .{});
             return createHtmlElementT(document, Element.Html.Unknown, namespace, attribute_iterator, .{ ._tag_name = tag_name });
         },
     }
@@ -1105,14 +1105,14 @@ fn populateElementAttributes(frame: *Frame, element: *Element, list: anytype) !v
         // from cloneNode
         try element._attributes.cloneFrom(list, frame);
         element.noteStyleAttribute();
-        return;
+        return noteEventHandlerAttributes(element, frame);
     }
 
     if (@TypeOf(list) == Parser.RebuiltAttributes) {
         // from the parser, rebuilding an element in another document
         try element._attributes.cloneFrom(list.list, frame);
         element.noteStyleAttribute();
-        return;
+        return noteEventHandlerAttributes(element, frame);
     }
 
     // from the parser
@@ -1127,9 +1127,19 @@ fn populateElementAttributes(frame: *Frame, element: *Element, list: anytype) !v
     try attributes.ensureTotalCapacity(count, frame);
     while (list.next()) |attr| {
         const name = try parserAttributeName(frame, attr.name);
-        try attributes.putNew(name, attr.value.slice(), frame);
+        _ = try attributes.putNew(name, attr.value.slice(), frame);
     }
     element.noteStyleAttribute();
+    try noteEventHandlerAttributes(element, frame);
+}
+
+// Register the on* attribute handlers with the event manager
+fn noteEventHandlerAttributes(element: *Element, frame: *Frame) !void {
+    const html = element.is(Element.Html) orelse return;
+    for (element._attributes.entries()) |*entry| {
+        // entry must be by-ref
+        try html.eventHandlerAttributeChanged(entry.name(), entry.value(), frame);
+    }
 }
 
 // Attributes are keyed by qualified name (no namespace model), so a prefixed
@@ -1166,7 +1176,7 @@ pub fn constructCustomElement(frame: *Frame, new_target: JS.Function) !*Element 
         return error.IllegalConstructor;
     }
 
-    const tag_name = try String.init(frame.arena, definition.name, .{});
+    const tag_name = try String.init(frame.page_arena, definition.name, .{});
     const node = try createHtmlElementT(frame.document, Element.Html.Custom, .html, null, .{
         ._tag_name = tag_name,
         ._definition = definition,

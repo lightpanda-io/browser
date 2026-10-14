@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const ParsedNode = @import("Parser.zig").ParsedNode;
 
 pub extern "c" fn html5ever_parse_document(
@@ -224,7 +225,7 @@ pub extern "c" fn xml5ever_parse_document(
 ) void;
 
 // General encoding api
-const EncodingInfo = extern struct {
+pub const EncodingInfo = extern struct {
     found: u8,
     handle: ?*anyopaque,
     name_len: usize,
@@ -240,7 +241,23 @@ const EncodingInfo = extern struct {
         }
         return self.name_ptr[0..self.name_len];
     }
+
+    pub fn isUtf16(self: *const EncodingInfo) bool {
+        const n = self.name();
+        return std.mem.eql(u8, n, "UTF-16LE") or std.mem.eql(u8, n, "UTF-16BE");
+    }
 };
+
+/// Decodes `input` from the encoding `handle` names into UTF-8. A BOM
+/// switches to the encoding it marks and is dropped.
+pub fn decodeToUtf8(allocator: std.mem.Allocator, handle: *anyopaque, input: []const u8) ![]const u8 {
+    if (input.len == 0) {
+        return "";
+    }
+    const out = try allocator.alloc(u8, encoding_max_utf8_buffer_length(handle, input.len));
+    const result = encoding_decode(handle, input.ptr, input.len, out.ptr, out.len, 1);
+    return out[0..result.bytes_written];
+}
 
 const DecodeResult = extern struct {
     had_errors: u8,

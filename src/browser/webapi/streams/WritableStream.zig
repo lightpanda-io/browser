@@ -35,7 +35,8 @@ pub const State = enum {
 _state: State,
 _writer: ?*WritableStreamDefaultWriter,
 _controller: *WritableStreamDefaultController,
-_stored_error: ?[]const u8,
+/// What the stream errored with, e.g. the `e` of controller.error(e).
+_stored_error: ?js.Value.Global,
 _write_fn: ?js.Function.Global,
 _close_fn: ?js.Function.Global,
 _transform_stream: ?*TransformStream,
@@ -123,8 +124,19 @@ pub fn closeStream(self: *WritableStream, exec: *const Execution) !void {
     self._state = .closed;
 
     if (self._transform_stream) |ts| {
-        try ts.transformClose(exec);
-        return;
+        return ts.transformClose(exec) catch |err| {
+            // The flush failed and errored the readable side. Like a failed
+            // close in the spec, this side ends up errored too. A cancelled
+            // readable has nothing stored, and this side stays closed.
+            if (err == error.StreamError) {
+                if (ts._readable._stored_error) |stored| {
+                    const local = exec.js.local.?;
+                    self._stored_error = try local.toLocal(stored).persist();
+                    self._state = .errored;
+                }
+            }
+            return err;
+        };
     }
 
     if (self._close_fn) |close_fn| {

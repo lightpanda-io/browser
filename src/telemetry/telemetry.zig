@@ -270,16 +270,16 @@ test "telemetry: always disabled in debug builds" {
 }
 
 test "telemetry: getOrCreateId" {
-    defer std.Io.Dir.cwd().deleteFile(testing.io, "/tmp/" ++ IID_FILE) catch {};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.arena_allocator);
 
-    std.Io.Dir.cwd().deleteFile(testing.io, "/tmp/" ++ IID_FILE) catch {};
-
-    const id1 = getOrCreateId("/tmp/").?;
-    const id2 = getOrCreateId("/tmp/").?;
+    const id1 = getOrCreateId(dir).?;
+    const id2 = getOrCreateId(dir).?;
     try testing.expectEqual(&id1, &id2);
 
-    std.Io.Dir.cwd().deleteFile(testing.io, "/tmp/" ++ IID_FILE) catch {};
-    const id3 = getOrCreateId("/tmp/").?;
+    try tmp.dir.deleteFile(testing.io, IID_FILE);
+    const id3 = getOrCreateId(dir).?;
     try testing.expectEqual(false, std.mem.eql(u8, &id1, &id3));
 
     const id4 = getOrCreateId(null).?;

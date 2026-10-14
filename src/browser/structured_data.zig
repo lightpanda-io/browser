@@ -705,10 +705,10 @@ test "structured_data: link headers from response" {
     defer testing.test_session.closeAllPages();
 
     // Stand in for what frameHeaderDoneCallback records from the navigation.
-    try frame._http_headers.append(frame.arena, .{ .name = "link", .value =
+    try frame._http_headers.append(frame.page_arena, .{ .name = "link", .value =
         \\<https://docs.example.com/>; rel="service-doc"
     });
-    try frame._http_headers.append(frame.arena, .{ .name = "link", .value =
+    try frame._http_headers.append(frame.page_arena, .{ .name = "link", .value =
         \\<https://api.example.com/spec>; rel="service-desc", </css/site.css>; rel="stylesheet"
     });
 

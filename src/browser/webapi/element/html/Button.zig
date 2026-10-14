@@ -64,29 +64,7 @@ pub fn getType(self: *const Button) []const u8 {
 }
 
 pub fn getForm(self: *Button, frame: *Frame) ?*Form {
-    const element = self.asElement();
-
-    // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        // form= resolves in the control's own tree (shadow root or document),
-        // not the calling realm's. getElementByIdFromNode walks to that root.
-        if (frame.getElementByIdFromNode(element.asNode(), form_id)) |form_element| {
-            return form_element.is(Form);
-        }
-        // form attribute present but invalid - no form owner
-        return null;
-    }
-
-    // No form attribute - traverse ancestors looking for a <form>
-    var node = element.asNode()._parent;
-    while (node) |n| {
-        if (n.is(Element.Html.Form)) |form| {
-            return form;
-        }
-        node = n._parent;
-    }
-
-    return null;
+    return Form.ownerOf(self.asElement(), frame);
 }
 
 fn getLabels(self: *Button, frame: *Frame) !js.Array {

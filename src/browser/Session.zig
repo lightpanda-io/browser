@@ -29,6 +29,7 @@ const Factory = @import("Factory.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Navigation = @import("webapi/navigation/Navigation.zig");
 
+const URL = @import("URL.zig");
 const Page = @import("Page.zig");
 const Frame = @import("Frame.zig");
 const Browser = @import("Browser.zig");
@@ -357,7 +358,6 @@ fn removePageFromList(self: *Session, page: *Page) void {
 fn tearDownPage(self: *Session, page: *Page) void {
     self.notification.dispatch(.frame_remove, .{});
     self.retire(page);
-    self.navigation.onRemoveFrame();
 }
 
 // Allocate a Page in a free slot, publish it as the active page, and
@@ -393,6 +393,8 @@ pub fn createPage(self: *Session) !PageHandle {
 
     const frame_id = self.nextFrameId();
     const frame = try self.installNewActivePage(frame_id);
+
+    frame.document._ready_state = .complete;
 
     // https://html.spec.whatwg.org/multipage/document-sequences.html --
     // Creating a new browsing context always produces an initial about:blank
@@ -912,7 +914,7 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
     // therefore no frameHeaderDoneCallback to commit a pending Page. Swap the
     // active Page immediately instead of allocating a pending one that would
     // never be promoted, leaving the previous document in place (issue #2363).
-    if (std.mem.eql(u8, "about:blank", url) or std.mem.startsWith(u8, url, "blob:")) {
+    if (URL.isAboutBlank(url) or std.mem.startsWith(u8, url, "blob:")) {
         return self.replaceRootImmediate(frame_id, url, opts);
     }
 
@@ -990,7 +992,6 @@ pub fn commitPendingPage(self: *Session, replacement: *Page) !void {
     // walkable (node_registry, inspector context group, isolated worlds). OLD
     // is still the live page (index 0); its memory stays alive until step 4.
     self.notification.dispatch(.frame_remove, .{});
-    self.navigation.onRemoveFrame();
 
     // Step 2: register the new page with CDP. `replacement.replaces` is still
     // set, so the session still reports an in-flight nav and CDP's frameCreated

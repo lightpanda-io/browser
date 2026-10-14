@@ -23,7 +23,6 @@ const js = @import("../js/js.zig");
 
 const EventTarget = @import("EventTarget.zig");
 const ServiceWorker = @import("ServiceWorker.zig");
-const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 const ServiceWorkerContainer = @import("ServiceWorkerContainer.zig");
 const ServiceWorkerGlobalScope = @import("ServiceWorkerGlobalScope.zig");
 
@@ -50,14 +49,12 @@ _container: ?*ServiceWorkerContainer,
 // ServiceWorkerGlobalScope._registrations
 _node: std.DoublyLinkedList.Node = .{},
 
-_on_update_found: ?js.Function.Global = null,
-
 pub fn init(scope: *ServiceWorkerGlobalScope, container: ?*ServiceWorkerContainer, exec: *Execution) !*ServiceWorkerRegistration {
-    const self = try exec._factory.eventTargetWithAllocator(exec.arena, ServiceWorkerRegistration{
+    const self = try exec._factory.eventTargetWithAllocator(exec.page_arena, ServiceWorkerRegistration{
         ._proto = undefined,
         ._exec = exec,
         ._scope = scope,
-        ._scope_url = try exec.arena.dupe(u8, scope._scope_url),
+        ._scope_url = try exec.page_arena.dupe(u8, scope._scope_url),
         ._container = container,
     });
     scope._registrations.append(&self._node);
@@ -132,14 +129,6 @@ pub fn unregister(self: *ServiceWorkerRegistration, exec: *const Execution) !js.
     return resolver.promise();
 }
 
-pub fn getOnUpdateFound(self: *const ServiceWorkerRegistration) ?js.Function.Global {
-    return self._on_update_found;
-}
-
-pub fn setOnUpdateFound(self: *ServiceWorkerRegistration, setter: ?WorkerGlobalScope.FunctionSetter) void {
-    self._on_update_found = WorkerGlobalScope.getFunctionFromSetter(setter);
-}
-
 pub fn worker(self: *ServiceWorkerRegistration, scope: *ServiceWorkerGlobalScope) !*ServiceWorker {
     if (self._worker) |w| {
         return w;
@@ -165,5 +154,5 @@ pub const JsApi = struct {
     pub const updateViaCache = bridge.accessor(ServiceWorkerRegistration.getUpdateViaCache, null, .{});
     pub const update = bridge.function(ServiceWorkerRegistration.update, .{});
     pub const unregister = bridge.function(ServiceWorkerRegistration.unregister, .{});
-    pub const onupdatefound = bridge.accessor(ServiceWorkerRegistration.getOnUpdateFound, ServiceWorkerRegistration.setOnUpdateFound, .{});
+    pub const onupdatefound = EventTarget.handlerAccessor(ServiceWorkerRegistration, "updatefound");
 };

@@ -138,6 +138,28 @@ fn shouldPercentEncode(c: u8, comptime encode_set: EncodeSet) bool {
     };
 }
 
+pub fn isAboutBlank(url: []const u8) bool {
+    return std.mem.eql(u8, url, "about:blank");
+}
+
+// For an unresolved URL, e.g. an attribute: the URL parser strips leading C0
+// controls and spaces, and the scheme is case-insensitive.
+pub fn isJavascriptUrl(url: []const u8) bool {
+    var i: usize = 0;
+    while (i < url.len and url[i] <= ' ') : (i += 1) {}
+    return std.ascii.startsWithIgnoreCase(url[i..], "javascript:");
+}
+
+pub fn isFetchable(url: []const u8) bool {
+    const protocol = getProtocol(url);
+    inline for (.{ "about:", "blob:", "data:", "file:", "http:", "https:" }) |scheme| {
+        if (std.ascii.eqlIgnoreCase(protocol, scheme)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 pub fn isCompleteHTTPUrl(url: []const u8) bool {
     if (url.len < 3) { // Minimum is "x://"
         return false;
@@ -293,14 +315,9 @@ fn findPortSeparator(host: []const u8) ?usize {
 }
 
 pub fn getSearch(raw: [:0]const u8) []const u8 {
-    const pos = std.mem.findScalarPos(u8, raw, 0, '?') orelse return "";
-    const query_part = raw[pos..];
-
-    if (std.mem.findScalarPos(u8, query_part, 0, '#')) |fragment_start| {
-        return query_part[0..fragment_start];
-    }
-
-    return query_part;
+    const end = std.mem.findScalar(u8, raw, '#') orelse raw.len;
+    const pos = std.mem.findScalar(u8, raw[0..end], '?') orelse return "";
+    return raw[pos..end];
 }
 
 pub fn getHash(raw: [:0]const u8) []const u8 {
@@ -607,28 +624,11 @@ fn buildUrlWithUserInfo(
     }
 }
 
-pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []const u8) ![:0]const u8 {
-    if (query_string.len == 0) {
-        return arena.dupeSentinel(u8, url, 0);
-    }
-
-    var buf: std.ArrayList(u8) = .empty;
-
-    // the most space well need is the url + ('?' or '&') + the query_string + null terminator
-    try buf.ensureTotalCapacityPrecise(arena, url.len + 2 + query_string.len);
-    buf.appendSliceAssumeCapacity(url);
-
-    if (std.mem.findScalar(u8, url, '?')) |index| {
-        const last_index = url.len - 1;
-        if (index != last_index and url[last_index] != '&') {
-            buf.appendAssumeCapacity('&');
-        }
-    } else {
-        buf.appendAssumeCapacity('?');
-    }
-    buf.appendSliceAssumeCapacity(query_string);
-    buf.appendAssumeCapacity(0);
-    return buf.items[0 .. buf.items.len - 1 :0];
+/// Replaces the query of `url` with `query` and keeps its fragment.
+pub fn setQuery(arena: Allocator, url: []const u8, query: []const u8) ![:0]const u8 {
+    const hash_start = std.mem.findScalar(u8, url, '#') orelse url.len;
+    const query_start = std.mem.findScalar(u8, url[0..hash_start], '?') orelse hash_start;
+    return arena.printSentinel("{s}?{s}{s}", .{ url[0..query_start], query, url[hash_start..] }, 0);
 }
 
 pub fn getRobotsUrl(arena: Allocator, url: [:0]const u8) ![:0]const u8 {
@@ -724,6 +724,30 @@ test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(false, isCompleteHTTPUrl("/example.com"));
     try testing.expectEqual(false, isCompleteHTTPUrl("../../about"));
     try testing.expectEqual(false, isCompleteHTTPUrl("about"));
+}
+
+test "URL: isAboutBlank" {
+    try testing.expectEqual(true, isAboutBlank("about:blank"));
+    try testing.expectEqual(false, isAboutBlank("about:srcdoc"));
+    try testing.expectEqual(false, isAboutBlank("about:"));
+    try testing.expectEqual(false, isAboutBlank(""));
+    try testing.expectEqual(false, isAboutBlank("about"));
+    try testing.expectEqual(false, isAboutBlank("http://example.com/about:blank"));
+    try testing.expectEqual(false, isAboutBlank("https://example.com/blob:x"));
+}
+
+test "URL: isFetchable" {
+    try testing.expectEqual(true, isFetchable("http://example.com/mailto:x"));
+    try testing.expectEqual(true, isFetchable("HTTPS://example.com"));
+    try testing.expectEqual(true, isFetchable("about:blank"));
+    try testing.expectEqual(true, isFetchable("blob:http://example.com/1"));
+    try testing.expectEqual(true, isFetchable("data:text/html,x"));
+    try testing.expectEqual(true, isFetchable("file:///tmp/x"));
+
+    try testing.expectEqual(false, isFetchable("mailto:a@example.com"));
+    try testing.expectEqual(false, isFetchable("TEL:+15555550100"));
+    try testing.expectEqual(false, isFetchable("ftp://example.com"));
+    try testing.expectEqual(false, isFetchable("example.com"));
 }
 
 test "URL: resolve regression (#1093)" {
@@ -1320,32 +1344,32 @@ test "URL: eqlDocument" {
     }
 }
 
-test "URL: concatQueryString" {
+test "URL: setQuery" {
     const arena = testing.arena_allocator;
 
     {
-        const url = try concatQueryString(arena, "https://www.lightpanda.io/", "");
-        try testing.expectEqual("https://www.lightpanda.io/", url);
+        const url = try setQuery(arena, "https://www.lightpanda.io/", "");
+        try testing.expectEqual("https://www.lightpanda.io/?", url);
     }
 
     {
-        const url = try concatQueryString(arena, "https://www.lightpanda.io/index?", "");
-        try testing.expectEqual("https://www.lightpanda.io/index?", url);
-    }
-
-    {
-        const url = try concatQueryString(arena, "https://www.lightpanda.io/index?", "a=b");
+        const url = try setQuery(arena, "https://www.lightpanda.io/index?", "a=b");
         try testing.expectEqual("https://www.lightpanda.io/index?a=b", url);
     }
 
     {
-        const url = try concatQueryString(arena, "https://www.lightpanda.io/index?1=2", "a=b");
-        try testing.expectEqual("https://www.lightpanda.io/index?1=2&a=b", url);
+        const url = try setQuery(arena, "https://www.lightpanda.io/index?1=2", "a=b");
+        try testing.expectEqual("https://www.lightpanda.io/index?a=b", url);
     }
 
     {
-        const url = try concatQueryString(arena, "https://www.lightpanda.io/index?1=2&", "a=b");
-        try testing.expectEqual("https://www.lightpanda.io/index?1=2&a=b", url);
+        const url = try setQuery(arena, "https://www.lightpanda.io/index#top", "a=b");
+        try testing.expectEqual("https://www.lightpanda.io/index?a=b#top", url);
+    }
+
+    {
+        const url = try setQuery(arena, "https://www.lightpanda.io/index?1=2#top?x", "a=b");
+        try testing.expectEqual("https://www.lightpanda.io/index?a=b#top?x", url);
     }
 }
 
@@ -1517,6 +1541,13 @@ test "URL: getPort" {
     // IPv6 without port - colons inside brackets must not be treated as port separator
     try testing.expectEqualSlices(u8, "", getPort("http://[::1]/path"));
     try testing.expectEqualSlices(u8, "", getPort("https://[2001:db8::1]/"));
+}
+
+test "URL: getSearch ignores a '?' in the fragment" {
+    try testing.expectEqualSlices(u8, "", getSearch("https://example.com/app#/item?id=5"));
+    try testing.expectEqualSlices(u8, "?q=1", getSearch("https://example.com/app?q=1#/item?id=5"));
+    try testing.expectEqualSlices(u8, "?q=1", getSearch("https://example.com/app?q=1"));
+    try testing.expectEqualSlices(u8, "", getSearch("https://example.com/app"));
 }
 
 test "URL: setPathname percent-encodes" {

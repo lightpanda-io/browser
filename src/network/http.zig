@@ -31,6 +31,10 @@ const repeat = @import("../string.zig").repeat;
 const log = lp.log;
 const posix = std.posix;
 
+// Tests run several processes, each with its own ephemeral test servers, while
+// fixtures keep addressing the fixed ports. Routes those to the real ones.
+pub var test_connect_to: ?*libcurl.CurlSList = null;
+
 pub const readfunc_pause = libcurl.curl_readfunc_pause;
 pub const writefunc_error = libcurl.curl_writefunc_error;
 pub const WsFrameType = libcurl.WsFrameType;
@@ -457,6 +461,10 @@ pub const Connection = struct {
         // even if we don't support it, and then it won't be decompressed.
         // empty string means: use whatever's available
         try libcurl.curl_easy_setopt(self._easy, .accept_encoding, "");
+
+        if (comptime lp.IS_TEST) {
+            try libcurl.curl_easy_setopt(self._easy, .connect_to, test_connect_to);
+        }
 
         // proxy
         const http_proxy = config.httpProxy();

@@ -26,12 +26,15 @@ const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+const Event = @import("../../Event.zig");
 const collections = @import("../../collections.zig");
 
+const Custom = @import("Custom.zig");
 pub const Input = @import("Input.zig");
 pub const Button = @import("Button.zig");
 pub const Select = @import("Select.zig");
 pub const TextArea = @import("TextArea.zig");
+const Output = @import("Output.zig");
 
 const NodeLive = collections.NodeLive;
 const HTMLFormControlsCollection = collections.HTMLFormControlsCollection;
@@ -48,6 +51,8 @@ _firing_submission_events: bool = false,
 // Prevents submission of the form while we're building the entry list for the
 // form. You can imagine an formdata = () => form.submit() endless loop.
 _constructing_entry_list: bool = false,
+
+_locked_for_reset: bool = false,
 
 fn asConstElement(self: *const Form) *const Element {
     return Factory.protoOf(self).asElement();
@@ -103,6 +108,7 @@ pub fn getElements(self: *Form, frame: *Frame) !*HTMLFormControlsCollection {
 
 const IteratorOpts = struct {
     image_buttons: bool = true, // form.elements doesn't incude input type=image
+    outputs: bool = false, // only reset() wants <output>
 };
 
 pub fn iterator(self: *Form, opts: IteratorOpts, frame: *Frame) NodeLive(.form) {
@@ -112,7 +118,7 @@ pub fn iterator(self: *Form, opts: IteratorOpts, frame: *Frame) NodeLive(.form) 
     else
         self.asNode(); // No ID: walk only form subtree (no external controls possible)
 
-    return NodeLive(.form).init(root, .{ .form = self, .form_id = form_id, .image_buttons = opts.image_buttons }, frame);
+    return NodeLive(.form).init(root, .{ .form = self, .form_id = form_id, .image_buttons = opts.image_buttons, .outputs = opts.outputs }, frame);
 }
 
 fn getAction(self: *Form, frame: *Frame) ![]const u8 {
@@ -154,6 +160,40 @@ pub fn submit(self: *Form, frame: *Frame) !void {
     return frame.submitForm(null, self, .{ .fire_event = false });
 }
 
+pub fn reset(self: *Form, frame: *Frame) !void {
+    if (self._locked_for_reset) {
+        // don't let a listener keep resetting during a reset
+        return;
+    }
+    self._locked_for_reset = true;
+    defer self._locked_for_reset = false;
+
+    const event = try Event.initTrusted(comptime .wrap("reset"), .{ .bubbles = true, .cancelable = true }, frame.page);
+    if (try frame._event_manager.dispatchCancelable(self.asElement().asEventTarget(), event)) {
+        return;
+    }
+
+    // resetting an <output> replaces its children, which ends the tree walker
+    // what would be inside of it
+    var controls: std.ArrayList(*Element) = .empty;
+    var it = self.iterator(.{ .outputs = true }, frame);
+    while (it.next()) |element| {
+        try controls.append(frame.call_arena, element);
+    }
+
+    for (controls.items) |element| {
+        if (element.is(Input)) |input| {
+            try input.reset(frame);
+        } else if (element.is(Select)) |select| {
+            select.reset(frame);
+        } else if (element.is(TextArea)) |textarea| {
+            textarea.reset();
+        } else if (element.is(Output)) |output| {
+            try output.reset(frame);
+        }
+    }
+}
+
 /// https://html.spec.whatwg.org/multipage/forms.html#dom-form-requestsubmit
 /// Like submit(), but fires the submit event and validates the form.
 pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
@@ -164,7 +204,7 @@ pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
         }
 
         // The submitter's form owner must be this form element.
-        const submitter_form = getFormOwner(s, frame);
+        const submitter_form = ownerOf(s, frame);
         if (submitter_form == null or submitter_form.? != self) return error.NotFound;
 
         break :blk s;
@@ -221,13 +261,21 @@ pub fn isSubmitButton(element: *Element) bool {
     return false;
 }
 
-/// Returns the form owner of a submittable element (Input or Button).
-fn getFormOwner(element: *Element, frame: *Frame) ?*Form {
-    if (element.is(Input)) |input| {
-        return input.getForm(frame);
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-owner
+pub fn ownerOf(element: *Element, frame: *Frame) ?*Form {
+    // A form attribute is authoritative, even when it names nothing. It
+    // resolves in the control's own tree (shadow root or document), not the
+    // calling realm's.
+    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
+        const form_element = frame.getElementByIdFromNode(element.asNode(), form_id) orelse return null;
+        return form_element.is(Form);
     }
-    if (element.is(Button)) |button| {
-        return button.getForm(frame);
+
+    var node = element.asNode()._parent;
+    while (node) |n| : (node = n._parent) {
+        if (n.is(Element.Html.Form)) |form| {
+            return form;
+        }
     }
     return null;
 }
@@ -287,6 +335,10 @@ fn checkElementValidity(element: *Element, frame: *Frame) !bool {
     if (element.is(Select)) |select| return select.checkValidity(frame);
     if (element.is(TextArea)) |textarea| return textarea.checkValidity(frame);
     if (element.is(Button)) |button| return button.checkValidity(frame);
+    if (element.is(Custom)) |custom| {
+        const internals = custom._internals orelse return true;
+        return internals.checkValidity(frame);
+    }
     return true;
 }
 
@@ -334,6 +386,7 @@ pub const JsApi = struct {
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});
     pub const requestSubmit = bridge.function(Form.requestSubmit, .{});
+    pub const reset = bridge.function(Form.reset, .{ .ce_reactions = true });
     pub const checkValidity = bridge.function(Form.checkValidity, .{});
     pub const reportValidity = bridge.function(Form.reportValidity, .{});
 };

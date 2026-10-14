@@ -42,7 +42,8 @@ const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 // Tracks the CSS properties the renderless layout acts on (display, visibility,
-// opacity, pointer-events, overflow, width, height) from author stylesheets.
+// opacity, pointer-events, overflow, width, height) and text-transform, which
+// innerText applies, from author stylesheets.
 // Rules are bucketed by their rightmost selector part for fast lookup.
 const StyleManager = @This();
 
@@ -55,6 +56,8 @@ arena: *lp.Arena,
 
 visibility: Group(Visibility) = .{},
 geometry: Group(Geometry) = .{},
+touch_action: Group(TouchAction) = .{},
+text: Group(Text) = .{},
 
 // Keyed by property name, pruning to what is (hopefully) one or few rules
 custom_rules: std.StringHashMapUnmanaged(CustomProperty) = .empty,
@@ -665,6 +668,40 @@ pub fn hasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     return self.visibilityProps(el).pointer_events_none;
 }
 
+/// Blink's VisibleToHitTestRequest. Ignores display:none, which callers handle
+/// for the whole subtree.
+pub fn isHitTestable(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return true;
+    const p = self.visibilityProps(el);
+    return !p.visibility_hidden and !p.pointer_events_none;
+}
+
+/// Computed text-transform, which inherits: the nearest of `el` and its
+/// ancestors with its own value, else none.
+pub fn textTransform(self: *StyleManager, el: *Element) TextTransform {
+    self.assertOwns(el);
+    var current: ?*Element = el;
+    while (current) |elem| : (current = elem.parentElement()) {
+        const own = self.ownTextTransform(elem);
+        if (own != .inherit) {
+            return own;
+        }
+    }
+    return .none;
+}
+
+/// `el`'s own cascaded text-transform; `.inherit` when it takes its parent's.
+/// For tree walks that already know the parent's value.
+pub fn ownTextTransform(self: *StyleManager, el: *Element) TextTransform {
+    self.rebuildIfDirty() catch return .inherit;
+    // Most pages declare no text-transform: skip the cascade and the memo.
+    if (!self.text.hasRules() and !el._flags.has_inline_style) {
+        return .inherit;
+    }
+    return self.text.ownProps(self.arena.allocator(), el, self.frame).text_transform;
+}
+
 /// The axes along which `el` is a scroll container: its own computed overflow
 /// on that axis is auto, scroll or overlay. No ancestor walk.
 pub fn overflowAxes(self: *StyleManager, el: *Element) Element.ScrollAxes {
@@ -680,6 +717,15 @@ pub fn overscrollContainAxes(self: *StyleManager, el: *Element) Element.ScrollAx
     self.rebuildIfDirty() catch return .{};
     const p = self.geometryProps(el);
     return .{ .x = p.overscroll_x_contains, .y = p.overscroll_y_contains };
+}
+
+/// The axes along which the effective touch-action of `el`, its own
+/// intersected with its ancestors', forbids a touch from panning.
+pub fn touchPanBlockedAxes(self: *StyleManager, el: *Element) Element.ScrollAxes {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{};
+    const p = self.touch_action.inheritedProps(self.arena.allocator(), el, self.frame);
+    return .{ .x = p.pan_x_blocked, .y = p.pan_y_blocked };
 }
 
 /// Own computed width or height in px, from inline style or a sheet rule.
@@ -766,6 +812,11 @@ fn Group(comptime Spec: type) type {
 
         // inheritedProps' scratch, kept so each walk doesn't reallocate
         path: std.ArrayList(struct { el: *Element, own: Cascaded }) = .empty,
+
+        fn hasRules(self: *const Self) bool {
+            return self.id_rules.count() != 0 or self.class_rules.count() != 0 or
+                self.tag_rules.count() != 0 or self.other_rules.len != 0;
+        }
 
         fn capacities(self: *const Self) Capacities {
             return .{
@@ -1141,6 +1192,7 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
                     else => {},
                 }
             },
+            .pseudo_element => return null,
             .universal, .attribute => {},
         }
     }
@@ -1185,7 +1237,7 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
         switch (part) {
             .id => ids.* += 1,
             .class => classes.* += 1,
-            .tag, .tag_name => elements.* += 1,
+            .tag, .tag_name, .pseudo_element => elements.* += 1,
             .universal => {}, // zero specificity
             .attribute => classes.* += 1,
             .pseudo_class => |pc| {
@@ -1229,6 +1281,63 @@ pub const Display = enum(u2) {
         if (std.ascii.eqlIgnoreCase(value, "flex") or std.ascii.eqlIgnoreCase(value, "inline-flex")) return .flex;
         if (std.ascii.eqlIgnoreCase(value, "grid") or std.ascii.eqlIgnoreCase(value, "inline-grid")) return .grid;
         return .other;
+    }
+};
+
+/// The case-changing part of `text-transform`. innerText applies `uppercase`
+/// and `lowercase`; `capitalize` is a computed value only, and `full-width`,
+/// `full-size-kana` and `math-auto` are accepted but not applied. `.inherit` is both the
+/// `inherit`/`unset` keywords and "nothing declared": text-transform inherits.
+pub const TextTransform = enum(u3) {
+    inherit,
+    none,
+    capitalize,
+    uppercase,
+    lowercase,
+
+    // Null for an invalid value, which drops the declaration.
+    fn parse(value: []const u8) ?TextTransform {
+        const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+        if (std.ascii.eqlIgnoreCase(trimmed, "inherit") or std.ascii.eqlIgnoreCase(trimmed, "unset") or std.ascii.eqlIgnoreCase(trimmed, "revert") or std.ascii.eqlIgnoreCase(trimmed, "revert-layer")) {
+            return .inherit;
+        }
+        if (std.ascii.eqlIgnoreCase(trimmed, "initial") or std.ascii.eqlIgnoreCase(trimmed, "none")) {
+            return .none;
+        }
+
+        // At most one case keyword, alongside any of the non-case ones.
+        var result: ?TextTransform = null;
+        var any = false;
+        var it = std.mem.tokenizeAny(u8, trimmed, &std.ascii.whitespace);
+        while (it.next()) |token| {
+            any = true;
+            const case: TextTransform = if (std.ascii.eqlIgnoreCase(token, "uppercase"))
+                .uppercase
+            else if (std.ascii.eqlIgnoreCase(token, "lowercase"))
+                .lowercase
+            else if (std.ascii.eqlIgnoreCase(token, "capitalize"))
+                .capitalize
+            else if (std.ascii.eqlIgnoreCase(token, "full-width") or std.ascii.eqlIgnoreCase(token, "full-size-kana") or std.ascii.eqlIgnoreCase(token, "math-auto"))
+                continue
+            else
+                return null;
+            if (result != null) {
+                return null;
+            }
+            result = case;
+        }
+        if (any == false) {
+            return null;
+        }
+        return result orelse .none;
+    }
+
+    /// The computed-value keyword, as getComputedStyle reports it.
+    pub fn keyword(self: TextTransform) []const u8 {
+        return switch (self) {
+            .inherit, .none => "none",
+            else => @tagName(self),
+        };
     }
 };
 
@@ -1396,13 +1505,93 @@ const Geometry = struct {
     };
 };
 
+/// The axes a touch may not pan along: touch-action, intersected with the
+/// ancestors' (an ancestor's `none` stops the pan too).
+const TouchAction = struct {
+    const Declared = struct {
+        const names = [_][]const u8{"touch-action"};
+
+        pan_x_blocked: ?bool = null,
+        pan_y_blocked: ?bool = null,
+
+        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
+            if (!std.ascii.eqlIgnoreCase(name, "touch-action")) return;
+            const pans = parse(value) orelse return;
+            self.pan_x_blocked = !pans.x;
+            self.pan_y_blocked = !pans.y;
+        }
+
+        // The axes a touch may pan along; null for an invalid value. The
+        // directional keywords count for their whole axis.
+        fn parse(value: []const u8) ?Element.ScrollAxes {
+            if (std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "manipulation")) {
+                return .{ .x = true, .y = true };
+            }
+            if (std.ascii.eqlIgnoreCase(value, "none")) {
+                return .{};
+            }
+            var pans: Element.ScrollAxes = .{};
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            while (it.next()) |token| {
+                if (std.ascii.eqlIgnoreCase(token, "pan-x") or std.ascii.eqlIgnoreCase(token, "pan-left") or std.ascii.eqlIgnoreCase(token, "pan-right")) {
+                    pans.x = true;
+                } else if (std.ascii.eqlIgnoreCase(token, "pan-y") or std.ascii.eqlIgnoreCase(token, "pan-up") or std.ascii.eqlIgnoreCase(token, "pan-down")) {
+                    pans.y = true;
+                } else if (!std.ascii.eqlIgnoreCase(token, "pinch-zoom")) {
+                    return null;
+                }
+            }
+            return pans;
+        }
+    };
+
+    pub const Cascaded = struct {
+        pan_x_blocked: bool = false,
+        pan_y_blocked: bool = false,
+    };
+
+    const Computed = packed struct(u2) {
+        pan_x_blocked: bool = false,
+        pan_y_blocked: bool = false,
+
+        fn resolve(own: Cascaded, parent: Computed) Computed {
+            return .{
+                .pan_x_blocked = own.pan_x_blocked or parent.pan_x_blocked,
+                .pan_y_blocked = own.pan_y_blocked or parent.pan_y_blocked,
+            };
+        }
+    };
+};
+
+/// Inherited text properties. Each element stores only its own cascaded
+/// value; `.inherit` means it takes its parent's.
+const Text = struct {
+    const Declared = struct {
+        const names = [_][]const u8{"text-transform"};
+
+        text_transform: ?TextTransform = null,
+
+        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
+            if (std.ascii.eqlIgnoreCase(name, "text-transform")) {
+                self.text_transform = TextTransform.parse(value);
+            }
+        }
+    };
+
+    const Computed = packed struct(u3) {
+        text_transform: TextTransform = .inherit,
+    };
+};
+
 /// Every group's share of one declaration block, so a sheet's block is folded
 /// once. Field names match the StyleManager's group fields.
 const Declarations = struct {
-    const names = Visibility.Declared.names ++ Geometry.Declared.names;
+    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names;
 
     visibility: Visibility.Declared = .{},
     geometry: Geometry.Declared = .{},
+    touch_action: TouchAction.Declared = .{},
+    text: Text.Declared = .{},
 
     fn apply(self: *Declarations, name: []const u8, value: []const u8) void {
         inline for (group_fields) |field| {
@@ -1764,9 +1953,12 @@ fn inheritsKeyword(value: []const u8) bool {
 }
 
 /// An inherited boolean property's declared value: inner null for an explicit
-/// inherit, outer null for an invalid value, which the cascade drops.
+/// inherit, outer null for an invalid value, which the cascade drops. No UA
+/// style sets these properties, so revert also rolls back to inheriting.
 fn parseInheritedFlag(value: []const u8, comptime on: []const []const u8, comptime off: []const []const u8) ??bool {
-    if (inheritsKeyword(value)) return @as(?bool, null);
+    if (inheritsKeyword(value) or std.ascii.eqlIgnoreCase(value, "revert") or std.ascii.eqlIgnoreCase(value, "revert-layer")) {
+        return @as(?bool, null);
+    }
     inline for (on) |keyword| {
         if (std.ascii.eqlIgnoreCase(value, keyword)) return true;
     }
@@ -1776,13 +1968,34 @@ fn parseInheritedFlag(value: []const u8, comptime on: []const []const u8, compti
     return null;
 }
 
+// Absolute-size keywords, in pixels as Chrome maps them.
+const font_size_keywords = std.StaticStringMapWithEql(f64, std.static_string_map.eqlAsciiIgnoreCase).initComptime(.{
+    .{ "xx-small", 9 },
+    .{ "x-small", 10 },
+    .{ "small", 13 },
+    .{ "medium", 16 },
+    .{ "large", 18 },
+    .{ "x-large", 24 },
+    .{ "xx-large", 32 },
+    .{ "xxx-large", 48 },
+});
+
 fn parseFontSize(self: *StyleManager, raw: []const u8, parent: ?*Element, depth: u8) ?f64 {
     const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
     if (inheritsKeyword(value)) {
         return self.computedFontSizeAt(parent, depth);
     }
-    if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "medium")) {
-        return 16;
+    if (std.ascii.eqlIgnoreCase(value, "initial")) {
+        return DEFAULT_FONT_SIZE;
+    }
+    if (font_size_keywords.get(value)) |size| {
+        return size;
+    }
+    if (std.ascii.eqlIgnoreCase(value, "smaller")) {
+        return self.computedFontSizeAt(parent, depth) / 1.2;
+    }
+    if (std.ascii.eqlIgnoreCase(value, "larger")) {
+        return self.computedFontSizeAt(parent, depth) * 1.2;
     }
 
     const parsed = units.parse(value) catch return null;
@@ -1790,6 +2003,8 @@ fn parseFontSize(self: *StyleManager, raw: []const u8, parent: ?*Element, depth:
         .percentage => self.computedFontSizeAt(parent, depth) / 100.0,
         .em => self.computedFontSizeAt(parent, depth),
         .ex => self.computedFontSizeAt(parent, depth) / 2.0,
+        // The root's own `rem` resolves against the initial size.
+        .rem => if (parent == null) DEFAULT_FONT_SIZE else self.computedFontSizeAt(self.frame.document.getDocumentElement(), depth),
         else => return null,
     };
     const size = parsed.value * factor;
@@ -1803,6 +2018,29 @@ test "StyleManager: important cascade across external sheets, inline styles and 
 
 test "StyleManager: custom properties" {
     try testing.htmlRunner("css/custom_properties.html", .{});
+}
+
+test "StyleManager: text-transform" {
+    try testing.htmlRunner("css/text_transform.html", .{});
+}
+
+test "StyleManager: text-transform without rules skips the memo" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<p style="text-transform: uppercase"><b><i></i></b></p>
+    );
+    const p = div.asNode().firstChild().?.as(Element);
+    const b = p.asNode().firstChild().?.as(Element);
+    const i = b.asNode().firstChild().?.as(Element);
+
+    // Inherited from the inline declaration; only <p> needs the cascade.
+    try testing.expectEqual(TextTransform.uppercase, sm.textTransform(i));
+    try testing.expectEqual(1, sm.text.memo.count());
+    try testing.expectEqual(TextTransform.none, sm.textTransform(div));
 }
 
 test "StyleManager: computeSpecificity: element selector" {
@@ -2110,6 +2348,17 @@ test "StyleManager: memo: reuse and invalidation" {
     try b.setStyle("overscroll-behavior: contain; overscroll-behavior-x: auto", frame);
     try testing.expectEqual(Element.ScrollAxes{ .x = false, .y = true }, sm.overscrollContainAxes(b));
 
+    try b.setStyle("touch-action: pan-y pinch-zoom", frame);
+    try testing.expectEqual(Element.ScrollAxes{ .x = true, .y = false }, sm.touchPanBlockedAxes(b));
+    try b.setStyle("touch-action: none", frame);
+    try testing.expectEqual(Element.ScrollAxes{ .x = true, .y = true }, sm.touchPanBlockedAxes(b));
+    try b.setStyle("touch-action: manipulation", frame);
+    try testing.expectEqual(Element.ScrollAxes{}, sm.touchPanBlockedAxes(b));
+    try testing.expectEqual(Element.ScrollAxes{}, sm.touchPanBlockedAxes(p));
+    // An ancestor's touch-action narrows its descendants'.
+    try p.setStyle("touch-action: pan-x", frame);
+    try testing.expectEqual(Element.ScrollAxes{ .x = false, .y = true }, sm.touchPanBlockedAxes(b));
+
     // A stylesheet change resets the memo
     sm.sheetModified();
     try testing.expectEqual(false, sm.isHidden(p, .{}));
@@ -2203,6 +2452,34 @@ test "StyleManager: memo: a descendant overrides inherited visibility and pointe
     try u.setStyle("visibility: bogus; pointer-events: bogus", frame);
     try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(u));
     try testing.expectEqual(true, sm.hasPointerEventsNone(u));
+}
+
+test "StyleManager: revert on visibility and pointer-events inherits" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class=\"x\"></div><div class=\"x\"></div>");
+    const a = body.firstChild().?.as(Element);
+    const b = a.asNode().nextSibling().?.as(Element);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".x { visibility: hidden; pointer-events: none }", frame);
+    _ = try body.insertBefore(style_el.asNode(), a.asNode(), frame);
+
+    // No UA style sets either property, so the inline revert beats the class
+    // and inherits the body's values, instead of being dropped as invalid.
+    try a.setStyle("visibility: revert; pointer-events: revert", frame);
+    try b.setStyle("visibility: REVERT-LAYER; pointer-events: revert-layer", frame);
+    for ([_]*Element{ a, b }) |el| {
+        try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(el));
+        try testing.expectEqual(false, sm.hasPointerEventsNone(el));
+    }
 }
 
 // Every element of a deep chain probed in document order, the shape of an

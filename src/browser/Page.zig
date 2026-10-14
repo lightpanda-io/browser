@@ -25,10 +25,13 @@ const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
 const Factory = @import("Factory.zig");
 const Viewport = @import("Viewport.zig");
+const EventManagerBase = @import("EventManagerBase.zig");
 
 const Blob = @import("webapi/Blob.zig");
 const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
+const EventTarget = @import("webapi/EventTarget.zig");
+const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
 const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
 const PointList = @import("webapi/svg/PointList.zig");
 const StringList = @import("webapi/svg/StringList.zig");
@@ -89,8 +92,8 @@ factory: Factory,
 
 // The arena for this Page's lifetime. Document / Frame / Factory / DOM
 // objects allocate out of this.
-_frame_arena: *lp.Arena,
-frame_arena: Allocator,
+_arena: *lp.Arena,
+arena: Allocator,
 
 // Lazily-created per-node state, kept out of the nodes themselves because
 // few nodes ever need it. Keyed by node pointer and held by the Page, not a
@@ -164,6 +167,14 @@ identity: js.Identity = .{},
 // weak-callback safety.
 finalizer_callbacks: std.AutoHashMapUnmanaged(usize, js.FinalizerCallback) = .empty,
 
+// Event listener registration for every Frame in the Page. This used to be
+// per-frame, but a listener belongs to the target, e.g. a Node, and the Node
+// can be reached and live beyond its Frame.
+event_listeners: EventManagerBase,
+
+// Every live WorkerGlobalScope of this page
+worker_scopes: std.DoublyLinkedList = .{},
+
 // Persisted v8 handles owned by this Page. Handles that outlive the Page are
 // reset on teardown; handles that can be released early are dropped
 // individually. See js.GlobalTracker.
@@ -189,6 +200,9 @@ input_modifiers: if (lp.build_config.wpt_extensions) @import("frame/user_input.z
 
 // The element the synthetic pointer is currently over
 input_hover_target: ?*Element = null,
+
+// Touch contact and tap state; see user_input.TouchInput.
+input_touch: @import("frame/user_input.zig").TouchInput = .{},
 
 // Per-gesture button state for the synthetic mouse pointer; see
 // user_input.PointerButtons.
@@ -251,16 +265,17 @@ pub fn viewportChanged(self: *Page) void {
 
 // Initialize a Page and its root Frame.
 pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
-    const frame_arena = try session.arena_pool.acquire(.large, "Page.frame_arena");
-    errdefer frame_arena.release();
+    const arena = try session.arena_pool.acquire(.large, "Page.arena");
+    errdefer arena.release();
 
     self.* = .{
         .session = session,
         .frame = undefined,
-        ._frame_arena = frame_arena,
-        .frame_arena = frame_arena.allocator(),
-        .factory = Factory.init(self, frame_arena.allocator(), &session.browser.documents),
+        ._arena = arena,
+        .arena = arena.allocator(),
+        .factory = Factory.init(self, arena.allocator(), &session.browser.documents),
         .globals = .init(session.browser.app.allocator),
+        .event_listeners = .init(arena.allocator()),
         .log_context = .{ .id = log.nextPageId(), .url = &self.frame.url },
     };
     self.queued_navigation = &self.queued_navigation_1;
@@ -360,7 +375,7 @@ pub fn deinit(self: *Page) void {
     }
 
     self.factory.deinit();
-    self._frame_arena.release();
+    self._arena.release();
 }
 
 pub fn recordJsError(self: *Page, err: anyerror) void {
@@ -406,8 +421,8 @@ pub fn createBlobUrl(self: *Page, blob: *Blob, origin: ?[]const u8, creator_fram
     var uuid: [36]u8 = undefined;
     @import("../id.zig").uuidv4(&uuid);
 
-    const url = try self.frame_arena.print("blob:{s}/{s}", .{ origin orelse "null", uuid });
-    try self.blob_urls.put(self.frame_arena, url, .{ .blob = blob, .creator = creator_frame_id });
+    const url = try self.arena.print("blob:{s}/{s}", .{ origin orelse "null", uuid });
+    try self.blob_urls.put(self.arena, url, .{ .blob = blob, .creator = creator_frame_id });
     blob.acquireRef();
     return url;
 }
@@ -498,6 +513,17 @@ fn findPopupBy(self: *Page, comptime field: []const u8, id: u32) ?*Frame {
         }
     }
     return null;
+}
+
+// Called when an EventTarget is eagerly freed. Any listener it installed need
+// to be freed.
+pub fn removeTarget(self: *Page, target: *EventTarget) void {
+    self.event_listeners.removeTarget(target);
+    var node = self.worker_scopes.first;
+    while (node) |n| : (node = n.next) {
+        const wgs: *WorkerGlobalScope = @alignCast(@fieldParentPtr("_page_node", n));
+        wgs._event_manager.removeTarget(target);
+    }
 }
 
 // Snapshots the Execution of every same-origin global in this Page — the root

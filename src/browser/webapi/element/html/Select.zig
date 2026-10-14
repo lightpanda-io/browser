@@ -222,6 +222,24 @@ fn deselectOthers(self: *const Select, keep: *const Option) void {
     }
 }
 
+pub fn reset(self: *Select, frame: *Frame) void {
+    var last_selected: ?*Option = null;
+    var it = OptionIterator.init(self);
+    while (it.next()) |option| {
+        option._selected = option.asElement().hasAttributeInterned("selected");
+        if (option._selected) {
+            last_selected = option;
+        }
+    }
+    if (self.asElement().hasAttributeInterned("multiple") == false) {
+        if (last_selected) |keep| {
+            self.deselectOthers(keep);
+        }
+    }
+    self.resetToDefaultSelection();
+    frame.domChanged();
+}
+
 // HTML's "ask for a reset". Every path that selects an option in a
 // non-multiple select deselects the others, so this only has to handle a
 // menu list left with nothing selected.
@@ -341,6 +359,39 @@ pub fn getLength(self: *Select) u32 {
     return i;
 }
 
+pub const max_list_items = 100_000;
+pub fn setLength(self: *Select, value: u32, frame: *Frame) !void {
+    // value > options.len means add blank options
+    // value < options.len means remove extra options
+
+    // we'll collect the length AND trim at the same time
+
+    var len: u32 = 0;
+    var it = OptionIterator.init(self);
+    while (it.next()) |option| : (len += 1) {
+        if (len >= value) {
+            // we have to be in trim mode
+            option.asElement().remove(frame);
+        }
+    }
+    if (len >= value) {
+        return;
+    }
+
+    // growing, we append blank options
+    if (value > max_list_items) {
+        lp.log.debug(.js, "select overflow", .{ .max_list_items = max_list_items, .request = value });
+        return;
+    }
+    const self_node = self.asNode();
+    const doc = self_node.ownerDocument(frame).?;
+    for (len..value) |_| {
+        // yes, one at time, for the correct mutation records
+        const blank = try Frame.node_factory.createElementNS(doc, .html, "option", null);
+        _ = try self_node.appendChild(blank, frame);
+    }
+}
+
 // remove() is ChildNode's; remove(index) removes the option at index.
 fn remove(self: *Select, index_: ?js.Value, frame: *Frame) !void {
     const value = index_ orelse return self.asElement().remove(frame);
@@ -394,27 +445,7 @@ pub fn getSelectedOptions(self: *Select, frame: *Frame) !collections.NodeLive(.s
 }
 
 pub fn getForm(self: *Select, frame: *Frame) ?*Form {
-    const element = self.asElement();
-
-    // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        if (frame.getElementByIdFromNode(element.asNode(), form_id)) |form_element| {
-            return form_element.is(Form);
-        }
-        // form attribute present but invalid - no form owner
-        return null;
-    }
-
-    // No form attribute - traverse ancestors looking for a <form>
-    var node = element.asNode()._parent;
-    while (node) |n| {
-        if (n.is(Element.Html.Form)) |form| {
-            return form;
-        }
-        node = n._parent;
-    }
-
-    return null;
+    return Form.ownerOf(self.asElement(), frame);
 }
 
 fn getLabels(self: *Select, frame: *Frame) !js.Array {
@@ -512,7 +543,7 @@ pub const JsApi = struct {
     pub const selectedOptions = bridge.accessor(Select.getSelectedOptions, null, .{});
     pub const form = bridge.accessor(Select.getForm, null, .{});
     pub const size = reflect.unsignedLong("size", .{});
-    pub const length = bridge.accessor(Select.getLength, null, .{});
+    pub const length = bridge.accessor(Select.getLength, Select.setLength, .{ .ce_reactions = true });
     pub const labels = bridge.accessor(Select.getLabels, null, .{});
     pub const willValidate = bridge.accessor(Select.getWillValidate, null, .{});
     pub const validity = bridge.accessor(Select.getValidity, null, .{});

@@ -27,6 +27,7 @@ const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
 const Selector = @import("../selector/Selector.zig");
 const Form = @import("../element/html/Form.zig");
+const Table = @import("../element/html/Table.zig");
 const HTMLDocument = @import("../HTMLDocument.zig");
 
 const String = lp.String;
@@ -41,6 +42,7 @@ const Mode = enum {
     child_elements,
     child_tag,
     cells,
+    table_rows,
     select_options,
     selected_options,
     links,
@@ -71,11 +73,12 @@ const Filters = union(Mode) {
     child_elements,
     child_tag: Element.Tag,
     cells,
+    table_rows,
     select_options,
     selected_options,
     links,
     anchors,
-    form: struct { form: *Form, form_id: ?[]const u8, image_buttons: bool },
+    form: struct { form: *Form, form_id: ?[]const u8, image_buttons: bool, outputs: bool },
     document_named: []const u8,
 
     fn TypeOf(comptime mode: Mode) type {
@@ -108,6 +111,7 @@ pub fn NodeLive(comptime mode: Mode) type {
     const TW = switch (mode) {
         .tag, .tag_name, .tag_name_ns, .class_name, .name, .all_elements, .links, .anchors, .form, .document_named => TreeWalker.FullExcludeSelf,
         .child_elements, .child_tag, .cells => TreeWalker.Children,
+        .table_rows => Table.RowWalker,
         // A select's options can sit one level down, inside an <optgroup>, so
         // these two walk the subtree and filter on the parent instead.
         .select_options, .selected_options => TreeWalker.FullExcludeSelf,
@@ -318,6 +322,8 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .child_elements => return node._type == .element,
                 .child_tag => {
                     const el = node.is(Element) orelse return false;
+                    // getTag() is namespace-blind: an SVG "tr" reports .tr
+                    if (el._namespace != .html) return false;
                     return el.getTag() == self._filter;
                 },
                 .cells => {
@@ -325,6 +331,8 @@ pub fn NodeLive(comptime mode: Mode) type {
                     const el = node.is(Element) orelse return false;
                     return el.is(Element.Html.TableCell) != null;
                 },
+                // the RowWalker only yields rows
+                .table_rows => return true,
                 .select_options, .selected_options => {
                     const opt = node.is(Element.Html.Option) orelse return false;
 
@@ -362,7 +370,8 @@ pub fn NodeLive(comptime mode: Mode) type {
                 },
                 .form => {
                     const el = node.is(Element) orelse return false;
-                    if (!isFormControl(el)) {
+                    const is_control = isFormControl(el) or (self._filter.outputs and el.getTag() == .output);
+                    if (is_control == false) {
                         return false;
                     }
                     if (self._filter.image_buttons == false) {
@@ -411,6 +420,7 @@ pub fn NodeLive(comptime mode: Mode) type {
             const html = el.subtype(Element.Html);
             return switch (html._type) {
                 .input, .button, .select, .textarea => true,
+                .custom => html.subtype(Element.Html.Custom).isFormAssociated(),
                 else => false,
             };
         }
@@ -449,6 +459,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .child_elements => .{ ._data = .{ .child_elements = self } },
                 .child_tag => .{ ._data = .{ .child_tag = self } },
                 .cells => .{ ._data = .{ .cells = self } },
+                .table_rows => .{ ._data = .{ .table_rows = self } },
                 .select_options => .{ ._data = .{ .select_options = self } },
                 .selected_options => .{ ._data = .{ .selected_options = self } },
                 .links => .{ ._data = .{ .links = self } },
@@ -495,7 +506,7 @@ test "NodeLive: indexed reads stay linear" {
 
 fn buildSpans(frame: *Frame, count: usize) !*Node {
     const div = try frame.window._document.createElement("div", null, frame);
-    const html = try frame.arena.alloc(u8, count * "<span></span>".len);
+    const html = try frame.page_arena.alloc(u8, count * "<span></span>".len);
     var i: usize = 0;
     while (i < html.len) : (i += "<span></span>".len) {
         @memcpy(html[i..][0.."<span></span>".len], "<span></span>");

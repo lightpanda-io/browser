@@ -21,11 +21,14 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 
+const Fetch = @import("net/Fetch.zig");
+
 const Event = @import("Event.zig");
 const Scheduler = @import("Scheduler.zig");
 const EventTarget = @import("EventTarget.zig");
 const DOMException = @import("DOMException.zig");
 const ModelContextTool = @import("ModelContext.zig").Tool;
+const LockRequest = @import("LockManager.zig").LockRequest;
 
 const log = lp.log;
 const Execution = js.Execution;
@@ -40,6 +43,8 @@ const Dependend = union(enum) {
     // Handled by the owning signal's markAborted (which runs for dependent
     // signals too, unlike this union's markAborted).
     scheduler_task: *Scheduler.Task,
+    fetch: *Fetch, // The fetch removes itself when it completes.
+    lock_request: *LockRequest,
 
     // Returns false if the dependent was already aborted, in which case no
     // abort event must be dispatched for it.
@@ -54,14 +59,14 @@ const Dependend = union(enum) {
                 try dep.markAborted(exec);
                 return true;
             },
-            .scheduler_task => return false,
+            .scheduler_task, .fetch, .lock_request => return false,
         }
     }
 
     fn dispatchAbortEvent(self: Dependend, exec: *const Execution) !void {
         switch (self) {
             .signal => |dep| try dep.dispatchAbortEvent(exec),
-            .model_context_tool, .scheduler_task => {},
+            .model_context_tool, .scheduler_task, .fetch, .lock_request => {},
         }
     }
 };
@@ -71,7 +76,6 @@ _type: Type = .generic,
 _aborted: bool = false,
 _is_dependent: bool = false,
 _reason: Reason = .undefined,
-_on_abort: ?js.Function.Global = null,
 _dependents: std.ArrayList(Dependend) = .empty,
 _source_signals: std.ArrayList(*AbortSignal) = .empty,
 
@@ -92,14 +96,6 @@ pub fn getAborted(self: *const AbortSignal) bool {
 
 fn getReason(self: *const AbortSignal) Reason {
     return self._reason;
-}
-
-fn getOnAbort(self: *const AbortSignal) ?js.Function.Global {
-    return self._on_abort;
-}
-
-fn setOnAbort(self: *AbortSignal, cb: ?js.Function.Global) !void {
-    self._on_abort = cb;
 }
 
 pub fn asEventTarget(self: *AbortSignal) *EventTarget {
@@ -143,27 +139,37 @@ fn markAborted(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !vo
     } else {
         // Allocate the DOMException so the reason keeps a single JS identity:
         // dependent signals must expose the very same DOMException instance.
-        const dom = try exec.arena.create(DOMException);
+        const dom = try exec.page_arena.create(DOMException);
         dom.* = DOMException.fromError(error.AbortError).?;
         self._reason = .{ .dom = dom };
     }
 
     // Unlike the loop in abort(), this runs for dependent signals too, so a
-    // task registered on an any() signal still gets rejected.
+    // task or fetch registered on an any() signal still gets rejected.
     for (self._dependents.items) |dep| {
         switch (dep) {
             .scheduler_task => |task| task.onAbort(self._reason, exec),
+            .fetch => |fetch| fetch.abort(self._reason),
+            .lock_request => |lr| lr.onAbort(self._reason, exec),
             else => {},
+        }
+    }
+}
+
+pub fn removeDependent(self: *AbortSignal, dep: Dependend) void {
+    for (self._dependents.items, 0..) |d, i| {
+        if (std.meta.eql(d, dep)) {
+            _ = self._dependents.orderedRemove(i);
+            return;
         }
     }
 }
 
 fn dispatchAbortEvent(self: *AbortSignal, exec: *const Execution) !void {
     const target = self.asEventTarget();
-    const on_abort = self._on_abort;
-    if (exec.hasDirectListeners(target, "abort", on_abort)) {
+    if (exec.hasDirectListeners(target, "abort")) {
         const event = try Event.initTrusted(comptime .wrap("abort"), .{}, exec.page);
-        try exec.dispatch(target, event, on_abort, .{ .context = "abort signal" });
+        try exec.dispatch(target, event, .{ .context = "abort signal" });
     }
 }
 
@@ -203,12 +209,12 @@ fn createAny(signals_value: js.Value, exec: *const Execution) !*AbortSignal {
 
     for (signals) |source| {
         if (!source._is_dependent) {
-            try source._dependents.append(exec.arena, .{ .signal = result });
-            try result._source_signals.append(exec.arena, source);
+            try source._dependents.append(exec.page_arena, .{ .signal = result });
+            try result._source_signals.append(exec.page_arena, source);
         } else {
             for (source._source_signals.items) |s| {
-                try s._dependents.append(exec.arena, .{ .signal = result });
-                try result._source_signals.append(exec.arena, s);
+                try s._dependents.append(exec.page_arena, .{ .signal = result });
+                try result._source_signals.append(exec.page_arena, s);
             }
         }
     }
@@ -225,7 +231,7 @@ fn createTimeout(milliseconds: f64, exec: *const Execution) !*AbortSignal {
     }
     const delay: u32 = @intFromFloat(@min(truncated, std.math.maxInt(u32)));
 
-    const callback = try exec.arena.create(TimeoutCallback);
+    const callback = try exec.page_arena.create(TimeoutCallback);
     callback.* = .{
         .exec = exec,
         .signal = try init(exec),
@@ -303,7 +309,7 @@ const TimeoutCallback = struct {
             .worker => {},
         }
 
-        const dom = try self.exec.arena.create(DOMException);
+        const dom = try self.exec.page_arena.create(DOMException);
         dom.* = DOMException.fromError(error.TimeoutError).?;
         try self.signal.abort(.{ .dom = dom }, self.exec);
     }
@@ -323,7 +329,7 @@ pub const JsApi = struct {
 
     pub const aborted = bridge.accessor(AbortSignal.getAborted, null, .{});
     pub const reason = bridge.accessor(AbortSignal.getReason, null, .{});
-    pub const onabort = bridge.accessor(AbortSignal.getOnAbort, AbortSignal.setOnAbort, .{});
+    pub const onabort = EventTarget.handlerAccessor(AbortSignal, "abort");
     pub const throwIfAborted = bridge.function(AbortSignal.throwIfAborted, .{});
 
     // Static method

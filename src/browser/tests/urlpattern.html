@@ -261,3 +261,15 @@
   testing.expectError('TypeError', () => new URLPattern({ pathname: '/*' }).generate('pathname', {}));
   testing.expectError('TypeError', () => new URLPattern({ pathname: '/foo' }).generate('invalid', {}));
 </script>
+
+<script id=catastrophic_backtracking>
+  {
+    // A regexp group that backtracks exponentially on a near miss. Chrome
+    // bounds the match and returns at once, treating a pattern that gives up
+    // as not matching, even where the second alternative would match.
+    const pattern = new URLPattern({ pathname: '/((?:a+)+b|a+c)' });
+    testing.expectEqual(true, pattern.test({ pathname: '/' + 'a'.repeat(10) + 'c' }));
+    testing.expectEqual(false, pattern.test({ pathname: '/' + 'a'.repeat(40) + 'c' }));
+    testing.expectEqual(null, pattern.exec({ pathname: '/' + 'a'.repeat(40) + 'c' }));
+  }
+</script>

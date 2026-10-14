@@ -246,6 +246,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
             return error.InvalidFilename;
         }
     }
+    if (opts.trace_results and opts.trace == null) {
+        log.fatal(.app, "conflicting flags", .{
+            .hint = "--trace-results adds result text to the --trace file; pass --trace too",
+        });
+        return error.ConflictingFlags;
+    }
     if (opts.no_llm and opts.provider != null) {
         log.warn(.app, "ignoring --provider", .{ .reason = "--no-llm takes precedence" });
     }
@@ -382,7 +388,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     errdefer if (self.ai_client) |c| c.deinit(allocator);
 
     if (opts.trace) |path| {
-        self.trace = Trace.create(allocator, path) catch |err| {
+        self.trace = Trace.create(allocator, path, opts.trace_results) catch |err| {
             log.fatal(.app, "cannot write trace", .{ .path = path, .err = err });
             return err;
         };
@@ -1269,10 +1275,11 @@ fn abortSave(self: *Agent, baseline: usize, reason: []const u8) void {
     self.failSave(reason);
 }
 
-/// Save synthesis warrants more reasoning than a normal turn. `.none` stays off
-/// so users can opt out on models that reject `reasoning_effort` (e.g. Mistral).
+/// Save synthesis warrants more reasoning than a normal turn. `.null` and
+/// `.none` are kept as chosen.
 fn bumpedEffort(effort: Config.Effort) Config.Effort {
     return switch (effort) {
+        .null => .null,
         .none => .none,
         .minimal => .low,
         .low => .medium,
@@ -1920,8 +1927,11 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 .max_tokens = 4096,
                 .tool_choice = .none,
                 // .low caps thinking so reasoning models still emit an answer;
-                // `.none` stays off to opt out on models that reject it.
-                .effort = if (self.effort == .none) .none else .low,
+                // `.null` and `.none` are kept as chosen.
+                .effort = switch (self.effort) {
+                    .null, .none => self.effort,
+                    else => .low,
+                },
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
                 .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
                 .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },

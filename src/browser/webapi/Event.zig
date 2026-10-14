@@ -89,6 +89,7 @@ pub const Type = union(enum) {
     pop_state_event: *@import("event/PopStateEvent.zig"),
     hash_change_event: *@import("event/HashChangeEvent.zig"),
     media_query_list_event: *@import("event/MediaQueryListEvent.zig"),
+    animation_playback_event: *@import("event/AnimationPlaybackEvent.zig"),
     before_unload_event: *@import("event/BeforeUnloadEvent.zig"),
     storage_event: *@import("event/StorageEvent.zig"),
     device_motion_event: *@import("event/DeviceMotionEvent.zig"),
@@ -194,6 +195,18 @@ pub fn relatedTargetPtr(self: *Event) ?*?*EventTarget {
     }
 }
 
+/// Storage of a TouchEvent's Touch.target, for dispatch's shadow-tree
+/// retargeting and resets. Mirrors relatedTargetPtr.
+pub fn touchTargetPtr(self: *Event) ?*?*EventTarget {
+    switch (self._type) {
+        .ui_event => |ui| switch (ui._type) {
+            .touch_event => |te| return te.touchTargetPtr(),
+            else => return null,
+        },
+        else => return null,
+    }
+}
+
 pub fn is(self: *Event, comptime T: type) ?*T {
     switch (self._type) {
         .generic => return if (T == Event) self else null,
@@ -206,6 +219,7 @@ pub fn is(self: *Event, comptime T: type) ?*T {
         .pop_state_event => |e| return if (T == @import("event/PopStateEvent.zig")) e else null,
         .hash_change_event => |e| return if (T == @import("event/HashChangeEvent.zig")) e else null,
         .media_query_list_event => |e| return if (T == @import("event/MediaQueryListEvent.zig")) e else null,
+        .animation_playback_event => |e| return if (T == @import("event/AnimationPlaybackEvent.zig")) e else null,
         .before_unload_event => |e| return if (T == @import("event/BeforeUnloadEvent.zig")) e else null,
         .storage_event => |e| return if (T == @import("event/StorageEvent.zig")) e else null,
         .device_motion_event => |e| return if (T == @import("event/DeviceMotionEvent.zig")) e else null,

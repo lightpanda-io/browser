@@ -1,26 +1,44 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
+<script id=expectReportedErrors>
+  // Both throws below are reported to window; that's expected here.
+  window.addEventListener('error', (e) => e.preventDefault());
+
+  // The thrown object's `message` getter allocates enough to force several
+  // scavenges while it's read, relocating the exception mid-read.
+  function gcMovingException() {
+    return {
+      get message() {
+        const keep = [];
+        for (let round = 0; round < 8; round++) {
+          const junk = [];
+          for (let i = 0; i < 300000; i++) junk.push({ i, s: 'x' + i });
+          keep.push(junk);
+        }
+        return 'moved' + keep.length;
+      },
+      stack: 'stack',
+    };
+  }
+  testing.expectEqual('function', typeof gcMovingException);
+</script>
+
 <script id=observerThrowsObjectMovedByGc>
   {
     const target = document.createElement('div');
     new MutationObserver(() => {
-      throw {
-        get message() {
-          const keep = [];
-          for (let round = 0; round < 8; round++) {
-            const junk = [];
-            for (let i = 0; i < 300000; i++) junk.push({ i, s: 'x' + i });
-            keep.push(junk);
-          }
-          return 'moved' + keep.length;
-        },
-        stack: 'stack',
-      };
+      throw gcMovingException();
     }).observe(target, { attributes: true });
     target.setAttribute('x', '1');
     testing.expectEqual('1', target.getAttribute('x'));
   }
+</script>
+
+<!-- A throwing script's TryCatch is read (TryCatch.caught) before the exception is reported. -->
+<script id=scriptThrowsObjectMovedByGc>
+  testing.expectEqual(true, true);
+  throw gcMovingException();
 </script>
 
 <script id=stillAlive>

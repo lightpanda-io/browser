@@ -25,11 +25,13 @@ const Page = @import("../../Page.zig");
 const Transfer = @import("../../../network/HttpClient.zig").Transfer;
 
 const Blob = @import("../Blob.zig");
+const AbortSignal = @import("../AbortSignal.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
-const FormData = @import("FormData.zig");
 
 const Headers = @import("Headers.zig");
+const FormData = @import("FormData.zig");
 const body_init = @import("body_init.zig");
+const TextDecoderStream = @import("../encoding/TextDecoderStream.zig");
 
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
@@ -57,6 +59,7 @@ _is_redirected: bool,
 _http_transfer: ?*Transfer = null,
 _body_used: bool = false,
 _body_stream: ?*ReadableStream = null,
+_signal: ?*AbortSignal = null, // fetch's abort, aborts response body read
 
 const Body = union(enum) {
     empty,
@@ -304,6 +307,12 @@ pub fn getBody(self: *Response, exec: *const Execution) !?*ReadableStream {
                 return stream;
             }
             const stream = blk: {
+                if (self.abortReason()) |reason| {
+                    // Like text() and json(), reads reject with the signal's reason.
+                    const stream = try ReadableStream.init(null, null, exec);
+                    try stream._controller.doError(try AbortSignal.reasonJsValue(reason, exec.js.local.?));
+                    break :blk stream;
+                }
                 if (body.len == 0) {
                     const stream = try ReadableStream.init(null, null, exec);
                     try stream._controller.close();
@@ -322,7 +331,7 @@ pub fn getBody(self: *Response, exec: *const Execution) !?*ReadableStream {
                 return stream;
             }
             const stream = try ReadableStream.init(null, null, exec);
-            try stream._controller.doError("Failed to read response body");
+            try stream._controller.typeError("Failed to read response body");
             self._body_stream = stream;
             if (self._body_used) {
                 try lockStream(stream, exec);
@@ -337,6 +346,15 @@ pub fn getBody(self: *Response, exec: *const Execution) !?*ReadableStream {
 fn lockStream(stream: *ReadableStream, exec: *const Execution) !void {
     _ = try stream.getReader(exec);
     stream._disturbed = true;
+}
+
+// TODO: a body stream obtained before the abort isn't errored.
+fn abortReason(self: *const Response) ?AbortSignal.Reason {
+    const signal = self._signal orelse return null;
+    if (signal._aborted == false or self._body == .empty) {
+        return null;
+    }
+    return signal._reason;
 }
 
 pub fn isOK(self: *const Response) bool {
@@ -383,6 +401,9 @@ fn consume(self: *Response, exec: *const Execution) !void {
 
 pub fn consumeBytes(self: *Response, exec: *const Execution) ![]const u8 {
     try self.consume(exec);
+    if (self.abortReason() != null) {
+        return exec.js.local.?.typeError("The operation was aborted.");
+    }
     return switch (self._body) {
         .empty => "",
         .bytes => |b| b,
@@ -415,12 +436,35 @@ pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
     return self.consumeAs(.form_data, exec);
 }
 
+// Returns a ReadableStream<string> that decodes the body as UTF-8, ignoring
+// any Content-Type charset (Fetch's non-standard streaming text accessor).
+pub fn textStream(self: *Response, exec: *const Execution) !*ReadableStream {
+    const local = exec.js.local.?;
+    try self.checkUnusable(local);
+
+    const byte_stream = try self.getBody(exec) orelse {
+        const stream = try ReadableStream.init(null, null, exec);
+        try stream._controller.close();
+        return stream;
+    };
+    self._body_used = true;
+
+    const decoder = try TextDecoderStream.init(null, null, exec);
+    return byte_stream.pipeThrough(.{ .readable = decoder.getReadable(), .writable = decoder.getWritable() }, exec);
+}
+
 const Package = enum { array_buffer, bytes, text, json, blob, form_data };
 
 // a byte body is packaged right away, a stream body once it has been drained.
 fn consumeAs(self: *Response, kind: Package, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
     try self.consume(exec);
+
+    if (self.abortReason()) |reason| {
+        var resolver = local.createPromiseResolver();
+        resolver.reject("response aborted", try AbortSignal.reasonJsValue(reason, local));
+        return resolver.promise();
+    }
 
     const content_type = try self._headers.get("content-type", exec);
     switch (self._body) {
@@ -486,15 +530,15 @@ const StreamConsumer = struct {
 
         const reader = try stream.getReader(exec);
 
-        const state = try exec.arena.create(StreamConsumer);
+        const state = try exec.page_arena.create(StreamConsumer);
         state.* = .{
             .execution = exec,
             .kind = kind,
-            .content_type = if (content_type) |ct| try exec.arena.dupe(u8, ct) else null,
+            .content_type = if (content_type) |ct| try exec.page_arena.dupe(u8, ct) else null,
             .reader = reader,
             .chunks = .empty,
             .total_len = 0,
-            .arena = exec.arena,
+            .arena = exec.page_arena,
             .resolver = try resolver.persist(),
         };
 
@@ -596,6 +640,7 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
         ._is_redirected = self._is_redirected,
         ._headers = try .initGuarded(.{ .obj = self._headers }, self._headers._guard, exec),
         ._http_transfer = null,
+        ._signal = self._signal,
     };
     arena.report();
     return cloned;
@@ -632,6 +677,7 @@ pub const JsApi = struct {
     pub const blob = bridge.function(Response.blob, .{});
     pub const bytes = bridge.function(Response.bytes, .{});
     pub const formData = bridge.function(Response.formData, .{});
+    pub const textStream = bridge.function(Response.textStream, .{});
     pub const clone = bridge.function(Response.clone, .{});
 };
 

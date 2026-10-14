@@ -117,9 +117,9 @@ fn goInner(delta: i32, frame: *Frame) !void {
 
     if (same_document) {
         const target = frame.window.asEventTarget();
-        if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
+        if (frame._event_manager.hasDirectListeners(target, "popstate")) {
             const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
-            try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
+            try frame._event_manager.dispatchDirect(target, event, .{ .context = "Pop State" });
         }
         // hashchange is queued by navigateInner.
     }

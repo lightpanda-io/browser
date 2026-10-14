@@ -52,10 +52,11 @@ fn disable(cmd: *CDP.Command) !void {
 }
 
 fn getFullAXTree(cmd: *CDP.Command) !void {
-    const params = (try cmd.params(struct {
+    const Params = struct {
         depth: ?i32 = null,
         frameId: ?[]const u8 = null,
-    })) orelse return error.InvalidParams;
+    };
+    const params: Params = (try cmd.params(Params)) orelse .{};
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const session = bc.session;
@@ -75,7 +76,9 @@ fn getFullAXTree(cmd: *CDP.Command) !void {
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
 
-    return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{}) }, .{});
+    return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{
+        .depth = params.depth orelse 0,
+    }) }, .{});
 }
 
 fn queryAXTree(cmd: *CDP.Command) !void {
@@ -86,7 +89,7 @@ fn queryAXTree(cmd: *CDP.Command) !void {
         accessibleName: ?[]const u8 = null,
         role: ?[]const u8 = null,
     };
-    const params = (try cmd.params(Params)) orelse return error.InvalidParams;
+    const params: Params = (try cmd.params(Params)) orelse .{};
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const node = try dom.getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
@@ -104,7 +107,7 @@ fn queryAXTree(cmd: *CDP.Command) !void {
 }
 
 fn getPartialAXTree(cmd: *CDP.Command) !void {
-    const params = (try cmd.params(struct {
+    const Params = struct {
         nodeId: ?u32 = null,
         backendNodeId: ?u32 = null,
         objectId: ?[]const u8 = null,
@@ -112,7 +115,8 @@ fn getPartialAXTree(cmd: *CDP.Command) !void {
         // not yet emitted; this returns the subtree rooted at the resolved
         // node, matching the scope of queryAXTree.
         fetchRelatives: ?bool = null,
-    })) orelse return error.InvalidParams;
+    };
+    const params: Params = (try cmd.params(Params)) orelse .{};
 
     if (params.fetchRelatives orelse true) {
         // orelse true, because that's what Chrome defaults too, and if people
