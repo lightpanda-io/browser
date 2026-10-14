@@ -36,12 +36,14 @@
 
       doc.addEventListener('readystatechange', () => events.push('readystatechange ' + doc.readyState));
       doc.addEventListener('DOMContentLoaded', () => events.push('dcl'));
-      cw.addEventListener('load', () => events.push('window load'));
+      // the events are queued by close(): wait for the last one
+      cw.addEventListener('load', () => {
+        events.push('window load');
+        state.resolve();
+      });
 
       doc.write('<p id=written>hello</p>');
       doc.close();
-
-      setTimeout(() => state.resolve(), 10);
     }, 5);
 
     await state.done(() => {
@@ -70,11 +72,12 @@
 
     doc.open();
     doc.addEventListener('DOMContentLoaded', () => events.push('dcl'));
-    cw.addEventListener('load', () => events.push('window load'));
+    cw.addEventListener('load', () => {
+      events.push('window load');
+      state.resolve();
+    });
     doc.write('<p id=written>fresh</p>');
     doc.close();
-
-    setTimeout(() => state.resolve(), 10);
 
     await state.done(() => {
       testing.expectEqual('fresh', doc.getElementById('written').textContent);
@@ -142,10 +145,13 @@
       if (loads > 1) return;
       const doc = iframe.contentDocument;
       doc.open();
-      iframe.contentWindow.addEventListener('load', () => window_loads += 1);
+      iframe.contentWindow.addEventListener('load', () => {
+        window_loads += 1;
+        // a (wrongly) unmuted element load fires right after this one
+        setTimeout(() => state.resolve(), 0);
+      });
       doc.write('<p>muted</p>');
       doc.close();
-      setTimeout(() => state.resolve(), 10);
     });
     document.body.appendChild(iframe);
 
