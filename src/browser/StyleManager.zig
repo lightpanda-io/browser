@@ -142,20 +142,21 @@ fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet
         while (it.next()) |parsed_rule| {
             switch (parsed_rule) {
                 .style => |s| try self.addRawRule(build_arena, s.selector, s.block, 0, NO_LAYER),
-                .at_rule => |a| {
-                    // Only `@media` and `@layer` participate in the cascade
-                    // here. Other at-rules (`@keyframes`, `@supports`,
-                    // `@font-face`, …) don't carry top-level declarations
-                    // relevant to the visibility filter and stay skipped as
-                    // before.
-                    if (std.ascii.eqlIgnoreCase(a.keyword, "media")) {
-                        try self.applyMediaAtRule(build_arena, a.text, 0, NO_LAYER, null);
-                    } else if (std.ascii.eqlIgnoreCase(a.keyword, "layer")) {
-                        try self.applyLayerAtRule(build_arena, a.text, 0, NO_LAYER, null);
-                    }
-                },
+                .at_rule => |a| try self.applyAtRule(build_arena, a.keyword, a.text, 0, NO_LAYER, null),
             }
         }
+    }
+}
+
+/// Apply an at-rule that takes part in the cascade. Only `@media` and `@layer`
+/// do here. Other at-rules (`@keyframes`, `@supports`, `@font-face`, …) don't
+/// carry declarations relevant to the visibility filter and are skipped.
+fn applyAtRule(self: *StyleManager, build_arena: Allocator, keyword: []const u8, text: []const u8, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
+    if (std.ascii.eqlIgnoreCase(keyword, "media")) {
+        return self.applyMediaAtRule(build_arena, text, depth, layer, nest);
+    }
+    if (std.ascii.eqlIgnoreCase(keyword, "layer")) {
+        return self.applyLayerAtRule(build_arena, text, depth, layer, nest);
     }
 }
 
@@ -254,13 +255,7 @@ fn applyInnerRules(self: *StyleManager, build_arena: Allocator, inner: []const u
     while (it.next()) |nested_rule| {
         switch (nested_rule) {
             .style => |s| try self.addRawRule(build_arena, s.selector, s.block, depth, layer),
-            .at_rule => |nested| {
-                if (std.ascii.eqlIgnoreCase(nested.keyword, "media")) {
-                    try self.applyMediaAtRule(build_arena, nested.text, depth, layer, null);
-                } else if (std.ascii.eqlIgnoreCase(nested.keyword, "layer")) {
-                    try self.applyLayerAtRule(build_arena, nested.text, depth, layer, null);
-                }
-            },
+            .at_rule => |nested| try self.applyAtRule(build_arena, nested.keyword, nested.text, depth, layer, null),
         }
     }
 }
@@ -508,16 +503,10 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
             .rule => |nested| {
                 // The arena, not build_arena: a custom property's rule keeps
                 // its selector text past the rebuild.
-                const selector = try CssParser.resolveNestedSelector(self.arena.allocator(), selector_text, nested.selector);
+                const selector = try CssParser.resolveNestedSelector(self.arena.allocator(), selector_text, nested.selector) orelse continue;
                 try self.addRawRule(build_arena, selector, nested.block, depth + 1, layer);
             },
-            .at_rule => |nested| {
-                if (std.ascii.eqlIgnoreCase(nested.keyword, "media")) {
-                    try self.applyMediaAtRule(build_arena, nested.text, depth + 1, layer, selector_text);
-                } else if (std.ascii.eqlIgnoreCase(nested.keyword, "layer")) {
-                    try self.applyLayerAtRule(build_arena, nested.text, depth + 1, layer, selector_text);
-                }
-            },
+            .at_rule => |nested| try self.applyAtRule(build_arena, nested.keyword, nested.text, depth + 1, layer, selector_text),
         }
     }
 }
@@ -1311,7 +1300,7 @@ fn addNestedCssomRules(self: *StyleManager, build_arena: Allocator, parent: *CSS
         switch (rule._type) {
             .style => |sr| {
                 // The arena, as in addRawRule.
-                const selector = try CssParser.resolveNestedSelector(self.arena.allocator(), parent_selector, sr._selector_text);
+                const selector = try CssParser.resolveNestedSelector(self.arena.allocator(), parent_selector, sr._selector_text) orelse continue;
                 _ = try self.addRuleAs(sr, selector);
                 try self.addNestedCssomRules(build_arena, sr, selector, depth + 1);
             },
