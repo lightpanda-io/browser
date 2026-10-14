@@ -71,6 +71,12 @@ _ready_state: ReadyState = .loading,
 _load_aborted: bool = false,
 // HTML's "active parser was aborted" flag also makes open/write no-ops.
 _active_parser_aborted: bool = false,
+// Its frame navigated to another document: open/write are no-ops.
+_navigated_away: bool = false,
+// The iframe load event steps' flags: a document.open() while the element's
+// load event fires for this document mutes its later ones.
+_iframe_load_in_progress: bool = false,
+_mute_iframe_load: bool = false,
 _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
 // Track IDs that were removed from the map - they might have duplicates in the tree
@@ -1085,7 +1091,7 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
         return error.InvalidStateError;
     }
 
-    if (self._active_parser_aborted) return;
+    if (self._active_parser_aborted or self._navigated_away) return;
 
     const html = blk: {
         var joined: std.ArrayList(u8) = .empty;
@@ -1213,12 +1219,16 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
         return error.InvalidStateError;
     }
 
-    if (self._active_parser_aborted or frame._load_state == .parsing) {
+    if (self._active_parser_aborted or self._navigated_away or frame._load_state == .parsing) {
         return self;
     }
 
     if (self._script_created_parser != null) {
         return self;
+    }
+
+    if (self._iframe_load_in_progress) {
+        self._mute_iframe_load = true;
     }
 
     // If we aren't parsing, then open clears the document.
@@ -1298,8 +1308,12 @@ fn finishScriptCreatedParser(self: *Document, frame: *Frame) !void {
     // Even if flushPendingText errors, the handle is already finished and we
     // must not retain the Streaming — defer so the error path also drops it.
     // (Streaming.done nulls its own handle, so dropping the struct is safe.)
-    defer self._script_created_parser = null;
-    try self._script_created_parser.?.done();
+    // Dropped before the load steps below: a load handler can write() again,
+    // which must open a fresh parser rather than feed this finished one.
+    {
+        defer self._script_created_parser = null;
+        try self._script_created_parser.?.done();
+    }
 
     // The write'd markup is fully parsed; run any deferred scripts it produced
     // (e.g. inline modules) before firing the load event. This frame's initial
@@ -1307,7 +1321,7 @@ fn finishScriptCreatedParser(self: *Document, frame: *Frame) !void {
     // iframe written into via document.write), so we can't rely on it.
     frame._script_manager.base.scriptCreatedParseDone();
 
-    frame.scriptCreatedParserDone();
+    try frame.scriptCreatedParserDone();
 }
 
 fn getFirstElementChild(self: *Document) ?*Element {
