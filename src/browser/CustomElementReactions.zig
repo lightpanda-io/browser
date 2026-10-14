@@ -18,8 +18,9 @@
 
 // Implements the spec's "custom element reactions" mechanism: callbacks
 // (connectedCallback, disconnectedCallback, adoptedCallback,
-// attributeChangedCallback) are enqueued during DOM mutation and invoked at
-// the outer algorithm boundary, not synchronously mid-mutation.
+// attributeChangedCallback and the form-associated callbacks) are enqueued
+// during DOM mutation and invoked at the outer algorithm boundary, not
+// synchronously mid-mutation.
 //
 // The "stack of element queues" is collapsed to a single flat ArrayList plus
 // per-scope checkpoint indices: push() captures items.len, popAndInvoke()
@@ -40,6 +41,7 @@ const lp = @import("lightpanda");
 const Frame = @import("Frame.zig");
 const Element = @import("webapi/Element.zig");
 const Document = @import("webapi/Document.zig");
+const Form = @import("webapi/element/html/Form.zig");
 const Custom = @import("webapi/element/html/Custom.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 
@@ -148,6 +150,18 @@ pub fn enqueueAttributeChanged(
     } });
 }
 
+pub fn enqueueFormAssociated(self: *Self, frame: *Frame, element: *Custom, form: ?*Form) !void {
+    try self.route(frame, .{ .form_associated = .{ .element = element, .form = form } });
+}
+
+pub fn enqueueFormDisabled(self: *Self, frame: *Frame, element: *Custom, disabled: bool) !void {
+    try self.route(frame, .{ .form_disabled = .{ .element = element, .disabled = disabled } });
+}
+
+pub fn enqueueFormReset(self: *Self, frame: *Frame, element: *Custom) !void {
+    try self.route(frame, .{ .form_reset = element });
+}
+
 pub const Reaction = union(enum) {
     upgrade: struct { element: *Custom, definition: *CustomElementDefinition },
     connected: *Element,
@@ -155,6 +169,9 @@ pub const Reaction = union(enum) {
     move: *Element,
     adopted: Adopted,
     attribute_changed: AttributeChanged,
+    form_associated: struct { element: *Custom, form: ?*Form },
+    form_disabled: struct { element: *Custom, disabled: bool },
+    form_reset: *Custom,
 
     const Adopted = struct {
         element: *Element,

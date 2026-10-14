@@ -859,3 +859,19 @@
   form.removeEventListener('reset', reenter)
 }
 </script>
+
+<script id="form_attribute_ignored_when_disconnected">
+{
+  // a disconnected control falls back to its ancestor form
+  const form = document.createElement('form')
+  const input = document.createElement('input')
+  input.setAttribute('form', 'nope')
+  form.appendChild(input)
+  testing.expectEqual(form, input.form)
+
+  // connected, the form attribute is authoritative again
+  document.body.appendChild(form)
+  testing.expectEqual(null, input.form)
+  form.remove()
+}
+</script>

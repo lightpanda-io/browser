@@ -190,6 +190,8 @@ pub fn reset(self: *Form, frame: *Frame) !void {
             textarea.reset();
         } else if (element.is(Output)) |output| {
             try output.reset(frame);
+        } else if (element.is(Custom)) |custom| {
+            try frame._ce_reactions.enqueueFormReset(frame, custom);
         }
     }
 }
@@ -266,12 +268,15 @@ pub fn ownerOf(element: *Element, frame: *Frame) ?*Form {
     // A form attribute is authoritative, even when it names nothing. It
     // resolves in the control's own tree (shadow root or document), not the
     // calling realm's.
-    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        const form_element = frame.getElementByIdFromNode(element.asNode(), form_id) orelse return null;
-        return form_element.is(Form);
+    const element_node = element.asNode();
+    if (element_node.isConnected()) {
+        if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
+            const form_element = frame.getElementByIdFromNode(element_node, form_id) orelse return null;
+            return form_element.is(Form);
+        }
     }
 
-    var node = element.asNode()._parent;
+    var node = element_node._parent;
     while (node) |n| : (node = n._parent) {
         if (n.is(Element.Html.Form)) |form| {
             return form;

@@ -1181,7 +1181,11 @@ pub fn constructCustomElement(frame: *Frame, new_target: JS.Function) !*Element 
         ._tag_name = tag_name,
         ._definition = definition,
     });
-    return node.as(Element);
+    const element = node.as(Element);
+    if (definition.form_associated) {
+        try element.is(Element.Html.Custom).?.registerFormAssociated(frame);
+    }
+    return element;
 }
 
 pub fn createTextNode(document: *const Node.Document, text: []const u8) !*Node {

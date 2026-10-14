@@ -276,6 +276,12 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     const connected = node.isConnected();
     custom._connected_callback_invoked = connected;
     custom._disconnected_callback_invoked = connected == false;
+
+    if (definition.form_associated) {
+        try custom.registerFormAssociated(frame);
+        custom._upgrade_in_progress = false;
+        custom.formStateChanged(frame);
+    }
 }
 
 fn upgradeFailed(custom: *Custom) void {

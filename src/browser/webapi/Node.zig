@@ -1007,14 +1007,22 @@ pub fn moveBefore(self: *Node, node_val: js.Value, child_val: js.Value, frame: *
     const connected = node.isConnected();
     const previous_root = node.getRootNode(.{});
 
-    if (node._parent) |old_parent| {
-        frame.removeNode(old_parent, node, .{ .reconnect_to = self });
+    const old_parent = node._parent;
+    if (old_parent) |op| {
+        frame.removeNode(op, node, .{ .reconnect_to = self, .move = true });
     }
 
     if (ref) |r| {
         try frame.insertNodeRelative(self, node, .{ .before = r }, .{ .previous_root = previous_root });
     } else {
         try frame.appendNode(self, node, .{ .previous_root = previous_root });
+    }
+
+    if (old_parent) |op| {
+        // the removal skipped this to not expose the intermediate state
+        if (op != self and frame._form_associated.items.len != 0) {
+            Element.Html.Custom.formLegendMoved(op, node, frame);
+        }
     }
 
     if (connected) {
