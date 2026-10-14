@@ -63,6 +63,16 @@ jobs:
       - name: zig build
         run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast -Dorderfile=orderfile/lightpanda.ld ${{ matrix.cpu_flag }} ${{ env.VERSION_FLAG }}
 
+      # Reference partials for the docs site, pulled daily by its
+      # browser-reference workflow. A debug build: the output doesn't depend
+      # on the optimize mode, it compiles far faster than ReleaseFast, and its
+      # flags match the snapshot step's so the C deps come from the cache.
+      - name: docs reference
+        if: matrix.arch == 'x86_64'
+        run: |
+          zig build -Dprebuilt_v8_path=v8/libc_v8.a docs
+          tar -czf lightpanda-docs.tar.gz -C zig-out/docs .
+
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
 
@@ -89,7 +99,7 @@ jobs:
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           allowUpdates: true
-          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }},lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug
+          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }},lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug${{ matrix.arch == 'x86_64' && ',lightpanda-docs.tar.gz' || '' }}
           tag: ${{ env.RELEASE }}
           makeLatest: ${{ github.ref_type == 'tag' }}
 

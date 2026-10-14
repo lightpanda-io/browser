@@ -78,7 +78,7 @@ const Filters = union(Mode) {
     selected_options,
     links,
     anchors,
-    form: struct { form: *Form, form_id: ?[]const u8, image_buttons: bool },
+    form: struct { form: *Form, form_id: ?[]const u8, image_buttons: bool, outputs: bool },
     document_named: []const u8,
 
     fn TypeOf(comptime mode: Mode) type {
@@ -370,7 +370,8 @@ pub fn NodeLive(comptime mode: Mode) type {
                 },
                 .form => {
                     const el = node.is(Element) orelse return false;
-                    if (!isFormControl(el)) {
+                    const is_control = isFormControl(el) or (self._filter.outputs and el.getTag() == .output);
+                    if (is_control == false) {
                         return false;
                     }
                     if (self._filter.image_buttons == false) {
@@ -419,6 +420,7 @@ pub fn NodeLive(comptime mode: Mode) type {
             const html = el.subtype(Element.Html);
             return switch (html._type) {
                 .input, .button, .select, .textarea => true,
+                .custom => html.subtype(Element.Html.Custom).isFormAssociated(),
                 else => false,
             };
         }

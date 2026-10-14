@@ -237,17 +237,29 @@ pub const GlobalScope = union(enum) {
         self: GlobalScope,
         target: *EventTarget,
         event: *Event,
-        handler: anytype,
         comptime opts: EventManagerBase.DispatchDirectOptions,
     ) !void {
         return switch (self) {
-            inline else => |g| g.dispatch(target, event, handler, opts),
+            inline else => |g| g.dispatch(target, event, opts),
         };
     }
 
-    pub fn hasDirectListeners(self: GlobalScope, target: *EventTarget, typ: []const u8, handler: anytype) bool {
+    pub fn hasDirectListeners(self: GlobalScope, target: *EventTarget, typ: []const u8) bool {
         return switch (self) {
-            inline else => |g| g.hasDirectListeners(target, typ, handler),
+            inline else => |g| g.hasDirectListeners(target, typ),
+        };
+    }
+
+    pub fn setHandler(self: GlobalScope, target: *EventTarget, typ: []const u8, handler: ?JS.Function.Global) !void {
+        switch (self) {
+            inline else => |g| _ = try g._event_manager.setHandler(target, typ, handler),
+        }
+    }
+
+    pub fn getHandler(self: GlobalScope, target: *EventTarget, typ: []const u8) ?JS.Function.Global {
+        return switch (self) {
+            .frame => |frame| frame._event_manager.getHandler(target, typ),
+            .worker => |worker| worker._event_manager.getHandler(worker.js, target, typ),
         };
     }
 

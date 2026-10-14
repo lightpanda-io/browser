@@ -15,6 +15,19 @@
   window.onerror = null;
 </script>
 
+<script id=bodyOnerrorAttributeParameters>
+  // <body onerror> compiles with the window.onerror parameter names.
+  let bodyOnerrorArgs = null;
+  const bodyEl = document.createElement('body');
+  bodyEl.setAttribute('onerror', 'bodyOnerrorArgs = [event, source, lineno, colno, error]; return true;');
+  const bodyOnerrorErr = new Error('boom');
+  window.reportError(bodyOnerrorErr);
+  testing.expectEqual('string', typeof bodyOnerrorArgs[0]);
+  testing.expectEqual('number', typeof bodyOnerrorArgs[2]);
+  testing.expectEqual(bodyOnerrorErr, bodyOnerrorArgs[4]);
+  bodyEl.removeAttribute('onerror');
+</script>
+
 <script id=onerrorCalledBeforeEventListener>
   let callOrder = [];
   window.onerror = function() { callOrder.push('onerror'); return true; };

@@ -518,6 +518,9 @@ pub const BrowserContext = struct {
     // can use the existing Frame/js.Context as-is.
     main_world_touched: bool = false,
 
+    // Runtime.exceptionThrown's exceptionDetails.exceptionId.
+    next_exception_id: u32 = 1,
+
     // Scripts registered via Page.addScriptToEvaluateOnNewDocument.
     // Evaluated in each new document after navigation completes.
     scripts_on_new_document: std.ArrayList(ScriptOnNewDocument) = .empty,
@@ -606,6 +609,7 @@ pub const BrowserContext = struct {
         try notification.register(.frame_navigated_within_document, self, onFrameNavigatedWithinDocument);
         try notification.register(.frame_navigate_failed, self, onFrameNavigateFailed);
         try notification.register(.frame_child_frame_created, self, onFrameChildFrameCreated);
+        try notification.register(.frame_child_frame_detached, self, onFrameChildFrameDetached);
         try notification.register(.frame_destroyed, self, onFrameDestroyed);
         try notification.register(.frame_dom_content_loaded, self, onFrameDOMContentLoaded);
         try notification.register(.frame_loaded, self, onFrameLoaded);
@@ -759,6 +763,7 @@ pub const BrowserContext = struct {
             .label_index = label_index,
             .temp_arena = temp_arena,
             .filter = opts.filter,
+            .depth = opts.depth,
         };
     }
 
@@ -940,10 +945,12 @@ pub const BrowserContext = struct {
 
     pub fn runtimeEnable(self: *BrowserContext) !void {
         try self.notification.register(.runtime_console_message, self, onRuntimeConsoleMessage);
+        try self.notification.register(.exception_thrown, self, onExceptionThrown);
     }
 
     pub fn runtimeDisable(self: *BrowserContext) void {
         self.notification.unregister(.runtime_console_message, self);
+        self.notification.unregister(.exception_thrown, self);
     }
 
     // Registers for the download notifications dispatched by Frame when a
@@ -1028,6 +1035,11 @@ pub const BrowserContext = struct {
     fn onFrameChildFrameCreated(ctx: *anyopaque, msg: *const Notification.FrameChildFrameCreated) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameChildFrameCreated(self, msg);
+    }
+
+    fn onFrameChildFrameDetached(ctx: *anyopaque, msg: *const Notification.FrameChildFrameDetached) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/page.zig").frameChildFrameDetached(self, msg);
     }
 
     fn onFrameNetworkIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkIdle) !void {
@@ -1181,6 +1193,13 @@ pub const BrowserContext = struct {
         const arena = self.acquireNotificationArena();
         defer self.releaseNotificationArena();
         return @import("domains/runtime.zig").consoleMessage(arena, self, msg);
+    }
+
+    fn onExceptionThrown(ctx: *anyopaque, msg: *const Notification.ExceptionThrown) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        const arena = self.acquireNotificationArena();
+        defer self.releaseNotificationArena();
+        return @import("domains/runtime.zig").exceptionThrown(arena, self, msg);
     }
 
     fn acquireNotificationArena(self: *BrowserContext) Allocator {

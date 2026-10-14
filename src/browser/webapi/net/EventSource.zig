@@ -78,10 +78,6 @@ _skip_lf: bool = false,
 // A single leading BOM is stripped from the stream's first line.
 _bom_checked: bool = false,
 
-_on_open: ?js.Function.Global = null,
-_on_message: ?js.Function.Global = null,
-_on_error: ?js.Function.Global = null,
-
 const ReadyState = enum(u8) {
     connecting = 0,
     open = 1,
@@ -128,23 +124,14 @@ pub fn init(url: []const u8, opts_: ?Opts, exec: *const Execution) !*EventSource
     return self;
 }
 
-pub fn deinit(self: *EventSource, _: *Page) void {
+pub fn deinit(self: *EventSource, page: *Page) void {
     self._ready_state = .closed;
     if (self._transfer) |transfer| {
         self._transfer = null;
         transfer.cancel();
     }
 
-    if (self._on_open) |func| {
-        func.release();
-    }
-    if (self._on_message) |func| {
-        func.release();
-    }
-    if (self._on_error) |func| {
-        func.release();
-    }
-
+    page.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
@@ -156,7 +143,7 @@ pub fn acquireRef(self: *EventSource) void {
     self._rc.acquire();
 }
 
-fn asEventTarget(self: *EventSource) *EventTarget {
+pub fn asEventTarget(self: *EventSource) *EventTarget {
     return self._proto;
 }
 
@@ -246,7 +233,7 @@ fn failConnection(self: *EventSource) void {
         return;
     }
     self._ready_state = .closed;
-    self.dispatchEvent("error", self._on_error) catch |err| {
+    self.dispatchEvent("error") catch |err| {
         log.debug(.http, "EventSource error event", .{ .err = err, .url = self._url });
     };
     self.deactivate();
@@ -257,7 +244,7 @@ fn reestablish(self: *EventSource) void {
         return;
     }
     self._ready_state = .connecting;
-    self.dispatchEvent("error", self._on_error) catch |err| {
+    self.dispatchEvent("error") catch |err| {
         log.debug(.http, "EventSource error event", .{ .err = err, .url = self._url });
     };
     // the error handler may have close()d us
@@ -336,7 +323,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     // https://html.spec.whatwg.org/multipage/server-sent-events.html#announce-the-connection
     self._ready_state = .open;
-    try self.dispatchEvent("open", self._on_open);
+    try self.dispatchEvent("open");
     return .proceed;
 }
 
@@ -536,13 +523,12 @@ fn dispatchPending(self: *EventSource) !void {
 
     const exec = self._exec;
     const target = self.asEventTarget();
-    const handler: ?js.Function.Global = if (is_message) self._on_message else null;
 
     if (is_message) {
-        if (!exec.hasDirectListeners(target, "message", handler)) {
+        if (!exec.hasDirectListeners(target, "message")) {
             return;
         }
-    } else if (!exec.hasDirectListeners(target, type_buf, handler)) {
+    } else if (!exec.hasDirectListeners(target, type_buf)) {
         return;
     }
 
@@ -553,15 +539,15 @@ fn dispatchPending(self: *EventSource) !void {
         .origin = self._event_origin,
         .lastEventId = self._last_event_id.items,
     }, exec.page);
-    try exec.dispatch(target, event.asEvent(), handler, .{ .context = "EventSource message" });
+    try exec.dispatch(target, event.asEvent(), .{ .context = "EventSource message" });
 }
 
-fn dispatchEvent(self: *EventSource, comptime name: []const u8, handler: ?js.Function.Global) !void {
+fn dispatchEvent(self: *EventSource, comptime name: []const u8) !void {
     const exec = self._exec;
     const target = self.asEventTarget();
-    if (exec.hasDirectListeners(target, name, handler)) {
+    if (exec.hasDirectListeners(target, name)) {
         const event = try Event.initTrusted(comptime .wrap(name), .{}, exec.page);
-        try exec.dispatch(target, event, handler, .{ .context = "EventSource " ++ name });
+        try exec.dispatch(target, event, .{ .context = "EventSource " ++ name });
     }
 }
 
@@ -575,39 +561,6 @@ fn getReadyState(self: *const EventSource) u16 {
 
 fn getWithCredentials(self: *const EventSource) bool {
     return self._with_credentials;
-}
-
-fn getOnOpen(self: *const EventSource) ?js.Function.Global {
-    return self._on_open;
-}
-
-fn setOnOpen(self: *EventSource, cb_: ?js.Function) !void {
-    if (self._on_open) |old| {
-        old.release();
-    }
-    self._on_open = if (cb_) |cb| try cb.persistWithThis(self) else null;
-}
-
-fn getOnMessage(self: *const EventSource) ?js.Function.Global {
-    return self._on_message;
-}
-
-fn setOnMessage(self: *EventSource, cb_: ?js.Function) !void {
-    if (self._on_message) |old| {
-        old.release();
-    }
-    self._on_message = if (cb_) |cb| try cb.persistWithThis(self) else null;
-}
-
-fn getOnError(self: *const EventSource) ?js.Function.Global {
-    return self._on_error;
-}
-
-fn setOnError(self: *EventSource, cb_: ?js.Function) !void {
-    if (self._on_error) |old| {
-        old.release();
-    }
-    self._on_error = if (cb_) |cb| try cb.persistWithThis(self) else null;
 }
 
 pub const JsApi = struct {
@@ -629,9 +582,9 @@ pub const JsApi = struct {
     pub const readyState = bridge.accessor(EventSource.getReadyState, null, .{});
     pub const withCredentials = bridge.accessor(EventSource.getWithCredentials, null, .{});
 
-    pub const onopen = bridge.accessor(EventSource.getOnOpen, EventSource.setOnOpen, .{});
-    pub const onmessage = bridge.accessor(EventSource.getOnMessage, EventSource.setOnMessage, .{});
-    pub const onerror = bridge.accessor(EventSource.getOnError, EventSource.setOnError, .{});
+    pub const onopen = EventTarget.handlerAccessor(EventSource, "open");
+    pub const onmessage = EventTarget.handlerAccessor(EventSource, "message");
+    pub const onerror = EventTarget.handlerAccessor(EventSource, "error");
 
     pub const close = bridge.function(EventSource.close, .{});
 };

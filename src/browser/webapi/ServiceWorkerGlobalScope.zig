@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Transfer = @import("../../network/HttpClient.zig").Transfer;
 
+const EventTarget = @import("EventTarget.zig");
 const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 
@@ -60,9 +61,6 @@ _script_load: ?ScriptLoad = null,
 _self_registration: ?*ServiceWorkerRegistration = null,
 
 _cookie_store: ?*CookieStore = null,
-_on_install: ?js.Function.Global = null,
-_on_activate: ?js.Function.Global = null,
-_on_message: ?js.Function.Global = null,
 
 // Our event dispatching is more complicated, because it can be held by an
 // arbitrary JS promise (ExtendableEvent.waitUntil). So we create this, hold it
@@ -339,7 +337,7 @@ fn releaseScriptLoad(self: *ServiceWorkerGlobalScope) void {
 
 fn beginInstall(self: *ServiceWorkerGlobalScope) void {
     self.setState(.installing);
-    self.dispatchExtendable(comptime .wrap("install"), self._on_install, struct {
+    self.dispatchExtendable(comptime .wrap("install"), struct {
         fn done(ctx: *anyopaque) void {
             const s: *ServiceWorkerGlobalScope = @ptrCast(@alignCast(ctx));
             s.releasePendingEvent();
@@ -358,7 +356,7 @@ fn beginActivate(self: *ServiceWorkerGlobalScope) void {
         return;
     }
     self.setState(.activating);
-    self.dispatchExtendable(comptime .wrap("activate"), self._on_activate, struct {
+    self.dispatchExtendable(comptime .wrap("activate"), struct {
         fn done(ctx: *anyopaque) void {
             const s: *ServiceWorkerGlobalScope = @ptrCast(@alignCast(ctx));
             s.releasePendingEvent();
@@ -389,7 +387,6 @@ fn finishActivation(self: *ServiceWorkerGlobalScope) void {
 fn dispatchExtendable(
     self: *ServiceWorkerGlobalScope,
     typ: String,
-    handler: ?js.Function.Global,
     comptime on_done: fn (ctx: *anyopaque) void,
 ) !void {
     const wgs = self._proto;
@@ -404,7 +401,7 @@ fn dispatchExtendable(
     self._pending_event = event;
     errdefer self.releasePendingEvent();
 
-    try wgs.dispatch(wgs.asEventTarget(), base, handler, .{ .context = "service worker lifecycle" });
+    try wgs.dispatch(wgs.asEventTarget(), base, .{ .context = "service worker lifecycle" });
 
     // Seal only after the handlers have run, so a synchronous waitUntil is
     // counted before an empty pending set can complete the phase.
@@ -514,18 +511,17 @@ const ReceiveMessageCallback = struct {
         const target = wgs.asEventTarget();
 
         const data = self.data orelse {
-            if (wgs._event_manager.hasDirectListeners(target, "messageerror", null)) {
+            if (wgs._event_manager.hasDirectListeners(target, "messageerror")) {
                 const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
                     .bubbles = false,
                     .cancelable = false,
                 }, wgs.page)).asEvent();
-                try wgs.dispatch(target, event, null, .{});
+                try wgs.dispatch(target, event, .{});
             }
             return null;
         };
 
-        const on_message = self.worker_scope._on_message;
-        if (wgs._event_manager.hasDirectListeners(target, "message", on_message) == false) {
+        if (wgs._event_manager.hasDirectListeners(target, "message") == false) {
             data.release();
             return null;
         }
@@ -535,7 +531,7 @@ const ReceiveMessageCallback = struct {
             .bubbles = false,
             .cancelable = false,
         }, wgs.page)).asEvent();
-        try wgs.dispatch(target, event, on_message, .{});
+        try wgs.dispatch(target, event, .{});
         return null;
     }
 };
@@ -575,28 +571,8 @@ pub fn skipWaiting(_: *ServiceWorkerGlobalScope, exec: *const js.Execution) !js.
     return resolver.promise();
 }
 
-pub fn getOnInstall(self: *const ServiceWorkerGlobalScope) ?js.Function.Global {
-    return self._on_install;
-}
-
-pub fn setOnInstall(self: *ServiceWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
-    self._on_install = WorkerGlobalScope.getFunctionFromSetter(setter);
-}
-
-pub fn getOnActivate(self: *const ServiceWorkerGlobalScope) ?js.Function.Global {
-    return self._on_activate;
-}
-
-pub fn setOnActivate(self: *ServiceWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
-    self._on_activate = WorkerGlobalScope.getFunctionFromSetter(setter);
-}
-
-pub fn getOnMessage(self: *const ServiceWorkerGlobalScope) ?js.Function.Global {
-    return self._on_message;
-}
-
-pub fn setOnMessage(self: *ServiceWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
-    self._on_message = WorkerGlobalScope.getFunctionFromSetter(setter);
+pub fn asEventTarget(self: *ServiceWorkerGlobalScope) *EventTarget {
+    return self._proto.asEventTarget();
 }
 
 pub const JsApi = struct {
@@ -613,9 +589,9 @@ pub const JsApi = struct {
     pub const skipWaiting = bridge.function(ServiceWorkerGlobalScope.skipWaiting, .{});
     pub const cookieStore = bridge.accessor(ServiceWorkerGlobalScope.getCookieStore, null, .{});
 
-    pub const oninstall = bridge.accessor(ServiceWorkerGlobalScope.getOnInstall, ServiceWorkerGlobalScope.setOnInstall, .{});
-    pub const onactivate = bridge.accessor(ServiceWorkerGlobalScope.getOnActivate, ServiceWorkerGlobalScope.setOnActivate, .{});
-    pub const onmessage = bridge.accessor(ServiceWorkerGlobalScope.getOnMessage, ServiceWorkerGlobalScope.setOnMessage, .{});
+    pub const oninstall = EventTarget.handlerAccessor(ServiceWorkerGlobalScope, "install");
+    pub const onactivate = EventTarget.handlerAccessor(ServiceWorkerGlobalScope, "activate");
+    pub const onmessage = EventTarget.handlerAccessor(ServiceWorkerGlobalScope, "message");
 
     // Deliberately absent: `onfetch` and `clients`. Nothing dispatches fetch
     // events yet, and an accessor that silently never fires is worse than a

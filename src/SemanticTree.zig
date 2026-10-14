@@ -43,11 +43,14 @@ arena: std.mem.Allocator,
 prune: bool,
 interactive_only: bool,
 max_depth: u32,
+max_bytes: ?u32,
 
 pub const Opts = struct {
     prune: bool = true,
     interactive_only: bool = false,
     max_depth: u32 = std.math.maxInt(u32) - 1,
+    // Text output only.
+    max_bytes: ?u32 = null,
 };
 
 /// `frame` only seeds the owner lookup; the tree is walked with the frame
@@ -63,12 +66,14 @@ pub fn init(arena: std.mem.Allocator, node: *Node, registry: *NodeRegistry, fram
         .prune = opts.prune,
         .interactive_only = opts.interactive_only,
         .max_depth = opts.max_depth,
+        .max_bytes = opts.max_bytes,
     };
 }
 
 /// Walk the pruned tree with `visitor`: `visit(*Node, *NodeData) !bool`
 /// returns whether to descend into the children, `leave() !void` closes a
-/// visited node.
+/// visited node. An optional `visitPruned(*Node, *NodeData) !bool` sees the
+/// nodes pruning skips, and returns whether to get a `leave()` for it too.
 fn visitAll(self: @This(), visitor: anytype) error{WriteFailed}!void {
     var xpath_buffer: std.ArrayList(u8) = .empty;
     const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
@@ -92,10 +97,314 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
     return self.visitAll(&visitor);
 }
 
+/// Past `max_bytes`, lines are kept by priority, records round-robin, and
+/// dropped lines are counted in `[more]` markers.
 pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
-    var visitor = TextVisitor{ .writer = writer, .tree = self, .depth = 0 };
-    return self.visitAll(&visitor);
+    const max_bytes = self.max_bytes orelse {
+        var visitor: TextVisitor = .{ .writer = writer };
+        return self.visitAll(&visitor);
+    };
+    var collector: LineCollector = .{
+        .arena = self.arena,
+        .text = .init(self.arena),
+        .focused = if (self.frame.document._active_element) |el| el.asNode() else null,
+    };
+    try self.visitAll(&collector);
+    const text = collector.text.written();
+    if (text.len <= max_bytes) return writer.writeAll(text);
+    const budget: Budget = Budget.init(self.arena, text, collector.lines.items, max_bytes) catch return error.WriteFailed;
+    try budget.render(self.arena, writer);
 }
+
+const TextVisitor = struct {
+    writer: *std.Io.Writer,
+    depth: u32 = 0,
+
+    pub fn visit(self: *TextVisitor, node: *Node, data: *NodeData) !bool {
+        try self.writer.splatByteAll(' ', self.depth);
+        const line = try writeTextLine(self.writer, node, data);
+        try self.writer.writeByte('\n');
+        self.depth += 1;
+        return line.walk_children;
+    }
+
+    pub fn leave(self: *TextVisitor) !void {
+        self.depth -= 1;
+    }
+};
+
+const Priority = enum(u3) { critical, heading, named, text, chrome };
+
+const Line = struct {
+    id: NodeRegistry.Id,
+    // Into the collector's text buffer, indent and newline included.
+    start: u32,
+    end: u32,
+    depth: u32,
+    parent: ?u32,
+    priority: Priority,
+    // Says something itself (a name, text or value), not only through children.
+    contentful: bool,
+    // A pruned row, list or landmark, or the pruned walk root: never printed,
+    // but it groups its lines into a record and scopes their markers.
+    hidden: bool,
+    // Inside an alert or status message, all of which is critical.
+    critical_subtree: bool,
+    // Inside site navigation, all of which ranks last unless critical.
+    chrome_subtree: bool,
+    subtree_len: u32 = 1,
+    // Printed lines in the subtree, this one included.
+    printed_len: u32,
+
+    fn childDepth(line: Line) u32 {
+        return line.depth + @intFromBool(!line.hidden);
+    }
+
+    fn printedBelow(line: Line) u32 {
+        return line.printed_len - @intFromBool(!line.hidden);
+    }
+};
+
+const LineCollector = struct {
+    arena: std.mem.Allocator,
+    text: std.Io.Writer.Allocating,
+    focused: ?*Node,
+    lines: std.ArrayList(Line) = .empty,
+    current: ?u32 = null,
+
+    pub fn visit(self: *LineCollector, node: *Node, data: *NodeData) !bool {
+        const start = self.text.written().len;
+        try self.text.writer.splatByteAll(' ', self.depth());
+        const line = try writeTextLine(&self.text.writer, node, data);
+        try self.text.writer.writeByte('\n');
+        try self.append(data, start, .{
+            .hidden = false,
+            .contentful = line.contentful,
+            .priority = linePriority(node, data, self.focused),
+        });
+        return line.walk_children;
+    }
+
+    pub fn visitPruned(self: *LineCollector, _: *Node, data: *NodeData) !bool {
+        // The walk root always gets a line, so the output has a single top.
+        const anchor = (structural_roles.get(data.role) orelse .wrapper) == .anchor;
+        if (self.current != null and !anchor) return false;
+        try self.append(data, self.text.written().len, .{ .hidden = true, .contentful = false, .priority = .text });
+        return true;
+    }
+
+    pub fn leave(self: *LineCollector) !void {
+        const index = self.current.?;
+        const line = &self.lines.items[index];
+        line.subtree_len = @intCast(self.lines.items.len - index);
+        self.current = line.parent;
+        if (line.parent) |p| self.lines.items[p].printed_len += line.printed_len;
+    }
+
+    const Own = struct { hidden: bool, contentful: bool, priority: Priority };
+
+    fn append(self: *LineCollector, data: *const NodeData, start: usize, own: Own) !void {
+        const inherited = if (self.current) |p| self.lines.items[p].critical_subtree else false;
+        const role_scope = critical_roles.get(data.role);
+        const critical = inherited or role_scope != null;
+        const chrome = (if (self.current) |p| self.lines.items[p].chrome_subtree else false) or chrome_roles.has(data.role);
+        try self.lines.append(self.arena, .{
+            .id = data.id,
+            .start = @intCast(start),
+            .end = @intCast(self.text.written().len),
+            .depth = self.depth(),
+            .parent = self.current,
+            .priority = if (critical) .critical else if (chrome) .chrome else own.priority,
+            .contentful = own.contentful,
+            .hidden = own.hidden,
+            .critical_subtree = inherited or role_scope == .subtree,
+            .chrome_subtree = chrome,
+            .printed_len = @intFromBool(!own.hidden),
+        });
+        self.current = @intCast(self.lines.items.len - 1);
+    }
+
+    fn depth(self: *const LineCollector) u32 {
+        return if (self.current) |p| self.lines.items[p].childDepth() else 0;
+    }
+};
+
+// Ordered: an inner scope can widen an outer one, never narrow it.
+const critical_roles = std.StaticStringMap(enum { self, subtree }).initComptime(.{
+    // Their message is their children.
+    .{ "alert", .subtree },
+    .{ "status", .subtree },
+    // External stylesheets are off by default, so a menu or drawer that an
+    // author class hides still looks like an open dialog: promoting its
+    // controls would hand them the budget.
+    .{ "dialog", .self },
+    .{ "alertdialog", .self },
+});
+
+// Menus and footers often come before the content, with more links than it.
+// A banner is left out: it holds the search box and the cart.
+const chrome_roles = std.StaticStringMap(void).initComptime(.{
+    .{ "navigation", {} },
+    .{ "complementary", {} },
+    .{ "contentinfo", {} },
+});
+
+fn linePriority(node: *Node, data: *const NodeData, focused: ?*Node) Priority {
+    if (focused == node) return .critical;
+    if (node.is(Element)) |el| {
+        if (std.mem.eql(u8, el.getAttributeSafe(comptime .wrap("aria-invalid")) orelse "", "true")) return .critical;
+    }
+    if (data.value != null or data.options != null or data.checked != null) return .named;
+    const named = data.name != null and data.name.?.len > 0;
+    // Headings outline the page, and a record's title is often one.
+    if (named and std.mem.eql(u8, data.role, "heading")) return .heading;
+    if (named and !std.mem.eql(u8, data.role, "StaticText")) return .named;
+    return .text;
+}
+
+const Budget = struct {
+    text: []const u8,
+    lines: []const Line,
+    kept: []bool,
+    // For a kept line: how many printed lines have it as their nearest kept ancestor.
+    omitted: []u32,
+
+    fn init(arena: std.mem.Allocator, text: []const u8, lines: []const Line, max_bytes: usize) !Budget {
+        var self: Budget = .{
+            .text = text,
+            .lines = lines,
+            .kept = try arena.alloc(bool, lines.len),
+            .omitted = try arena.alloc(u32, lines.len),
+        };
+        @memset(self.kept, false);
+        @memset(self.omitted, 0);
+
+        // The walk root is always kept, so a tiny budget can still be exceeded.
+        const root = lines[0];
+        self.kept[0] = true;
+        self.omitted[0] = root.printedBelow();
+        var used = lineCost(root) + markerCost(root, self.omitted[0]);
+
+        const limit = max_bytes -| trailerCost(root.printed_len);
+        var chain: std.ArrayList(u32) = .empty;
+        for (try candidateOrder(arena, lines)) |i| {
+            if (self.kept[i]) continue;
+            chain.clearRetainingCapacity();
+            var c = i;
+            while (!self.kept[c]) : (c = lines[c].parent.?) {
+                try chain.append(arena, c);
+            }
+            const new_used = self.chainCost(chain.items, used);
+            if (new_used <= limit) {
+                self.keep(chain.items);
+                used = new_used;
+            }
+        }
+        return self;
+    }
+
+    /// `used` once `chain`, a candidate then its unkept ancestors, is kept.
+    fn chainCost(self: *const Budget, chain: []const u32, used: usize) usize {
+        var total = used;
+        var below: u32 = 0;
+        for (chain) |c| {
+            const line = self.lines[c];
+            total += lineCost(line) + markerCost(line, line.printedBelow() - below);
+            below = line.printed_len;
+        }
+        const p = self.lines[chain[chain.len - 1]].parent.?;
+        return total + markerCost(self.lines[p], self.omitted[p] - below) - markerCost(self.lines[p], self.omitted[p]);
+    }
+
+    fn keep(self: *Budget, chain: []const u32) void {
+        var it = std.mem.reverseIterator(chain);
+        while (it.next()) |c| {
+            const line = self.lines[c];
+            self.omitted[line.parent.?] -= line.printed_len;
+            self.kept[c] = true;
+            self.omitted[c] = line.printedBelow();
+        }
+    }
+
+    fn render(self: *const Budget, arena: std.mem.Allocator, writer: *std.Io.Writer) error{WriteFailed}!void {
+        var pending: std.ArrayList(u32) = .empty;
+        var shown: usize = 0;
+        for (self.lines, 0..) |line, i| {
+            while (pending.getLastOrNull()) |p| {
+                if (p + self.lines[p].subtree_len > i) break;
+                try writeMarker(writer, self.lines[p], self.omitted[p]);
+                _ = pending.pop();
+            }
+            if (!self.kept[i]) continue;
+            try writer.writeAll(self.text[line.start..line.end]);
+            shown += @intFromBool(!line.hidden);
+            if (self.omitted[i] > 0) {
+                pending.append(arena, @intCast(i)) catch return error.WriteFailed;
+            }
+        }
+        while (pending.pop()) |p| {
+            try writeMarker(writer, self.lines[p], self.omitted[p]);
+        }
+        try writer.print(trailer_fmt, .{ shown, self.lines[0].printed_len });
+    }
+
+    /// Contentful lines by (priority, rank among same-priority siblings): with
+    /// rows and list items as hidden parents, that takes records round-robin.
+    /// Containers only come in as the ancestors of a kept line.
+    fn candidateOrder(arena: std.mem.Allocator, lines: []const Line) ![]u32 {
+        const rank = try arena.alloc(u32, lines.len);
+        const next = try arena.alloc(std.EnumArray(Priority, u32), lines.len);
+        @memset(next, .initFill(0));
+        var keys: std.ArrayList(u64) = .empty;
+        rank[0] = 0;
+        for (lines[1..], 1..) |line, i| {
+            // Nested detail never outranks its parent.
+            const parent = line.parent.?;
+            if (line.hidden) {
+                rank[i] = rank[parent];
+                continue;
+            }
+            const counter = next[parent].getPtr(line.priority);
+            rank[i] = @max(counter.*, rank[parent]);
+            counter.* += 1;
+            if (!line.contentful and line.priority != .critical) continue;
+            const r: u64 = @min(rank[i], std.math.maxInt(u29));
+            try keys.append(arena, @as(u64, @backingInt(line.priority)) << 61 | r << 32 | i);
+        }
+        std.mem.sort(u64, keys.items, {}, std.sort.asc(u64));
+
+        const order = try arena.alloc(u32, keys.items.len);
+        for (order, keys.items) |*o, key| o.* = @truncate(key);
+        return order;
+    }
+
+    const trailer_fmt = "[showing {d} of {d} nodes; read a [+N more @id] with tree backendNodeId=id]\n";
+
+    fn lineCost(line: Line) usize {
+        return line.end - line.start;
+    }
+
+    fn markerCost(line: Line, omitted: u32) usize {
+        if (omitted == 0) return 0;
+        var counter: std.Io.Writer.Discarding = .init(&.{});
+        writeMarker(&counter.writer, line, omitted) catch unreachable;
+        return @intCast(counter.fullCount());
+    }
+
+    fn trailerCost(total: usize) usize {
+        return std.fmt.count(trailer_fmt, .{ total, total });
+    }
+
+    fn writeMarker(writer: *std.Io.Writer, line: Line, omitted: u32) error{WriteFailed}!void {
+        try writer.splatByteAll(' ', line.childDepth());
+        // Scoping `tree` to the walk root returns the same budget problem.
+        if (line.parent == null) {
+            try writer.print("[+{d} more; raise maxBytes]\n", .{omitted});
+        } else {
+            try writer.print("[+{d} more @{d}]\n", .{ omitted, line.id });
+        }
+    }
+};
 
 const OptionData = struct {
     value: []const u8,
@@ -130,7 +439,8 @@ const Open = struct {
     tag_counts: std.StringArrayHashMapUnmanaged(usize) = .empty,
     name: ?[]const u8, // The children's parent_name
     xpath_len: usize,
-    visited: bool,
+    // Whether the visitor gets a `leave()` once the children are done.
+    opened: bool,
 };
 
 fn walk(self: @This(), ctx: *WalkContext, visitor: anytype) !void {
@@ -159,7 +469,7 @@ fn walk(self: @This(), ctx: *WalkContext, visitor: anytype) !void {
         }
 
         const done = stack.pop().?;
-        if (done.visited) {
+        if (done.opened) {
             try visitor.leave();
         }
         ctx.xpath_buffer.shrinkRetainingCapacity(done.xpath_len);
@@ -297,7 +607,7 @@ fn visitNode(
         }
     }
 
-    var did_visit = false;
+    var opened = false;
     var should_walk_children = true;
     var data: NodeData = .{
         .id = cdp_node.id,
@@ -315,17 +625,16 @@ fn visitNode(
 
     if (should_visit) {
         should_walk_children = try visitor.visit(node, &data);
-        did_visit = true; // Always true if should_visit was true, because visit() executed and opened structures
-    } else {
-        // If we skip the node, we must NOT tell the visitor to close it later
-        did_visit = false;
+        opened = true;
+    } else if (@hasDecl(@TypeOf(visitor.*), "visitPruned")) {
+        opened = try visitor.visitPruned(node, &data);
     }
 
     try stack.append(self.arena, .{
         .next_child = if (should_walk_children) node._first_child else null,
         .name = name,
         .xpath_len = initial_xpath_len,
-        .visited = did_visit,
+        .opened = opened,
     });
 }
 
@@ -479,109 +788,96 @@ const JsonVisitor = struct {
 };
 
 fn isStructuralRole(role: []const u8) bool {
-    const structural_roles = std.StaticStringMap(void).initComptime(.{
-        .{ "none", {} },
-        .{ "generic", {} },
-        .{ "InlineTextBox", {} },
-        .{ "banner", {} },
-        .{ "navigation", {} },
-        .{ "main", {} },
-        .{ "list", {} },
-        .{ "listitem", {} },
-        .{ "table", {} },
-        .{ "rowgroup", {} },
-        .{ "row", {} },
-        .{ "cell", {} },
-        .{ "region", {} },
-    });
     return structural_roles.has(role);
 }
 
-const TextVisitor = struct {
-    writer: *std.Io.Writer,
-    tree: Self,
-    depth: usize,
+// Pruned from the tree. In the text output, anchors still group their lines
+// into records and scope the `[more]` markers for what's dropped.
+const structural_roles = std.StaticStringMap(enum { wrapper, anchor }).initComptime(.{
+    .{ "none", .wrapper },
+    .{ "generic", .wrapper },
+    .{ "InlineTextBox", .wrapper },
+    .{ "rowgroup", .wrapper },
+    .{ "cell", .wrapper },
+    .{ "banner", .anchor },
+    .{ "navigation", .anchor },
+    .{ "main", .anchor },
+    .{ "list", .anchor },
+    .{ "listitem", .anchor },
+    .{ "table", .anchor },
+    .{ "row", .anchor },
+    .{ "region", .anchor },
+});
 
-    pub fn visit(self: *TextVisitor, node: *Node, data: *NodeData) !bool {
-        for (0..self.depth) |_| {
-            try self.writer.writeByte(' ');
-        }
-
-        var name_to_print: ?[]const u8 = null;
-        if (data.name) |n| {
-            if (n.len > 0) {
-                name_to_print = n;
-            }
-        } else if (node.is(CData.Text)) |text_node| {
-            const trimmed = std.mem.trim(u8, text_node.ownData(), " \t\r\n");
-            if (trimmed.len > 0) {
-                name_to_print = trimmed;
-            }
-        }
-
-        const is_text_only = std.mem.eql(u8, data.role, "StaticText") or std.mem.eql(u8, data.role, "none") or std.mem.eql(u8, data.role, "generic");
-
-        try self.writer.print("{d}", .{data.id});
-        if (data.interactive) {
-            try self.writer.writeAll(if (data.disabled) " [i:disabled]" else " [i]");
-        }
-        if (!is_text_only) {
-            try self.writer.print(" {s}", .{data.role});
-        }
-        if (name_to_print) |n| {
-            try self.writer.print(" '{s}'", .{n});
-        }
-
-        if (data.value) |v| {
-            if (v.len > 0) {
-                try self.writer.print(" value='{s}'", .{v});
-            }
-        }
-
-        if (data.checked) |c| {
-            if (c) {
-                try self.writer.writeAll(" [checked]");
-            } else {
-                try self.writer.writeAll(" [unchecked]");
-            }
-        }
-
-        if (data.options) |options| {
-            try self.writer.writeAll(" options=[");
-            for (options, 0..) |opt, i| {
-                if (i > 0) try self.writer.writeAll(",");
-                try self.writer.print("'{s}'", .{opt.value});
-                if (opt.selected) {
-                    try self.writer.writeAll("*");
-                }
-            }
-            try self.writer.writeAll("]\n");
-            self.depth += 1;
-            return false; // Native handling complete, do not walk children
-        }
-
-        try self.writer.writeByte('\n');
-        self.depth += 1;
-
-        // If this is a leaf-like semantic node and we already have a name,
-        // skip children to avoid redundant StaticText or noise.
-        const is_leaf_semantic = std.mem.eql(u8, data.role, "link") or
-            std.mem.eql(u8, data.role, "button") or
-            std.mem.eql(u8, data.role, "heading") or
-            std.mem.eql(u8, data.role, "code");
-        if (is_leaf_semantic and data.name != null and data.name.?.len > 0) {
-            return false;
-        }
-
-        return true;
-    }
-
-    pub fn leave(self: *TextVisitor) !void {
-        if (self.depth > 0) {
-            self.depth -= 1;
-        }
-    }
+const TextLine = struct {
+    walk_children: bool,
+    // A name, text or value of its own, not only children.
+    contentful: bool,
 };
+
+fn writeTextLine(writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine {
+    var name_to_print: ?[]const u8 = null;
+    if (data.name) |n| {
+        if (n.len > 0) {
+            name_to_print = n;
+        }
+    } else if (node.is(CData.Text)) |text_node| {
+        const trimmed = std.mem.trim(u8, text_node.ownData(), " \t\r\n");
+        if (trimmed.len > 0) {
+            name_to_print = trimmed;
+        }
+    }
+
+    const is_text_only = std.mem.eql(u8, data.role, "StaticText") or std.mem.eql(u8, data.role, "none") or std.mem.eql(u8, data.role, "generic");
+
+    try writer.print("{d}", .{data.id});
+    if (data.interactive) {
+        try writer.writeAll(if (data.disabled) " [i:disabled]" else " [i]");
+    }
+    if (!is_text_only) {
+        try writer.print(" {s}", .{data.role});
+    }
+    if (name_to_print) |n| {
+        try writer.print(" '{s}'", .{n});
+    }
+
+    if (data.value) |v| {
+        if (v.len > 0) {
+            try writer.print(" value='{s}'", .{v});
+        }
+    }
+
+    if (data.checked) |c| {
+        if (c) {
+            try writer.writeAll(" [checked]");
+        } else {
+            try writer.writeAll(" [unchecked]");
+        }
+    }
+
+    if (data.options) |options| {
+        try writer.writeAll(" options=[");
+        for (options, 0..) |opt, i| {
+            if (i > 0) try writer.writeAll(",");
+            try writer.print("'{s}'", .{opt.value});
+            if (opt.selected) {
+                try writer.writeAll("*");
+            }
+        }
+        try writer.writeAll("]");
+        return .{ .walk_children = false, .contentful = true }; // Native handling complete, do not walk children
+    }
+    const contentful = name_to_print != null or (if (data.value) |v| v.len > 0 else false) or data.checked != null;
+
+    // If this is a leaf-like semantic node and we already have a name,
+    // skip children to avoid redundant StaticText or noise.
+    const is_leaf_semantic = std.mem.eql(u8, data.role, "link") or
+        std.mem.eql(u8, data.role, "button") or
+        std.mem.eql(u8, data.role, "heading") or
+        std.mem.eql(u8, data.role, "code");
+    const walk_children = !(is_leaf_semantic and data.name != null and data.name.?.len > 0);
+    return .{ .walk_children = walk_children, .contentful = contentful };
+}
 
 const NodeDetails = struct {
     backendNodeId: NodeRegistry.Id,
@@ -853,4 +1149,77 @@ test "SemanticTree: deep nesting doesn't overflow the native stack" {
     try testing.expect(std.mem.find(u8, json_str, "\"role\":\"link\",\"name\":\"deep\"") != null);
     try testing.expectEqual(depth, std.mem.count(u8, json_str, "/g[1]"));
     try testing.expect(std.mem.endsWith(u8, json_str, "/text()[1]\",\"nodeType\":3,\"nodeValue\":\"deep\",\"children\":[]}]}"));
+}
+
+test "SemanticTree: maxBytes keeps alerts and controls, marks the rest" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/tree_budget.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const max_bytes = 500;
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .max_bytes = max_bytes });
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try st.textStringify(&aw.writer);
+    const out = aw.written();
+
+    try testing.expect(out.len <= max_bytes);
+    try testing.expect(std.mem.find(u8, out, "'Email is invalid'") != null);
+    try testing.expect(std.mem.find(u8, out, "textbox 'Email' value='nope'") != null);
+    try testing.expect(std.mem.find(u8, out, "button 'Submit'") != null);
+    // The list item, pruned from the output, scopes the marker for its text.
+    try testing.expect(std.mem.find(u8, out, "link 'Result four'\n  [+1 more @") != null);
+    try testing.expect(std.mem.find(u8, out, "Lorem ipsum") == null);
+    try testing.expect(std.mem.find(u8, out, "paragraph") == null);
+    try testing.expect(std.mem.find(u8, out, "[showing ") != null);
+}
+
+test "SemanticTree: maxBytes keeps a dialog, not its text" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/tree_budget_dialog.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const max_bytes = 300;
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .max_bytes = max_bytes });
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try st.textStringify(&aw.writer);
+    const out = aw.written();
+
+    try testing.expect(out.len <= max_bytes);
+    try testing.expect(std.mem.find(u8, out, "dialog 'Your privacy'") != null);
+    try testing.expect(std.mem.find(u8, out, "1,042 partners") == null);
+}
+
+test "SemanticTree: maxBytes ranks headings first and navigation last" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/tree_budget_nav.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const max_bytes = 300;
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .max_bytes = max_bytes });
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try st.textStringify(&aw.writer);
+    const out = aw.written();
+
+    try testing.expect(out.len <= max_bytes);
+    try testing.expect(std.mem.find(u8, out, "heading 'Mini PC 128GB'") != null);
+    try testing.expect(std.mem.find(u8, out, "heading 'Warranty'") != null);
+    try testing.expect(std.mem.find(u8, out, "button 'Add to cart'") != null);
+    try testing.expect(std.mem.find(u8, out, "'$3,879.00'") != null);
+    try testing.expect(std.mem.find(u8, out, "Category 1'") == null);
+    try testing.expect(std.mem.find(u8, out, "Footer link 1'") == null);
 }

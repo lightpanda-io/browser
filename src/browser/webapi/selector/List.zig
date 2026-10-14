@@ -444,28 +444,34 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
         return false;
     };
 
+    const case_insensitive = switch (attr.value_case) {
+        .sensitive => false,
+        .insensitive => true,
+        .html_legacy => el._namespace == .html,
+    };
+
     switch (attr.matcher) {
         .presence => return true,
         .exact => |expected| {
-            return if (attr.case_insensitive)
+            return if (case_insensitive)
                 std.ascii.eqlIgnoreCase(value, expected)
             else
                 std.mem.eql(u8, value, expected);
         },
         .substring => |expected| {
-            return if (attr.case_insensitive)
+            return if (case_insensitive)
                 std.ascii.findIgnoreCase(value, expected) != null
             else
                 std.mem.find(u8, value, expected) != null;
         },
         .starts_with => |expected| {
-            return if (attr.case_insensitive)
+            return if (case_insensitive)
                 std.ascii.startsWithIgnoreCase(value, expected)
             else
                 std.mem.startsWith(u8, value, expected);
         },
         .ends_with => |expected| {
-            return if (attr.case_insensitive)
+            return if (case_insensitive)
                 std.ascii.endsWithIgnoreCase(value, expected)
             else
                 std.mem.endsWith(u8, value, expected);
@@ -474,7 +480,7 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
             // Space-separated word match (like class names)
             var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
             while (it.next()) |word| {
-                const same = if (attr.case_insensitive)
+                const same = if (case_insensitive)
                     std.ascii.eqlIgnoreCase(word, expected)
                 else
                     std.mem.eql(u8, word, expected);
@@ -485,7 +491,7 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
         },
         .prefix_dash => |expected| {
             // Matches value or value- prefix (for language codes like en, en-US)
-            if (attr.case_insensitive) {
+            if (case_insensitive) {
                 if (std.ascii.eqlIgnoreCase(value, expected)) return true;
                 if (value.len > expected.len and value[expected.len] == '-') {
                     return std.ascii.eqlIgnoreCase(value[0..expected.len], expected);
@@ -574,6 +580,9 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             if (el.is(Node.Element.Html.Form) != null or el.is(Node.Element.Html.FieldSet) != null) {
                 return !hasInvalidDescendant(node, frame);
             }
+            if (el.is(Node.Element.Html.Custom)) |custom| {
+                return isCustomValid(custom) orelse false;
+            }
             return false;
         },
         .invalid => {
@@ -588,6 +597,9 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             }
             if (el.is(Node.Element.Html.Form) != null or el.is(Node.Element.Html.FieldSet) != null) {
                 return hasInvalidDescendant(node, frame);
+            }
+            if (el.is(Node.Element.Html.Custom)) |custom| {
+                return isCustomValid(custom) == false;
             }
             return false;
         },
@@ -624,7 +636,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         // and :visited matches nothing.
         .link, .any_link => {
             const tag = el.getTag();
-            if (tag != .anchor and tag != .area) return false;
+            if (tag != .a and tag != .area) return false;
             return el.hasAttributeInterned("href");
         },
         .visited => return false,
@@ -760,6 +772,19 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
     }
 }
 
+fn isCustomValid(custom: *Node.Element.Html.Custom) ?bool {
+    if (custom.isFormAssociated() == false) {
+        // matches neither:valid nor :invalid
+        return null;
+    }
+    if (custom.willValidate() == false) {
+        // matches neither:valid nor :invalid
+        return null;
+    }
+    const internals = custom._internals orelse return true;
+    return internals._flags.any() == false;
+}
+
 fn hasInvalidDescendant(parent: *Node, frame: *Frame) bool {
     var child = parent.firstChild();
     while (child) |c| {
@@ -772,6 +797,8 @@ fn hasInvalidDescendant(parent: *Node, frame: *Frame) bool {
                 if (invalid) return true;
             } else if (child_el.is(Node.Element.Html.Select)) |select| {
                 if (select.getRequired() and select.getValue(frame).len == 0) return true;
+            } else if (child_el.is(Node.Element.Html.Custom)) |custom| {
+                if (isCustomValid(custom) == false) return true;
             }
         }
         if (hasInvalidDescendant(c, frame)) return true;

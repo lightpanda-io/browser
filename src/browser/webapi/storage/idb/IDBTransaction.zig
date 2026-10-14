@@ -35,7 +35,6 @@ const DOMStringList = @import("../../collections.zig").DOMStringList;
 
 const log = lp.log;
 const Execution = js.Execution;
-const FunctionSetter = idb.FunctionSetter;
 
 const IDBTransaction = @This();
 
@@ -90,6 +89,9 @@ _gate_waiter: Engine.GateWaiter,
 // versionchange only: the version to fall back to if the upgrade aborts.
 _old_version: ?i64 = null,
 _abort_requests: std.ArrayList(*IDBRequest) = .empty,
+// Every request created under the transaction. They live in our arena, so
+// their listeners have to be dropped when it's released.
+_requests: std.ArrayList(*IDBRequest) = .empty,
 _abort_pending: bool = false,
 // A transaction is only active for one execution of a Scheduler's task. We
 // capture the scheduler's generation here and reject any request made in a
@@ -106,10 +108,6 @@ _cloning: bool = false,
 // that, when Engine.detach cancels us, we know whether the registration held
 // a pin (parked) or the drain task does (owner).
 _parked: bool = false,
-
-_on_complete: ?js.Function.Global = null,
-_on_error: ?js.Function.Global = null,
-_on_abort: ?js.Function.Global = null,
 
 pub const Mode = enum {
     readonly,
@@ -185,7 +183,7 @@ pub fn initVersionChange(db: *IDBDatabase, exec: *Execution) !*IDBTransaction {
     return self;
 }
 
-pub fn deinit(self: *IDBTransaction, _: *Page) void {
+pub fn deinit(self: *IDBTransaction, page: *Page) void {
     if (comptime lp.IS_DEBUG) {
         // Pins hold refs, so the last release can't happen while parked (nor
         // while a drain task is scheduled).
@@ -197,6 +195,10 @@ pub fn deinit(self: *IDBTransaction, _: *Page) void {
     for (self._clones.items) |*slot| {
         slot.release();
     }
+    for (self._requests.items) |request| {
+        page.removeTarget(request.asEventTarget());
+    }
+    page.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
@@ -403,14 +405,14 @@ fn fireAbort(self: *IDBTransaction, exec: *Execution) void {
     const et = self.asEventTarget();
     event._target = et;
     event._dispatch_target = et;
-    exec.dispatch(et, event, self._on_abort, .{ .context = "IDBTransaction.abort", .inject_target = false }) catch |err| {
+    exec.dispatch(et, event, .{ .context = "IDBTransaction.abort", .inject_target = false }) catch |err| {
         log.debug(.storage, "idb abort dispatch", .{ .err = err });
     };
     if (event._stop_propagation) {
         return;
     }
     const db = self._db;
-    exec.dispatch(db.asEventTarget(), event, db._on_abort, .{ .context = "IDBDatabase.abort", .inject_target = false }) catch |err| {
+    exec.dispatch(db.asEventTarget(), event, .{ .context = "IDBDatabase.abort", .inject_target = false }) catch |err| {
         log.debug(.storage, "idb abort dispatch", .{ .err = err });
     };
 }
@@ -472,7 +474,7 @@ fn commitAndComplete(self: *IDBTransaction, exec: *Execution) void {
         self._begun = false;
     }
     _ = self._engine.releaseGate(&self._gate_waiter);
-    self.fire(exec, comptime .wrap("complete"), self._on_complete);
+    self.fire(exec, comptime .wrap("complete"));
 }
 
 // "is this transaction still usable". Once settled or explicitly committing, it
@@ -504,6 +506,7 @@ pub fn ensureBegun(self: *IDBTransaction) !void {
 pub fn newRequest(self: *IDBTransaction) !*IDBRequest {
     const request = try self._exec._factory.eventTargetWithAllocator(self._arena.allocator(), IDBRequest{ ._proto = undefined });
     request._txn = .{ .owned = self };
+    try self._requests.append(self._arena.allocator(), request);
     return request;
 }
 
@@ -594,45 +597,13 @@ fn getError(self: *const IDBTransaction) ?DOMException {
     return DOMException.fromError(mapped) orelse DOMException.init(null, "UnknownError");
 }
 
-fn getOnComplete(self: *const IDBTransaction) ?js.Function.Global {
-    return self._on_complete;
-}
-
-fn setOnComplete(self: *IDBTransaction, setter: ?FunctionSetter) void {
-    self._on_complete = getFunctionFromSetter(setter);
-}
-
-fn getOnError(self: *const IDBTransaction) ?js.Function.Global {
-    return self._on_error;
-}
-
-fn setOnError(self: *IDBTransaction, setter: ?FunctionSetter) void {
-    self._on_error = getFunctionFromSetter(setter);
-}
-
-fn getOnAbort(self: *const IDBTransaction) ?js.Function.Global {
-    return self._on_abort;
-}
-
-fn setOnAbort(self: *IDBTransaction, setter: ?FunctionSetter) void {
-    self._on_abort = getFunctionFromSetter(setter);
-}
-
-fn getFunctionFromSetter(setter: ?FunctionSetter) ?js.Function.Global {
-    const s = setter orelse return null;
-    return switch (s) {
-        .func => |f| f,
-        .anything => null,
-    };
-}
-
-fn fire(self: *IDBTransaction, exec: *Execution, typ: lp.String, handler: ?js.Function.Global) void {
+fn fire(self: *IDBTransaction, exec: *Execution, typ: lp.String) void {
     self._settled = true;
     const event = Event.initTrusted(typ, null, exec.page) catch |err| {
         log.debug(.storage, "idb transaction event", .{ .err = err });
         return;
     };
-    exec.dispatch(self.asEventTarget(), event, handler, .{ .context = "IDBTransaction" }) catch |err| {
+    exec.dispatch(self.asEventTarget(), event, .{ .context = "IDBTransaction" }) catch |err| {
         log.debug(.storage, "idb transaction dispatch", .{ .err = err });
     };
 }
@@ -815,7 +786,7 @@ pub const JsApi = struct {
     pub const objectStore = bridge.function(IDBTransaction.objectStore, .{});
     pub const abort = bridge.function(IDBTransaction.abort, .{});
     pub const commit = bridge.function(IDBTransaction.commit, .{});
-    pub const oncomplete = bridge.accessor(IDBTransaction.getOnComplete, IDBTransaction.setOnComplete, .{});
-    pub const onerror = bridge.accessor(IDBTransaction.getOnError, IDBTransaction.setOnError, .{});
-    pub const onabort = bridge.accessor(IDBTransaction.getOnAbort, IDBTransaction.setOnAbort, .{});
+    pub const oncomplete = EventTarget.handlerAccessor(IDBTransaction, "complete");
+    pub const onerror = EventTarget.handlerAccessor(IDBTransaction, "error");
+    pub const onabort = EventTarget.handlerAccessor(IDBTransaction, "abort");
 };

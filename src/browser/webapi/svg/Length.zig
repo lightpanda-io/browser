@@ -331,7 +331,7 @@ fn fromShared(unit: units.Unit) ?Unit {
         .in => .in,
         .pt => .pt,
         .pc => .pc,
-        .vh, .vw, .deg, .rad, .grad, .turn => null,
+        .rem, .vh, .vw, .deg, .rad, .grad, .turn => null,
     };
 }
 

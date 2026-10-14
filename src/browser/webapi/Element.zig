@@ -779,6 +779,10 @@ pub fn hasAttributeInterned(self: *const Element, comptime name: []const u8) boo
 pub fn hasDisabledConcept(self: *const Element) bool {
     return switch (self.getTag()) {
         .button, .input, .select, .textarea, .optgroup, .option, .fieldset => true,
+        .custom => {
+            const custom = @constCast(self).is(Html.Custom) orelse return false;
+            return custom.isFormAssociated();
+        },
         else => false,
     };
 }
@@ -925,6 +929,10 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
     }
 
     const shadow_root = try ShadowRoot.init(self, opts, frame);
+    shadow_root._available_to_internals = opts.declarative or blk: {
+        const custom = self.is(Html.Custom) orelse break :blk false;
+        break :blk custom._definition != null;
+    };
     const page = frame.page;
     try page.element_shadow_roots.put(page.arena, self, shadow_root);
     self._flags.shadow_host = true;
@@ -1252,7 +1260,7 @@ fn isNativelyFocusable(self: *Element) bool {
     return switch (self.getTag()) {
         .button, .select, .textarea, .iframe => true,
         .input => self.as(Html.Input)._input_type != .hidden,
-        .anchor, .area => self.getAttributeInterned("href") != null,
+        .a, .area => self.getAttributeInterned("href") != null,
         else => false,
     };
 }
@@ -2341,7 +2349,7 @@ pub fn getTag(self: *const Element) Tag {
         .html => blk: {
             const he = self.subtype(Html);
             break :blk switch (he._type) {
-                .anchor => .anchor,
+                .anchor => .a,
                 .area => .area,
                 .base => .base,
                 .div => .div,
@@ -2354,7 +2362,7 @@ pub fn getTag(self: *const Element) Tag {
                 .datalist => .datalist,
                 .details => .details,
                 .dialog => .dialog,
-                .directory => .directory,
+                .directory => .dir,
                 .iframe => .iframe,
                 .img => .img,
                 .br => .br,
@@ -2424,8 +2432,8 @@ pub fn ownerFrame(self: *const Element, frame: *const Frame) ?*Frame {
 }
 
 pub const Tag = enum {
+    a,
     address,
-    anchor,
     audio,
     area,
     aside,
@@ -2450,8 +2458,8 @@ pub const Tag = enum {
     del,
     dfn,
     dialog,
+    dir,
     div,
-    directory,
     dl,
     dt,
     embed,
@@ -2508,7 +2516,7 @@ pub const Tag = enum {
     polyline,
     pre,
     progress,
-    quote,
+    q,
     rect,
     s,
     script,
@@ -2546,6 +2554,8 @@ pub const Tag = enum {
         const tag = std.meta.stringToEnum(Tag, lower) orelse return null;
         return switch (tag) {
             .unknown, .custom => null,
+            // groupings, not element names (h1-h6, audio/video)
+            .heading, .media => null,
             else => tag,
         };
     }

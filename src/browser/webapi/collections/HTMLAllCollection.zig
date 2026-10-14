@@ -76,7 +76,7 @@ fn isAllNamed(el: *Element) bool {
         return false;
     }
     return switch (el.getTag()) {
-        .anchor, .button, .embed, .form, .frameset, .iframe, .img, .input, .map, .meta, .object, .select, .textarea => true,
+        .a, .button, .embed, .form, .frameset, .iframe, .img, .input, .map, .meta, .object, .select, .textarea => true,
         else => false,
     };
 }

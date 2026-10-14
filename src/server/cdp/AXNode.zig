@@ -40,7 +40,6 @@ const scratch_retain_limit = 64 * 1024;
 // Need a custom writer, because we can't just serialize the node as-is.
 // Sometimes we want to serializ the node without children, sometimes with just
 // its direct children, and sometimes the entire tree.
-// (For now, we only support direct children)
 pub const Writer = struct {
     root: *const NodeRegistry.Node,
     registry: *NodeRegistry,
@@ -52,6 +51,7 @@ pub const Writer = struct {
     // queryAXTree spec) and emit only nodes whose role + accessible name
     // match the filter, in a flat shape.
     filter: ?Filter = null,
+    depth: i32 = 0,
 
     pub const Filter = struct {
         role: ?[]const u8 = null,
@@ -59,6 +59,7 @@ pub const Writer = struct {
     };
 
     pub const Opts = struct {
+        depth: i32 = 0,
         filter: ?Filter = null,
     };
 
@@ -124,6 +125,8 @@ pub const Writer = struct {
         var descend = try self.writeNode(self.root.id, .fromNode(self.root.dom), walker.hidden(self.root.dom), ignore_cache, w);
         while (walker.next(descend)) |dom_node| {
             descend = false;
+            if (self.depth > 0 and self.depth < walker.depth) continue;
+
             switch (dom_node._type) {
                 .cdata => {
                     if (dom_node.is(DOMNode.CData.Text) == null) {
@@ -344,7 +347,7 @@ pub const Writer = struct {
                         if (uri.len == 0) return;
                         try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
                     },
-                    .anchor => {
+                    .a => {
                         const a = el.as(DOMNode.Element.Html.Anchor);
                         const uri = try a.getHref(self.frame);
                         if (uri.len == 0) return;
@@ -354,50 +357,69 @@ pub const Writer = struct {
                     .input => {
                         const input = el.as(DOMNode.Element.Html.Input);
                         const is_disabled = el.isDisabled();
+                        const is_readonly = el.hasAttributeInterned("readonly");
+
+                        if (is_disabled) {
+                            try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
+                        }
+                        try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                        if (!is_disabled) {
+                            try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                        }
 
                         switch (input._input_type) {
-                            .text, .email, .tel, .url, .search, .password, .number => {
-                                if (is_disabled) {
-                                    try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
-                                }
-                                try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
-                                if (!is_disabled) {
-                                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                                }
+                            .text, .email, .tel, .url, .password => {
                                 try self.writeAXProperty(.{ .name = .editable, .value = .{ .token = "plaintext" } }, w);
-                                if (!is_disabled) {
+                                if (!is_disabled and !is_readonly) {
                                     try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
                                 }
                                 try self.writeAXProperty(.{ .name = .multiline, .value = .{ .boolean = false } }, w);
-                                try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = el.hasAttributeInterned("readonly") } }, w);
+                                // Readonly is set to false if the field is disabled, disregarding the readonly attribute.
+                                if (is_disabled == false) {
+                                    try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = false } }, w);
+                                } else {
+                                    try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = is_readonly } }, w);
+                                }
                                 try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeInterned("required") } }, w);
                             },
-                            .button, .submit, .reset, .image => {
-                                try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
-                                if (!is_disabled) {
-                                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                            .search => {
+                                try self.writeAXProperty(.{ .name = .editable, .value = .{ .token = "plaintext" } }, w);
+                                if (!is_disabled and !is_readonly) {
+                                    try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
                                 }
                             },
-                            .checkbox, .radio => {
-                                try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
-                                if (!is_disabled) {
-                                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                            .number => {
+                                try self.writeAXProperty(.{ .name = .editable, .value = .{ .token = "plaintext" } }, w);
+                                if (!is_disabled and !is_readonly) {
+                                    try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
                                 }
+                                try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeInterned("required") } }, w);
+                            },
+                            .checkbox, .radio => {
                                 const is_checked = el.hasAttributeInterned("checked");
                                 try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = if (is_checked) "true" else "false" } }, w);
+                            },
+                            .range, .color, .date, .time, .@"datetime-local", .month, .week => {
+                                if (!is_disabled) {
+                                    try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
+                                }
                             },
                             else => {},
                         }
                     },
                     .textarea => {
                         const is_disabled = el.isDisabled();
+                        const is_readonly = el.hasAttributeInterned("readonly");
 
+                        if (is_disabled) {
+                            try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
+                        }
                         try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
                         }
                         try self.writeAXProperty(.{ .name = .editable, .value = .{ .token = "plaintext" } }, w);
-                        if (!is_disabled) {
+                        if (!is_disabled and !is_readonly) {
                             try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
                         }
                         try self.writeAXProperty(.{ .name = .multiline, .value = .{ .boolean = true } }, w);
@@ -407,6 +429,9 @@ pub const Writer = struct {
                     .select => {
                         const is_disabled = el.isDisabled();
 
+                        if (is_disabled) {
+                            try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
+                        }
                         try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
@@ -424,6 +449,9 @@ pub const Writer = struct {
                     },
                     .button => {
                         const is_disabled = el.isDisabled();
+                        if (is_disabled) {
+                            try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
+                        }
                         try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
@@ -434,7 +462,6 @@ pub const Writer = struct {
                         try self.writeAXProperty(.{ .name = .orientation, .value = .{ .token = "horizontal" } }, w);
                     },
                     .li => {
-                        // Calculate level by counting list ancestors (ul, ol, menu)
                         var level: usize = 0;
                         var current = dom_node._parent;
                         while (current) |node| {
@@ -449,7 +476,9 @@ pub const Writer = struct {
                             }
                             current = node._parent;
                         }
-                        try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = level } }, w);
+                        // As far as I can see, chrome reports a min of 1, even
+                        // for a list without ul/ol/menu parent.
+                        try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = @max(level, 1) } }, w);
                     },
                     else => {},
                 }
@@ -793,7 +822,7 @@ const AXRole = enum(u8) {
                     .datalist => .listbox,
 
                     // Interactive Elements
-                    .anchor, .area => {
+                    .a, .area => {
                         if (el.getAttributeInterned("href") == null) {
                             return .none;
                         }
@@ -1116,6 +1145,7 @@ const Walker = struct {
     current: *DOMNode,
     frame: *Frame,
     hiding_ancestor: ?*DOMNode,
+    depth: i32 = 0,
 
     fn init(root: *DOMNode, frame: *Frame) Walker {
         return .{ .root = root, .current = root, .frame = frame, .hiding_ancestor = hidingAncestor(root, frame) };
@@ -1129,6 +1159,7 @@ const Walker = struct {
                     self.hiding_ancestor = self.current;
                 }
                 self.current = child;
+                self.depth += 1;
                 return child;
             }
         }
@@ -1140,6 +1171,7 @@ const Walker = struct {
                 return sibling;
             }
             node = node._parent.?;
+            self.depth -= 1;
             if (node == self.hiding_ancestor) {
                 self.hiding_ancestor = null;
             }
@@ -2085,6 +2117,68 @@ test "AXNode: writer prunes children when root is hidden" {
 
     try testing.expect(std.mem.find(u8, json, "under-display-none") == null);
     try testing.expect(std.mem.find(u8, json, "\"childIds\":[]") != null);
+}
+
+test "AXNode: writer depth cuts every branch at the same level" {
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/ax_depth.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const node = try registry.register(frame.window._document.asNode());
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer temp_arena.release();
+
+    // document(0) > html(1) > body(2) > div, ul, button(3) > p, li, text(4) > text(5)
+    {
+        const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+            .root = node,
+            .registry = &registry,
+            .frame = frame,
+            .label_index = &label_index,
+            .temp_arena = temp_arena,
+            .depth = 3,
+        }, .{});
+        defer testing.allocator.free(json);
+
+        const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+        defer parsed.deinit();
+        const nodes = parsed.value.array.items;
+
+        // Every branch reaches depth 3, not only the first one.
+        try testing.expect(findNode(nodes, "list", "") != null);
+        try testing.expect(findNode(nodes, "button", "btn") != null);
+        // Nothing below depth 3.
+        try testing.expect(findNode(nodes, "paragraph", "") == null);
+        try testing.expect(findNode(nodes, "listitem", "") == null);
+        try testing.expect(findNode(nodes, "StaticText", "btn") == null);
+    }
+
+    {
+        const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+            .root = node,
+            .registry = &registry,
+            .frame = frame,
+            .label_index = &label_index,
+            .temp_arena = temp_arena,
+            .depth = 4,
+        }, .{});
+        defer testing.allocator.free(json);
+
+        const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+        defer parsed.deinit();
+        const nodes = parsed.value.array.items;
+
+        try testing.expect(findNode(nodes, "paragraph", "") != null);
+        try testing.expect(findNode(nodes, "listitem", "") != null);
+        try testing.expect(findNode(nodes, "StaticText", "btn") != null);
+        // Nothing below depth 4.
+        try testing.expect(findNode(nodes, "StaticText", "one") == null);
+        try testing.expect(findNode(nodes, "StaticText", "item-a") == null);
+    }
 }
 
 test "AXNode: generic containers share memoized ignore answers" {

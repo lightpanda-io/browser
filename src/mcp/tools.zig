@@ -12,7 +12,7 @@ const McpTool = protocol.Tool;
 /// Convert browser tool_defs to MCP wire-protocol tools (comptime).
 /// Tool identity comes from the `BrowserTool` tag — `tool_defs` only
 /// carries the LLM-facing description and JSON schema.
-const browser_tool_list = blk: {
+pub const browser_tool_list = blk: {
     const field_names = @typeInfo(BrowserTool).@"enum".field_names;
     var tools: [field_names.len]McpTool = undefined;
     for (browser_tools.tool_defs, field_names, 0..) |td, field_name, i| {
@@ -92,7 +92,8 @@ const session_id_schema = browser_tools.minify(
     \\}
 );
 
-const extra_tools = [_]McpTool{
+/// MCP-only tools, absent from the agent and scripts.
+pub const extra_tools = [_]McpTool{
     .{
         .name = "save",
         .title = "Save the session as an agent script",
@@ -1634,7 +1635,7 @@ test "MCP - findElement" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"button"}}}
     );
     try testing.expectJson(.{
-        .{ .name = "Click Me", .listeners = &.{ "pointerdown", "mousedown", "pointerup", "mouseup", "click" } },
+        .{ .name = "Click Me", .listeners = &.{ "click", "pointerdown", "mousedown", "pointerup", "mouseup" } },
         .{ .name = "Prevent Default" },
         .{ .name = "Chord" },
         .{ .name = "Disabled", .disabled = true },

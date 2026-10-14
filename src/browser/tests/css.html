@@ -5,6 +5,9 @@
   testing.expectEqual('object', typeof CSS);
   testing.expectEqual('function', typeof CSS.escape);
   testing.expectEqual('function', typeof CSS.supports);
+  // a namespace has no interface object
+  testing.expectEqual('undefined', typeof Css);
+  testing.expectEqual(false, 'Css' in window);
 </script>
 
 <script id="entries">

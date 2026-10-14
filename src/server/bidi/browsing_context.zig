@@ -38,6 +38,9 @@ const remote_value = @import("remote_value.zig");
 
 const log = lp.log;
 
+// The one browser.ClientWindow every browsing context lives in.
+pub const client_window = "default";
+
 pub const Context = struct {
     // The BiDi navigable id. Stable across navigations.
     id: [36]u8,
@@ -103,6 +106,7 @@ fn getTree(cmd: *BiDi.Command) !void {
             .url = url,
             .context = &ctx.id,
             .userContext = bidi.user_context.id(),
+            .clientWindow = client_window,
         }},
     });
 }
@@ -155,6 +159,7 @@ pub fn openContext(bidi: *BiDi) !*Context {
         .context = &ctx.id,
         .url = "about:blank",
         .userContext = bidi.user_context.id(),
+        .clientWindow = client_window,
         .originalOpener = null,
         .children = null,
     });
@@ -374,6 +379,7 @@ pub fn destroy(cmd: *BiDi.Command, ctx: *Context) !void {
         .context = &gone.id,
         .url = url,
         .userContext = bidi.user_context.id(),
+        .clientWindow = client_window,
         .originalOpener = null,
         .children = null,
     });
@@ -518,7 +524,7 @@ pub const Locator = union(enum) {
                     .tag_name => true,
                     .link_text, .partial_link_text => |needle| blk: {
                         // an <a> outside HTML has no rendered text
-                        if (element.getTag() != .anchor) {
+                        if (element.getTag() != .a) {
                             break :blk false;
                         }
                         text.clearRetainingCapacity();
@@ -776,6 +782,7 @@ const Info = struct {
     context: []const u8,
     url: []const u8,
     userContext: []const u8,
+    clientWindow: []const u8,
     originalOpener: ?[]const u8 = null,
     children: []const Info = &.{},
 };

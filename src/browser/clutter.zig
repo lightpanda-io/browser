@@ -289,7 +289,7 @@ const Pass = struct {
                 switch (tag) {
                     // Unlike readability: without href, <a> is a placeholder
                     // (tag chips, JS buttons), and its text is not link text.
-                    .anchor => if (el.getAttributeSafe(comptime .wrap("href"))) |href| {
+                    .a => if (el.getAttributeSafe(comptime .wrap("href"))) |href| {
                         inner.in_link = true;
                         inner.hash_link = href.len > 0 and href[0] == '#';
                     },
@@ -337,7 +337,7 @@ const Pass = struct {
 
     fn isUnlikely(self: *const Pass, el: *Element, tag: Element.Tag, ctx: Ctx) ?Rule {
         if (self.flags.unlikelys == false) return null;
-        if (tag != .body and tag != .anchor and !ctx.in_table and !ctx.in_code) {
+        if (tag != .body and tag != .a and !ctx.in_table and !ctx.in_code) {
             const names = self.classAndId(el);
             if (containsAny(names, &unlikely) and !containsAny(names, &maybe_candidate)) {
                 return .unlikely;

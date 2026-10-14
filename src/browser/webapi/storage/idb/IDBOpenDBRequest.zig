@@ -18,10 +18,8 @@
 
 const js = @import("../../../js/js.zig");
 
-const idb = @import("idb.zig");
+const EventTarget = @import("../../EventTarget.zig");
 const IDBRequest = @import("IDBRequest.zig");
-
-const FunctionSetter = idb.FunctionSetter;
 
 // The request returned by IDBFactory.open / deleteDatabase.
 const IDBOpenDBRequest = @This();
@@ -29,24 +27,9 @@ const IDBOpenDBRequest = @This();
 pub const Proto = IDBRequest;
 
 _proto: *IDBRequest,
-// Stored, never fired: an open that upgrades does not wait on other
-// connections (see IDBFactory.OpenContext), so nothing ever blocks.
-_on_blocked: ?js.Function.Global = null,
 
-fn getOnBlocked(self: *const IDBOpenDBRequest) ?js.Function.Global {
-    return self._on_blocked;
-}
-
-fn setOnBlocked(self: *IDBOpenDBRequest, setter: ?FunctionSetter) void {
-    self._on_blocked = idb.functionFromSetter(setter);
-}
-
-fn getOnUpgradeNeeded(self: *const IDBOpenDBRequest) ?js.Function.Global {
-    return self._proto.getOnUpgradeNeeded();
-}
-
-fn setOnUpgradeNeeded(self: *IDBOpenDBRequest, setter: ?FunctionSetter) void {
-    self._proto.setOnUpgradeNeeded(setter);
+pub fn asEventTarget(self: *IDBOpenDBRequest) *EventTarget {
+    return self._proto.asEventTarget();
 }
 
 pub const JsApi = struct {
@@ -58,6 +41,6 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const onblocked = bridge.accessor(IDBOpenDBRequest.getOnBlocked, IDBOpenDBRequest.setOnBlocked, .{});
-    pub const onupgradeneeded = bridge.accessor(IDBOpenDBRequest.getOnUpgradeNeeded, IDBOpenDBRequest.setOnUpgradeNeeded, .{});
+    pub const onblocked = EventTarget.handlerAccessor(IDBOpenDBRequest, "blocked");
+    pub const onupgradeneeded = EventTarget.handlerAccessor(IDBOpenDBRequest, "upgradeneeded");
 };

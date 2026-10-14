@@ -48,21 +48,8 @@ _selection_start: u32 = 0,
 _selection_end: u32 = 0,
 _selection_direction: Selection.SelectionDirection = .none,
 
-_on_selectionchange: ?js.Function.Global = null,
 _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,
-
-fn getOnSelectionChange(self: *TextArea) ?js.Function.Global {
-    return self._on_selectionchange;
-}
-
-fn setOnSelectionChange(self: *TextArea, listener: ?js.Function) !void {
-    if (listener) |listen| {
-        self._on_selectionchange = try listen.persistWithThis(self);
-    } else {
-        self._on_selectionchange = null;
-    }
-}
 
 pub fn asElement(self: *TextArea) *Element {
     return Factory.protoOf(self).asElement();
@@ -100,6 +87,11 @@ pub fn setValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
         self._selection_end = @intCast(owned.len);
         self._selection_direction = .none;
     }
+}
+
+pub fn reset(self: *TextArea) void {
+    self._value = null;
+    self._user_edited = false;
 }
 
 pub fn setUserValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
@@ -169,27 +161,7 @@ fn getSelectionEnd(self: *const TextArea) u32 {
 }
 
 pub fn getForm(self: *TextArea, frame: *Frame) ?*Form {
-    const element = self.asElement();
-
-    // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        if (frame.getElementByIdFromNode(element.asNode(), form_id)) |form_element| {
-            return form_element.is(Form);
-        }
-        // form attribute present but invalid - no form owner
-        return null;
-    }
-
-    // No form attribute - traverse ancestors looking for a <form>
-    var node = element.asNode()._parent;
-    while (node) |n| {
-        if (n.is(Element.Html.Form)) |form| {
-            return form;
-        }
-        node = n._parent;
-    }
-
-    return null;
+    return Form.ownerOf(self.asElement(), frame);
 }
 
 fn getLabels(self: *TextArea, frame: *Frame) !js.Array {
@@ -298,7 +270,6 @@ pub const JsApi = struct {
     pub const checkValidity = bridge.function(TextArea.checkValidity, .{});
     pub const reportValidity = bridge.function(TextArea.reportValidity, .{});
     pub const setCustomValidity = bridge.function(TextArea.setCustomValidity, .{});
-    pub const onselectionchange = bridge.accessor(TextArea.getOnSelectionChange, TextArea.setOnSelectionChange, .{});
     pub const @"type" = bridge.property("textarea", .{ .template = false, .readonly = true });
     pub const value = bridge.accessor(TextArea.getValue, TextArea.setValue, .{});
     pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, TextArea.setDefaultValue, .{ .ce_reactions = true });

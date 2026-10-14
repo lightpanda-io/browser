@@ -78,7 +78,6 @@ _response_headers: std.ArrayList(http.Header) = .empty,
 _response_type: ResponseType = .default,
 
 _ready_state: ReadyState = .unsent,
-_on_ready_state_change: ?js.Function.Global = null,
 _with_credentials: bool = false,
 _timeout: u32 = 0,
 
@@ -145,14 +144,10 @@ pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
 
     self.clearResponse(page);
 
-    if (self._on_ready_state_change) |func| {
-        func.release();
-    }
-
-    self._proto.releaseListeners();
     if (self._upload) |upload| {
-        upload._proto.releaseListeners();
+        page.removeTarget(upload.asEventTarget());
     }
+    page.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
@@ -175,20 +170,8 @@ pub fn acquireRef(self: *XMLHttpRequest) void {
     self._rc.acquire();
 }
 
-fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
+pub fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
     return self._proto._proto;
-}
-
-fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function.Global {
-    return self._on_ready_state_change;
-}
-
-fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_ready_state_change = try cb.persistWithThis(self);
-    } else {
-        self._on_ready_state_change = null;
-    }
 }
 
 fn getWithCredentials(self: *const XMLHttpRequest) bool {
@@ -836,8 +819,7 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
             try self._proto.dispatch(.abort, null, exec);
         } else if (is_timeout) {
             try self._proto.dispatch(.timeout, null, exec);
-        }
-        if (!is_timeout) {
+        } else {
             try self._proto.dispatch(.err, null, exec);
         }
         try self._proto.dispatch(.load_end, null, exec);
@@ -858,9 +840,9 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, exec: *const Execution
     self._ready_state = state;
 
     const target = self.asEventTarget();
-    if (exec.hasDirectListeners(target, "readystatechange", self._on_ready_state_change)) {
+    if (exec.hasDirectListeners(target, "readystatechange")) {
         const event = try Event.initTrusted(.wrap("readystatechange"), .{}, exec.page);
-        try exec.dispatch(target, event, self._on_ready_state_change, .{ .context = "XHR state change" });
+        try exec.dispatch(target, event, .{ .context = "XHR state change" });
     }
 }
 
@@ -892,7 +874,7 @@ pub const JsApi = struct {
     pub const LOADING = bridge.property(@backingInt(XMLHttpRequest.ReadyState.loading), .{ .template = true });
     pub const DONE = bridge.property(@backingInt(XMLHttpRequest.ReadyState.done), .{ .template = true });
 
-    pub const onreadystatechange = bridge.accessor(XMLHttpRequest.getOnReadyStateChange, XMLHttpRequest.setOnReadyStateChange, .{});
+    pub const onreadystatechange = EventTarget.handlerAccessor(XMLHttpRequest, "readystatechange");
     pub const upload = bridge.accessor(XMLHttpRequest.getUpload, null, .{});
     pub const timeout = bridge.accessor(XMLHttpRequest.getTimeout, XMLHttpRequest.setTimeout, .{});
     pub const withCredentials = bridge.accessor(XMLHttpRequest.getWithCredentials, XMLHttpRequest.setWithCredentials, .{});
@@ -933,4 +915,94 @@ test "WebApi: XHR" {
 
 test "WebApi: XHR in worker" {
     try testing.htmlRunner("net/xhr_worker.html", .{});
+}
+
+test "WebApi: XHR listeners are dropped when the XHR is freed" {
+    // A freed XHR's address gets reused by a new one, which must not inherit
+    // the old one's listeners.
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec(
+            \\globalThis.fired = 0;
+            \\for (let i = 0; i < 200; i++) {
+            \\  new XMLHttpRequest().addEventListener('foo', () => fired++);
+            \\  new XMLHttpRequest().upload.addEventListener('foo', () => fired++);
+            \\  new XMLHttpRequest().onload = () => fired++;
+            \\  new XMLHttpRequest().upload.onload = () => fired++;
+            \\}
+        , null);
+    }
+
+    // Not env.memoryPressureNotification: it skips small heaps.
+    const isolate = testing.test_session.browser.env.isolate;
+    for (0..3) |_| {
+        isolate.memoryPressureNotification(.critical);
+    }
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const fired = try ls.local.exec(
+        \\for (let i = 0; i < 200; i++) {
+        \\  new XMLHttpRequest().dispatchEvent(new Event('foo'));
+        \\  new XMLHttpRequest().upload.dispatchEvent(new Event('foo'));
+        \\  new XMLHttpRequest().dispatchEvent(new Event('load'));
+        \\  new XMLHttpRequest().upload.dispatchEvent(new Event('load'));
+        \\}
+        \\fired;
+    , null);
+    try testing.expectEqual(0, try fired.toF64());
+}
+
+test "WebApi: worker XHR listeners are dropped when the XHR is freed" {
+    // Same as above, but in a worker, whose listeners live in its own store.
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    // Navigate the frame first to avoid CORS blocking request for the worker.
+    try frame.navigate("http://localhost:9582/", .{});
+    try testing.waitForFrame();
+
+    const worker = try @import("../Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", null, frame);
+    const ctx = worker._worker_scope._proto.js;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        ctx.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec(
+            \\globalThis.fired = 0;
+            \\for (let i = 0; i < 200; i++) {
+            \\  new XMLHttpRequest().addEventListener('foo', () => fired++);
+            \\  new XMLHttpRequest().upload.addEventListener('foo', () => fired++);
+            \\  new XMLHttpRequest().onload = () => fired++;
+            \\  new XMLHttpRequest().upload.onload = () => fired++;
+            \\}
+        , null);
+    }
+
+    // Not env.memoryPressureNotification: it skips small heaps.
+    const isolate = testing.test_session.browser.env.isolate;
+    for (0..3) |_| {
+        isolate.memoryPressureNotification(.critical);
+    }
+
+    var ls: js.Local.Scope = undefined;
+    ctx.localScope(&ls);
+    defer ls.deinit();
+    const fired = try ls.local.exec(
+        \\for (let i = 0; i < 200; i++) {
+        \\  new XMLHttpRequest().dispatchEvent(new Event('foo'));
+        \\  new XMLHttpRequest().upload.dispatchEvent(new Event('foo'));
+        \\  new XMLHttpRequest().dispatchEvent(new Event('load'));
+        \\  new XMLHttpRequest().upload.dispatchEvent(new Event('load'));
+        \\}
+        \\fired;
+    , null);
+    try testing.expectEqual(0, try fired.toF64());
 }

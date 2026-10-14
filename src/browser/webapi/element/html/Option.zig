@@ -26,6 +26,7 @@ const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+const TreeWalker = @import("../../TreeWalker.zig");
 const Select = @import("Select.zig");
 
 const String = lp.String;
@@ -84,23 +85,41 @@ pub fn setValue(self: *Option, value: []const u8, frame: *Frame) !void {
     self._value = owned;
 }
 
-pub fn getText(self: *const Option, frame: *Frame) []const u8 {
+pub fn getText(self: *Option, frame: *Frame) []const u8 {
     return self.strippedText(frame.call_arena);
 }
 
 // https://html.spec.whatwg.org/multipage/form-elements.html#dom-option-text
-fn strippedText(self: *const Option, allocator: std.mem.Allocator) []const u8 {
-    const node: *Node = @constCast(self.asConstElement().asConstNode());
-    const content = node.getTextContentAlloc(allocator) catch return "";
-
-    // Strip and collapse ASCII whitespace.
-    var result = std.ArrayList(u8).initCapacity(allocator, content.len) catch return "";
-    var it = std.mem.tokenizeAny(u8, content, " \t\n\r\x0C");
-    while (it.next()) |word| {
-        if (result.items.len > 0) {
-            result.appendAssumeCapacity(' ');
+fn strippedText(self: *Option, allocator: std.mem.Allocator) []const u8 {
+    var result: std.ArrayList(u8) = .empty;
+    var pending_space = false;
+    var tw = TreeWalker.FullExcludeSelf.init(self.asNode(), .{});
+    while (tw.next()) |node| {
+        if (node.is(Element)) |el| {
+            if (el.getTag() == .script) {
+                // script tags are called out as being ignored.
+                tw.skipChildren();
+            }
+            continue;
         }
-        result.appendSliceAssumeCapacity(word);
+        const cdata = node.is(Node.CData) orelse continue;
+        switch (cdata._type) {
+            .text, .cdata_section => {},
+            .comment, .processing_instruction => continue,
+        }
+        const data = cdata._data.str();
+        // +1 for a space pending from the previous node
+        result.ensureUnusedCapacity(allocator, data.len + 1) catch return "";
+        for (data) |c| switch (c) {
+            ' ', '\t', '\n', '\r', '\x0C' => pending_space = result.items.len > 0,
+            else => {
+                if (pending_space) {
+                    result.appendAssumeCapacity(' ');
+                    pending_space = false;
+                }
+                result.appendAssumeCapacity(c);
+            },
+        };
     }
     return result.items;
 }
@@ -156,8 +175,8 @@ fn setDefaultSelected(self: *Option, value: bool, frame: *Frame) !void {
 // On getting, return the `label` content attribute if present (verbatim, even
 // when empty), otherwise the value of the `text` IDL attribute. On setting,
 // reflect to the `label` content attribute.
-fn getLabel(self: *const Option, frame: *Frame) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("label")) orelse self.getText(frame);
+fn getLabel(self: *Option, frame: *Frame) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("label")) orelse self.getText(frame);
 }
 
 fn setLabel(self: *Option, label: []const u8, frame: *Frame) !void {
