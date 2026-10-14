@@ -205,36 +205,42 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
     self._pending_reads.clearRetainingCapacity();
 }
 
-pub fn doError(self: *ReadableStreamDefaultController, err: []const u8) !void {
-    return self.fail(err, false);
+pub fn doError(self: *ReadableStreamDefaultController, reason: ?js.Value) !void {
+    var ls: js.Local.Scope = undefined;
+    self._execution.js.localScope(&ls);
+    defer ls.deinit();
+
+    const local = &ls.local;
+    return self.fail(local, reason orelse .{ .local = local, .handle = local.isolate.initUndefined() });
 }
 
-/// Like doError, but pending reads reject with a TypeError instead of the
-/// bare message, which is what native transforms (e.g. CompressionStream) throw.
 pub fn typeError(self: *ReadableStreamDefaultController, message: []const u8) !void {
-    return self.fail(message, true);
+    var ls: js.Local.Scope = undefined;
+    self._execution.js.localScope(&ls);
+    defer ls.deinit();
+
+    const local = &ls.local;
+    return self.fail(local, .{ .local = local, .handle = local.isolate.createTypeError(message) });
 }
 
-fn fail(self: *ReadableStreamDefaultController, err: []const u8, type_error: bool) !void {
-    if (self._stream._state != .readable) {
+/// Errors the stream. Pending and later reads reject with `reason` itself.
+pub fn fail(self: *ReadableStreamDefaultController, local: *const js.Local, reason: js.Value) !void {
+    const stream = self._stream;
+    if (stream._state != .readable) {
         return;
     }
 
-    self._stream._state = .errored;
-    self._stream._stored_error = try self._arena.dupe(u8, err);
+    stream._stored_error = try reason.persist();
+    stream._state = .errored;
     self.clearQueue();
 
-    // Reject all pending reads
-    for (self._pending_reads.items) |resolver| {
-        const local_resolver = self._execution.js.toLocal(resolver);
-        if (type_error) {
-            local_resolver.rejectError("stream error", .{ .type_error = err });
-        } else {
-            local_resolver.reject("stream error", err);
-        }
+    // Rejecting runs page JS, which can reach the list too.
+    const pending_reads = self._pending_reads;
+    self._pending_reads = .empty;
+    for (pending_reads.items) |resolver| {
+        local.toLocal(resolver).reject("stream error", reason);
         resolver.release();
     }
-    self._pending_reads.clearRetainingCapacity();
 }
 
 /// The caller owns the returned global and must release it.
@@ -323,6 +329,7 @@ test "ReadableStreamDefaultController: chunks and pending reads release their gl
         \\new Response('native chunk').body.getReader().read();
     , null);
 
-    // cancel() keeps its own resolver so a repeated cancel returns the same promise.
-    try testing.expectEqual(base + 1, tracker.list.items.len);
+    // cancel() keeps its own resolver so a repeated cancel returns the same
+    // promise, and each errored stream keeps what it errored with.
+    try testing.expectEqual(base + 3, tracker.list.items.len);
 }

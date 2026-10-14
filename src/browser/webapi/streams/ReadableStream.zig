@@ -47,7 +47,8 @@ _state: State,
 _execution: *const Execution,
 _reader: ?*ReadableStreamDefaultReader,
 _controller: *ReadableStreamDefaultController,
-_stored_error: ?[]const u8,
+/// What the stream errored with, e.g. the `e` of controller.error(e).
+_stored_error: ?js.Value.Global,
 _pull_fn: ?js.Function.Global = null,
 _pulling: bool = false,
 _pull_again: bool = false,
@@ -236,17 +237,25 @@ fn shouldCallPull(self: *const ReadableStream) bool {
     return desired_size > 0;
 }
 
-pub fn cancel(self: *ReadableStream, reason: ?[]const u8, exec: *const Execution) !js.Promise {
+pub fn cancel(self: *ReadableStream, reason: ?js.Value, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
     self._disturbed = true;
 
-    if (self._state != .readable) {
-        if (self._cancel) |c| {
-            if (c.resolver) |r| {
-                return local.toLocal(r).promise();
+    switch (self._state) {
+        .readable => {},
+        .closed => {
+            if (self._cancel) |c| {
+                if (c.resolver) |r| {
+                    return local.toLocal(r).promise();
+                }
             }
-        }
-        return local.resolvePromise(.{});
+            return local.resolvePromise(.{});
+        },
+        .errored => {
+            const resolver = local.createPromiseResolver();
+            resolver.reject("ReadableStream.cancel", self._stored_error.?);
+            return resolver.promise();
+        },
     }
 
     if (self._cancel == null) {
@@ -411,7 +420,6 @@ const PipeState = struct {
 
 const Cancel = struct {
     callback: ?js.Function.Global = null,
-    reason: ?[]const u8 = null,
     resolver: ?js.PromiseResolver.Global = null,
 };
 

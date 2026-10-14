@@ -80,7 +80,7 @@ pub const EncodingStream = struct {
     ) !void {
         self.end();
         try controller.typeError(message);
-        return self.exec.js.typeError(message);
+        return error.StreamError;
     }
 
     /// Feed the stream and collect encoded bytes.
@@ -231,7 +231,7 @@ pub const DecodingStream = struct {
     ) !void {
         self.end();
         try controller.typeError(message);
-        return self.exec.js.typeError(message);
+        return error.StreamError;
     }
 
     /// Feed the stream and collect decoded bytes.

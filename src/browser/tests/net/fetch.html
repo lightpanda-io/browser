@@ -369,6 +369,11 @@
     c6.abort();
     const stream_read = await rejection(streamed.body.getReader().read());
 
+    const c7 = new AbortController();
+    const streamed_custom = await fetch('http://127.0.0.1:9582/xhr', { signal: c7.signal });
+    c7.abort(custom);
+    const stream_read_custom = await rejection(streamed_custom.body.getReader().read());
+
     state.resolve();
     await state.done(() => {
       testing.expectEqual('AbortError', inflight.name);
@@ -380,7 +385,8 @@
       testing.expectEqual(100, text.length);
       testing.expectEqual(custom, unread_text);
       testing.expectEqual(custom, unread_clone_json);
-      testing.expectTrue(stream_read !== 'resolved', 'aborted body stream read resolved');
+      testing.expectEqual('AbortError', stream_read.name);
+      testing.expectEqual(custom, stream_read_custom);
     });
   }
 </script>
