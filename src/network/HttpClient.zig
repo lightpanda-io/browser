@@ -1326,7 +1326,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     switch (cache_result) {
         .hit => |cached| {
             lp.metrics.http_cache.incr(.hit);
-            try transfer.bufferCached(cached, .local);
+            try self.serveCached(transfer, cached, .local);
             return true;
         },
         .revalidate => |cached| {
@@ -1383,8 +1383,16 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
     };
 
     lp.metrics.http_cache.incr(.revalidated);
-    try transfer.bufferCached(stale, .validated);
+    try self.serveCached(transfer, stale, .validated);
     return true;
+}
+
+fn serveCached(self: *Client, transfer: *Transfer, cached: Cache.CachedResponse, cache_state: ResourceTiming.CacheState) !void {
+    const body = transfer.setCachedResponse(cached, cache_state);
+    if (self.interceptResponse(transfer, .{ .cached = body })) {
+        return;
+    }
+    try transfer.bufferEvents(body);
 }
 
 // Everything the cache needs about this response. Names and values are
@@ -1957,9 +1965,10 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     self.removeConn(msg.conn);
     transfer._conn = null;
 
-    // A revalidation (304) is not offered: what it delivers is the cached
-    // body, which the response on the transfer does not carry.
-    if (transfer._cache_intent != .revalidate and self.interceptResponse(transfer, .final)) {
+    // A revalidation (304) is not offered directly: what it delivers is the
+    // cached body
+    const not_modified = transfer._cache_intent == .revalidate and transfer.res.header.?.status == 304;
+    if (not_modified == false and self.interceptResponse(transfer, .final)) {
         return false;
     }
 
@@ -1971,6 +1980,10 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 // already released) to CDP. True when CDP took it: the transfer is parked
 // until continueInterceptedResponse, fulfillIntercepted or abortParked.
 fn interceptResponse(self: *Client, transfer: *Transfer, pause: Transfer.ResponsePause) bool {
+    if (transfer.res.stream.started) {
+        // A stream (EventSource) has already delivered its header and data.
+        return false;
+    }
     transfer._response_pause = pause;
     var wait_for_interception = false;
     transfer.notify(
@@ -2259,6 +2272,10 @@ pub fn continueInterceptedResponse(self: *Client, transfer: *Transfer) !void {
     transfer.unpark();
     switch (transfer._response_pause) {
         .final => self.deliverResponse(transfer) catch |err| {
+            transfer.abortPipelineError(err);
+            return err;
+        },
+        .cached => |body| transfer.bufferEvents(body) catch |err| {
             transfer.abortPipelineError(err);
             return err;
         },
@@ -2717,6 +2734,9 @@ pub const Transfer = struct {
     pub const ResponsePause = union(enum) {
         // A final response, delivered to the consumer on continue.
         final,
+        // A response served from the HTTP cache (a hit, or the stored copy a
+        // 304 renewed), with its arena-owned body; delivered on continue.
+        cached: []const u8,
         // A redirect response; the arena-owned Location is followed on continue.
         redirect: []const u8,
         // A network failure; on continue it is reported exactly as it would
@@ -3504,9 +3524,10 @@ pub const Transfer = struct {
         }
     }
 
-    // Serve a cache entry as this transfer's response. Takes ownership of
-    // `cached` (file-backed bodies are read into the arena and closed).
-    fn bufferCached(self: *Transfer, cached: Cache.CachedResponse, cache_state: ResourceTiming.CacheState) !void {
+    // Make a cache entry this transfer's response, returning its body.
+    // Takes ownership of `cached` (file-backed bodies are read into the
+    // arena and closed).
+    fn setCachedResponse(self: *Transfer, cached: Cache.CachedResponse, cache_state: ResourceTiming.CacheState) []const u8 {
         const body: []const u8 = switch (cached.data) {
             .buffer => |b| b,
         };
@@ -3516,7 +3537,7 @@ pub const Transfer = struct {
         self._from_cache = true;
         self._timing.cache = cache_state;
         self._content_length = body.len;
-        try self.bufferEvents(body);
+        return body;
     }
 
     // Materialize an interceptor-supplied response (CDP fulfillRequest).
@@ -3543,6 +3564,8 @@ pub const Transfer = struct {
 
         self.setResponseHead(status, content_type);
         self.setResponseHeaders(headers);
+        // It may replace a cached response paused at the response stage.
+        self._from_cache = false;
         self._content_length = owned_body.len;
         try self.bufferEvents(owned_body);
     }

@@ -139,7 +139,7 @@ pub fn requestIntercept(arena: Allocator, bc: *CDP.BrowserContext, intercept: *c
         .requestId = &id.toInterceptId(intercept_id),
         .frameId = &id.toFrameId(transfer.req.frame_id),
         .request = network.RequestWriter.init(arena, transfer, bc.network_limits.post_data),
-        .resourceType = transfer.req.resource_type.string(),
+        .resourceType = fetchResourceType(transfer.req.resource_type),
         .networkId = &id.toRequestId(transfer), // matches the Network REQ-ID
     }, .{ .session_id = session_id });
 
@@ -172,17 +172,17 @@ pub fn responseIntercept(arena: Allocator, bc: *CDP.BrowserContext, intercept: *
             .requestId = &id.toInterceptId(intercept_id),
             .frameId = &id.toFrameId(transfer.req.frame_id),
             .request = network.RequestWriter.init(arena, transfer, bc.network_limits.post_data),
-            .resourceType = transfer.req.resource_type.string(),
+            .resourceType = fetchResourceType(transfer.req.resource_type),
             .responseErrorReason = cdpErrorReason(failure.err),
             .networkId = &id.toRequestId(transfer), // matches the Network REQ-ID
         }, .{ .session_id = session_id }),
-        .final, .redirect => {
+        .final, .cached, .redirect => {
             const head = transfer.res.header orelse return error.MissingResponseHead;
             try bc.cdp.sendEvent("Fetch.requestPaused", .{
                 .requestId = &id.toInterceptId(intercept_id),
                 .frameId = &id.toFrameId(transfer.req.frame_id),
                 .request = network.RequestWriter.init(arena, transfer, bc.network_limits.post_data),
-                .resourceType = transfer.req.resource_type.string(),
+                .resourceType = fetchResourceType(transfer.req.resource_type),
                 .responseStatusCode = head.status,
                 .responseStatusText = transfer.statusText() orelse "",
                 .responseHeaders = transfer.responseHeaders(),
@@ -251,22 +251,16 @@ fn getResponseBody(cmd: *CDP.Command) !void {
         requestId: []const u8, // "INT-{d}"
     })) orelse return error.InvalidParams;
 
+    const no_body = "Can only get response body on requests captured after headers received.";
     const transfer = (try pausedResponse(bc, params.requestId)) orelse {
-        return cmd.sendError(-32000, "Can only get response body on requests captured after headers received.", .{});
+        return cmd.sendError(-32000, no_body, .{});
     };
-    switch (transfer._response_pause) {
-        .final => {},
-        .redirect => return cmd.sendError(-32000, "Response body is not available for redirects.", .{}),
-        .failed => return cmd.sendError(-32000, "Response body is not available for a failed request.", .{}),
-    }
-
-    const body = transfer.res.buffer.items;
-    if (std.unicode.utf8ValidateSlice(body)) {
-        return cmd.sendResult(.{
-            .body = body,
-            .base64Encoded = false,
-        }, .{ .size_hint = body.len });
-    }
+    const body = switch (transfer._response_pause) {
+        .final => transfer.res.buffer.items,
+        .cached => |cached| cached,
+        .redirect, .failed => return cmd.sendError(-32000, no_body, .{}),
+    };
+    // Like Chrome, always base64, whatever the body is.
     return cmd.sendResult(.{
         .body = network.Base64Body{ .data = body },
         .base64Encoded = true,
@@ -289,10 +283,12 @@ fn continueRequest(cmd: *CDP.Command) !void {
     }
 
     if (try pausedResponse(bc, params.requestId)) |transfer| {
-        // The request has already been sent; only an unchanged continue is meaningful.
-        if (params.url != null or params.method != null or params.postData != null or params.headers != null) {
-            return cmd.sendError(-32602, "Cannot override request at the response stage.", .{});
-        }
+        // The request has already been sent: like Chrome, its overrides are
+        // ignored, except that a url on a redirect replaces its Location.
+        if (params.url) |url| switch (transfer._response_pause) {
+            .redirect => transfer._response_pause = .{ .redirect = try transfer.arena.dupe(u8, url) },
+            else => {},
+        };
         _ = bc.intercept_state.remove(try idFromRequestId(params.requestId));
         try bc.cdp.browser.http_client.continueInterceptedResponse(transfer);
         return cmd.sendResult(null, .{});
@@ -499,7 +495,7 @@ pub fn requestAuthRequired(arena: Allocator, bc: *CDP.BrowserContext, intercept:
         .requestId = &id.toInterceptId(intercept_id),
         .frameId = &id.toFrameId(request.frame_id),
         .request = network.RequestWriter.init(arena, transfer, bc.network_limits.post_data),
-        .resourceType = request.resource_type.string(),
+        .resourceType = fetchResourceType(request.resource_type),
         .authChallenge = .{
             .origin = "", // TODO get origin, could be the proxy address for example.
             .source = if (challenge.source) |s| (if (s == .server) "Server" else "Proxy") else "",
@@ -522,7 +518,7 @@ pub fn requestAuthRequired(arena: Allocator, bc: *CDP.BrowserContext, intercept:
 // The CDP Network.ErrorReason for a network failure paused at the response
 // stage. Failed is CDP's own generic reason, for failures it has no narrower
 // value for (TLS, protocol and size errors among them).
-fn cdpErrorReason(err: anyerror) ErrorReason {
+fn cdpErrorReason(err: anyerror) network.ErrorReason {
     return switch (err) {
         error.OperationTimedout => .TimedOut,
         error.CouldntResolveHost, error.CouldntResolveProxy => .NameNotResolved,
@@ -531,6 +527,10 @@ fn cdpErrorReason(err: anyerror) ErrorReason {
         error.SendError, error.RecvError => .ConnectionReset,
         else => .Failed,
     };
+}
+
+fn fetchResourceType(resource_type: HttpClient.Request.ResourceType) []const u8 {
+    return @tagName(InterceptState.cdpResourceType(resource_type));
 }
 
 // Get u32 from requestId which is formatted as: "INT-{d}"
@@ -631,7 +631,11 @@ pub const InterceptState = struct {
                 continue;
             }
             if (pattern.resource_type) |rt| {
-                if (rt != cdpResourceType(resource_type)) {
+                const wanted: ResourceType = switch (rt) {
+                    .Fetch, .EventSource => .XHR,
+                    else => rt,
+                };
+                if (wanted != cdpResourceType(resource_type)) {
                     continue;
                 }
             }
@@ -642,14 +646,15 @@ pub const InterceptState = struct {
         return false;
     }
 
+    // Unlike the Network domain, Chrome's Fetch domain doesn't tell XHR,
+    // fetch() and EventSource apart (they are all Blink's kXhr): they pause as
+    // XHR, and a pattern for any one of the three matches all of them.
     fn cdpResourceType(resource_type: HttpClient.Request.ResourceType) ResourceType {
         return switch (resource_type) {
             .document => .Document,
-            .xhr => .XHR,
+            .xhr, .fetch, .eventsource => .XHR,
             .script, .worker => .Script,
-            .fetch => .Fetch,
             .stylesheet => .Stylesheet,
-            .eventsource => .EventSource,
             .image => .Image,
         };
     }
@@ -819,7 +824,10 @@ test "cdp.Fetch: InterceptState patterns" {
     });
     try testing.expectEqual(2, state.patterns.len);
     try testing.expect(state.matches(.Request, "http://h/api/x", .xhr));
-    try testing.expectEqual(false, state.matches(.Request, "http://h/api/x", .fetch));
+    // Like Chrome, XHR also covers fetch() and EventSource
+    try testing.expect(state.matches(.Request, "http://h/api/x", .fetch));
+    try testing.expect(state.matches(.Request, "http://h/api/x", .eventsource));
+    try testing.expectEqual(false, state.matches(.Request, "http://h/api/x", .script));
     try testing.expectEqual(false, state.matches(.Request, "http://h/other", .xhr));
     // A pattern pauses only at its own stage
     try testing.expect(state.matches(.Response, "http://h/a.css", .stylesheet));
@@ -850,7 +858,8 @@ test "cdp.Fetch: enable compiles patterns, disable clears them" {
     try ctx.expectSentResult(null, .{ .id = 1, .session_id = "SID-P" });
     try testing.expectEqual(2, bc.intercept_state.patterns.len);
     try testing.expect(bc.intercept_state.matches(.Request, "http://h/json/a", .fetch));
-    try testing.expectEqual(false, bc.intercept_state.matches(.Request, "http://h/json/a", .xhr));
+    try testing.expect(bc.intercept_state.matches(.Request, "http://h/json/a", .xhr));
+    try testing.expectEqual(false, bc.intercept_state.matches(.Request, "http://h/json/a", .script));
     try testing.expect(bc.intercept_state.matches(.Request, "http://h/exact", .xhr));
     try testing.expectEqual(false, bc.intercept_state.matches(.Request, "http://h/", .document));
 
@@ -874,6 +883,7 @@ test "cdp.Fetch: enable compiles patterns, disable clears them" {
 // Response-stage tests drive real requests against the test server and read
 // the outcome through the request's own callbacks.
 const ResponseStageProbe = struct {
+    streaming: bool = false,
     body: std.ArrayList(u8) = .empty,
     done: bool = false,
     err: ?anyerror = null,
@@ -908,6 +918,7 @@ const ResponseStageProbe = struct {
             .credentials_mode = .omit,
             .request_mode = .no_cors,
             .resource_type = .script,
+            .streaming = self.streaming,
             .notification = bc.session.notification,
             .ctx = self,
             .data_callback = dataCallback,
@@ -990,7 +1001,8 @@ test "cdp.Fetch: response stage pauses a final response and continueResponse del
     try testing.expectEqual(0, probe.body.items.len);
 
     try ctx.processMessage(.{ .id = 2, .method = "Fetch.getResponseBody", .params = .{ .requestId = "INT-0000000001" } });
-    try ctx.expectSentResult(.{ .body = repeat("1234567890", 10), .base64Encoded = false }, .{ .id = 2 });
+    // repeat("1234567890", 10), base64 like Chrome even for text
+    try ctx.expectSentResult(.{ .body = "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MA==", .base64Encoded = true }, .{ .id = 2 });
 
     try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueResponse", .params = .{ .requestId = "INT-0000000001" } });
     try ctx.expectSentResult(null, .{ .id = 3 });
@@ -1052,7 +1064,7 @@ test "cdp.Fetch: response stage fulfillRequest replaces the response" {
     try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
 }
 
-test "cdp.Fetch: response stage getResponseBody base64-encodes a non-UTF-8 body" {
+test "cdp.Fetch: response stage getResponseBody returns a binary body byte-exact" {
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RS", .session_id = "SID-RS" });
@@ -1104,7 +1116,7 @@ test "cdp.Fetch: response stage pauses a redirect response, then the response it
     try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/xhr", location.?);
 
     try ctx.processMessage(.{ .id = 2, .method = "Fetch.getResponseBody", .params = .{ .requestId = "INT-0000000001" } });
-    try ctx.expectSentError(-32000, "Response body is not available for redirects.", .{ .id = 2 });
+    try ctx.expectSentError(-32000, "Can only get response body on requests captured after headers received.", .{ .id = 2 });
 
     // Releasing the redirect follows it; the redirected request's response pauses in turn.
     try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueResponse", .params = .{ .requestId = "INT-0000000001" } });
@@ -1121,6 +1133,41 @@ test "cdp.Fetch: response stage pauses a redirect response, then the response it
     try probe.tickUntilSettled(bc);
     try testing.expectEqual(null, probe.err);
     try testing.expectEqualSlices(u8, repeat("1234567890", 10), probe.body.items);
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: response stage continueRequest ignores request overrides, but a url replaces a redirect's Location" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RS", .session_id = "SID-RS" });
+    try enableResponseStage(&ctx);
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/xhr/redirect");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{
+        .requestId = "INT-0000000001",
+        .url = "http://127.0.0.1:9582/images/small.png",
+        .method = "POST",
+    } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.requestPaused", .{
+        .requestId = "INT-0000000002",
+        .request = .{ .url = "http://127.0.0.1:9582/images/small.png", .method = "GET" },
+    }, .{ .session_id = "SID-RS" });
+
+    // Not a redirect: the url is ignored, like the rest.
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueRequest", .params = .{
+        .requestId = "INT-0000000002",
+        .url = "http://127.0.0.1:9582/xhr",
+    } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqual(1024, probe.body.items.len);
     try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
 }
 
@@ -1146,7 +1193,7 @@ test "cdp.Fetch: response stage pauses a network failure with responseErrorReaso
     try testing.expectEqual(null, paused.get("responseHeaders"));
 
     try ctx.processMessage(.{ .id = 2, .method = "Fetch.getResponseBody", .params = .{ .requestId = "INT-0000000001" } });
-    try ctx.expectSentError(-32000, "Response body is not available for a failed request.", .{ .id = 2 });
+    try ctx.expectSentError(-32000, "Can only get response body on requests captured after headers received.", .{ .id = 2 });
 
     // Releasing it unchanged reports the original failure.
     try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueResponse", .params = .{ .requestId = "INT-0000000001" } });
@@ -1154,6 +1201,23 @@ test "cdp.Fetch: response stage pauses a network failure with responseErrorReaso
     try probe.tickUntilSettled(bc);
     try testing.expectEqual(error.CouldntConnect, probe.err.?);
     try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: response stage does not pause a stream it already delivered" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RS", .session_id = "SID-RS" });
+    try enableResponseStage(&ctx);
+
+    var probe: ResponseStageProbe = .{ .streaming = true };
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/sse/simple");
+    try probe.tickUntilSettled(bc);
+
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqual(73, probe.body.items.len);
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(error.PausedEventNotSent, sentPausedParams(&ctx, "INT-0000000001"));
 }
 
 test "cdp.Fetch: closing the browser context releases a response-stage pause" {
@@ -1174,12 +1238,12 @@ test "cdp.Fetch: closing the browser context releases a response-stage pause" {
 }
 
 test "cdp.Fetch: cdpErrorReason" {
-    try testing.expectEqual(ErrorReason.TimedOut, cdpErrorReason(error.OperationTimedout));
-    try testing.expectEqual(ErrorReason.NameNotResolved, cdpErrorReason(error.CouldntResolveHost));
-    try testing.expectEqual(ErrorReason.NameNotResolved, cdpErrorReason(error.CouldntResolveProxy));
-    try testing.expectEqual(ErrorReason.ConnectionFailed, cdpErrorReason(error.CouldntConnect));
-    try testing.expectEqual(ErrorReason.ConnectionClosed, cdpErrorReason(error.GotNothing));
-    try testing.expectEqual(ErrorReason.ConnectionReset, cdpErrorReason(error.RecvError));
-    try testing.expectEqual(ErrorReason.ConnectionReset, cdpErrorReason(error.SendError));
-    try testing.expectEqual(ErrorReason.Failed, cdpErrorReason(error.SslConnectError));
+    try testing.expectEqual(network.ErrorReason.TimedOut, cdpErrorReason(error.OperationTimedout));
+    try testing.expectEqual(network.ErrorReason.NameNotResolved, cdpErrorReason(error.CouldntResolveHost));
+    try testing.expectEqual(network.ErrorReason.NameNotResolved, cdpErrorReason(error.CouldntResolveProxy));
+    try testing.expectEqual(network.ErrorReason.ConnectionFailed, cdpErrorReason(error.CouldntConnect));
+    try testing.expectEqual(network.ErrorReason.ConnectionClosed, cdpErrorReason(error.GotNothing));
+    try testing.expectEqual(network.ErrorReason.ConnectionReset, cdpErrorReason(error.RecvError));
+    try testing.expectEqual(network.ErrorReason.ConnectionReset, cdpErrorReason(error.SendError));
+    try testing.expectEqual(network.ErrorReason.Failed, cdpErrorReason(error.SslConnectError));
 }

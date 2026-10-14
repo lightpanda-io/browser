@@ -249,8 +249,7 @@ pub const RequestAuthRequired = struct {
     wait_for_interception: *bool,
 };
 
-// A final response is complete (status, headers and the whole body are on the
-// transfer) and has not been delivered to its consumer yet.
+// A final response or a redirect which has not be delivered to its consumer yet.
 pub const ResponseIntercept = struct {
     transfer: *Transfer,
     wait_for_interception: *bool,
