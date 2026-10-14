@@ -42,7 +42,7 @@ pub fn getStyle(self: *CSSStyleRule, frame: *Frame) !*CSSStyleProperties {
     return style;
 }
 
-fn getCssRules(self: *CSSStyleRule, frame: *Frame) !*CSSRuleList {
+pub fn getCssRules(self: *CSSStyleRule, frame: *Frame) !*CSSRuleList {
     if (self._rules) |rules| {
         return rules;
     }
