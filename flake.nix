@@ -22,7 +22,6 @@
 
     crane = {
       url = "github:ipetkov/crane";
-      inputs.nixpkgs.follows = "nixpkgs";
     };
 
     flake-utils.url = "github:numtide/flake-utils";
@@ -61,36 +60,43 @@
           cp -r ${pkgs.gcc.cc}/lib/gcc $out/lib/gcc
         '';
 
-        # This build pipeline is very unhappy without an FHS-compliant env.
+        buildDeps =
+          pkgs: with pkgs; [
+            gcc
+            gcc.cc.lib
+            crtFiles
+            glibc.dev
+          ];
+
+        v8BuildDeps =
+          pkgs: with pkgs; [
+            python3
+            pkg-config
+            expat.dev
+            glib.dev
+            zlib
+          ];
+
+        # This build pipeline (V8 mainly) is very unhappy without an FHS-compliant env.
         fhs = pkgs.buildFHSEnv {
           name = "fhs-shell";
           multiArch = true;
           targetPkgs =
-            pkgs: with pkgs; [
-              # Build Tools
+            pkgs:
+            (buildDeps pkgs)
+            ++ (v8BuildDeps pkgs)
+            ++ (with pkgs; [
               zig
               zls
               rustToolchain
-              python3
-              pkg-config
-              cmake
-              gperf
-
-              # GCC
-              gcc
-              gcc.cc.lib
-              crtFiles
-
-              # Libraries
-              expat.dev
-              glib.dev
-              glibc.dev
-              zlib
-            ];
+            ]);
         };
 
         lightpanda = pkgs.callPackage ./nix/package.nix {
-          inherit rustToolchain;
+          inherit craneLib;
+          buildInputs = (buildDeps pkgs) ++ (with pkgs; [ zig ]);
+          src = ./.;
+          version = "1.0.0";
         };
 
       in
