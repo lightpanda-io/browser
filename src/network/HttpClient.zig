@@ -1313,6 +1313,8 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
 
     const arena = transfer.arena;
 
+    transfer._cache_cookie = try transfer.getCookieString(arena.allocator());
+
     // Redirects rewrite req.url; the entry must be stored/renewed under the
     // URL this lookup ran against, not the final hop. req.url is arena-owned,
     // so the captured slice outlives any redirect rewrite.
@@ -2607,6 +2609,11 @@ pub const Transfer = struct {
     // what releasing it unchanged does: deliver the response, follow the
     // redirect, or fail with the network error.
     _response_pause: ResponsePause = .final,
+
+    // The jar's cookies for the request, as cacheLookup read them: what a
+    // stored response that varies on Cookie is matched against, at lookup and
+    // at store (the jar may have taken the response's own cookies by then).
+    _cache_cookie: ?[:0]const u8 = null,
 
     // Cache key captured at lookup time (req.url before any redirect
     // rewrote it). Only meaningful while _cache_intent != .none.
@@ -3950,13 +3957,51 @@ pub const Transfer = struct {
     }
 
     // The cache works in plain headers; req_headers carry a `source` alongside
-    // them that it has no use for.
+    // them that it has no use for. The jar's cookies reach libcurl on their
+    // own, not as a request header, so a response that varies on Cookie is
+    // matched against what cacheLookup read from the jar, which joins any
+    // Cookie header of the request. Used for matching only, never sent.
+    // Credentials (Cookie, Authorization, Proxy-Authorization) go in as their
+    // SHA-256, so a stored entry's Vary row never holds them; an absent one
+    // stays absent.
     fn cacheRequestHeaders(self: *const Transfer) ![]http.Header {
-        const headers = try self.arena.alloc(http.Header, self.req_headers.items.len);
-        for (self.req_headers.items, headers) |hdr, *out| {
+        const jar_cookies = self._cache_cookie;
+        const arena = self.arena.allocator();
+        const headers = try arena.alloc(http.Header, self.req_headers.items.len + @intFromBool(jar_cookies != null));
+        var cookie_at: ?usize = null;
+        for (self.req_headers.items, headers[0..self.req_headers.items.len], 0..) |hdr, *out, i| {
             out.* = .{ .name = hdr.name, .value = hdr.value };
+            if (std.ascii.eqlIgnoreCase(hdr.name, "cookie")) cookie_at = i;
         }
-        return headers;
+        var len = headers.len;
+        if (jar_cookies) |jar| {
+            if (cookie_at) |i| {
+                headers[i].value = try std.fmt.allocPrint(arena, "{s}; {s}", .{ headers[i].value, jar });
+                len -= 1;
+            } else {
+                cookie_at = len - 1;
+                headers[len - 1] = .{ .name = "cookie", .value = jar };
+            }
+        }
+        for (headers[0..len]) |*hdr| {
+            if (isCredentialHeader(hdr.name)) {
+                hdr.value = try credentialDigest(arena, hdr.value);
+            }
+        }
+        return headers[0..len];
+    }
+
+    fn isCredentialHeader(name: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(name, "cookie") or
+            std.ascii.eqlIgnoreCase(name, "authorization") or
+            std.ascii.eqlIgnoreCase(name, "proxy-authorization");
+    }
+
+    fn credentialDigest(arena: Allocator, value: []const u8) ![]const u8 {
+        if (value.len == 0) return "";
+        var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(value, &digest, .{});
+        return arena.dupe(u8, &std.fmt.bytesToHex(digest, .lower));
     }
 
     fn removeHeader(self: *Transfer, name: []const u8) void {
@@ -6414,6 +6459,7 @@ const TestCache = struct {
 // One GET through a client, settled.
 const TestCacheRequest = struct {
     header: ?[2][]const u8 = null, // a request header to set
+    jar: ?*Cookie.Jar = null, // credentials included when set
     body: std.ArrayList(u8) = .empty,
     done: bool = false,
     err: ?anyerror = null,
@@ -6433,9 +6479,11 @@ const TestCacheRequest = struct {
             .method = .GET,
             .url = url,
             .origin = null,
-            .credentials_mode = .omit,
+            .credentials_mode = if (self.jar != null) .include else .omit,
             .request_mode = .no_cors,
             .resource_type = .xhr,
+            // same-site, so the jar's Lax cookies are sent
+            .cookie_origin = if (self.jar != null) .{ .url = "http://127.0.0.1:9582/" } else null,
             .ctx = self,
             .header_callback = headerCallback,
             .data_callback = dataCallback,
@@ -6445,6 +6493,7 @@ const TestCacheRequest = struct {
         }, null);
         {
             errdefer transfer.deinit();
+            transfer.cookie_jar = self.jar;
             if (self.header) |h| try transfer.setHeader(h[0], h[1], .{});
         }
         try transfer.submit();
@@ -6556,4 +6605,120 @@ test "HttpClient: a URL with userinfo bypasses the cache" {
     defer r.deinit();
     try r.run(client, "http://u:p@127.0.0.1:9582/cache/max-age");
     try testing.expectEqual(false, r.from_cache);
+}
+
+test "HttpClient: a response varying on Cookie is a hit only for the cookies it was stored with" {
+    const client = &testing.test_browser.http_client;
+    var tc = try TestCache.init(client);
+    tc.use(client);
+    defer tc.deinit(client);
+    const url = "http://127.0.0.1:9582/cache/vary-cookie";
+
+    var jar_a = Cookie.Jar.init(testing.allocator, null);
+    defer jar_a.deinit();
+    try jar_a.populateFromResponse(url, "who=a");
+    var jar_b = Cookie.Jar.init(testing.allocator, null);
+    defer jar_b.deinit();
+    try jar_b.populateFromResponse(url, "who=b");
+
+    // stored with cookie A: a hit for A only
+    const steps = [_]struct { jar: ?*Cookie.Jar, hit: bool }{
+        .{ .jar = &jar_a, .hit = false },
+        .{ .jar = &jar_a, .hit = true },
+        .{ .jar = &jar_b, .hit = false }, // replaces the entry
+        .{ .jar = &jar_b, .hit = true },
+        .{ .jar = null, .hit = false }, // replaces it again
+        .{ .jar = null, .hit = true },
+        .{ .jar = &jar_a, .hit = false }, // stored without cookies: not for a visitor with one
+    };
+    for (steps) |step| {
+        var r: TestCacheRequest = .{ .jar = step.jar };
+        defer r.deinit();
+        try r.run(client, url);
+        try testing.expectEqual(step.hit, r.from_cache);
+        try testing.expectEqual("varied", r.body.items);
+    }
+}
+
+test "HttpClient: the Vary row of a response varying on Cookie holds a digest, not the cookies" {
+    const client = &testing.test_browser.http_client;
+    var tc = try TestCache.init(client);
+    tc.use(client);
+    defer tc.deinit(client);
+    const url = "http://127.0.0.1:9582/cache/vary-cookie";
+
+    var jar = Cookie.Jar.init(testing.allocator, null);
+    defer jar.deinit();
+    try jar.populateFromResponse(url, "who=secret-value");
+
+    var r: TestCacheRequest = .{ .jar = &jar };
+    defer r.deinit();
+    try r.run(client, url);
+
+    const conn = try tc.cache.kind.sqlite.pool.acquire();
+    defer tc.cache.kind.sqlite.pool.release(conn);
+    try testing.expectEqual(1, (try conn.scalar(i64, "select count(*) from header where url = $1 and vary = true and lower(name) = 'cookie'", .{url})).?);
+    try testing.expectEqual(0, (try conn.scalar(i64, "select count(*) from header where instr(cast(value as text), 'secret-value') > 0", .{})).?);
+
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("who=secret-value", &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    try testing.expectEqual(1, (try conn.scalar(i64, "select count(*) from header where url = $1 and vary = true and cast(value as text) = $2", .{ url, @as([]const u8, &hex) })).?);
+}
+
+test "HttpClient: a response varying on a header the request lacked is not a hit for a request carrying it" {
+    const client = &testing.test_browser.http_client;
+    var tc = try TestCache.init(client);
+    tc.use(client);
+    defer tc.deinit(client);
+    const url = "http://127.0.0.1:9582/cache/vary-variant";
+
+    const steps = [_]struct { variant: ?[]const u8, hit: bool }{
+        .{ .variant = null, .hit = false },
+        .{ .variant = null, .hit = true },
+        .{ .variant = "b", .hit = false }, // replaces the entry
+        .{ .variant = "b", .hit = true },
+        .{ .variant = null, .hit = false },
+    };
+    for (steps) |step| {
+        var r: TestCacheRequest = .{ .header = if (step.variant) |v| .{ "X-Variant", v } else null };
+        defer r.deinit();
+        try r.run(client, url);
+        try testing.expectEqual(step.hit, r.from_cache);
+        try testing.expectEqual("varied", r.body.items);
+    }
+}
+
+test "HttpClient: the Vary row of a response varying on Authorization holds a digest, not the token" {
+    const client = &testing.test_browser.http_client;
+    var tc = try TestCache.init(client);
+    tc.use(client);
+    defer tc.deinit(client);
+    const url = "http://127.0.0.1:9582/cache/vary-authorization";
+
+    {
+        var r: TestCacheRequest = .{ .header = .{ "Authorization", "Bearer secret-token" } };
+        defer r.deinit();
+        try r.run(client, url);
+    }
+    {
+        const conn = try tc.cache.kind.sqlite.pool.acquire();
+        defer tc.cache.kind.sqlite.pool.release(conn);
+        try testing.expectEqual(0, (try conn.scalar(i64, "select count(*) from header where instr(cast(value as text), 'secret-token') > 0", .{})).?);
+        var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash("Bearer secret-token", &digest, .{});
+        const hex = std.fmt.bytesToHex(digest, .lower);
+        try testing.expectEqual(1, (try conn.scalar(i64, "select count(*) from header where url = $1 and vary = true and lower(name) = 'authorization' and cast(value as text) = $2", .{ url, @as([]const u8, &hex) })).?);
+    }
+
+    // the same token is a hit, another one (even by case) is not
+    for ([_]struct { token: []const u8, hit: bool }{
+        .{ .token = "Bearer secret-token", .hit = true },
+        .{ .token = "Bearer SECRET-TOKEN", .hit = false },
+    }) |step| {
+        var r: TestCacheRequest = .{ .header = .{ "Authorization", step.token } };
+        defer r.deinit();
+        try r.run(client, url);
+        try testing.expectEqual(step.hit, r.from_cache);
+    }
 }

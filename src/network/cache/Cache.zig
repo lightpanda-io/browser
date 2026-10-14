@@ -504,19 +504,25 @@ fn parseHttpDate(value: []const u8) ?i64 {
 }
 
 /// The request headers the Vary list names, which a later lookup has to match
-/// against. Names and values stay borrowed from the caller's headers.
+/// against. Names and values stay borrowed from the caller's headers. A named
+/// header the request did not carry is kept with an empty value: a later
+/// request carrying it is not a match.
 fn varyHeaders(arena: std.mem.Allocator, vary: ?[]const u8, request_headers: []const Http.Header) ![]const Http.Header {
     const vary_value = vary orelse return &.{};
 
     var headers: std.ArrayList(Http.Header) = .empty;
-    for (request_headers) |hdr| {
-        var iter = std.mem.splitScalar(u8, vary_value, ',');
-        while (iter.next()) |part| {
-            const name = std.mem.trim(u8, part, &std.ascii.whitespace);
+    var iter = std.mem.splitScalar(u8, vary_value, ',');
+    while (iter.next()) |part| {
+        const name = std.mem.trim(u8, part, &std.ascii.whitespace);
+        if (name.len == 0) continue;
+        var found = false;
+        for (request_headers) |hdr| {
             if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
                 try headers.append(arena, hdr);
+                found = true;
             }
         }
+        if (!found) try headers.append(arena, .{ .name = name, .value = "" });
     }
     return headers.items;
 }
@@ -727,9 +733,12 @@ test "Cache: tryCache vary headers" {
         .request_headers = &request_headers,
     });
 
-    try testing.expectEqual(1, stored.?.vary_headers.len);
+    try testing.expectEqual(2, stored.?.vary_headers.len);
     try testing.expectString("Accept-Encoding", stored.?.vary_headers[0].name);
     try testing.expectString("gzip", stored.?.vary_headers[0].value);
+    // a named header the request did not carry is recorded as absent
+    try testing.expectString("accept-language", stored.?.vary_headers[1].name);
+    try testing.expectString("", stored.?.vary_headers[1].value);
 
     // Vary: * is never stored
     const wildcard = try tryCache(arena.allocator(), .{

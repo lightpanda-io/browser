@@ -1488,6 +1488,36 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/cache/vary-cookie")) {
+        return req.respond("varied", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Cache-Control", .value = "max-age=600" },
+                .{ .name = "Vary", .value = "Cookie" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cache/vary-authorization")) {
+        return req.respond("varied", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Cache-Control", .value = "max-age=600" },
+                .{ .name = "Vary", .value = "Authorization" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cache/vary-variant")) {
+        return req.respond("varied", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Cache-Control", .value = "max-age=600" },
+                .{ .name = "Vary", .value = "X-Variant" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/download/report.csv")) {
         // A file download: Content-Disposition: attachment drives the
         // Browser.setDownloadBehavior path (issue #2701).
