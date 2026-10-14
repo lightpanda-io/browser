@@ -490,6 +490,10 @@ fn visitNode(
     if (current_depth > self.max_depth) return;
 
     // 1. Skip non-content nodes
+    // visibility:hidden inherits but a descendant can set it back to
+    // visible, so a hidden element is passed through rather than cut: its
+    // own line and text go, its children still get their say.
+    var invisible = false;
     if (node.is(Element)) |el| {
         const tag = el.getTag();
         if (tag.isMetadata() or tag == .svg) return;
@@ -506,11 +510,15 @@ fn visitNode(
         if (el.is(Element.Html)) |html_el| {
             if (html_el.getHidden()) return;
         }
+        invisible = self.frame._style_manager.hasVisibilityHiddenInherited(el);
     } else if (node.is(CData.Text)) |text_node| {
         const text = text_node.ownData();
         if (isAllWhitespace(text)) {
             return;
         }
+        if (node._parent) |parent| if (parent.is(Element)) |parent_el| {
+            if (self.frame._style_manager.hasVisibilityHiddenInherited(parent_el)) return;
+        };
     } else if (node._type != .document and node._type != .document_fragment) {
         return;
     }
@@ -573,13 +581,15 @@ fn visitNode(
     // This prevents token bloat and ensures their StaticText children aren't incorrectly pruned.
     // We ignore interactivity because a generic wrapper with an event listener still shouldn't hoist all text.
     // Not computing it also keeps a deep chain of containers from being O(depth²).
-    const name = if (structural and !has_explicit_label)
+    const name = if (invisible or (structural and !has_explicit_label))
         null
     else
         try axn.getName(self.frame, self.arena, ctx.label_index);
 
-    var should_visit = true;
-    if (self.interactive_only) {
+    var should_visit = !invisible;
+    if (invisible) {
+        // Passed through, as above.
+    } else if (self.interactive_only) {
         var keep = false;
         if (interactive.isInteractiveRole(role)) {
             keep = true;
@@ -1118,6 +1128,30 @@ test "SemanticTree: a slotted element inherits its slot's display" {
 
     try testing.expect(std.mem.find(u8, aw.written(), "slotted-shown") != null);
     try testing.expect(std.mem.find(u8, aw.written(), "slotted-hidden") == null);
+}
+
+test "SemanticTree: visibility:hidden drops the element, not a visible descendant" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/visibility_hidden.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    for ([_]bool{ false, true }) |prune| {
+        const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = prune });
+
+        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer aw.deinit();
+        try st.textStringify(&aw.writer);
+        const text = aw.written();
+
+        try testing.expect(std.mem.find(u8, text, "We use cookies") == null);
+        try testing.expect(std.mem.find(u8, text, "Accept all") == null);
+        try testing.expect(std.mem.find(u8, text, "Inherited hidden") == null);
+        try testing.expect(std.mem.find(u8, text, "Shown again") != null);
+        try testing.expect(std.mem.find(u8, text, "Page content") != null);
+    }
 }
 
 test "SemanticTree: deep nesting doesn't overflow the native stack" {
