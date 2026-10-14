@@ -280,6 +280,59 @@
 }
 </script>
 
+<style>
+  .flex-row { display: flex; }
+</style>
+
+<script id="flexContainerMarqueeLoop">
+{
+  // A marquee clones its item into a block-level flex container until there
+  // are ceil(container / item) + 2 of them, re-reading both widths after each
+  // clone.
+  const width = (el) => el.getBoundingClientRect().width;
+  const container = document.createElement('div');
+  container.className = 'flex-row';
+  const item = document.createElement('div');
+  item.textContent = 'item';
+  container.appendChild(item);
+  document.body.appendChild(container);
+
+  let clones = 0;
+  for (let i = 0; i < Math.ceil(width(container) / width(item)) + 2 && clones < 50; i++) {
+    container.appendChild(item.cloneNode(true));
+    clones++;
+  }
+  testing.expectTrue(clones < 50);
+  testing.expectTrue(container.scrollWidth > container.clientWidth);
+}
+</script>
+
+<script id="boxesSizedByTheirItems">
+{
+  const grows = (setup) => {
+    const box = document.createElement('div');
+    box.appendChild(document.createElement('span'));
+    (setup(box) ?? document.body).appendChild(box);
+    const before = box.clientWidth;
+    box.appendChild(document.createElement('span'));
+    box.appendChild(document.createElement('span'));
+    return box.clientWidth > before;
+  };
+
+  testing.expectTrue(grows((box) => { box.style.display = 'inline-flex'; }));
+  testing.expectTrue(grows((box) => { box.style.cssText = 'display: flex; width: max-content'; }));
+  testing.expectTrue(grows((box) => { box.style.cssText = 'display: grid; position: absolute'; }));
+  testing.expectTrue(grows((box) => { box.style.cssText = 'display: flex; float: left'; }));
+  testing.expectTrue(grows((box) => {
+    box.style.display = 'flex';
+    const row = document.createElement('div');
+    row.className = 'flex-row';
+    document.body.appendChild(row);
+    return row;
+  }));
+}
+</script>
+
 <script id="scrollHeightFromContent">
 {
   // An empty element has no content to overflow its box.
