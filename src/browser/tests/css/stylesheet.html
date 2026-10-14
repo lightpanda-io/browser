@@ -242,6 +242,20 @@
 }
 </script>
 
+<script id="CSSStyleDeclaration_setCssText_after_nested_rule">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // A nested rule (CSS Nesting) ends at its own `}`: the declarations
+    // after it still apply instead of being skipped along with it.
+    style.cssText = 'color: red; &.x { color: blue; } display: none; div:hover { color: green } opacity: 0';
+    testing.expectEqual('red', style.color);
+    testing.expectEqual('none', style.display);
+    testing.expectEqual('0', style.opacity);
+}
+</script>
+
 <script id="CSSStyleDeclaration_style_syncs_to_attribute">
 {
     // JS style modifications must be reflected in getAttribute.
