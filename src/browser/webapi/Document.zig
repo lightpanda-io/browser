@@ -1662,7 +1662,6 @@ pub const JsApi = struct {
     pub const ondrag = EventTarget.handlerAccessor(Document, "drag");
     pub const ondragend = EventTarget.handlerAccessor(Document, "dragend");
     pub const ondragenter = EventTarget.handlerAccessor(Document, "dragenter");
-    pub const ondragexit = EventTarget.handlerAccessor(Document, "dragexit");
     pub const ondragleave = EventTarget.handlerAccessor(Document, "dragleave");
     pub const ondragover = EventTarget.handlerAccessor(Document, "dragover");
     pub const ondragstart = EventTarget.handlerAccessor(Document, "dragstart");

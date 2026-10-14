@@ -1013,11 +1013,6 @@ pub const JsApi = struct {
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{});
     pub const CSS = bridge.accessor(Window.getCSS, null, .{});
     pub const customElements = bridge.accessor(Window.getCustomElements, null, .{});
-    // GlobalEventHandlers: the same on* set as HTMLElement, minus oncopy,
-    // oncut and onpaste (DocumentAndElementEventHandlers) and the fullscreen
-    // handlers (Element and Document only). The touch handlers stay off
-    // Window too, as in Chrome without a touch screen: `'ontouchstart' in
-    // window` is how pages detect a touch device.
     pub const onabort = EventTarget.handlerAccessor(Window, "abort");
     pub const onanimationcancel = EventTarget.handlerAccessor(Window, "animationcancel");
     pub const onanimationend = EventTarget.handlerAccessor(Window, "animationend");
@@ -1044,7 +1039,6 @@ pub const JsApi = struct {
     pub const ondrag = EventTarget.handlerAccessor(Window, "drag");
     pub const ondragend = EventTarget.handlerAccessor(Window, "dragend");
     pub const ondragenter = EventTarget.handlerAccessor(Window, "dragenter");
-    pub const ondragexit = EventTarget.handlerAccessor(Window, "dragexit");
     pub const ondragleave = EventTarget.handlerAccessor(Window, "dragleave");
     pub const ondragover = EventTarget.handlerAccessor(Window, "dragover");
     pub const ondragstart = EventTarget.handlerAccessor(Window, "dragstart");
