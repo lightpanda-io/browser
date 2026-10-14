@@ -873,6 +873,7 @@ pub const BrowserContext = struct {
         try self.intercept_state.setPatterns(patterns);
         self.fetch_session_id = session_id;
         try self.notification.register(.http_request_intercept, self, onHttpRequestIntercept);
+        try self.notification.register(.http_response_intercept, self, onHttpResponseIntercept);
         if (authRequests) {
             try self.notification.register(.http_request_auth_required, self, onHttpRequestAuthRequired);
         }
@@ -919,6 +920,7 @@ pub const BrowserContext = struct {
 
     fn fetchDisable(self: *BrowserContext) void {
         self.notification.unregister(.http_request_intercept, self);
+        self.notification.unregister(.http_response_intercept, self);
         self.notification.unregister(.http_request_auth_required, self);
         self.intercept_state.clearPatterns();
         self.fetch_session_id = null;
@@ -1077,6 +1079,13 @@ pub const BrowserContext = struct {
         const arena = self.acquireNotificationArena();
         defer self.releaseNotificationArena();
         try @import("domains/fetch.zig").requestIntercept(arena, self, msg);
+    }
+
+    fn onHttpResponseIntercept(ctx: *anyopaque, msg: *const Notification.ResponseIntercept) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        const arena = self.acquireNotificationArena();
+        defer self.releaseNotificationArena();
+        try @import("domains/fetch.zig").responseIntercept(arena, self, msg);
     }
 
     fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {

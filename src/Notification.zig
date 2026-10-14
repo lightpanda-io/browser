@@ -89,6 +89,7 @@ const EventListeners = struct {
     http_request_intercept: List = .{},
     http_request_done: List = .{},
     http_request_auth_required: List = .{},
+    http_response_intercept: List = .{},
     http_request_served_from_cache: List = .{},
     http_response_data: List = .{},
     http_response_header_done: List = .{},
@@ -121,6 +122,7 @@ const Events = union(enum) {
     http_request_start: *const RequestStart,
     http_request_intercept: *const RequestIntercept,
     http_request_auth_required: *const RequestAuthRequired,
+    http_response_intercept: *const ResponseIntercept,
     http_request_served_from_cache: *const RequestServedFromCache,
     http_request_done: *const RequestDone,
     http_response_data: *const ResponseData,
@@ -243,6 +245,12 @@ pub const RequestIntercept = struct {
 };
 
 pub const RequestAuthRequired = struct {
+    transfer: *Transfer,
+    wait_for_interception: *bool,
+};
+
+// A final response or a redirect which has not be delivered to its consumer yet.
+pub const ResponseIntercept = struct {
     transfer: *Transfer,
     wait_for_interception: *bool,
 };
