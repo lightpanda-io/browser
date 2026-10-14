@@ -215,9 +215,18 @@ fn walkInteractive(
 
         // Not just the element's own display: a slotted element inherits
         // from its slot, which this light-tree walk never visits.
-        if (!el.isVisible(frame)) {
+        const owner = el.ownerFrame(frame) orelse {
             tw.skipChildren();
             continue;
+        };
+        switch (owner._style_manager.rendering(el)) {
+            .none => {
+                tw.skipChildren();
+                continue;
+            },
+            // A descendant can set visibility back to visible.
+            .invisible => continue,
+            .visible => {},
         }
 
         const html_el = el.is(Element.Html) orelse continue;
@@ -744,4 +753,16 @@ test "browser.interactive: hidden elements are skipped" {
     try testing.expectEqual(1, elements.len);
     try testing.expectEqual("button", elements[0].tag_name);
     try testing.expectEqual("Visible", elements[0].name.?);
+}
+
+test "browser.interactive: visibility:hidden elements are skipped" {
+    const elements = try testInteractive(
+        \\<button style="visibility:hidden">Inline</button>
+        \\<div style="visibility:hidden"><a href="/x">Ancestor</a><button style="visibility:visible">Visible again</button></div>
+        \\<button style="opacity:0">Transparent</button>
+    );
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(2, elements.len);
+    try testing.expectEqual("Visible again", elements[0].name.?);
+    try testing.expectEqual("Transparent", elements[1].name.?);
 }
