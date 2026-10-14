@@ -290,12 +290,12 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, exec: *const Execution
 
 /// pipeThrough(transform) — pipes this readable stream through a transform stream,
 /// returning the readable side. `transform` is a JS object with `readable` and `writable` properties.
-const PipeTransform = struct {
+pub const PipeTransform = struct {
     readable: *ReadableStream,
     writable: *WritableStream,
 };
 
-fn pipeThrough(self: *ReadableStream, transform: PipeTransform, exec: *const Execution) !*ReadableStream {
+pub fn pipeThrough(self: *ReadableStream, transform: PipeTransform, exec: *const Execution) !*ReadableStream {
     if (self.getLocked()) {
         return exec.js.typeError("ReadableStream is locked");
     }
