@@ -367,8 +367,6 @@ fn tearDownPage(self: *Session, page: *Page) void {
 // and `active`, leaving the session pageless (the caller is responsible
 // for any prior teardown of an old page).
 fn installNewActivePage(self: *Session, frame_id: u32) !*Frame {
-    _ = try self.getOrCreateNavigation(frame_id);
-
     const page = try self.allocatePage(frame_id);
     errdefer self.queuePageDestruction(page);
 
