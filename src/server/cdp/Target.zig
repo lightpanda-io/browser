@@ -289,10 +289,15 @@ pub fn findFrame(self: *const Target, frame_id: u32) ?*Frame {
 }
 
 // A transfer belongs to the page of the document that made it, a worker's
-// to its owner's. Transfers with no frame (e.g. a test's) go to the first
-// target.
+// to its owner's. By root_frame_id, not a frame lookup: a root navigation
+// unlinks the old page before aborting its transfers, and the failures of its
+// child frames' requests must still reach the target. Transfers with no frame
+// (e.g. a test's) go to the first target.
 fn ownsTransfer(self: *const Target, transfer: *const HttpClient.Transfer) bool {
     const req = &transfer.req;
+    if (req.root_frame_id != 0) {
+        return self.frame_id == req.root_frame_id;
+    }
     const frame_id = req.document_frame_id orelse req.frame_id;
     if (frame_id == 0) {
         return self.bc.firstTarget() == self;
