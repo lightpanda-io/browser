@@ -1688,6 +1688,13 @@ pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
         return own.value;
     }
 
+    if (axis == .width) {
+        const owner = self.ownerFrame(frame) orelse return own.value;
+        if (owner._style_manager.widthFromContainingBlock(self)) {
+            return own.value;
+        }
+    }
+
     return @max(own.value, self.contentAxis(frame, axis));
 }
 
@@ -1837,9 +1844,8 @@ fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
 // The dummy layout engine has no line-breaking, and an element only overflows
 // horizontally when its children don't wrap (white-space:nowrap, a flex row, an
 // inline-block strip), so the single-row assumption covers the case that
-// matters. We can't detect the layout mode to do better: existingStyle() sees only
-// the inline `style=` attribute, and the computed cascade resolves stylesheet
-// rules for `display:none` and `visibility` alone.
+// matters. We don't detect the layout mode to do better: the cascade resolves
+// too few properties to lay out lines.
 //
 // Only direct children are measured, never the whole subtree. This runs on
 // every size read, and recursing would make an element's cost O(subtree)

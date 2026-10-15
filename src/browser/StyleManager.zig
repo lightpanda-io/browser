@@ -58,6 +58,7 @@ visibility: Group(Visibility) = .{},
 geometry: Group(Geometry) = .{},
 touch_action: Group(TouchAction) = .{},
 text: Group(Text) = .{},
+flow: Group(Flow) = .{},
 
 // Keyed by property name, pruning to what is (hopefully) one or few rules
 custom_rules: std.StringHashMapUnmanaged(CustomProperty) = .empty,
@@ -757,6 +758,26 @@ pub fn inlineSize(self: *StyleManager, el: *Element, comptime axis: Element.Axis
     return length.resolve(self.frame.page.getViewport());
 }
 
+/// A block-level flex or grid container in normal flow, with an auto width,
+/// that isn't a flex or grid item itself. Its width comes from its containing
+/// block: its items overflow it instead of widening it.
+pub fn widthFromContainingBlock(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    if (!self.visibilityProps(el).block_flex_or_grid or self.geometryProps(el).width.unit != .auto) {
+        return false;
+    }
+    const flow = self.flow.ownProps(self.arena.allocator(), el, self.frame);
+    if (flow.absolutely_positioned or flow.floated) {
+        return false;
+    }
+    const parent = el.asNode().flatTreeParentElement(self.frame) orelse return true;
+    return switch (self.visibilityProps(parent).display) {
+        .flex, .grid => false,
+        else => true,
+    };
+}
+
 /// Callers must have run rebuildIfDirty, which resets the memo.
 fn visibilityProps(self: *StyleManager, el: *Element) Visibility.Computed {
     return self.visibility.inheritedProps(self.arena.allocator(), el, self.frame);
@@ -1355,14 +1376,18 @@ pub const TextTransform = enum(u3) {
 };
 
 /// A declared width or height. Values that need layout (auto, %, em) are
-/// `auto`: they win the cascade but give no size.
-pub const Length = packed struct(u34) {
+/// `auto`: they win the cascade but give no size. The intrinsic sizes, which
+/// follow the content, are `content`.
+pub const Length = packed struct(u35) {
     value: f32 = 0,
     unit: Unit = .auto,
 
-    const Unit = enum(u2) { auto, px, vw, vh };
+    const Unit = enum(u3) { auto, content, px, vw, vh };
 
     fn parse(text: []const u8) Length {
+        if (isIntrinsic(text)) {
+            return .{ .unit = .content };
+        }
         const parsed = units.parse(text) catch return .{};
         if (parsed.value < 0) {
             return .{};
@@ -1376,10 +1401,19 @@ pub const Length = packed struct(u34) {
         };
     }
 
+    fn isIntrinsic(text: []const u8) bool {
+        inline for (.{ "min-content", "max-content", "fit-content" }) |keyword| {
+            if (std.ascii.eqlIgnoreCase(text, keyword)) {
+                return true;
+            }
+        }
+        return std.ascii.startsWithIgnoreCase(text, "fit-content(");
+    }
+
     fn resolve(self: Length, viewport: Viewport) ?f64 {
         const value: f64 = self.value;
         return switch (self.unit) {
-            .auto => null,
+            .auto, .content => null,
             .px => value,
             .vw, .vh => value * @as(f64, @floatFromInt(if (self.unit == .vw) viewport.width else viewport.height)) / 100.0,
         };
@@ -1392,6 +1426,7 @@ const Visibility = struct {
         const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events" };
 
         display: ?Display = null,
+        block_flex_or_grid: ?bool = null,
         // Inner null: an explicit inherit, which still wins the cascade
         visibility_hidden: ??bool = null,
         opacity_zero: ?bool = null,
@@ -1400,6 +1435,7 @@ const Visibility = struct {
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "display")) {
                 self.display = Display.parse(value);
+                self.block_flex_or_grid = std.ascii.eqlIgnoreCase(value, "flex") or std.ascii.eqlIgnoreCase(value, "grid");
             } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
                 self.visibility_hidden = parseInheritedFlag(value, &.{ "hidden", "collapse" }, &.{ "visible", "initial" });
             } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
@@ -1419,6 +1455,7 @@ const Visibility = struct {
         // Author value (inline or sheet). Without `author_display` it's the UA
         // fallback: .none when matchesUaDisplayNoneRule, else .other.
         display: Display = .other,
+        block_flex_or_grid: bool = false,
         author_display: bool = false,
         // Null takes the parent's value
         visibility_hidden: ?bool = null,
@@ -1426,8 +1463,9 @@ const Visibility = struct {
         pointer_events_none: ?bool = null,
     };
 
-    const Computed = packed struct(u7) {
+    const Computed = packed struct(u8) {
         display: Display = .other,
+        block_flex_or_grid: bool = false,
         author_display: bool = false,
         visibility_hidden: bool = false, // inherited
         pointer_events_none: bool = false, // inherited
@@ -1437,6 +1475,7 @@ const Visibility = struct {
         fn resolve(own: Cascaded, parent: Computed) Computed {
             return .{
                 .display = own.display,
+                .block_flex_or_grid = own.block_flex_or_grid,
                 .author_display = own.author_display,
                 .visibility_hidden = own.visibility_hidden orelse parent.visibility_hidden,
                 .pointer_events_none = own.pointer_events_none orelse parent.pointer_events_none,
@@ -1508,7 +1547,7 @@ const Geometry = struct {
         }
     };
 
-    const Computed = packed struct(u72) {
+    const Computed = packed struct(u74) {
         overflow_x_scrolls: bool = false,
         overflow_y_scrolls: bool = false,
         overscroll_x_contains: bool = false,
@@ -1596,15 +1635,40 @@ const Text = struct {
     };
 };
 
+/// Whether a box is out of normal flow, which sizes it to its content.
+const Flow = struct {
+    const Declared = struct {
+        const names = [_][]const u8{ "position", "float" };
+
+        absolutely_positioned: ?bool = null,
+        floated: ?bool = null,
+
+        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
+            if (std.ascii.eqlIgnoreCase(name, "position")) {
+                self.absolutely_positioned = std.ascii.eqlIgnoreCase(value, "absolute") or std.ascii.eqlIgnoreCase(value, "fixed");
+            } else if (std.ascii.eqlIgnoreCase(name, "float")) {
+                self.floated = std.ascii.eqlIgnoreCase(value, "left") or std.ascii.eqlIgnoreCase(value, "right") or
+                    std.ascii.eqlIgnoreCase(value, "inline-start") or std.ascii.eqlIgnoreCase(value, "inline-end");
+            }
+        }
+    };
+
+    const Computed = packed struct(u2) {
+        absolutely_positioned: bool = false,
+        floated: bool = false,
+    };
+};
+
 /// Every group's share of one declaration block, so a sheet's block is folded
 /// once. Field names match the StyleManager's group fields.
 const Declarations = struct {
-    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names;
+    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names ++ Flow.Declared.names;
 
     visibility: Visibility.Declared = .{},
     geometry: Geometry.Declared = .{},
     touch_action: TouchAction.Declared = .{},
     text: Text.Declared = .{},
+    flow: Flow.Declared = .{},
 
     fn apply(self: *Declarations, name: []const u8, value: []const u8) void {
         inline for (group_fields) |field| {
@@ -2255,13 +2319,17 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         \\<i style="height: 10vh; height: auto"></i>
         \\<i style="width: 50%; height: -5px"></i>
         \\<i style="width: 2em !important; width: 10vw"></i>
+        \\<i style="display: flex"></i>
+        \\<i style="display: inline-grid"></i>
+        \\<i style="width: max-content; position: absolute; float: left"></i>
+        \\<i style="width: fit-content(10px); position: relative; float: none"></i>
     );
     const expected = [_]Declarations{
-        .{ .visibility = .{ .display = .none } },
-        .{ .visibility = .{ .display = .none } },
-        .{ .visibility = .{ .display = .none } },
-        .{ .visibility = .{ .display = .other } },
-        .{ .visibility = .{ .display = .none, .visibility_hidden = true } },
+        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false } },
+        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false } },
+        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false } },
+        .{ .visibility = .{ .display = .other, .block_flex_or_grid = false } },
+        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false, .visibility_hidden = true } },
         .{ .visibility = .{ .opacity_zero = true, .pointer_events_none = true } },
         .{ .visibility = .{ .opacity_zero = false, .pointer_events_none = true } },
         .{ .visibility = .{ .visibility_hidden = true } },
@@ -2278,6 +2346,10 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .geometry = .{ .height = .{} } },
         .{ .geometry = .{ .width = .{}, .height = .{} } },
         .{ .geometry = .{ .width = .{} } },
+        .{ .visibility = .{ .display = .flex, .block_flex_or_grid = true } },
+        .{ .visibility = .{ .display = .grid, .block_flex_or_grid = false } },
+        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = true, .floated = true } },
+        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = false, .floated = false } },
     };
 
     var i: usize = 0;
@@ -2289,6 +2361,7 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         try std.testing.expectEqual(expected[i], scanned);
         try std.testing.expectEqual(expected[i].visibility, inlineDeclared(Visibility.Declared, el, frame).props(.any));
         try std.testing.expectEqual(expected[i].geometry, inlineDeclared(Geometry.Declared, el, frame).props(.any));
+        try std.testing.expectEqual(expected[i].flow, inlineDeclared(Flow.Declared, el, frame).props(.any));
         // scanning never creates the style object
         try testing.expectEqual(null, el.existingStyle(frame));
         const materialized = extractDeclared(Declarations, try el.getOrCreateStyle(frame)).props(.any);
