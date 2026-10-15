@@ -68,6 +68,12 @@
     \\              cdp        Chrome DevTools Protocol (WebSocket on /).
     \\              webdriver  WebDriver BiDi (WebSocket on /session) plus the
     \\                         classic WebDriver session endpoints.
+    \\  --remote-allow-origins <ORIGIN>
+    \\          Origin (e.g. http://localhost:3000) allowed in the Origin header
+    \\          of CDP and BiDi WebSocket upgrades, or * to allow any. Can be
+    \\          passed multiple times. Upgrades without an Origin header are
+    \\          always accepted.
+    \\          Defaults to none, rejecting any upgrade that sends an Origin.
     ,
     .fetch =
     \\usage: {0s} fetch <url>... [OPTIONS] [COMMON_OPTIONS]
