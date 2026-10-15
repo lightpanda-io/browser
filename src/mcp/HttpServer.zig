@@ -639,6 +639,20 @@ fn testPost(allocator: std.mem.Allocator, port: u16, sid: []const u8, body: []co
     return out.toOwnedSlice();
 }
 
+/// Closes session `sid` the way a client does, with DELETE.
+fn testDelete(allocator: std.mem.Allocator, port: u16, sid: []const u8) !std.http.Status {
+    var client: std.http.Client = .{ .allocator = allocator, .io = lp.io };
+    defer client.deinit();
+    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/", .{port});
+    defer allocator.free(url);
+    const result = try client.fetch(.{
+        .location = .{ .url = url },
+        .method = .DELETE,
+        .extra_headers = &.{.{ .name = "mcp-session-id", .value = sid }},
+    });
+    return result.status;
+}
+
 const SlowCall = struct {
     port: u16,
     done: std.atomic.Value(bool) = .init(false),
@@ -671,6 +685,8 @@ test "HttpServer - sessions run on their own threads" {
     // A page that takes 1.5s to load in one session...
     var slow: SlowCall = .{ .port = port };
     const slow_thread = try std.Thread.spawn(.{}, SlowCall.run, .{&slow});
+    var slow_joined = false;
+    defer if (!slow_joined) slow_thread.join();
     lp.io.sleep(.fromMilliseconds(100), .awake) catch {};
 
     // ...doesn't hold up another session's load.
@@ -682,6 +698,7 @@ test "HttpServer - sessions run on their own threads" {
     try testing.expect(!slow.done.load(.acquire));
 
     slow_thread.join();
+    slow_joined = true;
     defer if (slow.response) |r| testing.allocator.free(r);
     try testing.expect(std.mem.find(u8, slow.response orelse "", "Navigated") != null);
 
@@ -694,22 +711,44 @@ test "HttpServer - sessions run on their own threads" {
     try testing.expect(std.mem.find(u8, list, "\\\"default\\\"") != null);
     try testing.expect(std.mem.find(u8, list, "\\\"slow\\\"") != null);
     try testing.expect(std.mem.find(u8, list, "delay_ms=1500") != null);
+    // Neither load reached the default session.
+    try testing.expect(std.mem.find(u8, list, "{\\\"id\\\":\\\"default\\\"}") != null);
+
+    const close_default = try testPost(testing.allocator, port, "fast",
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"default"}}}
+    );
+    defer testing.allocator.free(close_default);
+    try testing.expect(std.mem.find(u8, close_default, "cannot be closed") != null);
 
     const close_self = try testPost(testing.allocator, port, "fast",
-        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"fast"}}}
+        \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"fast"}}}
     );
     defer testing.allocator.free(close_self);
     try testing.expect(std.mem.find(u8, close_self, "attached to") != null);
 
     const closed = try testPost(testing.allocator, port, "fast",
-        \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"slow"}}}
+        \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"slow"}}}
     );
     defer testing.allocator.free(closed);
     try testing.expect(std.mem.find(u8, closed, "closed session slow") != null);
 
     const after = try testPost(testing.allocator, port, "fast",
-        \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"session_list"}}
+        \\{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"session_list"}}
     );
     defer testing.allocator.free(after);
     try testing.expect(std.mem.find(u8, after, "\\\"slow\\\"") == null);
+
+    // A call on a closed id starts a fresh session there, without the old page.
+    const reopened = try testPost(testing.allocator, port, "slow",
+        \\{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"session_list"}}
+    );
+    defer testing.allocator.free(reopened);
+    try testing.expect(std.mem.find(u8, reopened, "{\\\"id\\\":\\\"slow\\\"}") != null);
+
+    try testing.expectEqual(.accepted, try testDelete(testing.allocator, port, "slow"));
+    const deleted = try testPost(testing.allocator, port, "fast",
+        \\{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"session_list"}}
+    );
+    defer testing.allocator.free(deleted);
+    try testing.expect(std.mem.find(u8, deleted, "\\\"slow\\\"") == null);
 }
