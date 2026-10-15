@@ -20,6 +20,7 @@ const std = @import("std");
 
 const CDP = @import("../CDP.zig");
 const js = @import("../../../browser/js/js.zig");
+const Frame = @import("../../../browser/Frame.zig");
 const Notification = @import("../../../Notification.zig");
 const repeat = @import("../../../string.zig").repeat;
 
@@ -120,6 +121,13 @@ const RemoteObject = struct {
     }
 };
 
+// The frame an event happened in: its values are wrapped in that frame's
+// context, and its executionContextId is that context's. The main frame when
+// the frame is gone.
+fn eventFrame(target: *CDP.Target, frame_id: u32) ?*Frame {
+    return target.findFrame(frame_id) orelse target.mainFrame();
+}
+
 const ConsoleMessage = struct {
     type: []const u8,
     executionContextId: i32,
@@ -132,7 +140,7 @@ pub fn consoleMessage(arena: Allocator, target: *CDP.Target, event: *const Notif
     // minted on the primary's inspector session.
     const session_id = target.session_id orelse return;
     const inspector_session = try target.inspectorSession(session_id);
-    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
+    const frame = eventFrame(target, event.frame_id) orelse return error.FrameNotLoaded;
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -185,7 +193,7 @@ pub fn exceptionThrown(arena: Allocator, target: *CDP.Target, event: *const Noti
     // Like consoleAPICalled: the primary session's inspector mints the handle.
     const session_id = target.session_id orelse return;
     const inspector_session = try target.inspectorSession(session_id);
-    const frame = target.mainFrame() orelse return error.FrameNotLoaded;
+    const frame = eventFrame(target, event.frame_id) orelse return error.FrameNotLoaded;
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
