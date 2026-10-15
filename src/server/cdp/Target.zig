@@ -277,6 +277,17 @@ pub fn ownsFrame(self: *const Target, frame_id: u32) bool {
     return self.bc.targetForFrame(frame_id) == self;
 }
 
+// The frame `frame_id` of this target's page (popups included). null for a
+// frame of another target's page: its state (node registry, isolated worlds)
+// is cleaned up with that page, not this one.
+pub fn findFrame(self: *const Target, frame_id: u32) ?*Frame {
+    const frame = self.session.findFrameByFrameId(frame_id) orelse return null;
+    if (self.frame_id != frame.page.frame._frame_id) {
+        return null;
+    }
+    return frame;
+}
+
 // A transfer belongs to the page of the document that made it, a worker's
 // to its owner's. Transfers with no frame (e.g. a test's) go to the first
 // target.

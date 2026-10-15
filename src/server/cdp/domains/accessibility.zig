@@ -59,13 +59,12 @@ fn getFullAXTree(cmd: *CDP.Command) !void {
     const params: Params = (try cmd.params(Params)) orelse .{};
 
     const target = try cmd.target();
-    const session = target.session;
 
     const frame = blk: {
         const frame_id = params.frameId orelse {
             break :blk target.mainFrame() orelse return error.FrameNotLoaded;
         };
-        break :blk session.findFrameByFrameId(try id.parseFrameId(frame_id)) orelse {
+        break :blk target.findFrame(try id.parseFrameId(frame_id)) orelse {
             return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
         };
     };

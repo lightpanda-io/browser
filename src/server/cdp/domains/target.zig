@@ -451,6 +451,18 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
         filter: ?[]const TargetFilter = null,
     })) orelse return error.InvalidParams;
 
+    // Sent on a page session, it's about the page's own children (iframes,
+    // workers), which aren't targets here. Only the browser-level call
+    // decides whether new pages are auto-attached: chromedp sends it on its
+    // first tab, then attaches each new tab itself.
+    if (cmd.input.session_id) |session_id| {
+        if (cmd.browser_context) |bc| {
+            if (bc.attached_sessions.contains(session_id)) {
+                return cmd.sendResult(null, .{});
+            }
+        }
+    }
+
     // set a flag to send Target.attachedToTarget events
     cmd.cdp.target_auto_attach = params.autoAttach;
 
@@ -1371,6 +1383,31 @@ test "cdp.target: closing a target keeps the others" {
     try ctx.expectSentError(-31998, "UnknownTargetId", .{ .id = 5 });
 }
 
+// A target's state (node registry, isolated worlds) is cleaned up with its
+// own page only, so it must not take in another page's frames.
+test "cdp.target: a frame id of another target is rejected" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const targets = try createTargets(&ctx, 2);
+    const a = targets[0];
+    const b = targets[1];
+    const a_frame_id = &id.toFrameId(a.frame_id.?);
+    const b_frame_id = &id.toFrameId(b.frame_id.?);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Page.createIsolatedWorld", .sessionId = a.session_id.?, .params = .{ .frameId = b_frame_id, .worldName = "utility" } });
+    try ctx.expectSentError(-32000, "Frame with the given id does not belong to the target.", .{ .id = 2 });
+    try testing.expectEqual(0, a.isolated_worlds.items.len);
+
+    try ctx.processMessage(.{ .id = 3, .method = "Accessibility.getFullAXTree", .sessionId = a.session_id.?, .params = .{ .frameId = b_frame_id } });
+    try ctx.expectSentError(-32000, "Frame with the given id does not belong to the target.", .{ .id = 3 });
+
+    // The target's own frame still works.
+    try ctx.processMessage(.{ .id = 4, .method = "Page.createIsolatedWorld", .sessionId = a.session_id.?, .params = .{ .frameId = a_frame_id, .worldName = "utility" } });
+    try testing.expect(try sentResult(&ctx, 4) != null);
+    try testing.expectEqual(1, a.isolated_worlds.items.len);
+}
+
 test "cdp.target: createTarget is capped" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1378,4 +1415,30 @@ test "cdp.target: createTarget is capped" {
     _ = try createTargets(&ctx, CDP.Target.max_targets);
     try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
     try ctx.expectSentError(-32000, "Cannot have more than 16 targets at a time", .{ .id = 2 });
+}
+
+// chromedp's flow: auto-attach set on the first tab's session, then each new
+// tab created and attached explicitly. Each tab must get one session, which
+// receives its page's events.
+test "cdp.target: setAutoAttach on a page session doesn't attach new pages" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const first = bc.firstTarget().?;
+    try ctx.processMessage(.{ .id = 2, .method = "Target.attachToTarget", .params = .{ .targetId = &first.target_id.? } });
+    const first_session_id = first.session_id.?;
+
+    try ctx.processMessage(.{ .id = 3, .method = "Target.setAutoAttach", .sessionId = first_session_id, .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false, .flatten = true } });
+    try ctx.expectSentResult(null, .{ .id = 3, .session_id = first_session_id });
+    try testing.expectEqual(false, ctx.cdp().target_auto_attach);
+
+    try ctx.processMessage(.{ .id = 4, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const second = bc.targets.items[1];
+    try testing.expectEqual(null, second.session_id);
+
+    try ctx.processMessage(.{ .id = 5, .method = "Target.attachToTarget", .params = .{ .targetId = &second.target_id.? } });
+    try ctx.expectSentResult(.{ .sessionId = second.session_id.? }, .{ .id = 5 });
+    try testing.expectEqual(2, bc.attached_sessions.count());
 }
