@@ -26,6 +26,9 @@ const Element = @import("../../Element.zig");
 const collections = @import("../../collections.zig");
 
 const HtmlElement = @import("../Html.zig");
+const Table = @import("Table.zig");
+const Cell = @import("TableCell.zig");
+const Section = @import("TableSection.zig");
 
 const TableRow = @This();
 
@@ -45,6 +48,40 @@ fn getCells(self: *TableRow, frame: *Frame) collections.NodeLive(.cells) {
     return collections.NodeLive(.cells).init(self.asNode(), {}, frame);
 }
 
+fn insertCell(self: *TableRow, index: ?i32, frame: *Frame) !*Cell {
+    return Table.insertChild(self.asNode(), Cell, "td", index, frame);
+}
+
+fn deleteCell(self: *TableRow, index: i32, frame: *Frame) !void {
+    return Table.deleteChild(self.asNode(), Cell, index, frame);
+}
+
+fn getRowIndex(self: *TableRow) i32 {
+    const node = self.asNode();
+    const parent = node._parent orelse return -1;
+    if (parent.is(Table)) |table| {
+        return table.rowIndex(node);
+    }
+    if (parent.is(Section) == null) {
+        return -1;
+    }
+    const grandparent = parent._parent orelse return -1;
+    const table = grandparent.is(Table) orelse return -1;
+    return table.rowIndex(node);
+}
+
+fn getSectionRowIndex(self: *TableRow) i32 {
+    const node = self.asNode();
+    const parent = node._parent orelse return -1;
+    if (parent.is(Table)) |table| {
+        return table.rowIndex(node);
+    }
+    if (parent.is(Section) == null) {
+        return -1;
+    }
+    return Table.childIndex(parent, TableRow, node);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(TableRow);
 
@@ -62,4 +99,8 @@ pub const JsApi = struct {
     pub const @"align" = reflect.string("align");
 
     pub const cells = bridge.accessor(TableRow.getCells, null, .{});
+    pub const insertCell = bridge.function(TableRow.insertCell, .{ .ce_reactions = true });
+    pub const deleteCell = bridge.function(TableRow.deleteCell, .{ .ce_reactions = true });
+    pub const rowIndex = bridge.accessor(TableRow.getRowIndex, null, .{});
+    pub const sectionRowIndex = bridge.accessor(TableRow.getSectionRowIndex, null, .{});
 };
