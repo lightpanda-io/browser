@@ -305,6 +305,11 @@ _parent_notified: bool = false,
 // load the iframe, but we won't delay the parent
 _delays_parent_load: bool = true,
 
+// Set while window.load is being dispatched. A load handler that open()s,
+// write()s and close()s again gets readystatechange and DOMContentLoaded, but
+// not a nested load (as in Chrome).
+_load_event_in_progress: bool = false,
+
 _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
@@ -1478,29 +1483,16 @@ pub fn pendingLoadCompleted(self: *Frame) void {
 
 // A document.open() has been closed. If it was opened after it loaded, it
 // will re-trigger DOMContentLoaded and load.
-pub fn scriptCreatedParserDone(self: *Frame) !void {
+pub fn scriptCreatedParserDone(self: *Frame) void {
     switch (self._load_state) {
         .parsing, .load => {},
         .waiting => self._load_state = .parsing,
         .complete => {
-            // Queued, as in Chrome: firing from within document.close() lets
-            // a load handler that writes + closes again recurse into itself.
-            return self.js.scheduler.add(self, struct {
-                fn run(ctx: *anyopaque) !?u32 {
-                    const f: *Frame = @ptrCast(@alignCast(ctx));
-                    // re-opened since: its own close() queues the events
-                    if (f.document._script_created_parser != null) {
-                        return null;
-                    }
-                    f._load_state = .parsing;
-                    f._parent_notified = false;
-                    // the parent was already released the first time, we don't
-                    // want documentIsComplete to re-trigger it.
-                    f._delays_parent_load = false;
-                    f.documentIsComplete();
-                    return null;
-                }
-            }.run, 0, .{ .name = "frame.scriptCreatedParserDone" });
+            self._load_state = .parsing;
+            self._parent_notified = false;
+            // the parent was already released the first time, we don't
+            // want documentIsComplete to re-trigger it.
+            self._delays_parent_load = false;
         },
     }
     self.documentIsComplete();
@@ -1550,6 +1542,10 @@ fn _documentIsComplete(self: *Frame) !void {
     try self.dispatchQueuedEvents();
     if (self.loadEventsAborted()) return;
 
+    // A close() from within our own load handler: the outer dispatch
+    // finishes the load steps.
+    if (self._load_event_in_progress) return;
+
     // Dispatch window.load event.
     const window_target = self.window.asEventTarget();
     if (self._event_manager.hasDirectListeners(window_target, "load")) {
@@ -1557,6 +1553,8 @@ fn _documentIsComplete(self: *Frame) !void {
         // This event is weird, it's dispatched directly on the window, but
         // with the document as the target.
         event._target = self.document.asEventTarget();
+        self._load_event_in_progress = true;
+        defer self._load_event_in_progress = false;
         try self._event_manager.dispatchDirect(window_target, event, .{ .inject_target = false, .context = "page load" });
     }
 

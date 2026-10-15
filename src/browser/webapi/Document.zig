@@ -1321,7 +1321,7 @@ fn finishScriptCreatedParser(self: *Document, frame: *Frame) !void {
     // iframe written into via document.write), so we can't rely on it.
     frame._script_manager.base.scriptCreatedParseDone();
 
-    try frame.scriptCreatedParserDone();
+    frame.scriptCreatedParserDone();
 }
 
 fn getFirstElementChild(self: *Document) ?*Element {
