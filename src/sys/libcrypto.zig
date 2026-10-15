@@ -153,7 +153,36 @@ pub extern fn RSA_generate_key_ex(rsa: *RSA, bits: c_int, e: *const BIGNUM, cb: 
 pub extern fn RSAPublicKey_dup(rsa: *const RSA) ?*RSA;
 pub extern fn EVP_PKEY_set1_RSA(pkey: *EVP_PKEY, key: *RSA) c_int;
 pub extern fn EVP_PKEY_get0_RSA(pkey: *const EVP_PKEY) ?*RSA;
+pub extern fn RSA_get0_n(rsa: *const RSA) ?*const BIGNUM;
 pub extern fn RSA_get0_e(rsa: *const RSA) ?*const BIGNUM;
+pub extern fn RSA_get0_d(rsa: *const RSA) ?*const BIGNUM;
+pub extern fn RSA_get0_p(rsa: *const RSA) ?*const BIGNUM;
+pub extern fn RSA_get0_q(rsa: *const RSA) ?*const BIGNUM;
+pub extern fn RSA_get0_dmp1(rsa: *const RSA) ?*const BIGNUM;
+pub extern fn RSA_get0_dmq1(rsa: *const RSA) ?*const BIGNUM;
+pub extern fn RSA_get0_iqmp(rsa: *const RSA) ?*const BIGNUM;
+// Build a key from its components; NULL on error or an invalid (inconsistent) key.
+pub extern fn RSA_new_public_key(n: *const BIGNUM, e: *const BIGNUM) ?*RSA;
+pub extern fn RSA_new_private_key(
+    n: *const BIGNUM,
+    e: *const BIGNUM,
+    d: *const BIGNUM,
+    p: *const BIGNUM,
+    q: *const BIGNUM,
+    dmp1: *const BIGNUM,
+    dmq1: *const BIGNUM,
+    iqmp: *const BIGNUM,
+) ?*RSA;
+
+// DER encoders. With `*outp == null`, libcrypto allocates the output (release
+// it with OPENSSL_free) and stores it in `*outp`. Returns the length, or a
+// negative value on error.
+const struct_pkcs8_priv_key_info_st = opaque {};
+pub const PKCS8_PRIV_KEY_INFO = struct_pkcs8_priv_key_info_st;
+pub extern fn i2d_PUBKEY(pkey: *const EVP_PKEY, outp: *[*c]u8) c_int;
+pub extern fn EVP_PKEY2PKCS8(pkey: *const EVP_PKEY) ?*PKCS8_PRIV_KEY_INFO;
+pub extern fn i2d_PKCS8_PRIV_KEY_INFO(key: *const PKCS8_PRIV_KEY_INFO, outp: *[*c]u8) c_int;
+pub extern fn PKCS8_PRIV_KEY_INFO_free(key: ?*PKCS8_PRIV_KEY_INFO) void;
 
 pub extern fn BN_new() ?*BIGNUM;
 pub extern fn BN_free(bn: ?*BIGNUM) void;

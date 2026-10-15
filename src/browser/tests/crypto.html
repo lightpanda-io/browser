@@ -234,6 +234,176 @@
   });
 </script>
 
+<script id=rsa-oaep-export type=module>
+  const state = await testing.async();
+  const algo = { name: "RSA-OAEP", hash: "SHA-256" };
+  const { privateKey, publicKey } = await crypto.subtle.generateKey(
+    { ...algo, modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) },
+    true,
+    ["encrypt", "decrypt"],
+  );
+  const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+  const msg = new TextEncoder().encode("exported key path");
+  const roundTrip = async (pub, priv) =>
+    new TextDecoder().decode(await crypto.subtle.decrypt(algo, priv, await crypto.subtle.encrypt(algo, pub, msg)));
+
+  // DER: spki and pkcs8 survive an import/export round trip byte for byte.
+  const spki = await crypto.subtle.exportKey("spki", publicKey);
+  const pkcs8 = await crypto.subtle.exportKey("pkcs8", privateKey);
+  const spkiKey = await crypto.subtle.importKey("spki", spki, algo, true, ["encrypt"]);
+  const pkcs8Key = await crypto.subtle.importKey("pkcs8", pkcs8, algo, true, ["decrypt"]);
+  const spkiAgain = await crypto.subtle.exportKey("spki", spkiKey);
+  const pkcs8Again = await crypto.subtle.exportKey("pkcs8", pkcs8Key);
+
+  // JWK: the public members on both halves, the private ones on the private key.
+  const publicJwk = await crypto.subtle.exportKey("jwk", publicKey);
+  const privateJwk = await crypto.subtle.exportKey("jwk", privateKey);
+  const jwkPublicKey = await crypto.subtle.importKey("jwk", publicJwk, algo, true, ["encrypt"]);
+  const jwkPrivateKey = await crypto.subtle.importKey("jwk", privateJwk, algo, true, ["decrypt"]);
+  const privateJwkAgain = await crypto.subtle.exportKey("jwk", jwkPrivateKey);
+
+  // A JWK without `alg`, `ext` or `key_ops` imports too; SHA-1 is plain "RSA-OAEP".
+  const bare = await crypto.subtle.importKey("jwk", { kty: "RSA", n: publicJwk.n, e: publicJwk.e }, { name: "RSA-OAEP", hash: "SHA-1" }, true, ["encrypt"]);
+  const bareJwk = await crypto.subtle.exportKey("jwk", bare);
+  // Each hash has its own `alg`, which a JWK import accepts back.
+  const algs = [];
+  for (const hash of ["SHA-1", "SHA-256", "SHA-384", "SHA-512"]) {
+    const key = await crypto.subtle.importKey("jwk", { kty: "RSA", n: publicJwk.n, e: publicJwk.e }, { name: "RSA-OAEP", hash }, true, ["encrypt"]);
+    const { alg } = await crypto.subtle.exportKey("jwk", key);
+    await crypto.subtle.importKey("jwk", { kty: "RSA", n: publicJwk.n, e: publicJwk.e, alg }, { name: "RSA-OAEP", hash }, true, ["encrypt"]);
+    algs.push(alg);
+  }
+
+  const results = {
+    viaSpki: await roundTrip(spkiKey, privateKey),
+    viaPkcs8: await roundTrip(publicKey, pkcs8Key),
+    viaJwk: await roundTrip(jwkPublicKey, jwkPrivateKey),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(hex(spki), hex(spkiAgain));
+    testing.expectEqual(hex(pkcs8), hex(pkcs8Again));
+    testing.expectEqual("public", spkiKey.type);
+    testing.expectEqual("private", pkcs8Key.type);
+    testing.expectEqual("RSA,RSA-OAEP-256,AQAB,true", [publicJwk.kty, publicJwk.alg, publicJwk.e, publicJwk.ext].join(","));
+    testing.expectEqual("encrypt", publicJwk.key_ops.join(","));
+    testing.expectEqual(false, "d" in publicJwk);
+    testing.expectEqual("decrypt", privateJwk.key_ops.join(","));
+    testing.expectEqual(publicJwk.n, privateJwk.n);
+    testing.expectEqual(6, ["d", "dp", "dq", "p", "q", "qi"].filter((m) => typeof privateJwk[m] === "string" && privateJwk[m].length > 0).length);
+    testing.expectEqual(JSON.stringify(privateJwk), JSON.stringify(privateJwkAgain));
+    testing.expectEqual("private", jwkPrivateKey.type);
+    testing.expectEqual(1024, jwkPrivateKey.algorithm.modulusLength);
+    testing.expectEqual("1,0,1", jwkPrivateKey.algorithm.publicExponent.join(","));
+    testing.expectEqual("exported key path", results.viaSpki);
+    testing.expectEqual("exported key path", results.viaPkcs8);
+    testing.expectEqual("exported key path", results.viaJwk);
+    testing.expectEqual("RSA-OAEP", bareJwk.alg);
+    testing.expectEqual("SHA-1", bare.algorithm.hash.name);
+    testing.expectEqual("RSA-OAEP,RSA-OAEP-256,RSA-OAEP-384,RSA-OAEP-512", algs.join(","));
+  });
+</script>
+
+<script id=rsa-oaep-jwk-errors type=module>
+  const state = await testing.async();
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const algo = { name: "RSA-OAEP", hash: "SHA-256" };
+  const gen = (extractable) => crypto.subtle.generateKey(
+    { ...algo, modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) },
+    extractable,
+    ["encrypt", "decrypt"],
+  );
+  const { privateKey, publicKey } = await gen(true);
+  const locked = await gen(false);
+  const pub = await crypto.subtle.exportKey("jwk", publicKey);
+  const priv = await crypto.subtle.exportKey("jwk", privateKey);
+  const importPublic = (jwk, extractable = true, usages = ["encrypt"]) =>
+    errorName(() => crypto.subtle.importKey("jwk", jwk, algo, extractable, usages));
+  const importPrivate = (jwk, usages = ["decrypt"]) =>
+    errorName(() => crypto.subtle.importKey("jwk", jwk, algo, true, usages));
+  // base64url of the member's bytes with a 0x00 octet in front.
+  const zeroPrefixed = (b64url) => {
+    const raw = atob(b64url.replace(/-/g, "+").replace(/_/g, "/"));
+    return btoa("\0" + raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  };
+  const { qi, ...withoutQi } = priv;
+  const { kty, ...withoutKty } = pub;
+  // Without key_ops, so the usage check (SyntaxError) is the one that fails.
+  const { key_ops: _publicOps, ...pubNoOps } = pub;
+  const { key_ops: _privateOps, ...privNoOps } = priv;
+
+  const results = {
+    // exportKey: each DER format belongs to one half; a non-extractable key exports nothing.
+    spkiOfPrivate: await errorName(() => crypto.subtle.exportKey("spki", privateKey)),
+    pkcs8OfPublic: await errorName(() => crypto.subtle.exportKey("pkcs8", publicKey)),
+    notExtractable: await errorName(() => crypto.subtle.exportKey("jwk", locked.privateKey)),
+    // importKey: the format and the key data must agree.
+    jwkFromBytes: await errorName(() => crypto.subtle.importKey("jwk", new Uint8Array(8), algo, true, ["encrypt"])),
+    spkiFromJwk: await errorName(() => crypto.subtle.importKey("spki", pub, algo, true, ["encrypt"])),
+    // The usages must fit the half the JWK describes (`d` makes it private).
+    privateForEncrypt: await importPrivate(privNoOps, ["encrypt"]),
+    publicForDecrypt: await importPublic(pubNoOps, true, ["decrypt"]),
+    // kty, use and alg are matched case-sensitively; alg must name the requested hash.
+    ktyMissing: await importPublic(withoutKty),
+    ktyEc: await importPublic({ ...pub, kty: "EC" }),
+    ktyLower: await importPublic({ ...pub, kty: "rsa" }),
+    useSig: await importPublic({ ...pub, use: "sig" }),
+    algOtherHash: await importPublic({ ...pub, alg: "RSA-OAEP" }),
+    algLower: await importPublic({ ...pub, alg: "rsa-oaep-256" }),
+    algUnknown: await importPublic({ ...pub, alg: "RS256" }),
+    // ext and key_ops can only narrow what is asked for.
+    extFalse: await importPublic({ ...pub, ext: false }),
+    extFalseLocked: await importPublic({ ...pub, ext: false }, false),
+    keyOpsMissing: await importPublic({ ...pub, key_ops: ["wrapKey"] }),
+    keyOpsDuplicate: await importPublic({ ...pub, key_ops: ["encrypt", "encrypt"] }),
+    keyOpsWider: await importPublic({ ...pub, key_ops: ["encrypt", "wrapKey"] }),
+    // The members must be present, minimal, well-formed, and make a valid key.
+    missingN: await importPublic({ kty: "RSA", e: pub.e }),
+    emptyE: await importPublic({ ...pub, e: "" }),
+    leadingZero: await importPublic({ ...pub, n: zeroPrefixed(pub.n) }),
+    notBase64: await importPublic({ ...pub, n: "!!!" }),
+    missingQi: await importPrivate(withoutQi),
+    wrongD: await importPrivate({ ...priv, d: priv.dp }),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("InvalidAccessError", results.spkiOfPrivate);
+    testing.expectEqual("InvalidAccessError", results.pkcs8OfPublic);
+    testing.expectEqual("InvalidAccessError", results.notExtractable);
+    testing.expectEqual("TypeError", results.jwkFromBytes);
+    testing.expectEqual("TypeError", results.spkiFromJwk);
+    testing.expectEqual("SyntaxError", results.privateForEncrypt);
+    testing.expectEqual("SyntaxError", results.publicForDecrypt);
+    testing.expectEqual("DataError", results.ktyMissing);
+    testing.expectEqual("DataError", results.ktyEc);
+    testing.expectEqual("DataError", results.ktyLower);
+    testing.expectEqual("DataError", results.useSig);
+    testing.expectEqual("DataError", results.algOtherHash);
+    testing.expectEqual("DataError", results.algLower);
+    testing.expectEqual("DataError", results.algUnknown);
+    testing.expectEqual("DataError", results.extFalse);
+    testing.expectEqual(null, results.extFalseLocked);
+    testing.expectEqual("DataError", results.keyOpsMissing);
+    testing.expectEqual("DataError", results.keyOpsDuplicate);
+    testing.expectEqual(null, results.keyOpsWider);
+    testing.expectEqual("DataError", results.missingN);
+    testing.expectEqual("DataError", results.emptyE);
+    testing.expectEqual("DataError", results.leadingZero);
+    testing.expectEqual("DataError", results.notBase64);
+    testing.expectEqual("DataError", results.missingQi);
+    testing.expectEqual("DataError", results.wrongD);
+  });
+</script>
+
 <script id=aes-ctr-counter-wrap type=module>
   const state = await testing.async();
   // AES-CTR must increment only the rightmost `length` bits of the counter
