@@ -2434,6 +2434,10 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
     try Frame.init(popup, frame_id, page, .{});
     errdefer popup.deinit();
 
+    // A popup is a top-level browsing context: it has its own session history.
+    try session.createNavigation(popup);
+    errdefer session.removeNavigation(frame_id);
+
     popup.window._opener = opts.opener;
 
     if (opts.name.len > 0 and

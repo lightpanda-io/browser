@@ -296,11 +296,17 @@ pub fn deinit(self: *Page) void {
     log.log(.frame, self.log_context.max_level, "navigation done", .{ .url = self.frame.url });
 
     for (self.popups.items) |popup| {
+        self.session.removeNavigation(popup._frame_id);
         popup.deinit();
     }
     self.popups = .empty;
 
     for (self.closed_frames.items) |frame| {
+        if (frame.parent == null) {
+            // A closed popup: its window stayed reachable until now, and so
+            // did its session history.
+            self.session.removeNavigation(frame._frame_id);
+        }
         frame.deinit();
     }
     self.closed_frames = .empty;

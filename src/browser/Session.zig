@@ -394,20 +394,7 @@ pub fn createPage(self: *Session) !PageHandle {
     const frame = try self.installNewActivePage(frame_id);
 
     frame.document._ready_state = .complete;
-
-    // https://html.spec.whatwg.org/multipage/document-sequences.html --
-    // Creating a new browsing context always produces an initial about:blank
-    // Document with its own session history entry, even before any real
-    // navigation happens. Without this, navigation.currentEntry crashes on
-    // a page that hasn't navigated yet.
-    const navigation = self.navigationFor(frame);
-    _ = try navigation.pushEntry(
-        frame.url,
-        .{ .source = .navigation, .value = null },
-        frame,
-        false,
-    );
-    navigation._initial_entry = true;
+    try self.createNavigation(frame);
 
     return .{ .session = self, .frame_id = frame_id };
 }
@@ -424,8 +411,31 @@ pub fn closePage(self: *Session, frame_id: u32) void {
         self.discardPendingPage(pending);
     }
     self.tearDownPage(live);
-    // Unlike a root navigation, this browsing context is gone for good. The
-    // Navigation's memory lives in the session arena.
+    // Unlike a root navigation, this browsing context is gone for good.
+    self.removeNavigation(frame_id);
+}
+
+// Creates the session history of `frame`, a new top-level browsing context:
+// a page's root frame or a popup.
+// https://html.spec.whatwg.org/multipage/document-sequences.html --
+// Creating a new browsing context always produces an initial about:blank
+// Document with its own session history entry, even before any real
+// navigation happens. Without this, navigation.currentEntry crashes on
+// a browsing context that hasn't navigated yet.
+pub fn createNavigation(self: *Session, frame: *Frame) !void {
+    const navigation = try self.getOrCreateNavigation(frame._frame_id);
+    _ = try navigation.pushEntry(
+        frame.url,
+        .{ .source = .navigation, .value = null },
+        frame,
+        false,
+    );
+    navigation._initial_entry = true;
+}
+
+// Drops the session history of the top-level browsing context `frame_id`.
+// The Navigation's memory lives in the session arena.
+pub fn removeNavigation(self: *Session, frame_id: u32) void {
     _ = self.navigations.remove(frame_id);
 }
 
@@ -442,10 +452,14 @@ fn getOrCreateNavigation(self: *Session, frame_id: u32) !*Navigation {
     return gop.value_ptr.*;
 }
 
-// The session history of `frame`'s top-level browsing context. Child frames
-// and popups share their page's.
+// The session history of `frame`'s top-level browsing context: its page's
+// root frame or a popup, both without a parent. Child frames share theirs.
 pub fn navigationFor(self: *const Session, frame: *const Frame) *Navigation {
-    return self.navigations.get(frame.page.frame._frame_id) orelse {
+    var top = frame;
+    while (top.parent) |parent| {
+        top = parent;
+    }
+    return self.navigations.get(top._frame_id) orelse {
         lp.assert(false, "Session.navigationFor no navigation", .{ .frame_id = frame._frame_id });
     };
 }
@@ -1174,6 +1188,25 @@ test "Session: each page has its own session history" {
 
     try testing.expectEqual(3, session.navigationFor(a)._entries.items.len);
     try testing.expectEqual(1, session.navigationFor(b)._entries.items.len);
+}
+
+test "Session: a popup has its own session history" {
+    const session = testing.test_session;
+    defer session.closeAllPages();
+
+    const frame = (try session.createPage()).frame().?;
+    const popup = try frame.openPopup(.{ .url = "about:blank", .name = "", .opener = frame.window });
+    try testing.expect(session.navigationFor(frame) != session.navigationFor(popup));
+
+    const js = @import("js/js.zig");
+    var ls: js.Local.Scope = undefined;
+    popup.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec("history.pushState(null, '', '#one')", null);
+
+    try testing.expectEqual(1, session.navigationFor(frame)._entries.items.len);
+    try testing.expectEqual("about:blank", session.navigationFor(frame).getCurrentEntry()._url.?);
+    try testing.expectEqual("about:blank#one", session.navigationFor(popup).getCurrentEntry()._url.?);
 }
 
 test "Session: console capture runs no page JS" {
