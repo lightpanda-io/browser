@@ -1159,11 +1159,8 @@ test "agent script runtime: page.classify executes presets, categories and struc
 test "agent script runtime: page.classify missing API key throws" {
     defer testing.test_session.closeAllPages();
 
-    // Drop the cached client so the key is resolved again.
-    if (testing.test_app.typesafe_client) |*c| {
-        c.deinit();
-        testing.test_app.typesafe_client = null;
-    }
+    // Drop the cached clients so the key is resolved again.
+    testing.test_app.dropTypesafeClients();
     _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
 
     var registry = NodeRegistry.init(testing.allocator);
