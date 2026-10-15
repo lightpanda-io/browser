@@ -450,7 +450,8 @@ fn getNavigationHistory(cmd: *CDP.Command) !void {
         return error.SessionIdNotLoaded;
     }
 
-    const nav = bc.session.navigation;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const nav = bc.session.navigationFor(frame);
     const entries_in = nav._entries.items;
 
     const entries_out = try cmd.arena.alloc(NavigationEntry, entries_in.len);
@@ -485,7 +486,8 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
     }
 
     const session = bc.session;
-    const nav = session.navigation;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const nav = session.navigationFor(frame);
 
     var target_index: ?usize = null;
     var target_url: ?[:0]const u8 = null;
@@ -500,8 +502,6 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
 
     const idx = target_index orelse return error.InvalidParams;
     const url = target_url orelse return error.InvalidParams;
-
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const opts = Frame.NavigateOpts{
         .reason = .history,

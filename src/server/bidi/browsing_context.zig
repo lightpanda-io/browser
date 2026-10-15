@@ -312,7 +312,7 @@ fn startNavigation(cmd: *BiDi.Command, ctx: *Context, frame: *Frame, url: [:0]co
 
 // Whether the session history has an entry `delta` steps from the current one.
 pub fn canTraverse(frame: *const Frame, delta: i32) bool {
-    const navigation = frame._session.navigation;
+    const navigation = frame._session.navigationFor(frame);
     const target = @as(i64, @intCast(navigation._index)) + delta;
     return target >= 0 and target < navigation._entries.items.len;
 }

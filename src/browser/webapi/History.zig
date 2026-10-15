@@ -30,11 +30,11 @@ const ScrollRestoration = enum { auto, manual };
 _scroll_restoration: ScrollRestoration = .auto,
 
 pub fn getLength(_: *const History, frame: *Frame) u32 {
-    return @intCast(frame._session.navigation._entries.items.len);
+    return @intCast(frame._session.navigationFor(frame)._entries.items.len);
 }
 
 pub fn getState(_: *const History, frame: *Frame) !?js.Value {
-    if (frame._session.navigation.getCurrentEntry()._state.value) |state| {
+    if (frame._session.navigationFor(frame).getCurrentEntry()._state.value) |state| {
         const value = try frame.js.local.?.parseJSON(state);
         return value;
     } else return null;
@@ -59,7 +59,7 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
         try arena.dupeSentinel(u8, frame.url, 0);
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
-    _ = try session.navigation.pushEntry(url, .{ .source = .history, .value = json }, frame, true);
+    _ = try session.navigationFor(frame).pushEntry(url, .{ .source = .history, .value = json }, frame, true);
 
     frame.url = url;
     // setHref == reinitializing.
@@ -83,7 +83,7 @@ fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8,
         try arena.dupeSentinel(u8, frame.url, 0);
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
-    _ = try session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, frame, true);
+    _ = try session.navigationFor(frame).replaceEntry(url, .{ .source = .history, .value = json }, frame, true);
 
     frame.url = url;
     // setHref == reinitializing.
@@ -101,19 +101,20 @@ fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8,
 fn goInner(delta: i32, frame: *Frame) !void {
     // 0 behaves the same as no argument, both reloading the frame.
 
-    const current = frame._session.navigation._index;
+    const navigation = frame._session.navigationFor(frame);
+    const current = navigation._index;
     const index_s: i64 = @intCast(@as(i64, @intCast(current)) + @as(i64, @intCast(delta)));
-    if (index_s < 0 or index_s > frame._session.navigation._entries.items.len - 1) {
+    if (index_s < 0 or index_s > navigation._entries.items.len - 1) {
         return;
     }
 
     const index = @as(usize, @intCast(index_s));
-    const entry = frame._session.navigation._entries.items[index];
+    const entry = navigation._entries.items[index];
     // popstate fires on the document that stays; a traversal to another
     // document replaces this one instead.
     const same_document = entry.sameDocument(frame);
 
-    _ = try frame._session.navigation.navigateInner(entry._url, .{ .traverse = index }, frame);
+    _ = try navigation.navigateInner(entry._url, .{ .traverse = index }, frame);
 
     if (same_document) {
         try firePopState(frame, entry._state.value);

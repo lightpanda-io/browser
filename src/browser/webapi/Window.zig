@@ -355,7 +355,7 @@ pub fn getHistory(self: *Window) *History {
 }
 
 fn getNavigation(_: *Window, frame: *Frame) *Navigation {
-    return frame._session.navigation;
+    return frame._session.navigationFor(frame);
 }
 
 fn setNavigation(self: *Window, value: js.Value) void {
