@@ -377,13 +377,29 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
         return error.CacheEntryNotFound;
     }
 
-    // Clear old non-Vary headers.
-    try conn.exec("delete from header where url = $1 and vary = false", .{req.url});
-
+    // replace headers with the same name.
     var lower_name: [256]u8 = undefined;
     for (req.headers) |h| {
-        if (h.name.len > lower_name.len) return error.HeaderNameTooLong;
+        if (h.name.len > lower_name.len) {
+            return error.HeaderNameTooLong;
+        }
         const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
+        if (std.mem.eql(u8, name, "content-length")) {
+            // content-length describes the 304 response itself
+            continue;
+        }
+
+        try conn.exec(
+            "delete from header where url = $1 and name = $2 and vary = false",
+            .{ req.url, name },
+        );
+    }
+
+    for (req.headers) |h| {
+        const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
+        if (std.mem.eql(u8, name, "content-length")) {
+            continue;
+        }
         try conn.exec(
             "insert into header (url, name, value, vary) values ($1, $2, $3, false)",
             .{ req.url, name, Blob{ .data = h.value } },
@@ -924,6 +940,66 @@ test "SqliteCache: renew preserves body" {
     );
     try testing.expect(result == .hit);
     try testing.expectEqualStrings("original body", result.hit.data.buffer);
+}
+
+test "SqliteCache: renew merges the 304's headers into the stored ones" {
+    var cache = try setupCache(testing.allocator);
+    defer cache.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
+    try cache.put(.{
+        .url = "https://example.com",
+        .content_type = "application/json",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 0 },
+        .etag = "\"v1\"",
+        .headers = &.{
+            .{ .name = "Content-Type", .value = "application/json" },
+            .{ .name = "Content-Length", .value = "11" },
+            .{ .name = "ETag", .value = "\"v1\"" },
+            .{ .name = "Link", .value = "</old>" },
+        },
+        .vary_headers = &.{.{ .name = "Accept-Encoding", .value = "gzip" }},
+    }, "hello world");
+
+    try cache.renew(arena.allocator(), .{
+        .url = "https://example.com",
+        .timestamp = now + 100,
+        .headers = &.{
+            .{ .name = "etag", .value = "\"v2\"" },
+            .{ .name = "cache-control", .value = "max-age=600" },
+            .{ .name = "content-length", .value = "0" },
+            .{ .name = "link", .value = "</a>" },
+            .{ .name = "link", .value = "</b>" },
+        },
+    });
+
+    const result = try cache.get(arena.allocator(), .{
+        .url = "https://example.com",
+        .timestamp = now + 100,
+        .request_headers = &.{.{ .name = "Accept-Encoding", .value = "gzip" }},
+    });
+    try testing.expect(result == .hit);
+
+    const expected = [_]Http.Header{
+        .{ .name = "content-type", .value = "application/json" },
+        .{ .name = "content-length", .value = "11" },
+        .{ .name = "etag", .value = "\"v2\"" },
+        .{ .name = "cache-control", .value = "max-age=600" },
+        .{ .name = "link", .value = "</a>" },
+        .{ .name = "link", .value = "</b>" },
+    };
+    const headers = result.hit.headers;
+    try testing.expectEqual(expected.len, headers.len);
+    for (expected, headers) |e, h| {
+        try testing.expectEqualStrings(e.name, h.name);
+        try testing.expectEqualStrings(e.value, h.value);
+    }
 }
 
 test "SqliteCache: maintenance purges expired entries without validators" {
