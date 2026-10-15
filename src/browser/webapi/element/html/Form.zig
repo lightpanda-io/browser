@@ -35,6 +35,7 @@ pub const Button = @import("Button.zig");
 pub const Select = @import("Select.zig");
 pub const TextArea = @import("TextArea.zig");
 const Output = @import("Output.zig");
+const ValidityState = @import("ValidityState.zig");
 
 const NodeLive = collections.NodeLive;
 const HTMLFormControlsCollection = collections.HTMLFormControlsCollection;
@@ -323,7 +324,7 @@ pub fn checkValidity(self: *Form, frame: *Frame) !bool {
     var iter = self.iterator(.{}, frame);
     var all_valid = true;
     while (iter.next()) |element| {
-        const ok = try checkElementValidity(element, frame);
+        const ok = try ValidityState.checkValidity(element, frame);
         if (!ok) all_valid = false;
     }
     return all_valid;
@@ -333,18 +334,6 @@ pub fn checkValidity(self: *Form, frame: *Frame) !bool {
 /// Headless: identical to checkValidity (no UI to draw).
 fn reportValidity(self: *Form, frame: *Frame) !bool {
     return self.checkValidity(frame);
-}
-
-fn checkElementValidity(element: *Element, frame: *Frame) !bool {
-    if (element.is(Input)) |input| return input.checkValidity(frame);
-    if (element.is(Select)) |select| return select.checkValidity(frame);
-    if (element.is(TextArea)) |textarea| return textarea.checkValidity(frame);
-    if (element.is(Button)) |button| return button.checkValidity(frame);
-    if (element.is(Custom)) |custom| {
-        const internals = custom._internals orelse return true;
-        return internals.checkValidity(frame);
-    }
-    return true;
 }
 
 pub fn getNoValidate(self: *const Form) bool {

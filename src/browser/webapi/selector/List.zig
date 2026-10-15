@@ -23,6 +23,7 @@ const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 
 const Node = @import("../Node.zig");
+const ValidityState = @import("../element/html/ValidityState.zig");
 const Part = @import("Selector.zig").Part;
 const Selector = @import("Selector.zig");
 const TreeWalker = @import("../TreeWalker.zig").Full;
@@ -568,40 +569,16 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
 
         // Form validation
         .valid => {
-            if (el.is(Node.Element.Html.Input)) |input| {
-                return switch (input._input_type) {
-                    .hidden, .submit, .reset, .button => false,
-                    else => !input.getRequired() or input.getValue().len > 0,
-                };
-            }
-            if (el.is(Node.Element.Html.Select)) |select| {
-                return !select.getRequired() or select.getValue(frame).len > 0;
-            }
             if (el.is(Node.Element.Html.Form) != null or el.is(Node.Element.Html.FieldSet) != null) {
                 return !hasInvalidDescendant(node, frame);
             }
-            if (el.is(Node.Element.Html.Custom)) |custom| {
-                return isCustomValid(custom) orelse false;
-            }
-            return false;
+            return ValidityState.isValid(el, frame) orelse false;
         },
         .invalid => {
-            if (el.is(Node.Element.Html.Input)) |input| {
-                return switch (input._input_type) {
-                    .hidden, .submit, .reset, .button => false,
-                    else => input.getRequired() and input.getValue().len == 0,
-                };
-            }
-            if (el.is(Node.Element.Html.Select)) |select| {
-                return select.getRequired() and select.getValue(frame).len == 0;
-            }
             if (el.is(Node.Element.Html.Form) != null or el.is(Node.Element.Html.FieldSet) != null) {
                 return hasInvalidDescendant(node, frame);
             }
-            if (el.is(Node.Element.Html.Custom)) |custom| {
-                return isCustomValid(custom) == false;
-            }
-            return false;
+            return ValidityState.isValid(el, frame) == false;
         },
         .required => {
             return el.hasAttributeInterned("required");
@@ -772,34 +749,11 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
     }
 }
 
-fn isCustomValid(custom: *Node.Element.Html.Custom) ?bool {
-    if (custom.isFormAssociated() == false) {
-        // matches neither:valid nor :invalid
-        return null;
-    }
-    if (custom.willValidate() == false) {
-        // matches neither:valid nor :invalid
-        return null;
-    }
-    const internals = custom._internals orelse return true;
-    return internals._flags.any() == false;
-}
-
 fn hasInvalidDescendant(parent: *Node, frame: *Frame) bool {
     var child = parent.firstChild();
     while (child) |c| {
         if (c.is(Node.Element)) |child_el| {
-            if (child_el.is(Node.Element.Html.Input)) |input| {
-                const invalid = switch (input._input_type) {
-                    .hidden, .submit, .reset, .button => false,
-                    else => input.getRequired() and input.getValue().len == 0,
-                };
-                if (invalid) return true;
-            } else if (child_el.is(Node.Element.Html.Select)) |select| {
-                if (select.getRequired() and select.getValue(frame).len == 0) return true;
-            } else if (child_el.is(Node.Element.Html.Custom)) |custom| {
-                if (isCustomValid(custom) == false) return true;
-            }
+            if (ValidityState.isValid(child_el, frame) == false) return true;
         }
         if (hasInvalidDescendant(c, frame)) return true;
         child = c.nextSibling();

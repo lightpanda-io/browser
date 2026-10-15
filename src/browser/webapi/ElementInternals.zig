@@ -23,7 +23,6 @@ const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 
 const Node = @import("Node.zig");
-const Event = @import("Event.zig");
 const Element = @import("Element.zig");
 const Blob = @import("Blob.zig");
 const File = @import("File.zig");
@@ -291,18 +290,9 @@ fn normalizeNewlines(message: []const u8, frame: *Frame) ![]const u8 {
     return out.items;
 }
 
-pub fn checkValidity(self: *ElementInternals, frame: *Frame) !bool {
-    if (!self.willValidate() or !self._flags.any()) {
-        return true;
-    }
-    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame.page);
-    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
-    return false;
-}
-
-fn _checkValidity(self: *ElementInternals, frame: *Frame) !bool {
+fn checkValidity(self: *ElementInternals, frame: *Frame) !bool {
     try self.assertFormAssociated();
-    return self.checkValidity(frame);
+    return ValidityState.checkValidity(self.asElement(), frame);
 }
 
 pub const JsApi = struct {
@@ -324,8 +314,8 @@ pub const JsApi = struct {
     pub const willValidate = bridge.accessor(ElementInternals.getWillValidate, null, .{});
     pub const validity = bridge.accessor(ElementInternals.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(ElementInternals.getValidationMessage, null, .{});
-    pub const checkValidity = bridge.function(ElementInternals._checkValidity, .{});
-    pub const reportValidity = bridge.function(ElementInternals._checkValidity, .{});
+    pub const checkValidity = bridge.function(ElementInternals.checkValidity, .{});
+    pub const reportValidity = bridge.function(ElementInternals.checkValidity, .{});
 
     // ARIAMixin
     pub const role = ariaAccessor("role");
