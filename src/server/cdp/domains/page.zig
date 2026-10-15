@@ -273,7 +273,7 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
     const target = try cmd.target();
 
     const frame_id = try id.parseFrameId(params.frameId);
-    const frame = target.session.findFrameByFrameId(frame_id) orelse {
+    const frame = target.findFrame(frame_id) orelse {
         return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
     };
 
@@ -406,9 +406,9 @@ fn setDocumentContent(cmd: *CDP.Command) !void {
         html: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
     const frame_id = try id.parseFrameId(params.frameId);
-    const frame = bc.session.findFrameByFrameId(frame_id) orelse {
+    const frame = target.findFrame(frame_id) orelse {
         return cmd.sendError(-32000, "No frame for given id found", .{});
     };
 

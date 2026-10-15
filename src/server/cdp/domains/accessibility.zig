@@ -166,7 +166,7 @@ fn findFrame(cmd: *CDP.Command, target: *CDP.Target, frame_id: ?[]const u8) !?*F
     const frame_id_ = frame_id orelse {
         return target.mainFrame() orelse return error.FrameNotLoaded;
     };
-    return target.session.findFrameByFrameId(try id.parseFrameId(frame_id_)) orelse {
+    return target.findFrame(try id.parseFrameId(frame_id_)) orelse {
         try cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
         return null;
     };

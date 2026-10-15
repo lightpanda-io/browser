@@ -93,7 +93,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
     const target = try cmd.target();
     const arena = target.arena.allocator();
     const frame_id = try id.parseFrameId(params.frameId);
-    const frame = target.session.findFrameByFrameId(frame_id) orelse return error.FrameNotFound;
+    const frame = target.findFrame(frame_id) orelse return error.FrameNotFound;
     const mc = frame.window._model_context orelse return error.NotFound;
     const tool = mc.findTool(params.toolName) orelse return error.NotFound;
     const exec = &frame.js.execution;
