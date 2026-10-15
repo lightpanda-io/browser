@@ -462,7 +462,7 @@ pub const Commands = cli.Builder(.{
             .{ .name = "port", .type = ?u16 },
             .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
             .{ .name = "cdp_port", .type = ?u16 },
-            .{ .name = "http_session_timeout", .type = ?u32 },
+            .{ .name = "http_session_timeout", .type = u32, .default = 0 },
         },
         .shared_options = CommonOptions,
     },
@@ -964,8 +964,7 @@ pub fn maxConnections(self: *const Config) u16 {
 // Null disables the reaper: sessions then only end on DELETE.
 pub fn httpSessionTimeout(self: *const Config) ?u64 {
     return switch (self.mode) {
-        .serve => |opts| if (opts.http_session_timeout == 0) null else @as(u64, opts.http_session_timeout) * 1000,
-        .mcp => |opts| if (opts.http_session_timeout) |seconds| @as(u64, seconds) * 1000 else null,
+        inline .serve, .mcp => |opts| if (opts.http_session_timeout == 0) null else @as(u64, opts.http_session_timeout) * 1000,
         else => unreachable,
     };
 }
@@ -1441,6 +1440,12 @@ test "Config: parseArgs --http-session-timeout" {
         const proc_args: std.process.Args = .{ .vector = &argv };
         const config = try parseArgs(arena.allocator(), proc_args);
         try std.testing.expectEqual(600_000, config.httpSessionTimeout());
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "mcp", "--http-session-timeout", "0" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(null, config.httpSessionTimeout());
     }
 }
 

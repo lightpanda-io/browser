@@ -203,7 +203,7 @@
     \\          Seconds before an idle HTTP session (--port) is closed. A later
     \\          request with its Mcp-Session-Id gets 404, so the client starts
     \\          a new session. The default session is never closed.
-    \\          Defaults to no timeout (sessions live until closed).
+    \\          Defaults to 0, which disables it (sessions live until closed).
     \\  --port <INT>
     \\          Serve MCP over HTTP on this port instead of stdio. Clients POST
     \\          JSON-RPC to /mcp; route requests to a session with the
