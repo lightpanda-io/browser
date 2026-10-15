@@ -353,7 +353,7 @@ fn removePageFromList(self: *Session, page: *Page) void {
 // which interleaves the OLD-page teardown with the pending-page promotion
 // in a specific order.
 fn tearDownPage(self: *Session, page: *Page) void {
-    self.notification.dispatch(.frame_remove, .{ .frame_id = page.frame._frame_id });
+    self.notification.dispatch(.frame_remove, .{});
     self.retire(page);
 }
 
@@ -1026,7 +1026,7 @@ pub fn commitPendingPage(self: *Session, replacement: *Page) !void {
     // Step 1: clear the OLD page's CDP / V8 inspector state while it is still
     // walkable (node_registry, inspector context group, isolated worlds). OLD
     // is still the live page (index 0); its memory stays alive until step 4.
-    self.notification.dispatch(.frame_remove, .{ .frame_id = old.frame._frame_id });
+    self.notification.dispatch(.frame_remove, .{});
 
     // Step 2: register the new page with CDP. `replacement.replaces` is still
     // set, so the session still reports an in-flight nav and CDP's frameCreated
