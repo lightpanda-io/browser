@@ -187,7 +187,7 @@ pub const KeyData = union(enum) {
     };
 };
 
-/// Algorithm for `encrypt()` / `decrypt()`. AES-CBC/CTR/GCM share one struct
+/// Algorithm for `encrypt()` / `decrypt()`. AES-CBC/CTR/GCM and RSA-OAEP share one struct
 /// (fields are mode-specific and optional) and dispatch on `name`; a bare string
 /// is the fallback form.
 pub const Encrypt = union(enum) {
@@ -195,6 +195,8 @@ pub const Encrypt = union(enum) {
         additionalData: ?js.TypedArray(u8) = null,
         counter: ?js.TypedArray(u8) = null,
         iv: ?js.TypedArray(u8) = null,
+        /// RSA-OAEP.
+        label: ?js.TypedArray(u8) = null,
         length: ?u32 = null,
         name: []const u8,
         tagLength: ?u32 = null,

@@ -44,11 +44,7 @@ pub fn validate(params: algorithm.Init.RsaHashedKeyGen, key_usages: []const []co
         .string => |s| s,
         .object => |o| o.name,
     };
-    if (!eql(hash_name, "SHA-1") and
-        !eql(hash_name, "SHA-256") and
-        !eql(hash_name, "SHA-384") and
-        !eql(hash_name, "SHA-512"))
-    {
+    if (canonicalHash(hash_name) == null) {
         return error.NotSupported;
     }
 
@@ -93,10 +89,20 @@ pub fn canonicalName(name: []const u8) ?[]const u8 {
     return null;
 }
 
-/// The (private, public) usages legal for an RSA-OAEP key pair.
-fn usageSets() struct { private: []const []const u8, public: []const []const u8 } {
-    return .{ .private = &.{ "decrypt", "unwrapKey" }, .public = &.{ "encrypt", "wrapKey" } };
+/// The registered hash name (case-insensitive), or null if not a supported
+/// hash. Stored on the key, so `.algorithm.hash.name` reports it and
+/// `findDigest` (which is case-sensitive) can look it up.
+pub fn canonicalHash(name: []const u8) ?[]const u8 {
+    inline for ([_][]const u8{ "SHA-1", "SHA-256", "SHA-384", "SHA-512" }) |canonical| {
+        if (eql(name, canonical)) return canonical;
+    }
+    return null;
 }
+
+const max_modulus_length = 4096;
+
+const private_usages: []const []const u8 = &.{ "decrypt", "unwrapKey" };
+const public_usages: []const []const u8 = &.{ "encrypt", "wrapKey" };
 
 /// Generates an RSA-OAEP key pair of `modulusLength` bits with the given public
 /// exponent. Mirrors EC.generate: each key keeps the EVP_PKEY of its half, and
@@ -115,17 +121,20 @@ pub fn generate(
     // errors are reported correctly), but only RSA-OAEP generation is implemented.
     if (!eql(params.name, "RSA-OAEP")) return error.NotSupported;
 
-    // modulusLength must fit the c_int BoringSSL's generator takes; reject an
-    // absurd size here instead of trapping on the @intCast below.
-    if (params.modulusLength > std.math.maxInt(c_int)) return error.OperationError;
+    // Generation runs on the main thread and can't be interrupted, and its cost
+    // grows steeply with the size: 8192 bits takes seconds, 16384 (BoringSSL's
+    // ceiling) tens of seconds, several times that on a vCPU. Pages generate
+    // 2048 or 4096 in practice. Chrome allows 16384 but generates off-thread.
+    if (params.modulusLength > max_modulus_length) return error.OperationError;
 
-    const hash_name = switch (params.hash) {
+    const hash_name = canonicalHash(switch (params.hash) {
         .string => |s| s,
         .object => |o| o.name,
-    };
-    const sets = usageSets();
-    const private_mask = maskOf(sets.private, key_usages);
-    const public_mask = maskOf(sets.public, key_usages);
+    }).?;
+    const private_mask = maskOf(private_usages, key_usages);
+    const public_mask = maskOf(public_usages, key_usages);
+    // The private key must end up with at least one usage.
+    if (private_mask == 0) return error.SyntaxError;
 
     // Public exponent as a big-endian BIGNUM (e.g. 65537 == {0x01, 0x00, 0x01}).
     const e = crypto.BN_new() orelse return error.OutOfMemory;
@@ -152,6 +161,7 @@ pub fn generate(
     if (crypto.EVP_PKEY_set1_RSA(public_pkey, rsa_pub) != 1) return error.OutOfMemory;
 
     const modulus_length: u32 = @intCast(crypto.EVP_PKEY_bits(private_pkey));
+    const public_exponent = try exponentBytes(private_pkey, exec);
 
     const private = try CryptoKey.init(exec, .{
         ._type = .rsa,
@@ -159,7 +169,7 @@ pub fn generate(
         ._extractable = extractable,
         ._usages = private_mask,
         ._key = &.{},
-        ._algorithm = .{ .name = "RSA-OAEP", .hash = hash_name, .modulus_length = modulus_length },
+        ._algorithm = .{ .name = "RSA-OAEP", .hash = hash_name, .modulus_length = modulus_length, .public_exponent = public_exponent },
         ._vary = .{ .pkey = private_pkey },
     });
 
@@ -170,7 +180,7 @@ pub fn generate(
         ._extractable = true,
         ._usages = public_mask,
         ._key = &.{},
-        ._algorithm = .{ .name = "RSA-OAEP", .hash = hash_name, .modulus_length = modulus_length },
+        ._algorithm = .{ .name = "RSA-OAEP", .hash = hash_name, .modulus_length = modulus_length, .public_exponent = public_exponent },
         ._vary = .{ .pkey = public_pkey },
     });
 
@@ -191,9 +201,9 @@ pub fn import(
 ) !js.Promise {
     const local = exec.js.local.?;
 
-    // Reject an unsupported OAEP digest at import time (findDigest knows the set),
-    // rather than letting it surface only on the first encrypt/decrypt.
-    _ = crypto.findDigest(hash_name) catch return error.NotSupported;
+    // Reject an unsupported OAEP digest at import time, rather than letting it
+    // surface only on the first encrypt/decrypt.
+    const hash = canonicalHash(hash_name) orelse return error.NotSupported;
 
     var ptr: [*c]const u8 = der.ptr;
     const pkey: *crypto.EVP_PKEY = blk: {
@@ -216,26 +226,41 @@ pub fn import(
         ._extractable = extractable,
         ._usages = usages_mask,
         ._key = &.{},
-        ._algorithm = .{ .name = "RSA-OAEP", .hash = hash_name, .modulus_length = @intCast(crypto.EVP_PKEY_bits(pkey)) },
+        ._algorithm = .{
+            .name = "RSA-OAEP",
+            .hash = hash,
+            .modulus_length = @intCast(crypto.EVP_PKEY_bits(pkey)),
+            .public_exponent = try exponentBytes(pkey, exec),
+        },
         ._vary = .{ .pkey = pkey },
     });
     return local.resolvePromise(crypto_key);
 }
 
-/// Encrypts `data` with the public key (RSA-OAEP).
-pub fn encrypt(key: *const CryptoKey, data: []const u8, exec: *const Execution) ![]const u8 {
-    return crypt(key, data, true, exec);
+/// The public exponent of an RSA EVP_PKEY, big-endian, in the local arena.
+fn exponentBytes(pkey: *const crypto.EVP_PKEY, exec: *const Execution) ![]const u8 {
+    const rsa = crypto.EVP_PKEY_get0_RSA(pkey) orelse return error.OperationError;
+    const e = crypto.RSA_get0_e(rsa) orelse return error.OperationError;
+    const out = try exec.local_arena.alloc(u8, crypto.BN_num_bytes(e));
+    return out[0..crypto.BN_bn2bin(e, out.ptr)];
 }
 
-/// Decrypts `data` with the private key (RSA-OAEP).
-pub fn decrypt(key: *const CryptoKey, data: []const u8, exec: *const Execution) ![]const u8 {
-    return crypt(key, data, false, exec);
-}
+/// RSA-OAEP encrypt/decrypt. `encrypting` selects the init/op pair; the
+/// padding, OAEP digest (the hash stored on the key), MGF1 digest, label and
+/// the two-call output sizing are identical for both directions.
+pub fn crypt(
+    key: *const CryptoKey,
+    data: []const u8,
+    label: []const u8,
+    encrypting: bool,
+    exec: *const Execution,
+) ![]const u8 {
+    // The key must be an RSA-OAEP key with the matching usage.
+    if (key._type != .rsa) return error.InvalidAccessError;
+    if ((encrypting and !key.canEncrypt()) or (!encrypting and !key.canDecrypt())) {
+        return error.InvalidAccessError;
+    }
 
-/// Shared RSA-OAEP transform. `encrypting` selects the init/op pair; the
-/// padding, OAEP digest (the hash stored on the key), MGF1 digest and the
-/// two-call output sizing are identical for both directions.
-fn crypt(key: *const CryptoKey, data: []const u8, encrypting: bool, exec: *const Execution) ![]const u8 {
     const hash_name = key._algorithm.hash orelse return error.OperationError;
     const md = crypto.findDigest(hash_name) catch return error.OperationError;
 
@@ -247,6 +272,15 @@ fn crypt(key: *const CryptoKey, data: []const u8, encrypting: bool, exec: *const
     if (crypto.EVP_PKEY_CTX_set_rsa_padding(ctx, crypto.RSA_PKCS1_OAEP_PADDING) != 1) return error.OperationError;
     if (crypto.EVP_PKEY_CTX_set_rsa_oaep_md(ctx, md) != 1) return error.OperationError;
     if (crypto.EVP_PKEY_CTX_set_rsa_mgf1_md(ctx, md) != 1) return error.OperationError;
+    if (label.len > 0) {
+        // The context takes ownership of the copy, but only on success.
+        const copy: [*]u8 = @ptrCast(crypto.OPENSSL_malloc(label.len) orelse return error.OutOfMemory);
+        @memcpy(copy[0..label.len], label);
+        if (crypto.EVP_PKEY_CTX_set0_rsa_oaep_label(ctx, copy, label.len) != 1) {
+            crypto.OPENSSL_free(copy);
+            return error.OperationError;
+        }
+    }
 
     // First call (null output) reports the size; the second writes the buffer.
     var out_len: usize = 0;

@@ -270,6 +270,10 @@ pub fn exportKey(
     }
 
     if (std.mem.eql(u8, format, "raw")) {
+        // RSA keys live in `_vary.pkey`; there's no raw form.
+        if (key._type == .rsa) {
+            return error.NotSupported;
+        }
         return local.resolvePromise(js.ArrayBuffer{ .values = key._key });
     }
 
@@ -439,19 +443,17 @@ fn cryptOp(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    // RSA-OAEP is handled before the switch: the algorithm may arrive as a bare
-    // string ("RSA-OAEP"), which would hit `.name => NotSupported` below. The key
-    // type, not the algorithm's shape, decides. No iv/counter is involved.
-    if (key._type == .rsa) {
-        const rsa_out = blk: {
-            if (encrypting) {
-                if (!key.canEncrypt()) return error.InvalidAccessError;
-                break :blk try RSA.encrypt(key, data, exec);
-            }
-            if (!key.canDecrypt()) return error.InvalidAccessError;
-            break :blk try RSA.decrypt(key, data, exec);
+    // RSA-OAEP is handled before the switch: it may arrive as a bare string
+    // ("RSA-OAEP"), which would hit `.name => NotSupported` below. An RSA key
+    // used with another algorithm's name falls through to AES.crypt, which
+    // rejects the key type.
+    if (RSA.canonicalName(algo.algoName()) != null) {
+        const label: []const u8 = switch (algo) {
+            .params => |p| if (p.label) |l| l.values else "",
+            .name => "",
         };
-        return local.resolvePromise(js.ArrayBuffer{ .values = rsa_out });
+        const out = try RSA.crypt(key, data, label, encrypting, exec);
+        return local.resolvePromise(js.ArrayBuffer{ .values = out });
     }
 
     const params = switch (algo) {
