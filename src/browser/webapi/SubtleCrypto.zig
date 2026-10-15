@@ -58,16 +58,11 @@ pub fn generateKey(
         .hmac_key_gen => |params| return HMAC.init(params, extractable, key_usages, exec),
         .aes_key_gen => |params| return AES.generate(params, extractable, key_usages, exec),
         .ec_key_gen => |params| return EC.generate(params, extractable, key_usages, exec),
-        .rsa_hashed_key_gen => |params| {
-            try RSA.validate(params, key_usages);
-            log.debug(.not_implemented, "generateKey", .{ .name = params.name });
-        },
+        .rsa_hashed_key_gen => |params| return RSA.generate(params, extractable, key_usages, exec),
         .name => |js_name| return generateKeyFromName(try js_name.toSSO(false), extractable, key_usages, exec),
         .object => |object| return generateKeyFromName(try object.name.toSSO(false), extractable, key_usages, exec),
         .invalid => return local.typeError("invalid algorithm"),
     }
-
-    return error.NotSupported;
 }
 
 fn generateKeyFromName(
@@ -144,6 +139,22 @@ pub fn importKey(
                 .jwk => return error.NotSupported,
             };
             return EC.import(name, algo.namedCurve(), format, der, is_private, extractable, mask, exec);
+        }
+        if (RSA.canonicalName(name) != null) {
+            const der = switch (key_data) {
+                .bytes => |b| b.values,
+                .jwk => return error.NotSupported,
+            };
+            // RSA-OAEP import params {name, hash} match the `.hmac` variant of the
+            // Import union (same shape: a name plus a hash), so the hash is read there.
+            const hash_name = switch (algo) {
+                .hmac => |h| switch (h.hash) {
+                    .string => |s| s,
+                    .object => |o| o.name,
+                },
+                else => return local.typeError("RSA-OAEP import requires a hash"),
+            };
+            return RSA.import(format, der, hash_name, is_private, extractable, mask, exec);
         }
         log.debug(.not_implemented, "SubtleCrypto.importKey", .{ .name = name });
         return error.NotSupported;
@@ -235,6 +246,9 @@ fn asymmetricAllowedUsages(name: []const u8, is_private: bool) ?[]const []const 
     if (eqlIgnoreCase(name, "ECDH") or eqlIgnoreCase(name, "X25519") or eqlIgnoreCase(name, "X448")) {
         return if (is_private) &.{ "deriveKey", "deriveBits" } else &.{};
     }
+    if (eqlIgnoreCase(name, "RSA-OAEP")) {
+        return if (is_private) &.{ "decrypt", "unwrapKey" } else &.{ "encrypt", "wrapKey" };
+    }
     return null;
 }
 
@@ -256,6 +270,10 @@ pub fn exportKey(
     }
 
     if (std.mem.eql(u8, format, "raw")) {
+        // RSA keys live in `_vary.pkey`; there's no raw form.
+        if (key._type == .rsa) {
+            return error.NotSupported;
+        }
         return local.resolvePromise(js.ArrayBuffer{ .values = key._key });
     }
 
@@ -425,6 +443,19 @@ fn cryptOp(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
+    // RSA-OAEP is handled before the switch: it may arrive as a bare string
+    // ("RSA-OAEP"), which would hit `.name => NotSupported` below. An RSA key
+    // used with another algorithm's name falls through to AES.crypt, which
+    // rejects the key type.
+    if (RSA.canonicalName(algo.algoName()) != null) {
+        const label: []const u8 = switch (algo) {
+            .params => |p| if (p.label) |l| l.values else "",
+            .name => "",
+        };
+        const out = try RSA.crypt(key, data, label, encrypting, exec);
+        return local.resolvePromise(js.ArrayBuffer{ .values = out });
+    }
+
     const params = switch (algo) {
         .params => |p| p,
         // A bare string identifier carries no iv/counter, so it can't drive AES.

@@ -125,6 +125,7 @@ pub const NID_secp521r1 = 716; // P-521
 
 pub extern fn EVP_PKEY_new() ?*EVP_PKEY;
 pub extern fn EVP_PKEY_id(pkey: *const EVP_PKEY) c_int;
+pub extern fn EVP_PKEY_bits(pkey: *const EVP_PKEY) c_int;
 pub extern fn EVP_PKEY_set1_EC_KEY(pkey: *EVP_PKEY, key: *EC_KEY) c_int;
 
 pub extern fn EC_KEY_new_by_curve_name(nid: c_int) ?*EC_KEY;
@@ -136,6 +137,42 @@ pub extern fn EC_KEY_set_public_key(key: *EC_KEY, point: *const EC_POINT) c_int;
 // DER decoders (advance `inp` past the parsed structure).
 pub extern fn d2i_PUBKEY(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
 pub extern fn d2i_AutoPrivateKey(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
+
+// RSA-OAEP: key generation, import, and the encrypt/decrypt operations.
+pub const EVP_PKEY_RSA = 6; // NID_rsaEncryption
+pub const RSA_PKCS1_OAEP_PADDING = 4;
+
+const struct_rsa_st = opaque {};
+pub const RSA = struct_rsa_st;
+const struct_bignum_st = opaque {};
+pub const BIGNUM = struct_bignum_st;
+
+pub extern fn RSA_new() ?*RSA;
+pub extern fn RSA_free(rsa: ?*RSA) void;
+pub extern fn RSA_generate_key_ex(rsa: *RSA, bits: c_int, e: *const BIGNUM, cb: ?*anyopaque) c_int;
+pub extern fn RSAPublicKey_dup(rsa: *const RSA) ?*RSA;
+pub extern fn EVP_PKEY_set1_RSA(pkey: *EVP_PKEY, key: *RSA) c_int;
+pub extern fn EVP_PKEY_get0_RSA(pkey: *const EVP_PKEY) ?*RSA;
+pub extern fn RSA_get0_e(rsa: *const RSA) ?*const BIGNUM;
+
+pub extern fn BN_new() ?*BIGNUM;
+pub extern fn BN_free(bn: ?*BIGNUM) void;
+pub extern fn BN_bin2bn(in: [*c]const u8, len: usize, ret: ?*BIGNUM) ?*BIGNUM;
+pub extern fn BN_num_bytes(bn: *const BIGNUM) c_uint;
+pub extern fn BN_bn2bin(in: *const BIGNUM, out: [*]u8) usize;
+
+pub extern fn OPENSSL_malloc(size: usize) ?*anyopaque;
+pub extern fn OPENSSL_free(ptr: ?*anyopaque) void;
+
+pub extern fn EVP_PKEY_encrypt_init(ctx: ?*EVP_PKEY_CTX) c_int;
+pub extern fn EVP_PKEY_encrypt(ctx: ?*EVP_PKEY_CTX, out: [*c]u8, out_len: *usize, in: [*c]const u8, in_len: usize) c_int;
+pub extern fn EVP_PKEY_decrypt_init(ctx: ?*EVP_PKEY_CTX) c_int;
+pub extern fn EVP_PKEY_decrypt(ctx: ?*EVP_PKEY_CTX, out: [*c]u8, out_len: *usize, in: [*c]const u8, in_len: usize) c_int;
+pub extern fn EVP_PKEY_CTX_set_rsa_padding(ctx: ?*EVP_PKEY_CTX, padding: c_int) c_int;
+pub extern fn EVP_PKEY_CTX_set_rsa_oaep_md(ctx: ?*EVP_PKEY_CTX, md: *const EVP_MD) c_int;
+pub extern fn EVP_PKEY_CTX_set_rsa_mgf1_md(ctx: ?*EVP_PKEY_CTX, md: *const EVP_MD) c_int;
+/// Takes ownership of `label` (an OPENSSL_malloc buffer) on success only.
+pub extern fn EVP_PKEY_CTX_set0_rsa_oaep_label(ctx: ?*EVP_PKEY_CTX, label: [*]u8, label_len: usize) c_int;
 
 const NID_X25519 = @as(c_int, 948);
 pub const EVP_PKEY_X25519 = NID_X25519;
