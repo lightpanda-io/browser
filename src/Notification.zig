@@ -370,7 +370,7 @@ pub const ConsoleMessageType = enum {
 };
 
 pub const ConsoleMessage = struct {
-    // The root frame of the message's page (a worker's is its owner's).
+    // The frame the message was logged in (a worker's is its owner's).
     frame_id: u32,
     timestamp: u64,
     source: enum {
