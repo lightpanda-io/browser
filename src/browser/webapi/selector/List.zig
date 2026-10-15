@@ -572,13 +572,13 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             if (el.is(Node.Element.Html.Form) != null or el.is(Node.Element.Html.FieldSet) != null) {
                 return !hasInvalidDescendant(node, frame);
             }
-            return isControlValid(el, frame) orelse false;
+            return ValidityState.isValid(el, frame) orelse false;
         },
         .invalid => {
             if (el.is(Node.Element.Html.Form) != null or el.is(Node.Element.Html.FieldSet) != null) {
                 return hasInvalidDescendant(node, frame);
             }
-            return isControlValid(el, frame) == false;
+            return ValidityState.isValid(el, frame) == false;
         },
         .required => {
             return el.hasAttributeInterned("required");
@@ -749,47 +749,11 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
     }
 }
 
-fn isCustomValid(custom: *Node.Element.Html.Custom) ?bool {
-    if (custom.isFormAssociated() == false) {
-        // matches neither:valid nor :invalid
-        return null;
-    }
-    if (custom.willValidate() == false) {
-        // matches neither:valid nor :invalid
-        return null;
-    }
-    const internals = custom._internals orelse return true;
-    return internals._flags.any() == false;
-}
-
-// null when the element is not a candidate for constraint validation
-fn isControlValid(el: *Node.Element, frame: *Frame) ?bool {
-    const Html = Node.Element.Html;
-    if (el.is(Html.Custom)) |custom| {
-        return isCustomValid(custom);
-    }
-    const will_validate = if (el.is(Html.Input)) |input|
-        input.getWillValidate()
-    else if (el.is(Html.Select)) |select|
-        select.getWillValidate()
-    else if (el.is(Html.TextArea)) |textarea|
-        textarea.getWillValidate()
-    else if (el.is(Html.Button)) |button|
-        button.getWillValidate()
-    else
-        return null;
-    if (!will_validate) {
-        return null;
-    }
-    const validity: ValidityState = .{ ._owner = el };
-    return validity.getValid(frame);
-}
-
 fn hasInvalidDescendant(parent: *Node, frame: *Frame) bool {
     var child = parent.firstChild();
     while (child) |c| {
         if (c.is(Node.Element)) |child_el| {
-            if (isControlValid(child_el, frame) == false) return true;
+            if (ValidityState.isValid(child_el, frame) == false) return true;
         }
         if (hasInvalidDescendant(c, frame)) return true;
         child = c.nextSibling();

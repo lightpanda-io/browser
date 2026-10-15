@@ -23,7 +23,6 @@ const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
-const Event = @import("../../Event.zig");
 const Element = @import("../../Element.zig");
 const collections = @import("../../collections.zig");
 
@@ -473,14 +472,8 @@ fn getValidationMessage(self: *const Select) []const u8 {
     return "";
 }
 
-pub fn checkValidity(self: *Select, frame: *Frame) !bool {
-    if (!self.getWillValidate()) return true;
-    const v = ValidityState{ ._owner = self.asElement() };
-    if (v.getValid(frame)) return true;
-
-    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame.page);
-    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
-    return false;
+fn checkValidity(self: *Select, frame: *Frame) !bool {
+    return ValidityState.checkValidity(self.asElement(), frame);
 }
 
 fn reportValidity(self: *Select, frame: *Frame) !bool {

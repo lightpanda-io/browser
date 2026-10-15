@@ -24,7 +24,6 @@ const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
-const Event = @import("../../Event.zig");
 const Element = @import("../../Element.zig");
 
 const HtmlElement = @import("../Html.zig");
@@ -147,13 +146,8 @@ fn getValidationMessage(self: *const Button) []const u8 {
     return self._custom_validity orelse "";
 }
 
-pub fn checkValidity(self: *Button, frame: *Frame) !bool {
-    if (!self.getWillValidate()) return true;
-    if (self._custom_validity == null) return true;
-
-    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame.page);
-    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
-    return false;
+fn checkValidity(self: *Button, frame: *Frame) !bool {
+    return ValidityState.checkValidity(self.asElement(), frame);
 }
 
 fn reportValidity(self: *Button, frame: *Frame) !bool {
