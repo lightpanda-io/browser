@@ -2763,7 +2763,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     sm.is_evaluating = true;
     defer sm.endEvaluationWindow(was_evaluating);
 
-    var response = transfer.submitSync(.{ .copy_headers = true }) catch |err| {
+    var response = transfer.submitSync(.{}) catch |err| {
         log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
@@ -2807,7 +2807,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     // scratch-list pattern in `CSSStyleSheet.replaceSync`. Keeping
     // `_href` consistent with what the sheet actually contains is the
     // minimum.
-    const content_type: ?Mime = if (HttpClient.findHeader(response.headers, "content-type")) |value|
+    const content_type: ?Mime = if (response.content_type) |value|
         Mime.parse(value) catch null
     else
         null;
