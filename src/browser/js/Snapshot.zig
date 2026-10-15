@@ -73,7 +73,7 @@ startup_data: v8.StartupData,
 // external reference. When we load the snapshot, we need to give it the same
 // array with the exact same number of entries in the same order (but, of course
 // cross-process, the value (address) might be different).
-external_references: [countExternalReferences()]isize,
+external_references: *const ExternalReferences,
 
 // Track whether this snapshot owns its data (was created in-process)
 // If false, the data points into embedded_snapshot_blob and will not be freed
@@ -138,13 +138,13 @@ fn isValid(self: Snapshot) bool {
 }
 
 pub fn create() !Snapshot {
-    var external_references = collectExternalReferences();
+    const external_references = collectExternalReferences();
 
     var params: v8.CreateParams = undefined;
     v8.v8__Isolate__CreateParams__CONSTRUCT(&params);
     params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator(4 * 1024 * 1024 * 1024);
     defer v8.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
-    params.external_references = @ptrCast(&external_references);
+    params.external_references = external_references;
 
     const snapshot_creator = v8.v8__SnapshotCreator__CREATE(&params);
     defer v8.v8__SnapshotCreator__DESTRUCT(snapshot_creator);
@@ -495,9 +495,18 @@ fn countExternalReferences() comptime_int {
     return count + 1; // +1 for null terminator
 }
 
-fn collectExternalReferences() [countExternalReferences()]isize {
+const ExternalReferences = [countExternalReferences()]isize;
+
+// Static rather than carried by value: in debug builds every frame the
+// Snapshot passed through (create, load, App.init) kept its own copy, which
+// was enough to exhaust V8's stack limit before the snapshot's first script.
+var external_references_storage: ExternalReferences = undefined;
+
+fn collectExternalReferences() *const ExternalReferences {
+    @setEvalBranchQuota(100_000);
     var idx: usize = 0;
-    var references = std.mem.zeroes([countExternalReferences()]isize);
+    const references = &external_references_storage;
+    @memset(references, 0);
 
     references[idx] = @bitCast(@intFromPtr(&illegalConstructorCallback));
     idx += 1;

@@ -161,7 +161,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator(js.ArrayBuffer.MAX_LENGTH).?;
     errdefer v8.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
 
-    params.external_references = &snapshot.external_references;
+    params.external_references = snapshot.external_references;
 
     if (app.config.v8MaxHeapMb()) |mb| {
         v8.v8__ResourceConstraints__ConfigureDefaultsFromHeapSize(
