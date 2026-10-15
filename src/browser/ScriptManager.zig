@@ -376,6 +376,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 // There was a preloaded script, we borrow it's source and status
                 consumed_preload = pre;
                 script.source = pre.source;
+                script.encoding = pre.encoding;
                 script.status = pre.status;
                 script.complete = true;
             } else {
@@ -395,12 +396,13 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                     try frame.headersForRequest(transfer, .{});
                 }
 
-                const response = try transfer.submitSync(.{});
+                const response = try transfer.submitSync(.{ .copy_headers = true });
 
                 // Take the body's arena rather than releasing it: `source`
                 // has to outlive this call, up to script.deinit().
                 script.source_arena = response.arena;
                 script.source = .{ .remote = response.body };
+                script.setContentType(HttpClient.findHeader(response.headers, "content-type"));
                 script.status = response.status;
                 script.complete = true;
             }

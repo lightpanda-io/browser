@@ -24,45 +24,21 @@ const std = @import("std");
 const h5e = @import("../parser/html5ever.zig");
 
 const Allocator = std.mem.Allocator;
+const EncodingInfo = h5e.EncodingInfo;
 
 /// Decodes `bytes` to UTF-8. A BOM wins, then `protocol_charset` (the
 /// Content-Type charset), then a leading `@charset` rule, then
 /// `environment_charset` (the document's encoding). Malformed sequences
 /// become U+FFFD. Returns `bytes` itself when it is already valid UTF-8.
 pub fn decode(allocator: Allocator, bytes: []const u8, protocol_charset: ?[]const u8, environment_charset: []const u8) ![]const u8 {
-    const encoding = fallbackEncoding(bytes, protocol_charset, environment_charset);
-
-    // A UTF-16 BOM is never valid UTF-8, so only the UTF-8 one can slip
-    // through the fast path; the decoder drops it.
-    if (std.mem.eql(u8, encoding.name(), "UTF-8") and
-        !std.mem.startsWith(u8, bytes, "\xEF\xBB\xBF") and
-        std.unicode.utf8ValidateSlice(bytes))
-    {
-        return bytes;
-    }
-    return h5e.decodeToUtf8(allocator, encoding.handle.?, bytes);
+    return h5e.validUtf8(allocator, fallbackEncoding(bytes, protocol_charset, environment_charset), bytes);
 }
 
 /// https://drafts.csswg.org/css-syntax/#determine-the-fallback-encoding
-fn fallbackEncoding(bytes: []const u8, protocol_charset: ?[]const u8, environment_charset: []const u8) h5e.EncodingInfo {
-    if (protocol_charset) |label| {
-        const info = h5e.encoding_for_label(label.ptr, label.len);
-        if (info.isValid()) return info;
-    }
-
-    if (charsetRuleLabel(bytes)) |label| {
-        const info = h5e.encoding_for_label(label.ptr, label.len);
-        if (info.isValid()) return if (info.isUtf16()) utf8() else info;
-    }
-
-    const info = h5e.encoding_for_label(environment_charset.ptr, environment_charset.len);
-    if (info.isValid()) return info;
-
-    return utf8();
-}
-
-fn utf8() h5e.EncodingInfo {
-    return h5e.encoding_for_label("utf-8", 5);
+fn fallbackEncoding(bytes: []const u8, protocol_charset: ?[]const u8, environment_charset: []const u8) EncodingInfo {
+    if (EncodingInfo.forLabel(protocol_charset)) |info| return info;
+    if (EncodingInfo.forLabel(charsetRuleLabel(bytes))) |info| return if (info.isUtf16()) .utf8() else info;
+    return EncodingInfo.forLabel(environment_charset) orelse .utf8();
 }
 
 /// The label of a `@charset "<label>";` rule opening the first 1024 bytes,

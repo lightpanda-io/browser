@@ -23,7 +23,9 @@ const HttpClient = @import("../network/HttpClient.zig");
 
 const js = @import("js/js.zig");
 const Frame = @import("Frame.zig");
+const Mime = @import("Mime.zig");
 const ImportMap = @import("ImportMap.zig");
+const h5e = @import("parser/html5ever.zig");
 
 const Element = @import("webapi/Element.zig");
 const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
@@ -602,6 +604,9 @@ pub const Script = struct {
     // limited .large arena pool
     source_arena: ?*lp.Arena = null,
 
+    // The encoding a remote script's Content-Type charset names.
+    encoding: ?h5e.EncodingInfo = null,
+
     extra: Extra,
     node: std.DoublyLinkedList.Node,
     manager: *ScriptManagerBase,
@@ -690,6 +695,32 @@ pub const Script = struct {
         return (self.source_arena orelse self.arena).allocator();
     }
 
+    pub fn setContentType(self: *Script, content_type: ?[]const u8) void {
+        const mime = Mime.parse(content_type orelse return) catch return;
+        self.encoding = .forLabel(mime.explicitCharset());
+    }
+
+    /// A classic script's text. Remote bytes are decoded with the
+    /// Content-Type charset, else the element's charset attribute, else the
+    /// document's encoding; a BOM overrides all three.
+    /// https://html.spec.whatwg.org/#fetch-a-classic-script
+    fn classicText(self: *Script, fe: Extra.FrameExtra) ![]const u8 {
+        if (self.source != .remote) {
+            return self.source.content();
+        }
+        const bytes = self.source.content();
+        const encoding = self.encoding orelse
+            h5e.EncodingInfo.forLabel(fe.script_element.asElement().getAttributeSafe(comptime .wrap("charset"))) orelse
+            h5e.EncodingInfo.forLabel(fe.frame.charset) orelse
+            h5e.EncodingInfo.utf8();
+        // V8 reads UTF-8 itself, replacing malformed sequences as decoding
+        // would, so only a UTF-16 BOM needs the decoder.
+        if (encoding.isUtf8() and !std.mem.startsWith(u8, bytes, "\xFE\xFF") and !std.mem.startsWith(u8, bytes, "\xFF\xFE")) {
+            return bytes;
+        }
+        return h5e.decodeToUtf8(self.sourceAllocator(), encoding.handle.?, bytes);
+    }
+
     pub fn startCallback(transfer: *HttpClient.Transfer) !void {
         log.debug(.http, "script fetch start", .{ .req = transfer });
     }
@@ -746,6 +777,8 @@ pub const Script = struct {
             self.debug_transfer_auth_challenge = transfer._auth_challenge != null;
             self.debug_transfer_easy_id = if (transfer._conn) |c| @intFromPtr(c._easy) else 0;
         }
+
+        self.setContentType(transfer.contentType());
 
         lp.assert(self.source.remote.capacity == 0, "ScriptManagerBase.Header buffer", .{ .capacity = self.source.remote.capacity });
 
@@ -947,12 +980,14 @@ pub const Script = struct {
         defer frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
 
         const success = blk: {
-            const content = self.source.content();
             switch (fe.kind) {
-                .javascript => _ = local.eval(content, url) catch break :blk false,
+                .javascript => {
+                    const text = self.classicText(fe) catch break :blk false;
+                    _ = local.eval(text, url) catch break :blk false;
+                },
                 .module => {
                     // We don't care about waiting for the evaluation here.
-                    frame.js.module(false, local, content, url, cacheable) catch break :blk false;
+                    frame.js.module(false, local, self.source.content(), url, cacheable) catch break :blk false;
                 },
                 .importmap => unreachable, // handled before the try/catch.
             }
