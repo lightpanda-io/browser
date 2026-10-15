@@ -863,12 +863,16 @@ fn writeTextLine(writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine
         try writer.print(" {s}", .{data.role});
     }
     if (name_to_print) |n| {
-        try writer.print(" '{s}'", .{n});
+        try writer.writeAll(" '");
+        try writeOneLine(writer, n);
+        try writer.writeByte('\'');
     }
 
     if (data.value) |v| {
         if (v.len > 0) {
-            try writer.print(" value='{s}'", .{v});
+            try writer.writeAll(" value='");
+            try writeOneLine(writer, v);
+            try writer.writeByte('\'');
         }
     }
 
@@ -884,7 +888,9 @@ fn writeTextLine(writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine
         try writer.writeAll(" options=[");
         for (options, 0..) |opt, i| {
             if (i > 0) try writer.writeAll(",");
-            try writer.print("'{s}'", .{opt.value});
+            try writer.writeByte('\'');
+            try writeOneLine(writer, opt.value);
+            try writer.writeByte('\'');
             if (opt.selected) {
                 try writer.writeAll("*");
             }
@@ -906,6 +912,16 @@ fn writeTextLine(writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine
     else
         .all;
     return .{ .children = children, .contentful = contentful };
+}
+
+/// Each node is one line: a newline in a name or value would start another.
+fn writeOneLine(writer: *std.Io.Writer, s: []const u8) !void {
+    var words = std.mem.tokenizeAny(u8, s, &std.ascii.whitespace);
+    if (words.next()) |first| try writer.writeAll(first);
+    while (words.next()) |word| {
+        try writer.writeByte(' ');
+        try writer.writeAll(word);
+    }
 }
 
 const NodeDetails = struct {
@@ -1227,6 +1243,25 @@ test "SemanticTree: a named heading or code keeps its links" {
         // The rest of a heading's text is in its name, not repeated below it.
         try testing.expectEqual(1, std.mem.count(u8, out, "Acme"));
     }
+}
+
+test "SemanticTree: a multi-line name or value stays on its node's line" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/tree_multiline.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{});
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try st.textStringify(&aw.writer);
+    const out = aw.written();
+
+    try testing.expect(std.mem.find(u8, out, "button 'Close dialog'\n") != null);
+    try testing.expect(std.mem.find(u8, out, "textbox value='first line second line'\n") != null);
 }
 
 test "SemanticTree: maxBytes keeps alerts and controls, marks the rest" {
