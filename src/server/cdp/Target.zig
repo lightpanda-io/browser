@@ -239,9 +239,20 @@ fn deinitIsolatedWorlds(self: *Target) void {
 // on targetDestroyed, so both are sent even when nothing was attached.
 // Closes the page. Called by BrowserContext.closeTarget, which then frees
 // the target.
+// The sessions are detached and the page closed even if sending an event
+// fails: the target is freed either way, and nothing may be left pointing
+// to it.
 pub fn close(self: *Target) !void {
     const cdp = self.cdp;
     const bc = self.bc;
+    defer {
+        bc.detachTargetSessions(self);
+        if (self.pageHandle()) |handle| {
+            handle.close();
+        }
+        self.deinitIsolatedWorlds();
+        self.target_id = null;
+    }
     if (self.target_id) |*target_id| {
         for (bc.attached_sessions.values()) |session| {
             if (session.target != self) {
@@ -259,13 +270,6 @@ pub fn close(self: *Target) !void {
         }
         try cdp.sendEvent("Target.targetDestroyed", .{ .targetId = target_id }, .{});
     }
-    bc.detachTargetSessions(self);
-
-    if (self.pageHandle()) |handle| {
-        handle.close();
-    }
-    self.deinitIsolatedWorlds();
-    self.target_id = null;
 }
 
 pub fn pageHandle(self: *const Target) ?Session.PageHandle {
