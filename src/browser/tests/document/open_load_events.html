@@ -86,45 +86,76 @@
   }
 </script>
 
+<!--
+  close() on a loaded document runs readystatechange, DOMContentLoaded and load
+  synchronously, as in Chrome.
+-->
+<script id=close_after_load_is_sync type=module>
+  {
+    const state = await testing.async();
+
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    const cw = iframe.contentWindow;
+    const events = [];
+
+    setTimeout(() => {
+      const doc = cw.document;
+      doc.open();
+      doc.addEventListener('readystatechange', () => events.push('rsc:' + doc.readyState));
+      doc.addEventListener('DOMContentLoaded', () => events.push('DCL'));
+      cw.addEventListener('load', () => events.push('load'));
+      doc.write('<p>x</p>');
+      events.push('before:' + doc.readyState);
+      doc.close();
+      events.push('after:' + doc.readyState);
+      state.resolve();
+    }, 5);
+
+    await state.done(() => {
+      testing.expectEqual('before:loading,rsc:interactive,DCL,rsc:complete,load,after:complete', events.join(','));
+    });
+  }
+</script>
+
 <script id=close_from_load_handler type=module>
   {
     const state = await testing.async();
 
-    // Each window load opens, writes + closes again: the next load must be
-    // queued, not fired from within close() (which recursed, and crashed on
-    // the write).
+    // A load handler that opens, writes + closes again gets readystatechange
+    // and DOMContentLoaded, but no nested load, now or later (as in Chrome).
+    // Firing it recursed, and crashed on the write.
     const iframe = document.createElement('iframe');
     document.body.appendChild(iframe);
     const cw = iframe.contentWindow;
-    let depth = 0;
-    let max_depth = 0;
+    const events = [];
     let count = 0;
 
     const rewrite = () => {
       const doc = cw.document;
       doc.open();
-      // open() erased the window's listeners
+      // open() erased the listeners
+      doc.addEventListener('readystatechange', () => events.push('rsc:' + doc.readyState));
+      doc.addEventListener('DOMContentLoaded', () => events.push('DCL'));
       cw.addEventListener('load', onload);
       doc.write('<b id=n>' + count + '</b>');
       doc.close();
     };
     const onload = () => {
-      depth += 1;
-      max_depth = Math.max(max_depth, depth);
+      events.push('load');
       count += 1;
       if (count < 3) {
         rewrite();
-      } else {
-        state.resolve();
       }
-      depth -= 1;
     };
     setTimeout(rewrite, 5);
+    setTimeout(() => state.resolve(), 50);
 
     await state.done(() => {
-      testing.expectEqual(1, max_depth);
-      testing.expectEqual(3, count);
-      testing.expectEqual('2', cw.document.getElementById('n').textContent);
+      testing.expectEqual(1, count);
+      testing.expectEqual('rsc:interactive,DCL,rsc:complete,load,rsc:interactive,DCL,rsc:complete', events.join(','));
+      testing.expectEqual('1', cw.document.getElementById('n').textContent);
+      testing.expectEqual('complete', cw.document.readyState);
     });
   }
 </script>
