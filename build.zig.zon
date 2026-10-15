@@ -32,8 +32,8 @@
         },
         // .@"boringssl-zig" = .{ .path = "../boringssl-zig" },
         .curl = .{
-            .url = "https://github.com/curl/curl/releases/download/curl-8_22_0/curl-8.22.0.tar.gz",
-            .hash = "N-V-__8AALJXUwHr71AwttzhEqqYTvFb_jz0EQ5Ou3OWpHBM",
+            .url = "https://github.com/curl/curl/releases/download/curl-8_23_0/curl-8.23.0.tar.gz",
+            .hash = "N-V-__8AAMjlVwH79yAHsK65VUcPuhOO6BWgpLDvvnlWPLly",
         },
         .sqlite3 = .{
             .url = "https://sqlite.org/2026/sqlite-amalgamation-3530200.zip",
