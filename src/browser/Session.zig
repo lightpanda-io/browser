@@ -1178,7 +1178,9 @@ test "Session: each page has its own session history" {
 
     const a = (try session.createPage()).frame().?;
     const b = (try session.createPage()).frame().?;
-    try testing.expect(session.navigationFor(a) != session.navigationFor(b));
+    const nav_a = session.navigationFor(a);
+    const nav_b = session.navigationFor(b);
+    try testing.expect(nav_a != nav_b);
 
     const js = @import("js/js.zig");
     var ls: js.Local.Scope = undefined;
@@ -1186,8 +1188,8 @@ test "Session: each page has its own session history" {
     defer ls.deinit();
     _ = try ls.local.exec("history.pushState(null, '', '#one'); history.pushState(null, '', '#two')", null);
 
-    try testing.expectEqual(3, session.navigationFor(a)._entries.items.len);
-    try testing.expectEqual(1, session.navigationFor(b)._entries.items.len);
+    try testing.expectEqual(3, nav_a._entries.items.len);
+    try testing.expectEqual(1, nav_b._entries.items.len);
 }
 
 test "Session: a popup has its own session history" {
@@ -1196,7 +1198,9 @@ test "Session: a popup has its own session history" {
 
     const frame = (try session.createPage()).frame().?;
     const popup = try frame.openPopup(.{ .url = "about:blank", .name = "", .opener = frame.window });
-    try testing.expect(session.navigationFor(frame) != session.navigationFor(popup));
+    const frame_nav = session.navigationFor(frame);
+    const popup_nav = session.navigationFor(popup);
+    try testing.expect(frame_nav != popup_nav);
 
     const js = @import("js/js.zig");
     var ls: js.Local.Scope = undefined;
@@ -1204,9 +1208,9 @@ test "Session: a popup has its own session history" {
     defer ls.deinit();
     _ = try ls.local.exec("history.pushState(null, '', '#one')", null);
 
-    try testing.expectEqual(1, session.navigationFor(frame)._entries.items.len);
-    try testing.expectEqual("about:blank", session.navigationFor(frame).getCurrentEntry()._url.?);
-    try testing.expectEqual("about:blank#one", session.navigationFor(popup).getCurrentEntry()._url.?);
+    try testing.expectEqual(1, frame_nav._entries.items.len);
+    try testing.expectEqual("about:blank", frame_nav.getCurrentEntry()._url.?);
+    try testing.expectEqual("about:blank#one", popup_nav.getCurrentEntry()._url.?);
 }
 
 test "Session: console capture runs no page JS" {

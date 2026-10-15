@@ -854,8 +854,9 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         });
 
         if (self.parent == null) {
-            session.navigationFor(self)._current_navigation_kind = opts.kind;
-            try session.navigationFor(self).commitNavigation(self);
+            const navigation = session.navigationFor(self);
+            navigation._current_navigation_kind = opts.kind;
+            try navigation.commitNavigation(self);
         }
 
         self.documentIsComplete();
