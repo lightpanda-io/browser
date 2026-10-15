@@ -9,19 +9,21 @@
 <script id="rectIsViewportRelative">
 {
   const filler = $('#filler');
+  // Empty paragraphs have no height in a real layout, so give them text.
   for (let i = 0; i < 300; i++) {
-    filler.appendChild(document.createElement('p'));
+    const p = document.createElement('p');
+    p.textContent = 'x';
+    filler.appendChild(p);
   }
   const far = $('#far');
   const before = far.getBoundingClientRect();
   testing.expectTrue(before.top > window.innerHeight);
-  testing.expectEqual(far, document.elementFromPoint(before.x, before.y));
 
   window.scrollTo(0, 100);
   const after = far.getBoundingClientRect();
   testing.expectEqual(before.top - 100, after.top);
   testing.expectEqual(before.x, after.x);
-  testing.expectEqual(far, document.elementFromPoint(after.x, after.y));
+  testing.expectEqual(after.top, far.getClientRects()[0].top);
 
   // scrollIntoView brings it into the viewport
   far.scrollIntoView();

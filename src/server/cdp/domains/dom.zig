@@ -486,6 +486,8 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
         .element => {
             // Drivers (e.g. Playwright's click) scroll the target into view and
             // then require its content quads to intersect the viewport.
+            // `params.rect` (Playwright's click position) is ignored: the faux
+            // layout scrolls the whole element into view.
             const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
             const element = node.dom.is(DOMNode.Element).?;
             element.scrollIntoViewIfNeeded(null, element.ownerFrame(frame) orelse frame);
