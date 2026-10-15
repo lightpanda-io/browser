@@ -1714,9 +1714,12 @@ pub fn boundingClientRectValues(self: *Element, frame: *Frame) DOMRect.Data {
 
 // Some cases need the bounding rect but have already done the visibility check.
 pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect.Data {
+    // Client rects are viewport-relative: offset the faux-layout document
+    // position by the owning window's scroll position.
+    const window = (self.ownerFrame(frame) orelse frame).window;
     return .{
-        .x = self.horizontalPosition(frame),
-        .y = calculateDocumentPosition(self.asNode()),
+        .x = self.horizontalPosition(frame) - @as(f64, @floatFromInt(window.getScrollX())),
+        .y = calculateDocumentPosition(self.asNode()) - @as(f64, @floatFromInt(window.getScrollY())),
         .width = self.boxAxis(frame, .width),
         .height = self.boxAxis(frame, .height),
     };
@@ -2129,7 +2132,7 @@ pub fn scrollIntoViewIfNeeded(self: *Element, center_if_needed: ?bool, frame: *F
     const y = calculateDocumentPosition(self.asNode());
     const scroll_y: f64 = @floatFromInt(frame.window.getScrollY());
     const viewport_height: f64 = @floatFromInt(frame.window.getInnerHeight(frame));
-    if (y >= scroll_y and y <= scroll_y + viewport_height) {
+    if (y >= scroll_y and y < scroll_y + viewport_height) {
         return;
     }
     self.scrollIntoView(null, frame);
