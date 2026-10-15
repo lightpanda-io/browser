@@ -141,10 +141,6 @@ pub fn importKey(
             return EC.import(name, algo.namedCurve(), format, der, is_private, extractable, mask, exec);
         }
         if (RSA.canonicalName(name) != null) {
-            const der = switch (key_data) {
-                .bytes => |b| b.values,
-                .jwk => return error.NotSupported,
-            };
             // RSA-OAEP import params {name, hash} match the `.hmac` variant of the
             // Import union (same shape: a name plus a hash), so the hash is read there.
             const hash_name = switch (algo) {
@@ -154,7 +150,17 @@ pub fn importKey(
                 },
                 else => return local.typeError("RSA-OAEP import requires a hash"),
             };
-            return RSA.import(format, der, hash_name, is_private, extractable, mask, exec);
+            const is_jwk = std.mem.eql(u8, format, "jwk");
+            switch (key_data) {
+                .bytes => |b| {
+                    if (is_jwk) return local.typeError("jwk format expects an object");
+                    return RSA.import(format, b.values, hash_name, is_private, extractable, mask, exec);
+                },
+                .jwk => |jwk| {
+                    if (!is_jwk) return local.typeError("this format expects a BufferSource");
+                    return RSA.importJwk(jwk, hash_name, extractable, mask, exec);
+                },
+            }
         }
         log.debug(.not_implemented, "SubtleCrypto.importKey", .{ .name = name });
         return error.NotSupported;
@@ -175,7 +181,7 @@ pub fn importKey(
                 .jwk => |j| j,
                 .bytes => return local.typeError("jwk format expects an object"),
             };
-            if (!std.mem.eql(u8, jwk.kty, "oct")) {
+            if (!std.mem.eql(u8, jwk.kty orelse "", "oct")) {
                 return error.DataError;
             }
             const k = jwk.k orelse return error.DataError;
@@ -281,8 +287,11 @@ pub fn exportKey(
         return exportJwk(key, exec);
     }
 
-    const is_unsupported = std.mem.eql(u8, format, "pkcs8") or std.mem.eql(u8, format, "spki");
-    if (is_unsupported) {
+    const is_der = std.mem.eql(u8, format, "pkcs8") or std.mem.eql(u8, format, "spki");
+    if (is_der) {
+        if (key._type == .rsa) {
+            return RSA.exportDer(format, key, exec);
+        }
         log.debug(.not_implemented, "SubtleCrypto.exportKey", .{ .format = format });
         return error.NotSupported;
     }
@@ -312,6 +321,7 @@ fn exportJwk(key: *CryptoKey, exec: *const Execution) !js.Promise {
             const hash: []const u8 = key._algorithm.hash orelse "SHA-";
             break :blk try exec.local_arena.print("HS{s}", .{hash[4..]}); // strip "SHA-"
         },
+        .rsa => return RSA.exportJwk(key, exec),
         else => {
             log.debug(.not_implemented, "SubtleCrypto.exportKey", .{ .format = "jwk", .type = key._type });
             return error.NotSupported;

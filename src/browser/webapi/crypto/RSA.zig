@@ -16,9 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! RSA-OAEP: key generation, import (spki/pkcs8 via DER), and the
-//! encrypt/decrypt operations. The key material lives as a libcrypto EVP_PKEY
-//! in `CryptoKey._vary.pkey`. See EC.zig for the asymmetric-key rationale.
+//! RSA-OAEP: key generation, import and export (spki/pkcs8 DER and JWK), and
+//! the encrypt/decrypt operations. The key material lives as a libcrypto
+//! EVP_PKEY in `CryptoKey._vary.pkey`. See EC.zig for the asymmetric-key
+//! rationale.
 
 const std = @import("std");
 
@@ -95,6 +96,30 @@ pub fn canonicalName(name: []const u8) ?[]const u8 {
 pub fn canonicalHash(name: []const u8) ?[]const u8 {
     inline for ([_][]const u8{ "SHA-1", "SHA-256", "SHA-384", "SHA-512" }) |canonical| {
         if (eql(name, canonical)) return canonical;
+    }
+    return null;
+}
+
+/// The JWK `alg` of each OAEP hash (JWA, section 4.3).
+const jwk_algs = [_]struct { hash: []const u8, alg: []const u8 }{
+    .{ .hash = "SHA-1", .alg = "RSA-OAEP" },
+    .{ .hash = "SHA-256", .alg = "RSA-OAEP-256" },
+    .{ .hash = "SHA-384", .alg = "RSA-OAEP-384" },
+    .{ .hash = "SHA-512", .alg = "RSA-OAEP-512" },
+};
+
+/// The JWK `alg` for a canonical hash name.
+fn jwkAlgOfHash(hash: []const u8) ?[]const u8 {
+    for (jwk_algs) |entry| {
+        if (std.mem.eql(u8, entry.hash, hash)) return entry.alg;
+    }
+    return null;
+}
+
+/// The canonical hash for a JWK `alg`. The spec matches `alg` case-sensitively.
+fn hashOfJwkAlg(alg: []const u8) ?[]const u8 {
+    for (jwk_algs) |entry| {
+        if (std.mem.eql(u8, entry.alg, alg)) return entry.hash;
     }
     return null;
 }
@@ -188,8 +213,8 @@ pub fn generate(
 }
 
 /// Imports an RSA-OAEP key from DER: `spki` (public) or `pkcs8` (private).
-/// jwk/raw aren't handled yet. libcrypto parses the DER, so a malformed
-/// structure is DataError. `hash_name` is the OAEP digest, kept for encrypt.
+/// libcrypto parses the DER, so a malformed structure is DataError. `hash_name`
+/// is the OAEP digest, kept for encrypt. JWK goes through `importJwk`.
 pub fn import(
     format: []const u8,
     der: []const u8,
@@ -213,14 +238,108 @@ pub fn import(
         if (std.mem.eql(u8, format, "pkcs8")) {
             break :blk crypto.d2i_AutoPrivateKey(null, &ptr, @intCast(der.len)) orelse return error.DataError;
         }
-        // jwk / raw not implemented yet.
+        // "raw" isn't a format RSA keys have.
         return error.NotSupported;
     };
     errdefer crypto.EVP_PKEY_free(pkey);
 
     if (crypto.EVP_PKEY_id(pkey) != crypto.EVP_PKEY_RSA) return error.DataError;
 
-    const crypto_key = try CryptoKey.init(exec, .{
+    return local.resolvePromise(try newKey(pkey, hash, is_private, extractable, usages_mask, exec));
+}
+
+/// Imports an RSA-OAEP key from a JSON Web Key: `n` and `e` for a public key,
+/// plus `d`, `p`, `q`, `dp`, `dq` and `qi` for a private one (the presence of
+/// `d` decides, as in SubtleCrypto.importKind, which already validated the
+/// usages against it). Follows the "import key" steps of RSA-OAEP: a JWK that
+/// doesn't fit the requested key, or describes an invalid one, is DataError.
+pub fn importJwk(
+    jwk: algorithm.KeyData.Jwk,
+    hash_name: []const u8,
+    extractable: bool,
+    usages_mask: u8,
+    exec: *const Execution,
+) !js.Promise {
+    const local = exec.js.local.?;
+    const hash = canonicalHash(hash_name) orelse return error.NotSupported;
+
+    if (!std.mem.eql(u8, jwk.kty orelse "", "RSA")) return error.DataError;
+    if (jwk.use) |use| {
+        if (usages_mask != 0 and !std.mem.eql(u8, use, "enc")) return error.DataError;
+    }
+    if (jwk.key_ops) |key_ops| try checkKeyOps(key_ops, usages_mask);
+    if (jwk.ext) |ext| {
+        if (!ext and extractable) return error.DataError;
+    }
+    // `alg` is optional; when present, it must name the requested hash.
+    if (jwk.alg) |alg| {
+        const alg_hash = hashOfJwkAlg(alg) orelse return error.DataError;
+        if (!std.mem.eql(u8, alg_hash, hash)) return error.DataError;
+    }
+
+    const rsa = try rsaFromJwk(jwk, exec);
+    defer crypto.RSA_free(rsa);
+    const pkey = crypto.EVP_PKEY_new() orelse return error.OutOfMemory;
+    errdefer crypto.EVP_PKEY_free(pkey);
+    if (crypto.EVP_PKEY_set1_RSA(pkey, rsa) != 1) return error.OutOfMemory;
+
+    return local.resolvePromise(try newKey(pkey, hash, jwk.d != null, extractable, usages_mask, exec));
+}
+
+/// A JWK `key_ops` must hold every requested usage, and no value twice
+/// (RFC 7517, section 4.3). Values that aren't usages are allowed.
+fn checkKeyOps(key_ops: []const []const u8, usages_mask: u8) !void {
+    var listed: u8 = 0;
+    for (key_ops, 0..) |op, i| {
+        for (key_ops[0..i]) |earlier| {
+            if (std.mem.eql(u8, earlier, op)) return error.DataError;
+        }
+        if (common.usageBit(op)) |bit| listed |= bit;
+    }
+    if (usages_mask & ~listed != 0) return error.DataError;
+}
+
+/// The RSA key described by a JWK (JWA, section 6.3). A private key needs all
+/// of the CRT members; libcrypto rejects members that don't make a valid key,
+/// such as the extra primes of `oth`, which this two-prime import ignores.
+fn rsaFromJwk(jwk: algorithm.KeyData.Jwk, exec: *const Execution) !*crypto.RSA {
+    const members = [_]?[]const u8{ jwk.n, jwk.e, jwk.d, jwk.p, jwk.q, jwk.dp, jwk.dq, jwk.qi };
+    const needed: usize = if (jwk.d == null) 2 else members.len;
+
+    var nums: [members.len]*crypto.BIGNUM = undefined;
+    var count: usize = 0;
+    defer for (nums[0..count]) |num| crypto.BN_free(num);
+    for (members[0..needed]) |member| {
+        nums[count] = try jwkBigNum(member, exec);
+        count += 1;
+    }
+
+    if (jwk.d == null) {
+        return crypto.RSA_new_public_key(nums[0], nums[1]) orelse error.DataError;
+    }
+    return crypto.RSA_new_private_key(nums[0], nums[1], nums[2], nums[3], nums[4], nums[5], nums[6], nums[7]) orelse error.DataError;
+}
+
+/// A JWK Base64urlUInt member as a BIGNUM. A missing or empty member, or one
+/// with a leading zero octet (JWA, section 2: it must use the minimum number of
+/// octets), is DataError.
+fn jwkBigNum(member: ?[]const u8, exec: *const Execution) !*crypto.BIGNUM {
+    const bytes = try common.base64Decode(exec.local_arena, member orelse return error.DataError);
+    if (bytes.len == 0 or (bytes.len > 1 and bytes[0] == 0)) return error.DataError;
+    return crypto.BN_bin2bn(bytes.ptr, bytes.len, null) orelse error.OutOfMemory;
+}
+
+/// Wraps an RSA `pkey` in a CryptoKey. The key takes ownership of `pkey` only on
+/// success.
+fn newKey(
+    pkey: *crypto.EVP_PKEY,
+    hash: []const u8,
+    is_private: bool,
+    extractable: bool,
+    usages_mask: u8,
+    exec: *const Execution,
+) !*CryptoKey {
+    return CryptoKey.init(exec, .{
         ._type = .rsa,
         ._kind = if (is_private) .private else .public,
         ._extractable = extractable,
@@ -234,15 +353,102 @@ pub fn import(
         },
         ._vary = .{ .pkey = pkey },
     });
-    return local.resolvePromise(crypto_key);
+}
+
+/// Exports an RSA key as DER: `spki` for a public key, `pkcs8` for a private
+/// one. Asking for the other half's format is InvalidAccessError.
+pub fn exportDer(format: []const u8, key: *const CryptoKey, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    const pkey = key.getKeyObject();
+
+    var out: [*c]u8 = null;
+    const len = blk: {
+        if (std.mem.eql(u8, format, "spki")) {
+            if (key._kind != .public) return error.InvalidAccessError;
+            break :blk crypto.i2d_PUBKEY(pkey, &out);
+        }
+        if (key._kind != .private) return error.InvalidAccessError;
+        const info = crypto.EVP_PKEY2PKCS8(pkey) orelse return error.OperationError;
+        defer crypto.PKCS8_PRIV_KEY_INFO_free(info);
+        break :blk crypto.i2d_PKCS8_PRIV_KEY_INFO(info, &out);
+    };
+    defer crypto.OPENSSL_free(out);
+    if (len <= 0) return error.OperationError;
+
+    const der = try exec.local_arena.dupe(u8, out[0..@intCast(len)]);
+    return local.resolvePromise(js.ArrayBuffer{ .values = der });
+}
+
+/// The JWK of an RSA-OAEP key (JWA, section 6.3). Members are listed in
+/// lexicographic order, the order browsers return a JsonWebKey in.
+const JwkPublic = struct {
+    alg: []const u8,
+    e: []const u8,
+    ext: bool,
+    key_ops: []const []const u8,
+    kty: []const u8 = "RSA",
+    n: []const u8,
+};
+
+const JwkPrivate = struct {
+    alg: []const u8,
+    d: []const u8,
+    dp: []const u8,
+    dq: []const u8,
+    e: []const u8,
+    ext: bool,
+    key_ops: []const []const u8,
+    kty: []const u8 = "RSA",
+    n: []const u8,
+    p: []const u8,
+    q: []const u8,
+    qi: []const u8,
+};
+
+/// Exports an RSA-OAEP key as a JWK: the public members for either half, plus
+/// the private members (with the CRT parameters) for the private key.
+pub fn exportJwk(key: *const CryptoKey, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    const rsa = crypto.EVP_PKEY_get0_RSA(key.getKeyObject()) orelse return error.OperationError;
+    const alg = jwkAlgOfHash(key._algorithm.hash orelse "") orelse return error.OperationError;
+    const n = try jwkMember(crypto.RSA_get0_n(rsa), exec);
+    const e = try jwkMember(crypto.RSA_get0_e(rsa), exec);
+    const key_ops = try key.getUsages(exec);
+
+    if (key._kind == .public) {
+        return local.resolvePromise(JwkPublic{ .alg = alg, .e = e, .ext = key._extractable, .key_ops = key_ops, .n = n });
+    }
+    return local.resolvePromise(JwkPrivate{
+        .alg = alg,
+        .d = try jwkMember(crypto.RSA_get0_d(rsa), exec),
+        .dp = try jwkMember(crypto.RSA_get0_dmp1(rsa), exec),
+        .dq = try jwkMember(crypto.RSA_get0_dmq1(rsa), exec),
+        .e = e,
+        .ext = key._extractable,
+        .key_ops = key_ops,
+        .n = n,
+        .p = try jwkMember(crypto.RSA_get0_p(rsa), exec),
+        .q = try jwkMember(crypto.RSA_get0_q(rsa), exec),
+        .qi = try jwkMember(crypto.RSA_get0_iqmp(rsa), exec),
+    });
+}
+
+/// A key component as a JWK Base64urlUInt member.
+fn jwkMember(bn: ?*const crypto.BIGNUM, exec: *const Execution) ![]const u8 {
+    return common.base64Encode(exec.local_arena, try bnBytes(bn, exec));
 }
 
 /// The public exponent of an RSA EVP_PKEY, big-endian, in the local arena.
 fn exponentBytes(pkey: *const crypto.EVP_PKEY, exec: *const Execution) ![]const u8 {
     const rsa = crypto.EVP_PKEY_get0_RSA(pkey) orelse return error.OperationError;
-    const e = crypto.RSA_get0_e(rsa) orelse return error.OperationError;
-    const out = try exec.local_arena.alloc(u8, crypto.BN_num_bytes(e));
-    return out[0..crypto.BN_bn2bin(e, out.ptr)];
+    return bnBytes(crypto.RSA_get0_e(rsa), exec);
+}
+
+/// A BIGNUM as big-endian bytes (the minimum number of them), in the local arena.
+fn bnBytes(bn: ?*const crypto.BIGNUM, exec: *const Execution) ![]const u8 {
+    const num = bn orelse return error.OperationError;
+    const out = try exec.local_arena.alloc(u8, crypto.BN_num_bytes(num));
+    return out[0..crypto.BN_bn2bin(num, out.ptr)];
 }
 
 /// RSA-OAEP encrypt/decrypt. `encrypting` selects the init/op pair; the
