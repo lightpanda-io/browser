@@ -394,8 +394,10 @@ fn detachFromTarget(cmd: *CDP.Command) !void {
 
     if (cmd.browser_context) |bc| {
         // Without a sessionId, detach the target's primary session (if any).
+        // Without a targetId either, the target is the command's: the one of
+        // the session it was sent through, else the first one.
         const primary_session_id: ?[]const u8 = blk: {
-            const target = if (params.targetId) |target_id| bc.findTarget(target_id) else bc.firstTarget();
+            const target = if (params.targetId) |target_id| bc.findTarget(target_id) else cmd.target() catch null;
             break :blk (target orelse break :blk null).session_id;
         };
         if (params.sessionId orelse primary_session_id) |requested_session_id| {
@@ -1150,6 +1152,22 @@ test "cdp.target: detachFromTarget without session" {
         try ctx.expectSentResult(null, .{ .id = 10 });
         try ctx.expectSentCount(1);
     }
+}
+
+test "cdp.target: detachFromTarget without params detaches the target of its session" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const targets = try createTargets(&ctx, 2);
+    const a = targets[0];
+    const b = targets[1];
+    const a_session_id = a.session_id.?;
+    const b_session_id = b.session_id.?;
+
+    try ctx.processMessage(.{ .id = 2, .method = "Target.detachFromTarget", .sessionId = b_session_id });
+    try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = b_session_id }, .{});
+    try testing.expectEqual(null, b.session_id);
+    try testing.expectEqual(a_session_id, a.session_id.?);
 }
 
 test "cdp.target: setAutoAttach false sends detachedFromTarget" {
