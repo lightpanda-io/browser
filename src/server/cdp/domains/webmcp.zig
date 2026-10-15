@@ -444,7 +444,8 @@ test "cdp.WebMCP: cancelInvocation" {
 
     // Register a never-settling tool so we have an invocation to cancel.
     var ls: js.Local.Scope = undefined;
-    bc.firstTarget().?.mainFrame().?.js.localScope(&ls);
+    const target = bc.firstTarget().?;
+    target.mainFrame().?.js.localScope(&ls);
     defer ls.deinit();
     _ = try ls.local.exec(
         \\navigator.modelContext.registerTool({
@@ -457,7 +458,7 @@ test "cdp.WebMCP: cancelInvocation" {
         .tools = &.{.{ .name = "hang" }},
     }, .{ .session_id = "SID-M" });
 
-    const frame_id = id.toFrameId(bc.firstTarget().?.mainFrame().?._frame_id);
+    const frame_id = id.toFrameId(target.mainFrame().?._frame_id);
     try ctx.processMessage(.{
         .id = 2,
         .method = "WebMCP.invokeTool",

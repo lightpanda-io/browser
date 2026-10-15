@@ -1203,12 +1203,13 @@ test "cdp.dom: focus and setFileInputFiles fire in the node's own frame" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_iframe.html" });
-    const child = bc.firstTarget().?.mainFrame().?.child_frames.items[0];
+    const target = bc.firstTarget().?;
+    const child = target.mainFrame().?.child_frames.items[0];
 
     const text = child.document.getElementById("text", child) orelse unreachable;
     const upload = child.document.getElementById("upload", child) orelse unreachable;
-    const text_node = try bc.firstTarget().?.node_registry.register(text.asNode());
-    const upload_node = try bc.firstTarget().?.node_registry.register(upload.asNode());
+    const text_node = try target.node_registry.register(text.asNode());
+    const upload_node = try target.node_registry.register(upload.asNode());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1358,14 +1359,15 @@ test "cdp.dom: resolveNode into a child frame's context" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RN", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
-    const root = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const target = bc.firstTarget().?;
+    const root = target.mainFrame() orelse unreachable;
     const child = root.child_frames.items[0];
     const child_main = try mainWorldContextId(bc, child);
     try testing.expect(child_main != try mainWorldContextId(bc, root));
 
     // Register the child's <html> the way DOM.describeNode(objectId) would.
     const html = child.document.getDocumentElement() orelse unreachable;
-    const node = try bc.firstTarget().?.node_registry.register(html.asNode());
+    const node = try target.node_registry.register(html.asNode());
 
     try ctx.processMessage(.{ .id = 10, .method = "Runtime.enable", .sessionId = "SID-X" });
 
@@ -1406,9 +1408,10 @@ test "cdp.dom: getFrameOwner returns the owner iframe element" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-FO", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
-    const root = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const target = bc.firstTarget().?;
+    const root = target.mainFrame() orelse unreachable;
     const child = root.child_frames.items[0];
-    const iframe_node = try bc.firstTarget().?.node_registry.register(child.iframe.?.asNode());
+    const iframe_node = try target.node_registry.register(child.iframe.?.asNode());
 
     try ctx.processMessage(.{ .id = 10, .method = "DOM.getFrameOwner", .sessionId = "SID-X", .params = .{
         .frameId = &id.toFrameId(child._frame_id),
@@ -1425,7 +1428,7 @@ test "cdp.dom: getFrameOwner returns the owner iframe element" {
     } }, .{ .id = 11 });
 
     // So does the document element, for its own frame.
-    const child_html = try bc.firstTarget().?.node_registry.register(child.window._document.getDocumentElement().?.asNode());
+    const child_html = try target.node_registry.register(child.window._document.getDocumentElement().?.asNode());
     try ctx.processMessage(.{ .id = 12, .method = "DOM.describeNode", .sessionId = "SID-X", .params = .{
         .backendNodeId = child_html.id,
     } });
@@ -1453,12 +1456,13 @@ test "cdp.dom: remote object ids belong to the session that minted them" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RO", .url = "cdp/dom1.html", .target_id = "FID-000000000R".*, .session_id = "SID-PRIMARY" });
-    _ = try bc.attachSession(bc.firstTarget().?, "SID-AUX", null);
+    const target = bc.firstTarget().?;
+    _ = try bc.attachSession(target, "SID-AUX", null);
 
-    const root = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const root = target.mainFrame() orelse unreachable;
     const html = root.document.getDocumentElement() orelse unreachable;
-    const html_node = try bc.firstTarget().?.node_registry.register(html.asNode());
-    const document_node = try bc.firstTarget().?.node_registry.register(root.document.asNode());
+    const html_node = try target.node_registry.register(html.asNode());
+    const document_node = try target.node_registry.register(root.document.asNode());
 
     // The auxiliary session mints an id for <html> and resolves it.
     try ctx.processMessage(.{ .id = 20, .method = "DOM.resolveNode", .sessionId = "SID-AUX", .params = .{ .backendNodeId = html_node.id } });

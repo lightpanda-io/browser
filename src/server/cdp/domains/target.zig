@@ -639,9 +639,10 @@ test "cdp.target: disposeBrowserContext detaches target sessions" {
     try ctx.processMessage(.{ .id = 1, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
     try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
     const bc = &ctx.cdp().browser_context.?;
-    const target_id = bc.firstTarget().?.target_id.?;
+    const target = bc.firstTarget().?;
+    const target_id = target.target_id.?;
     const context_id = try testing.arena_allocator.dupe(u8, bc.id);
-    const primary_id = try testing.arena_allocator.dupe(u8, bc.firstTarget().?.session_id.?);
+    const primary_id = try testing.arena_allocator.dupe(u8, target.session_id.?);
     try ctx.processMessage(.{ .id = 3, .method = "Target.attachToBrowserTarget" });
     try ctx.processMessage(.{
         .id = 4,
@@ -676,8 +677,9 @@ test "cdp.target: disposeBrowserContext detaches target sessions" {
 
     // The connection remains usable; stale target/session IDs are not reused.
     try ctx.processMessage(.{ .id = 6, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
-    try testing.expect(!std.mem.eql(u8, &target_id, &ctx.cdp().browser_context.?.firstTarget().?.target_id.?));
-    try testing.expect(!std.mem.eql(u8, primary_id, ctx.cdp().browser_context.?.firstTarget().?.session_id.?));
+    const new_target = ctx.cdp().browser_context.?.firstTarget().?;
+    try testing.expect(!std.mem.eql(u8, &target_id, &new_target.target_id.?));
+    try testing.expect(!std.mem.eql(u8, primary_id, new_target.session_id.?));
 }
 
 test "cdp.target: disposeBrowserContext destroys an unattached target" {
@@ -686,14 +688,15 @@ test "cdp.target: disposeBrowserContext destroys an unattached target" {
 
     try ctx.processMessage(.{ .id = 1, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
     const bc = &ctx.cdp().browser_context.?;
-    const target_id = bc.firstTarget().?.target_id.?;
+    const target = bc.firstTarget().?;
+    const target_id = target.target_id.?;
     const context_id = try testing.arena_allocator.dupe(u8, bc.id);
 
     // An invalid context ID must leave the live target untouched.
     try ctx.processMessage(.{ .id = 2, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-UNKNOWN" } });
     try ctx.expectSentError(-32602, "No browser context with the given id found", .{ .id = 2 });
     try ctx.expectSentCount(3);
-    try testing.expectEqual(&target_id, bc.firstTarget().?.target_id.?);
+    try testing.expectEqual(&target_id, target.target_id.?);
 
     try ctx.processMessage(.{ .id = 3, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = context_id } });
     try ctx.expectSentEvent("Target.targetDestroyed", .{ .targetId = target_id }, .{ .index = 3 });
@@ -779,8 +782,9 @@ test "cdp.target: createTarget" {
 
         // should create a browser context
         const bc = ctx.cdp().browser_context.?;
-        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.firstTarget().?.target_id.? } }, .{});
-        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = bc.firstTarget().?.session_id.?, .targetInfo = .{ .url = "about:blank", .title = "", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.firstTarget().?.target_id.? } }, .{});
+        const target = bc.firstTarget().?;
+        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = target.target_id.? } }, .{});
+        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = target.session_id.?, .targetInfo = .{ .url = "about:blank", .title = "", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = target.target_id.? } }, .{});
     }
 
     var ctx = try testing.context();
@@ -793,9 +797,10 @@ test "cdp.target: createTarget" {
 
     {
         try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
-        try testing.expectEqual(true, bc.firstTarget().?.target_id != null);
-        try ctx.expectSentResult(.{ .targetId = bc.firstTarget().?.target_id.? }, .{ .id = 10 });
-        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.firstTarget().?.target_id.? } }, .{});
+        const target = bc.firstTarget().?;
+        try testing.expectEqual(true, target.target_id != null);
+        try ctx.expectSentResult(.{ .targetId = target.target_id.? }, .{ .id = 10 });
+        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = target.target_id.? } }, .{});
     }
 }
 
@@ -919,7 +924,8 @@ test "cdp.target: attachToTarget" {
 
     // pretend we createdTarget first
     _ = try bc.session.createPage();
-    bc.firstTarget().?.target_id = "TID-000000000B".*;
+    const target = bc.firstTarget().?;
+    target.target_id = "TID-000000000B".*;
     {
         try ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-8" } });
         try ctx.expectSentError(-31998, "UnknownTargetId", .{ .id = 10 });
@@ -928,9 +934,9 @@ test "cdp.target: attachToTarget" {
     {
         // the first attach becomes the primary session
         try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-000000000B" } });
-        const session_id = bc.firstTarget().?.session_id.?;
+        const session_id = target.session_id.?;
         try ctx.expectSentResult(.{ .sessionId = session_id }, .{ .id = 11 });
-        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = session_id, .targetInfo = .{ .url = "about:blank", .title = "", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.firstTarget().?.target_id.? } }, .{});
+        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = session_id, .targetInfo = .{ .url = "about:blank", .title = "", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = target.target_id.? } }, .{});
         try testing.expectEqual(1, bc.attached_sessions.count());
         try testing.expect(bc.attached_sessions.contains(session_id));
     }
@@ -1032,11 +1038,12 @@ test "cdp.target: issue#474: attach to just created target" {
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
     {
         try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
-        try testing.expectEqual(true, bc.firstTarget().?.target_id != null);
-        try ctx.expectSentResult(.{ .targetId = bc.firstTarget().?.target_id.? }, .{ .id = 10 });
+        const target = bc.firstTarget().?;
+        try testing.expectEqual(true, target.target_id != null);
+        try ctx.expectSentResult(.{ .targetId = target.target_id.? }, .{ .id = 10 });
 
-        try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = bc.firstTarget().?.target_id.? } });
-        const session_id = bc.firstTarget().?.session_id.?;
+        try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = target.target_id.? } });
+        const session_id = target.session_id.?;
         try ctx.expectSentResult(.{ .sessionId = session_id }, .{ .id = 11 });
     }
 }
@@ -1046,18 +1053,19 @@ test "cdp.target: detachFromTarget" {
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
     try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
-    try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = bc.firstTarget().?.target_id.? } });
-    const session_id = bc.firstTarget().?.session_id.?;
+    const target = bc.firstTarget().?;
+    try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = target.target_id.? } });
+    const session_id = target.session_id.?;
 
     try ctx.processMessage(.{ .id = 12, .method = "Target.detachFromTarget", .params = .{ .sessionId = session_id } });
 
     try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = session_id }, .{});
-    try testing.expectEqual(null, bc.firstTarget().?.session_id);
+    try testing.expectEqual(null, target.session_id);
     try ctx.expectSentResult(null, .{ .id = 12 });
 
-    try ctx.processMessage(.{ .id = 13, .method = "Target.attachToTarget", .params = .{ .targetId = bc.firstTarget().?.target_id.? } });
-    try testing.expect(!std.mem.eql(u8, session_id, bc.firstTarget().?.session_id.?));
-    try ctx.expectSentResult(.{ .sessionId = bc.firstTarget().?.session_id.? }, .{ .id = 13 });
+    try ctx.processMessage(.{ .id = 13, .method = "Target.attachToTarget", .params = .{ .targetId = target.target_id.? } });
+    try testing.expect(!std.mem.eql(u8, session_id, target.session_id.?));
+    try ctx.expectSentResult(.{ .sessionId = target.session_id.? }, .{ .id = 13 });
 }
 
 test "cdp.target: detachFromTarget auxiliary session" {
@@ -1072,12 +1080,13 @@ test "cdp.target: detachFromTarget auxiliary session" {
     try ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-000000000B" } });
     try testing.expectEqual(2, bc.attached_sessions.count());
     const session_id = bc.attached_sessions.keys()[1];
-    try testing.expect(!std.mem.eql(u8, session_id, bc.firstTarget().?.session_id.?));
+    const target = bc.firstTarget().?;
+    try testing.expect(!std.mem.eql(u8, session_id, target.session_id.?));
 
     try ctx.processMessage(.{ .id = 11, .method = "Target.detachFromTarget", .params = .{ .sessionId = session_id } });
     try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = session_id }, .{});
     try testing.expectEqual(1, bc.attached_sessions.count());
-    try testing.expectEqual(true, bc.firstTarget().?.session_id != null);
+    try testing.expectEqual(true, target.session_id != null);
     try ctx.expectSentResult(null, .{ .id = 11 });
 }
 
@@ -1176,12 +1185,13 @@ test "cdp.target: setAutoAttach false sends detachedFromTarget" {
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
     try ctx.processMessage(.{ .id = 10, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
     try ctx.processMessage(.{ .id = 11, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
-    const session_id = bc.firstTarget().?.session_id.?;
+    const target = bc.firstTarget().?;
+    const session_id = target.session_id.?;
 
     try ctx.processMessage(.{ .id = 12, .method = "Target.setAutoAttach", .params = .{ .autoAttach = false, .waitForDebuggerOnStart = false } });
 
     try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = session_id }, .{});
-    try testing.expectEqual(null, bc.firstTarget().?.session_id);
+    try testing.expectEqual(null, target.session_id);
     try ctx.expectSentResult(null, .{ .id = 12 });
 }
 
@@ -1193,9 +1203,10 @@ test "cdp.target: targetInfoChanged reports the page's URL and title" {
     try ctx.expectSentResult(null, .{ .id = 1 });
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-TIC", .url = "cdp/accname.html", .target_id = "FID-000000000I".* });
+    const target = bc.firstTarget().?;
     try ctx.expectSentEvent("Target.targetInfoChanged", .{ .targetInfo = .{
-        .targetId = &bc.firstTarget().?.target_id.?,
-        .url = bc.firstTarget().?.getURL().?,
+        .targetId = &target.target_id.?,
+        .url = target.getURL().?,
         .title = "AccName Fixture",
         .browserContextId = "BID-TIC",
     } }, .{});

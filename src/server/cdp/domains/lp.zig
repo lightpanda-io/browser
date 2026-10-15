@@ -622,13 +622,14 @@ test "cdp.lp: semantic tree and node details read the node's own frame" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-T", .url = "cdp/semantic_tree_iframe.html", .target_id = "FID-000000000T".* });
-    const root = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const target = bc.firstTarget().?;
+    const root = target.mainFrame() orelse unreachable;
     const child = root.child_frames.items[0];
 
     const html = (child.document.getDocumentElement() orelse unreachable).asNode();
     const input = (try child.document.querySelector(.wrap("input"), child)).?.asNode();
-    const html_id = (try bc.firstTarget().?.node_registry.register(html)).id;
-    const input_id = (try bc.firstTarget().?.node_registry.register(input)).id;
+    const html_id = (try target.node_registry.register(html)).id;
+    const input_id = (try target.node_registry.register(input)).id;
 
     try ctx.processMessage(.{ .id = 1, .method = "LP.getSemanticTree", .params = .{ .backendNodeId = html_id, .format = "text", .prune = false } });
     const tree = (try dumpReply(&ctx, 1)).get("result").?.object.get("semanticTree").?.string;
@@ -651,7 +652,7 @@ test "cdp.lp: semantic tree and node details read the node's own frame" {
 
     // A document with no frame has no styles or layout to describe.
     const frameless = try root._factory.genericDocument(.{});
-    const frameless_id = (try bc.firstTarget().?.node_registry.register(frameless.asNode())).id;
+    const frameless_id = (try target.node_registry.register(frameless.asNode())).id;
     try ctx.processMessage(.{ .id = 3, .method = "LP.getSemanticTree", .params = .{ .backendNodeId = frameless_id } });
     try ctx.expectSentError(-31998, "InvalidNodeId", .{ .id = 3 });
     try ctx.processMessage(.{ .id = 4, .method = "LP.getNodeDetails", .params = .{ .backendNodeId = frameless_id } });
@@ -679,11 +680,12 @@ test "cdp.lp: getInteractiveElements reads the node's own frame" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-T", .url = "cdp/interactive_iframe.html", .target_id = "FID-000000000T".* });
-    const root = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const target = bc.firstTarget().?;
+    const root = target.mainFrame() orelse unreachable;
     const child = root.child_frames.items[0];
 
     const html = (child.document.getDocumentElement() orelse unreachable).asNode();
-    const html_id = (try bc.firstTarget().?.node_registry.register(html)).id;
+    const html_id = (try target.node_registry.register(html)).id;
 
     try ctx.processMessage(.{ .id = 1, .method = "LP.getInteractiveElements", .params = .{ .nodeId = html_id } });
     const elements = (try dumpReply(&ctx, 1)).get("result").?.object.get("elements").?.array.items;
@@ -753,7 +755,8 @@ test "cdp.lp: action tools" {
 
     // Test Click
     const btn = frame.document.getElementById("btn", frame).?.asNode();
-    const btn_id = (try bc.firstTarget().?.node_registry.register(btn)).id;
+    const target = bc.firstTarget().?;
+    const btn_id = (try target.node_registry.register(btn)).id;
     try ctx.processMessage(.{
         .id = 1,
         .method = "LP.clickNode",
@@ -762,7 +765,7 @@ test "cdp.lp: action tools" {
 
     // Test Fill Input
     const inp = frame.document.getElementById("inp", frame).?.asNode();
-    const inp_id = (try bc.firstTarget().?.node_registry.register(inp)).id;
+    const inp_id = (try target.node_registry.register(inp)).id;
     try ctx.processMessage(.{
         .id = 2,
         .method = "LP.fillNode",
@@ -771,7 +774,7 @@ test "cdp.lp: action tools" {
 
     // Test Fill Select
     const sel = frame.document.getElementById("sel", frame).?.asNode();
-    const sel_id = (try bc.firstTarget().?.node_registry.register(sel)).id;
+    const sel_id = (try target.node_registry.register(sel)).id;
     try ctx.processMessage(.{
         .id = 3,
         .method = "LP.fillNode",
@@ -780,7 +783,7 @@ test "cdp.lp: action tools" {
 
     // Test Scroll
     const scrollbox = frame.document.getElementById("scrollbox", frame).?.asNode();
-    const scrollbox_id = (try bc.firstTarget().?.node_registry.register(scrollbox)).id;
+    const scrollbox_id = (try target.node_registry.register(scrollbox)).id;
     try ctx.processMessage(.{
         .id = 4,
         .method = "LP.scrollNode",
@@ -790,9 +793,9 @@ test "cdp.lp: action tools" {
 
     // A leaf inside a scroll container scrolls the container, not the leaf.
     const leaf = frame.document.getElementById("innerleaf", frame).?.asNode();
-    const leaf_id = (try bc.firstTarget().?.node_registry.register(leaf)).id;
+    const leaf_id = (try target.node_registry.register(leaf)).id;
     const outer = frame.document.getElementById("outerscroll", frame).?.asNode();
-    const outer_id = (try bc.firstTarget().?.node_registry.register(outer)).id;
+    const outer_id = (try target.node_registry.register(outer)).id;
     try ctx.processMessage(.{
         .id = 5,
         .method = "LP.scrollNode",

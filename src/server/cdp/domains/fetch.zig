@@ -723,14 +723,15 @@ test "cdp.Fetch: interception events belong to the enabling session" {
         .session_id = "SID-PRIMARY",
         .target_id = "TID-000000000B".*,
     });
-    _ = try bc.attachSession(bc.firstTarget().?, "SID-AUX", null);
+    const target = bc.firstTarget().?;
+    _ = try bc.attachSession(target, "SID-AUX", null);
 
     try ctx.processMessage(.{
         .id = 1,
         .method = "Fetch.enable",
         .sessionId = "SID-AUX",
     });
-    try testing.expect(std.mem.eql(u8, "SID-AUX", bc.firstTarget().?.fetch_session_id.?));
+    try testing.expect(std.mem.eql(u8, "SID-AUX", target.fetch_session_id.?));
     try ctx.expectSentResult(null, .{ .id = 1, .session_id = "SID-AUX" });
 
     try ctx.processMessage(.{
@@ -738,14 +739,14 @@ test "cdp.Fetch: interception events belong to the enabling session" {
         .method = "Fetch.disable",
         .sessionId = "SID-PRIMARY",
     });
-    try testing.expect(std.mem.eql(u8, "SID-AUX", bc.firstTarget().?.fetch_session_id.?));
+    try testing.expect(std.mem.eql(u8, "SID-AUX", target.fetch_session_id.?));
 
     try ctx.processMessage(.{
         .id = 3,
         .method = "Fetch.disable",
         .sessionId = "SID-AUX",
     });
-    try testing.expectEqual(null, bc.firstTarget().?.fetch_session_id);
+    try testing.expectEqual(null, target.fetch_session_id);
 }
 
 test "cdp.Fetch: InterceptState issues a fresh id per pause" {
@@ -856,28 +857,29 @@ test "cdp.Fetch: enable compiles patterns, disable clears them" {
         .sessionId = "SID-P",
     });
     try ctx.expectSentResult(null, .{ .id = 1, .session_id = "SID-P" });
-    try testing.expectEqual(2, bc.firstTarget().?.intercept_state.patterns.len);
-    try testing.expect(bc.firstTarget().?.intercept_state.matches(.Request, "http://h/json/a", .fetch));
-    try testing.expect(bc.firstTarget().?.intercept_state.matches(.Request, "http://h/json/a", .xhr));
-    try testing.expectEqual(false, bc.firstTarget().?.intercept_state.matches(.Request, "http://h/json/a", .script));
-    try testing.expect(bc.firstTarget().?.intercept_state.matches(.Request, "http://h/exact", .xhr));
-    try testing.expectEqual(false, bc.firstTarget().?.intercept_state.matches(.Request, "http://h/", .document));
+    const target = bc.firstTarget().?;
+    try testing.expectEqual(2, target.intercept_state.patterns.len);
+    try testing.expect(target.intercept_state.matches(.Request, "http://h/json/a", .fetch));
+    try testing.expect(target.intercept_state.matches(.Request, "http://h/json/a", .xhr));
+    try testing.expectEqual(false, target.intercept_state.matches(.Request, "http://h/json/a", .script));
+    try testing.expect(target.intercept_state.matches(.Request, "http://h/exact", .xhr));
+    try testing.expectEqual(false, target.intercept_state.matches(.Request, "http://h/", .document));
 
     // re-enable without patterns = catch-all
     try ctx.processMessage(.{ .id = 2, .method = "Fetch.enable", .sessionId = "SID-P" });
     try ctx.expectSentResult(null, .{ .id = 2, .session_id = "SID-P" });
-    try testing.expect(bc.firstTarget().?.intercept_state.matches(.Request, "http://h/", .document));
+    try testing.expect(target.intercept_state.matches(.Request, "http://h/", .document));
 
     // explicit empty list = pause nothing; rejected when auth handling is on
     try ctx.processMessage(.{ .id = 3, .method = "Fetch.enable", .params = .{ .patterns = .{} }, .sessionId = "SID-P" });
     try ctx.expectSentResult(null, .{ .id = 3, .session_id = "SID-P" });
-    try testing.expectEqual(false, bc.firstTarget().?.intercept_state.matches(.Request, "http://h/", .document));
+    try testing.expectEqual(false, target.intercept_state.matches(.Request, "http://h/", .document));
     try ctx.processMessage(.{ .id = 4, .method = "Fetch.enable", .params = .{ .patterns = .{}, .handleAuthRequests = true }, .sessionId = "SID-P" });
     try ctx.expectSentError(-32602, "Can't specify empty patterns with handleAuth set", .{ .id = 4 });
 
     try ctx.processMessage(.{ .id = 5, .method = "Fetch.disable", .sessionId = "SID-P" });
-    try testing.expectEqual(0, bc.firstTarget().?.intercept_state.patterns.len);
-    try testing.expectEqual(false, bc.firstTarget().?.intercept_state.matches(.Request, "http://h/", .document));
+    try testing.expectEqual(0, target.intercept_state.patterns.len);
+    try testing.expectEqual(false, target.intercept_state.matches(.Request, "http://h/", .document));
 }
 
 // Response-stage tests drive real requests against the test server and read

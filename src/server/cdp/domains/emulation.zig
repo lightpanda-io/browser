@@ -580,7 +580,8 @@ test "cdp.Emulation: navigator.geolocation reads the override" {
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const target = bc.firstTarget().?;
+    const frame = target.mainFrame() orelse unreachable;
 
     {
         // Registers the callback synchronously; getCurrentPosition schedules
@@ -605,7 +606,7 @@ test "cdp.Emulation: navigator.geolocation reads the override" {
     // for a loaded page, same primitive Runner.waitForSelector/waitForScript
     // use to pump pending scheduler work under a CDP-loaded page.
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(bc.firstTarget().?.pageHandle().?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(target.pageHandle().?.frame_id, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -643,7 +644,8 @@ test "cdp.Emulation: navigator.geolocation watchPosition delivers the override" 
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const target = bc.firstTarget().?;
+    const frame = target.mainFrame() orelse unreachable;
 
     {
         var ls: js.Local.Scope = undefined;
@@ -662,7 +664,7 @@ test "cdp.Emulation: navigator.geolocation watchPosition delivers the override" 
     }
 
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(bc.firstTarget().?.pageHandle().?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(target.pageHandle().?.frame_id, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -707,7 +709,8 @@ test "cdp.Emulation: navigator.geolocation granted without an override is POSITI
 // Runs getCurrentPosition, pumps the scheduler, and returns the code the error
 // callback saw (0 if the success callback ran instead).
 fn errorCodeFor(bc: *CDP.BrowserContext) !i32 {
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const target = bc.firstTarget().?;
+    const frame = target.mainFrame() orelse unreachable;
 
     {
         var ls: js.Local.Scope = undefined;
@@ -724,7 +727,7 @@ fn errorCodeFor(bc: *CDP.BrowserContext) !i32 {
     }
 
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(bc.firstTarget().?.pageHandle().?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(target.pageHandle().?.frame_id, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -754,7 +757,8 @@ test "cdp.Emulation: navigator.geolocation errors PERMISSION_DENIED when permiss
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const target = bc.firstTarget().?;
+    const frame = target.mainFrame() orelse unreachable;
 
     {
         // Registers the callback synchronously; getCurrentPosition schedules
@@ -778,7 +782,7 @@ test "cdp.Emulation: navigator.geolocation errors PERMISSION_DENIED when permiss
     // for a loaded page, same primitive Runner.waitForSelector/waitForScript
     // use to pump pending scheduler work under a CDP-loaded page.
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(bc.firstTarget().?.pageHandle().?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(target.pageHandle().?.frame_id, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);

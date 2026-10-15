@@ -886,9 +886,10 @@ test "cdp.network setExtraHTTPHeaders rejects non-printable User-Agent" {
         } },
     });
 
-    try testing.expectEqual(bc.firstTarget().?.extra_headers.items.len, 1);
-    try testing.expectEqual("x-custom", bc.firstTarget().?.extra_headers.items[0].name);
-    try testing.expectEqual("hi", bc.firstTarget().?.extra_headers.items[0].value);
+    const target = bc.firstTarget().?;
+    try testing.expectEqual(target.extra_headers.items.len, 1);
+    try testing.expectEqual("x-custom", target.extra_headers.items[0].name);
+    try testing.expectEqual("hi", target.extra_headers.items[0].value);
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent" {
@@ -965,9 +966,10 @@ test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
         } },
     });
 
-    try testing.expectEqual(bc.firstTarget().?.extra_headers.items.len, 1);
-    try testing.expectEqual("x-keep", bc.firstTarget().?.extra_headers.items[0].name);
-    try testing.expectEqual("ok", bc.firstTarget().?.extra_headers.items[0].value);
+    const target = bc.firstTarget().?;
+    try testing.expectEqual(target.extra_headers.items.len, 1);
+    try testing.expectEqual("x-keep", target.extra_headers.items[0].name);
+    try testing.expectEqual("ok", target.extra_headers.items[0].value);
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a name that isn't an HTTP token" {
@@ -989,9 +991,10 @@ test "cdp.network setExtraHTTPHeaders rejects a name that isn't an HTTP token" {
         } },
     });
 
-    try testing.expectEqual(bc.firstTarget().?.extra_headers.items.len, 1);
-    try testing.expectEqual("x-keep", bc.firstTarget().?.extra_headers.items[0].name);
-    try testing.expectEqual("ok", bc.firstTarget().?.extra_headers.items[0].value);
+    const target = bc.firstTarget().?;
+    try testing.expectEqual(target.extra_headers.items.len, 1);
+    try testing.expectEqual("x-keep", target.extra_headers.items[0].name);
+    try testing.expectEqual("ok", target.extra_headers.items[0].value);
 }
 
 test "cdp.Network: cookies" {
@@ -1311,6 +1314,7 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .session_id = "SID-BLOCK",
     });
     const page = try bc.session.createPage();
+    const target = bc.firstTarget().?;
     const client = &bc.cdp.browser.http_client;
     defer client.setBlockedUrls(&.{}) catch unreachable;
 
@@ -1342,7 +1346,7 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .loader_id = 1,
         .method = .GET,
         .url = "https://blocked.test/script.js",
-        .origin = bc.firstTarget().?.security_origin,
+        .origin = target.security_origin,
         .credentials_mode = .omit,
         .request_mode = .no_cors,
         .resource_type = .script,
@@ -1369,7 +1373,7 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .loader_id = 1,
         .method = .GET,
         .url = "http://127.0.0.1:9582/redirect-no-fragment",
-        .origin = bc.firstTarget().?.security_origin,
+        .origin = target.security_origin,
         .credentials_mode = .omit,
         .request_mode = .no_cors,
         .resource_type = .script,
@@ -1526,7 +1530,8 @@ test "cdp.Network: enable maxResourceBufferSize evicts oversized bodies" {
         .params = .{ .requestId = &small },
     });
     try ctx.expectSentResult(.{ .body = "123", .base64Encoded = false }, .{ .id = 3 });
-    try testing.expectEqual(3, bc.firstTarget().?.captured_responses_size);
+    const target = bc.firstTarget().?;
+    try testing.expectEqual(3, target.captured_responses_size);
 
     // Re-enabling with a tighter limit evicts what's already captured.
     try ctx.processMessage(.{
@@ -1541,7 +1546,7 @@ test "cdp.Network: enable maxResourceBufferSize evicts oversized bodies" {
         .params = .{ .requestId = &small },
     });
     try ctx.expectSentError(-32000, "Request content was evicted from inspector cache", .{ .id = 5 });
-    try testing.expectEqual(0, bc.firstTarget().?.captured_responses_size);
+    try testing.expectEqual(0, target.captured_responses_size);
 }
 
 test "cdp.Network: getResponseBody omits a partial body" {
@@ -1613,13 +1618,14 @@ test "cdp.Network: enable maxTotalBufferSize evicts oldest bodies first" {
         .params = .{ .requestId = &second },
     });
     try ctx.expectSentResult(.{ .body = "bbbbbb", .base64Encoded = false }, .{ .id = 3 });
-    try testing.expectEqual(6, bc.firstTarget().?.captured_responses_size);
+    const target = bc.firstTarget().?;
+    try testing.expectEqual(6, target.captured_responses_size);
 
     // Network.disable releases everything retained.
     try ctx.processMessage(.{ .id = 4, .method = "Network.disable" });
     try ctx.expectSentResult(null, .{ .id = 4 });
-    try testing.expectEqual(0, bc.firstTarget().?.captured_responses.count());
-    try testing.expectEqual(0, bc.firstTarget().?.captured_responses_size);
+    try testing.expectEqual(0, target.captured_responses.count());
+    try testing.expectEqual(0, target.captured_responses_size);
     try ctx.processMessage(.{
         .id = 5,
         .method = "Network.getResponseBody",
