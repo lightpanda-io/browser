@@ -52,7 +52,9 @@ regex_context: *Regex.Context,
 default_sanitizer: *Sanitizer,
 render_fonts: screenshot.Fonts,
 
-typesafe_client: ?zenai.typesafe.Client = null,
+/// Idle TypeSafe clients. A call takes one (or makes one) and puts it back,
+/// so concurrent calls each get their own and keep its connection warm.
+typesafe_idle: std.ArrayList(*zenai.typesafe.Client) = .empty,
 typesafe_mutex: std.Io.Mutex = .init,
 
 pub fn init(allocator: Allocator, config: *const Config) !*App {
@@ -127,13 +129,14 @@ pub fn deinit(self: *App) void {
     self.render_fonts.deinit(allocator);
     self.arena_pool.deinit();
 
-    if (self.typesafe_client) |*c| c.deinit();
+    self.dropTypesafeClients();
+    self.typesafe_idle.deinit(allocator);
 
     allocator.destroy(self);
 }
 
 /// On `error.ApiError`, `failure` gets the API's status and message, duped
-/// into `arena` before another caller can overwrite them.
+/// into `arena`. Safe to call from any thread: it touches no browser state.
 pub fn askTypesafe(
     self: *App,
     arena: Allocator,
@@ -142,24 +145,51 @@ pub fn askTypesafe(
     options: zenai.typesafe.types.AskOptions,
     failure: *zenai.http.ErrorDetail,
 ) !zenai.typesafe.Client.Response(zenai.typesafe.types.AskResponse) {
-    self.typesafe_mutex.lockUncancelable(lp.io);
-    defer self.typesafe_mutex.unlock(lp.io);
+    const client = try self.takeTypesafeClient();
+    defer self.putTypesafeClient(client);
 
-    if (self.typesafe_client == null) {
-        const key = zenai.typesafe.envApiKey(lp.environ()) orelse return error.MissingApiKey;
-        self.typesafe_client = zenai.typesafe.Client.init(lp.io, self.allocator, key, .{
-            .base_url = zenai.typesafe.envBaseUrl(lp.environ()),
-            // Blocks the browser thread: fail fast.
-            .retry_policy = .disabled,
-            .request_timeout_ms = 10_000,
-        });
-    }
-
-    const client = &self.typesafe_client.?;
     return client.ask(state, questions, options) catch |err| {
         if (err == error.ApiError) failure.* = try client.last_error.dupe(arena);
         return err;
     };
+}
+
+fn takeTypesafeClient(self: *App) !*zenai.typesafe.Client {
+    {
+        self.typesafe_mutex.lockUncancelable(lp.io);
+        defer self.typesafe_mutex.unlock(lp.io);
+        if (self.typesafe_idle.pop()) |client| return client;
+    }
+
+    const key = zenai.typesafe.envApiKey(lp.environ()) orelse return error.MissingApiKey;
+    const client = try self.allocator.create(zenai.typesafe.Client);
+    client.* = zenai.typesafe.Client.init(lp.io, self.allocator, key, .{
+        .base_url = zenai.typesafe.envBaseUrl(lp.environ()),
+        // The calling session waits on it: fail fast.
+        .retry_policy = .disabled,
+        .request_timeout_ms = 10_000,
+    });
+    return client;
+}
+
+fn putTypesafeClient(self: *App, client: *zenai.typesafe.Client) void {
+    self.typesafe_mutex.lockUncancelable(lp.io);
+    defer self.typesafe_mutex.unlock(lp.io);
+    self.typesafe_idle.append(self.allocator, client) catch {
+        client.deinit();
+        self.allocator.destroy(client);
+    };
+}
+
+/// Close the idle clients; the next call reads the API key again.
+pub fn dropTypesafeClients(self: *App) void {
+    self.typesafe_mutex.lockUncancelable(lp.io);
+    defer self.typesafe_mutex.unlock(lp.io);
+    for (self.typesafe_idle.items) |client| {
+        client.deinit();
+        self.allocator.destroy(client);
+    }
+    self.typesafe_idle.clearRetainingCapacity();
 }
 
 fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {
