@@ -311,7 +311,15 @@ pub fn deinit(self: *Page) void {
     }
     self.closed_frames = .empty;
 
+    const frame_id = self.frame._frame_id;
     self.frame.deinit();
+
+    // The JS of a closed page can run until now, so its session history must
+    // stay until now too. A root navigation's replacement page reuses the
+    // frame id and keeps the history.
+    if (self.session.livePage(frame_id) == null) {
+        self.session.removeNavigation(frame_id);
+    }
 
     {
         var svg_point_lists = self._svg_point_lists.valueIterator();

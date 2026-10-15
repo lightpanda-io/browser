@@ -409,8 +409,6 @@ pub fn closePage(self: *Session, frame_id: u32) void {
         self.discardPendingPage(pending);
     }
     self.tearDownPage(live);
-    // Unlike a root navigation, this browsing context is gone for good.
-    self.removeNavigation(frame_id);
 }
 
 // Creates the session history of `frame`, a new top-level browsing context:
