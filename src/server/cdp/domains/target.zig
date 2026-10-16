@@ -253,8 +253,9 @@ fn createTarget(cmd: *CDP.Command) !void {
     }, .{});
 }
 
-// The target the client knows by `target_id`. TargetNotLoaded when it knows
-// of none.
+// The target the client knows by `target_id`. When there's none, the error
+// is the one of the single-target code: TargetNotLoaded when no target was
+// reported to the client yet, else UnknownTargetId.
 fn resolveTarget(bc: *const CDP.BrowserContext, target_id: []const u8) !*CDP.Target {
     if (bc.findTarget(target_id)) |target| {
         return target;

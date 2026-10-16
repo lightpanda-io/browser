@@ -234,11 +234,11 @@ fn deinitIsolatedWorlds(self: *Target) void {
     self.isolated_worlds.clearRetainingCapacity();
 }
 
-// Shared by Target.closeTarget, Page.close and Target.disposeBrowserContext.
-// Drivers settle page.close() on detachedFromTarget and drop the target
-// on targetDestroyed, so both are sent even when nothing was attached.
 // Closes the page. Called by BrowserContext.closeTarget, which then frees
-// the target.
+// the target; shared by Target.closeTarget, Page.close and
+// Target.disposeBrowserContext.
+// Drivers settle page.close() on detachedFromTarget and drop the target
+// on targetDestroyed, so both are sent.
 // The sessions are detached and the page closed even if sending an event
 // fails: the target is freed either way, and nothing may be left pointing
 // to it.
