@@ -76,15 +76,16 @@ pub fn init(allocator: Allocator, isolate: *v8.Isolate) !*Inspector {
     return self;
 }
 
-pub fn deinit(self: *const Inspector, allocator: Allocator) void {
+pub fn deinit(self: *Inspector) void {
+    const allocator = self.allocator;
+
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
     v8.v8_inspector__Client__IMPL__DELETE(self.client);
     v8.v8_inspector__Inspector__DELETE(self.handle);
-    var default_contexts = self.default_contexts;
-    default_contexts.deinit(allocator);
+    self.default_contexts.deinit(allocator);
     allocator.destroy(self);
 }
 
