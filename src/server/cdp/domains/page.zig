@@ -1666,7 +1666,7 @@ test "cdp.frame: isolated world follows a child's redirected origin" {
     // response has yet to arrive: the child exists on its request origin.
     var runner = bc.session.runner(.{});
     const target = bc.firstTarget().?;
-    try runner.waitForFrame(target.pageHandle().?.frame_id, 2000, .{ .until = .domcontentloaded });
+    try runner.waitForFrame(target.frame_id.?, 2000, .{ .until = .domcontentloaded });
     const root = target.mainFrame() orelse unreachable;
     try testing.expectEqual(1, root.child_frames.items.len);
     const child = root.child_frames.items[0];
@@ -2167,7 +2167,7 @@ test "cdp.page: stopLoading finishes a streaming document with what has arrived"
     // Tick until the first chunk has arrived; the server holds the rest back.
     var runner = bc.session.runner(.{});
     const target = bc.firstTarget().?;
-    const frame_id = target.pageHandle().?.frame_id;
+    const frame_id = target.frame_id.?;
     var attempts: usize = 0;
     while (true) : (attempts += 1) {
         _ = try runner.tickForFrame(frame_id, 20, .{});
