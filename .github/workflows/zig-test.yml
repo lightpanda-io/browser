@@ -13,6 +13,8 @@ on:
     paths:
       - ".github/**"
       - "src/**"
+      - "include/**"
+      - "examples/**"
       - "build.zig"
       - "build.zig.zon"
 
@@ -27,6 +29,8 @@ on:
     paths:
       - ".github/**"
       - "src/**"
+      - "include/**"
+      - "examples/**"
       - "build.zig"
       - "build.zig.zon"
 
@@ -72,6 +76,38 @@ jobs:
 
       - name: zig build test
         run: zig build -Dprebuilt_v8_path=v8/libc_v8_debug.a -Dtsan=true test
+
+  c-library:
+    name: c library
+    needs: zig-fmt
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - uses: ./.github/actions/install
+
+      - name: zig build test-lib
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a test-lib
+
+      - name: zig build lib
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a lib
+
+      - name: build the C example against the installed library
+        run: |
+          cc examples/c/fetch.c $(PKG_CONFIG_PATH=zig-out/lib/pkgconfig pkg-config --cflags --libs lightpanda) \
+            -Wl,-rpath,$PWD/zig-out/lib -o fetch-example
+
+      - name: run the example and verify its output
+        run: |
+          ./fetch-example https://example.com > out.html
+          grep -q "Example Domain" out.html
 
   zig-test-release:
     name: zig test
