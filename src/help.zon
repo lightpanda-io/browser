@@ -103,6 +103,8 @@
     \\                                 PNG image (base64 with --json).
     \\              semantic_tree      JSON-serialized semantic tree.
     \\              semantic_tree_text Pruned plain-text semantic tree.
+    \\              structured_data    JSON-LD, OpenGraph, Twitter card, meta
+    \\                                 and link tags as JSON.
     \\  --dump-max-bytes <INT>
     \\          Soft cap on the dumped html or markdown, in bytes. Output is cut
     \\          at a UTF-8 boundary and a '[truncated]' marker is appended.
