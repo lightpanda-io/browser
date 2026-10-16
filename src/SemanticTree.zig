@@ -646,11 +646,13 @@ fn visitNode(
         opened = try visitor.visitPruned(node, &data);
     }
 
+    // Its text is the only thing saying what it is, as outside a heading.
+    const nameless_control = should_visit and (name == null or name.?.len == 0);
     try stack.append(self.arena, .{
         .next_child = if (children != .none) node._first_child else null,
         .name = name,
         .invisible = invisible,
-        .controls_only = controls_only or children == .controls,
+        .controls_only = children == .controls or (controls_only and !nameless_control),
         .xpath_len = initial_xpath_len,
         .opened = opened,
     });
@@ -871,7 +873,7 @@ fn writeTextLine(writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine
     if (data.value) |v| {
         if (v.len > 0) {
             try writer.writeAll(" value='");
-            try writeOneLine(writer, v);
+            try writeEscapedNewlines(writer, v);
             try writer.writeByte('\'');
         }
     }
@@ -889,7 +891,7 @@ fn writeTextLine(writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine
         for (options, 0..) |opt, i| {
             if (i > 0) try writer.writeAll(",");
             try writer.writeByte('\'');
-            try writeOneLine(writer, opt.value);
+            try writeEscapedNewlines(writer, opt.value);
             try writer.writeByte('\'');
             if (opt.selected) {
                 try writer.writeAll("*");
@@ -914,7 +916,7 @@ fn writeTextLine(writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine
     return .{ .children = children, .contentful = contentful };
 }
 
-/// Each node is one line: a newline in a name or value would start another.
+/// Each node is one line: a newline in a name would start another.
 fn writeOneLine(writer: *std.Io.Writer, s: []const u8) !void {
     var words = std.mem.tokenizeAny(u8, s, &std.ascii.whitespace);
     if (words.next()) |first| try writer.writeAll(first);
@@ -922,6 +924,15 @@ fn writeOneLine(writer: *std.Io.Writer, s: []const u8) !void {
         try writer.writeByte(' ');
         try writer.writeAll(word);
     }
+}
+
+/// Unlike a name, a value is kept exact: only its line breaks are escaped.
+fn writeEscapedNewlines(writer: *std.Io.Writer, s: []const u8) !void {
+    for (s) |c| switch (c) {
+        '\n' => try writer.writeAll("\\n"),
+        '\r' => try writer.writeAll("\\r"),
+        else => try writer.writeByte(c),
+    };
 }
 
 const NodeDetails = struct {
@@ -1240,6 +1251,8 @@ test "SemanticTree: a named heading or code keeps its links" {
         try testing.expect(std.mem.find(u8, out, "link 'Post title'\n") != null);
         try testing.expect(std.mem.find(u8, out, "button 'Follow'\n") != null);
         try testing.expect(std.mem.find(u8, out, "link 'ls'\n") != null);
+        // A control without a name keeps the text that says what it is.
+        if (!interactive_only) try testing.expectEqual(2, std.mem.count(u8, out, "'Clickable title'"));
         // The rest of a heading's text is in its name, not repeated below it.
         try testing.expectEqual(1, std.mem.count(u8, out, "Acme"));
     }
@@ -1261,7 +1274,8 @@ test "SemanticTree: a multi-line name or value stays on its node's line" {
     const out = aw.written();
 
     try testing.expect(std.mem.find(u8, out, "button 'Close dialog'\n") != null);
-    try testing.expect(std.mem.find(u8, out, "textbox value='first line second line'\n") != null);
+    try testing.expect(std.mem.find(u8, out, "textbox value='first line\\nsecond line'\n") != null);
+    try testing.expect(std.mem.find(u8, out, "textbox value='a   b'\n") != null);
 }
 
 test "SemanticTree: maxBytes keeps alerts and controls, marks the rest" {
