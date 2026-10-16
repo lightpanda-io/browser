@@ -101,6 +101,6 @@ stdenv.mkDerivation {
     homepage = "https://lightpanda.io";
     license = lib.licenses.agpl3Only;
     mainProgram = "lightpanda";
-    platforms = builtins.attrNames v8Deps.archives;
+    platforms = [ "x86_64-linux" ];
   };
 }
