@@ -182,6 +182,12 @@ pub const BufferSource = struct {
     bytes: []const u8,
 };
 
+// An ArrayBuffer or any typed array kind or a DataView, exposed as its raw bytes.
+// The underlaying value *can* be a SharedBuffer
+pub const AllowSharedBufferSource = struct {
+    bytes: []u8,
+};
+
 pub const ArrayType = enum(u8) {
     int8,
     uint8,

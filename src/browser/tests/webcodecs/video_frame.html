@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=i420>
+{
+  // 4x2 I420: Y is 4x2, U and V 2x1
+  const data = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  const frame = new VideoFrame(data, {format: 'I420', timestamp: 5, codedWidth: 4, codedHeight: 2});
+  testing.expectEqual('I420', frame.format);
+  testing.expectEqual(4, frame.codedWidth);
+  testing.expectEqual(2, frame.codedHeight);
+  testing.expectEqual(4, frame.displayWidth);
+  testing.expectEqual(5, frame.timestamp);
+  testing.expectEqual(null, frame.duration);
+  const rect = frame.visibleRect;
+  testing.expectEqual([0, 0, 4, 2], [rect.x, rect.y, rect.width, rect.height]);
+  testing.expectEqual(true, rect instanceof DOMRectReadOnly);
+  // REC709 when no colorSpace is given
+  testing.expectEqual('bt709', frame.colorSpace.matrix);
+  testing.expectEqual(12, frame.allocationSize());
+  testing.expectEqual({}, frame.metadata());
+}
+</script>
+
+<script id=copy_to type=module>
+  const state = await testing.async();
+  const data = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  const frame = new VideoFrame(data, {format: 'I420', timestamp: 0, codedWidth: 4, codedHeight: 2});
+
+  const dest = new Uint8Array(20).fill(0xff);
+  const layout = await frame.copyTo(dest, {layout: [{offset: 0, stride: 5}, {offset: 12, stride: 2}, {offset: 16, stride: 3}]});
+  let error = null;
+  try { await frame.copyTo(new Uint8Array(11)); } catch (e) { error = e; }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([{offset: 0, stride: 5}, {offset: 12, stride: 2}, {offset: 16, stride: 3}], layout);
+    testing.expectEqual([1, 2, 3, 4, 0xff, 5, 6, 7, 8, 0xff, 0xff, 0xff, 9, 10, 0xff, 0xff, 11, 12, 0xff, 0xff], Array.from(dest));
+    testing.expectEqual('TypeError', error.name);
+  });
+</script>
+
+<script id=visible_rect type=module>
+  const state = await testing.async();
+  // The rect is cropped out of the coded frame, and becomes the coded size.
+  const data = new Uint8Array(16);
+  for (let i = 0; i < 16; i++) data[i] = i;
+  const frame = new VideoFrame(data, {format: 'RGBA', timestamp: 0, codedWidth: 2, codedHeight: 2, visibleRect: {x: 1, y: 1, width: 1, height: 1}});
+  const dest = new Uint8Array(4);
+  await frame.copyTo(dest);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(1, frame.codedWidth);
+    testing.expectEqual(0, frame.visibleRect.x);
+    testing.expectEqual([12, 13, 14, 15], Array.from(dest));
+  });
+</script>
+
+<script id=rgb_swizzle type=module>
+  const state = await testing.async();
+  const frame = new VideoFrame(new Uint8Array([1, 2, 3, 4]), {format: 'RGBA', timestamp: 0, codedWidth: 1, codedHeight: 1});
+  const bgrx = new Uint8Array(4);
+  await frame.copyTo(bgrx, {format: 'BGRX'});
+  const i420 = new VideoFrame(new Uint8Array(6), {format: 'I420', timestamp: 0, codedWidth: 2, codedHeight: 2});
+  let error = null;
+  try { await i420.copyTo(new Uint8Array(16), {format: 'RGBA'}); } catch (e) { error = e; }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([3, 2, 1, 255], Array.from(bgrx));
+    // no YUV to RGB conversion
+    testing.expectEqual('NotSupportedError', error.name);
+  });
+</script>
+
+<script id=invalid>
+{
+  const data = new Uint8Array(12);
+  const init = {format: 'I420', timestamp: 0, codedWidth: 4, codedHeight: 2};
+  testing.expectError('TypeError', () => new VideoFrame(data, {...init, codedWidth: 0}));
+  testing.expectError('TypeError', () => new VideoFrame(new Uint8Array(11), init));
+  // x must be a multiple of the chroma sub-sampling
+  testing.expectError('TypeError', () => new VideoFrame(data, {...init, visibleRect: {x: 1, y: 0, width: 2, height: 2}}));
+  testing.expectError('TypeError', () => new VideoFrame(data, {...init, displayWidth: 4}));
+  // rect members beyond u32 are rejected, not converted
+  testing.expectError('TypeError', () => new VideoFrame(data, {...init, visibleRect: {x: 1e300, y: 0, width: 2, height: 2}}));
+  testing.expectError('TypeError', () => new VideoFrame(data, init).allocationSize({rect: {x: 0, y: 0, width: 2 ** 64, height: 2}}));
+  testing.expectError('TypeError', () => new VideoFrame(data));
+  testing.expectError('TypeError', () => new VideoFrame({}));
+  // we don't decode images
+  testing.expectError('InvalidStateError', () => new VideoFrame(document.createElement('img'), {timestamp: 0}));
+}
+</script>
+
+<script id=from_frame>
+{
+  const frame = new VideoFrame(new Uint8Array(32), {format: 'RGBA', timestamp: 7, duration: 1, codedWidth: 4, codedHeight: 2, rotation: 91});
+  testing.expectEqual(90, frame.rotation);
+  // exact modulo, as Chrome's fmod: 1e300 is a multiple of 360
+  testing.expectEqual(90, new VideoFrame(frame, {rotation: 1e300}).rotation);
+  testing.expectEqual(270, new VideoFrame(frame, {rotation: -179}).rotation);
+  testing.expectEqual(2, frame.displayWidth);
+  testing.expectEqual(4, frame.displayHeight);
+
+  const copy = new VideoFrame(frame, {alpha: 'discard', timestamp: 8});
+  testing.expectEqual('RGBX', copy.format);
+  testing.expectEqual(8, copy.timestamp);
+  testing.expectEqual(1, copy.duration);
+  testing.expectEqual(90, copy.rotation);
+
+  const clone = frame.clone();
+  const serialized = structuredClone(frame);
+  frame.close();
+  testing.expectEqual(null, frame.format);
+  testing.expectEqual(0, frame.codedWidth);
+  testing.expectEqual(null, frame.visibleRect);
+  testing.expectEqual(null, frame.colorSpace.matrix);
+  testing.expectEqual(7, frame.timestamp);
+  testing.expectError('InvalidStateError', () => frame.clone());
+  testing.expectError('InvalidStateError', () => new VideoFrame(frame));
+
+  testing.expectEqual('RGBA', clone.format);
+  testing.expectEqual(4, clone.codedWidth);
+  testing.expectEqual('RGBA', serialized.format);
+  testing.expectEqual(90, serialized.rotation);
+  testing.expectEqual('rgb', serialized.colorSpace.matrix);
+}
+</script>
+
+<script id=canvas>
+{
+  const canvas = new OffscreenCanvas(3, 2);
+  testing.expectError('TypeError', () => new VideoFrame(canvas));
+  const frame = new VideoFrame(canvas, {timestamp: 1});
+  testing.expectEqual('RGBA', frame.format);
+  testing.expectEqual(3, frame.codedWidth);
+  testing.expectEqual(2, frame.displayHeight);
+  testing.expectEqual('RGBX', new VideoFrame(canvas, {timestamp: 1, alpha: 'discard'}).format);
+  testing.expectError('InvalidStateError', () => new VideoFrame(new OffscreenCanvas(0, 2), {timestamp: 1}));
+  // beyond Chrome's canvas limits: no bitmap to take, and no 40GB frame here
+  testing.expectError('InvalidStateError', () => new VideoFrame(new OffscreenCanvas(100000, 100000), {timestamp: 1}));
+  testing.expectError('InvalidStateError', () => new VideoFrame(new OffscreenCanvas(32767, 32767), {timestamp: 1}));
+}
+</script>

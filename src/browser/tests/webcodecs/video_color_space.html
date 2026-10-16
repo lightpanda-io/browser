@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=defaults>
+{
+  const cs = new VideoColorSpace();
+  testing.expectEqual(null, cs.primaries);
+  testing.expectEqual(null, cs.transfer);
+  testing.expectEqual(null, cs.matrix);
+  testing.expectEqual(null, cs.fullRange);
+  testing.expectEqual('{"primaries":null,"transfer":null,"matrix":null,"fullRange":null}', JSON.stringify(cs));
+}
+</script>
+
+<script id=values>
+{
+  const cs = new VideoColorSpace({primaries: 'bt2020', transfer: 'iec61966-2-1', matrix: 'bt2020-ncl', fullRange: true});
+  testing.expectEqual('bt2020', cs.primaries);
+  testing.expectEqual('iec61966-2-1', cs.transfer);
+  testing.expectEqual('bt2020-ncl', cs.matrix);
+  testing.expectEqual(true, cs.fullRange);
+  testing.expectEqual({primaries: 'bt2020', transfer: 'iec61966-2-1', matrix: 'bt2020-ncl', fullRange: true}, cs.toJSON());
+
+  testing.expectError('TypeError', () => new VideoColorSpace({primaries: 'nope'}));
+}
+</script>

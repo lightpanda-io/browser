@@ -506,6 +506,10 @@ const cloneable_types = .{
     @import("../webapi/DOMPoint.zig"),
     @import("../webapi/DOMRectReadOnly.zig"),
     @import("../webapi/DOMRect.zig"),
+    @import("../webapi/webcodecs/encoded_chunk.zig").EncodedAudioChunk,
+    @import("../webapi/webcodecs/encoded_chunk.zig").EncodedVideoChunk,
+    @import("../webapi/webcodecs/AudioData.zig"),
+    @import("../webapi/webcodecs/VideoFrame.zig"),
 };
 
 // Passed to a type's structuredSerialize hook to write its payload into the

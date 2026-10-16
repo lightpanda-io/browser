@@ -59,6 +59,11 @@ const TextTrackList = @import("media/TextTrackList.zig");
 
 const Animation = @import("animation/Animation.zig");
 
+const AudioDecoder = @import("webcodecs/AudioDecoder.zig");
+const AudioEncoder = @import("webcodecs/AudioEncoder.zig");
+const VideoDecoder = @import("webcodecs/VideoDecoder.zig");
+const VideoEncoder = @import("webcodecs/VideoEncoder.zig");
+
 const Navigation = @import("navigation/Navigation.zig");
 const NavigationHistoryEntry = @import("navigation/NavigationHistoryEntry.zig");
 const XMLHttpRequestEventTarget = @import("net/XMLHttpRequestEventTarget.zig");
@@ -74,6 +79,8 @@ _type: Type,
 pub const Type = enum(u8) {
     abort_signal,
     animation,
+    audio_decoder,
+    audio_encoder,
     broadcast_channel,
     cookie_store,
     event_source,
@@ -99,6 +106,8 @@ pub const Type = enum(u8) {
     text_track,
     text_track_cue,
     text_track_list,
+    video_decoder,
+    video_encoder,
     visual_viewport,
     websocket,
     window,
@@ -113,6 +122,8 @@ pub fn Subtype(comptime tag: Type) type {
     return switch (tag) {
         .abort_signal => AbortSignal,
         .animation => Animation,
+        .audio_decoder => AudioDecoder,
+        .audio_encoder => AudioEncoder,
         .broadcast_channel => BroadcastChannel,
         .cookie_store => CookieStore,
         .event_source => EventSource,
@@ -138,6 +149,8 @@ pub fn Subtype(comptime tag: Type) type {
         .text_track => TextTrack,
         .text_track_cue => TextTrackCue,
         .text_track_list => TextTrackList,
+        .video_decoder => VideoDecoder,
+        .video_encoder => VideoEncoder,
         .visual_viewport => VisualViewport,
         .websocket => WebSocket,
         .window => Window,
@@ -372,6 +385,10 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .xhr => writer.writeAll("<XMLHttpRequestEventTarget>"),
         .abort_signal => writer.writeAll("<AbortSignal>"),
         .animation => writer.writeAll("<Animation>"),
+        .audio_decoder => writer.writeAll("<AudioDecoder>"),
+        .audio_encoder => writer.writeAll("<AudioEncoder>"),
+        .video_decoder => writer.writeAll("<VideoDecoder>"),
+        .video_encoder => writer.writeAll("<VideoEncoder>"),
         .media_query_list => writer.writeAll("<MediaQueryList>"),
         .message_port => writer.writeAll("<MessagePort>"),
         .broadcast_channel => writer.writeAll("<BroadcastChannel>"),
@@ -399,6 +416,8 @@ pub fn toString(self: *EventTarget) []const u8 {
     return switch (self._type) {
         .abort_signal => return "[object AbortSignal]",
         .animation => return "[object Animation]",
+        .audio_decoder => return "[object AudioDecoder]",
+        .audio_encoder => return "[object AudioEncoder]",
         .broadcast_channel => return "[object BroadcastChannel]",
         .cookie_store => return "[object CookieStore]",
         .event_source => return "[object EventSource]",
@@ -424,6 +443,8 @@ pub fn toString(self: *EventTarget) []const u8 {
         .text_track => return "[object TextTrack]",
         .text_track_cue => return "[object TextTrackCue]",
         .text_track_list => return "[object TextTrackList]",
+        .video_decoder => return "[object VideoDecoder]",
+        .video_encoder => return "[object VideoEncoder]",
         .visual_viewport => return "[object VisualViewport]",
         .websocket => return "[object WebSocket]",
         .window => return "[object Window]",

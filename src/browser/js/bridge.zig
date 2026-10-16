@@ -1340,7 +1340,26 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/Sanitizer.zig"),
     @import("../webapi/Lock.zig"),
     @import("../webapi/LockManager.zig"),
+    @import("../webapi/webcodecs/encoded_chunk.zig"),
+    @import("../webapi/webcodecs/AudioData.zig"),
+    @import("../webapi/webcodecs/VideoColorSpace.zig"),
+    @import("../webapi/webcodecs/VideoFrame.zig"),
+    @import("../webapi/webcodecs/AudioDecoder.zig"),
+    @import("../webapi/webcodecs/AudioEncoder.zig"),
+    @import("../webapi/webcodecs/VideoDecoder.zig"),
+    @import("../webapi/webcodecs/VideoEncoder.zig"),
 });
+
+const webcodecs_apis = [_]type{
+    @import("../webapi/webcodecs/encoded_chunk.zig"),
+    @import("../webapi/webcodecs/AudioData.zig"),
+    @import("../webapi/webcodecs/VideoColorSpace.zig"),
+    @import("../webapi/webcodecs/VideoFrame.zig"),
+    @import("../webapi/webcodecs/AudioDecoder.zig"),
+    @import("../webapi/webcodecs/AudioEncoder.zig"),
+    @import("../webapi/webcodecs/VideoDecoder.zig"),
+    @import("../webapi/webcodecs/VideoEncoder.zig"),
+};
 
 // APIs available on EVERY worker global — dedicated, shared and service. This
 // is the WebIDL `[Exposed=Worker]` set, which covers all three. Each kind's
@@ -1441,7 +1460,7 @@ const worker_extended_apis = worker_common_apis ++ [_]type{
     @import("../webapi/FileReaderSync.zig"),
 };
 
-pub const DedicatedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/DedicatedWorkerGlobalScope.zig")} ++ worker_extended_apis));
+pub const DedicatedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/DedicatedWorkerGlobalScope.zig")} ++ worker_extended_apis ++ webcodecs_apis));
 pub const SharedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/SharedWorkerGlobalScope.zig")} ++ worker_extended_apis));
 
 pub const ServiceWorkerJsApis = flattenTypes(&([_]type{
