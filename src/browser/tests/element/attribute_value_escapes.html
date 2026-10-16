@@ -73,6 +73,8 @@
   testing.expectEqual('plain', ids('[x=abc]'));
   testing.expectEqual('digit', ids('[x=1]'));
   testing.expectEqual('tel', ids('[data-v="a:b"]'));
+  // In a quoted value, a backslash and a newline are a line continuation.
+  testing.expectEqual('tel', ids('[data-v="a\\\n:b"]'));
   testing.expectError("SyntaxError", () => root.querySelectorAll('[x=a:b]'));
 }
 </script>

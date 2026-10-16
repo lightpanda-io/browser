@@ -981,6 +981,12 @@ fn consumeEscapedIdentTail(self: *Parser, arena: Allocator, prefix_len: usize, e
         const b = input[j];
 
         if (b == '\\') {
+            if (j + 1 < input.len) switch (input[j + 1]) {
+                // Not a valid escape: the ident ends before the backslash.
+                // https://drafts.csswg.org/css-syntax/#starts-with-a-valid-escape
+                '\n', '\r', '\x0C' => break,
+                else => {},
+            };
             j += 1;
             const escape_result = try parseEscape(input[j..], arena);
             try result.appendSlice(arena, escape_result.bytes);
@@ -1985,6 +1991,69 @@ test "Selector: Parser.attributeValue" {
         var parser = Parser{ .input = "a:b]" };
         try testing.expectEqual("a", try parser.attributeValue(arena));
         try testing.expectEqual(":b]", parser.input);
+    }
+}
+
+test "Selector: Parser escaped newline ends an identifier" {
+    const arena = testing.arena_allocator;
+
+    // A backslash followed by a newline is not a valid escape: the ident
+    // ends before the backslash.
+    // https://drafts.csswg.org/css-syntax/#starts-with-a-valid-escape
+    {
+        var parser = Parser{ .input = ".a\\\nb" };
+        try testing.expectEqual("a", try parser.class(arena));
+        try testing.expectEqual("\\\nb", parser.input);
+    }
+
+    {
+        var parser = Parser{ .input = "#a\\\x0Cb" };
+        try testing.expectEqual("a", try parser.id(arena));
+        try testing.expectEqual("\\\x0Cb", parser.input);
+    }
+
+    {
+        var parser = Parser{ .input = "a\\\nb]" };
+        try testing.expectEqual("a", try parser.attributeName(arena));
+        try testing.expectEqual("\\\nb]", parser.input);
+    }
+
+    {
+        var parser = Parser{ .input = "a\\\rb]" };
+        try testing.expectEqual("a", try parser.attributeValue(arena));
+        try testing.expectEqual("\\\rb]", parser.input);
+    }
+
+    // Nothing before the backslash: no ident at all.
+    {
+        var parser = Parser{ .input = ".\\\nb" };
+        try testing.expectError(error.InvalidClassSelector, parser.class(arena));
+    }
+
+    {
+        var parser = Parser{ .input = "\\\n]" };
+        try testing.expectError(error.InvalidAttributeSelector, parser.attributeValue(arena));
+    }
+
+    // The stray backslash makes the whole selector invalid.
+    const invalid = [_][]const u8{
+        ".a\\\nb",
+        "#a\\\nb",
+        "[a\\\nb]",
+        "[x=a\\\nb]",
+        "[x=a\\\r\nb]",
+        "[x=a\\\x0Cb]",
+    };
+    for (invalid) |input| {
+        if (parseList(arena, input)) |_| {
+            return error.TestExpectedError;
+        } else |_| {}
+    }
+
+    // In a quoted value, a backslash and a newline are a line continuation.
+    {
+        const selectors = try parseList(arena, "[x=\"a\\\nb\"]");
+        try testing.expectEqual(1, selectors.len);
     }
 }
 
