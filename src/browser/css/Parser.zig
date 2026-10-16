@@ -124,18 +124,31 @@ const TokenStream = struct {
     }
 };
 
+/// The declarations of a `style` attribute or of a `cssText` assignment, on an
+/// element's style or a rule's. Browsers don't parse nested rules there: a
+/// `&.x { … }` is an invalid declaration, skipped through the next top-level
+/// `;` along with whatever follows it.
 pub fn parseDeclarationsList(input: []const u8) DeclarationsIterator {
-    return DeclarationsIterator.init(input);
+    return DeclarationsIterator.init(input, false);
 }
 
-const DeclarationsIterator = struct {
+/// The block of a style rule read from a stylesheet (`<style>`, `insertRule`,
+/// `replace`). CSS Nesting applies: a nested rule ends at its own `}`, so the
+/// declarations after it still parse.
+pub fn parseStyleBlock(input: []const u8) DeclarationsIterator {
+    return DeclarationsIterator.init(input, true);
+}
+
+pub const DeclarationsIterator = struct {
     input: []const u8,
     stream: TokenStream,
+    nesting: bool,
 
-    pub fn init(input: []const u8) DeclarationsIterator {
+    pub fn init(input: []const u8, nesting: bool) DeclarationsIterator {
         return .{
             .input = input,
             .stream = TokenStream.init(input),
+            .nesting = nesting,
         };
     }
 
@@ -151,32 +164,32 @@ const DeclarationsIterator = struct {
     }
 
     /// The block's contents (css-syntax-3 "consume a block's contents"): its
-    /// declarations, and the style rules and at-rules nested in it (CSS
-    /// Nesting). A nested rule ends at its own `}`, so the declarations after
-    /// it still parse.
+    /// declarations and at-rules and, from `parseStyleBlock`, the style rules
+    /// nested in it (CSS Nesting).
     pub fn nextItem(self: *DeclarationsIterator) ?BlockItem {
         while (true) {
             self.skipTriviaAndSemicolons();
             const peeked = self.stream.peek() orelse return null;
 
-            switch (peeked.token) {
-                .at_keyword => return .{ .at_rule = consumeAtRule(&self.stream, self.input) },
-                .ident => |name| {
-                    const mark = self.stream;
-                    _ = self.stream.next();
-                    if (self.consumeDeclaration(name)) |declaration| {
-                        return .{ .declaration = declaration };
-                    }
-                    // Not a declaration, e.g. `div:hover { … }`: consume it
-                    // again as a nested rule.
-                    self.stream = mark;
-                    if (consumeNestedRule(&self.stream, self.input)) |rule| {
-                        return .{ .rule = rule };
-                    }
-                },
-                else => if (consumeNestedRule(&self.stream, self.input)) |rule| {
-                    return .{ .rule = rule };
-                },
+            if (peeked.token == .at_keyword) {
+                return .{ .at_rule = consumeAtRule(&self.stream, self.input) };
+            }
+
+            const mark = self.stream;
+            if (peeked.token == .ident) {
+                _ = self.stream.next();
+                if (self.consumeDeclaration(peeked.token.ident)) |declaration| {
+                    return .{ .declaration = declaration };
+                }
+            }
+
+            // Not a declaration, e.g. `&.x { … }` or `div:hover { … }`:
+            // consume it again, as a nested rule where nesting applies.
+            self.stream = mark;
+            if (!self.nesting) {
+                skipInvalidDeclaration(&self.stream);
+            } else if (consumeNestedRule(&self.stream, self.input)) |rule| {
+                return .{ .rule = rule };
             }
         }
     }
@@ -190,7 +203,8 @@ const DeclarationsIterator = struct {
         }
 
         // Only a custom property's value may hold a `{}` block. Anywhere
-        // else, the block makes this a nested rule.
+        // else, the block makes this a nested rule or, without nesting, an
+        // invalid declaration.
         const value = self.consumeValue(std.mem.startsWith(u8, name, "--")) orelse return null;
         return .{
             .name = name,
@@ -511,6 +525,18 @@ fn consumeBlockBody(stream: *TokenStream, input: []const u8, block_start: usize)
     return input[block_start..];
 }
 
+/// Consume an invalid declaration through the next top-level `;`. A `{}`
+/// block in it is skipped whole, `;`s included.
+fn skipInvalidDeclaration(stream: *TokenStream) void {
+    var depth: usize = 0;
+    while (stream.next()) |span| {
+        if (depth == 0 and isSemicolon(span.token)) {
+            return;
+        }
+        updateDepth(span.token, &depth);
+    }
+}
+
 /// Consume a style rule nested in a block: a selector then a `{}` block.
 /// Returns null, having consumed it, for anything that reaches a top-level
 /// `;` before a block, or a block with no selector.
@@ -618,7 +644,7 @@ test "RulesIterator: top-level semicolons" {
 }
 
 test "DeclarationsIterator: nested rules end at their own block" {
-    var it = parseDeclarationsList(
+    var it = parseStyleBlock(
         \\ color: red;
         \\ &.active { color: blue; }
         \\ .child { display: none }
@@ -658,11 +684,29 @@ test "DeclarationsIterator: nested rules end at their own block" {
 }
 
 test "DeclarationsIterator: next skips nested rules" {
-    var it = parseDeclarationsList("&.a { color: blue; } color: red; .b { x: y } invalid; margin: 0");
+    var it = parseStyleBlock("&.a { color: blue; } color: red; .b { x: y } invalid; margin: 0");
     var declaration = it.next() orelse return error.MissingDeclaration;
     try testing.expectEqualStrings("color", declaration.name);
     try testing.expectEqualStrings("red", declaration.value);
     declaration = it.next() orelse return error.MissingDeclaration;
     try testing.expectEqualStrings("margin", declaration.name);
     try testing.expectEqual(null, it.next());
+}
+
+test "DeclarationsIterator: a declarations list has no nested rules" {
+    // `style=` and cssText: a nested rule is an invalid declaration, skipped
+    // through the next top-level `;`, so `display: none` goes with it.
+    var it = parseDeclarationsList("color: red; &.x { color: blue; } display: none; div:hover { color: green } opacity: 0; --custom: { a: b }; margin: 0");
+
+    var item = it.nextItem() orelse return error.MissingItem;
+    try testing.expectEqualStrings("color", item.declaration.name);
+
+    item = it.nextItem() orelse return error.MissingItem;
+    try testing.expectEqualStrings("--custom", item.declaration.name);
+    try testing.expectEqualStrings("{ a: b }", item.declaration.value);
+
+    item = it.nextItem() orelse return error.MissingItem;
+    try testing.expectEqualStrings("margin", item.declaration.name);
+
+    try testing.expectEqual(null, it.nextItem());
 }
