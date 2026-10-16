@@ -946,8 +946,11 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                 else => {},
             }
 
-            const lower = std.ascii.lowerString(&frame.buf, name);
-            const tag = std.meta.stringToEnum(Element.Tag, lower) orelse .unknown;
+            // No known tag name is longer than frame.buf.
+            const tag: Element.Tag = if (name.len > frame.buf.len)
+                .unknown
+            else
+                std.meta.stringToEnum(Element.Tag, std.ascii.lowerString(&frame.buf, name)) orelse .unknown;
             return createSvgElementT(document, Element.Svg.Generic, name, attribute_iterator, .{ ._tag = tag });
         },
         else => {
