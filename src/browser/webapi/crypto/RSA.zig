@@ -357,8 +357,7 @@ fn newKey(
 
 /// Exports an RSA key as DER: `spki` for a public key, `pkcs8` for a private
 /// one. Asking for the other half's format is InvalidAccessError.
-pub fn exportDer(format: []const u8, key: *const CryptoKey, exec: *const Execution) !js.Promise {
-    const local = exec.js.local.?;
+pub fn exportDer(format: []const u8, key: *const CryptoKey, exec: *const Execution) ![]const u8 {
     const pkey = key.getKeyObject();
 
     var out: [*c]u8 = null;
@@ -375,8 +374,7 @@ pub fn exportDer(format: []const u8, key: *const CryptoKey, exec: *const Executi
     defer crypto.OPENSSL_free(out);
     if (len <= 0) return error.OperationError;
 
-    const der = try exec.local_arena.dupe(u8, out[0..@intCast(len)]);
-    return local.resolvePromise(js.ArrayBuffer{ .values = der });
+    return exec.local_arena.dupe(u8, out[0..@intCast(len)]);
 }
 
 /// The JWK of an RSA-OAEP key (JWA, section 6.3). Members are listed in
@@ -405,9 +403,9 @@ const JwkPrivate = struct {
     qi: []const u8,
 };
 
-/// Exports an RSA-OAEP key as a JWK: the public members for either half, plus
-/// the private members (with the CRT parameters) for the private key.
-pub fn exportJwk(key: *const CryptoKey, exec: *const Execution) !js.Promise {
+/// Exports an RSA-OAEP key as a JWK object: the public members for either half,
+/// plus the private members (with the CRT parameters) for the private key.
+pub fn exportJwk(key: *const CryptoKey, exec: *const Execution) !js.Value {
     const local = exec.js.local.?;
     const rsa = crypto.EVP_PKEY_get0_RSA(key.getKeyObject()) orelse return error.OperationError;
     const alg = jwkAlgOfHash(key._algorithm.hash orelse "") orelse return error.OperationError;
@@ -416,9 +414,9 @@ pub fn exportJwk(key: *const CryptoKey, exec: *const Execution) !js.Promise {
     const key_ops = try key.getUsages(exec);
 
     if (key._kind == .public) {
-        return local.resolvePromise(JwkPublic{ .alg = alg, .e = e, .ext = key._extractable, .key_ops = key_ops, .n = n });
+        return local.zigValueToJs(JwkPublic{ .alg = alg, .e = e, .ext = key._extractable, .key_ops = key_ops, .n = n }, .{});
     }
-    return local.resolvePromise(JwkPrivate{
+    return local.zigValueToJs(JwkPrivate{
         .alg = alg,
         .d = try jwkMember(crypto.RSA_get0_d(rsa), exec),
         .dp = try jwkMember(crypto.RSA_get0_dmp1(rsa), exec),
@@ -430,7 +428,7 @@ pub fn exportJwk(key: *const CryptoKey, exec: *const Execution) !js.Promise {
         .p = try jwkMember(crypto.RSA_get0_p(rsa), exec),
         .q = try jwkMember(crypto.RSA_get0_q(rsa), exec),
         .qi = try jwkMember(crypto.RSA_get0_iqmp(rsa), exec),
-    });
+    }, .{});
 }
 
 /// A key component as a JWK Base64urlUInt member.
@@ -453,19 +451,20 @@ fn bnBytes(bn: ?*const crypto.BIGNUM, exec: *const Execution) ![]const u8 {
 
 /// RSA-OAEP encrypt/decrypt. `encrypting` selects the init/op pair; the
 /// padding, OAEP digest (the hash stored on the key), MGF1 digest, label and
-/// the two-call output sizing are identical for both directions.
+/// the two-call output sizing are identical for both directions. `usage` is the
+/// usage bit the key needs: encrypt/decrypt, or wrapKey/unwrapKey when wrapping
+/// a key.
 pub fn crypt(
     key: *const CryptoKey,
     data: []const u8,
     label: []const u8,
     encrypting: bool,
+    usage: u8,
     exec: *const Execution,
 ) ![]const u8 {
     // The key must be an RSA-OAEP key with the matching usage.
     if (key._type != .rsa) return error.InvalidAccessError;
-    if ((encrypting and !key.canEncrypt()) or (!encrypting and !key.canDecrypt())) {
-        return error.InvalidAccessError;
-    }
+    if (key._usages & usage == 0) return error.InvalidAccessError;
 
     const hash_name = key._algorithm.hash orelse return error.OperationError;
     const md = crypto.findDigest(hash_name) catch return error.OperationError;
