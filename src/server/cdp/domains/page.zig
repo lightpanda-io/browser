@@ -325,7 +325,7 @@ fn registerIsolatedWorldContext(arena: Allocator, target: *CDP.Target, world: *C
     js_context.localScope(&ls);
     defer ls.deinit();
 
-    target.bc.inspector().contextCreated(
+    try target.bc.inspector().contextCreated(
         target.group_id,
         &ls.local,
         world.name,
@@ -819,7 +819,7 @@ pub fn frameNavigated(arena: Allocator, target: *CDP.Target, event: *const Notif
         frame.js.localScope(&ls);
         defer ls.deinit();
 
-        target.bc.inspector().contextCreated(
+        try target.bc.inspector().contextCreated(
             target.group_id,
             &ls.local,
             "",
