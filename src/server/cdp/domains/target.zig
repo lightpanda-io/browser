@@ -397,25 +397,38 @@ fn detachFromTarget(cmd: *CDP.Command) !void {
     };
     const params = (try cmd.params(Params)) orelse Params{};
 
-    if (cmd.browser_context) |bc| {
-        // Without a sessionId, detach the target's primary session (if any).
-        // Without a targetId either, the target is the command's: the one of
-        // the session it was sent through, else the first one.
-        const primary_session_id: ?[]const u8 = blk: {
-            const target = if (params.targetId) |target_id| bc.findTarget(target_id) else cmd.target() catch null;
-            break :blk (target orelse break :blk null).session_id;
-        };
-        if (params.sessionId orelse primary_session_id) |requested_session_id| {
-            const session = bc.attached_sessions.get(requested_session_id) orelse return error.UnknownSessionId;
-            const session_id = session.id;
-            const parent_id = session.parent_id;
+    const bc = cmd.browser_context orelse {
+        return cmd.sendResult(null, .{});
+    };
 
-            session.target.fetchDisableForSession(session_id);
-            try cmd.sendEvent("Target.detachedFromTarget", .{
-                .sessionId = session_id,
-            }, .{ .session_id = parent_id });
-            _ = bc.detachSession(session_id);
+    // Without a sessionId, detach the target's primary session (if any).
+    // Without a targetId either, the target is the command's: the one of
+    // the session it was sent through, else the first one.
+    const requested_session_id: ?[]const u8 = blk: {
+        // params.sessionId is set, ignore targetId.
+        if (params.sessionId) |session_id| {
+            break :blk session_id;
         }
+
+        if (params.targetId) |target_id| {
+            const target = try resolveTarget(bc, target_id);
+            break :blk target.session_id;
+        }
+
+        const target = cmd.target() catch break :blk null;
+        break :blk target.session_id;
+    };
+
+    if (requested_session_id) |requested| {
+        const session = bc.attached_sessions.get(requested) orelse return error.UnknownSessionId;
+        const session_id = session.id;
+        const parent_id = session.parent_id;
+
+        session.target.fetchDisableForSession(session_id);
+        try cmd.sendEvent("Target.detachedFromTarget", .{
+            .sessionId = session_id,
+        }, .{ .session_id = parent_id });
+        _ = bc.detachSession(session_id);
     }
 
     return cmd.sendResult(null, .{});
