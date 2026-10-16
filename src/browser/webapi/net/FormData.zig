@@ -74,6 +74,26 @@ pub const Entry = struct {
             };
         }
     };
+
+    const Read = union(enum) {
+        file: *File,
+        string: []const u8,
+    };
+
+    fn read(self: *Entry, exec: *const Execution) !Entry.Read {
+        switch (self.value) {
+            .string => |*s| return .{ .string = s.str() },
+            .file => |f| return .{ .file = f },
+            .no_file => {
+                // An unselected file input stands for an empty, unnamed File.
+                // Materialize it on first read so repeated reads return the same
+                // object; it serializes exactly as .no_file did.
+                const file = try fileFromBytes("", "application/octet-stream", "", exec);
+                self.value = .{ .file = file };
+                return .{ .file = file };
+            },
+        }
+    }
 };
 
 pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormData {
@@ -186,20 +206,20 @@ pub fn acquireRef(self: *FormData) void {
     self._rc.acquire();
 }
 
-pub fn get(self: *const FormData, name: String) ?[]const u8 {
+pub fn get(self: *FormData, name: String, exec: *const Execution) !?Entry.Read {
     for (self._entries.items) |*entry| {
         if (entry.name.eql(name)) {
-            return entry.value.asString();
+            return try entry.read(exec);
         }
     }
     return null;
 }
 
-pub fn getAll(self: *const FormData, name: String, exec: *const Execution) ![]const []const u8 {
-    var arr: std.ArrayList([]const u8) = .empty;
+pub fn getAll(self: *FormData, name: String, exec: *const Execution) ![]const Entry.Read {
+    var arr: std.ArrayList(Entry.Read) = .empty;
     for (self._entries.items) |*entry| {
         if (entry.name.eql(name)) {
-            try arr.append(exec.call_arena, entry.value.asString());
+            try arr.append(exec.call_arena, try entry.read(exec));
         }
     }
     return arr.items;
@@ -256,12 +276,16 @@ pub fn append(self: *FormData, name: []const u8, value: EntryValue, filename: ?[
 // but over bytes we already hold rather than JS parts. Returned at refcount 1:
 // the entry owns that reference and deleteByName releases it.
 
-fn fileFrom(source: *Blob, name: []const u8, exec: *Execution) !*File {
-    const arena = try exec.getArena(source._slice.len + source._mime.len + 256, "Blob");
+fn fileFrom(source: *Blob, name: []const u8, exec: *const Execution) !*File {
+    return fileFromBytes(source._slice, source._mime, name, exec);
+}
+
+fn fileFromBytes(bytes: []const u8, mime: []const u8, name: []const u8, exec: *const Execution) !*File {
+    const arena = try exec.getArena(bytes.len + mime.len + 256, "Blob");
     errdefer arena.release();
 
     const file = try Factory.chainedWithAllocator(arena.allocator(), .{
-        try Blob.buildValueFromBytes(arena, source._slice, source._mime),
+        try Blob.buildValueFromBytes(arena, bytes, mime),
         File{
             ._proto = undefined,
             ._name = try arena.dupe(u8, name),
@@ -313,11 +337,15 @@ pub fn entries(self: *FormData, exec: *const js.Execution) !*EntryIterator {
     return EntryIterator.init(.{ .fd = self }, exec);
 }
 
-pub fn forEach(self: *FormData, cb_: js.Function, js_this_: ?js.Object) !void {
+pub fn forEach(self: *FormData, cb_: js.Function, js_this_: ?js.Object, exec: *const Execution) !void {
     const cb = if (js_this_) |js_this| try cb_.withThis(js_this) else cb_;
 
-    for (self._entries.items) |*entry| {
-        cb.call(void, .{ entry.value.asString(), entry.name.str(), self }) catch |err| {
+    // Index-based: the callback may append, which can reallocate the list.
+    var i: usize = 0;
+    while (i < self._entries.items.len) : (i += 1) {
+        const entry = &self._entries.items[i];
+        const value = try entry.read(exec);
+        cb.call(void, .{ value, entry.name.str(), self }) catch |err| {
             // this is a non-JS error
             log.debug(.js, "FormData.forEach", .{ .err = err });
         };
@@ -755,7 +783,7 @@ pub const Iterator = struct {
     index: u32 = 0,
     fd: *FormData,
 
-    pub const Entry = struct { []const u8, []const u8 };
+    pub const Entry = struct { []const u8, FormData.Entry.Read };
 
     pub fn acquireRef(self: *Iterator) void {
         self.fd.acquireRef();
@@ -765,7 +793,7 @@ pub const Iterator = struct {
         self.fd.releaseRef(page);
     }
 
-    pub fn next(self: *Iterator, _: *const Execution) ?Iterator.Entry {
+    pub fn next(self: *Iterator, exec: *const Execution) !?Iterator.Entry {
         const index = self.index;
         const items = self.fd._entries.items;
         if (index >= items.len) {
@@ -774,7 +802,7 @@ pub const Iterator = struct {
         self.index = index + 1;
 
         const e = &items[index];
-        return .{ e.name.str(), e.value.asString() };
+        return .{ e.name.str(), try e.read(exec) };
     }
 };
 
@@ -1032,6 +1060,15 @@ test "FormData: multipart empty body" {
     try testing.expectString("--B--\r\n", buf.written());
 }
 
+fn testGetString(fd: *const FormData, name: []const u8) ?[]const u8 {
+    for (fd._entries.items) |*entry| {
+        if (std.mem.eql(u8, entry.name.str(), name)) {
+            return entry.value.asString();
+        }
+    }
+    return null;
+}
+
 fn buildTestFile(arena: Allocator, page: *@import("../../Page.zig"), name: []const u8, mime: []const u8, body: []const u8) !*File {
     const blob_arena = try page.getArena(body.len + mime.len + 256, "Blob");
     const file = try Factory.chainedWithAllocator(blob_arena.allocator(), .{
@@ -1280,12 +1317,12 @@ test "FormData: urlencoded parse" {
     try fd.parseUrlEncoded("a=1&b=hello+world&c=%26%3D&no_value&&bad=100%zz");
 
     try testing.expectEqual(5, fd._entries.items.len);
-    try testing.expectString("1", fd.get(.wrap("a")).?);
-    try testing.expectString("hello world", fd.get(.wrap("b")).?);
-    try testing.expectString("&=", fd.get(.wrap("c")).?);
-    try testing.expectString("", fd.get(.wrap("no_value")).?);
+    try testing.expectString("1", testGetString(&fd, "a").?);
+    try testing.expectString("hello world", testGetString(&fd, "b").?);
+    try testing.expectString("&=", testGetString(&fd, "c").?);
+    try testing.expectString("", testGetString(&fd, "no_value").?);
     // An invalid percent sequence passes through verbatim.
-    try testing.expectString("100%zz", fd.get(.wrap("bad")).?);
+    try testing.expectString("100%zz", testGetString(&fd, "bad").?);
 }
 
 test "FormData: urlencoded parse exercises the vectorized guard" {
@@ -1304,9 +1341,9 @@ test "FormData: urlencoded parse exercises the vectorized guard" {
         "&pct=aaa%41aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ++
         "&clean=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 
-    try testing.expectString("aaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fd.get(.wrap("plus")).?);
-    try testing.expectString("aaaAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fd.get(.wrap("pct")).?);
-    try testing.expectString("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fd.get(.wrap("clean")).?);
+    try testing.expectString("aaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", testGetString(&fd, "plus").?);
+    try testing.expectString("aaaAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", testGetString(&fd, "pct").?);
+    try testing.expectString("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", testGetString(&fd, "clean").?);
 }
 
 test "FormData: multipart parse" {
@@ -1332,12 +1369,12 @@ test "FormData: multipart parse" {
         "--BOUNDARY--\r\n", "BOUNDARY", &frame.js.execution);
 
     try testing.expectEqual(3, fd._entries.items.len);
-    try testing.expectString("John", fd.get(.wrap("name")).?);
+    try testing.expectString("John", testGetString(&fd, "name").?);
     // Escaped name decodes, and a value containing CRLF survives.
     try testing.expectString("a\"b\r\nc", fd._entries.items[1].name.str());
     try testing.expectString("two\r\nlines", fd._entries.items[1].value.asString());
     // The boundary as a prefix of longer text is not a delimiter.
-    try testing.expectString("a\r\n--BOUNDARYx b", fd.get(.wrap("tricky")).?);
+    try testing.expectString("a\r\n--BOUNDARYx b", testGetString(&fd, "tricky").?);
 }
 
 test "FormData: multipart parse with file" {
@@ -1437,6 +1474,6 @@ test "FormData: multipart round-trip" {
     try testing.expectString("alice", fd._entries.items[0].value.asString());
     try testing.expectString("username", fd._entries.items[1].name.str());
     try testing.expectString("bob", fd._entries.items[1].value.asString());
-    try testing.expectString("quoted \"value\"", fd.get(.wrap("a\"b\r\nc")).?);
-    try testing.expectString("tabbed", fd.get(.wrap("a\tb")).?);
+    try testing.expectString("quoted \"value\"", testGetString(&fd, "a\"b\r\nc").?);
+    try testing.expectString("tabbed", testGetString(&fd, "a\tb").?);
 }
