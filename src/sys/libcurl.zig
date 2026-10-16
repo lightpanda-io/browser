@@ -264,6 +264,7 @@ pub const CurlInfo = enum(c.CURLINFO) {
     pretransfer_time_t = c.CURLINFO_PRETRANSFER_TIME_T,
     starttransfer_time_t = c.CURLINFO_STARTTRANSFER_TIME_T,
     size_download_t = c.CURLINFO_SIZE_DOWNLOAD_T,
+    header_size = c.CURLINFO_HEADER_SIZE,
     http_version = c.CURLINFO_HTTP_VERSION,
     num_connects = c.CURLINFO_NUM_CONNECTS,
     conn_id = c.CURLINFO_CONN_ID,
@@ -685,6 +686,7 @@ pub fn curl_easy_getinfo(easy: *Curl, comptime info: CurlInfo, out: anytype) Err
         .redirect_count,
         .num_connects,
         .http_version,
+        .header_size,
         => blk: {
             const p: *c_long = out;
             break :blk c.curl_easy_getinfo(easy, inf, p);

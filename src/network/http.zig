@@ -639,6 +639,17 @@ pub const Connection = struct {
         return @intCast(@max(0, size));
     }
 
+    // Bytes of every response header received for this transfer, status
+    // line and blank line included: curl's CURLINFO_HEADER_SIZE. It also
+    // counts a proxy's CONNECT reply (on the first transfer over a tunnelled
+    // connection) and any 1xx response's headers, and on HTTP/2 it counts
+    // curl's HTTP/1-style rendering of the headers, not the HPACK bytes.
+    pub fn getHeaderSize(self: *const Connection) !u64 {
+        var size: c_long = undefined;
+        try libcurl.curl_easy_getinfo(self._easy, .header_size, &size);
+        return @intCast(@max(0, size));
+    }
+
     pub fn getHttpVersion(self: *const Connection) !libcurl.CurlHttpVersion {
         var version: c_long = undefined;
         try libcurl.curl_easy_getinfo(self._easy, .http_version, &version);

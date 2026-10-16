@@ -1950,6 +1950,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     }
 
     try transfer.materializeResponse(msg.conn, .{});
+    transfer.captureWireSize(msg.conn);
     if (self.enforceCorsResponse(msg, transfer)) return true;
 
     // Latency is only meaningful for responses that hit the network (cache
@@ -2604,8 +2605,17 @@ pub const Transfer = struct {
     // rewrote it). Only meaningful while _cache_intent != .none.
     _cache_key: [:0]const u8 = "",
 
-    // Content length reported on the CDP loadingFinished event.
+    // Content length reported on the CDP responseReceived event, and the
+    // resource-timing size of a partial fetch.
     _content_length: usize = 0,
+
+    // Bytes reported on the CDP loadingFinished event (encodedDataLength).
+    // For a response fetched over the network, its header and body bytes as
+    // received, the body still compressed: a revalidated 304 counts its own
+    // bytes, not the cached body it unlocks, and a redirect only the final
+    // hop's. For a cache hit, the stored body; for a fulfilled or synthetic
+    // response, its body.
+    _encoded_data_length: usize = 0,
 
     // Length of the body data_callback will receive. Can be different than
     // Content-Length if the content was compressed
@@ -3019,6 +3029,7 @@ pub const Transfer = struct {
         }
 
         self.materializeResponse(conn, .{}) catch return false;
+        self.captureWireSize(conn);
         self.client.removeConn(conn);
         self._conn = null;
         self._content_length = self.res.buffer.items.len;
@@ -3298,6 +3309,23 @@ pub const Transfer = struct {
         };
     }
 
+    // What this hop's response put on the wire, as libcurl counts it, which
+    // approximates Chrome's wire bytes. The headers are curl's
+    // CURLINFO_HEADER_SIZE: it also counts a proxy's CONNECT reply (on the
+    // first transfer over a tunnelled connection) and any 1xx response's
+    // headers, and on HTTP/2 counts curl's HTTP/1-style rendering of them,
+    // not the HPACK bytes. The body is counted after any chunked framing is
+    // removed but before it is decompressed. A partial fetch stopped early
+    // counts what arrived before it stopped, the refused read included
+    // (decoded, if the body was compressed).
+    fn captureWireSize(self: *Transfer, conn: *const http.Connection) void {
+        const header_size = conn.getHeaderSize() catch 0;
+        // Not _timing.encoded_body_size: a streamed response's timing is
+        // captured at its first chunk, before the body has all arrived.
+        const body_size = conn.getDownloadSize() catch 0;
+        self._encoded_data_length = @intCast(header_size + body_size + self.res.partial_refused);
+    }
+
     fn redirectTiming(self: *Transfer, headers: []const http.Header) void {
         const t = &self._timing;
         const now = lp.datetime.microTimestamp(.boot);
@@ -3537,6 +3565,11 @@ pub const Transfer = struct {
         self._from_cache = true;
         self._timing.cache = cache_state;
         self._content_length = body.len;
+        // A revalidated entry keeps the 304's wire size, captured when it
+        // completed: that is what crossed the network.
+        if (cache_state == .local) {
+            self._encoded_data_length = body.len;
+        }
         return body;
     }
 
@@ -3567,6 +3600,7 @@ pub const Transfer = struct {
         // It may replace a cached response paused at the response stage.
         self._from_cache = false;
         self._content_length = owned_body.len;
+        self._encoded_data_length = owned_body.len;
         try self.bufferEvents(owned_body);
     }
 
@@ -4213,6 +4247,7 @@ pub const Transfer = struct {
             // flag and treats the resulting CURLE_WRITE_ERROR as a completed
             // response with the kept prefix as its body.
             res.partial_abort = true;
+            res.partial_refused = chunk_len;
             return http.writefunc_error;
         }
 
@@ -4457,7 +4492,7 @@ pub const Transfer = struct {
                     if (transfer._notify_cdp) {
                         transfer.notify(.http_request_done, &.{
                             .transfer = transfer,
-                            .content_length = transfer._content_length,
+                            .encoded_data_length = transfer._encoded_data_length,
                         });
                     }
                     // Before done_callback: a load handler can already see
@@ -4573,6 +4608,9 @@ const Response = struct {
     // apart from a real CURLE_WRITE_ERROR and deliver the response (headers,
     // status, kept prefix) as a success.
     partial_abort: bool = false,
+    // Length of the read dataCallback refused to end a partial fetch. It
+    // arrived, but libcurl doesn't count a read its callback refused.
+    partial_refused: usize = 0,
 
     // Response body. Filled by dataCallback, consumed in processMessages.
     // See Stream.spare to see how this works in streaming mode
@@ -4668,6 +4706,7 @@ const Synthetic = struct {
             transfer.setResponseHeaders(h);
         }
         transfer._content_length = body.len;
+        transfer._encoded_data_length = body.len;
         try transfer.bufferEvents(body);
     }
 };
@@ -6364,6 +6403,207 @@ test "HttpClient: throttled navigations wait for their per-host slot" {
     try testing.expectEqual(0, client.delayed_count);
     try testing.expectEqual(null, client.delayed_queue.first);
     try testing.expectEqual(null, client.pending_queue.first);
+}
+
+// Network.loadingFinished.encodedDataLength, as the client reports it in
+// http_request_done, against the test server's byte-exact responses.
+const TestSizedRequest = struct {
+    notification: *Notification,
+    reported: ?usize = null,
+    from_cache: bool = false,
+    bytes_received: usize = 0,
+    body: std.ArrayList(u8) = .empty,
+    done: bool = false,
+    err: ?anyerror = null,
+
+    fn init(self: *TestSizedRequest) !void {
+        self.* = .{ .notification = try Notification.init(testing.allocator) };
+        try self.notification.register(.http_request_done, self, onRequestDone);
+    }
+
+    fn deinit(self: *TestSizedRequest) void {
+        self.body.deinit(testing.allocator);
+        self.notification.deinit();
+    }
+
+    fn onRequestDone(ctx: *anyopaque, msg: *const Notification.RequestDone) !void {
+        const self: *TestSizedRequest = @ptrCast(@alignCast(ctx));
+        self.reported = msg.encoded_data_length;
+        self.from_cache = msg.transfer._from_cache;
+        self.bytes_received = msg.transfer.res.bytes_received;
+    }
+
+    const FetchOpts = struct {
+        partial: ?u32 = null,
+        streaming: bool = false,
+    };
+
+    // Requests `url` and runs it to completion, returning the reported size.
+    fn fetch(self: *TestSizedRequest, client: *Client, url: [:0]const u8, opts: FetchOpts) !usize {
+        self.body.clearRetainingCapacity();
+        self.reported = null;
+        self.done = false;
+        try client.request(.{
+            .method = .GET,
+            .url = url,
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
+            .resource_type = if (opts.partial == null) .xhr else .image,
+            .partial = opts.partial,
+            .streaming = opts.streaming,
+            .notification = self.notification,
+            .ctx = self,
+            .data_callback = dataCallback,
+            .done_callback = doneCallback,
+            .error_callback = errorCallback,
+            .shutdown_callback = noopShutdown,
+        }, null);
+        for (0..250) |_| {
+            if (self.done or self.err != null) break;
+            _ = try client.tick(20);
+        } else return error.NeverSettled;
+        // The delivering tick retired the transfer; the next one releases it.
+        _ = try client.tick(0);
+        if (self.err) |err| return err;
+        return self.reported orelse error.NotReported;
+    }
+
+    fn dataCallback(transfer: *Transfer, data: []const u8) !void {
+        const self: *TestSizedRequest = @ptrCast(@alignCast(transfer.req.ctx));
+        try self.body.appendSlice(testing.allocator, data);
+    }
+
+    fn doneCallback(ctx: *anyopaque) !void {
+        const self: *TestSizedRequest = @ptrCast(@alignCast(ctx));
+        self.done = true;
+    }
+
+    fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+        const self: *TestSizedRequest = @ptrCast(@alignCast(ctx));
+        self.err = err;
+    }
+};
+
+test "HttpClient: encodedDataLength is the header and body bytes of a Content-Length response" {
+    const client = &testing.test_browser.http_client;
+    var h: TestSizedRequest = undefined;
+    try h.init();
+    defer h.deinit();
+
+    const r = testing.transfer_size.content_length;
+    const reported = try h.fetch(client, "http://127.0.0.1:9582/transfer-size/content-length", .{});
+    try testing.expectEqual(r.head.len + r.body.len, reported);
+    try testing.expectEqual("hello world", h.body.items);
+}
+
+test "HttpClient: encodedDataLength counts the header and body bytes of a chunked response" {
+    const client = &testing.test_browser.http_client;
+    var h: TestSizedRequest = undefined;
+    try h.init();
+    defer h.deinit();
+
+    const r = testing.transfer_size.chunked;
+    const reported = try h.fetch(client, "http://127.0.0.1:9582/transfer-size/chunked", .{});
+    try testing.expectEqual("hello world", h.body.items);
+    // libcurl counts the payload, not the chunk framing around it.
+    try testing.expectEqual(r.head.len + "hello world".len, reported);
+}
+
+test "HttpClient: encodedDataLength counts the header and body bytes of a streamed response" {
+    const client = &testing.test_browser.http_client;
+    var h: TestSizedRequest = undefined;
+    try h.init();
+    defer h.deinit();
+
+    const r = testing.transfer_size.chunked;
+    const reported = try h.fetch(client, "http://127.0.0.1:9582/transfer-size/chunked", .{ .streaming = true });
+    try testing.expectEqual("hello world", h.body.items);
+    // libcurl counts the payload, not the chunk framing around it.
+    try testing.expectEqual(r.head.len + "hello world".len, reported);
+}
+
+test "HttpClient: encodedDataLength counts a compressed body as received, not decoded" {
+    const client = &testing.test_browser.http_client;
+    var h: TestSizedRequest = undefined;
+    try h.init();
+    defer h.deinit();
+
+    const r = testing.transfer_size.gzip;
+    const reported = try h.fetch(client, "http://127.0.0.1:9582/transfer-size/gzip", .{});
+    try testing.expectEqual(testing.transfer_size.gzip_decoded_len, h.body.items.len);
+    try testing.expectEqual(r.head.len + r.body.len, reported);
+}
+
+test "HttpClient: encodedDataLength after a redirect is the final response's bytes" {
+    const client = &testing.test_browser.http_client;
+    var h: TestSizedRequest = undefined;
+    try h.init();
+    defer h.deinit();
+
+    const r = testing.transfer_size.content_length;
+    const reported = try h.fetch(client, "http://127.0.0.1:9582/transfer-size/redirect", .{});
+    try testing.expectEqual("hello world", h.body.items);
+    try testing.expectEqual(r.head.len + r.body.len, reported);
+}
+
+test "HttpClient: encodedDataLength of an early-stopped partial fetch is the bytes that arrived" {
+    const client = &testing.test_browser.http_client;
+    var h: TestSizedRequest = undefined;
+    try h.init();
+    defer h.deinit();
+
+    const reported = try h.fetch(client, "http://127.0.0.1:9582/transfer-size/large", .{ .partial = 16 * 1024 });
+    try testing.expectEqual(16 * 1024, h.body.items.len);
+    // The fetch stopped once more than PARTIAL_DRAIN_MAX had arrived, long
+    // before the whole body.
+    try testing.expect(h.bytes_received > Request.PARTIAL_DRAIN_MAX);
+    try testing.expect(h.bytes_received < testing.transfer_size.large_len);
+    try testing.expectEqual(testing.transfer_size.large_head.len + h.bytes_received, reported);
+}
+
+test "HttpClient: encodedDataLength of a cache hit is the stored body, of a revalidation the 304's bytes" {
+    const client = &testing.test_browser.http_client;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var config = try lp.Config.init(testing.allocator, "test", .{
+        .serve = .{ .http_cache_dir = try testing.tmpPath(&tmp, "cache") },
+    });
+    defer config.deinit(testing.allocator);
+    var cache = try Cache.init(testing.allocator, &config);
+    defer cache.deinit();
+    try testing.expect(cache.active() != null);
+
+    const previous = client.cache;
+    client.cache = &cache;
+    defer client.cache = previous;
+
+    var h: TestSizedRequest = undefined;
+    try h.init();
+    defer h.deinit();
+
+    {
+        const r = testing.transfer_size.cacheable;
+        const url = "http://127.0.0.1:9582/transfer-size/cacheable";
+        try testing.expectEqual(r.head.len + r.body.len, try h.fetch(client, url, .{}));
+        try testing.expectEqual(false, h.from_cache);
+
+        try testing.expectEqual(r.body.len, try h.fetch(client, url, .{}));
+        try testing.expectEqual(true, h.from_cache);
+        try testing.expectEqual("hello world", h.body.items);
+    }
+
+    {
+        const r = testing.transfer_size.revalidated;
+        const url = "http://127.0.0.1:9582/transfer-size/revalidated";
+        try testing.expectEqual(r.head.len + r.body.len, try h.fetch(client, url, .{}));
+
+        // The 304 crossed the wire; the body it unlocked did not.
+        const reported = try h.fetch(client, url, .{});
+        try testing.expectEqual("hello world", h.body.items);
+        try testing.expectEqual(testing.transfer_size.not_modified.head.len, reported);
+    }
 }
 
 test "HttpClient: bodyless status announcing a body" {

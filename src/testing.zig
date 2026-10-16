@@ -676,6 +676,98 @@ var serve_counts = [_]struct { name: []const u8, count: u32 = 0 }{
     .{ .name = "prescan_module" },
 };
 
+// Responses for the transfer-size tests (HttpClient.zig). They are written
+// to the socket byte for byte, so a test knows how many header and body
+// bytes crossed the wire.
+pub const TransferSizeResponse = struct {
+    head: []const u8,
+    body: []const u8,
+};
+
+pub const transfer_size = struct {
+    pub const content_length: TransferSizeResponse = .{
+        .head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 11\r\n\r\n",
+        .body = "hello world",
+    };
+    // The payload is "hello world"; the chunk framing is wire bytes too.
+    pub const chunked: TransferSizeResponse = .{
+        .head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n",
+        .body = "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n",
+    };
+    // 1000 'a's, gzipped.
+    pub const gzip: TransferSizeResponse = .{
+        .head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: 29\r\n\r\n",
+        .body = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x4b\x4c\x1c\x05\xa3\x60\x14\x0c\x77\x00\x00\x03\xda\x38\x9a\xe8\x03\x00\x00",
+    };
+    pub const gzip_decoded_len = 1000;
+    pub const cacheable: TransferSizeResponse = .{
+        .head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nCache-Control: max-age=600\r\nContent-Length: 11\r\n\r\n",
+        .body = "hello world",
+    };
+    // Served on the first request; a request with If-None-Match gets
+    // `not_modified` instead.
+    pub const revalidated: TransferSizeResponse = .{
+        .head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nCache-Control: no-cache\r\nETag: \"v1\"\r\nContent-Length: 11\r\n\r\n",
+        .body = "hello world",
+    };
+    pub const not_modified: TransferSizeResponse = .{
+        .head = "HTTP/1.1 304 Not Modified\r\nCache-Control: no-cache\r\nETag: \"v1\"\r\n\r\n",
+        .body = "",
+    };
+    // Redirects to `content_length`.
+    pub const redirect: TransferSizeResponse = .{
+        .head = "HTTP/1.1 302 Found\r\nLocation: /transfer-size/content-length\r\nContent-Length: 9\r\n\r\n",
+        .body = "redirect!",
+    };
+    // The body is `large_len` bytes, far more than a partial fetch reads
+    // before it stops.
+    pub const large_head = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 262144\r\n\r\n";
+    pub const large_len = 256 * 1024;
+};
+
+fn serveTransferSize(req: *std.http.Server.Request, path: []const u8) !void {
+    const name = path["/transfer-size/".len..];
+    // Read the request before writing: the server's read and write buffers
+    // are the same memory.
+    var conditional = false;
+    var it = req.iterateHeaders();
+    while (it.next()) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, "if-none-match")) {
+            conditional = true;
+        }
+    }
+
+    const out = req.server.out;
+    if (std.mem.eql(u8, name, "large")) {
+        try out.writeAll(transfer_size.large_head);
+        var chunk: [4096]u8 = undefined;
+        for (&chunk, 0..) |*b, i| b.* = @truncate(i);
+        for (0..transfer_size.large_len / chunk.len) |_| {
+            try out.writeAll(&chunk);
+        }
+        return out.flush();
+    }
+
+    const response: TransferSizeResponse = if (std.mem.eql(u8, name, "content-length"))
+        transfer_size.content_length
+    else if (std.mem.eql(u8, name, "chunked"))
+        transfer_size.chunked
+    else if (std.mem.eql(u8, name, "gzip"))
+        transfer_size.gzip
+    else if (std.mem.eql(u8, name, "cacheable"))
+        transfer_size.cacheable
+    else if (std.mem.eql(u8, name, "revalidated"))
+        if (conditional) transfer_size.not_modified else transfer_size.revalidated
+    else if (std.mem.eql(u8, name, "redirect"))
+        transfer_size.redirect
+    else
+        return req.respond("unknown transfer-size response", .{ .status = .not_found });
+
+    try out.writeAll(response.head);
+    try out.writeAll(response.body);
+    return out.flush();
+}
+
 fn origin(req: *std.http.Server.Request) ?[]const u8 {
     var it = req.iterateHeaders();
     while (it.next()) |h| {
@@ -728,6 +820,10 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 .{ .name = "Content-Type", .value = "text/plain" },
             },
         });
+    }
+
+    if (std.mem.startsWith(u8, path, "/transfer-size/")) {
+        return serveTransferSize(req, path);
     }
 
     if (std.mem.eql(u8, path, "/xhr_empty")) {
