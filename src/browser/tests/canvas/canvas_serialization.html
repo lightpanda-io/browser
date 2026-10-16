@@ -75,13 +75,14 @@
 }
 </script>
 
-<script id=toBlob_basic>
+<script id=toBlob_basic type=module>
 {
+  const state = await testing.async();
   const canvas = document.getElementById('c');
   testing.expectEqual('function', typeof canvas.toBlob);
 
-  canvas.toBlob(function(blob) {
-    // A thrown TypeError in here is only logged, so guard before dereferencing.
+  canvas.toBlob((blob) => state.resolve(blob));
+  await state.done((blob) => {
     testing.expectEqual(true, blob instanceof Blob);
     testing.expectEqual('image/png', blob.type);
     testing.expectEqual(67, blob.size);
@@ -89,40 +90,56 @@
 }
 </script>
 
-<script id=toBlob_is_async>
+<script id=toBlob_is_async type=module>
 {
+  const state = await testing.async();
   const canvas = document.getElementById('c');
   let called = false;
-  canvas.toBlob(function() { called = true; });
-  // The callback runs from a task, never synchronously...
-  testing.expectEqual(false, called);
-  // ...but before any task queued after it.
-  setTimeout(function() { testing.expectEqual(true, called); }, 0);
+  canvas.toBlob(function() {
+    called = true;
+    state.resolve();
+  });
+  // The callback runs from a task, never synchronously. Serialization runs in
+  // parallel, so the spec doesn't order it against other tasks (Chrome runs a
+  // setTimeout(0) queued after it first).
+  const sync = called;
+  await state.done(() => {
+    testing.expectEqual(false, sync);
+    testing.expectEqual(true, called);
+  });
 }
 </script>
 
-<script id=toBlob_drains_microtasks>
+<script id=toBlob_drains_microtasks type=module>
 {
+  const state = await testing.async();
   const canvas = document.getElementById('c');
   const order = [];
   canvas.toBlob(function() {
     order.push('callback');
     Promise.resolve().then(function() { order.push('microtask'); });
+    // Queued from the callback's task, so it runs after that task's
+    // microtask checkpoint.
+    setTimeout(function() {
+      order.push('timer');
+      state.resolve(order.join(','));
+    }, 0);
   });
-  setTimeout(function() {
-    order.push('timer');
-    // The microtask checkpoint follows the callback's task, as for any task.
-    testing.expectEqual('callback,microtask,timer', order.join(','));
-  }, 0);
+  await state.done((v) => {
+    testing.expectEqual('callback,microtask,timer', v);
+  });
 }
 </script>
 
-<script id=toBlob_zero_size_yields_null>
+<script id=toBlob_zero_size_yields_null type=module>
 {
+  const state = await testing.async();
   const canvas = document.createElement('canvas');
   canvas.width = 0;
-  canvas.toBlob(function(blob) {
+  canvas.toBlob((blob) => state.resolve(blob));
+  await state.done((blob) => {
     testing.expectEqual(null, blob);
   });
 }
 </script>
+
