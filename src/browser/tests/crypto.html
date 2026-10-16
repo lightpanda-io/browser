@@ -404,6 +404,158 @@
   });
 </script>
 
+<script id=wrap-unwrap type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+  const gcm = { name: "AES-GCM", iv: new Uint8Array(12) };
+  const cbc = { name: "AES-CBC", iv: new Uint8Array(16) };
+  const rsaAlgo = { name: "RSA-OAEP", hash: "SHA-256" };
+  const msg = new TextEncoder().encode("wrapped");
+
+  const target = await subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  const rsa = await subtle.generateKey(
+    { ...rsaAlgo, modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) },
+    true,
+    ["encrypt", "decrypt", "wrapKey", "unwrapKey"],
+  );
+  const kw = await subtle.generateKey({ name: "AES-KW", length: 128 }, true, ["wrapKey", "unwrapKey"]);
+  const gcmWrapper = await subtle.generateKey({ name: "AES-GCM", length: 128 }, true, ["wrapKey", "unwrapKey", "decrypt"]);
+  const cbcWrapper = await subtle.generateKey({ name: "AES-CBC", length: 128 }, true, ["wrapKey", "unwrapKey"]);
+  const raw = hex(await subtle.exportKey("raw", target));
+
+  // AES-KW (RFC 3394) wraps the raw key, 8 bytes longer.
+  const kwWrapped = await subtle.wrapKey("raw", target, kw, "AES-KW");
+  const kwBack = await subtle.unwrapKey("raw", kwWrapped, kw, { name: "AES-KW" }, "AES-GCM", true, ["encrypt"]);
+
+  // AES-GCM wraps a JWK as the UTF-8 of JSON.stringify(exportKey("jwk", key)).
+  const jwkWrapped = await subtle.wrapKey("jwk", rsa.privateKey, gcmWrapper, gcm);
+  const jwkText = new TextDecoder().decode(await subtle.decrypt(gcm, gcmWrapper, jwkWrapped));
+  const jwkBack = await subtle.unwrapKey("jwk", jwkWrapped, gcmWrapper, gcm, rsaAlgo, true, ["decrypt"]);
+  const ct = await subtle.encrypt({ name: "RSA-OAEP" }, rsa.publicKey, msg);
+
+  // RSA-OAEP wraps by encrypting; AES-CBC here wraps a pkcs8 key.
+  const rsaWrapped = await subtle.wrapKey("raw", target, rsa.publicKey, { name: "RSA-OAEP" });
+  const rsaBack = await subtle.unwrapKey("raw", rsaWrapped, rsa.privateKey, "RSA-OAEP", { name: "AES-GCM" }, false, ["decrypt"]);
+  const p8Wrapped = await subtle.wrapKey("pkcs8", rsa.privateKey, cbcWrapper, cbc);
+  const p8Back = await subtle.unwrapKey("pkcs8", p8Wrapped, cbcWrapper, cbc, rsaAlgo, true, ["decrypt"]);
+
+  const results = {
+    kwRaw: hex(await subtle.exportKey("raw", kwBack)),
+    jwkJson: JSON.stringify(await subtle.exportKey("jwk", rsa.privateKey)),
+    jwkDecrypt: new TextDecoder().decode(await subtle.decrypt({ name: "RSA-OAEP" }, jwkBack, ct)),
+    rsaBackDecrypt: hex(await subtle.decrypt(gcm, rsaBack, await subtle.encrypt(gcm, target, msg))),
+    p8: hex(await subtle.exportKey("pkcs8", p8Back)),
+    p8Original: hex(await subtle.exportKey("pkcs8", rsa.privateKey)),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(40, kwWrapped.byteLength);
+    testing.expectEqual(raw, results.kwRaw);
+    testing.expectEqual(results.jwkJson, jwkText);
+    testing.expectEqual("private", jwkBack.type);
+    testing.expectEqual("wrapped", results.jwkDecrypt);
+    // The unwrapped key takes the extractable flag and usages asked for.
+    testing.expectEqual(false, rsaBack.extractable);
+    testing.expectEqual("decrypt", rsaBack.usages.join(","));
+    testing.expectEqual(hex(msg), results.rsaBackDecrypt);
+    testing.expectEqual(results.p8Original, results.p8);
+  });
+</script>
+
+<script id=wrap-unwrap-errors type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const gcm = { name: "AES-GCM", iv: new Uint8Array(12) };
+  const cbc = { name: "AES-CBC", iv: new Uint8Array(16) };
+  const aes = (name, usages, extractable = true) => subtle.generateKey({ name, length: 128 }, extractable, usages);
+
+  const target = await aes("AES-GCM", ["encrypt"]);
+  const locked = await aes("AES-GCM", ["encrypt"], false);
+  const wrapper = await aes("AES-GCM", ["wrapKey", "unwrapKey"]);
+  const encryptOnly = await aes("AES-GCM", ["encrypt", "decrypt"]);
+  const encryptAndUnwrap = await aes("AES-GCM", ["encrypt", "unwrapKey"]);
+  const kw = await aes("AES-KW", ["wrapKey", "unwrapKey"]);
+  const otherKw = await aes("AES-KW", ["wrapKey", "unwrapKey"]);
+  const hmac = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign"]);
+  // 160 bits: 20 raw bytes, not a multiple of the 8 AES-KW needs.
+  const hmac160 = await subtle.generateKey({ name: "HMAC", hash: "SHA-256", length: 160 }, true, ["sign"]);
+  const rsa = await subtle.generateKey(
+    { name: "RSA-OAEP", hash: "SHA-256", modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) },
+    true,
+    ["decrypt"],
+  );
+  const ecdh = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const x25519 = await subtle.generateKey({ name: "X25519" }, true, ["deriveBits"]);
+  const kwWrapped = await subtle.wrapKey("raw", target, kw, "AES-KW");
+  const notJson = await subtle.wrapKey("raw", target, wrapper, gcm);
+  const noKty = await subtle.encrypt(gcm, encryptAndUnwrap, new TextEncoder().encode(JSON.stringify({ k: "AAAAAAAAAAAAAAAAAAAAAA" })));
+  const extFalse = await subtle.encrypt(gcm, encryptAndUnwrap, new TextEncoder().encode(JSON.stringify({ kty: "oct", k: "AAAAAAAAAAAAAAAAAAAAAA", ext: false })));
+
+  const results = {
+    // The wrapping key: an algorithm that wraps or encrypts, its own algorithm, and the wrapKey/unwrapKey usage.
+    hmacAlgorithm: await errorName(() => subtle.wrapKey("raw", target, hmac, { name: "HMAC" })),
+    nameMismatch: await errorName(() => subtle.wrapKey("raw", target, wrapper, cbc)),
+    noWrapUsage: await errorName(() => subtle.wrapKey("raw", target, encryptOnly, gcm)),
+    noUnwrapUsage: await errorName(() => subtle.unwrapKey("raw", notJson, encryptOnly, gcm, "AES-GCM", true, ["encrypt"])),
+    // The wrapped key: exportable, in a format it has.
+    notExtractable: await errorName(() => subtle.wrapKey("raw", locked, wrapper, gcm)),
+    rsaRaw: await errorName(() => subtle.wrapKey("raw", rsa.privateKey, wrapper, gcm)),
+    // Only a public key has a raw form; EC's (the public point) isn't implemented.
+    x25519PrivateRaw: await errorName(() => subtle.wrapKey("raw", x25519.privateKey, wrapper, gcm)),
+    ecPrivateRaw: await errorName(() => subtle.wrapKey("raw", ecdh.privateKey, wrapper, gcm)),
+    ecPublicRaw: await errorName(() => subtle.wrapKey("raw", ecdh.publicKey, wrapper, gcm)),
+    x25519PublicRaw: await errorName(() => subtle.wrapKey("raw", x25519.publicKey, wrapper, gcm)),
+    badFormat: await errorName(() => subtle.wrapKey("pem", target, wrapper, gcm)),
+    // AES-KW only wraps: no encrypt, and its integrity check fails with another key.
+    encryptWithKw: await errorName(() => subtle.encrypt({ name: "AES-KW" }, kw, new Uint8Array(16))),
+    wrongKwKey: await errorName(() => subtle.unwrapKey("raw", kwWrapped, otherKw, "AES-KW", "AES-GCM", true, ["encrypt"])),
+    kwTooShort: await errorName(() => subtle.unwrapKey("raw", new Uint8Array(8), kw, "AES-KW", "AES-GCM", true, ["encrypt"])),
+    // The spec's AES-KW "wrap key" step says OperationError (Chrome reports DataError).
+    kwNotMultipleOf8: await errorName(() => subtle.wrapKey("raw", hmac160, kw, "AES-KW")),
+    // The unwrapped bytes go through importKey: a JWK must be JSON with a kty, and a secret key needs usages.
+    notJson: await errorName(() => subtle.unwrapKey("jwk", notJson, wrapper, gcm, "AES-GCM", true, ["encrypt"])),
+    jwkWithoutKty: await errorName(() => subtle.unwrapKey("jwk", noKty, encryptAndUnwrap, gcm, "AES-GCM", true, ["encrypt"])),
+    // A JWK with ext: false can't be unwrapped as extractable, but can as not.
+    extFalseExtractable: await errorName(() => subtle.unwrapKey("jwk", extFalse, encryptAndUnwrap, gcm, "AES-GCM", true, ["encrypt"])),
+    extFalse: await errorName(() => subtle.unwrapKey("jwk", extFalse, encryptAndUnwrap, gcm, "AES-GCM", false, ["encrypt"])),
+    emptyUsages: await errorName(() => subtle.unwrapKey("raw", kwWrapped, kw, "AES-KW", "AES-GCM", true, [])),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("NotSupportedError", results.hmacAlgorithm);
+    testing.expectEqual("InvalidAccessError", results.nameMismatch);
+    testing.expectEqual("InvalidAccessError", results.noWrapUsage);
+    testing.expectEqual("InvalidAccessError", results.noUnwrapUsage);
+    testing.expectEqual("InvalidAccessError", results.notExtractable);
+    testing.expectEqual("NotSupportedError", results.rsaRaw);
+    testing.expectEqual("InvalidAccessError", results.x25519PrivateRaw);
+    testing.expectEqual("InvalidAccessError", results.ecPrivateRaw);
+    testing.expectEqual("NotSupportedError", results.ecPublicRaw);
+    testing.expectEqual(null, results.x25519PublicRaw);
+    testing.expectEqual("TypeError", results.badFormat);
+    testing.expectEqual("NotSupportedError", results.encryptWithKw);
+    testing.expectEqual("OperationError", results.wrongKwKey);
+    testing.expectEqual("OperationError", results.kwTooShort);
+    testing.expectEqual("OperationError", results.kwNotMultipleOf8);
+    testing.expectEqual("DataError", results.notJson);
+    testing.expectEqual("DataError", results.jwkWithoutKty);
+    testing.expectEqual("DataError", results.extFalseExtractable);
+    testing.expectEqual(null, results.extFalse);
+    testing.expectEqual("SyntaxError", results.emptyUsages);
+  });
+</script>
+
 <script id=aes-ctr-counter-wrap type=module>
   const state = await testing.async();
   // AES-CTR must increment only the rightmost `length` bits of the counter

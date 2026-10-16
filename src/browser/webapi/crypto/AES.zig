@@ -16,9 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! AES for AES-CBC/CTR/GCM/KW: key generation, import, and encrypt/decrypt
-//! (CBC/CTR/GCM). Keys are raw byte strings; wrapKey/unwrapKey is not yet
-//! implemented.
+//! AES for AES-CBC/CTR/GCM/KW: key generation, import, encrypt/decrypt
+//! (CBC/CTR/GCM) and AES-KW's key wrap/unwrap. Keys are raw byte strings.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -176,12 +175,14 @@ fn cipherFor(mode: Mode, key_len: usize) ?*const crypto.EVP_CIPHER {
 }
 
 /// AES encrypt (`encrypting = true`) or decrypt. Returns the resulting bytes
-/// (ciphertext for GCM includes the appended tag).
+/// (ciphertext for GCM includes the appended tag). `usage` is the usage bit
+/// the key needs: encrypt/decrypt, or wrapKey/unwrapKey when wrapping a key.
 pub fn crypt(
     params: anytype, // algorithm.Encrypt.params
     key: *const CryptoKey,
     data: []const u8,
     encrypting: bool,
+    usage: u8,
     exec: *const Execution,
 ) CipherError![]const u8 {
     const mode = modeFor(params.name) orelse return error.NotSupported;
@@ -191,7 +192,7 @@ pub fn crypt(
     if (key._type != .aes or !eqlIgnoreCase(key._algorithm.name, params.name)) {
         return error.InvalidAccessError;
     }
-    if ((encrypting and !key.canEncrypt()) or (!encrypting and !key.canDecrypt())) {
+    if (key._usages & usage == 0) {
         return error.InvalidAccessError;
     }
 
@@ -207,6 +208,43 @@ pub fn crypt(
         },
         .gcm => gcm(cipher, key._key, params, data, encrypting, exec),
     };
+}
+
+/// AES-KW (RFC 3394) key wrap (`wrapping = true`) or unwrap, with the default
+/// IV. `usage` is the wrapKey/unwrapKey bit the key needs. Data that isn't a
+/// multiple of 8 bytes (or too short), and an integrity failure on unwrap, are
+/// OperationError.
+pub fn keyWrap(
+    key: *const CryptoKey,
+    data: []const u8,
+    wrapping: bool,
+    usage: u8,
+    exec: *const Execution,
+) CipherError![]const u8 {
+    if (key._type != .aes or !eqlIgnoreCase(key._algorithm.name, "AES-KW")) {
+        return error.InvalidAccessError;
+    }
+    if (key._usages & usage == 0) {
+        return error.InvalidAccessError;
+    }
+    if (data.len < 8) return error.OperationError;
+
+    // 16-byte aligned like the key schedules BoringSSL allocates itself.
+    var aes_key: crypto.AES_KEY align(16) = undefined;
+    const bits: c_uint = @intCast(key._key.len * 8);
+    const set = if (wrapping)
+        crypto.AES_set_encrypt_key(key._key.ptr, bits, &aes_key)
+    else
+        crypto.AES_set_decrypt_key(key._key.ptr, bits, &aes_key);
+    if (set != 0) return error.OperationError;
+
+    const out = try exec.local_arena.alloc(u8, if (wrapping) data.len + 8 else data.len - 8);
+    const len = if (wrapping)
+        crypto.AES_wrap_key(&aes_key, null, out.ptr, data.ptr, data.len)
+    else
+        crypto.AES_unwrap_key(&aes_key, null, out.ptr, data.ptr, data.len);
+    if (len < 0) return error.OperationError;
+    return out[0..@intCast(len)];
 }
 
 fn ivOf(opt: anytype) ?[]const u8 {

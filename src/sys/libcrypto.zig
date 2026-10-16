@@ -112,6 +112,20 @@ pub extern fn EVP_DecryptInit_ex(ctx: *EVP_CIPHER_CTX, cipher: ?*const EVP_CIPHE
 pub extern fn EVP_DecryptUpdate(ctx: *EVP_CIPHER_CTX, out: [*c]u8, out_len: *c_int, in: [*c]const u8, in_len: c_int) c_int;
 pub extern fn EVP_DecryptFinal_ex(ctx: *EVP_CIPHER_CTX, out: [*c]u8, out_len: *c_int) c_int;
 
+// AES key wrap (RFC 3394), for AES-KW. `AES_KEY` must match BoringSSL's
+// `struct aes_key_st` (AES_MAXNR = 14).
+pub const AES_KEY = extern struct {
+    rd_key: [4 * (14 + 1)]u32,
+    rounds: c_uint,
+};
+/// Returns 0 on success, negative for an invalid key size.
+pub extern fn AES_set_encrypt_key(key: [*]const u8, bits: c_uint, aeskey: *AES_KEY) c_int;
+pub extern fn AES_set_decrypt_key(key: [*]const u8, bits: c_uint, aeskey: *AES_KEY) c_int;
+/// Returns the output length (`in_len` + 8 / - 8), or -1. A null `iv` is the
+/// default IV.
+pub extern fn AES_wrap_key(key: *const AES_KEY, iv: ?[*]const u8, out: [*]u8, in: [*]const u8, in_len: usize) c_int;
+pub extern fn AES_unwrap_key(key: *const AES_KEY, iv: ?[*]const u8, out: [*]u8, in: [*]const u8, in_len: usize) c_int;
+
 // EVP_CIPHER_CTX_ctrl commands for AES-GCM.
 pub const EVP_CTRL_GCM_SET_IVLEN = 0x9;
 pub const EVP_CTRL_GCM_GET_TAG = 0x10;
