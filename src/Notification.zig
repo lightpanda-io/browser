@@ -266,7 +266,9 @@ pub const ResponseHeaderDone = struct {
 
 pub const RequestDone = struct {
     transfer: *Transfer,
-    content_length: usize,
+    // The bytes the response put on the wire, headers included, reported as
+    // Network.loadingFinished's encodedDataLength (Transfer._encoded_data_length).
+    encoded_data_length: usize,
 };
 
 pub const RequestFail = struct {
