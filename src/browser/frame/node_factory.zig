@@ -548,7 +548,7 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                         Element.Html.Track,
                         namespace,
                         attribute_iterator,
-                        .{ ._kind = comptime .wrap("subtitles"), ._ready_state = .none },
+                        .{},
                     ),
                     else => {},
                 },

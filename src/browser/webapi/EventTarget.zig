@@ -53,7 +53,9 @@ const IDBTransaction = @import("storage/idb/IDBTransaction.zig");
 const FontFaceSet = @import("css/FontFaceSet.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
 
+const TextTrack = @import("media/TextTrack.zig");
 const TextTrackCue = @import("media/TextTrackCue.zig");
+const TextTrackList = @import("media/TextTrackList.zig");
 
 const Animation = @import("animation/Animation.zig");
 
@@ -94,7 +96,9 @@ pub const Type = enum(u8) {
     service_worker_container,
     service_worker_registration,
     shared_worker,
+    text_track,
     text_track_cue,
+    text_track_list,
     visual_viewport,
     websocket,
     window,
@@ -131,7 +135,9 @@ pub fn Subtype(comptime tag: Type) type {
         .service_worker_container => ServiceWorkerContainer,
         .service_worker_registration => ServiceWorkerRegistration,
         .shared_worker => SharedWorker,
+        .text_track => TextTrack,
         .text_track_cue => TextTrackCue,
+        .text_track_list => TextTrackList,
         .visual_viewport => VisualViewport,
         .websocket => WebSocket,
         .window => Window,
@@ -369,7 +375,9 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .media_query_list => writer.writeAll("<MediaQueryList>"),
         .message_port => writer.writeAll("<MessagePort>"),
         .broadcast_channel => writer.writeAll("<BroadcastChannel>"),
+        .text_track => writer.writeAll("<TextTrack>"),
         .text_track_cue => writer.writeAll("<TextTrackCue>"),
+        .text_track_list => writer.writeAll("<TextTrackList>"),
         .navigation => writer.writeAll("<Navigation>"),
         .screen => writer.writeAll("<Screen>"),
         .screen_orientation => writer.writeAll("<ScreenOrientation>"),
@@ -413,7 +421,9 @@ pub fn toString(self: *EventTarget) []const u8 {
         .service_worker_container => return "[object ServiceWorkerContainer]",
         .service_worker_registration => return "[object ServiceWorkerRegistration]",
         .shared_worker => return "[object SharedWorker]",
+        .text_track => return "[object TextTrack]",
         .text_track_cue => return "[object TextTrackCue]",
+        .text_track_list => return "[object TextTrackList]",
         .visual_viewport => return "[object VisualViewport]",
         .websocket => return "[object WebSocket]",
         .window => return "[object Window]",

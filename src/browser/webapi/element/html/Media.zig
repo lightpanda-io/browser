@@ -29,6 +29,8 @@ const Event = @import("../../Event.zig");
 
 const HtmlElement = @import("../Html.zig");
 const MediaError = @import("../../media/MediaError.zig");
+const TextTrack = @import("../../media/TextTrack.zig");
+const TextTrackList = @import("../../media/TextTrackList.zig");
 
 pub const Audio = @import("Audio.zig");
 pub const Video = @import("Video.zig");
@@ -90,6 +92,10 @@ _playback_rate: f64 = 1.0,
 _ready_state: ReadyState = .HAVE_NOTHING,
 _network_state: NetworkState = .NETWORK_EMPTY,
 _error: ?*MediaError = null,
+_text_track_list: ?*TextTrackList = null,
+// added via addTextTrack. <track> children are found by a normal tree walk
+_added_text_tracks: std.ArrayList(*TextTrack) = .empty,
+_track_selection: enum { none, pending, done } = .none,
 
 pub fn asElement(self: *Media) *Element {
     return Factory.protoOf(self).asElement();
@@ -251,6 +257,84 @@ fn setCurrentTime(self: *Media, value: f64) void {
     self._current_time = value;
 }
 
+fn getTextTracks(self: *Media, frame: *Frame) !*TextTrackList {
+    if (self._text_track_list == null) {
+        self._text_track_list = try TextTrackList.init(self, frame);
+    }
+    return self._text_track_list.?;
+}
+
+fn addTextTrack(self: *Media, kind_: []const u8, label_: ?[]const u8, language_: ?[]const u8, frame: *Frame) !*TextTrack {
+    const kind = std.meta.stringToEnum(TextTrack.Kind, kind_) orelse return error.TypeError;
+    const track = try TextTrack.initForScript(kind, label_ orelse "", language_ orelse "", frame);
+    try self._added_text_tracks.append(frame.page_arena, track);
+    return track;
+}
+
+pub fn queueAutomaticTrackSelection(self: *Media, frame: *Frame) !void {
+    if (self._track_selection != .none) {
+        return;
+    }
+    const task = try frame._factory.create(TrackSelectionTask{ .media = self, .frame = frame });
+    errdefer frame._factory.destroy(task);
+    try frame.js.scheduler.add(task, TrackSelectionTask.run, 0, .{
+        .name = "Media.automaticTrackSelection",
+        .finalizer = TrackSelectionTask.finalizer,
+    });
+    self._track_selection = .pending;
+}
+
+const TrackSelectionTask = struct {
+    media: *Media,
+    frame: *Frame,
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *TrackSelectionTask = @ptrCast(@alignCast(ctx));
+        const media = self.media;
+        const frame = self.frame;
+        frame._factory.destroy(self);
+        try media.performAutomaticTrackSelection(frame);
+        return null;
+    }
+
+    fn finalizer(ctx: *anyopaque) void {
+        const self: *TrackSelectionTask = @ptrCast(@alignCast(ctx));
+        self.frame._factory.destroy(self);
+    }
+};
+
+fn performAutomaticTrackSelection(self: *Media, frame: *Frame) !void {
+    self._track_selection = .done;
+
+    var shown_subtitles = false;
+    var shown_chapters = false;
+    var it = self.asNode().childrenIterator();
+    while (it.next()) |child| {
+        const track_element = child.is(Element.Html.Track) orelse continue;
+        if (track_element.asElement().hasAttributeSafe(comptime .wrap("default")) == false) {
+            continue;
+        }
+        const track = try track_element.getTrack(frame);
+        if (track.getMode() != .disabled) {
+            continue;
+        }
+        switch (track.getKind()) {
+            .subtitles, .captions => {
+                if (shown_subtitles) continue;
+                shown_subtitles = true;
+                try track.setMode(.showing, frame);
+            },
+            .chapters => {
+                if (shown_chapters) continue;
+                shown_chapters = true;
+                try track.setMode(.showing, frame);
+            },
+            .metadata => try track.setMode(.hidden, frame),
+            .descriptions => {},
+        }
+    }
+}
+
 pub fn getSrc(self: *const Media, frame: *Frame) ![]const u8 {
     const element = self.asConstElement();
     const src = element.getAttributeInterned("src") orelse return "";
@@ -305,6 +389,9 @@ pub const JsApi = struct {
     pub const readyState = bridge.accessor(Media.getReadyState, null, .{});
     pub const networkState = bridge.accessor(Media.getNetworkState, null, .{});
     pub const @"error" = bridge.accessor(Media.getError, null, .{});
+
+    pub const textTracks = bridge.accessor(Media.getTextTracks, null, .{});
+    pub const addTextTrack = bridge.function(Media.addTextTrack, .{});
 
     pub const canPlayType = bridge.function(Media.canPlayType, .{});
     pub const play = bridge.function(Media.play, .{});

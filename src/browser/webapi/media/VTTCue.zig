@@ -16,9 +16,15 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const js = @import("../../js/js.zig");
+const std = @import("std");
 
+const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+
+const DocumentFragment = @import("../DocumentFragment.zig");
+
+const cue_text = @import("cue_text.zig");
+const VTTRegion = @import("VTTRegion.zig");
 const TextTrackCue = @import("TextTrackCue.zig");
 
 const VTTCue = @This();
@@ -27,31 +33,58 @@ pub const Proto = TextTrackCue;
 
 _proto: *TextTrackCue,
 _text: []const u8 = "",
-_region: ?js.Object.Global = null,
-_vertical: []const u8 = "",
+_region: ?*VTTRegion = null,
+_vertical: Direction = .horizontal,
 _snap_to_lines: bool = true,
 _line: ?f64 = null, // null represents "auto"
+_line_align: LineAlign = .start,
 _position: ?f64 = null, // null represents "auto"
+_position_align: PositionAlign = .auto,
 _size: f64 = 100,
-_align: []const u8 = "center",
+_align: Align = .center,
+
+pub const Direction = enum {
+    horizontal,
+    rl,
+    lr,
+
+    pub fn fromString(value: []const u8) ?Direction {
+        if (value.len == 0) {
+            return .horizontal;
+        }
+        return std.meta.stringToEnum(Direction, value) orelse return null;
+    }
+};
+
+pub const LineAlign = enum { start, center, end };
+pub const PositionAlign = enum { @"line-left", center, @"line-right", auto };
+pub const Align = enum { start, center, end, left, right };
 
 pub fn constructor(start_time: f64, end_time: f64, text: []const u8, frame: *Frame) !*VTTCue {
+    if (std.math.isFinite(start_time) == false) {
+        return error.TypeError;
+    }
+    if (std.math.isNan(end_time) or end_time == -std.math.inf(f64)) {
+        return error.TypeError;
+    }
+    return init(start_time, end_time, try frame.dupeString(text), frame);
+}
+
+// `text` must already be owned by the page.
+pub fn init(start_time: f64, end_time: f64, text: []const u8, frame: *Frame) !*VTTCue {
     const cue = try frame._factory.textTrackCue(VTTCue{
         ._proto = undefined,
-        ._text = try frame.dupeString(text),
-        ._region = null,
-        ._vertical = "",
-        ._snap_to_lines = true,
-        ._line = null, // "auto"
-        ._position = null, // "auto"
-        ._size = 100,
-        ._align = "center",
+        ._text = text,
     });
 
     cue._proto._start_time = start_time;
     cue._proto._end_time = end_time;
 
     return cue;
+}
+
+pub fn asCue(self: *VTTCue) *TextTrackCue {
+    return self._proto;
 }
 
 pub fn getText(self: *const VTTCue) []const u8 {
@@ -62,21 +95,24 @@ fn setText(self: *VTTCue, value: []const u8, frame: *Frame) !void {
     self._text = try frame.dupeString(value);
 }
 
-fn getRegion(self: *const VTTCue) ?js.Object.Global {
+fn getRegion(self: *const VTTCue) ?*VTTRegion {
     return self._region;
 }
 
-fn setRegion(self: *VTTCue, value: ?js.Object.Global) !void {
+fn setRegion(self: *VTTCue, value: ?*VTTRegion) void {
     self._region = value;
 }
 
 fn getVertical(self: *const VTTCue) []const u8 {
-    return self._vertical;
+    return switch (self._vertical) {
+        .horizontal => "",
+        else => |v| @tagName(v),
+    };
 }
 
-fn setVertical(self: *VTTCue, value: []const u8, frame: *Frame) !void {
-    // Valid values: "", "rl", "lr"
-    self._vertical = try frame.dupeString(value);
+fn setVertical(self: *VTTCue, value: []const u8) void {
+    // Invalid enum values are ignored
+    self._vertical = Direction.fromString(value) orelse return;
 }
 
 fn getSnapToLines(self: *const VTTCue) bool {
@@ -99,11 +135,29 @@ fn getLine(self: *const VTTCue) LineAndPositionSetting {
     return .{ .auto = "auto" };
 }
 
-fn setLine(self: *VTTCue, value: LineAndPositionSetting) void {
+fn setLine(self: *VTTCue, value: LineAndPositionSetting) !void {
     switch (value) {
-        .number => |num| self._line = num,
-        .auto => self._line = null,
+        .number => |num| {
+            if (std.math.isFinite(num) == false) {
+                return error.TypeError;
+            }
+            self._line = num;
+        },
+        .auto => |str| {
+            if (std.mem.eql(u8, str, "auto") == false) {
+                return error.TypeError;
+            }
+            self._line = null;
+        },
     }
+}
+
+fn getLineAlign(self: *const VTTCue) []const u8 {
+    return @tagName(self._line_align);
+}
+
+fn setLineAlign(self: *VTTCue, value: []const u8) void {
+    self._line_align = std.meta.stringToEnum(LineAlign, value) orelse return;
 }
 
 fn getPosition(self: *const VTTCue) LineAndPositionSetting {
@@ -113,35 +167,58 @@ fn getPosition(self: *const VTTCue) LineAndPositionSetting {
     return .{ .auto = "auto" };
 }
 
-fn setPosition(self: *VTTCue, value: LineAndPositionSetting) void {
+fn setPosition(self: *VTTCue, value: LineAndPositionSetting) !void {
     switch (value) {
-        .number => |num| self._position = num,
-        .auto => self._position = null,
+        .number => |num| {
+            if (std.math.isFinite(num) == false) {
+                return error.TypeError;
+            }
+            if (num < 0 or num > 100) {
+                return error.IndexSizeError;
+            }
+            self._position = num;
+        },
+        .auto => |str| {
+            if (std.mem.eql(u8, str, "auto") == false) {
+                return error.TypeError;
+            }
+            self._position = null;
+        },
     }
+}
+
+fn getPositionAlign(self: *const VTTCue) []const u8 {
+    return @tagName(self._position_align);
+}
+
+fn setPositionAlign(self: *VTTCue, value: []const u8) void {
+    self._position_align = std.meta.stringToEnum(PositionAlign, value) orelse return;
 }
 
 pub fn getSize(self: *const VTTCue) f64 {
     return self._size;
 }
 
-fn setSize(self: *VTTCue, value: f64) void {
+fn setSize(self: *VTTCue, value: f64) !void {
+    if (std.math.isFinite(value) == false) {
+        return error.TypeError;
+    }
+    if (value < 0 or value > 100) {
+        return error.IndexSizeError;
+    }
     self._size = value;
 }
 
 fn getAlign(self: *const VTTCue) []const u8 {
-    return self._align;
+    return @tagName(self._align);
 }
 
-fn setAlign(self: *VTTCue, value: []const u8, frame: *Frame) !void {
-    // Valid values: "start", "center", "end", "left", "right"
-    self._align = try frame.dupeString(value);
+fn setAlign(self: *VTTCue, value: []const u8) void {
+    self._align = std.meta.stringToEnum(Align, value) orelse return;
 }
 
-fn getCueAsHTML(self: *const VTTCue) !js.Object {
-    // Minimal implementation: return a document fragment
-    // In a full implementation, this would parse the VTT text into HTML nodes
-    _ = self;
-    return error.NotImplemented;
+fn getCueAsHTML(self: *const VTTCue, frame: *Frame) !*DocumentFragment {
+    return cue_text.toFragment(self._text, frame);
 }
 
 pub const JsApi = struct {
@@ -162,7 +239,9 @@ pub const JsApi = struct {
     pub const vertical = bridge.accessor(VTTCue.getVertical, VTTCue.setVertical, .{});
     pub const snapToLines = bridge.accessor(VTTCue.getSnapToLines, VTTCue.setSnapToLines, .{});
     pub const line = bridge.accessor(VTTCue.getLine, VTTCue.setLine, .{});
+    pub const lineAlign = bridge.accessor(VTTCue.getLineAlign, VTTCue.setLineAlign, .{});
     pub const position = bridge.accessor(VTTCue.getPosition, VTTCue.setPosition, .{});
+    pub const positionAlign = bridge.accessor(VTTCue.getPositionAlign, VTTCue.setPositionAlign, .{});
     pub const size = bridge.accessor(VTTCue.getSize, VTTCue.setSize, .{});
     pub const @"align" = bridge.accessor(VTTCue.getAlign, VTTCue.setAlign, .{});
     pub const getCueAsHTML = bridge.function(VTTCue.getCueAsHTML, .{});

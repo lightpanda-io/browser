@@ -45,14 +45,12 @@ pub fn asNode(self: *Picture) *Node {
     return self.asElement().asNode();
 }
 
-// A <source> entering the picture. Frame handles an inserted <img> itself.
-pub fn childInserted(parent: *Node, child: *Node, frame: *Frame) !void {
+// A <source> inserted into `parent`. Frame handles an inserted <img> itself.
+pub fn sourceInserted(parent: *Node, source: *Source, frame: *Frame) !void {
     if (parent.is(Picture) == null) {
         return;
     }
-    if (child.is(Source) != null) {
-        return imagesFrom(child.nextSibling(), frame);
-    }
+    return imagesFrom(source.asNode().nextSibling(), frame);
 }
 
 // `next_sibling` is the child's sibling from before it was unlinked.
