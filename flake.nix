@@ -37,6 +37,10 @@
       flake-utils,
       ...
     }:
+    let
+      zon = builtins.readFile ./build.zig.zon;
+      version = builtins.elemAt (builtins.match ".*\\.version = \"([^\"]+)\".*" zon) 0;
+    in
     flake-utils.lib.eachDefaultSystem (
       system:
       let
@@ -97,7 +101,7 @@
           inherit craneLib;
           buildInputs = (buildDeps pkgs) ++ (with pkgs; [ zig ]);
           src = ./.;
-          version = "1.0.0";
+          inherit version;
         };
 
       in
