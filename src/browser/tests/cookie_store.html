@@ -1,5 +1,13 @@
 <!DOCTYPE html>
 <script src="testing.js"></script>
+<script>
+  // The module scripts below interleave at each await and share cookieStore,
+  // so a change listener also sees the other scripts' cookies. Each test only
+  // keeps the events about its own.
+  function isAbout(e, prefix) {
+    return [...e.changed, ...e.deleted].some((c) => c.name.startsWith(prefix));
+  }
+</script>
 <script id=interface>
   testing.expectEqual('object', typeof cookieStore);
   testing.expectEqual(cookieStore, window.cookieStore);
@@ -118,7 +126,7 @@
 <script id=set-max-age type=module>
   const state = await testing.async();
   const events = [];
-  const handler = (e) => events.push(e);
+  const handler = (e) => { if (isAbout(e, 'ma-')) events.push(e); };
   cookieStore.addEventListener('change', handler);
 
   // A positive maxAge stores the cookie.
@@ -198,7 +206,7 @@
 <script id=change-event-from-cookieStore-set type=module>
   const state = await testing.async();
   const events = [];
-  const handler = (e) => events.push(e);
+  const handler = (e) => { if (isAbout(e, 'ev-from-set')) events.push(e); };
   cookieStore.addEventListener('change', handler);
 
   await cookieStore.set('ev-from-set', 'v1');
@@ -290,7 +298,7 @@
 <script id=change-event-delete-omits-value type=module>
   const state = await testing.async();
   const events = [];
-  const handler = (e) => events.push(e);
+  const handler = (e) => { if (isAbout(e, 'ev-delete-val')) events.push(e); };
   cookieStore.addEventListener('change', handler);
 
   await cookieStore.set('ev-delete-val', 'original');
@@ -321,7 +329,7 @@
 <script id=change-event-from-document-cookie type=module>
   const state = await testing.async();
   const events = [];
-  const handler = (e) => events.push(e);
+  const handler = (e) => { if (isAbout(e, 'ev-from-doc')) events.push(e); };
   cookieStore.addEventListener('change', handler);
 
   document.cookie = 'ev-from-doc=v1; path=/';
@@ -349,7 +357,7 @@
 <script id=change-event-onchange-attribute type=module>
   const state = await testing.async();
   let captured = null;
-  cookieStore.onchange = (e) => { captured = e; };
+  cookieStore.onchange = (e) => { if (isAbout(e, 'ev-onchange')) captured = e; };
 
   await cookieStore.set('ev-onchange', 'v1');
   await new Promise(r => setTimeout(r, 0));

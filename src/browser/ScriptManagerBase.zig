@@ -1003,10 +1003,7 @@ pub const Script = struct {
         }
 
         defer if (frame.js.call_depth == 0) {
-            local.runMacrotasks(); // also runs microtasks
-            _ = frame.js.scheduler.run() catch |err| {
-                log.err(.frame, "scheduler", .{ .err = err });
-            };
+            local.runMacrotasks();
         };
 
         if (success) {
