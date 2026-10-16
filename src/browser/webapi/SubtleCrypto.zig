@@ -184,6 +184,10 @@ pub fn importKey(
             if (!std.mem.eql(u8, jwk.kty orelse "", "oct")) {
                 return error.DataError;
             }
+            // A JWK marked non-extractable can't be imported as extractable.
+            if (extractable and jwk.ext == false) {
+                return error.DataError;
+            }
             const k = jwk.k orelse return error.DataError;
             break :blk try common.base64Decode(exec.local_arena, k);
         }
@@ -273,15 +277,44 @@ pub fn exportKey(
     const local = exec.js.local.?;
     return switch (try exportAs(format, key, exec)) {
         .bytes => |bytes| local.resolvePromise(js.ArrayBuffer{ .values = bytes }),
-        .jwk => |jwk| local.resolvePromise(jwk),
+        .jwk => |jwk| local.resolvePromise(try jwk.toJs(local)),
     };
 }
 
 /// A key exported in some format: the key's bytes (raw, spki, pkcs8), or its
-/// JWK object.
+/// JWK.
 const Exported = union(enum) {
     bytes: []const u8,
-    jwk: js.Value,
+    jwk: Jwk,
+};
+
+/// A key's JWK, as the struct it's built from: exportKey resolves it as an
+/// object, wrapKey serializes it here. Going through V8's JSON.stringify would
+/// let the page steer the wrapped bytes with an inherited `toJSON`; the spec
+/// stringifies "in the context of a new global object".
+const Jwk = union(enum) {
+    secret: JwkSecret,
+    rsa: RSA.Jwk,
+
+    fn toJs(self: Jwk, local: *const js.Local) !js.Value {
+        return switch (self) {
+            .secret => |jwk| local.zigValueToJs(jwk, .{}),
+            .rsa => |rsa| switch (rsa) {
+                inline else => |jwk| local.zigValueToJs(jwk, .{}),
+            },
+        };
+    }
+
+    /// The JSON text, identical to `JSON.stringify` of the object: members
+    /// are declared in the order they'd be set.
+    fn toJson(self: Jwk, allocator: std.mem.Allocator) ![]const u8 {
+        return switch (self) {
+            .secret => |jwk| std.json.Stringify.valueAlloc(allocator, jwk, .{}),
+            .rsa => |rsa| switch (rsa) {
+                inline else => |jwk| std.json.Stringify.valueAlloc(allocator, jwk, .{}),
+            },
+        };
+    }
 };
 
 /// The "export key" steps shared by exportKey and wrapKey.
@@ -334,9 +367,7 @@ const JwkSecret = struct {
     key_ops: []const []const u8,
 };
 
-fn exportJwk(key: *CryptoKey, exec: *const Execution) !js.Value {
-    const local = exec.js.local.?;
-
+fn exportJwk(key: *CryptoKey, exec: *const Execution) !Jwk {
     // The `alg` registry value depends on the algorithm and key length.
     const alg: []const u8 = switch (key._type) {
         .aes => try exec.local_arena.print("A{d}{s}", .{
@@ -347,19 +378,19 @@ fn exportJwk(key: *CryptoKey, exec: *const Execution) !js.Value {
             const hash: []const u8 = key._algorithm.hash orelse "SHA-";
             break :blk try exec.local_arena.print("HS{s}", .{hash[4..]}); // strip "SHA-"
         },
-        .rsa => return RSA.exportJwk(key, exec),
+        .rsa => return .{ .rsa = try RSA.exportJwk(key, exec) },
         else => {
             log.debug(.not_implemented, "SubtleCrypto.exportKey", .{ .format = "jwk", .type = key._type });
             return error.NotSupported;
         },
     };
 
-    return local.zigValueToJs(JwkSecret{
+    return .{ .secret = .{
         .k = try common.base64Encode(exec.local_arena, key._key),
         .alg = alg,
         .ext = key._extractable,
         .key_ops = try key.getUsages(exec),
-    }, .{});
+    } };
 }
 
 /// Derive an array of bits from a base key. `length` is in bits and may be null
@@ -490,7 +521,6 @@ pub fn wrapKey(
 
     const bytes = switch (try exportAs(format, key, exec)) {
         .bytes => |bytes| bytes,
-        // JSON.stringify of the JWK object, UTF-8 encoded.
         .jwk => |jwk| try jwk.toJson(exec.local_arena),
     };
     const out = try cryptBytes(algo, wrapping_key, bytes, .wrap, exec);

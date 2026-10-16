@@ -403,10 +403,15 @@ const JwkPrivate = struct {
     qi: []const u8,
 };
 
-/// Exports an RSA-OAEP key as a JWK object: the public members for either half,
-/// plus the private members (with the CRT parameters) for the private key.
-pub fn exportJwk(key: *const CryptoKey, exec: *const Execution) !js.Value {
-    const local = exec.js.local.?;
+/// The JWK of either half of an RSA-OAEP key.
+pub const Jwk = union(enum) {
+    public: JwkPublic,
+    private: JwkPrivate,
+};
+
+/// Exports an RSA-OAEP key as a JWK: the public members for either half, plus
+/// the private members (with the CRT parameters) for the private key.
+pub fn exportJwk(key: *const CryptoKey, exec: *const Execution) !Jwk {
     const rsa = crypto.EVP_PKEY_get0_RSA(key.getKeyObject()) orelse return error.OperationError;
     const alg = jwkAlgOfHash(key._algorithm.hash orelse "") orelse return error.OperationError;
     const n = try jwkMember(crypto.RSA_get0_n(rsa), exec);
@@ -414,9 +419,9 @@ pub fn exportJwk(key: *const CryptoKey, exec: *const Execution) !js.Value {
     const key_ops = try key.getUsages(exec);
 
     if (key._kind == .public) {
-        return local.zigValueToJs(JwkPublic{ .alg = alg, .e = e, .ext = key._extractable, .key_ops = key_ops, .n = n }, .{});
+        return .{ .public = .{ .alg = alg, .e = e, .ext = key._extractable, .key_ops = key_ops, .n = n } };
     }
-    return local.zigValueToJs(JwkPrivate{
+    return .{ .private = .{
         .alg = alg,
         .d = try jwkMember(crypto.RSA_get0_d(rsa), exec),
         .dp = try jwkMember(crypto.RSA_get0_dmp1(rsa), exec),
@@ -428,7 +433,7 @@ pub fn exportJwk(key: *const CryptoKey, exec: *const Execution) !js.Value {
         .p = try jwkMember(crypto.RSA_get0_p(rsa), exec),
         .q = try jwkMember(crypto.RSA_get0_q(rsa), exec),
         .qi = try jwkMember(crypto.RSA_get0_iqmp(rsa), exec),
-    }, .{});
+    } };
 }
 
 /// A key component as a JWK Base64urlUInt member.

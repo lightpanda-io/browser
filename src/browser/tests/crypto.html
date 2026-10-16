@@ -499,6 +499,7 @@
   const kwWrapped = await subtle.wrapKey("raw", target, kw, "AES-KW");
   const notJson = await subtle.wrapKey("raw", target, wrapper, gcm);
   const noKty = await subtle.encrypt(gcm, encryptAndUnwrap, new TextEncoder().encode(JSON.stringify({ k: "AAAAAAAAAAAAAAAAAAAAAA" })));
+  const extFalse = await subtle.encrypt(gcm, encryptAndUnwrap, new TextEncoder().encode(JSON.stringify({ kty: "oct", k: "AAAAAAAAAAAAAAAAAAAAAA", ext: false })));
 
   const results = {
     // The wrapping key: an algorithm that wraps or encrypts, its own algorithm, and the wrapKey/unwrapKey usage.
@@ -524,6 +525,9 @@
     // The unwrapped bytes go through importKey: a JWK must be JSON with a kty, and a secret key needs usages.
     notJson: await errorName(() => subtle.unwrapKey("jwk", notJson, wrapper, gcm, "AES-GCM", true, ["encrypt"])),
     jwkWithoutKty: await errorName(() => subtle.unwrapKey("jwk", noKty, encryptAndUnwrap, gcm, "AES-GCM", true, ["encrypt"])),
+    // A JWK with ext: false can't be unwrapped as extractable, but can as not.
+    extFalseExtractable: await errorName(() => subtle.unwrapKey("jwk", extFalse, encryptAndUnwrap, gcm, "AES-GCM", true, ["encrypt"])),
+    extFalse: await errorName(() => subtle.unwrapKey("jwk", extFalse, encryptAndUnwrap, gcm, "AES-GCM", false, ["encrypt"])),
     emptyUsages: await errorName(() => subtle.unwrapKey("raw", kwWrapped, kw, "AES-KW", "AES-GCM", true, [])),
   };
 
@@ -546,6 +550,8 @@
     testing.expectEqual("OperationError", results.kwNotMultipleOf8);
     testing.expectEqual("DataError", results.notJson);
     testing.expectEqual("DataError", results.jwkWithoutKty);
+    testing.expectEqual("DataError", results.extFalseExtractable);
+    testing.expectEqual(null, results.extFalse);
     testing.expectEqual("SyntaxError", results.emptyUsages);
   });
 </script>
