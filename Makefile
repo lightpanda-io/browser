@@ -77,7 +77,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test bench data end2end clean
+.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test coverage bench data end2end clean
 
 ## Download the prebuilt V8 libraries (skips the 10+ min source build)
 download-v8:
@@ -127,6 +127,11 @@ run-debug: build-dev
 
 test:
 	TEST_FILTER="$(or $(F),$(TEST_FILTER))" $(ZIG) build $(ZIGFLAGS) test -freference-trace
+
+## Run unit tests under kcov, report in zig-out/coverage/index.html (F= filters)
+coverage:
+	TEST_FILTER="$(or $(F),$(TEST_FILTER))" $(ZIG) build $(ZIGFLAGS) coverage
+	@echo "Coverage report: zig-out/coverage/index.html"
 
 ## Run demo/runner end to end tests
 end2end:

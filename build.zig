@@ -203,6 +203,29 @@ pub fn build(b: *Build) !void {
         const test_step = b.step("test", "Run unit tests");
         test_step.dependOn(&run_tests.step);
     }
+
+    {
+        // kcov can't read line info from the self-hosted backend's DWARF.
+        const cov_tests = b.addTest(.{
+            .root_module = lightpanda_module,
+            .use_llvm = true,
+            .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
+        });
+        const kcov = b.addSystemCommand(&.{ "kcov", "--clean" });
+        // Otherwise stdio is checked and the runner's stderr summary fails the step.
+        kcov.has_side_effects = true;
+        kcov.addPrefixedDirectoryArg("--include-path=", b.path("src"));
+        const report = kcov.addOutputDirectoryArg("coverage");
+        kcov.addArtifactArg(cov_tests);
+        // Shards are separate processes, each with its own report.
+        kcov.setEnvironmentVariable("TEST_JOBS", "1");
+        // Part of the cache key, so each filter gets a fresh report directory.
+        kcov.setEnvironmentVariable("TEST_FILTER", b.graph.environ_map.get("TEST_FILTER") orelse "");
+
+        const install = b.addInstallDirectory(.{ .source_dir = report, .install_dir = .prefix, .install_subdir = "coverage" });
+        const coverage_step = b.step("coverage", "Run unit tests under kcov (zig-out/coverage/index.html)");
+        coverage_step.dependOn(&install.step);
+    }
 }
 
 const Deps = struct {

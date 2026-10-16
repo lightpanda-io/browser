@@ -457,7 +457,23 @@ fn openPty(fds: *[2]std.c.fd_t) c_int {
     return 0;
 }
 
+/// A tracer that follows forks (kcov) intercepts the child's fatal signal,
+/// so a hardware fault re-executes forever instead of terminating it.
+fn isTraced() bool {
+    const fd = std.c.open("/proc/self/status", .{ .ACCMODE = .RDONLY });
+    if (fd < 0) return false;
+    defer _ = std.c.close(fd);
+    var buf: [4096]u8 = undefined;
+    const n = std.c.read(fd, &buf, buf.len);
+    if (n <= 0) return false;
+    const status = buf[0..@intCast(n)];
+    const start = (std.mem.find(u8, status, "TracerPid:") orelse return false) + "TracerPid:".len;
+    const end = std.mem.findScalarPos(u8, status, start, '\n') orelse status.len;
+    return !std.mem.eql(u8, std.mem.trim(u8, status[start..end], " \t"), "0");
+}
+
 fn testSignal(sig: std.posix.SIG, mode: SignalTestMode) !void {
+    if (isTraced()) return error.SkipZigTest;
     const guard = if (mode == .hardware) try std.posix.mmap(null, std.heap.pageSize(), .{}, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0) else null;
     defer if (guard) |memory| std.posix.munmap(memory);
     const file = if (mode == .regular_file) std.c.memfd_create("fatal-signal-test", std.c.MFD.CLOEXEC) else -1;
