@@ -275,6 +275,7 @@ const CommonOptions = .{
     .{ .name = "user_agent_suffix", .type = ?[]const u8 },
     .{ .name = "http_cache_dir", .type = ?[]const u8, .path = true },
     .{ .name = "http_cache_entry_limit", .type = ?u32, .default = 1000 },
+    .{ .name = "http_cache_shared", .type = bool },
     .{ .name = "http_debug", .type = bool },
     .{ .name = "http_curves", .type = ?[:0]const u8, .validator = httpCurvesValidator },
     .{ .name = "render_font", .type = []const u8, .multiple = true, .path = true },
@@ -820,6 +821,15 @@ pub fn renderFonts(self: *const Config) []const []const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.render_font.items,
         else => &.{},
+    };
+}
+
+/// --http-cache-shared: the HTTP cache follows RFC 9111's rules for a
+/// shared cache, for a process serving several users from one cache.
+pub fn httpCacheShared(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_shared,
+        else => false,
     };
 }
 
@@ -1456,6 +1466,21 @@ test "Config: parseArgs --http-session-timeout" {
         const proc_args: std.process.Args = .{ .vector = &argv };
         const config = try parseArgs(arena.allocator(), proc_args);
         try std.testing.expectEqual(null, config.httpSessionTimeout());
+    }
+}
+
+test "Config: parseArgs --http-cache-shared" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "serve" };
+        const config = try parseArgs(arena.allocator(), .{ .vector = &argv });
+        try std.testing.expectEqual(false, config.httpCacheShared());
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "serve", "--http-cache-shared" };
+        const config = try parseArgs(arena.allocator(), .{ .vector = &argv });
+        try std.testing.expectEqual(true, config.httpCacheShared());
     }
 }
 
