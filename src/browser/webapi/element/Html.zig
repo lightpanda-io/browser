@@ -404,32 +404,6 @@ pub fn setOuterText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
     }
 }
 
-pub fn insertAdjacentHTML(
-    self: *HtmlElement,
-    position: []const u8,
-    html: []const u8,
-    frame: *Frame,
-) !void {
-    const DocumentFragment = @import("../DocumentFragment.zig");
-
-    // The parse context is the node we insert into
-    const context_node, _ = try self.asNode().findAdjacentNodes(position, .html);
-    const context = if (context_node.is(Element)) |el|
-        if (el.is(Element.Html.Html) == null) el else null
-    else
-        null;
-
-    const fragment = (try DocumentFragment.init(self.asNode().getDocument(frame), frame)).asNode();
-    try Frame.parse.fragment(frame, fragment, html, .{ .context = context });
-
-    const target_node, const prev_node = try self.asNode().findAdjacentNodes(position, .html);
-
-    var iter = fragment.childrenIterator();
-    while (iter.next()) |child_node| {
-        _ = try target_node.insertBefore(child_node, prev_node, frame);
-    }
-}
-
 pub fn click(self: *HtmlElement, frame: *Frame) !void {
     switch (self._type) {
         .button, .input, .textarea, .select, .option, .optgroup => if (self.asElement().isDisabled()) return,
@@ -1151,7 +1125,6 @@ pub const JsApi = struct {
     fn _setOuterText(self: *HtmlElement, value: js.Value, frame: *Frame) !void {
         return self.setOuterText(if (value.isNull()) "" else try value.toZig([]const u8), frame);
     }
-    pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .ce_reactions = true });
     pub const click = bridge.function(HtmlElement.click, .{});
     pub const attachInternals = bridge.function(HtmlElement.attachInternals, .{});
 
