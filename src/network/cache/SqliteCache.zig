@@ -95,7 +95,34 @@ const SqliteCachePath = union(enum) {
     }
 };
 
+const db_name = "cache.db";
+const db_files = [_][]const u8{ db_name, db_name ++ "-wal", db_name ++ "-shm" };
+
 pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u32) !SqliteCache {
+    return open(allocator, path, entry_limit) catch |err| {
+        const cache_dir = switch (path) {
+            .path => |p| p,
+            .memory => return err,
+        };
+        switch (err) {
+            error.NotADB, error.Corrupt => {},
+            else => return err,
+        }
+        // It's only a cache: start over rather than fail to start.
+        log.warn(.cache, "discarding unreadable cache", .{ .kind = "SqliteCache", .path = cache_dir, .err = err });
+        var dir = try std.Io.Dir.cwd().openDir(lp.io, cache_dir, .{});
+        defer dir.close(lp.io);
+        for (db_files) |name| {
+            dir.deleteFile(lp.io, name) catch |delete_err| switch (delete_err) {
+                error.FileNotFound => {},
+                else => return delete_err,
+            };
+        }
+        return open(allocator, path, entry_limit);
+    };
+}
+
+fn open(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u32) !SqliteCache {
     var pool = switch (path) {
         .memory => try Pool.init(allocator, ":memory:"),
         .path => |cache_dir| blk: {
@@ -109,7 +136,7 @@ pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u3
             };
 
             const full_path = try allocator.printSentinel(
-                "{s}/cache.db",
+                "{s}/" ++ db_name,
                 .{std.mem.trimEnd(u8, cache_dir, &.{'/'})},
                 0,
             );
@@ -1132,4 +1159,40 @@ test "SqliteCache: evicts oldest entries over the limit" {
         try testing.expect(hit == .hit);
         try testing.expectEqualStrings(url, hit.hit.data.buffer);
     }
+}
+
+test "SqliteCache: starts over from an unreadable database" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "cache.db", .data = "This is not an SQLite database, only a page of text where its header would be." });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "cache.db-wal", .data = "stale" });
+
+    const cache_dir = try std.Io.Dir.path.join(testing.allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+    defer testing.allocator.free(cache_dir);
+
+    var cache = Cache{ .kind = .{ .sqlite = try .init(testing.allocator, .{ .path = cache_dir }, 0) } };
+    defer cache.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
+    try cache.put(.{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+    }, "hello world");
+
+    const result = try cache.get(arena.allocator(), .{
+        .url = "https://example.com",
+        .timestamp = now,
+        .request_headers = &.{},
+    });
+    try testing.expect(result == .hit);
+    try testing.expectEqualStrings("hello world", result.hit.data.buffer);
 }
