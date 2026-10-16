@@ -126,9 +126,12 @@ test "malloc_tuning: trim returns the free memory below a live chunk" {
                 b.* = std.c.malloc(block);
                 @memset(@as([*]u8, @ptrCast(b.*.?))[0..block], 0xaa);
             }
-            // a chunk that outlives the others, above them
-            const live = std.c.malloc(64);
-            for (blocks) |b| {
+            // the last block outlives the others, above them. Not a separate
+            // small chunk: the thread can get an arena reused from an exited
+            // thread, whose free lists can place a small chunk below the
+            // blocks, and then free() shrinks the heap by itself.
+            const live = blocks[count - 1];
+            for (blocks[0 .. count - 1]) |b| {
                 std.c.free(b);
             }
             r.before = residentBytes();
