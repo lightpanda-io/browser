@@ -769,12 +769,16 @@ fn decodeMultipartName(arena: Allocator, raw: []const u8) ![]const u8 {
     return out.items;
 }
 
-// Used by URLSearchParams to ingest a FormData; file entries collapse via Value.asString.
+// Used by URLSearchParams to ingest a FormData.
 pub fn toKeyValueList(self: *const FormData, arena: Allocator) !KeyValueList {
     var list: KeyValueList = .empty;
     try list.ensureTotalCapacity(arena, self._entries.items.len);
     for (self._entries.items) |*entry| {
-        try list.appendAssumeCapacity(arena, entry.name.str(), entry.value.asString());
+        const value = switch (entry.value) {
+            .string => |*s| s.str(),
+            .file, .no_file => "[object File]",
+        };
+        try list.appendAssumeCapacity(arena, entry.name.str(), value);
     }
     return list;
 }
