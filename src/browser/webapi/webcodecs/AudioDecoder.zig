@@ -43,8 +43,8 @@ _core: codec.Core(AudioDecoder),
 pub const Config = struct {
     codec: []const u8,
     description: ?js.Value = null,
-    numberOfChannels: f64,
-    sampleRate: f64,
+    numberOfChannels: js.EnforceRange(u32),
+    sampleRate: js.EnforceRange(u32),
 
     // "valid AudioDecoderConfig", plus the Opus registration's check.
     pub fn isValid(self: Config) bool {
@@ -52,8 +52,8 @@ pub const Config = struct {
         if (self.description) |d| {
             if (codec.isDetachedBuffer(d)) return false;
         }
-        const channels = common.enforceRange(u32, self.numberOfChannels) catch return false;
-        const sample_rate = common.enforceRange(u32, self.sampleRate) catch return false;
+        const channels = self.numberOfChannels.value;
+        const sample_rate = self.sampleRate.value;
         if (channels == 0 or sample_rate == 0) return false;
         if (std.mem.eql(u8, self.codec, "opus") and channels > 2 and self.description == null) return false;
         return true;

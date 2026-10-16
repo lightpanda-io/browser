@@ -749,6 +749,10 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
         return T{ .value = try self.jsValueToZig(T.js_nullable, js_val) };
     }
 
+    if (@hasDecl(T, "js_enforce_range")) {
+        return T{ .value = try js.enforceRange(T.js_enforce_range, try js_val.toF64()) };
+    }
+
     return switch (T) {
         js.Function, js.Function.Global => {
             if (!js_val.isFunction()) {

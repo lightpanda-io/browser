@@ -42,13 +42,13 @@ _core: codec.Core(AudioEncoder),
 
 pub const Config = struct {
     aac: ?Aac = null,
-    bitrate: ?f64 = null,
+    bitrate: ?js.EnforceRange(u64) = null,
     bitrateMode: []const u8 = "variable",
     codec: []const u8,
     flac: ?Flac = null,
-    numberOfChannels: f64,
+    numberOfChannels: js.EnforceRange(u32),
     opus: ?Opus = null,
-    sampleRate: f64,
+    sampleRate: js.EnforceRange(u32),
 
     // AacEncoderConfig, from the AAC registration
     const Aac = struct {
@@ -57,17 +57,17 @@ pub const Config = struct {
 
     // FlacEncoderConfig, from the FLAC registration
     const Flac = struct {
-        blockSize: f64 = 0,
-        compressLevel: f64 = 5,
+        blockSize: js.EnforceRange(u32) = .{},
+        compressLevel: js.EnforceRange(u32) = .{ .value = 5 },
     };
 
     // OpusEncoderConfig, from the Opus registration
     const Opus = struct {
         application: []const u8 = "audio",
-        complexity: ?f64 = null,
+        complexity: ?js.EnforceRange(u32) = null,
         format: []const u8 = "opus",
-        frameDuration: f64 = 20000,
-        packetlossperc: f64 = 0,
+        frameDuration: js.EnforceRange(u64) = .{ .value = 20000 },
+        packetlossperc: js.EnforceRange(u32) = .{},
         signal: []const u8 = "auto",
         usedtx: bool = false,
         useinbandfec: bool = false,
@@ -77,13 +77,12 @@ pub const Config = struct {
             if (codec.checkEnum(self.format, &.{ "opus", "ogg" }) == false) return false;
             if (codec.checkEnum(self.signal, &.{ "auto", "music", "voice" }) == false) return false;
             // RFC 6716 frames are 2.5 to 20ms; a packet holds up to 120ms of them
-            const duration = common.enforceRange(u64, self.frameDuration) catch return false;
+            const duration = self.frameDuration.value;
             if (duration < 2500 or duration > 120_000 or duration % 2500 != 0) return false;
-            if (common.optionalEnforceRange(u32, self.complexity) catch return false) |complexity| {
-                if (complexity > 10) return false;
+            if (self.complexity) |complexity| {
+                if (complexity.value > 10) return false;
             }
-            const packetlossperc = common.enforceRange(u32, self.packetlossperc) catch return false;
-            return packetlossperc <= 100;
+            return self.packetlossperc.value <= 100;
         }
     };
 
@@ -91,20 +90,14 @@ pub const Config = struct {
     pub fn isValid(self: Config) bool {
         if (codec.isEmptyCodec(self.codec)) return false;
         if (codec.checkEnum(self.bitrateMode, &.{ "constant", "variable" }) == false) return false;
-        const channels = common.enforceRange(u32, self.numberOfChannels) catch return false;
-        const sample_rate = common.enforceRange(u32, self.sampleRate) catch return false;
-        if (channels == 0 or sample_rate == 0) return false;
+        if (self.numberOfChannels.value == 0 or self.sampleRate.value == 0) return false;
 
-        const bitrate = common.optionalEnforceRange(u64, self.bitrate) catch return false;
+        const bitrate = if (self.bitrate) |b| b.value else null;
         // Not in the spec, but every engine and WPT reject it.
         if (bitrate == 0) return false;
 
         if (self.aac) |aac| {
             if (codec.checkEnum(aac.format, &.{ "aac", "adts" }) == false) return false;
-        }
-        if (self.flac) |flac| {
-            _ = common.enforceRange(u32, flac.blockSize) catch return false;
-            _ = common.enforceRange(u32, flac.compressLevel) catch return false;
         }
         if (std.mem.eql(u8, self.codec, "opus")) {
             if (self.opus) |opus| {

@@ -96,5 +96,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Crypto" {
+    // pbkdf2 limit tests
+    testing.expectLog(&.{ .js, .js });
     try testing.htmlRunner("crypto.html", .{});
 }

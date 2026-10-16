@@ -50,16 +50,16 @@ fn EncodedChunk(comptime interface_name: [:0]const u8) type {
 
         const Init = struct {
             data: js.AllowSharedBufferSource,
-            duration: ?f64 = null,
-            timestamp: f64,
+            duration: ?js.EnforceRange(u64) = null,
+            timestamp: js.EnforceRange(i64),
             transfer: []const js.Value = &.{},
             type: []const u8,
         };
 
         pub fn init(init_: Init, exec: *const Execution) !*Self {
             const chunk_type = std.meta.stringToEnum(Type, init_.type) orelse return error.TypeError;
-            const timestamp = try common.enforceRange(i64, init_.timestamp);
-            const duration = try common.optionalEnforceRange(u64, init_.duration);
+            const timestamp = init_.timestamp.value;
+            const duration = if (init_.duration) |d| d.value else null;
 
             const transfer: common.Transfer = .{ .buffers = init_.transfer };
             try transfer.check();

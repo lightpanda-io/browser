@@ -18,37 +18,7 @@
 
 // Helpers shared by the WebCodecs interfaces.
 
-const std = @import("std");
-
 const js = @import("../../js/js.zig");
-
-// WebIDL [EnforceRange]: we take such members as f64 since our integer
-// conversion wraps (ToInt32 and friends) instead of throwing.
-pub fn enforceRange(comptime T: type, value: f64) !T {
-    if (std.math.isFinite(value) == false) {
-        return error.TypeError;
-    }
-    const truncated = @trunc(value);
-    const min: f64 = switch (T) {
-        u32 => 0,
-        u64 => 0,
-        i64 => -9007199254740991,
-        else => @compileError("unsupported [EnforceRange] type"),
-    };
-    const max: f64 = switch (T) {
-        u32 => 4294967295,
-        u64, i64 => 9007199254740991,
-        else => unreachable,
-    };
-    if (truncated < min or truncated > max) {
-        return error.TypeError;
-    }
-    return @intFromFloat(truncated);
-}
-
-pub fn optionalEnforceRange(comptime T: type, value: ?f64) !?T {
-    return try enforceRange(T, value orelse return null);
-}
 
 // The `transfer` member of the WebCodecs init dictionaries. Checked before
 // anything is copied, and detached once the copy is made.
@@ -86,13 +56,3 @@ pub const Transfer = struct {
         return detached.isTrue();
     }
 };
-
-const testing = std.testing;
-test "webcodecs: enforceRange" {
-    try testing.expectEqual(@as(u32, 5), try enforceRange(u32, 5.9));
-    try testing.expectEqual(@as(i64, -10), try enforceRange(i64, -10));
-    try testing.expectError(error.TypeError, enforceRange(u32, -1));
-    try testing.expectError(error.TypeError, enforceRange(u32, 4294967296));
-    try testing.expectError(error.TypeError, enforceRange(i64, std.math.nan(f64)));
-    try testing.expectError(error.TypeError, enforceRange(u64, std.math.inf(f64)));
-}

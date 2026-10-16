@@ -68,18 +68,18 @@ pub const Format = enum {
 const Init = struct {
     data: js.AllowSharedBufferSource,
     format: []const u8,
-    numberOfChannels: f64,
-    numberOfFrames: f64,
+    numberOfChannels: js.EnforceRange(u32),
+    numberOfFrames: js.EnforceRange(u32),
     sampleRate: f64,
-    timestamp: f64,
+    timestamp: js.EnforceRange(i64),
     transfer: []const js.Value = &.{},
 };
 
 fn init(init_: Init, exec: *const Execution) !*AudioData {
     const format = std.meta.stringToEnum(Format, init_.format) orelse return error.TypeError;
-    const frames = try common.enforceRange(u32, init_.numberOfFrames);
-    const channels = try common.enforceRange(u32, init_.numberOfChannels);
-    const timestamp = try common.enforceRange(i64, init_.timestamp);
+    const frames = init_.numberOfFrames.value;
+    const channels = init_.numberOfChannels.value;
+    const timestamp = init_.timestamp.value;
     if (std.math.isFinite(init_.sampleRate) == false) {
         return error.TypeError;
     }
@@ -194,9 +194,9 @@ fn getDuration(self: *const AudioData) u64 {
 
 const CopyToOptions = struct {
     format: ?[]const u8 = null,
-    frameCount: ?f64 = null,
-    frameOffset: f64 = 0,
-    planeIndex: f64,
+    frameCount: ?js.EnforceRange(u32) = null,
+    frameOffset: js.EnforceRange(u32) = .{},
+    planeIndex: js.EnforceRange(u32),
 };
 
 // The parsed options, after "Compute Copy Element Count".
@@ -214,9 +214,9 @@ const Copy = struct {
 
 fn computeCopy(self: *const AudioData, options: CopyToOptions) !Copy {
     const source_format = self._format orelse return error.InvalidStateError;
-    const plane_index = try common.enforceRange(u32, options.planeIndex);
-    const frame_offset = try common.enforceRange(u32, options.frameOffset);
-    const requested_count = try common.optionalEnforceRange(u32, options.frameCount);
+    const plane_index = options.planeIndex.value;
+    const frame_offset = options.frameOffset.value;
+    const requested_count = if (options.frameCount) |c| c.value else null;
 
     const format = if (options.format) |f|
         std.meta.stringToEnum(Format, f) orelse return error.TypeError
