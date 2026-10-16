@@ -29,3 +29,50 @@
     () => document.querySelector('p[data-random="line one\nline two"]'));
 }
 </script>
+
+<div id="unquoted">
+  <a id="tel" href="tel:1" data-v="a:b">tel</a>
+  <a id="mail" href="mailto:x@example.com">mail</a>
+  <a id="plain" x="abc">plain</a>
+  <a id="digit" x="1">digit</a>
+  <a id="nul" x="a&#xFFFD;b">nul</a>
+</div>
+
+<script id=unquotedAttributeValueEscapes>
+{
+  // An unquoted attribute value is an <ident-token>, which may hold escapes.
+  // https://drafts.csswg.org/css-syntax/#consume-name
+  const root = document.getElementById('unquoted');
+  const ids = (sel) => Array.from(root.querySelectorAll(sel), (e) => e.id).join(',');
+
+  testing.expectEqual('tel', ids('a[href^=tel\\:]'));
+
+  // Each operator.
+  testing.expectEqual('tel', ids('[data-v=a\\:b]'));
+  testing.expectEqual('tel', ids('[data-v~=a\\:b]'));
+  testing.expectEqual('tel', ids('[data-v|=a\\:b]'));
+  testing.expectEqual('tel', ids('[href^=tel\\:]'));
+  testing.expectEqual('tel', ids('[data-v$=\\:b]'));
+  testing.expectEqual('tel', ids('[href*=l\\:1]'));
+
+  // Hex escape with its terminating space.
+  testing.expectEqual('tel', ids('[href=tel\\3a 1]'));
+  // Escaped ordinary letter.
+  testing.expectEqual('tel', ids('[href^=te\\l]'));
+  // Selector list.
+  testing.expectEqual('tel,mail', ids('a[href^=tel\\:], a[href^=mailto\\:]'));
+
+  testing.expectEqual(true, root.querySelector('a[href^=tel\\:]').matches('[href^=tel\\:]'));
+  testing.expectEqual('tel', root.querySelector('a').closest('[href^=tel\\:]').id);
+
+  // A null in an unquoted value is U+FFFD.
+  testing.expectEqual('nul', ids('[x=a\0b]'));
+
+  // Unchanged forms. A leading digit is not an ident (Chrome rejects [x=1]),
+  // but it has always been accepted here; kept lenient so nothing tightens.
+  testing.expectEqual('plain', ids('[x=abc]'));
+  testing.expectEqual('digit', ids('[x=1]'));
+  testing.expectEqual('tel', ids('[data-v="a:b"]'));
+  testing.expectError("SyntaxError", () => root.querySelectorAll('[x=a:b]'));
+}
+</script>

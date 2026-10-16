@@ -1305,6 +1305,12 @@ fn attributeValue(self: *Parser, arena: Allocator) ![]const u8 {
         i += 1;
     }
 
+    // An unquoted value is an <ident-token>, which may contain escapes
+    // (and nulls, which become U+FFFD).
+    if (i < input.len and (input[i] == '\\' or input[i] == 0)) {
+        return self.consumeEscapedIdentTail(arena, i, error.InvalidAttributeSelector);
+    }
+
     if (i == 0) {
         return error.InvalidAttributeSelector;
     }
@@ -1908,6 +1914,107 @@ test "Selector: Parser.attributeValue" {
     {
         var parser = Parser{ .input = "\"abc\\" };
         try testing.expectError(error.InvalidAttributeSelector, parser.attributeValue(arena));
+    }
+
+    // A leading digit is not an ident (Chrome rejects it), but it has always
+    // been accepted here; kept lenient so no selector that parses stops parsing.
+    {
+        var parser = Parser{ .input = "1]" };
+        try testing.expectEqual("1", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Unquoted values are idents and may hold escapes: tel\: -> tel:
+    {
+        var parser = Parser{ .input = "tel\\:]" };
+        try testing.expectEqual("tel:", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Escape in the middle of an unquoted value.
+    {
+        var parser = Parser{ .input = "a\\:b]" };
+        try testing.expectEqual("a:b", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Escape as the first character of an unquoted value.
+    {
+        var parser = Parser{ .input = "\\:a]" };
+        try testing.expectEqual(":a", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Hex escape in an unquoted value consumes its terminating space.
+    {
+        var parser = Parser{ .input = "tel\\3a 1]" };
+        try testing.expectEqual("tel:1", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Escaped ordinary letter decodes to itself.
+    {
+        var parser = Parser{ .input = "te\\l]" };
+        try testing.expectEqual("tel", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Unquoted value stops before a following flag.
+    {
+        var parser = Parser{ .input = "a\\:b i]" };
+        try testing.expectEqual("a:b", try parser.attributeValue(arena));
+        try testing.expectEqual(" i]", parser.input);
+    }
+
+    // A null in an unquoted value is U+FFFD.
+    {
+        var parser = Parser{ .input = "a\x00b]" };
+        try testing.expectEqual("a\u{FFFD}b", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Backslash at EOF in an unquoted value is U+FFFD.
+    {
+        var parser = Parser{ .input = "abc\\" };
+        try testing.expectEqual("abc\u{FFFD}", try parser.attributeValue(arena));
+        try testing.expectEqual("", parser.input);
+    }
+
+    // An unescaped colon still ends the unquoted value.
+    {
+        var parser = Parser{ .input = "a:b]" };
+        try testing.expectEqual("a", try parser.attributeValue(arena));
+        try testing.expectEqual(":b]", parser.input);
+    }
+}
+
+test "Selector: Parser.attribute unquoted escaped values" {
+    const arena = testing.arena_allocator;
+
+    const cases = [_]struct { []const u8, std.meta.Tag(Selector.AttributeMatcher) }{
+        .{ "[href=tel\\:]", .exact },
+        .{ "[href~=tel\\:]", .word },
+        .{ "[href|=tel\\:]", .prefix_dash },
+        .{ "[href^=tel\\:]", .starts_with },
+        .{ "[href$=tel\\:]", .ends_with },
+        .{ "[href*=tel\\:]", .substring },
+    };
+    for (cases) |case| {
+        var parser = Parser{ .input = case[0] };
+        const attr = try parser.attribute(arena);
+        try testing.expectEqual(case[1], std.meta.activeTag(attr.matcher));
+        const value = switch (attr.matcher) {
+            .presence => unreachable,
+            inline else => |v| v,
+        };
+        try testing.expectEqual("tel:", value);
+        try testing.expectEqual("", parser.input);
+    }
+
+    // An unescaped colon in an unquoted value is still invalid.
+    {
+        var parser = Parser{ .input = "[x=a:b]" };
+        try testing.expectError(error.InvalidAttributeSelector, parser.attribute(arena));
     }
 }
 
