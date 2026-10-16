@@ -70,6 +70,7 @@ listener_paused: bool,
 max_connections: usize,
 
 advertise_host: ?[]const u8,
+remote_allow_origins: []const []const u8,
 
 // the protocols (cdp/bidi) we support
 protocols: Protocols,
@@ -224,6 +225,7 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
         .shutdown_begun = false,
         .worker_wg = .{},
         .advertise_host = config.explicitAdvertiseHost(),
+        .remote_allow_origins = config.remoteAllowOrigins(),
     };
     return self;
 }
