@@ -366,7 +366,7 @@ fn resolveNode(cmd: *CDP.Command) !void {
     defer ls.deinit();
 
     // The object id is minted on the command's session; only that session can unwrap it later.
-    const inspector_session = try target.inspectorSession(cmd.input.session_id);
+    const inspector_session = try target.inspectorSession(cmd.sessionId());
 
     // node._node is a *DOMNode we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
@@ -436,7 +436,7 @@ fn describeNode(cmd: *CDP.Command) !void {
     }
     const target = try cmd.target();
 
-    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.sessionId(), params.nodeId, params.backendNodeId, params.objectId);
 
     return cmd.sendResult(.{ .node = target.nodeWriter(node, .{ .depth = params.depth }) }, .{});
 }
@@ -480,7 +480,7 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
 
     // We retrieve the node to at least check if it exists and is valid.
     const target = try cmd.target();
-    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.sessionId(), params.nodeId, params.backendNodeId, params.objectId);
 
     switch (node.dom._type) {
         .element => {
@@ -533,7 +533,7 @@ fn getContentQuads(cmd: *CDP.Command) !void {
     const target = try cmd.target();
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.sessionId(), params.nodeId, params.backendNodeId, params.objectId);
 
     // TODO likely if the following CSS properties are set the quads should be empty
     // visibility: hidden
@@ -559,7 +559,7 @@ fn getBoxModel(cmd: *CDP.Command) !void {
     const target = try cmd.target();
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.sessionId(), params.nodeId, params.backendNodeId, params.objectId);
 
     // TODO implement for document or text
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
@@ -640,7 +640,7 @@ fn getOuterHTML(cmd: *CDP.Command) !void {
     const target = try cmd.target();
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.sessionId(), params.nodeId, params.backendNodeId, params.objectId);
 
     var aw = std.Io.Writer.Allocating.init(cmd.arena);
     try dump.deep(node.dom, .{}, &aw.writer, frame);
@@ -654,7 +654,7 @@ fn requestNode(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const target = try cmd.target();
-    const node = try getNode(cmd.arena, target, cmd.input.session_id, null, null, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.sessionId(), null, null, params.objectId);
 
     return cmd.sendResult(.{ .nodeId = node.id }, .{});
 }
@@ -675,7 +675,7 @@ fn setFileInputFiles(cmd: *CDP.Command) !void {
     const target = try cmd.target();
     const root = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.sessionId(), params.nodeId, params.backendNodeId, params.objectId);
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
     const input = element.is(Input) orelse return error.NotAnInputElement;
     if (input._input_type != .file) return error.NotAFileInput;
@@ -708,7 +708,7 @@ fn focus(cmd: *CDP.Command) !void {
     const target = try cmd.target();
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
-    const node = try getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try getNode(cmd.arena, target, cmd.sessionId(), params.nodeId, params.backendNodeId, params.objectId);
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
     if (element.isFocusable(frame) == false) {
         return cmd.sendError(-32000, "Element is not focusable", .{});

@@ -1009,12 +1009,20 @@ pub const Command = struct {
     // no session.
     pub fn target(self: *const Command) !*Target {
         const bc = self.browser_context orelse return error.BrowserContextNotLoaded;
-        if (self.input.session_id orelse self.target_session_id) |session_id| {
+        if (self.sessionId()) |session_id| {
             if (bc.attached_sessions.get(session_id)) |attached| {
                 return attached.target;
             }
         }
         return bc.firstTarget() orelse error.TargetNotLoaded;
+    }
+
+    // The session the command was sent through: its own sessionId, else the
+    // one of the Target.sendMessageToTarget that wraps it. For routing only
+    // (target, inspector session): replies (sendResult/sendError) and events
+    // keep input.session_id, see Target.sendMessageToTarget.
+    pub fn sessionId(self: *const Command) ?[]const u8 {
+        return self.input.session_id orelse self.target_session_id;
     }
 
     pub fn createBrowserContext(self: *Command) !*BrowserContext {

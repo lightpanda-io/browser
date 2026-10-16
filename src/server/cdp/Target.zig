@@ -589,7 +589,7 @@ pub fn inspectorSession(self: *const Target, session_id: ?[]const u8) !*js.Inspe
 
 /// Forwards `cmd`'s raw JSON to the inspector session of the session it was sent through.
 pub fn callInspector(self: *Target, cmd: *const CDP.Command) !void {
-    const inspector_session = try self.inspectorSession(cmd.input.session_id);
+    const inspector_session = try self.inspectorSession(cmd.sessionId());
     inspector_session.send(cmd.input.json);
     self.session.browser.env.runMicrotasks();
 }
