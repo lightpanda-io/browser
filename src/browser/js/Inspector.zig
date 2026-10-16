@@ -29,8 +29,8 @@ const Allocator = std.mem.Allocator;
 const CLIENT_TRUST_LEVEL = 1;
 
 // A context group is the set of contexts a Session sees. CDP uses one group
-// per page target (its root frame id), so a session attached to one page
-// doesn't see the other pages' contexts. Must not be 0.
+// per page target (see BrowserContext.next_group_id), so a session attached
+// to one page doesn't see the other pages' contexts. Must not be 0.
 pub const GroupId = c_int;
 
 // Inspector exists for the lifetime of the Isolate/Env. 1 Isolate = 1 Inspector.
