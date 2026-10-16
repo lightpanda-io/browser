@@ -131,6 +131,7 @@ test:
 ## Run unit tests under kcov, report in zig-out/coverage/index.html (F= filters)
 coverage:
 	TEST_FILTER="$(or $(F),$(TEST_FILTER))" $(ZIG) build $(ZIGFLAGS) coverage
+	@echo "Coverage report: zig-out/coverage/index.html"
 
 ## Run demo/runner end to end tests
 end2end:

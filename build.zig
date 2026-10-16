@@ -212,6 +212,8 @@ pub fn build(b: *Build) !void {
             .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
         });
         const kcov = b.addSystemCommand(&.{ "kcov", "--clean" });
+        // Otherwise stdio is checked and the runner's stderr summary fails the step.
+        kcov.has_side_effects = true;
         kcov.addPrefixedDirectoryArg("--include-path=", b.path("src"));
         const report = kcov.addOutputDirectoryArg("coverage");
         kcov.addArtifactArg(cov_tests);
