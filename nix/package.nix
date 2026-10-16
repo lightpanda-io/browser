@@ -50,38 +50,81 @@ let
       '';
 
   zigTargetTriple = "${stdenv.hostPlatform.parsed.cpu.name}-${stdenv.hostPlatform.parsed.kernel.name}-${stdenv.hostPlatform.parsed.abi.name}";
+
+  mkZigDerivation =
+    extraArgs:
+    stdenv.mkDerivation (
+      {
+        inherit src;
+
+        configurePhase = ''
+          runHook preConfigure
+
+          export HOME="$TMPDIR/home"
+          mkdir -p "$HOME"
+
+          export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
+          export ZIG_LOCAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR"
+          mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
+          cp -r --no-preserve=mode ${zigDeps}/. "$ZIG_GLOBAL_CACHE_DIR/p"
+
+          runHook postConfigure
+        '';
+      }
+      // extraArgs
+      // {
+        nativeBuildInputs = buildInputs ++ (extraArgs.nativeBuildInputs or [ ]);
+      }
+    );
+
+  snapshot = mkZigDerivation {
+    pname = "lightpanda-snapshot";
+    version = "${version}-nix";
+
+    nativeBuildInputs = [ pkgs.patchelf ];
+
+    buildPhase = ''
+      runHook preBuild
+
+      TERM=dumb zig build extras \
+        -Doptimize=ReleaseFast \
+        -Dtarget=${zigTargetTriple} \
+        -Dprebuilt_v8_path=${v8} \
+        -Dprebuilt_rust_path=${rustFfiLib}
+
+      patchelf --set-interpreter "$(cat "$NIX_CC/nix-support/dynamic-linker")" zig-out/bin/lightpanda-snapshot-creator
+      ./zig-out/bin/lightpanda-snapshot-creator snapshot.bin
+
+      runHook postBuild
+    '';
+
+    installPhase = ''
+      runHook preInstall
+
+      mkdir -p $out
+      cp snapshot.bin $out/snapshot.bin
+
+      runHook postInstall
+    '';
+  };
 in
-stdenv.mkDerivation {
+mkZigDerivation {
   pname = "lightpanda";
   version = "${version}-nix";
-  inherit src;
 
-  nativeBuildInputs = buildInputs ++ [
-    pkgs.autoPatchelfHook
-  ];
-
-  configurePhase = ''
-    runHook preConfigure
-
-    export HOME="$TMPDIR/home"
-    mkdir -p "$HOME"
-
-    export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
-    export ZIG_LOCAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR"
-    mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
-    cp -r --no-preserve=mode ${zigDeps}/. "$ZIG_GLOBAL_CACHE_DIR/p"
-
-    runHook postConfigure
-  '';
+  nativeBuildInputs = [ pkgs.autoPatchelfHook ];
 
   buildPhase = ''
     runHook preBuild
+
+    cp ${snapshot}/snapshot.bin src/snapshot.bin
 
     TERM=dumb zig build \
       -Doptimize=ReleaseFast \
       -Dtarget=${zigTargetTriple} \
       -Dprebuilt_v8_path=${v8} \
       -Dprebuilt_rust_path=${rustFfiLib} \
+      -Dsnapshot_path=../../snapshot.bin \
       -Dversion=${version}
 
     runHook postBuild
