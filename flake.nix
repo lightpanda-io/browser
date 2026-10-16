@@ -41,7 +41,7 @@
       zon = builtins.readFile ./build.zig.zon;
       version = builtins.elemAt (builtins.match ".*\\.version = \"([^\"]+)\".*" zon) 0;
     in
-    flake-utils.lib.eachDefaultSystem (
+    flake-utils.lib.eachSystem [ "x86_64-linux" ] (
       system:
       let
         overlays = [
