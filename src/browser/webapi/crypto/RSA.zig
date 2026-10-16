@@ -264,13 +264,7 @@ pub fn importJwk(
     const hash = canonicalHash(hash_name) orelse return error.NotSupported;
 
     if (!std.mem.eql(u8, jwk.kty orelse "", "RSA")) return error.DataError;
-    if (jwk.use) |use| {
-        if (usages_mask != 0 and !std.mem.eql(u8, use, "enc")) return error.DataError;
-    }
-    if (jwk.key_ops) |key_ops| try checkKeyOps(key_ops, usages_mask);
-    if (jwk.ext) |ext| {
-        if (!ext and extractable) return error.DataError;
-    }
+    try common.checkJwk(jwk, "enc", usages_mask, extractable);
     // `alg` is optional; when present, it must name the requested hash.
     if (jwk.alg) |alg| {
         const alg_hash = hashOfJwkAlg(alg) orelse return error.DataError;
@@ -284,19 +278,6 @@ pub fn importJwk(
     if (crypto.EVP_PKEY_set1_RSA(pkey, rsa) != 1) return error.OutOfMemory;
 
     return local.resolvePromise(try newKey(pkey, hash, jwk.d != null, extractable, usages_mask, exec));
-}
-
-/// A JWK `key_ops` must hold every requested usage, and no value twice
-/// (RFC 7517, section 4.3). Values that aren't usages are allowed.
-fn checkKeyOps(key_ops: []const []const u8, usages_mask: u8) !void {
-    var listed: u8 = 0;
-    for (key_ops, 0..) |op, i| {
-        for (key_ops[0..i]) |earlier| {
-            if (std.mem.eql(u8, earlier, op)) return error.DataError;
-        }
-        if (common.usageBit(op)) |bit| listed |= bit;
-    }
-    if (usages_mask & ~listed != 0) return error.DataError;
 }
 
 /// The RSA key described by a JWK (JWA, section 6.3). A private key needs all

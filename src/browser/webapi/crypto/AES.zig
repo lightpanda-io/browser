@@ -107,8 +107,8 @@ pub fn generate(
     return local.resolvePromise(crypto_key);
 }
 
-/// Imports raw AES key material (from the `raw` or `jwk` formats; the caller has
-/// already turned both into the underlying bytes).
+/// Imports raw AES key material (from the `raw` format, or the `k` of a JWK
+/// that `importJwk` checked).
 pub fn import(
     name: []const u8,
     raw: []const u8,
@@ -138,6 +138,36 @@ pub fn import(
     });
 
     return local.resolvePromise(crypto_key);
+}
+
+/// Imports an AES key from a JWK, following the "jwk" steps of AES's "import
+/// key": the usages first (SyntaxError), then kty "oct", the key in `k`, an
+/// `alg` that names this algorithm at the key's length, and the common
+/// use/key_ops/ext checks (DataError).
+pub fn importJwk(
+    name: []const u8,
+    jwk: algorithm.KeyData.Jwk,
+    extractable: bool,
+    key_usages: []const []const u8,
+    exec: *const Execution,
+) !js.Promise {
+    const canonical = canonicalName(name) orelse return error.NotSupported;
+    const mask = try common.usageMask(allowedUsages(canonical).?, key_usages);
+
+    const raw = try common.octKey(jwk, exec.local_arena);
+    if (jwk.alg) |alg| {
+        if (!std.mem.eql(u8, alg, try jwkAlg(canonical, raw.len, exec))) return error.DataError;
+    }
+    try common.checkJwk(jwk, "enc", mask, extractable);
+
+    // import() rejects a key that isn't 128, 192 or 256 bits (DataError).
+    return import(canonical, raw, extractable, key_usages, exec);
+}
+
+/// The JWK `alg` of an AES key: "A", its length in bits and the mode
+/// ("A128GCM", "A256KW", ...). `name` is the canonical algorithm name.
+pub fn jwkAlg(name: []const u8, key_len: usize, exec: *const Execution) ![]const u8 {
+    return exec.local_arena.print("A{d}{s}", .{ key_len * 8, name[4..] }); // strip "AES-"
 }
 
 const CipherError = error{ InvalidAccessError, OperationError, NotSupported, OutOfMemory };

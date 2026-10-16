@@ -556,6 +556,84 @@
   });
 </script>
 
+<script id=jwk-symmetric type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const k16 = "AAAAAAAAAAAAAAAAAAAAAA"; // 16 bytes
+  const k24 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 24 bytes
+  const k32 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 32 bytes
+  const aes = { kty: "oct", k: k16, alg: "A128GCM" };
+  const hmac = { kty: "oct", k: k16, alg: "HS256" };
+  const importAes =(jwk, usages = ["encrypt"], extractable = true, name = "AES-GCM") =>
+    errorName(() => subtle.importKey("jwk", jwk, name, extractable, usages));
+  const importHmac = (jwk, usages = ["sign"], hash = "SHA-256") =>
+    errorName(() => subtle.importKey("jwk", jwk, { name: "HMAC", hash }, true, usages));
+
+  // A non-extractable JWK, wrapped as JSON, must not come back extractable.
+  const wrapper = await subtle.generateKey({ name: "AES-GCM", length: 128 }, true, ["encrypt", "unwrapKey"]);
+  const gcm = { name: "AES-GCM", iv: new Uint8Array(12) };
+  const lockedJson = new TextEncoder().encode(JSON.stringify({ ...aes, ext: false }));
+  const wrappedLocked = await subtle.encrypt(gcm, wrapper, lockedJson);
+
+  const results = {
+    // Accepted: matching alg, use and key_ops, ext:false imported as non-extractable.
+    aes: await importAes(aes),
+    aesWithoutAlg: await importAes({ kty: "oct", k: k16 }),
+    kw: await importAes({ kty: "oct", k: k16, alg: "A128KW" }, ["wrapKey"], true, "AES-KW"),
+    cbc192: await importAes({ kty: "oct", k: k24, alg: "A192CBC" }, ["encrypt"], true, "AES-CBC"),
+    ctr256: await importAes({ kty: "oct", k: k32, alg: "A256CTR" }, ["encrypt"], true, "AES-CTR"),
+    hmac: await importHmac(hmac),
+    hmacSha1: await importHmac({ kty: "oct", k: k16, alg: "HS1" }, ["sign"], "SHA-1"),
+    useMatches: await importAes({ ...aes, use: "enc" }),
+    extFalseLocked: await importAes({ ...aes, ext: false }, ["encrypt"], false),
+    keyOpsWider: await importAes({ ...aes, key_ops: ["encrypt", "decrypt"] }),
+    // kty, k and alg (case-sensitive, and naming this algorithm at this length / hash).
+    ktyMissing: await importAes({ k: k16 }),
+    ktyRsa: await importAes({ ...aes, kty: "RSA" }),
+    kMissing: await importAes({ kty: "oct", alg: "A128GCM" }),
+    algLength: await importAes({ ...aes, alg: "A256GCM" }),
+    algMode: await importAes({ ...aes, alg: "A128CBC" }),
+    algLowercase: await importAes({ ...aes, alg: "a128gcm" }),
+    hmacAlgHash: await importHmac({ ...hmac, alg: "HS512" }),
+    // use, key_ops and ext.
+    aesUseSig: await importAes({ ...aes, use: "sig" }),
+    hmacUseEnc: await importHmac({ ...hmac, use: "enc" }),
+    keyOpsMissing: await importAes({ ...aes, key_ops: ["decrypt"] }),
+    keyOpsDuplicate: await importAes({ ...aes, key_ops: ["encrypt", "encrypt"] }),
+    aesExtFalse: await importAes({ ...aes, ext: false }),
+    hmacExtFalse: await importHmac({ ...hmac, ext: false }),
+    unwrapExtFalse: await errorName(() => subtle.unwrapKey("jwk", wrappedLocked, wrapper, gcm, "AES-GCM", true, ["encrypt"])),
+    // The usages are checked before the JWK.
+    badUsageBadKty: await importAes({ ...aes, kty: "RSA" }, ["sign"]),
+    // HKDF and PBKDF2 keys only come in raw.
+    hkdf: await errorName(() => subtle.importKey("jwk", { kty: "oct", k: k16 }, "HKDF", false, ["deriveBits"])),
+    pbkdf2: await errorName(() => subtle.importKey("jwk", { kty: "oct", k: k16 }, "PBKDF2", false, ["deriveBits"])),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    // Compared with the case name, so a failure says which one.
+    for (const ok of ["aes", "aesWithoutAlg", "kw", "cbc192", "ctr256", "hmac", "hmacSha1", "useMatches", "extFalseLocked", "keyOpsWider"]) {
+      testing.expectEqual(`${ok}: null`, `${ok}: ${results[ok]}`);
+    }
+    for (const bad of ["ktyMissing", "ktyRsa", "kMissing", "algLength", "algMode", "algLowercase", "hmacAlgHash",
+      "aesUseSig", "hmacUseEnc", "keyOpsMissing", "keyOpsDuplicate", "aesExtFalse", "hmacExtFalse", "unwrapExtFalse"]) {
+      testing.expectEqual(`${bad}: DataError`, `${bad}: ${results[bad]}`);
+    }
+    testing.expectEqual("SyntaxError", results.badUsageBadKty);
+    testing.expectEqual("NotSupportedError", results.hkdf);
+    testing.expectEqual("NotSupportedError", results.pbkdf2);
+  });
+</script>
+
 <script id=aes-ctr-counter-wrap type=module>
   const state = await testing.async();
   // AES-CTR must increment only the rightmost `length` bits of the counter
