@@ -51,8 +51,9 @@
           inherit system overlays;
         };
 
+        minimalRustToolchain = fenix.packages.${system}.stable.minimalToolchain;
         rustToolchain = fenix.packages.${system}.stable.toolchain;
-        craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+        craneLib = (crane.mkLib pkgs).overrideToolchain minimalRustToolchain;
 
         # We need crtbeginS.o for building.
         crtFiles = pkgs.runCommand "crt-files" { } ''
