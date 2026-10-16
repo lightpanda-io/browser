@@ -606,7 +606,7 @@ test "cdp.Emulation: navigator.geolocation reads the override" {
     // for a loaded page, same primitive Runner.waitForSelector/waitForScript
     // use to pump pending scheduler work under a CDP-loaded page.
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(target.pageHandle().?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(target.frame_id.?, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -664,7 +664,7 @@ test "cdp.Emulation: navigator.geolocation watchPosition delivers the override" 
     }
 
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(target.pageHandle().?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(target.frame_id.?, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -727,7 +727,7 @@ fn errorCodeFor(bc: *CDP.BrowserContext) !i32 {
     }
 
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(target.pageHandle().?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(target.frame_id.?, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -782,7 +782,7 @@ test "cdp.Emulation: navigator.geolocation errors PERMISSION_DENIED when permiss
     // for a loaded page, same primitive Runner.waitForSelector/waitForScript
     // use to pump pending scheduler work under a CDP-loaded page.
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(target.pageHandle().?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(target.frame_id.?, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
