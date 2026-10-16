@@ -488,7 +488,7 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
             // then require its content quads to intersect the viewport.
             // `params.rect` (Playwright's click position) is ignored: the faux
             // layout scrolls the whole element into view.
-            const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+            const frame = target.mainFrame() orelse return error.FrameNotLoaded;
             const element = node.dom.is(DOMNode.Element).?;
             element.scrollIntoViewIfNeeded(null, element.ownerFrame(frame) orelse frame);
         },
@@ -930,7 +930,7 @@ test "cdp.dom: scrollIntoViewIfNeeded brings the node's quads into the viewport"
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = bc.firstTarget().?.mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
