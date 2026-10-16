@@ -255,7 +255,7 @@ fn createTarget(cmd: *CDP.Command) !void {
 
 // The target the client knows by `target_id`. TargetNotLoaded when it knows
 // of none.
-fn findTarget(bc: *const CDP.BrowserContext, target_id: []const u8) !*CDP.Target {
+fn resolveTarget(bc: *const CDP.BrowserContext, target_id: []const u8) !*CDP.Target {
     if (bc.findTarget(target_id)) |target| {
         return target;
     }
@@ -274,7 +274,7 @@ fn attachToTarget(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const target = try findTarget(bc, params.targetId);
+    const target = try resolveTarget(bc, params.targetId);
 
     // The first attach becomes the page's primary session, which all
     // Page/Network/... events are emitted to. Later attaches — e.g.
@@ -334,7 +334,7 @@ fn closeTarget(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const target = try findTarget(bc, params.targetId);
+    const target = try resolveTarget(bc, params.targetId);
 
     try cmd.sendResult(.{ .success = true }, .{});
     try bc.closeTarget(target);
@@ -348,7 +348,7 @@ fn getTargetInfo(cmd: *CDP.Command) !void {
 
     if (params.targetId) |param_target_id| {
         const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-        const target = try findTarget(bc, param_target_id);
+        const target = try resolveTarget(bc, param_target_id);
         return cmd.sendResult(.{ .targetInfo = targetInfo(target).? }, .{});
     }
 
