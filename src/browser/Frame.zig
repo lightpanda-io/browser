@@ -761,7 +761,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
         if (is_blob) {
             // strip out blob:
-            self.origin = try URL.getOrigin(self.page_arena, request_url[5.. :0]);
+            self.origin = try URL.getOrigin(self.page_arena, self.url[5.. :0]);
         } else if (self.parent) |parent| {
             self.origin = parent.origin;
             if (is_about_blank or is_srcdoc) {
