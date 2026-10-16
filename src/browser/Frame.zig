@@ -3299,8 +3299,10 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
     if (child.is(Element.Html.Image)) |img| {
         // noop if it didn't actually change
         try img.sourceChanged(self);
-    } else {
-        try Element.Html.Picture.childInserted(parent, child, self);
+    } else if (child.is(Element.Html.Source)) |source| {
+        try Element.Html.Picture.sourceInserted(parent, source, self);
+    } else if (child.is(Element.Html.Track)) |track| {
+        try track.insertedInto(parent, self);
     }
 
     // Update live ranges for insertion (DOM spec insert step 6).

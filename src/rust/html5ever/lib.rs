@@ -451,6 +451,30 @@ pub extern "C" fn encoding_max_encode_buffer_length(
         .unwrap_or(input_len * 10)
 }
 
+/// Looks `name` (an HTML named character reference without its leading '&')
+/// up in html5ever's table. Returns 0 when no reference starts with `name`, 1
+/// when `name` is only a prefix of one, and 2 for a full reference, whose
+/// codepoints are written to `out` (the second is 0 for single-codepoint ones).
+#[no_mangle]
+pub extern "C" fn html5ever_named_character_reference(
+    name: *const c_uchar,
+    len: usize,
+    out: *mut [u32; 2],
+) -> u8 {
+    let bytes = unsafe { std::slice::from_raw_parts(name, len) };
+    let Ok(name) = std::str::from_utf8(bytes) else {
+        return 0;
+    };
+    match html5ever::data::NAMED_ENTITIES.get(name) {
+        None => 0,
+        Some(&(0, _)) => 1,
+        Some(&(c1, c2)) => {
+            unsafe { *out = [c1, c2] };
+            2
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn html5ever_parse_fragment(
     html: *mut c_uchar,

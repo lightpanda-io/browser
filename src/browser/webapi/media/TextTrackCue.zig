@@ -16,10 +16,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+
 const js = @import("../../js/js.zig");
 
 const Frame = @import("../../Frame.zig");
 const EventTarget = @import("../EventTarget.zig");
+const TextTrack = @import("TextTrack.zig");
 
 const TextTrackCue = @This();
 
@@ -31,6 +34,7 @@ _id: []const u8 = "",
 _start_time: f64 = 0,
 _end_time: f64 = 0,
 _pause_on_exit: bool = false,
+_track: ?*TextTrack = null, // The track whose list of cues this cue is in.
 
 pub const Type = union(enum) {
     vtt: *@import("VTTCue.zig"),
@@ -38,6 +42,10 @@ pub const Type = union(enum) {
 
 pub fn asEventTarget(self: *TextTrackCue) *EventTarget {
     return self._proto;
+}
+
+fn getTrack(self: *const TextTrackCue) ?*TextTrack {
+    return self._track;
 }
 
 pub fn getId(self: *const TextTrackCue) []const u8 {
@@ -52,16 +60,25 @@ pub fn getStartTime(self: *const TextTrackCue) f64 {
     return self._start_time;
 }
 
-fn setStartTime(self: *TextTrackCue, value: f64) void {
+fn setStartTime(self: *TextTrackCue, value: f64, frame: *Frame) !void {
+    if (std.math.isFinite(value) == false) {
+        return error.TypeError;
+    }
     self._start_time = value;
+    if (self._track) |track| {
+        try track.reorder(self, frame);
+    }
 }
 
 fn getEndTime(self: *const TextTrackCue) f64 {
     return self._end_time;
 }
 
-fn setEndTime(self: *TextTrackCue, value: f64) void {
+fn setEndTime(self: *TextTrackCue, value: f64, frame: *Frame) !void {
     self._end_time = value;
+    if (self._track) |track| {
+        try track.reorder(self, frame);
+    }
 }
 
 fn getPauseOnExit(self: *const TextTrackCue) bool {
@@ -84,6 +101,7 @@ pub const JsApi = struct {
 
     pub const Prototype = EventTarget;
 
+    pub const track = bridge.accessor(TextTrackCue.getTrack, null, .{});
     pub const id = bridge.accessor(TextTrackCue.getId, TextTrackCue.setId, .{});
     pub const startTime = bridge.accessor(TextTrackCue.getStartTime, TextTrackCue.setStartTime, .{});
     pub const endTime = bridge.accessor(TextTrackCue.getEndTime, TextTrackCue.setEndTime, .{});

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<!-- VTTRegion is in the spec, WPT and Firefox; Chrome doesn't expose it. -->
+
+<script id=defaults>
+{
+  const region = new VTTRegion();
+  testing.expectEqual(true, region instanceof VTTRegion);
+  testing.expectEqual("", region.id);
+  testing.expectEqual(100, region.width);
+  testing.expectEqual(3, region.lines);
+  testing.expectEqual(0, region.regionAnchorX);
+  testing.expectEqual(100, region.regionAnchorY);
+  testing.expectEqual(0, region.viewportAnchorX);
+  testing.expectEqual(100, region.viewportAnchorY);
+  testing.expectEqual("", region.scroll);
+}
+</script>
+
+<script id=percentages>
+{
+  const region = new VTTRegion();
+  region.width = 42.5;
+  testing.expectEqual(42.5, region.width);
+
+  testing.expectError("IndexSizeError", () => { region.width = 101; });
+  testing.expectError("IndexSizeError", () => { region.regionAnchorX = -1; });
+  testing.expectError("TypeError", () => { region.viewportAnchorY = NaN; });
+  testing.expectError("TypeError", () => { region.viewportAnchorX = Infinity; });
+  testing.expectEqual(42.5, region.width);
+  testing.expectEqual(0, region.regionAnchorX);
+  testing.expectEqual(100, region.viewportAnchorY);
+}
+</script>
+
+<!-- Per the current IDL (unsigned long) and WPT VTTRegion/lines.html; Firefox
+     still throws IndexSizeError for negative values, from an older spec. -->
+<script id=lines>
+{
+  const region = new VTTRegion();
+  region.lines = 130;
+  testing.expectEqual(130, region.lines);
+  region.lines = -1;
+  testing.expectEqual(4294967295, region.lines);
+  region.lines = NaN;
+  testing.expectEqual(0, region.lines);
+}
+</script>
+
+<script id=scroll>
+{
+  const region = new VTTRegion();
+  region.scroll = "up";
+  testing.expectEqual("up", region.scroll);
+  region.scroll = "down";
+  testing.expectEqual("up", region.scroll);
+  region.scroll = "";
+  testing.expectEqual("", region.scroll);
+}
+</script>
