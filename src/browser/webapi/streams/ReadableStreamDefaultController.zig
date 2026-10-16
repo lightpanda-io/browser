@@ -243,6 +243,12 @@ pub fn fail(self: *ReadableStreamDefaultController, local: *const js.Local, reas
     }
 }
 
+/// Errors the stream with an arbitrary JS value, preserving its identity.
+/// This is what the JS-facing `controller.error(e)` uses.
+pub fn errorWithValue(self: *ReadableStreamDefaultController, value: js.Value) !void {
+    return self.fail(value.local, value);
+}
+
 /// The caller owns the returned global and must release it.
 pub fn dequeue(self: *ReadableStreamDefaultController) ?js.Value.Global {
     if (self._queue.items.len == 0) {
