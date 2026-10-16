@@ -16,10 +16,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! RSA-OAEP: key generation, import and export (spki/pkcs8 DER and JWK), and
-//! the encrypt/decrypt operations. The key material lives as a libcrypto
-//! EVP_PKEY in `CryptoKey._vary.pkey`. See EC.zig for the asymmetric-key
-//! rationale.
+//! RSA-OAEP and RSASSA-PKCS1-v1_5: key generation, import and export
+//! (spki/pkcs8 DER and JWK), the encrypt/decrypt operations of RSA-OAEP and
+//! the sign/verify operations of RSASSA-PKCS1-v1_5. The key material lives as
+//! a libcrypto EVP_PKEY in `CryptoKey._vary.pkey`. See EC.zig for the
+//! asymmetric-key rationale.
 
 const std = @import("std");
 
@@ -84,52 +85,77 @@ fn isValidPublicExponent(bytes: []const u8) bool {
     return false;
 }
 
-/// The registered name (case-insensitive), or null if not an RSA-OAEP algorithm.
-pub fn canonicalName(name: []const u8) ?[]const u8 {
-    if (eql(name, "RSA-OAEP")) return "RSA-OAEP";
+/// What sets the RSA algorithms implemented here apart: the usages of each
+/// half of a key pair and the JWK members that describe their keys.
+pub const Scheme = struct {
+    name: []const u8,
+    private_usages: []const []const u8,
+    public_usages: []const []const u8,
+    /// The JWK `use` of the keys.
+    jwk_use: []const u8,
+    /// The JWK `alg` for each of `hashes`: the values of JWA, sections 3.1 and
+    /// 4.1, and WebCrypto's "RS1" for RSASSA-PKCS1-v1_5 with SHA-1.
+    jwk_algs: [hashes.len][]const u8,
+};
+
+const schemes = [_]Scheme{
+    .{
+        .name = "RSA-OAEP",
+        .private_usages = &.{ "decrypt", "unwrapKey" },
+        .public_usages = &.{ "encrypt", "wrapKey" },
+        .jwk_use = "enc",
+        .jwk_algs = .{ "RSA-OAEP", "RSA-OAEP-256", "RSA-OAEP-384", "RSA-OAEP-512" },
+    },
+    .{
+        .name = "RSASSA-PKCS1-v1_5",
+        .private_usages = &.{"sign"},
+        .public_usages = &.{"verify"},
+        .jwk_use = "sig",
+        .jwk_algs = .{ "RS1", "RS256", "RS384", "RS512" },
+    },
+};
+
+/// The scheme of an RSA algorithm name (case-insensitive), or null if it isn't
+/// one implemented here.
+pub fn scheme(name: []const u8) ?*const Scheme {
+    for (&schemes) |*s| {
+        if (eql(name, s.name)) return s;
+    }
     return null;
 }
+
+const hashes = [_][]const u8{ "SHA-1", "SHA-256", "SHA-384", "SHA-512" };
 
 /// The registered hash name (case-insensitive), or null if not a supported
 /// hash. Stored on the key, so `.algorithm.hash.name` reports it and
 /// `findDigest` (which is case-sensitive) can look it up.
 pub fn canonicalHash(name: []const u8) ?[]const u8 {
-    inline for ([_][]const u8{ "SHA-1", "SHA-256", "SHA-384", "SHA-512" }) |canonical| {
+    for (hashes) |canonical| {
         if (eql(name, canonical)) return canonical;
     }
     return null;
 }
 
-/// The JWK `alg` of each OAEP hash (JWA, section 4.3).
-const jwk_algs = [_]struct { hash: []const u8, alg: []const u8 }{
-    .{ .hash = "SHA-1", .alg = "RSA-OAEP" },
-    .{ .hash = "SHA-256", .alg = "RSA-OAEP-256" },
-    .{ .hash = "SHA-384", .alg = "RSA-OAEP-384" },
-    .{ .hash = "SHA-512", .alg = "RSA-OAEP-512" },
-};
-
-/// The JWK `alg` for a canonical hash name.
-fn jwkAlgOfHash(hash: []const u8) ?[]const u8 {
-    for (jwk_algs) |entry| {
-        if (std.mem.eql(u8, entry.hash, hash)) return entry.alg;
+/// The JWK `alg` of `s` for a canonical hash name.
+fn jwkAlgOfHash(s: *const Scheme, hash: []const u8) ?[]const u8 {
+    for (hashes, s.jwk_algs) |h, alg| {
+        if (std.mem.eql(u8, h, hash)) return alg;
     }
     return null;
 }
 
-/// The canonical hash for a JWK `alg`. The spec matches `alg` case-sensitively.
-fn hashOfJwkAlg(alg: []const u8) ?[]const u8 {
-    for (jwk_algs) |entry| {
-        if (std.mem.eql(u8, entry.alg, alg)) return entry.hash;
+/// The canonical hash for a JWK `alg` of `s`. The spec matches `alg`
+/// case-sensitively.
+fn hashOfJwkAlg(s: *const Scheme, alg: []const u8) ?[]const u8 {
+    for (hashes, s.jwk_algs) |hash, a| {
+        if (std.mem.eql(u8, a, alg)) return hash;
     }
     return null;
 }
 
 const max_modulus_length = 4096;
 
-const private_usages: []const []const u8 = &.{ "decrypt", "unwrapKey" };
-const public_usages: []const []const u8 = &.{ "encrypt", "wrapKey" };
-
-/// Generates an RSA-OAEP key pair of `modulusLength` bits with the given public
+/// Generates an RSA key pair of `modulusLength` bits with the given public
 /// exponent. Mirrors EC.generate: each key keeps the EVP_PKEY of its half, and
 /// the requested usages are split across the pair (validate() rejected illegal
 /// ones).
@@ -142,9 +168,9 @@ pub fn generate(
     const local = exec.js.local.?;
     try validate(params, key_usages);
 
-    // validate() also accepts RSASSA-PKCS1-v1_5 and RSA-PSS (so their parameter
-    // errors are reported correctly), but only RSA-OAEP generation is implemented.
-    if (!eql(params.name, "RSA-OAEP")) return error.NotSupported;
+    // validate() also accepts RSA-PSS (so its parameter errors are reported
+    // correctly), but it isn't implemented.
+    const s = scheme(params.name) orelse return error.NotSupported;
 
     // Generation runs on the main thread and can't be interrupted, and its cost
     // grows steeply with the size: 8192 bits takes seconds, 16384 (BoringSSL's
@@ -153,11 +179,11 @@ pub fn generate(
     if (params.modulusLength > max_modulus_length) return error.OperationError;
 
     const hash_name = canonicalHash(switch (params.hash) {
-        .string => |s| s,
+        .string => |str| str,
         .object => |o| o.name,
     }).?;
-    const private_mask = maskOf(private_usages, key_usages);
-    const public_mask = maskOf(public_usages, key_usages);
+    const private_mask = maskOf(s.private_usages, key_usages);
+    const public_mask = maskOf(s.public_usages, key_usages);
     // The private key must end up with at least one usage.
     if (private_mask == 0) return error.SyntaxError;
 
@@ -194,7 +220,7 @@ pub fn generate(
         ._extractable = extractable,
         ._usages = private_mask,
         ._key = &.{},
-        ._algorithm = .{ .name = "RSA-OAEP", .hash = hash_name, .modulus_length = modulus_length, .public_exponent = public_exponent },
+        ._algorithm = .{ .name = s.name, .hash = hash_name, .modulus_length = modulus_length, .public_exponent = public_exponent },
         ._vary = .{ .pkey = private_pkey },
     });
 
@@ -205,17 +231,19 @@ pub fn generate(
         ._extractable = true,
         ._usages = public_mask,
         ._key = &.{},
-        ._algorithm = .{ .name = "RSA-OAEP", .hash = hash_name, .modulus_length = modulus_length, .public_exponent = public_exponent },
+        ._algorithm = .{ .name = s.name, .hash = hash_name, .modulus_length = modulus_length, .public_exponent = public_exponent },
         ._vary = .{ .pkey = public_pkey },
     });
 
     return local.resolvePromise(CryptoKey.Pair{ .privateKey = private, .publicKey = public });
 }
 
-/// Imports an RSA-OAEP key from DER: `spki` (public) or `pkcs8` (private).
-/// libcrypto parses the DER, so a malformed structure is DataError. `hash_name`
-/// is the OAEP digest, kept for encrypt. JWK goes through `importJwk`.
+/// Imports an RSA key of scheme `s` from DER: `spki` (public) or `pkcs8`
+/// (private). libcrypto parses the DER, so a malformed structure is DataError.
+/// `hash_name` is the digest of the OAEP padding or of the signature, kept on
+/// the key. JWK goes through `importJwk`.
 pub fn import(
+    s: *const Scheme,
     format: []const u8,
     der: []const u8,
     hash_name: []const u8,
@@ -226,8 +254,8 @@ pub fn import(
 ) !js.Promise {
     const local = exec.js.local.?;
 
-    // Reject an unsupported OAEP digest at import time, rather than letting it
-    // surface only on the first encrypt/decrypt.
+    // Reject an unsupported digest at import time, rather than letting it
+    // surface only on the first operation.
     const hash = canonicalHash(hash_name) orelse return error.NotSupported;
 
     var ptr: [*c]const u8 = der.ptr;
@@ -245,15 +273,17 @@ pub fn import(
 
     if (crypto.EVP_PKEY_id(pkey) != crypto.EVP_PKEY_RSA) return error.DataError;
 
-    return local.resolvePromise(try newKey(pkey, hash, is_private, extractable, usages_mask, exec));
+    return local.resolvePromise(try newKey(s, pkey, hash, is_private, extractable, usages_mask, exec));
 }
 
-/// Imports an RSA-OAEP key from a JSON Web Key: `n` and `e` for a public key,
-/// plus `d`, `p`, `q`, `dp`, `dq` and `qi` for a private one (the presence of
-/// `d` decides, as in SubtleCrypto.importKind, which already validated the
-/// usages against it). Follows the "import key" steps of RSA-OAEP: a JWK that
-/// doesn't fit the requested key, or describes an invalid one, is DataError.
+/// Imports an RSA key of scheme `s` from a JSON Web Key: `n` and `e` for a
+/// public key, plus `d`, `p`, `q`, `dp`, `dq` and `qi` for a private one (the
+/// presence of `d` decides, as in SubtleCrypto.importKind, which already
+/// validated the usages against it). Follows the "import key" steps of
+/// RSA-OAEP and RSASSA-PKCS1-v1_5: a JWK that doesn't fit the requested key, or
+/// describes an invalid one, is DataError.
 pub fn importJwk(
+    s: *const Scheme,
     jwk: algorithm.KeyData.Jwk,
     hash_name: []const u8,
     extractable: bool,
@@ -264,10 +294,10 @@ pub fn importJwk(
     const hash = canonicalHash(hash_name) orelse return error.NotSupported;
 
     if (!std.mem.eql(u8, jwk.kty orelse "", "RSA")) return error.DataError;
-    try common.checkJwk(jwk, "enc", usages_mask, extractable);
+    try common.checkJwk(jwk, s.jwk_use, usages_mask, extractable);
     // `alg` is optional; when present, it must name the requested hash.
     if (jwk.alg) |alg| {
-        const alg_hash = hashOfJwkAlg(alg) orelse return error.DataError;
+        const alg_hash = hashOfJwkAlg(s, alg) orelse return error.DataError;
         if (!std.mem.eql(u8, alg_hash, hash)) return error.DataError;
     }
 
@@ -277,7 +307,7 @@ pub fn importJwk(
     errdefer crypto.EVP_PKEY_free(pkey);
     if (crypto.EVP_PKEY_set1_RSA(pkey, rsa) != 1) return error.OutOfMemory;
 
-    return local.resolvePromise(try newKey(pkey, hash, jwk.d != null, extractable, usages_mask, exec));
+    return local.resolvePromise(try newKey(s, pkey, hash, jwk.d != null, extractable, usages_mask, exec));
 }
 
 /// The RSA key described by a JWK (JWA, section 6.3). A private key needs all
@@ -310,9 +340,10 @@ fn jwkBigNum(member: ?[]const u8, exec: *const Execution) !*crypto.BIGNUM {
     return crypto.BN_bin2bn(bytes.ptr, bytes.len, null) orelse error.OutOfMemory;
 }
 
-/// Wraps an RSA `pkey` in a CryptoKey. The key takes ownership of `pkey` only on
-/// success.
+/// Wraps an RSA `pkey` in a CryptoKey of scheme `s`. The key takes ownership
+/// of `pkey` only on success.
 fn newKey(
+    s: *const Scheme,
     pkey: *crypto.EVP_PKEY,
     hash: []const u8,
     is_private: bool,
@@ -327,7 +358,7 @@ fn newKey(
         ._usages = usages_mask,
         ._key = &.{},
         ._algorithm = .{
-            .name = "RSA-OAEP",
+            .name = s.name,
             .hash = hash,
             .modulus_length = @intCast(crypto.EVP_PKEY_bits(pkey)),
             .public_exponent = try exponentBytes(pkey, exec),
@@ -358,7 +389,7 @@ pub fn exportDer(format: []const u8, key: *const CryptoKey, exec: *const Executi
     return exec.local_arena.dupe(u8, out[0..@intCast(len)]);
 }
 
-/// The JWK of an RSA-OAEP key (JWA, section 6.3). Members are listed in
+/// The JWK of an RSA key (JWA, section 6.3). Members are listed in
 /// lexicographic order, the order browsers return a JsonWebKey in.
 const JwkPublic = struct {
     alg: []const u8,
@@ -384,17 +415,18 @@ const JwkPrivate = struct {
     qi: []const u8,
 };
 
-/// The JWK of either half of an RSA-OAEP key.
+/// The JWK of either half of an RSA key.
 pub const Jwk = union(enum) {
     public: JwkPublic,
     private: JwkPrivate,
 };
 
-/// Exports an RSA-OAEP key as a JWK: the public members for either half, plus
-/// the private members (with the CRT parameters) for the private key.
+/// Exports an RSA key as a JWK: the public members for either half, plus the
+/// private members (with the CRT parameters) for the private key.
 pub fn exportJwk(key: *const CryptoKey, exec: *const Execution) !Jwk {
     const rsa = crypto.EVP_PKEY_get0_RSA(key.getKeyObject()) orelse return error.OperationError;
-    const alg = jwkAlgOfHash(key._algorithm.hash orelse "") orelse return error.OperationError;
+    const s = scheme(key._algorithm.name) orelse return error.OperationError;
+    const alg = jwkAlgOfHash(s, key._algorithm.hash orelse "") orelse return error.OperationError;
     const n = try jwkMember(crypto.RSA_get0_n(rsa), exec);
     const e = try jwkMember(crypto.RSA_get0_e(rsa), exec);
     const key_ops = try key.getUsages(exec);
@@ -449,7 +481,7 @@ pub fn crypt(
     exec: *const Execution,
 ) ![]const u8 {
     // The key must be an RSA-OAEP key with the matching usage.
-    if (key._type != .rsa) return error.InvalidAccessError;
+    if (key._type != .rsa or !std.mem.eql(u8, key._algorithm.name, "RSA-OAEP")) return error.InvalidAccessError;
     if (key._usages & usage == 0) return error.InvalidAccessError;
 
     const hash_name = key._algorithm.hash orelse return error.OperationError;
@@ -487,6 +519,59 @@ pub fn crypt(
         if (crypto.EVP_PKEY_decrypt(ctx, out.ptr, &out_len, data.ptr, data.len) != 1) return error.OperationError;
     }
     return out[0..out_len];
+}
+
+/// RSASSA-PKCS1-v1_5 signature generation (RFC 8017, section 8.2.1) of `data`
+/// with the key's hash. SubtleCrypto.sign checked the algorithm and the sign
+/// usage; only a private key signs.
+pub fn sign(key: *const CryptoKey, data: []const u8, exec: *const Execution) ![]const u8 {
+    if (key._kind != .private) return error.InvalidAccessError;
+
+    const ctx = try digestContext(key, false);
+    defer crypto.EVP_MD_CTX_free(ctx);
+
+    // First call (null output) reports the size; the second writes the buffer.
+    var sig_len: usize = 0;
+    if (crypto.EVP_DigestSign(ctx, null, &sig_len, data.ptr, data.len) != 1) return error.OperationError;
+    const out = try exec.local_arena.alloc(u8, sig_len);
+    if (crypto.EVP_DigestSign(ctx, out.ptr, &sig_len, data.ptr, data.len) != 1) return error.OperationError;
+    return out[0..sig_len];
+}
+
+/// RSASSA-PKCS1-v1_5 signature verification (RFC 8017, section 8.2.2) of
+/// `signature` over `data` with the key's hash. SubtleCrypto.verify checked
+/// the algorithm and the verify usage; only a public key verifies. A signature
+/// that doesn't match, whatever its length, is false rather than an error.
+pub fn verify(key: *const CryptoKey, signature: []const u8, data: []const u8) !bool {
+    if (key._kind != .public) return error.InvalidAccessError;
+
+    const ctx = try digestContext(key, true);
+    defer crypto.EVP_MD_CTX_free(ctx);
+
+    if (crypto.EVP_DigestVerify(ctx, signature.ptr, signature.len, data.ptr, data.len) == 1) return true;
+    // A bad signature is an expected outcome, not a failure: don't leave it on
+    // the thread's error queue for the next libcrypto caller.
+    crypto.ERR_clear_error();
+    return false;
+}
+
+/// A digest context set up to sign or verify with `key`: its hash, and
+/// PKCS #1 v1.5 padding. Free it with EVP_MD_CTX_free.
+fn digestContext(key: *const CryptoKey, verifying: bool) !*crypto.EVP_MD_CTX {
+    const hash_name = key._algorithm.hash orelse return error.OperationError;
+    const md = crypto.findDigest(hash_name) catch return error.OperationError;
+
+    const ctx = crypto.EVP_MD_CTX_new() orelse return error.OutOfMemory;
+    errdefer crypto.EVP_MD_CTX_free(ctx);
+    // The key context belongs to `ctx`.
+    var pctx: ?*crypto.EVP_PKEY_CTX = null;
+    const init_ok = if (verifying)
+        crypto.EVP_DigestVerifyInit(ctx, &pctx, md, null, key.getKeyObject())
+    else
+        crypto.EVP_DigestSignInit(ctx, &pctx, md, null, key.getKeyObject());
+    if (init_ok != 1) return error.OperationError;
+    if (crypto.EVP_PKEY_CTX_set_rsa_padding(pctx, crypto.RSA_PKCS1_PADDING) != 1) return error.OperationError;
+    return ctx;
 }
 
 /// The usage bitmask of those `usages` that belong to `set`.

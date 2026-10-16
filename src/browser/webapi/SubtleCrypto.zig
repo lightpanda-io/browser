@@ -140,17 +140,17 @@ pub fn importKey(
             };
             return EC.import(name, algo.namedCurve(), format, der, is_private, extractable, mask, exec);
         }
-        if (RSA.canonicalName(name) != null) {
-            const hash_name = importHash(algo) orelse return local.typeError("RSA-OAEP import requires a hash");
+        if (RSA.scheme(name)) |scheme| {
+            const hash_name = importHash(algo) orelse return local.typeError("RSA import requires a hash");
             const is_jwk = std.mem.eql(u8, format, "jwk");
             switch (key_data) {
                 .bytes => |b| {
                     if (is_jwk) return local.typeError("jwk format expects an object");
-                    return RSA.import(format, b.values, hash_name, is_private, extractable, mask, exec);
+                    return RSA.import(scheme, format, b.values, hash_name, is_private, extractable, mask, exec);
                 },
                 .jwk => |jwk| {
                     if (!is_jwk) return local.typeError("this format expects a BufferSource");
-                    return RSA.importJwk(jwk, hash_name, extractable, mask, exec);
+                    return RSA.importJwk(scheme, jwk, hash_name, extractable, mask, exec);
                 },
             }
         }
@@ -218,7 +218,7 @@ pub fn importKey(
     return error.NotSupported;
 }
 
-/// The hash of an importKey algorithm that carries one (HMAC, RSA-OAEP): those
+/// The hash of an importKey algorithm that carries one (HMAC, RSA): those
 /// params {name, hash} match the `.hmac` variant of the Import union (same
 /// shape), so the hash is read there. Null for the other variants.
 fn importHash(algo: algorithm.Import) ?[]const u8 {
@@ -247,9 +247,10 @@ fn importKind(format: []const u8, key_data: algorithm.KeyData) bool {
     return false;
 }
 
-/// The usages permitted for an EC/OKP key of the given privacy, or null if the
-/// algorithm isn't one of the asymmetric algorithms handled here. Real key
-/// import for these isn't implemented yet — this only drives usage validation.
+/// The usages permitted for an EC/OKP/RSA key of the given privacy, or null if
+/// the algorithm isn't one of the asymmetric algorithms handled here. Only EC
+/// and RSA import their keys; for the others this only drives usage
+/// validation.
 fn asymmetricAllowedUsages(name: []const u8, is_private: bool) ?[]const []const u8 {
     if (eqlIgnoreCase(name, "ECDSA") or eqlIgnoreCase(name, "Ed25519") or eqlIgnoreCase(name, "Ed448")) {
         return if (is_private) &.{"sign"} else &.{"verify"};
@@ -257,8 +258,8 @@ fn asymmetricAllowedUsages(name: []const u8, is_private: bool) ?[]const []const 
     if (eqlIgnoreCase(name, "ECDH") or eqlIgnoreCase(name, "X25519") or eqlIgnoreCase(name, "X448")) {
         return if (is_private) &.{ "deriveKey", "deriveBits" } else &.{};
     }
-    if (eqlIgnoreCase(name, "RSA-OAEP")) {
-        return if (is_private) &.{ "decrypt", "unwrapKey" } else &.{ "encrypt", "wrapKey" };
+    if (RSA.scheme(name)) |scheme| {
+        return if (is_private) scheme.private_usages else scheme.public_usages;
     }
     return null;
 }
@@ -575,7 +576,7 @@ const CryptUse = enum {
 /// and the wrapKey/unwrapKey usage.
 fn checkWrappingKey(algo: algorithm.Encrypt, wrapping_key: *const CryptoKey, use: CryptUse) !void {
     const name = algo.algoName();
-    if (RSA.canonicalName(name) == null and AES.canonicalName(name) == null) {
+    if (!eqlIgnoreCase(name, "RSA-OAEP") and AES.canonicalName(name) == null) {
         return error.NotSupported;
     }
     if (!eqlIgnoreCase(name, wrapping_key._algorithm.name)) {
@@ -614,8 +615,9 @@ fn cryptBytes(
     // RSA-OAEP is handled before the switch: it may arrive as a bare string
     // ("RSA-OAEP"), which would hit `.name => NotSupported` below. An RSA key
     // used with another algorithm's name falls through to AES.crypt, which
-    // rejects the key type.
-    if (RSA.canonicalName(name) != null) {
+    // rejects the key type. The other RSA algorithms don't encrypt, and end
+    // up NotSupported below.
+    if (eqlIgnoreCase(name, "RSA-OAEP")) {
         const label: []const u8 = switch (algo) {
             .params => |p| if (p.label) |l| l.values else "",
             .name => "",
@@ -649,14 +651,19 @@ pub fn sign(
     data: []const u8, // ArrayBuffer.
     exec: *const Execution,
 ) !js.Promise {
-    return switch (key._type) {
+    const local = exec.js.local.?;
+    switch (key._type) {
         // Call sign for HMAC.
         .hmac => return HMAC.sign(algo, key, data, exec),
+        .rsa => {
+            try checkSigningKey(algo, key, CryptoKey.Usages.sign);
+            return local.resolvePromise(js.ArrayBuffer{ .values = try RSA.sign(key, data, exec) });
+        },
         else => {
             log.debug(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
             return error.InvalidAccessError;
         },
-    };
+    }
 }
 
 /// Verify a digital signature.
@@ -668,14 +675,38 @@ pub fn verify(
     data: []const u8, // ArrayBuffer.
     exec: *const Execution,
 ) !js.Promise {
-    if (!algo.isHMAC()) {
+    const local = exec.js.local.?;
+    switch (key._type) {
+        .hmac => {
+            if (!algo.isHMAC()) {
+                return error.InvalidAccessError;
+            }
+            return HMAC.verify(key, signature, data, exec);
+        },
+        .rsa => {
+            try checkSigningKey(algo, key, CryptoKey.Usages.verify);
+            return local.resolvePromise(try RSA.verify(key, signature, data));
+        },
+        else => return error.InvalidAccessError,
+    }
+}
+
+/// The checks sign/verify make before the algorithm's own, in the spec's
+/// order: an algorithm that signs (else NotSupported), the key's own algorithm,
+/// and the sign or verify usage (else InvalidAccessError).
+fn checkSigningKey(algo: algorithm.Sign, key: *const CryptoKey, usage: u8) !void {
+    const name = algo.algoName();
+    const signing = [_][]const u8{ "HMAC", "RSASSA-PKCS1-v1_5", "RSA-PSS", "ECDSA", "Ed25519", "Ed448" };
+    for (signing) |s| {
+        if (eqlIgnoreCase(name, s)) break;
+    } else return error.NotSupported;
+
+    if (!eqlIgnoreCase(name, key._algorithm.name)) {
         return error.InvalidAccessError;
     }
-
-    return switch (key._type) {
-        .hmac => HMAC.verify(key, signature, data, exec),
-        else => error.InvalidAccessError,
-    };
+    if (key._usages & usage == 0) {
+        return error.InvalidAccessError;
+    }
 }
 
 /// `digest()` accepts an AlgorithmIdentifier: either a bare string (`"SHA-256"`)

@@ -29,7 +29,7 @@ const EC_KEY = struct_ec_key_st;
 const struct_evp_pkey_st = opaque {};
 pub const EVP_PKEY = struct_evp_pkey_st;
 const struct_evp_pkey_ctx_st = opaque {};
-const EVP_PKEY_CTX = struct_evp_pkey_ctx_st;
+pub const EVP_PKEY_CTX = struct_evp_pkey_ctx_st;
 
 pub extern fn RAND_bytes(buf: [*]u8, len: usize) c_int;
 
@@ -43,6 +43,8 @@ pub const EVP_MAX_MD_BLOCK_SIZE = 128;
 
 pub extern fn EVP_MD_size(md: ?*const EVP_MD) usize;
 pub extern fn EVP_MD_block_size(md: ?*const EVP_MD) usize;
+
+pub extern fn ERR_clear_error() void;
 
 pub extern fn CRYPTO_memcmp(a: ?*const anyopaque, b: ?*const anyopaque, len: usize) c_int;
 
@@ -152,8 +154,9 @@ pub extern fn EC_KEY_set_public_key(key: *EC_KEY, point: *const EC_POINT) c_int;
 pub extern fn d2i_PUBKEY(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
 pub extern fn d2i_AutoPrivateKey(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
 
-// RSA-OAEP: key generation, import, and the encrypt/decrypt operations.
+// RSA: key generation, import, and the encrypt/decrypt and sign/verify operations.
 pub const EVP_PKEY_RSA = 6; // NID_rsaEncryption
+pub const RSA_PKCS1_PADDING = 1;
 pub const RSA_PKCS1_OAEP_PADDING = 4;
 
 const struct_rsa_st = opaque {};
@@ -233,11 +236,14 @@ pub extern fn EVP_PKEY_free(pkey: ?*EVP_PKEY) void;
 
 pub extern fn EVP_DigestSignInit(ctx: ?*EVP_MD_CTX, pctx: ?*?*EVP_PKEY_CTX, typ: ?*const EVP_MD, e: ?*ENGINE, pkey: ?*EVP_PKEY) c_int;
 pub extern fn EVP_DigestSign(ctx: ?*EVP_MD_CTX, sig: [*c]u8, sig_len: *usize, data: [*c]const u8, data_len: usize) c_int;
+pub extern fn EVP_DigestVerifyInit(ctx: ?*EVP_MD_CTX, pctx: ?*?*EVP_PKEY_CTX, typ: ?*const EVP_MD, e: ?*ENGINE, pkey: ?*EVP_PKEY) c_int;
+/// Returns 1 for a valid signature, 0 otherwise (on the error queue).
+pub extern fn EVP_DigestVerify(ctx: ?*EVP_MD_CTX, sig: [*c]const u8, sig_len: usize, data: [*c]const u8, data_len: usize) c_int;
 pub extern fn EVP_Digest(data: ?*const anyopaque, len: usize, md_out: [*c]u8, md_out_size: [*c]c_uint, @"type": ?*const EVP_MD, impl: ?*ENGINE) c_int;
 pub extern fn EVP_MD_CTX_new() ?*EVP_MD_CTX;
 pub extern fn EVP_MD_CTX_free(ctx: ?*EVP_MD_CTX) void;
 const struct_evp_md_ctx_st = opaque {};
-const EVP_MD_CTX = struct_evp_md_ctx_st;
+pub const EVP_MD_CTX = struct_evp_md_ctx_st;
 
 const struct_x509_st = opaque {};
 pub const X509 = struct_x509_st;
