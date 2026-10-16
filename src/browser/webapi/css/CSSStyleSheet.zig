@@ -129,12 +129,12 @@ fn initStyleRule(selector: []const u8, block: []const u8, depth: u8, frame: *Fra
 
     const style_props = try style_rule.getStyle(frame);
     const style = style_props.asCSSStyleDeclaration();
-    try style.replaceCssText(block, frame);
+    try style.replaceStyleBlock(block, frame);
 
     if (depth >= StyleManager.MAX_AT_RULE_NESTING or std.mem.findScalar(u8, block, '{') == null) {
         return style_rule._proto;
     }
-    var it = Parser.parseDeclarationsList(block);
+    var it = Parser.parseStyleBlock(block);
     while (it.nextItem()) |item| {
         const nested: *CSSRule = switch (item) {
             .declaration => continue,

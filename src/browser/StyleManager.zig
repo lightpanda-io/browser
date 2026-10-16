@@ -485,7 +485,7 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
         return;
     }
     var customs: CustomSink = .{ .allocator = build_arena };
-    const folded = try foldDeclarations(Declarations, block_text, &customs);
+    const folded = try foldDeclarations(Declarations, CssParser.parseStyleBlock(block_text), &customs);
     _ = try self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), customs.map.values(), layer);
 
     // CSS Nesting: the rules nested in the block follow their parent in
@@ -493,7 +493,7 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
     if (depth >= MAX_AT_RULE_NESTING or std.mem.findScalar(u8, block_text, '{') == null) {
         return;
     }
-    var it = CssParser.parseDeclarationsList(block_text);
+    var it = CssParser.parseStyleBlock(block_text);
     while (it.nextItem()) |item| {
         switch (item) {
             .declaration => {},
@@ -1775,7 +1775,7 @@ fn inlineDeclared(comptime Declared: type, el: *Element, frame: *Frame) Slots(De
     }
     const attr = el.getAttributeInterned("style") orelse return .{};
     // Without a sink nothing allocates
-    return foldDeclarations(Declared, attr, null) catch unreachable;
+    return foldDeclarations(Declared, CssParser.parseDeclarationsList(attr), null) catch unreachable;
 }
 
 /// `--*` declarations of one block, keyed by name so a block declaring the same
@@ -1790,9 +1790,9 @@ const CustomSink = struct {
 // earlier !important one, and an empty value removes the property. The tracked
 // properties are matched case-insensitively; a custom property's name is
 // case-sensitive and goes to `customs` when there is one.
-fn foldDeclarations(comptime Declared: type, block: []const u8, customs: ?*CustomSink) !Slots(Declared) {
+fn foldDeclarations(comptime Declared: type, declarations: CssParser.DeclarationsIterator, customs: ?*CustomSink) !Slots(Declared) {
     var slots: Slots(Declared) = .{};
-    var it = CssParser.parseDeclarationsList(block);
+    var it = declarations;
     while (it.next()) |declaration| {
         if (isCustomProperty(declaration.name)) {
             const sink = customs orelse continue;

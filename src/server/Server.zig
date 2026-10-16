@@ -1336,6 +1336,9 @@ pub const Worker = struct {
             log.err(.serve, "worker init", .{ .err = err });
             self.releaseConnection();
         };
+        // The connection's browser, pages and isolate are freed: hand that
+        // memory back, or the process keeps its largest page's footprint.
+        lp.malloc_tuning.trim();
     }
 
     fn _start(self: *Worker, origin: Origin) !void {
