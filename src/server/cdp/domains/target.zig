@@ -194,7 +194,7 @@ fn createTarget(cmd: *CDP.Command) !void {
     // Creating the page creates its target, see BrowserContext.onFrameCreated.
     const page = try bc.session.createPage();
     const frame = page.frame().?;
-    const target = bc.findTargetByFrameId(page.frame_id) orelse {
+    const target = bc.findTargetByRootFrameId(page.frame_id) orelse {
         lp.assert(false, "CDP.target.createTarget no target", .{ .frame_id = page.frame_id });
     };
 

@@ -575,9 +575,11 @@ pub const BrowserContext = struct {
         return null;
     }
 
-    pub fn findTargetByFrameId(self: *const BrowserContext, frame_id: u32) ?*Target {
+    // The target whose page has `root_frame_id` as root frame. Unlike
+    // targetForFrame, a child frame or a popup doesn't match.
+    pub fn findTargetByRootFrameId(self: *const BrowserContext, root_frame_id: u32) ?*Target {
         for (self.targets.items) |target| {
-            if (target.frame_id == frame_id) {
+            if (target.frame_id == root_frame_id) {
                 return target;
             }
         }
@@ -587,16 +589,16 @@ pub const BrowserContext = struct {
     // The target whose page `frame_id` belongs to: its root frame, a child
     // frame or a popup.
     pub fn targetForFrame(self: *const BrowserContext, frame_id: u32) ?*Target {
-        if (self.findTargetByFrameId(frame_id)) |target| {
+        if (self.findTargetByRootFrameId(frame_id)) |target| {
             return target;
         }
         const frame = self.session.findFrameByFrameId(frame_id) orelse return null;
-        return self.findTargetByFrameId(frame.page.frame._frame_id);
+        return self.findTargetByRootFrameId(frame.page.frame._frame_id);
     }
 
     fn onFrameRemove(ctx: *anyopaque, event: Notification.FrameRemove) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        const target = self.findTargetByFrameId(event.frame_id) orelse return;
+        const target = self.findTargetByRootFrameId(event.frame_id) orelse return;
         @import("domains/page.zig").frameRemove(target);
     }
 
@@ -606,7 +608,7 @@ pub const BrowserContext = struct {
     // reported on Target.setAutoAttach.
     fn onFrameCreated(ctx: *anyopaque, frame: *Frame) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        const target = self.findTargetByFrameId(frame._frame_id) orelse blk: {
+        const target = self.findTargetByRootFrameId(frame._frame_id) orelse blk: {
             for (self.targets.items) |target| {
                 if (target.frame_id == null) {
                     break :blk target;
@@ -646,7 +648,7 @@ pub const BrowserContext = struct {
 
     fn onFrameDestroyed(ctx: *anyopaque, frame: *const Frame) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        const target = self.findTargetByFrameId(frame.page.frame._frame_id) orelse return;
+        const target = self.findTargetByRootFrameId(frame.page.frame._frame_id) orelse return;
         @import("domains/page.zig").frameDestroyed(target, frame);
     }
 
