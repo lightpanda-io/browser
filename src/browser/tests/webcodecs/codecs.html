@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=unconfigured>
+{
+  const callbacks = {output: () => {}, error: () => {}};
+  for (const [Codec, queueSize] of [[AudioDecoder, 'decodeQueueSize'], [VideoDecoder, 'decodeQueueSize'], [AudioEncoder, 'encodeQueueSize'], [VideoEncoder, 'encodeQueueSize']]) {
+    const codec = new Codec(callbacks);
+    testing.expectEqual('unconfigured', codec.state);
+    testing.expectEqual(0, codec[queueSize]);
+    testing.expectError('TypeError', () => new Codec({output: () => {}}));
+    codec.reset();
+    codec.close();
+    testing.expectEqual('closed', codec.state);
+    testing.expectError('InvalidStateError', () => codec.reset());
+    testing.expectError('InvalidStateError', () => codec.close());
+  }
+}
+</script>
+
+<script id=invalid_configs>
+{
+  const decoder = new AudioDecoder({output: () => {}, error: () => {}});
+  testing.expectError('TypeError', () => decoder.configure({codec: ' ', sampleRate: 48000, numberOfChannels: 2}));
+  testing.expectError('TypeError', () => decoder.configure({codec: 'opus', sampleRate: 0, numberOfChannels: 2}));
+  testing.expectError('TypeError', () => decoder.configure({codec: 'opus', numberOfChannels: 2}));
+  testing.expectEqual('unconfigured', decoder.state);
+
+  const encoder = new AudioEncoder({output: () => {}, error: () => {}});
+  testing.expectError('TypeError', () => encoder.configure({codec: 'opus', sampleRate: 48000, numberOfChannels: 2, opus: {complexity: 11}}));
+  testing.expectError('TypeError', () => encoder.configure({codec: 'opus', sampleRate: 48000, numberOfChannels: 2, bitrate: 0}));
+
+  const video = new VideoEncoder({output: () => {}, error: () => {}});
+  testing.expectError('TypeError', () => video.configure({codec: 'vp8', width: 0, height: 10}));
+}
+</script>
+
+<script id=unsupported type=module>
+  const state = await testing.async();
+
+  const errors = [];
+  const decoder = new VideoDecoder({output: () => {}, error: (e) => errors.push([e.name, decoder.state])});
+  decoder.configure({codec: 'vp09.00.10.08'});
+  testing.expectEqual('configured', decoder.state);
+
+  testing.expectError('DataError', () => decoder.decode(new EncodedVideoChunk({type: 'delta', timestamp: 0, data: new Uint8Array(1)})));
+  decoder.decode(new EncodedVideoChunk({type: 'key', timestamp: 0, data: new Uint8Array(1)}));
+  testing.expectEqual(1, decoder.decodeQueueSize);
+  const dequeued = new Promise(resolve => decoder.ondequeue = resolve);
+
+  let flushError = null;
+  try { await decoder.flush(); } catch (e) { flushError = [e.name, errors.length]; }
+  await dequeued;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([['NotSupportedError', 'closed']], errors);
+    // the error callback runs before the flush promise's handlers
+    testing.expectEqual(['NotSupportedError', 1], flushError);
+    testing.expectEqual('closed', decoder.state);
+    testing.expectEqual(0, decoder.decodeQueueSize);
+  });
+</script>
+
+<script id=reset type=module>
+  const state = await testing.async();
+
+  const errors = [];
+  const encoder = new AudioEncoder({output: () => {}, error: (e) => errors.push(e.name)});
+  encoder.configure({codec: 'opus', sampleRate: 48000, numberOfChannels: 2});
+  const flush = encoder.flush().catch(e => e.name);
+  // drops the pending configure, so the codec isn't closed
+  encoder.reset();
+  const flushError = await flush;
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('AbortError', flushError);
+    testing.expectEqual([], errors);
+    testing.expectEqual('unconfigured', encoder.state);
+  });
+</script>
+
+<script id=is_config_supported type=module>
+  const state = await testing.async();
+
+  const support = await AudioEncoder.isConfigSupported({codec: 'opus', sampleRate: 48000, numberOfChannels: 2, unknown: 1, opus: {complexity: 5}});
+  const video = await VideoDecoder.isConfigSupported({codec: 'avc1.42001E', description: new Uint8Array([1, 2])});
+  let invalid = null;
+  try { await VideoEncoder.isConfigSupported({codec: 'vp8'}); } catch (e) { invalid = e.name; }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(false, support.supported);
+    testing.expectEqual('opus', support.config.codec);
+    testing.expectEqual(48000, support.config.sampleRate);
+    testing.expectEqual(undefined, support.config.unknown);
+    testing.expectEqual(5, support.config.opus.complexity);
+    testing.expectEqual(false, video.supported);
+    testing.expectEqual([1, 2], Array.from(new Uint8Array(video.config.description)));
+    testing.expectEqual('TypeError', invalid);
+  });
+</script>

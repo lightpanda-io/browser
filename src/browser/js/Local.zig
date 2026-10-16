@@ -784,6 +784,10 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             const bytes = (try jsValueToArrayBufferSlice(u8, true, js_val)) orelse return null;
             return .{ .bytes = bytes };
         },
+        js.AllowSharedBufferSource => {
+            const bytes = (try jsValueToArrayBufferSlice(u8, true, js_val)) orelse return null;
+            return .{ .bytes = bytes };
+        },
         js.Value => js_val,
         js.Value.Global => return try js_val.persist(),
         js.Object => {

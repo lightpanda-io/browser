@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=construct>
+{
+  const data = new AudioData({
+    format: 'f32-planar', sampleRate: 8000, numberOfFrames: 4, numberOfChannels: 2, timestamp: 10,
+    data: new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]),
+  });
+  testing.expectEqual('f32-planar', data.format);
+  testing.expectEqual(8000, data.sampleRate);
+  testing.expectEqual(4, data.numberOfFrames);
+  testing.expectEqual(2, data.numberOfChannels);
+  testing.expectEqual(10, data.timestamp);
+  testing.expectEqual(500, data.duration);
+
+  const plane = new Float32Array(4);
+  data.copyTo(plane, {planeIndex: 1});
+  testing.expectEqual([5, 6, 7, 8], Array.from(plane));
+
+  // planar to interleaved, with an offset
+  testing.expectEqual(8, data.allocationSize({planeIndex: 0, format: 'f32', frameOffset: 3}));
+  const interleaved = new Float32Array(2);
+  data.copyTo(interleaved, {planeIndex: 0, format: 'f32', frameOffset: 3});
+  testing.expectEqual([4, 8], Array.from(interleaved));
+
+  testing.expectError('RangeError', () => data.copyTo(plane, {planeIndex: 2}));
+  testing.expectError('RangeError', () => data.copyTo(plane, {planeIndex: 0, frameOffset: 4}));
+  testing.expectError('RangeError', () => data.copyTo(new Float32Array(1), {planeIndex: 0}));
+}
+</script>
+
+<script id=invalid>
+{
+  const init = {format: 's16', sampleRate: 8000, numberOfFrames: 2, numberOfChannels: 1, timestamp: 0, data: new Int16Array(2)};
+  testing.expectError('TypeError', () => new AudioData({...init, numberOfFrames: 0}));
+  testing.expectError('TypeError', () => new AudioData({...init, sampleRate: 0}));
+  testing.expectError('TypeError', () => new AudioData({...init, data: new Int16Array(1)}));
+  testing.expectError('TypeError', () => new AudioData({...init, format: 'nope'}));
+  // a duration beyond u64 saturates
+  testing.expectEqual(2 ** 64, new AudioData({...init, sampleRate: 1e-30}).duration);
+}
+</script>
+
+<script id=conversion>
+{
+  const data = new AudioData({
+    format: 'u8', sampleRate: 8000, numberOfFrames: 3, numberOfChannels: 1, timestamp: 0,
+    data: new Uint8Array([0, 128, 255]),
+  });
+  const s16 = new Int16Array(3);
+  data.copyTo(s16, {planeIndex: 0, format: 's16'});
+  testing.expectEqual([-32768, 0, 32512], Array.from(s16));
+
+  const f32 = new Float32Array(3);
+  data.copyTo(f32, {planeIndex: 0, format: 'f32-planar'});
+  testing.expectEqual([-1, 0, 1], Array.from(f32));
+
+  const back = new AudioData({
+    format: 'f32', sampleRate: 8000, numberOfFrames: 2, numberOfChannels: 1, timestamp: 0,
+    data: new Float32Array([0.5, -2]),
+  });
+  const u8 = new Uint8Array(2);
+  back.copyTo(u8, {planeIndex: 0, format: 'u8'});
+  testing.expectEqual([191, 0], Array.from(u8));
+}
+</script>
+
+<script id=close_and_clone>
+{
+  const data = new AudioData({format: 'u8', sampleRate: 8000, numberOfFrames: 1, numberOfChannels: 1, timestamp: 3, data: new Uint8Array([42])});
+  const clone = data.clone();
+  const copy = structuredClone(data);
+  data.close();
+  testing.expectEqual(null, data.format);
+  testing.expectEqual(0, data.numberOfFrames);
+  testing.expectEqual(0, data.sampleRate);
+  testing.expectEqual(3, data.timestamp);
+  testing.expectError('InvalidStateError', () => data.clone());
+  testing.expectError('InvalidStateError', () => data.allocationSize({planeIndex: 0}));
+  data.close();
+
+  for (const other of [clone, copy]) {
+    const dest = new Uint8Array(1);
+    other.copyTo(dest, {planeIndex: 0});
+    testing.expectEqual(42, dest[0]);
+  }
+}
+</script>
