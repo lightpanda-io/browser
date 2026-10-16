@@ -17,13 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
 const js = @import("js.zig");
 const v8 = js.v8;
 
 const TaggedOpaque = @import("TaggedOpaque.zig");
 
-const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 const CLIENT_TRUST_LEVEL = 1;
@@ -105,7 +103,11 @@ pub fn contextCreated(
     origin: []const u8,
     aux_data: []const u8,
     is_default_context: bool,
-) void {
+) !void {
+    if (is_default_context) {
+        try self.default_contexts.put(self.allocator, group_id, local.ctx.handle);
+    }
+
     v8.v8_inspector__Inspector__ContextCreated(
         self.handle,
         name.ptr,
@@ -117,12 +119,6 @@ pub fn contextCreated(
         group_id,
         local.handle,
     );
-
-    if (is_default_context) {
-        self.default_contexts.put(self.allocator, group_id, local.ctx.handle) catch |err| {
-            log.err(.js, "inspector default context", .{ .err = err });
-        };
-    }
 }
 
 pub fn getContextId(_: *const Inspector, local: *const js.Local) i32 {

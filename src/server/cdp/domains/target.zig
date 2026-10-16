@@ -207,7 +207,7 @@ fn createTarget(cmd: *CDP.Command) !void {
         defer ls.deinit();
 
         const aux_data = try cmd.arena.print("{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
-        bc.inspector().contextCreated(
+        try bc.inspector().contextCreated(
             target.group_id,
             &ls.local,
             "",
