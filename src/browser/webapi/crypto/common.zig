@@ -16,13 +16,15 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Shared helpers for the symmetric SubtleCrypto algorithms (AES, HMAC):
-//! usage-mask validation and the base64url codec used by the JWK format.
+//! Shared helpers for the SubtleCrypto algorithms: usage-mask validation, the
+//! base64url codec used by the JWK format, and the JWK checks every
+//! algorithm's import makes.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const CryptoKey = @import("../CryptoKey.zig");
+const algorithm = @import("algorithm.zig");
 
 /// Maps a usage string to its `CryptoKey.Usages` bit, or null if unknown.
 pub fn usageBit(name: []const u8) ?u8 {
@@ -65,6 +67,43 @@ pub fn usageMaskInner(allowed: []const []const u8, usages: []const []const u8, r
         return error.SyntaxError;
     }
     return mask;
+}
+
+/// The key bytes of a symmetric ("oct") JWK: its `kty` must be "oct" and its
+/// `k` present and decodable (JWA, section 6.4). Anything else is DataError.
+pub fn octKey(jwk: algorithm.KeyData.Jwk, allocator: Allocator) error{ OutOfMemory, DataError }![]u8 {
+    if (!std.mem.eql(u8, jwk.kty orelse "", "oct")) return error.DataError;
+    return base64Decode(allocator, jwk.k orelse return error.DataError);
+}
+
+/// The JWK checks shared by every algorithm's "import key": `use` must be
+/// `expected_use` ("enc" or "sig") when usages are requested, `key_ops` must
+/// hold every requested usage and no value twice (RFC 7517, section 4.3;
+/// values that aren't usages are allowed), and a JWK with `ext: false` can't be
+/// imported as extractable. `kty`, the key members and `alg` are each
+/// algorithm's own.
+pub fn checkJwk(
+    jwk: algorithm.KeyData.Jwk,
+    expected_use: []const u8,
+    usages_mask: u8,
+    extractable: bool,
+) error{DataError}!void {
+    if (jwk.use) |use| {
+        if (usages_mask != 0 and !std.mem.eql(u8, use, expected_use)) return error.DataError;
+    }
+    if (jwk.key_ops) |key_ops| {
+        var listed: u8 = 0;
+        for (key_ops, 0..) |op, i| {
+            for (key_ops[0..i]) |earlier| {
+                if (std.mem.eql(u8, earlier, op)) return error.DataError;
+            }
+            if (usageBit(op)) |bit| listed |= bit;
+        }
+        if (usages_mask & ~listed != 0) return error.DataError;
+    }
+    if (jwk.ext) |ext| {
+        if (!ext and extractable) return error.DataError;
+    }
 }
 
 /// Decodes a base64url (or base64) string, tolerating either alphabet and

@@ -141,15 +141,7 @@ pub fn importKey(
             return EC.import(name, algo.namedCurve(), format, der, is_private, extractable, mask, exec);
         }
         if (RSA.canonicalName(name) != null) {
-            // RSA-OAEP import params {name, hash} match the `.hmac` variant of the
-            // Import union (same shape: a name plus a hash), so the hash is read there.
-            const hash_name = switch (algo) {
-                .hmac => |h| switch (h.hash) {
-                    .string => |s| s,
-                    .object => |o| o.name,
-                },
-                else => return local.typeError("RSA-OAEP import requires a hash"),
-            };
+            const hash_name = importHash(algo) orelse return local.typeError("RSA-OAEP import requires a hash");
             const is_jwk = std.mem.eql(u8, format, "jwk");
             switch (key_data) {
                 .bytes => |b| {
@@ -166,8 +158,25 @@ pub fn importKey(
         return error.NotSupported;
     }
 
-    // Resolve the raw key bytes from the requested format. Symmetric keys
-    // support "raw" (a BufferSource) and "jwk" (an "oct" JSON Web Key).
+    // Symmetric keys come in "raw" (a BufferSource) or, for AES and HMAC, "jwk"
+    // (an "oct" JSON Web Key, which each checks against the key it imports).
+    if (std.mem.eql(u8, format, "jwk")) {
+        const jwk = switch (key_data) {
+            .jwk => |j| j,
+            .bytes => return local.typeError("jwk format expects an object"),
+        };
+        if (AES.canonicalName(name) != null) {
+            return AES.importJwk(name, jwk, extractable, key_usages, exec);
+        }
+        if (eqlIgnoreCase(name, "HMAC")) {
+            const hash_name = importHash(algo) orelse return local.typeError("HMAC import requires a hash");
+            return HMAC.importJwk(hash_name, jwk, extractable, key_usages, exec);
+        }
+        // HKDF and PBKDF2 keys only come in "raw".
+        log.debug(.not_implemented, "SubtleCrypto.importKey", .{ .name = name, .format = format });
+        return error.NotSupported;
+    }
+
     const raw: []const u8 = blk: {
         if (std.mem.eql(u8, format, "raw")) {
             break :blk switch (key_data) {
@@ -175,21 +184,6 @@ pub fn importKey(
                 // A JWK object passed where a BufferSource is expected.
                 .jwk => return local.typeError("raw format expects a BufferSource"),
             };
-        }
-        if (std.mem.eql(u8, format, "jwk")) {
-            const jwk = switch (key_data) {
-                .jwk => |j| j,
-                .bytes => return local.typeError("jwk format expects an object"),
-            };
-            if (!std.mem.eql(u8, jwk.kty orelse "", "oct")) {
-                return error.DataError;
-            }
-            // A JWK marked non-extractable can't be imported as extractable.
-            if (extractable and jwk.ext == false) {
-                return error.DataError;
-            }
-            const k = jwk.k orelse return error.DataError;
-            break :blk try common.base64Decode(exec.local_arena, k);
         }
         // spki / pkcs8 (asymmetric formats) are not supported for these algorithms.
         return error.NotSupported;
@@ -216,18 +210,25 @@ pub fn importKey(
         }
     }
     if (eqlIgnoreCase(name, "HMAC")) {
-        const hash_name = switch (algo) {
-            .hmac => |h| switch (h.hash) {
-                .string => |s| s,
-                .object => |o| o.name,
-            },
-            else => return local.typeError("HMAC import requires a hash"),
-        };
+        const hash_name = importHash(algo) orelse return local.typeError("HMAC import requires a hash");
         return HMAC.import(hash_name, raw, extractable, key_usages, exec);
     }
 
     log.debug(.not_implemented, "SubtleCrypto.importKey", .{ .name = name });
     return error.NotSupported;
+}
+
+/// The hash of an importKey algorithm that carries one (HMAC, RSA-OAEP): those
+/// params {name, hash} match the `.hmac` variant of the Import union (same
+/// shape), so the hash is read there. Null for the other variants.
+fn importHash(algo: algorithm.Import) ?[]const u8 {
+    return switch (algo) {
+        .hmac => |h| switch (h.hash) {
+            .string => |s| s,
+            .object => |o| o.name,
+        },
+        else => null,
+    };
 }
 
 /// Whether the requested format/key-data describe a private key. The format
@@ -370,14 +371,8 @@ const JwkSecret = struct {
 fn exportJwk(key: *CryptoKey, exec: *const Execution) !Jwk {
     // The `alg` registry value depends on the algorithm and key length.
     const alg: []const u8 = switch (key._type) {
-        .aes => try exec.local_arena.print("A{d}{s}", .{
-            key._key.len * 8,
-            key._algorithm.name[4..], // strip "AES-"
-        }),
-        .hmac => blk: {
-            const hash: []const u8 = key._algorithm.hash orelse "SHA-";
-            break :blk try exec.local_arena.print("HS{s}", .{hash[4..]}); // strip "SHA-"
-        },
+        .aes => try AES.jwkAlg(key._algorithm.name, key._key.len, exec),
+        .hmac => try HMAC.jwkAlg(key._algorithm.hash orelse "SHA-", exec),
         .rsa => return .{ .rsa = try RSA.exportJwk(key, exec) },
         else => {
             log.debug(.not_implemented, "SubtleCrypto.exportKey", .{ .format = "jwk", .type = key._type });
