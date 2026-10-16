@@ -183,7 +183,7 @@ fn queryAXTree(cmd: *CDP.Command) !void {
     const params: Params = (try cmd.params(Params)) orelse .{};
 
     const target = try cmd.target();
-    const node = try dom.getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try dom.getNode(cmd.arena, target, cmd.sessionId(), params.nodeId, params.backendNodeId, params.objectId);
 
     return sendAXNodes(cmd, target, target.mainFrame() orelse return error.FrameNotLoaded, node, .{
         .filter = .{
@@ -203,7 +203,7 @@ fn getPartialAXTree(cmd: *CDP.Command) !void {
     const params: Params = (try cmd.params(Params)) orelse .{};
 
     const target = try cmd.target();
-    const node = try dom.getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const node = try dom.getNode(cmd.arena, target, cmd.sessionId(), params.nodeId, params.backendNodeId, params.objectId);
 
     return sendAXNodes(cmd, target, target.mainFrame() orelse return error.FrameNotLoaded, node, .{
         // Defaults to true, like Chrome.
