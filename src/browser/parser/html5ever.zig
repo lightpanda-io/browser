@@ -66,11 +66,20 @@ pub extern "c" fn html5ever_parse_document_with_encoding(
     allow_declarative_shadow: bool,
 ) void;
 
+// Namespace of the fragment parse context element, matched by
+// html5ever_parse_fragment.
+pub const ContextNamespace = enum(u8) {
+    html = 0,
+    svg = 1,
+    mathml = 2,
+};
+
 pub extern "c" fn html5ever_parse_fragment(
     html: [*c]const u8,
     len: usize,
     context_name: [*c]const u8,
     context_name_len: usize,
+    context_ns: ContextNamespace,
     doc: *anyopaque,
     ctx: *anyopaque,
     createElementCallback: *const fn (ctx: *anyopaque, data: *anyopaque, QualName, AttributeIterator) callconv(.c) ?*anyopaque,
