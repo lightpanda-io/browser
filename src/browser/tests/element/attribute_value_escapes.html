@@ -68,13 +68,16 @@
   // A null in an unquoted value is U+FFFD.
   testing.expectEqual('nul', ids('[x=a\0b]'));
 
-  // Unchanged forms. A leading digit is not an ident (Chrome rejects [x=1]),
-  // but it has always been accepted here; kept lenient so nothing tightens.
+  // Unchanged forms.
   testing.expectEqual('plain', ids('[x=abc]'));
-  testing.expectEqual('digit', ids('[x=1]'));
   testing.expectEqual('tel', ids('[data-v="a:b"]'));
   // In a quoted value, a backslash and a newline are a line continuation.
   testing.expectEqual('tel', ids('[data-v="a\\\n:b"]'));
   testing.expectError("SyntaxError", () => root.querySelectorAll('[x=a:b]'));
+
+  // An unquoted value must start like an ident.
+  testing.expectError("SyntaxError", () => root.querySelectorAll('[x=1]'));
+  testing.expectError("SyntaxError", () => root.querySelectorAll('[x=-1]'));
+  testing.expectEqual('digit', ids('[x=\\31]'));
 }
 </script>

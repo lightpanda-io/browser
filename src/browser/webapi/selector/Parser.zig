@@ -1301,29 +1301,8 @@ fn attributeValue(self: *Parser, arena: Allocator) ![]const u8 {
         return result.items;
     }
 
-    var i: usize = 0;
-    for (input) |b| {
-        switch (b) {
-            'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
-            0x80...0xFF => {},
-            else => break,
-        }
-        i += 1;
-    }
-
-    // An unquoted value is an <ident-token>, which may contain escapes
-    // (and nulls, which become U+FFFD).
-    if (i < input.len and (input[i] == '\\' or input[i] == 0)) {
-        return self.consumeEscapedIdentTail(arena, i, error.InvalidAttributeSelector);
-    }
-
-    if (i == 0) {
-        return error.InvalidAttributeSelector;
-    }
-
-    const value = input[0..i];
-    self.input = input[i..];
-    return arena.dupe(u8, value);
+    // An unquoted value is an <ident-token>: [x=1] and [x=-1] are invalid.
+    return self.parseIdentifier(arena, error.InvalidAttributeSelector);
 }
 
 fn asUint(comptime string: anytype) @Int(
@@ -1922,10 +1901,21 @@ test "Selector: Parser.attributeValue" {
         try testing.expectError(error.InvalidAttributeSelector, parser.attributeValue(arena));
     }
 
-    // A leading digit is not an ident (Chrome rejects it), but it has always
-    // been accepted here; kept lenient so no selector that parses stops parsing.
+    // An unquoted value must start like an ident.
+    for ([_][]const u8{ "1]", "-1]", "-]", "+a]" }) |input| {
+        var parser = Parser{ .input = input };
+        try testing.expectError(error.InvalidAttributeSelector, parser.attributeValue(arena));
+    }
+
     {
-        var parser = Parser{ .input = "1]" };
+        var parser = Parser{ .input = "--1]" };
+        try testing.expectEqual("--1", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // An escaped digit is a valid ident start.
+    {
+        var parser = Parser{ .input = "\\31 ]" };
         try testing.expectEqual("1", try parser.attributeValue(arena));
         try testing.expectEqual("]", parser.input);
     }
