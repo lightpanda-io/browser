@@ -173,6 +173,13 @@ pub fn terminate(self: *Runtime) void {
     self.env.terminate();
 }
 
+/// Like `terminate`, but through a V8 interrupt, so it also stops code that
+/// runs after an `await`, inside a microtask checkpoint that `terminate`
+/// would wait out.
+pub fn requestTerminate(self: *Runtime) void {
+    self.env.requestTerminate();
+}
+
 pub fn cancelTerminate(self: *Runtime) void {
     self.env.cancelTerminate();
 }
