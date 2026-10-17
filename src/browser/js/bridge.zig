@@ -93,28 +93,6 @@ pub fn Builder(comptime T: type) type {
             }
             @compileError("Property for " ++ @typeName(@TypeOf(value)) ++ " hasn't been defined yet");
         }
-
-        const PrototypeChainEntry = @import("TaggedOpaque.zig").PrototypeChainEntry;
-        pub fn prototypeChain() [prototypeChainLength(T)]PrototypeChainEntry {
-            var entries: [prototypeChainLength(T)]PrototypeChainEntry = undefined;
-
-            entries[0] = .{ .offset = 0, .index = JsApiLookup.getId(T.JsApi) };
-
-            if (entries.len == 1) {
-                return entries;
-            }
-
-            var Prototype = T;
-            inline for (entries[1..]) |*entry| {
-                const Next = PrototypeType(Prototype).?;
-                entry.* = .{
-                    .index = JsApiLookup.getId(Next.JsApi),
-                    .offset = Factory.protoOffset(Prototype),
-                };
-                Prototype = Next;
-            }
-            return entries;
-        }
     };
 }
 
@@ -891,22 +869,6 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
 //         };
 //     }
 // }
-
-// Given a Type, returns the length of the prototype chain, including self
-fn prototypeChainLength(comptime T: type) usize {
-    var l: usize = 1;
-    var Next = T;
-    while (PrototypeType(Next)) |N| {
-        Next = N;
-        l += 1;
-    }
-    return l;
-}
-
-// Given a Type, gets its prototype Type (if any)
-fn PrototypeType(comptime T: type) ?type {
-    return reflect.Proto(T);
-}
 
 fn flattenTypes(comptime Types: []const type) [countFlattenedTypes(Types)]type {
     @setEvalBranchQuota(10_000);

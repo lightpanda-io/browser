@@ -62,7 +62,6 @@ pub const JsApi = struct {
     pub const bridge = js.Bridge(Marker);
     pub const Meta = struct {
         pub const name = "SVGMarkerElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
     pub const SVG_MARKERUNITS_UNKNOWN = bridge.property(0, .{ .template = true });

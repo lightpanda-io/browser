@@ -60,7 +60,6 @@ pub const JsApi = struct {
     pub const bridge = js.Bridge(TextPath);
     pub const Meta = struct {
         pub const name = "SVGTextPathElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
     pub const TEXTPATH_METHODTYPE_UNKNOWN = bridge.property(0, .{ .template = true });

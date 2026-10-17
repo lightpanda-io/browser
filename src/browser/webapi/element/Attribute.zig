@@ -98,7 +98,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "Attr";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
@@ -677,7 +676,6 @@ pub const NamedNodeMap = struct {
 
         pub const Meta = struct {
             pub const name = "NamedNodeMap";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
         };
 

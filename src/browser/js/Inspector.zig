@@ -357,7 +357,7 @@ const UnwrappedObject = struct {
     object_group: ?[]const u8,
 };
 
-pub fn getTaggedOpaque(value: *const v8.Value) ?*TaggedOpaque {
+pub fn getTaggedOpaque(value: *const v8.Value) ?TaggedOpaque {
     if (!v8.v8__Value__IsObject(value)) {
         return null;
     }

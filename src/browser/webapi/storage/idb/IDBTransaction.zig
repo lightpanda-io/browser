@@ -774,7 +774,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "IDBTransaction";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
