@@ -361,11 +361,18 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
     var intercept_state = &bc.intercept_state;
     const intercept_id = try idFromRequestId(params.requestId);
 
-    const transfer_id = intercept_state.remove(intercept_id) orelse return error.RequestNotFound;
+    const transfer_id = intercept_state.get(intercept_id) orelse return error.RequestNotFound;
     const transfer = client.findTransfer(transfer_id) orelse {
+        _ = intercept_state.remove(intercept_id);
         log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "auth" });
         return cmd.sendResult(null, .{});
     };
+    // Only an authRequired pause can be answered with continueWithAuth: a
+    // request- or response-stage pause stays paused, as in Chrome.
+    if (transfer.state != .parked or transfer.state.parked != .intercept_auth) {
+        return cmd.sendError(-32000, "Invalid InterceptionId.", .{});
+    }
+    _ = intercept_state.remove(intercept_id);
 
     log.debug(.cdp, "request intercept", .{
         .state = "continue with auth",
@@ -1365,9 +1372,48 @@ test "cdp.Fetch: continueWithAuth ProvideCredentials retries, a declined retry d
 
     try probe.tickUntilSettled(bc);
     try testing.expectEqual(null, probe.err);
+    try testing.expect(probe.done);
     try testing.expectEqual(401, probe.status);
     try testing.expectEqualSlices(u8, "No", probe.body.items);
     try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: continueWithAuth on a request-stage pause is rejected and keeps the pause" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-AU", .session_id = "SID-AU" });
+    try enableAuthHandling(&ctx);
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/xhr/401");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    for ([_][]const u8{ "CancelAuth", "ProvideCredentials" }, 2..) |response, cmd_id| {
+        try ctx.processMessage(.{ .id = cmd_id, .method = "Fetch.continueWithAuth", .params = .{
+            .requestId = "INT-0000000001",
+            .authChallengeResponse = .{ .response = response },
+        } });
+        try ctx.expectSentError(-32000, "Invalid InterceptionId.", .{ .id = cmd_id });
+    }
+    try testing.expectEqual(false, probe.done);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqual(1, bc.cdp.browser.http_client.intercepted);
+
+    // Still paused at the request stage: continueRequest resumes it.
+    try ctx.processMessage(.{ .id = 4, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.authRequired", .{ .requestId = "INT-0000000002" }, .{ .session_id = "SID-AU" });
+
+    try ctx.processMessage(.{ .id = 5, .method = "Fetch.continueWithAuth", .params = .{
+        .requestId = "INT-0000000002",
+        .authChallengeResponse = .{ .response = "Default" },
+    } });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try probe.tickUntilSettled(bc);
+    try testing.expect(probe.done);
+    try testing.expectEqual(401, probe.status);
 }
 
 test "cdp.Fetch: cdpErrorReason" {
