@@ -19,9 +19,12 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const Notification = @import("../../Notification.zig");
+
 const js = @import("../js/js.zig");
 const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
+
 const Console = @import("Console.zig");
 const History = @import("History.zig");
 const Navigation = @import("navigation/Navigation.zig");
@@ -51,7 +54,7 @@ const CustomElementRegistry = @import("CustomElementRegistry.zig");
 const Selection = @import("Selection.zig");
 const Timers = @import("Timers.zig");
 const Scheduler = @import("Scheduler.zig");
-const Notification = @import("../../Notification.zig");
+const global_event_handlers = @import("global_event_handlers.zig");
 
 const log = lp.log;
 
@@ -366,15 +369,16 @@ pub fn getCustomElements(self: *Window) *CustomElementRegistry {
     return &self._custom_elements;
 }
 
-// The "window-reflecting body element event handler set" (HTML spec): these
-// event handlers of body and frameset elements are aliases for the Window's.
+// The event handlers of body and frameset elements that are aliases for the
+// Window's: the "window-reflecting body element event handler set" plus
+// WindowEventHandlers (HTML spec, "determining the target of an event handler").
 pub fn isWindowReflectingHandler(name: []const u8) bool {
     inline for (.{ "onblur", "onerror", "onfocus", "onload", "onresize", "onscroll" }) |n| {
         if (std.mem.eql(u8, name, n)) {
             return true;
         }
     }
-    return false;
+    return global_event_handlers.isWindowEventHandler(name);
 }
 
 // Accessor for a window-reflecting event handler (i.e. body or frameset)..
@@ -1102,13 +1106,24 @@ pub const JsApi = struct {
     pub const onvolumechange = EventTarget.handlerAccessor(Window, "volumechange");
     pub const onwaiting = EventTarget.handlerAccessor(Window, "waiting");
     pub const onwheel = EventTarget.handlerAccessor(Window, "wheel");
-    // WindowEventHandlers
+    pub const onafterprint = EventTarget.handlerAccessor(Window, "afterprint");
+    pub const onbeforeprint = EventTarget.handlerAccessor(Window, "beforeprint");
+    pub const onbeforeunload = EventTarget.handlerAccessor(Window, "beforeunload");
     pub const onhashchange = EventTarget.handlerAccessor(Window, "hashchange");
+    pub const onlanguagechange = EventTarget.handlerAccessor(Window, "languagechange");
     pub const onmessage = EventTarget.handlerAccessor(Window, "message");
+    pub const onmessageerror = EventTarget.handlerAccessor(Window, "messageerror");
+    pub const onoffline = EventTarget.handlerAccessor(Window, "offline");
+    pub const ononline = EventTarget.handlerAccessor(Window, "online");
+    pub const onpagehide = EventTarget.handlerAccessor(Window, "pagehide");
+    pub const onpagereveal = EventTarget.handlerAccessor(Window, "pagereveal");
     pub const onpageshow = EventTarget.handlerAccessor(Window, "pageshow");
+    pub const onpageswap = EventTarget.handlerAccessor(Window, "pageswap");
     pub const onpopstate = EventTarget.handlerAccessor(Window, "popstate");
     pub const onrejectionhandled = EventTarget.handlerAccessor(Window, "rejectionhandled");
+    pub const onstorage = EventTarget.handlerAccessor(Window, "storage");
     pub const onunhandledrejection = EventTarget.handlerAccessor(Window, "unhandledrejection");
+    pub const onunload = EventTarget.handlerAccessor(Window, "unload");
     pub const event = bridge.accessor(Window.getEvent, Window.setEvent, .{ .null_as_undefined = true });
     pub const fetch = bridge.function(Window.fetch, .{});
     pub const queueMicrotask = bridge.function(Window.queueMicrotask, .{});

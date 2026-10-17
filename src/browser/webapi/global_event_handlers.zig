@@ -121,18 +121,46 @@ pub const Handler = enum {
     onwheel,
 };
 
-const handlers = std.StaticStringMap(void).initComptime(blk: {
-    const names = @typeInfo(Handler).@"enum".field_names;
+/// The WindowEventHandlers mixin: on Window, and on body/frameset elements.
+pub const WindowHandler = enum {
+    onafterprint,
+    onbeforeprint,
+    onbeforeunload,
+    onhashchange,
+    onlanguagechange,
+    onmessage,
+    onmessageerror,
+    onoffline,
+    ononline,
+    onpagehide,
+    onpageshow,
+    onpopstate,
+    onrejectionhandled,
+    onstorage,
+    onunhandledrejection,
+    onunload,
+};
+
+fn nameMap(comptime E: type) std.StaticStringMap(void) {
+    const names = @typeInfo(E).@"enum".field_names;
     var entries: [names.len]struct { []const u8 } = undefined;
     for (names, 0..) |name, i| {
         entries[i] = .{name};
     }
-    break :blk entries;
-});
+    return .initComptime(entries);
+}
+
+const handlers = nameMap(Handler);
+const window_handlers = nameMap(WindowHandler);
 
 /// Whether `name` (e.g. "onclick") is an event handler content attribute.
 pub fn isEventHandler(name: []const u8) bool {
     return handlers.has(name);
+}
+
+/// Whether `name` (e.g. "onpagehide") is a WindowEventHandlers attribute.
+pub fn isWindowEventHandler(name: []const u8) bool {
+    return window_handlers.has(name);
 }
 
 const testing = @import("../../testing.zig");
@@ -143,4 +171,12 @@ test "GlobalEventHandlers: isEventHandler" {
     try testing.expectEqual(false, isEventHandler("on"));
     try testing.expectEqual(false, isEventHandler(""));
     try testing.expectEqual(false, isEventHandler("onunknown"));
+    try testing.expectEqual(false, isEventHandler("onpagehide"));
+}
+
+test "GlobalEventHandlers: isWindowEventHandler" {
+    try testing.expectEqual(true, isWindowEventHandler("onpagehide"));
+    try testing.expectEqual(true, isWindowEventHandler("onbeforeunload"));
+    try testing.expectEqual(false, isWindowEventHandler("onload"));
+    try testing.expectEqual(false, isWindowEventHandler("pagehide"));
 }

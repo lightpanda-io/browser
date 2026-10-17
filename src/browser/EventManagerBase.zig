@@ -25,6 +25,7 @@ const Page = @import("Page.zig");
 const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const ErrorEvent = @import("webapi/event/ErrorEvent.zig");
+const BeforeUnloadEvent = @import("webapi/event/BeforeUnloadEvent.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -625,6 +626,27 @@ pub const Listener = struct {
                 return;
             },
         };
+
+        if (this._type == .window and event._type_string.eql(comptime .wrap("beforeunload"))) {
+            const before_unload = event.is(BeforeUnloadEvent) orelse return;
+            if (result.isNullOrUndefined()) {
+                return;
+            }
+            event.preventDefault();
+            if (before_unload._return_value.len == 0) {
+                // onbeforeunload is weird, the return value is converting to
+                // a string, so false -> "false" and it doesn't cancel. Only
+                // a null does.
+                const str = result.toStringSlice() catch |err| {
+                    log.debug(.event, context, .{ .err = err });
+                    return;
+                };
+                before_unload.setReturnValue(str) catch |err| {
+                    log.debug(.event, context, .{ .err = err });
+                };
+            }
+            return;
+        }
 
         const cancel = if (error_event != null) result.isTrue() else result.isFalse();
         if (cancel) {

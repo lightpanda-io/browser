@@ -655,7 +655,7 @@ pub fn getIsContentEditable(self: *HtmlElement) bool {
 // handler. `value` must be the element's stored attribute value: the handler
 // keeps it, uncopied.
 pub fn eventHandlerAttributeChanged(self: *HtmlElement, name: []const u8, value: ?[]const u8, frame: *Frame) !void {
-    if (global_event_handlers.isEventHandler(name) == false) {
+    if (name.len < 3 or name[0] != 'o' or name[1] != 'n') {
         return;
     }
     const element = self.asElement();
@@ -666,6 +666,9 @@ pub fn eventHandlerAttributeChanged(self: *HtmlElement, name: []const u8, value:
             return owner._event_manager.setHandlerSource(owner.window.asEventTarget(), name[2..], value);
         },
         else => {},
+    }
+    if (global_event_handlers.isEventHandler(name) == false) {
+        return;
     }
     return frame._event_manager.setHandlerSource(element.asEventTarget(), name[2..], value);
 }
