@@ -405,8 +405,9 @@ pub const Commands = cli.Builder(.{
     .{
         .name = "serve",
         .options = .{
-            .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
-            .{ .name = "port", .type = u16, .default = 9222 },
+            .{ .name = "host", .type = ?[]const u8 },
+            .{ .name = "port", .type = ?u16 },
+            .{ .name = "socket", .type = ?[:0]const u8, .path = true },
             .{ .name = "advertise_host", .type = ?[]const u8 },
             // Repeatable; one server can speak several on the same port.
             .{ .name = "protocol", .type = Protocol, .multiple = true },
@@ -846,7 +847,7 @@ pub fn cookieJarFile(self: *const Config) ?[]const u8 {
 
 pub fn port(self: *const Config) u16 {
     return switch (self.mode) {
-        .serve => |opts| opts.port,
+        .serve => |opts| opts.port orelse 9222,
         .mcp => |opts| opts.cdp_port orelse 0,
         else => unreachable,
     };
@@ -854,7 +855,7 @@ pub fn port(self: *const Config) u16 {
 
 pub fn advertiseHost(self: *const Config) []const u8 {
     return switch (self.mode) {
-        .serve => |opts| opts.advertise_host orelse advertiseHostFallback(opts.host),
+        .serve => |opts| opts.advertise_host orelse advertiseHostFallback(opts.host orelse "127.0.0.1"),
         .mcp => "127.0.0.1",
         else => unreachable,
     };
@@ -899,7 +900,7 @@ fn advertiseHostFallback(host: []const u8) []const u8 {
 // resolvable, but the caller still benefits from emitting a guidance log.
 pub fn bindIsWildcard(self: *const Config) bool {
     return switch (self.mode) {
-        .serve => |opts| opts.advertise_host == null and isHostWildcard(opts.host),
+        .serve => |opts| opts.advertise_host == null and isHostWildcard(opts.host orelse "127.0.0.1"),
         else => false,
     };
 }
@@ -1302,6 +1303,23 @@ pub fn parseArgs(allocator: Allocator, proc_args: std.process.Args) !Config {
             @field(agent_opts, field_name) = @field(run, field_name);
         }
         command = .{ .agent = agent_opts };
+    }
+
+    // A Unix listener must not quietly open a TCP endpoint as well.
+    if (command == .serve) {
+        const opts = command.serve;
+        if (opts.socket != null) {
+            if (opts.host != null or opts.port != null or opts.advertise_host != null) {
+                log.fatal(.app, "socket conflicts with TCP", .{});
+                return error.InvalidArgument;
+            }
+            for (opts.protocol.items) |protocol| {
+                if (protocol != .cdp) {
+                    log.fatal(.app, "socket is CDP-only", .{});
+                    return error.InvalidArgument;
+                }
+            }
+        }
     }
 
     if (command == .fetch and command.fetch.url.items.len == 0) {
@@ -1848,4 +1866,25 @@ test "Config: parseArgs --load-resources defaults stylesheets on for mcp and age
         try std.testing.expectEqual(case.stylesheet, resources.stylesheet);
         try std.testing.expectEqual(case.image, resources.image);
     }
+}
+
+test "Config: unix socket serve flag refuses TCP flags" {
+    log.expectLog(&.{.app});
+    const vectors = [_][*:0]const u8{ "lightpanda", "serve", "--socket", "/tmp/lp-test.sock", "--port", "9322" };
+    const proc_args: std.process.Args = .{ .vector = &vectors };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(error.InvalidArgument, parseArgs(arena.allocator(), proc_args));
+}
+
+test "Config: unix socket serve flag is parsed without opening TCP" {
+    const vectors = [_][*:0]const u8{ "lightpanda", "serve", "--socket", "/tmp/lp-test.sock" };
+    const proc_args: std.process.Args = .{ .vector = &vectors };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const config = try parseArgs(arena.allocator(), proc_args);
+    try std.testing.expect(config.mode == .serve);
+    try std.testing.expectEqualStrings("/tmp/lp-test.sock", config.mode.serve.socket.?);
+    try std.testing.expectEqual(@as(?u16, null), config.mode.serve.port);
+    try std.testing.expectEqual(@as(?[]const u8, null), config.mode.serve.host);
 }
