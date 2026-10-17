@@ -106,6 +106,7 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
         .resource_type = .fetch,
         .frame_id = transfer.req.frame_id,
         .document_frame_id = transfer.req.document_frame_id,
+        .root_frame_id = transfer.req.root_frame_id,
         .loader_id = transfer.req.loader_id,
         .notification = transfer.req.notification,
         .origin = null,
