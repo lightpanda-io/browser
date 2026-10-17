@@ -154,7 +154,7 @@ pub const Prepared = struct {
     pub fn jsonStringify(self: *const Prepared, jws: *std.json.Stringify) std.Io.Writer.Error!void {
         try jws.beginWriteRaw();
         try jws.writer.writeByte('"');
-        var b64 = Base64Writer.init(jws.writer, .standard);
+        var b64 = Base64Writer.init(jws.writer, .default);
         try self.write(&b64.writer);
         try b64.finish();
         try jws.writer.writeByte('"');

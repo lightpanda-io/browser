@@ -28,6 +28,8 @@ const Config = @import("../../../Config.zig");
 const URL = @import("../../../browser/URL.zig");
 const Mime = @import("../../../browser/Mime.zig");
 const Notification = @import("../../../Notification.zig");
+const simdutf = @import("../../../sys/simdutf.zig");
+const Base64 = simdutf.Base64;
 
 const HttpClient = @import("../../../network/HttpClient.zig");
 const Cache = @import("../../../network/cache/Cache.zig");
@@ -431,7 +433,8 @@ fn getResponseBody(cmd: *CDP.Command) !void {
 
     // must_encode trusts the declared charset; a server can declare UTF-8 and
     // still send invalid bytes.
-    if (!resp.must_encode and std.unicode.utf8ValidateSlice(data.items)) {
+    const slice = data.items;
+    if (!resp.must_encode and simdutf.v8__simdutf_validate_utf8(slice.ptr, slice.len)) {
         return cmd.sendResult(.{
             .body = data.items,
             .base64Encoded = false,
@@ -451,7 +454,7 @@ pub const Base64Body = struct {
     pub fn jsonStringify(self: Base64Body, jws: *std.json.Stringify) std.Io.Writer.Error!void {
         try jws.beginWriteRaw();
         try jws.writer.writeByte('"');
-        var b64 = Base64Writer.init(jws.writer, .standard);
+        var b64 = Base64Writer.init(jws.writer, .default);
         try b64.writer.writeAll(self.data);
         try b64.finish();
         try jws.writer.writeByte('"');
@@ -625,11 +628,11 @@ pub const RequestWriter = struct {
 
                 // postDataEntries is the binary-safe representation
                 // (postData is lossy for non-UTF-8 bodies).
-                const encoder = std.base64.standard.Encoder;
-                const encoded = try self.arena.alloc(u8, encoder.calcSize(body.len));
+                const encoded_len = Base64.Encoder.calcSize(.default, body.len);
+                const encoded = try self.arena.alloc(u8, encoded_len);
                 try jws.objectField("postDataEntries");
                 try jws.write(&[_]struct { bytes: []const u8 }{
-                    .{ .bytes = encoder.encode(encoded, body) },
+                    .{ .bytes = Base64.Encoder.encode(.default, encoded, body) },
                 });
             }
         }
