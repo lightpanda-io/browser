@@ -92,7 +92,13 @@ fn writeMcpTools(w: *Writer) Writer.Error!void {
 
     var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
     defer arena.deinit();
-    try w.writeAll("## MCP-only tools\n\nThese tools exist only in the MCP server, not in the agent or in scripts.\n\n");
+    try w.writeAll(
+        \\## MCP-only tools
+        \\
+        \\These tools exist only in the MCP server, not in the agent or in scripts. Over the [HTTP transport](/usage/mcp#http-transport), every tool call runs in the session the `Mcp-Session-Id` header names, falling back to the always-present `default` session; the `session_*` tools create, list and close those sessions.
+        \\
+        \\
+    );
     for (mcp_tools.extra_tools) |mt| {
         try w.print("### {s}\n\n", .{mt.name});
         if (mt.title) |title| {
@@ -111,10 +117,28 @@ fn writeMcpTools(w: *Writer) Writer.Error!void {
         try w.writeAll("\n\n");
     }
 
-    try w.writeAll("## Resources\n\nRead with `resources/read`.\n\n| URI | MIME type | Description |\n|---|---|---|\n");
+    try w.writeAll(
+        \\## Resources
+        \\
+        \\The host application reads these with `resources/read`. The page resources need a loaded page; the skill resources don't.
+        \\
+        \\| URI | MIME type | Description |
+        \\|---|---|---|
+        \\
+    );
     for (mcp_resources.resource_list) |r| {
         try w.print("| `{s}` | `{s}` | {f} |\n", .{ r.uri, r.mimeType orelse "", Cell{ .s = r.description orelse r.name } });
     }
+    try w.writeAll(
+        \\
+        \\```json copy
+        \\{"jsonrpc":"2.0","id":2,"method":"resources/read",
+        \\ "params":{"uri":"mcp://page/markdown"}}
+        \\```
+        \\
+        \\The `markdown` tool and the `mcp://page/markdown` resource return the same content; the difference is who initiates. The agent calls **tools** during its workflow, while the host application reads **resources**, e.g. an IDE displaying page state in the background.
+        \\
+    );
 }
 
 /// The agent REPL's slash commands: meta, LLM-prompt, and one per browser
