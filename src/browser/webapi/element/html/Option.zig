@@ -175,6 +175,12 @@ fn setDefaultSelected(self: *Option, value: bool, frame: *Frame) !void {
 // On getting, return the `label` content attribute if present (verbatim, even
 // when empty), otherwise the value of the `text` IDL attribute. On setting,
 // reflect to the `label` content attribute.
+// https://html.spec.whatwg.org/multipage/form-elements.html#dom-option-index
+fn getIndex(self: *Option) u32 {
+    const select = self.ownerSelect() orelse return 0;
+    return select.optionIndex(self) orelse 0;
+}
+
 fn getLabel(self: *Option, frame: *Frame) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("label")) orelse self.getText(frame);
 }
@@ -201,6 +207,7 @@ pub const JsApi = struct {
     pub const selected = bridge.accessor(Option.getSelected, Option.setSelected, .{});
     pub const defaultSelected = bridge.accessor(Option.getDefaultSelected, Option.setDefaultSelected, .{ .ce_reactions = true });
     pub const disabled = reflect.boolean("disabled");
+    pub const index = bridge.accessor(Option.getIndex, null, .{});
 };
 
 pub const Build = struct {
