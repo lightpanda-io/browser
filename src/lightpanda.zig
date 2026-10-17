@@ -349,9 +349,12 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         }
     }
 
+    // Pages swapped for their markdown alternate.
+    const alternates = try session.arena.allocator().alloc(bool, pages.items.len);
+    @memset(alternates, false);
     if (opts.markdown_alternate) {
         const remaining = opts.wait_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
-        try followMarkdownAlternates(session, pages.items, errors, remaining);
+        try followMarkdownAlternates(session, pages.items, errors, remaining, alternates);
     }
 
     var http_error = false;
@@ -382,7 +385,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         }
     }
 
-    try writeResults(app, opts, pages.items, errors);
+    try writeResults(app, opts, pages.items, errors, alternates);
 
     var failed = false;
     for (urls, pages.items, errors) |url, page, err| {
@@ -410,8 +413,9 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
 
 /// Loads each page's markdown alternate in a page of its own (same session, so
 /// same cookies, robots and proxy) and swaps it in for the page when it loads
-/// as markdown. Otherwise the page is kept and converted as usual.
-fn followMarkdownAlternates(session: *Session, pages: []Session.PageHandle, errors: []const ?anyerror, timeout_ms: u32) !void {
+/// as markdown, marking it in `followed`. Otherwise the page is kept and
+/// converted as usual.
+fn followMarkdownAlternates(session: *Session, pages: []Session.PageHandle, errors: []const ?anyerror, timeout_ms: u32, followed: []bool) !void {
     const arena = session.arena.allocator();
     const alternates = try arena.alloc(?Session.PageHandle, pages.len);
     var conditions: std.ArrayList(Session.Runner.WaitCondition) = .empty;
@@ -431,22 +435,27 @@ fn followMarkdownAlternates(session: *Session, pages: []Session.PageHandle, erro
     if (conditions.items.len == 0) return;
 
     var runner = session.runner(.{});
-    _ = try runner.waitResult(timeout_ms, conditions.items);
+    const result = try runner.waitResult(timeout_ms, conditions.items);
 
-    for (pages, alternates) |*page, alternate| {
+    for (pages, alternates, followed) |*page, alternate, *was_followed| {
         const alt = alternate orelse continue;
         if (alt.frame()) |frame| {
             if (markdown.isAlternateLoaded(frame)) {
+                log.info(.app, "markdown alternate", .{ .page = page.frame().?.url, .alternate = frame.url });
                 page.close();
                 page.* = alt;
+                was_followed.* = true;
                 continue;
+            }
+            if (result == .timeout) {
+                log.warn(.app, "markdown alternate skipped", .{ .alternate = frame.url, .reason = "wait budget used up" });
             }
         }
         alt.close();
     }
 }
 
-fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, errors: []?anyerror) !void {
+fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, errors: []?anyerror, alternates: []const bool) !void {
     const writer = opts.writer orelse return;
 
     if (opts.json) {
@@ -459,7 +468,7 @@ fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, e
         if (wrap) {
             try writer.writeAll("{\"results\":[");
         }
-        for (pages, errors, 0..) |page, *err, i| {
+        for (pages, errors, alternates, 0..) |page, *err, alternate, i| {
             if (i != 0) {
                 try writer.writeByte(',');
             }
@@ -484,7 +493,7 @@ fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, e
             defer aw.deinit();
 
             if (opts.dump_mode) |mode| {
-                if (frame) |f| dumpContent(app, mode, opts, f, &aw.writer) catch |e| {
+                if (frame) |f| dumpContent(app, mode, opts, f, alternate, &aw.writer) catch |e| {
                     aw.clearRetainingCapacity();
                     if (err.* == null) err.* = e;
                 };
@@ -503,7 +512,7 @@ fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, e
                 try writer.writeAll("Frame closed. Please open a bug report including the URL\n");
                 break :blk;
             };
-            try dumpContent(app, mode, opts, frame, writer);
+            try dumpContent(app, mode, opts, frame, alternates[0], writer);
         }
     }
     try writer.flush();
@@ -542,13 +551,13 @@ fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
     return (element orelse return error.SelectorNotFound).asNode();
 }
 
-fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Frame, writer: *std.Io.Writer) !void {
+fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Frame, alternate: bool, writer: *std.Io.Writer) !void {
     var arena: std.heap.ArenaAllocator = .init(app.allocator);
     defer arena.deinit();
     const state = try RenderTree.resolve(arena.allocator(), try dumpRoot(frame, opts.selector), opts.dump.strip, frame);
     switch (mode) {
         .html => try dump.render(state, opts.dump, writer, frame),
-        .markdown => try markdown.dump(state, .{ .max_bytes = opts.dump.max_bytes }, writer, frame),
+        .markdown => try markdown.dump(state, .{ .max_bytes = opts.dump.max_bytes, .alternate = alternate }, writer, frame),
         .png => {
             _ = try screenshot.png(arena.allocator(), state, pngOpts(frame), writer, frame);
         },
@@ -779,7 +788,7 @@ test "dumpContent: structured_data" {
     defer page.close();
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    try dumpContent(testing.test_app, .structured_data, .{ .dump = .{} }, page.frame().?, &aw.writer);
+    try dumpContent(testing.test_app, .structured_data, .{ .dump = .{} }, page.frame().?, false, &aw.writer);
     try testing.expectJson(.{
         .jsonLd = &.{"{\"@type\":\"Product\",\"name\":\"Blue Kettle\"}"},
         .openGraph = .{ .type = "product" },
@@ -807,15 +816,28 @@ test "fetch: followMarkdownAlternates swaps in a page's markdown alternate" {
         try testing.pageTest("markdown_alternate.html", .{ .wait_until_done = true }),
         try testing.pageTest("markdown_alternate_html.html", .{ .wait_until_done = true }),
         try testing.pageTest("markdown_flex.html", .{ .wait_until_done = true }),
+        try testing.pageTest("markdown_alternate_plain.html", .{ .wait_until_done = true }),
     };
-    var errors = [_]?anyerror{ null, null, null };
-    try followMarkdownAlternates(session, &pages, &errors, 2000);
+    var errors = [_]?anyerror{ null, null, null, null };
+    var followed = [_]bool{ false, false, false, false };
+    try followMarkdownAlternates(session, &pages, &errors, 2000, &followed);
 
     const base = "http://127.0.0.1:9582/src/browser/tests/";
     try testing.expectString(base ++ "markdown_source.md", pages[0].frame().?.url);
     try testing.expectString(base ++ "markdown_alternate_html.html", pages[1].frame().?.url);
     try testing.expectString(base ++ "markdown_flex.html", pages[2].frame().?.url);
-    try testing.expectEqual(3, session.pages.items.len);
+    // Many servers send .md files as text/plain; the link already says it's markdown.
+    try testing.expectString(base ++ "markdown_source.txt", pages[3].frame().?.url);
+    try testing.expectEqual(true, followed[0]);
+    try testing.expectEqual(false, followed[1]);
+    try testing.expectEqual(false, followed[2]);
+    try testing.expectEqual(true, followed[3]);
+    try testing.expectEqual(4, session.pages.items.len);
+
+    // A followed text/plain alternate is written as-is, not fenced.
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dumpContent(testing.test_app, .markdown, .{ .dump = .{} }, pages[3].frame().?, true, &aw.writer);
+    try testing.expectString(@embedFile("browser/tests/markdown_source.txt"), aw.written());
 }
 
 test {

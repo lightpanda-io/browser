@@ -456,7 +456,7 @@ pub const Tool = enum {
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
                     \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output; same groups as the html tool's strip. `shell` (page chrome by markup) and `clutter` (keep only the main content, in the manner of reader modes) are the ones that matter for reading; `ui` also drops images.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering. An empty string is treated as omitted." },
-                    \\    "alternate": { "type": "boolean", "description": "Optional. When the page links a markdown version of itself (<link rel=\"alternate\" type=\"text/markdown\">), return that file instead of converting the page. It is the author's file and can differ from the rendered page. Falls back to the page when there is no such link or it does not load as markdown. Ignored with selector or backendNodeId. Defaults to false." },
+                    \\    "alternate": { "type": "boolean", "description": "Optional. When the page links a markdown version of itself (<link rel=\"alternate\" type=\"text/markdown\">), return that file instead of converting the page. It is the author's file and can differ from the rendered page; the output then starts with a comment naming its URL. Falls back to the page when there is no such link or it does not load as markdown. Cannot be combined with selector or backendNodeId. Defaults to false." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -1652,7 +1652,9 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     const args = try parseArgsOrDefault(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
-    if (args.alternate and args.selector == null and args.backendNodeId == null) {
+    if (args.alternate) {
+        // The alternate stands for the whole page, like `fetch --markdown-alternate`.
+        if (args.selector != null or args.backendNodeId != null) return ToolError.InvalidParams;
         if (try readMarkdownAlternate(arena, session, page, args.maxBytes, args.timeout)) |text| return text;
     }
 
@@ -1680,8 +1682,10 @@ fn readMarkdownAlternate(arena: std.mem.Allocator, session: *lp.Session, frame: 
 
     const alternate = page.frame() orelse return null;
     if (!lp.markdown.isAlternateLoaded(alternate)) return null;
+    // Say which source this is: the alternate can differ from the rendered page.
     var aw: std.Io.Writer.Allocating = .init(arena);
-    lp.markdown.dump(.{ .root = alternate.document.asNode() }, .{ .max_bytes = max_bytes }, &aw.writer, alternate) catch
+    aw.writer.print("<!-- markdown alternate: {s} -->\n", .{alternate.url}) catch return ToolError.OutOfMemory;
+    lp.markdown.dump(.{ .root = alternate.document.asNode() }, .{ .max_bytes = max_bytes, .alternate = true }, &aw.writer, alternate) catch
         return ToolError.InternalError;
     return aw.written();
 }
@@ -3545,7 +3549,7 @@ test "markdown: alternate reads the page's text/markdown link" {
     const followed = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"alternate":true}
     , .{}), .{ .source = .user });
-    try std.testing.expectEqualStrings(source, followed.text);
+    try std.testing.expectEqualStrings("<!-- markdown alternate: " ++ base ++ "markdown_source.md -->\n" ++ source, followed.text);
     // Read in a page of its own: the current page stays put.
     try std.testing.expect(!followed.navigated);
     try std.testing.expectEqual(1, session.pages.items.len);
@@ -3554,12 +3558,16 @@ test "markdown: alternate reads the page's text/markdown link" {
     const capped = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"alternate":true,"maxBytes":7}
     , .{}), .{ .source = .user });
-    try std.testing.expect(std.mem.startsWith(u8, capped.text, "# Title\n\n[truncated]"));
+    try std.testing.expect(std.mem.find(u8, capped.text, "-->\n# Title\n\n[truncated]") != null);
 
-    const scoped = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+    // The alternate stands for the whole page: no scoping, as in `fetch`.
+    try std.testing.expectError(ToolError.InvalidParams, call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"alternate":true,"selector":"p"}
-    , .{}), .{ .source = .user });
-    try std.testing.expect(std.mem.find(u8, scoped.text, "Rendered page") != null);
+    , .{}), .{ .source = .user }));
+
+    // Many servers send .md files as text/plain; followed, it is written as-is.
+    const plain = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"alternate\":true,\"url\":\"" ++ base ++ "markdown_alternate_plain.html\"}", .{}), .{ .source = .user });
+    try std.testing.expectEqualStrings("<!-- markdown alternate: " ++ base ++ "markdown_source.txt -->\n" ++ source, plain.text);
 
     // An alternate that doesn't load as markdown falls back to the page.
     const fallback = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"alternate\":true,\"url\":\"" ++ base ++ "markdown_alternate_html.html\"}", .{}), .{ .source = .user });

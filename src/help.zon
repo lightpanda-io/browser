@@ -142,8 +142,10 @@
     \\          file instead of converting the page. The file is the author's
     \\          and can differ from the rendered page. Falls back to converting
     \\          the page when there is no such link or it does not load as
-    \\          markdown. With --json, "url" is where the markdown came from.
-    \\          Defaults to false.
+    \\          markdown (text/markdown, or text/plain since many servers send
+    \\          .md files that way). The alternate's URL is logged; with
+    \\          --json, "url" is where the markdown came from. The alternate
+    \\          loads within what is left of --wait-ms. Defaults to false.
     \\  --metrics
     \\          Write metrics (Prometheus text format) to stdout on exit, after
     \\          any --dump output.
