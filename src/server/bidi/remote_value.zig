@@ -429,7 +429,7 @@ pub const Serializer = struct {
     }
 
     // One of our objects. The spec only cares about four, the rest are opaque.
-    fn platform(self: *Serializer, tao: *const js.TaggedOpaque, depth: u32) !Remote.Body {
+    fn platform(self: *Serializer, tao: js.TaggedOpaque, depth: u32) !Remote.Body {
         if (tao.as(Node)) |dom_node| {
             return .{ .node = try self.node(dom_node, 0) };
         }

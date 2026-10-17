@@ -754,7 +754,6 @@ pub const JsApi = struct {
         pub const name = "SubtleCrypto";
 
         pub var class_id: bridge.ClassId = undefined;
-        pub const prototype_chain = bridge.prototypeChain();
     };
 
     pub const generateKey = bridge.function(SubtleCrypto.generateKey, .{});

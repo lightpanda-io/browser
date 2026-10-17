@@ -62,7 +62,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "Screen";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
@@ -131,7 +130,6 @@ pub const Orientation = struct {
 
         pub const Meta = struct {
             pub const name = "ScreenOrientation";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
         };
 

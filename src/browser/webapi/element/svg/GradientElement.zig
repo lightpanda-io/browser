@@ -102,7 +102,6 @@ pub const JsApi = struct {
     pub const bridge = js.Bridge(GradientElement);
     pub const Meta = struct {
         pub const name = "SVGGradientElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

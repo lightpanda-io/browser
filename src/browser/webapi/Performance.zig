@@ -763,7 +763,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "Performance";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
@@ -869,7 +868,6 @@ pub const Entry = struct {
 
         pub const Meta = struct {
             pub const name = "PerformanceEntry";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
         };
         pub const name = bridge.accessor(Entry.getName, null, .{});
@@ -921,7 +919,6 @@ const Mark = struct {
 
         pub const Meta = struct {
             pub const name = "PerformanceMark";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
         };
         pub const detail = bridge.accessor(Mark.getDetail, null, .{});
@@ -985,7 +982,6 @@ const Measure = struct {
 
         pub const Meta = struct {
             pub const name = "PerformanceMeasure";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
         };
         pub const detail = bridge.accessor(Measure.getDetail, null, .{});
@@ -1179,7 +1175,6 @@ const ResourceTiming = struct {
 
         pub const Meta = struct {
             pub const name = "PerformanceResourceTiming";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
         };
 
@@ -1223,7 +1218,6 @@ pub const PerformanceTiming = struct {
 
         pub const Meta = struct {
             pub const name = "PerformanceTiming";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
             pub const empty_with_no_proto = true;
         };
@@ -1264,7 +1258,6 @@ pub const PerformanceNavigation = struct {
 
         pub const Meta = struct {
             pub const name = "PerformanceNavigation";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
             pub const empty_with_no_proto = true;
         };

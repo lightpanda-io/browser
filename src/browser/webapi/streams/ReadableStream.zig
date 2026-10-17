@@ -428,7 +428,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "ReadableStream";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
@@ -467,7 +466,6 @@ const AsyncIterator = struct {
 
         pub const Meta = struct {
             pub const name = "ReadableStreamAsyncIterator";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
         };
 

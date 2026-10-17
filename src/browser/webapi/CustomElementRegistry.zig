@@ -339,7 +339,6 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "CustomElementRegistry";
         pub var class_id: bridge.ClassId = undefined;
-        pub const prototype_chain = bridge.prototypeChain();
     };
 
     pub const define = bridge.function(CustomElementRegistry.define, .{ .ce_reactions = true });

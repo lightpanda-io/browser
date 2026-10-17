@@ -232,7 +232,6 @@ pub const ResizeObserverEntry = struct {
 
         pub const Meta = struct {
             pub const name = "ResizeObserverEntry";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
         };
 
@@ -268,7 +267,6 @@ pub const ResizeObserverSize = struct {
 
         pub const Meta = struct {
             pub const name = "ResizeObserverSize";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
         };
 
@@ -282,7 +280,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "ResizeObserver";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

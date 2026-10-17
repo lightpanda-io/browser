@@ -46,7 +46,6 @@ const Plugin = struct {
         pub const bridge = js.Bridge(Plugin);
         pub const Meta = struct {
             pub const name = "Plugin";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
             pub const empty_with_no_proto = true;
         };
@@ -70,7 +69,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "PluginArray";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
         pub const empty_with_no_proto = true;
     };
