@@ -50,8 +50,7 @@ fn promptNumberedChoiceLine(header: []const u8, items: []const [:0]const u8, def
     var stdin_buf: [128]u8 = undefined;
     var stdin = std.Io.File.stdin().readerStreaming(lp.io, &stdin_buf);
 
-    var attempt: u8 = 0;
-    while (attempt < 3) : (attempt += 1) {
+    for (0..3) |_| {
         std.debug.print("{s}\n", .{header});
         for (items, 0..) |item, idx| {
             const marker: []const u8 = if (default) |d| (if (d == idx) " (default)" else "") else "";

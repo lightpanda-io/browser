@@ -29,7 +29,7 @@ const EC_KEY = struct_ec_key_st;
 const struct_evp_pkey_st = opaque {};
 pub const EVP_PKEY = struct_evp_pkey_st;
 const struct_evp_pkey_ctx_st = opaque {};
-const EVP_PKEY_CTX = struct_evp_pkey_ctx_st;
+pub const EVP_PKEY_CTX = struct_evp_pkey_ctx_st;
 
 pub extern fn RAND_bytes(buf: [*]u8, len: usize) c_int;
 
@@ -43,6 +43,8 @@ pub const EVP_MAX_MD_BLOCK_SIZE = 128;
 
 pub extern fn EVP_MD_size(md: ?*const EVP_MD) usize;
 pub extern fn EVP_MD_block_size(md: ?*const EVP_MD) usize;
+
+pub extern fn ERR_clear_error() void;
 
 pub extern fn CRYPTO_memcmp(a: ?*const anyopaque, b: ?*const anyopaque, len: usize) c_int;
 
@@ -112,6 +114,20 @@ pub extern fn EVP_DecryptInit_ex(ctx: *EVP_CIPHER_CTX, cipher: ?*const EVP_CIPHE
 pub extern fn EVP_DecryptUpdate(ctx: *EVP_CIPHER_CTX, out: [*c]u8, out_len: *c_int, in: [*c]const u8, in_len: c_int) c_int;
 pub extern fn EVP_DecryptFinal_ex(ctx: *EVP_CIPHER_CTX, out: [*c]u8, out_len: *c_int) c_int;
 
+// AES key wrap (RFC 3394), for AES-KW. `AES_KEY` must match BoringSSL's
+// `struct aes_key_st` (AES_MAXNR = 14).
+pub const AES_KEY = extern struct {
+    rd_key: [4 * (14 + 1)]u32,
+    rounds: c_uint,
+};
+/// Returns 0 on success, negative for an invalid key size.
+pub extern fn AES_set_encrypt_key(key: [*]const u8, bits: c_uint, aeskey: *AES_KEY) c_int;
+pub extern fn AES_set_decrypt_key(key: [*]const u8, bits: c_uint, aeskey: *AES_KEY) c_int;
+/// Returns the output length (`in_len` + 8 / - 8), or -1. A null `iv` is the
+/// default IV.
+pub extern fn AES_wrap_key(key: *const AES_KEY, iv: ?[*]const u8, out: [*]u8, in: [*]const u8, in_len: usize) c_int;
+pub extern fn AES_unwrap_key(key: *const AES_KEY, iv: ?[*]const u8, out: [*]u8, in: [*]const u8, in_len: usize) c_int;
+
 // EVP_CIPHER_CTX_ctrl commands for AES-GCM.
 pub const EVP_CTRL_GCM_SET_IVLEN = 0x9;
 pub const EVP_CTRL_GCM_GET_TAG = 0x10;
@@ -138,8 +154,9 @@ pub extern fn EC_KEY_set_public_key(key: *EC_KEY, point: *const EC_POINT) c_int;
 pub extern fn d2i_PUBKEY(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
 pub extern fn d2i_AutoPrivateKey(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
 
-// RSA-OAEP: key generation, import, and the encrypt/decrypt operations.
+// RSA: key generation, import, and the encrypt/decrypt and sign/verify operations.
 pub const EVP_PKEY_RSA = 6; // NID_rsaEncryption
+pub const RSA_PKCS1_PADDING = 1;
 pub const RSA_PKCS1_OAEP_PADDING = 4;
 
 const struct_rsa_st = opaque {};
@@ -219,11 +236,14 @@ pub extern fn EVP_PKEY_free(pkey: ?*EVP_PKEY) void;
 
 pub extern fn EVP_DigestSignInit(ctx: ?*EVP_MD_CTX, pctx: ?*?*EVP_PKEY_CTX, typ: ?*const EVP_MD, e: ?*ENGINE, pkey: ?*EVP_PKEY) c_int;
 pub extern fn EVP_DigestSign(ctx: ?*EVP_MD_CTX, sig: [*c]u8, sig_len: *usize, data: [*c]const u8, data_len: usize) c_int;
+pub extern fn EVP_DigestVerifyInit(ctx: ?*EVP_MD_CTX, pctx: ?*?*EVP_PKEY_CTX, typ: ?*const EVP_MD, e: ?*ENGINE, pkey: ?*EVP_PKEY) c_int;
+/// Returns 1 for a valid signature, 0 otherwise (on the error queue).
+pub extern fn EVP_DigestVerify(ctx: ?*EVP_MD_CTX, sig: [*c]const u8, sig_len: usize, data: [*c]const u8, data_len: usize) c_int;
 pub extern fn EVP_Digest(data: ?*const anyopaque, len: usize, md_out: [*c]u8, md_out_size: [*c]c_uint, @"type": ?*const EVP_MD, impl: ?*ENGINE) c_int;
 pub extern fn EVP_MD_CTX_new() ?*EVP_MD_CTX;
 pub extern fn EVP_MD_CTX_free(ctx: ?*EVP_MD_CTX) void;
 const struct_evp_md_ctx_st = opaque {};
-const EVP_MD_CTX = struct_evp_md_ctx_st;
+pub const EVP_MD_CTX = struct_evp_md_ctx_st;
 
 const struct_x509_st = opaque {};
 pub const X509 = struct_x509_st;

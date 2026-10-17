@@ -381,6 +381,37 @@
   }
 </script>
 
+<script id=formDataWithFiles>
+{
+  // A FormData init is converted as sequence<sequence<USVString>> by
+  // iterating it, so a File value stringifies to "[object File]", not to
+  // its name.
+  const form = document.createElement('form');
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.name = 'empty';
+  form.appendChild(input);
+
+  const fd = new FormData(form);
+  fd.append('s', 'text');
+  fd.append('f', new File(['abc'], 'a.txt'));
+  fd.append('b', new Blob(['xyz']));
+  fd.append('r', new File(['abc'], 'a.txt'), 'renamed.txt');
+
+  const usp = new URLSearchParams(fd);
+  testing.expectEqual(5, usp.size);
+  testing.expectEqual('[object File]', usp.get('empty'));
+  testing.expectEqual('text', usp.get('s'));
+  testing.expectEqual('[object File]', usp.get('f'));
+  testing.expectEqual('[object File]', usp.get('b'));
+  testing.expectEqual('[object File]', usp.get('r'));
+  testing.expectEqual('empty=%5Bobject+File%5D&s=text&f=%5Bobject+File%5D&b=%5Bobject+File%5D&r=%5Bobject+File%5D', usp.toString());
+
+  // Same result as passing the iterated entries explicitly.
+  testing.expectEqual(new URLSearchParams([...fd]).toString(), usp.toString());
+}
+</script>
+
 <script id=arrayOfArrays>
 {
   const usp = new URLSearchParams([["a", "1"], ["b", "2"], ["a", "3"]]);

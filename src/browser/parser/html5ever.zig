@@ -66,11 +66,20 @@ pub extern "c" fn html5ever_parse_document_with_encoding(
     allow_declarative_shadow: bool,
 ) void;
 
+// Namespace of the fragment parse context element, matched by
+// html5ever_parse_fragment.
+pub const ContextNamespace = enum(u8) {
+    html = 0,
+    svg = 1,
+    mathml = 2,
+};
+
 pub extern "c" fn html5ever_parse_fragment(
     html: [*c]const u8,
     len: usize,
     context_name: [*c]const u8,
     context_name_len: usize,
+    context_ns: ContextNamespace,
     doc: *anyopaque,
     ctx: *anyopaque,
     createElementCallback: *const fn (ctx: *anyopaque, data: *anyopaque, QualName, AttributeIterator) callconv(.c) ?*anyopaque,
@@ -223,6 +232,10 @@ pub extern "c" fn xml5ever_parse_document(
     attachDeclarativeShadowCallback: *const fn (ctx: *anyopaque, host_ref: *anyopaque, template_ref: *anyopaque, mode_is_open: u8) callconv(.c) u8,
     allow_declarative_shadow: bool,
 ) void;
+
+// 0: no reference starts with `name`, 1: `name` is a prefix of one,
+// 2: `name` is one, its codepoints are in `out` (out[1] == 0 for a single one).
+pub extern "c" fn html5ever_named_character_reference(name: [*]const u8, len: usize, out: *[2]u32) u8;
 
 // General encoding api
 pub const EncodingInfo = extern struct {

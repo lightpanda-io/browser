@@ -1069,7 +1069,10 @@ const Upgrade = union(enum) {
 // hand the fd to its worker (spawning one for a new connection).
 fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target: Upgrade) !Served {
     var accept_buf: [28]u8 = undefined;
-    const accept_key = webSocketAccept(req.head, &accept_buf, server.advertise_host) catch |err| {
+    const accept_key = webSocketAccept(req.head, &accept_buf, .{
+        .host = server.advertise_host,
+        .origins = server.remote_allow_origins,
+    }) catch |err| {
         const response: []const u8 = switch (err) {
             error.ForbiddenOrigin => forbidden_origin_response,
             error.ForbiddenHost => forbidden_host_response,
@@ -1101,9 +1104,14 @@ fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target:
 
 // Validate an incoming WebSocket upgrade request head and, on success, write
 // the Sec-WebSocket-Accept value into `out`. Mirrors the origin/host defenses
-// from the old Handshake path. `advertise_host` is the explicit
-// --advertise-host, if any.
-fn webSocketAccept(head: []const u8, out: *[28]u8, advertise_host: ?[]const u8) ![]const u8 {
+// from the old Handshake path. `allow` holds the explicit --advertise-host and
+// --remote-allow-origins, if any.
+const Allow = struct {
+    host: ?[]const u8 = null,
+    origins: []const []const u8 = &.{},
+};
+
+fn webSocketAccept(head: []const u8, out: *[28]u8, allow: Allow) ![]const u8 {
     const FOUND_UPGRADE: u8 = 1 << 0;
     const FOUND_VERSION: u8 = 1 << 1;
     const FOUND_CONNECTION: u8 = 1 << 2;
@@ -1131,12 +1139,15 @@ fn webSocketAccept(head: []const u8, out: *[28]u8, advertise_host: ?[]const u8) 
             key = h.value;
             found |= FOUND_KEY;
         } else if (std.ascii.eqlIgnoreCase(h.key, "origin")) {
-            // Only a browser sends Origin, and a browser has no business
-            // driving CDP/BiDi: it's cross-origin to us by definition.
-            log.warn(.serve, "rejected websocket origin", .{ .origin = h.value[0..@min(h.value.len, 64)] });
-            return error.ForbiddenOrigin;
+            // A browser has no business driving CDP/BiDi: it's cross-origin
+            // to us by definition. But non-browser clients (e.g. Python's
+            // websocket-client) send one too, so the operator can allow it.
+            if (isAllowedOrigin(h.value, allow.origins) == false) {
+                log.warn(.serve, "rejected websocket origin", .{ .origin = h.value[0..@min(h.value.len, 64)], .note = "See `--remote-allow-origins <origins>` if this is a legitimate origin" });
+                return error.ForbiddenOrigin;
+            }
         } else if (std.ascii.eqlIgnoreCase(h.key, "host")) {
-            if (isAllowedHost(h.value, advertise_host) == false) {
+            if (isAllowedHost(h.value, allow.host) == false) {
                 log.warn(.serve, "rejected websocket host", .{ .host = h.value[0..@min(h.value.len, 64)], .note = "See `--advertise-host <host>` if this is a legitimate host" });
                 return error.ForbiddenHost;
             }
@@ -1153,6 +1164,17 @@ fn webSocketAccept(head: []const u8, out: *[28]u8, advertise_host: ?[]const u8) 
     hasher.final(&sha);
     _ = std.base64.standard.Encoder.encode(out, &sha);
     return out;
+}
+
+// Exact (case-insensitive) match against a --remote-allow-origins value, or
+// anything if one is `*`, as Chrome does.
+fn isAllowedOrigin(value: []const u8, allowed: []const []const u8) bool {
+    for (allowed) |origin| {
+        if (std.mem.eql(u8, origin, "*") or std.ascii.eqlIgnoreCase(origin, value)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Defense in depth against DNS rebinding: only an IP literal can legitimately
@@ -1205,8 +1227,35 @@ test "http: webSocketAccept honours the advertised host" {
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
         "Sec-WebSocket-Version: 13\r\n\r\n";
     var out: [28]u8 = undefined;
-    try testing.expectError(error.ForbiddenHost, webSocketAccept(head, &out, null));
-    try testing.expectString("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", try webSocketAccept(head, &out, "lightpanda"));
+    try testing.expectError(error.ForbiddenHost, webSocketAccept(head, &out, .{}));
+    try testing.expectString("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", try webSocketAccept(head, &out, .{ .host = "lightpanda" }));
+}
+
+test "http: isAllowedOrigin" {
+    try testing.expectEqual(false, isAllowedOrigin("http://localhost:3000", &.{}));
+    try testing.expectEqual(true, isAllowedOrigin("http://localhost:3000", &.{"http://localhost:3000"}));
+    try testing.expectEqual(true, isAllowedOrigin("http://LOCALHOST:3000", &.{"http://localhost:3000"}));
+    try testing.expectEqual(true, isAllowedOrigin("http://b.test", &.{ "http://a.test", "http://b.test" }));
+    try testing.expectEqual(true, isAllowedOrigin("null", &.{"*"}));
+    try testing.expectEqual(true, isAllowedOrigin("https://evil.com", &.{ "http://a.test", "*" }));
+    try testing.expectEqual(false, isAllowedOrigin("http://localhost:3001", &.{"http://localhost:3000"}));
+    try testing.expectEqual(false, isAllowedOrigin("http://a.test.evil.com", &.{"http://a.test"}));
+}
+
+test "http: webSocketAccept honours the allowed origins" {
+    testing.expectLog(&.{ .serve, .serve });
+    const head = "GET / HTTP/1.1\r\n" ++
+        "Host: 127.0.0.1:9222\r\n" ++
+        "Origin: http://127.0.0.1:9222\r\n" ++
+        "Upgrade: websocket\r\n" ++
+        "Connection: Upgrade\r\n" ++
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    var out: [28]u8 = undefined;
+    try testing.expectError(error.ForbiddenOrigin, webSocketAccept(head, &out, .{}));
+    try testing.expectError(error.ForbiddenOrigin, webSocketAccept(head, &out, .{ .origins = &.{"http://localhost:9222"} }));
+    try testing.expectString("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", try webSocketAccept(head, &out, .{ .origins = &.{"http://127.0.0.1:9222"} }));
+    try testing.expectString("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", try webSocketAccept(head, &out, .{ .origins = &.{"*"} }));
 }
 
 test "http: the read buffer grows with the request and gives the space back" {

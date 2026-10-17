@@ -98,8 +98,37 @@ pub fn init(
     return local.resolvePromise(crypto_key);
 }
 
-/// Imports raw HMAC key material (from the `raw` or `jwk` formats; the caller
-/// has already turned both into the underlying bytes).
+/// Imports an HMAC key from a JWK, following the "jwk" steps of HMAC's "import
+/// key": the usages first (SyntaxError), then kty "oct", the key in `k`, an
+/// `alg` that names the hash ("HS256", ...), and the common use/key_ops/ext
+/// checks (DataError).
+pub fn importJwk(
+    hash_name: []const u8,
+    jwk: algorithm.KeyData.Jwk,
+    extractable: bool,
+    key_usages: []const []const u8,
+    exec: *const Execution,
+) !js.Promise {
+    _ = crypto.findDigest(hash_name) catch return error.NotSupported;
+    const mask = try common.usageMask(&.{ "sign", "verify" }, key_usages);
+
+    const raw = try common.octKey(jwk, exec.local_arena);
+    if (jwk.alg) |alg| {
+        if (!std.mem.eql(u8, alg, try jwkAlg(hash_name, exec))) return error.DataError;
+    }
+    try common.checkJwk(jwk, "sig", mask, extractable);
+
+    // import() rejects an empty key (DataError).
+    return import(hash_name, raw, extractable, key_usages, exec);
+}
+
+/// The JWK `alg` of an HMAC key with the given hash ("SHA-256" → "HS256").
+pub fn jwkAlg(hash_name: []const u8, exec: *const Execution) ![]const u8 {
+    return exec.local_arena.print("HS{s}", .{hash_name[4..]}); // strip "SHA-"
+}
+
+/// Imports raw HMAC key material (from the `raw` format, or the `k` of a JWK
+/// that `importJwk` checked).
 pub fn import(
     hash_name: []const u8,
     raw: []const u8,

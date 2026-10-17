@@ -2088,6 +2088,7 @@ pub const Request = struct {
         stylesheet,
         eventsource,
         image,
+        text_track,
         worker,
 
         // Allowed Values: Document, Stylesheet, Image, Media, Font, Script,
@@ -2103,6 +2104,7 @@ pub const Request = struct {
                 .stylesheet => "Stylesheet",
                 .eventsource => "EventSource",
                 .image => "Image",
+                .text_track => "TextTrack",
                 .worker => "Script",
             };
         }
@@ -2670,6 +2672,7 @@ pub const Transfer = struct {
             .script => "script",
             .stylesheet => "style",
             .image => "image",
+            .text_track => "track",
             .worker => "worker",
         };
     }
@@ -3416,6 +3419,7 @@ pub const Transfer = struct {
                 .stylesheet => "link",
                 .eventsource, .worker => "other",
                 .image => "img",
+                .text_track => "track",
             },
             .protocol = t.protocol,
             .start = t.start_time,

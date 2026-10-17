@@ -315,16 +315,20 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
 
 pub fn parseFragment(self: *Parser, html: []const u8) void {
     self.fragment = true;
-    const context_name: []const u8 = if (self.context orelse self.container.node.is(Element)) |el|
-        el.getLocalName()
-    else
-        "";
+    const context_el = self.context orelse self.container.node.is(Element);
+    const context_name: []const u8 = if (context_el) |el| el.getLocalName() else "";
+    const context_ns: h5e.ContextNamespace = if (context_el) |el| switch (el._namespace) {
+        .svg => .svg,
+        .mathml => .mathml,
+        else => .html,
+    } else .html;
 
     h5e.html5ever_parse_fragment(
         html.ptr,
         html.len,
         context_name.ptr,
         context_name.len,
+        context_ns,
         &self.container,
         self,
         createElementCallback,

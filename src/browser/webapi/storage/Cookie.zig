@@ -1066,11 +1066,10 @@ test "Jar: add limit" {
     };
 
     // test the max number limit
-    var i: usize = 0;
-    while (i < max_jar_size) : (i += 1) {
+    for (names) |name| {
         const c = Cookie{
             .arena = std.heap.ArenaAllocator.init(testing.allocator),
-            .name = names[i],
+            .name = name,
             .domain = "lightpanda.io",
             .path = "/",
             .expires = null,

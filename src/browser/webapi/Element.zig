@@ -549,8 +549,24 @@ pub fn insertAdjacentHTML(
     html_or_xml: []const u8,
     frame: *Frame,
 ) !void {
-    const he = self.is(Html) orelse return error.NotHtmlElement;
-    return he.insertAdjacentHTML(position, html_or_xml, frame);
+    const node = self.asNode();
+
+    // The parse context is the node we insert into
+    const context_node, _ = try node.findAdjacentNodes(position, .html);
+    const context = if (context_node.is(Element)) |el|
+        if (el.is(Html.Html) == null) el else null
+    else
+        null;
+
+    const fragment = (try Node.DocumentFragment.init(node.getDocument(frame), frame)).asNode();
+    try Frame.parse.fragment(frame, fragment, html_or_xml, .{ .context = context });
+
+    const target_node, const prev_node = try node.findAdjacentNodes(position, .html);
+
+    var iter = fragment.childrenIterator();
+    while (iter.next()) |child_node| {
+        _ = try target_node.insertBefore(child_node, prev_node, frame);
+    }
 }
 
 pub fn requestFullscreen(_: *const Element, frame: *Frame) js.Promise {
@@ -2648,13 +2664,6 @@ pub const JsApi = struct {
     // the frame-aware variant returns the original URI for namespaces
     // outside the built-in set instead of the placeholder
     pub const namespaceURI = bridge.accessor(Element.getNamespaceUri, null, .{});
-
-    pub const innerText = bridge.accessor(_innerText, Element.setInnerText, .{ .ce_reactions = true });
-    fn _innerText(self: *Element, frame: *Frame) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
-        try self.getInnerText(&buf.writer, frame);
-        return buf.written();
-    }
 
     pub const outerHTML = bridge.accessor(_getOuterHTML, _setOuterHTML, .{ .ce_reactions = true });
     fn _getOuterHTML(self: *Element, frame: *Frame) ![]const u8 {

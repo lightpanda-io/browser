@@ -226,11 +226,15 @@ pub const Sign = union(enum) {
     string: []const u8,
     object: struct { name: []const u8 },
 
-    pub fn isHMAC(self: Sign) bool {
-        const name = switch (self) {
+    pub fn algoName(self: Sign) []const u8 {
+        return switch (self) {
             .string => |string| string,
             .object => |object| object.name,
         };
+    }
+
+    pub fn isHMAC(self: Sign) bool {
+        const name = self.algoName();
 
         if (name.len < 4) return false;
         const hmac: u32 = @bitCast([4]u8{ 'H', 'M', 'A', 'C' });

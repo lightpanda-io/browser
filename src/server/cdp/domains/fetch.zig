@@ -656,6 +656,7 @@ pub const InterceptState = struct {
             .script, .worker => .Script,
             .stylesheet => .Stylesheet,
             .image => .Image,
+            .text_track => .TextTrack,
         };
     }
 

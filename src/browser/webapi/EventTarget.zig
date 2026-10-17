@@ -53,9 +53,16 @@ const IDBTransaction = @import("storage/idb/IDBTransaction.zig");
 const FontFaceSet = @import("css/FontFaceSet.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
 
+const TextTrack = @import("media/TextTrack.zig");
 const TextTrackCue = @import("media/TextTrackCue.zig");
+const TextTrackList = @import("media/TextTrackList.zig");
 
 const Animation = @import("animation/Animation.zig");
+
+const AudioDecoder = @import("webcodecs/AudioDecoder.zig");
+const AudioEncoder = @import("webcodecs/AudioEncoder.zig");
+const VideoDecoder = @import("webcodecs/VideoDecoder.zig");
+const VideoEncoder = @import("webcodecs/VideoEncoder.zig");
 
 const Navigation = @import("navigation/Navigation.zig");
 const NavigationHistoryEntry = @import("navigation/NavigationHistoryEntry.zig");
@@ -72,6 +79,8 @@ _type: Type,
 pub const Type = enum(u8) {
     abort_signal,
     animation,
+    audio_decoder,
+    audio_encoder,
     broadcast_channel,
     cookie_store,
     event_source,
@@ -94,7 +103,11 @@ pub const Type = enum(u8) {
     service_worker_container,
     service_worker_registration,
     shared_worker,
+    text_track,
     text_track_cue,
+    text_track_list,
+    video_decoder,
+    video_encoder,
     visual_viewport,
     websocket,
     window,
@@ -109,6 +122,8 @@ pub fn Subtype(comptime tag: Type) type {
     return switch (tag) {
         .abort_signal => AbortSignal,
         .animation => Animation,
+        .audio_decoder => AudioDecoder,
+        .audio_encoder => AudioEncoder,
         .broadcast_channel => BroadcastChannel,
         .cookie_store => CookieStore,
         .event_source => EventSource,
@@ -131,7 +146,11 @@ pub fn Subtype(comptime tag: Type) type {
         .service_worker_container => ServiceWorkerContainer,
         .service_worker_registration => ServiceWorkerRegistration,
         .shared_worker => SharedWorker,
+        .text_track => TextTrack,
         .text_track_cue => TextTrackCue,
+        .text_track_list => TextTrackList,
+        .video_decoder => VideoDecoder,
+        .video_encoder => VideoEncoder,
         .visual_viewport => VisualViewport,
         .websocket => WebSocket,
         .window => Window,
@@ -366,10 +385,16 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .xhr => writer.writeAll("<XMLHttpRequestEventTarget>"),
         .abort_signal => writer.writeAll("<AbortSignal>"),
         .animation => writer.writeAll("<Animation>"),
+        .audio_decoder => writer.writeAll("<AudioDecoder>"),
+        .audio_encoder => writer.writeAll("<AudioEncoder>"),
+        .video_decoder => writer.writeAll("<VideoDecoder>"),
+        .video_encoder => writer.writeAll("<VideoEncoder>"),
         .media_query_list => writer.writeAll("<MediaQueryList>"),
         .message_port => writer.writeAll("<MessagePort>"),
         .broadcast_channel => writer.writeAll("<BroadcastChannel>"),
+        .text_track => writer.writeAll("<TextTrack>"),
         .text_track_cue => writer.writeAll("<TextTrackCue>"),
+        .text_track_list => writer.writeAll("<TextTrackList>"),
         .navigation => writer.writeAll("<Navigation>"),
         .screen => writer.writeAll("<Screen>"),
         .screen_orientation => writer.writeAll("<ScreenOrientation>"),
@@ -391,6 +416,8 @@ pub fn toString(self: *EventTarget) []const u8 {
     return switch (self._type) {
         .abort_signal => return "[object AbortSignal]",
         .animation => return "[object Animation]",
+        .audio_decoder => return "[object AudioDecoder]",
+        .audio_encoder => return "[object AudioEncoder]",
         .broadcast_channel => return "[object BroadcastChannel]",
         .cookie_store => return "[object CookieStore]",
         .event_source => return "[object EventSource]",
@@ -413,7 +440,11 @@ pub fn toString(self: *EventTarget) []const u8 {
         .service_worker_container => return "[object ServiceWorkerContainer]",
         .service_worker_registration => return "[object ServiceWorkerRegistration]",
         .shared_worker => return "[object SharedWorker]",
+        .text_track => return "[object TextTrack]",
         .text_track_cue => return "[object TextTrackCue]",
+        .text_track_list => return "[object TextTrackList]",
+        .video_decoder => return "[object VideoDecoder]",
+        .video_encoder => return "[object VideoEncoder]",
         .visual_viewport => return "[object VisualViewport]",
         .websocket => return "[object WebSocket]",
         .window => return "[object Window]",

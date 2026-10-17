@@ -451,12 +451,37 @@ pub extern "C" fn encoding_max_encode_buffer_length(
         .unwrap_or(input_len * 10)
 }
 
+/// Looks `name` (an HTML named character reference without its leading '&')
+/// up in html5ever's table. Returns 0 when no reference starts with `name`, 1
+/// when `name` is only a prefix of one, and 2 for a full reference, whose
+/// codepoints are written to `out` (the second is 0 for single-codepoint ones).
+#[no_mangle]
+pub extern "C" fn html5ever_named_character_reference(
+    name: *const c_uchar,
+    len: usize,
+    out: *mut [u32; 2],
+) -> u8 {
+    let bytes = unsafe { std::slice::from_raw_parts(name, len) };
+    let Ok(name) = std::str::from_utf8(bytes) else {
+        return 0;
+    };
+    match html5ever::data::NAMED_ENTITIES.get(name) {
+        None => 0,
+        Some(&(0, _)) => 1,
+        Some(&(c1, c2)) => {
+            unsafe { *out = [c1, c2] };
+            2
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn html5ever_parse_fragment(
     html: *mut c_uchar,
     len: usize,
     context_name: *const c_uchar,
     context_name_len: usize,
+    context_ns: u8,
     document: Ref,
     ctx: Ref,
     create_element_callback: CreateElementCallback,
@@ -530,7 +555,14 @@ pub extern "C" fn html5ever_parse_fragment(
         ..Default::default()
     };
 
-    let context_qname = QualName::new(None, ns!(html), context_local);
+    // An svg or math context makes the fragment foreign content, so e.g.
+    // <symbol> lands in the SVG namespace (0: html, 1: svg, 2: mathml).
+    let context_namespace = match context_ns {
+        1 => ns!(svg),
+        2 => ns!(mathml),
+        _ => ns!(html),
+    };
+    let context_qname = QualName::new(None, context_namespace, context_local);
     let context_data = arena.alloc(sink::ElementData {
         qname: context_qname.clone(),
         mathml_annotation_xml_integration_point: false,

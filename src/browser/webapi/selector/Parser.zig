@@ -981,6 +981,12 @@ fn consumeEscapedIdentTail(self: *Parser, arena: Allocator, prefix_len: usize, e
         const b = input[j];
 
         if (b == '\\') {
+            if (j + 1 < input.len) switch (input[j + 1]) {
+                // Not a valid escape: the ident ends before the backslash.
+                // https://drafts.csswg.org/css-syntax/#starts-with-a-valid-escape
+                '\n', '\r', '\x0C' => break,
+                else => {},
+            };
             j += 1;
             const escape_result = try parseEscape(input[j..], arena);
             try result.appendSlice(arena, escape_result.bytes);
@@ -1295,23 +1301,8 @@ fn attributeValue(self: *Parser, arena: Allocator) ![]const u8 {
         return result.items;
     }
 
-    var i: usize = 0;
-    for (input) |b| {
-        switch (b) {
-            'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
-            0x80...0xFF => {},
-            else => break,
-        }
-        i += 1;
-    }
-
-    if (i == 0) {
-        return error.InvalidAttributeSelector;
-    }
-
-    const value = input[0..i];
-    self.input = input[i..];
-    return arena.dupe(u8, value);
+    // An unquoted value is an <ident-token>: [x=1] and [x=-1] are invalid.
+    return self.parseIdentifier(arena, error.InvalidAttributeSelector);
 }
 
 fn asUint(comptime string: anytype) @Int(
@@ -1908,6 +1899,181 @@ test "Selector: Parser.attributeValue" {
     {
         var parser = Parser{ .input = "\"abc\\" };
         try testing.expectError(error.InvalidAttributeSelector, parser.attributeValue(arena));
+    }
+
+    // An unquoted value must start like an ident.
+    for ([_][]const u8{ "1]", "-1]", "-]", "+a]" }) |input| {
+        var parser = Parser{ .input = input };
+        try testing.expectError(error.InvalidAttributeSelector, parser.attributeValue(arena));
+    }
+
+    {
+        var parser = Parser{ .input = "--1]" };
+        try testing.expectEqual("--1", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // An escaped digit is a valid ident start.
+    {
+        var parser = Parser{ .input = "\\31 ]" };
+        try testing.expectEqual("1", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Unquoted values are idents and may hold escapes: tel\: -> tel:
+    {
+        var parser = Parser{ .input = "tel\\:]" };
+        try testing.expectEqual("tel:", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Escape in the middle of an unquoted value.
+    {
+        var parser = Parser{ .input = "a\\:b]" };
+        try testing.expectEqual("a:b", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Escape as the first character of an unquoted value.
+    {
+        var parser = Parser{ .input = "\\:a]" };
+        try testing.expectEqual(":a", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Hex escape in an unquoted value consumes its terminating space.
+    {
+        var parser = Parser{ .input = "tel\\3a 1]" };
+        try testing.expectEqual("tel:1", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Escaped ordinary letter decodes to itself.
+    {
+        var parser = Parser{ .input = "te\\l]" };
+        try testing.expectEqual("tel", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Unquoted value stops before a following flag.
+    {
+        var parser = Parser{ .input = "a\\:b i]" };
+        try testing.expectEqual("a:b", try parser.attributeValue(arena));
+        try testing.expectEqual(" i]", parser.input);
+    }
+
+    // A null in an unquoted value is U+FFFD.
+    {
+        var parser = Parser{ .input = "a\x00b]" };
+        try testing.expectEqual("a\u{FFFD}b", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Backslash at EOF in an unquoted value is U+FFFD.
+    {
+        var parser = Parser{ .input = "abc\\" };
+        try testing.expectEqual("abc\u{FFFD}", try parser.attributeValue(arena));
+        try testing.expectEqual("", parser.input);
+    }
+
+    // An unescaped colon still ends the unquoted value.
+    {
+        var parser = Parser{ .input = "a:b]" };
+        try testing.expectEqual("a", try parser.attributeValue(arena));
+        try testing.expectEqual(":b]", parser.input);
+    }
+}
+
+test "Selector: Parser escaped newline ends an identifier" {
+    const arena = testing.arena_allocator;
+
+    // A backslash followed by a newline is not a valid escape: the ident
+    // ends before the backslash.
+    // https://drafts.csswg.org/css-syntax/#starts-with-a-valid-escape
+    {
+        var parser = Parser{ .input = ".a\\\nb" };
+        try testing.expectEqual("a", try parser.class(arena));
+        try testing.expectEqual("\\\nb", parser.input);
+    }
+
+    {
+        var parser = Parser{ .input = "#a\\\x0Cb" };
+        try testing.expectEqual("a", try parser.id(arena));
+        try testing.expectEqual("\\\x0Cb", parser.input);
+    }
+
+    {
+        var parser = Parser{ .input = "a\\\nb]" };
+        try testing.expectEqual("a", try parser.attributeName(arena));
+        try testing.expectEqual("\\\nb]", parser.input);
+    }
+
+    {
+        var parser = Parser{ .input = "a\\\rb]" };
+        try testing.expectEqual("a", try parser.attributeValue(arena));
+        try testing.expectEqual("\\\rb]", parser.input);
+    }
+
+    // Nothing before the backslash: no ident at all.
+    {
+        var parser = Parser{ .input = ".\\\nb" };
+        try testing.expectError(error.InvalidClassSelector, parser.class(arena));
+    }
+
+    {
+        var parser = Parser{ .input = "\\\n]" };
+        try testing.expectError(error.InvalidAttributeSelector, parser.attributeValue(arena));
+    }
+
+    // The stray backslash makes the whole selector invalid.
+    const invalid = [_][]const u8{
+        ".a\\\nb",
+        "#a\\\nb",
+        "[a\\\nb]",
+        "[x=a\\\nb]",
+        "[x=a\\\r\nb]",
+        "[x=a\\\x0Cb]",
+    };
+    for (invalid) |input| {
+        if (parseList(arena, input)) |_| {
+            return error.TestExpectedError;
+        } else |_| {}
+    }
+
+    // In a quoted value, a backslash and a newline are a line continuation.
+    {
+        const selectors = try parseList(arena, "[x=\"a\\\nb\"]");
+        try testing.expectEqual(1, selectors.len);
+    }
+}
+
+test "Selector: Parser.attribute unquoted escaped values" {
+    const arena = testing.arena_allocator;
+
+    const cases = [_]struct { []const u8, std.meta.Tag(Selector.AttributeMatcher) }{
+        .{ "[href=tel\\:]", .exact },
+        .{ "[href~=tel\\:]", .word },
+        .{ "[href|=tel\\:]", .prefix_dash },
+        .{ "[href^=tel\\:]", .starts_with },
+        .{ "[href$=tel\\:]", .ends_with },
+        .{ "[href*=tel\\:]", .substring },
+    };
+    for (cases) |case| {
+        var parser = Parser{ .input = case[0] };
+        const attr = try parser.attribute(arena);
+        try testing.expectEqual(case[1], std.meta.activeTag(attr.matcher));
+        const value = switch (attr.matcher) {
+            .presence => unreachable,
+            inline else => |v| v,
+        };
+        try testing.expectEqual("tel:", value);
+        try testing.expectEqual("", parser.input);
+    }
+
+    // An unescaped colon in an unquoted value is still invalid.
+    {
+        var parser = Parser{ .input = "[x=a:b]" };
+        try testing.expectError(error.InvalidAttributeSelector, parser.attribute(arena));
     }
 }
 

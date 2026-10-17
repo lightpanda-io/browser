@@ -182,6 +182,12 @@ pub const BufferSource = struct {
     bytes: []const u8,
 };
 
+// An ArrayBuffer or any typed array kind or a DataView, exposed as its raw bytes.
+// The underlaying value *can* be a SharedBuffer
+pub const AllowSharedBufferSource = struct {
+    bytes: []u8,
+};
+
 pub const ArrayType = enum(u8) {
     int8,
     uint8,
@@ -323,6 +329,30 @@ pub fn Nullable(comptime T: type) type {
 
         pub const js_nullable = T;
     };
+}
+
+// A WebIDL [EnforceRange] integer. NaN, +/i infinity and values outside of T's
+// range are a TypeError.
+pub fn EnforceRange(comptime T: type) type {
+    return struct {
+        value: T = 0,
+
+        pub const js_enforce_range = T;
+    };
+}
+
+pub fn enforceRange(comptime T: type, value: f64) !T {
+    if (std.math.isFinite(value) == false) {
+        return error.TypeError;
+    }
+    // [EnforceRange] long long is limited to the safe integer range.
+    const min: f64 = @floatFromInt(@max(std.math.minInt(T), -9007199254740991));
+    const max: f64 = @floatFromInt(@min(std.math.maxInt(T), 9007199254740991));
+    const truncated = @trunc(value);
+    if (truncated < min or truncated > max) {
+        return error.TypeError;
+    }
+    return @intFromFloat(truncated);
 }
 
 pub const Exception = struct {
@@ -507,7 +537,7 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
 
 test "TaggedAnyOpaque" {
     // If we grow this, fine, but it should be a conscious decision
-    try std.testing.expectEqual(24, @sizeOf(TaggedOpaque));
+    try testing.expectEqual(24, @sizeOf(TaggedOpaque));
 }
 
 test "js: ArrayBuffers crossing Zig don't keep a reference to their backing store" {
@@ -634,4 +664,16 @@ pub fn writeStackTrace(isolate: *v8.Isolate, stack_handle: *const v8.StackTrace,
             v8.v8__StackFrame__GetColumn(frame_handle),
         });
     }
+}
+
+test "js: enforceRange" {
+    try testing.expectEqual(@as(u32, 5), try enforceRange(u32, 5.9));
+    try testing.expectEqual(@as(i64, -10), try enforceRange(i64, -10));
+    try testing.expectError(error.TypeError, enforceRange(u32, -1));
+    try testing.expectError(error.TypeError, enforceRange(u32, 4294967296));
+    try testing.expectError(error.TypeError, enforceRange(i64, std.math.nan(f64)));
+    try testing.expectError(error.TypeError, enforceRange(u64, std.math.inf(f64)));
+    try testing.expectError(error.TypeError, enforceRange(u64, 9007199254740992));
+    try testing.expectEqual(@as(u16, 65535), try enforceRange(u16, 65535.5));
+    try testing.expectError(error.TypeError, enforceRange(u16, 65536));
 }

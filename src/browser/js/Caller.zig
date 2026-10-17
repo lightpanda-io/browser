@@ -148,10 +148,6 @@ pub const CallOpts = struct {
 pub fn constructor(self: *Caller, comptime T: type, func: anytype, handle: *const v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
     const local = &self.local;
 
-    var hs: js.HandleScope = undefined;
-    hs.init(local.isolate);
-    defer hs.deinit();
-
     const info = FunctionCallbackInfo{ .handle = handle };
 
     if (!info.isConstructCall()) {
@@ -860,10 +856,6 @@ pub const Function = struct {
             return;
         }
         const info = FunctionCallbackInfo{ .handle = info_handle };
-
-        var hs: js.HandleScope = undefined;
-        hs.initWithIsolateHandle(v8_isolate);
-        defer hs.deinit();
 
         var cache_state: CacheState = undefined;
         if (comptime opts.cache) |cache| {

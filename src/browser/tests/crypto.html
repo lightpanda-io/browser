@@ -125,6 +125,46 @@
   });
 </script>
 
+<script id=deriveBits-length type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const key = await subtle.importKey("raw", new TextEncoder().encode("password"), "PBKDF2", false, ["deriveBits"]);
+  const pbkdf2 = (iterations) => ({ name: "PBKDF2", hash: "SHA-256", salt: new Uint8Array(16), iterations });
+  const derive = (length, iterations = 1000) => errorName(() => subtle.deriveBits(pbkdf2(iterations), key, length));
+
+  const results = {
+    ok: await derive(256),
+    nullLength: await derive(null),
+    // [EnforceRange]: -8 used to wrap to 2^32 - 8 bits.
+    nan: await derive(NaN),
+    infinity: await derive(Infinity),
+    negative: await derive(-8),
+    tooLarge: await derive(2 ** 32 + 8),
+    // Valid lengths whose cost (blocks * iterations) is over the PBKDF2 limit.
+    hugeLength: await derive(2 ** 32 - 8, 100000),
+    hugeIterations: await derive(256, 2 ** 24 + 1),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(null, results.ok);
+    testing.expectEqual("OperationError", results.nullLength);
+    for (const name of ["nan", "infinity", "negative", "tooLarge"]) {
+      testing.expectEqual(`${name}: TypeError`, `${name}: ${results[name]}`);
+    }
+    testing.expectEqual("OperationError", results.hugeLength);
+    testing.expectEqual("OperationError", results.hugeIterations);
+  });
+</script>
+
 <script id=rsa-oaep-roundtrip type=module>
   const state = await testing.async();
   const { privateKey, publicKey } = await crypto.subtle.generateKey(
@@ -153,13 +193,22 @@
   });
 </script>
 
+<script>
+  // A throwaway 2048-bit RSA key pair (spki public + pkcs8 private), for the
+  // RSA-OAEP and RSASSA-PKCS1-v1_5 import tests.
+  {
+    const fromB64 = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    window.rsaTestKey = {
+      spki: fromB64("MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2J6+FUn6SF2o4+6vj6jbsGfumBrlZIS7OTRmw3sJOzvinrDRQ3hf+TmCgBSHcGbohHTItgB8mfM1MMbsIggYjbNSs+bRhVmbtMFS3GxBsrNt+YvaEMF0C3sdYi6+gWZqJYrfEF/a8HT2+IZQJ5B7PsIOoVPWlDkaLQBPlQDgK0JJQJ+1mOI8dXHz9PaPXB1v9/w3nUpRV6bdy9Iui453XnoY8ajIKy0bzk12160PxZM4vAvrvdmTY12BwkGsim+7iqNlLjU6fJKb4D0766YfroGDPhxd3sDqxLteQeA64oIcqeQzDq89843DS1VeGwv+nrwNHCy3cAmLVaytk4vECQIDAQAB"),
+      pkcs8: fromB64("MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDYnr4VSfpIXajj7q+PqNuwZ+6YGuVkhLs5NGbDewk7O+KesNFDeF/5OYKAFIdwZuiEdMi2AHyZ8zUwxuwiCBiNs1Kz5tGFWZu0wVLcbEGys235i9oQwXQLex1iLr6BZmolit8QX9rwdPb4hlAnkHs+wg6hU9aUORotAE+VAOArQklAn7WY4jx1cfP09o9cHW/3/DedSlFXpt3L0i6LjndeehjxqMgrLRvOTXbXrQ/Fkzi8C+u92ZNjXYHCQayKb7uKo2UuNTp8kpvgPTvrph+ugYM+HF3ewOrEu15B4Drighyp5DMOrz3zjcNLVV4bC/6evA0cLLdwCYtVrK2Ti8QJAgMBAAECggEAHW4z1SCf6IURFSawo4wFjQoR2IiO8gE2jqcX7ycgMfQI7haH1+ra3zl5CX3AiPzySkyzmEaopyHr8ByWqGkBLP9YFSke/kcWaJB7eYcbxfOq1WSy0+P0qDqp21UOfPY1JbSgadEcJd8+TrWw3i87D2O+KR0C4lB/xe1s4omj6zxuSMOL3igRtu+pSem3e5Wb/lid2OIAskxgt+RiyRSPsajBunhah4WxhY0NQIt5WK0kiNfpd8vz3qVTnF8t5oPPWLvdHIApDHLOkbeX+0XA5XeJojdPgN/vdInuXYoFp/VF6Jc+nAgCOEDI/+JPQ+Jpoy1FJoB5fZimivPvGbXrIQKBgQDup6Y/+zRYIRCN8VpcUBuvQHLbE17UDTrVrSh8fqPJpAWvNPrYZb+tG23cuPec4FIGoadjwiuFgsXs9lXv0qPxcgTyR6l0RzrDWNmt8HvPRrgEIJEwv+BT+heRUecaXHSvG1vCam06MkjgFLvnCJ7hEVCNf4+irhLCNV+J9TnZ4wKBgQDoXR6WdVCDEHz+PBsfzcINbRxyWLPIJmULcngqpeQ3UyrxWXxXR2BKuVrOZq5Dn9XcmP/zZ9u4eCI2Nst4eLlzQIxXDxsj62Y/5yAc9tw4nzTvxPaKf7orBMrRjYSmj9vOrpYIlVjV+cPRBfjxfRonSDf3kWlUS62GFweeDQo+IwKBgQDiMJ8PEOVhiaUJAvEjgQFcLnctT8SWshtLHZy7scNGf2Cr2EjPBFCQnuiXQ+/bDXhwtJHTqNpa5cD1f9ufO0MKuYgaoPToMgJt1y4o/z45C8uojb1OOO1Cakwf/UJN58bnl8R2FSyE9dfAGaalp7P9mM2B7p6SDu3Uh4WPWY6FBQKBgHINgv4HB0XNygxgJFAwBpfgfp4Bu/z6G47K2QDV/HbLc8CTU9zjQ/hpkpDNBaxbv/VPhBJNYCPjk6dYrfasCxrvC/OPjprK6J1lLPYKlX2VZ75oxzqkBxUmfQbul7XJ1vJT74C3Dau5tMvcSpz98uBlKlNyJGkj3EB8/VguvmBRAoGBAJFSOHauuxGtvw64JnMEkUL9vnjuryyH6CcXgSP6SMY58O2KL/nMEGeAYguwrkl5CdoN2zrWr8/I8cr1UrkKHtzsQHrCYlA6LaZaHDUdxCEIyarO7z18ZXzi32HRol1UFjpQTVg2N9t9rGqC2Hg+hg2D0kGJCwf/t8Uydc2tiTh/"),
+    };
+  }
+</script>
+
 <script id=rsa-oaep-import type=module>
   const state = await testing.async();
-  const fromB64 = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  // A throwaway 2048-bit RSA key pair (spki public + pkcs8 private) for the
-  // import path: encrypt with the imported public key, decrypt with the private.
-  const spki = fromB64("MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2J6+FUn6SF2o4+6vj6jbsGfumBrlZIS7OTRmw3sJOzvinrDRQ3hf+TmCgBSHcGbohHTItgB8mfM1MMbsIggYjbNSs+bRhVmbtMFS3GxBsrNt+YvaEMF0C3sdYi6+gWZqJYrfEF/a8HT2+IZQJ5B7PsIOoVPWlDkaLQBPlQDgK0JJQJ+1mOI8dXHz9PaPXB1v9/w3nUpRV6bdy9Iui453XnoY8ajIKy0bzk12160PxZM4vAvrvdmTY12BwkGsim+7iqNlLjU6fJKb4D0766YfroGDPhxd3sDqxLteQeA64oIcqeQzDq89843DS1VeGwv+nrwNHCy3cAmLVaytk4vECQIDAQAB");
-  const pkcs8 = fromB64("MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDYnr4VSfpIXajj7q+PqNuwZ+6YGuVkhLs5NGbDewk7O+KesNFDeF/5OYKAFIdwZuiEdMi2AHyZ8zUwxuwiCBiNs1Kz5tGFWZu0wVLcbEGys235i9oQwXQLex1iLr6BZmolit8QX9rwdPb4hlAnkHs+wg6hU9aUORotAE+VAOArQklAn7WY4jx1cfP09o9cHW/3/DedSlFXpt3L0i6LjndeehjxqMgrLRvOTXbXrQ/Fkzi8C+u92ZNjXYHCQayKb7uKo2UuNTp8kpvgPTvrph+ugYM+HF3ewOrEu15B4Drighyp5DMOrz3zjcNLVV4bC/6evA0cLLdwCYtVrK2Ti8QJAgMBAAECggEAHW4z1SCf6IURFSawo4wFjQoR2IiO8gE2jqcX7ycgMfQI7haH1+ra3zl5CX3AiPzySkyzmEaopyHr8ByWqGkBLP9YFSke/kcWaJB7eYcbxfOq1WSy0+P0qDqp21UOfPY1JbSgadEcJd8+TrWw3i87D2O+KR0C4lB/xe1s4omj6zxuSMOL3igRtu+pSem3e5Wb/lid2OIAskxgt+RiyRSPsajBunhah4WxhY0NQIt5WK0kiNfpd8vz3qVTnF8t5oPPWLvdHIApDHLOkbeX+0XA5XeJojdPgN/vdInuXYoFp/VF6Jc+nAgCOEDI/+JPQ+Jpoy1FJoB5fZimivPvGbXrIQKBgQDup6Y/+zRYIRCN8VpcUBuvQHLbE17UDTrVrSh8fqPJpAWvNPrYZb+tG23cuPec4FIGoadjwiuFgsXs9lXv0qPxcgTyR6l0RzrDWNmt8HvPRrgEIJEwv+BT+heRUecaXHSvG1vCam06MkjgFLvnCJ7hEVCNf4+irhLCNV+J9TnZ4wKBgQDoXR6WdVCDEHz+PBsfzcINbRxyWLPIJmULcngqpeQ3UyrxWXxXR2BKuVrOZq5Dn9XcmP/zZ9u4eCI2Nst4eLlzQIxXDxsj62Y/5yAc9tw4nzTvxPaKf7orBMrRjYSmj9vOrpYIlVjV+cPRBfjxfRonSDf3kWlUS62GFweeDQo+IwKBgQDiMJ8PEOVhiaUJAvEjgQFcLnctT8SWshtLHZy7scNGf2Cr2EjPBFCQnuiXQ+/bDXhwtJHTqNpa5cD1f9ufO0MKuYgaoPToMgJt1y4o/z45C8uojb1OOO1Cakwf/UJN58bnl8R2FSyE9dfAGaalp7P9mM2B7p6SDu3Uh4WPWY6FBQKBgHINgv4HB0XNygxgJFAwBpfgfp4Bu/z6G47K2QDV/HbLc8CTU9zjQ/hpkpDNBaxbv/VPhBJNYCPjk6dYrfasCxrvC/OPjprK6J1lLPYKlX2VZ75oxzqkBxUmfQbul7XJ1vJT74C3Dau5tMvcSpz98uBlKlNyJGkj3EB8/VguvmBRAoGBAJFSOHauuxGtvw64JnMEkUL9vnjuryyH6CcXgSP6SMY58O2KL/nMEGeAYguwrkl5CdoN2zrWr8/I8cr1UrkKHtzsQHrCYlA6LaZaHDUdxCEIyarO7z18ZXzi32HRol1UFjpQTVg2N9t9rGqC2Hg+hg2D0kGJCwf/t8Uydc2tiTh/");
+  // Encrypt with the imported public key, decrypt with the private.
+  const { spki, pkcs8 } = rsaTestKey;
   const publicKey = await crypto.subtle.importKey("spki", spki, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
   const privateKey = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["decrypt"]);
   // Hash names match case-insensitively and are reported in canonical form.
@@ -401,6 +450,485 @@
     testing.expectEqual("DataError", results.notBase64);
     testing.expectEqual("DataError", results.missingQi);
     testing.expectEqual("DataError", results.wrongD);
+  });
+</script>
+
+<script id=rsassa-sign-verify type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const algo = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
+  const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const data = new TextEncoder().encode("lightpanda rsassa");
+
+  // PKCS #1 v1.5 signatures are deterministic: this key signs `data` with
+  // SHA-256 into exactly what OpenSSL (and Chrome) produce.
+  const expected = "YxvJD9uFamAy2GThpElvfytCcmRnlmcCl36q5MwolJh+cjT0rsSPoWcNU5u/fPEaZ4XNfnIsTKPktylb2tDmflEjpSjm83Fbcgcky2whEpfrdFoUK2Yu+WaXQBSAxGA6pcx7Gi+KCYvBdmVu81EVLFzNk67uwWyZLYLZYpq884b6rLFVWGCJz463JnzM20SmxecH+pxMotoN4obkAqc3X75Me5PRbgboF6i2nFmC0pUbdolKv+oF4ndsiUlbTOj7p7JY0RM5tube/ZZDi1cGLBNib3aSPEFUDAt7JKMZrZTfXgkZ780QMw/C5rwhRZupdeSUP9ChTNBLDxb0NKFuEQ==";
+  const privateKey = await subtle.importKey("pkcs8", rsaTestKey.pkcs8, algo, false, ["sign"]);
+  const publicKey = await subtle.importKey("spki", rsaTestKey.spki, algo, false, ["verify"]);
+  const signature = await subtle.sign("RSASSA-PKCS1-v1_5", privateKey, data);
+  // The name matches case-insensitively, and the hash is the key's.
+  const lowerName = await subtle.sign({ name: "rsassa-pkcs1-v1_5" }, privateKey, data);
+  const sha512Key = await subtle.importKey("pkcs8", rsaTestKey.pkcs8, { ...algo, hash: "sha-512" }, false, ["sign"]);
+  const sha512Public = await subtle.importKey("spki", rsaTestKey.spki, { ...algo, hash: "SHA-512" }, false, ["verify"]);
+  const sha512Signature = await subtle.sign(algo, sha512Key, data);
+
+  const tampered = new Uint8Array(signature.slice(0));
+  tampered[10] ^= 1;
+  const results = {
+    valid: await subtle.verify(algo, publicKey, signature, data),
+    lowerName: await subtle.verify({ name: "rsassa-pkcs1-v1_5" }, publicKey, signature, data),
+    otherData: await subtle.verify(algo, publicKey, signature, new TextEncoder().encode("lightpanda rsassb")),
+    tampered: await subtle.verify(algo, publicKey, tampered, data),
+    // A signature of the wrong length is invalid, not an error.
+    truncated: await subtle.verify(algo, publicKey, signature.slice(0, 255), data),
+    empty: await subtle.verify(algo, publicKey, new Uint8Array(0), data),
+    tooLong: await subtle.verify(algo, publicKey, new Uint8Array(512), data),
+    // Each key verifies with its own hash only.
+    sha512Valid: await subtle.verify(algo, sha512Public, sha512Signature, data),
+    sha512WithSha256: await subtle.verify(algo, sha512Public, signature, data),
+  };
+
+  // A generated pair: the private half signs, the public half verifies.
+  const pair = await subtle.generateKey(
+    { ...algo, modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) },
+    true,
+    ["sign", "verify"],
+  );
+  const generatedSignature = await subtle.sign(algo, pair.privateKey, data);
+  const generatedValid = await subtle.verify(algo, pair.publicKey, generatedSignature, data);
+  // Only "sign" asked for: the public key has no usages.
+  const signOnly = await subtle.generateKey(
+    { ...algo, modulusLength: 1024, publicExponent: new Uint8Array([3]) },
+    true,
+    ["sign"],
+  );
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(expected, b64(signature));
+    testing.expectEqual(expected, b64(lowerName));
+    testing.expectEqual(true, results.valid);
+    testing.expectEqual(true, results.lowerName);
+    testing.expectEqual(false, results.otherData);
+    testing.expectEqual(false, results.tampered);
+    testing.expectEqual(false, results.truncated);
+    testing.expectEqual(false, results.empty);
+    testing.expectEqual(false, results.tooLong);
+    testing.expectEqual(true, results.sha512Valid);
+    testing.expectEqual(false, results.sha512WithSha256);
+    testing.expectEqual(false, b64(sha512Signature) === expected);
+    testing.expectEqual("RSASSA-PKCS1-v1_5", privateKey.algorithm.name);
+    testing.expectEqual("SHA-512", sha512Key.algorithm.hash.name);
+    testing.expectEqual(2048, publicKey.algorithm.modulusLength);
+    testing.expectEqual(128, generatedSignature.byteLength);
+    testing.expectEqual(true, generatedValid);
+    testing.expectEqual("RSASSA-PKCS1-v1_5", pair.publicKey.algorithm.name);
+    testing.expectEqual("SHA-256", pair.publicKey.algorithm.hash.name);
+    testing.expectEqual("sign", pair.privateKey.usages.join(","));
+    testing.expectEqual("verify", pair.publicKey.usages.join(","));
+    testing.expectEqual("3", signOnly.publicKey.algorithm.publicExponent.join(","));
+    testing.expectEqual("", signOnly.publicKey.usages.join(","));
+  });
+</script>
+
+<script id=rsassa-export type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const algo = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
+  const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+  const data = new TextEncoder().encode("exported key path");
+  const { privateKey, publicKey } = await subtle.generateKey(
+    { ...algo, modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) },
+    true,
+    ["sign", "verify"],
+  );
+  const roundTrip = async (priv, pub) => subtle.verify(algo, pub, await subtle.sign(algo, priv, data), data);
+
+  // DER: spki and pkcs8 survive an import/export round trip byte for byte.
+  const spki = await subtle.exportKey("spki", publicKey);
+  const pkcs8 = await subtle.exportKey("pkcs8", privateKey);
+  const spkiKey = await subtle.importKey("spki", spki, algo, true, ["verify"]);
+  const pkcs8Key = await subtle.importKey("pkcs8", pkcs8, algo, true, ["sign"]);
+
+  // JWK: "sig" keys whose `alg` is RS<bits of the hash>.
+  const publicJwk = await subtle.exportKey("jwk", publicKey);
+  const privateJwk = await subtle.exportKey("jwk", privateKey);
+  const jwkPublicKey = await subtle.importKey("jwk", publicJwk, algo, true, ["verify"]);
+  const jwkPrivateKey = await subtle.importKey("jwk", privateJwk, algo, true, ["sign"]);
+  const withUse = await subtle.importKey("jwk", { ...publicJwk, use: "sig" }, algo, true, ["verify"]);
+  const algs = [];
+  for (const hash of ["SHA-1", "SHA-256", "SHA-384", "SHA-512"]) {
+    const key = await subtle.importKey("jwk", { kty: "RSA", n: publicJwk.n, e: publicJwk.e }, { ...algo, hash }, true, ["verify"]);
+    const { alg } = await subtle.exportKey("jwk", key);
+    await subtle.importKey("jwk", { kty: "RSA", n: publicJwk.n, e: publicJwk.e, alg }, { ...algo, hash }, true, ["verify"]);
+    algs.push(alg);
+  }
+
+  // A key travels as a wrapped JWK and still signs once unwrapped.
+  const wrapper = await subtle.generateKey({ name: "AES-GCM", length: 128 }, true, ["wrapKey", "unwrapKey"]);
+  const gcm = { name: "AES-GCM", iv: new Uint8Array(12) };
+  const wrapped = await subtle.wrapKey("jwk", privateKey, wrapper, gcm);
+  const unwrapped = await subtle.unwrapKey("jwk", wrapped, wrapper, gcm, algo, false, ["sign"]);
+
+  const results = {
+    spkiAgain: hex(await subtle.exportKey("spki", spkiKey)),
+    pkcs8Again: hex(await subtle.exportKey("pkcs8", pkcs8Key)),
+    privateJwkAgain: JSON.stringify(await subtle.exportKey("jwk", jwkPrivateKey)),
+    viaSpki: await roundTrip(privateKey, spkiKey),
+    viaPkcs8: await roundTrip(pkcs8Key, publicKey),
+    viaJwk: await roundTrip(jwkPrivateKey, jwkPublicKey),
+    viaUse: await roundTrip(privateKey, withUse),
+    viaUnwrap: await roundTrip(unwrapped, publicKey),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(hex(spki), results.spkiAgain);
+    testing.expectEqual(hex(pkcs8), results.pkcs8Again);
+    testing.expectEqual("RSA,RS256,AQAB,true", [publicJwk.kty, publicJwk.alg, publicJwk.e, publicJwk.ext].join(","));
+    testing.expectEqual("verify", publicJwk.key_ops.join(","));
+    testing.expectEqual("sign", privateJwk.key_ops.join(","));
+    testing.expectEqual(JSON.stringify(privateJwk), results.privateJwkAgain);
+    testing.expectEqual("RS1,RS256,RS384,RS512", algs.join(","));
+    testing.expectEqual("RSASSA-PKCS1-v1_5", jwkPrivateKey.algorithm.name);
+    testing.expectEqual("RSASSA-PKCS1-v1_5", unwrapped.algorithm.name);
+    testing.expectEqual(true, results.viaSpki);
+    testing.expectEqual(true, results.viaPkcs8);
+    testing.expectEqual(true, results.viaJwk);
+    testing.expectEqual(true, results.viaUse);
+    testing.expectEqual(true, results.viaUnwrap);
+  });
+</script>
+
+<script id=rsassa-errors type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const algo = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
+  const data = new TextEncoder().encode("hi");
+  const gen = (name, usages) => subtle.generateKey(
+    { name, hash: "SHA-256", modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) },
+    true,
+    usages,
+  );
+  const rsassa = await gen("RSASSA-PKCS1-v1_5", ["sign", "verify"]);
+  const oaep = await gen("RSA-OAEP", ["encrypt", "decrypt", "wrapKey", "unwrapKey"]);
+  const hmac = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]);
+  const signature = await subtle.sign(algo, rsassa.privateKey, data);
+  // A 512-bit modulus is too short for a SHA-512 DigestInfo.
+  const small = await subtle.generateKey(
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-512", modulusLength: 512, publicExponent: new Uint8Array([1, 0, 1]) },
+    true,
+    ["sign"],
+  );
+  const publicJwk = await subtle.exportKey("jwk", rsassa.publicKey);
+  const { key_ops: _publicOps, ...pubNoOps } = publicJwk;
+  const importPublic = (jwk, usages = ["verify"]) => errorName(() => subtle.importKey("jwk", jwk, algo, true, usages));
+
+  const results = {
+    // Each half does its own operation only.
+    signWithPublic: await errorName(() => subtle.sign(algo, rsassa.publicKey, data)),
+    verifyWithPrivate: await errorName(() => subtle.verify(algo, rsassa.privateKey, signature, data)),
+    // A signature libcrypto can't produce.
+    tooSmall: await errorName(() => subtle.sign("RSASSA-PKCS1-v1_5", small.privateKey, data)),
+    // The algorithm must be one that signs, and the key's own.
+    unknownName: await errorName(() => subtle.sign("RSA", rsassa.privateKey, data)),
+    oaepName: await errorName(() => subtle.sign("RSA-OAEP", oaep.privateKey, data)),
+    hmacNameOnRsa: await errorName(() => subtle.sign("HMAC", rsassa.privateKey, data)),
+    rsaNameOnHmac: await errorName(() => subtle.sign(algo, hmac, data)),
+    rsaVerifyOnHmac: await errorName(() => subtle.verify(algo, hmac, signature, data)),
+    rsaNameOnOaep: await errorName(() => subtle.sign(algo, oaep.privateKey, data)),
+    // RSASSA-PKCS1-v1_5 keys don't encrypt or wrap, and RSA-OAEP keys don't sign.
+    encryptName: await errorName(() => subtle.encrypt(algo, rsassa.publicKey, data)),
+    oaepOnRsassa: await errorName(() => subtle.encrypt({ name: "RSA-OAEP" }, rsassa.publicKey, data)),
+    wrapName: await errorName(() => subtle.wrapKey("jwk", hmac, rsassa.publicKey, algo)),
+    // Import: spki keys verify, pkcs8 keys sign, and a private key needs a usage.
+    spkiForSign: await errorName(() => subtle.importKey("spki", rsaTestKey.spki, algo, true, ["sign"])),
+    pkcs8ForVerify: await errorName(() => subtle.importKey("pkcs8", rsaTestKey.pkcs8, algo, true, ["verify"])),
+    pkcs8NoUsages: await errorName(() => subtle.importKey("pkcs8", rsaTestKey.pkcs8, algo, true, [])),
+    spkiNoUsages: await errorName(() => subtle.importKey("spki", rsaTestKey.spki, algo, true, [])),
+    noHash: await errorName(() => subtle.importKey("spki", rsaTestKey.spki, "RSASSA-PKCS1-v1_5", true, ["verify"])),
+    badHash: await errorName(() => subtle.importKey("spki", rsaTestKey.spki, { ...algo, hash: "SHA-224" }, true, ["verify"])),
+    // RSA-PSS isn't implemented yet.
+    pss: await errorName(() => subtle.importKey("spki", rsaTestKey.spki, { name: "RSA-PSS", hash: "SHA-256" }, true, ["verify"])),
+    // Generation: the private key must get "sign". RSA-PSS isn't implemented yet.
+    verifyOnly: await errorName(() => gen("RSASSA-PKCS1-v1_5", ["verify"])),
+    pssGenerate: await errorName(() => gen("RSA-PSS", ["sign", "verify"])),
+    // JWK: a "sig" key whose `alg` names the requested hash.
+    publicForSign: await importPublic(pubNoOps, ["sign"]),
+    useEnc: await importPublic({ ...publicJwk, use: "enc" }),
+    algOtherHash: await importPublic({ ...publicJwk, alg: "RS384" }),
+    algLower: await importPublic({ ...publicJwk, alg: "rs256" }),
+    algOaep: await importPublic({ ...publicJwk, alg: "RSA-OAEP-256" }),
+    algPss: await importPublic({ ...publicJwk, alg: "PS256" }),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("InvalidAccessError", results.signWithPublic);
+    testing.expectEqual("InvalidAccessError", results.verifyWithPrivate);
+    testing.expectEqual("OperationError", results.tooSmall);
+    testing.expectEqual("NotSupportedError", results.unknownName);
+    testing.expectEqual("NotSupportedError", results.oaepName);
+    testing.expectEqual("InvalidAccessError", results.hmacNameOnRsa);
+    testing.expectEqual("InvalidAccessError", results.rsaNameOnHmac);
+    testing.expectEqual("InvalidAccessError", results.rsaVerifyOnHmac);
+    testing.expectEqual("InvalidAccessError", results.rsaNameOnOaep);
+    testing.expectEqual("NotSupportedError", results.encryptName);
+    testing.expectEqual("InvalidAccessError", results.oaepOnRsassa);
+    testing.expectEqual("NotSupportedError", results.wrapName);
+    testing.expectEqual("SyntaxError", results.spkiForSign);
+    testing.expectEqual("SyntaxError", results.pkcs8ForVerify);
+    testing.expectEqual("SyntaxError", results.pkcs8NoUsages);
+    testing.expectEqual(null, results.spkiNoUsages);
+    testing.expectEqual("TypeError", results.noHash);
+    testing.expectEqual("NotSupportedError", results.badHash);
+    testing.expectEqual("NotSupportedError", results.pss);
+    testing.expectEqual("SyntaxError", results.verifyOnly);
+    testing.expectEqual("NotSupportedError", results.pssGenerate);
+    testing.expectEqual("SyntaxError", results.publicForSign);
+    testing.expectEqual("DataError", results.useEnc);
+    testing.expectEqual("DataError", results.algOtherHash);
+    testing.expectEqual("DataError", results.algLower);
+    testing.expectEqual("DataError", results.algOaep);
+    testing.expectEqual("DataError", results.algPss);
+  });
+</script>
+
+<script id=wrap-unwrap type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+  const gcm = { name: "AES-GCM", iv: new Uint8Array(12) };
+  const cbc = { name: "AES-CBC", iv: new Uint8Array(16) };
+  const rsaAlgo = { name: "RSA-OAEP", hash: "SHA-256" };
+  const msg = new TextEncoder().encode("wrapped");
+
+  const target = await subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  const rsa = await subtle.generateKey(
+    { ...rsaAlgo, modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) },
+    true,
+    ["encrypt", "decrypt", "wrapKey", "unwrapKey"],
+  );
+  const kw = await subtle.generateKey({ name: "AES-KW", length: 128 }, true, ["wrapKey", "unwrapKey"]);
+  const gcmWrapper = await subtle.generateKey({ name: "AES-GCM", length: 128 }, true, ["wrapKey", "unwrapKey", "decrypt"]);
+  const cbcWrapper = await subtle.generateKey({ name: "AES-CBC", length: 128 }, true, ["wrapKey", "unwrapKey"]);
+  const raw = hex(await subtle.exportKey("raw", target));
+
+  // AES-KW (RFC 3394) wraps the raw key, 8 bytes longer.
+  const kwWrapped = await subtle.wrapKey("raw", target, kw, "AES-KW");
+  const kwBack = await subtle.unwrapKey("raw", kwWrapped, kw, { name: "AES-KW" }, "AES-GCM", true, ["encrypt"]);
+
+  // AES-GCM wraps a JWK as the UTF-8 of JSON.stringify(exportKey("jwk", key)).
+  const jwkWrapped = await subtle.wrapKey("jwk", rsa.privateKey, gcmWrapper, gcm);
+  const jwkText = new TextDecoder().decode(await subtle.decrypt(gcm, gcmWrapper, jwkWrapped));
+  const jwkBack = await subtle.unwrapKey("jwk", jwkWrapped, gcmWrapper, gcm, rsaAlgo, true, ["decrypt"]);
+  const ct = await subtle.encrypt({ name: "RSA-OAEP" }, rsa.publicKey, msg);
+
+  // RSA-OAEP wraps by encrypting; AES-CBC here wraps a pkcs8 key.
+  const rsaWrapped = await subtle.wrapKey("raw", target, rsa.publicKey, { name: "RSA-OAEP" });
+  const rsaBack = await subtle.unwrapKey("raw", rsaWrapped, rsa.privateKey, "RSA-OAEP", { name: "AES-GCM" }, false, ["decrypt"]);
+  const p8Wrapped = await subtle.wrapKey("pkcs8", rsa.privateKey, cbcWrapper, cbc);
+  const p8Back = await subtle.unwrapKey("pkcs8", p8Wrapped, cbcWrapper, cbc, rsaAlgo, true, ["decrypt"]);
+
+  const results = {
+    kwRaw: hex(await subtle.exportKey("raw", kwBack)),
+    jwkJson: JSON.stringify(await subtle.exportKey("jwk", rsa.privateKey)),
+    jwkDecrypt: new TextDecoder().decode(await subtle.decrypt({ name: "RSA-OAEP" }, jwkBack, ct)),
+    rsaBackDecrypt: hex(await subtle.decrypt(gcm, rsaBack, await subtle.encrypt(gcm, target, msg))),
+    p8: hex(await subtle.exportKey("pkcs8", p8Back)),
+    p8Original: hex(await subtle.exportKey("pkcs8", rsa.privateKey)),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(40, kwWrapped.byteLength);
+    testing.expectEqual(raw, results.kwRaw);
+    testing.expectEqual(results.jwkJson, jwkText);
+    testing.expectEqual("private", jwkBack.type);
+    testing.expectEqual("wrapped", results.jwkDecrypt);
+    // The unwrapped key takes the extractable flag and usages asked for.
+    testing.expectEqual(false, rsaBack.extractable);
+    testing.expectEqual("decrypt", rsaBack.usages.join(","));
+    testing.expectEqual(hex(msg), results.rsaBackDecrypt);
+    testing.expectEqual(results.p8Original, results.p8);
+  });
+</script>
+
+<script id=wrap-unwrap-errors type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const gcm = { name: "AES-GCM", iv: new Uint8Array(12) };
+  const cbc = { name: "AES-CBC", iv: new Uint8Array(16) };
+  const aes = (name, usages, extractable = true) => subtle.generateKey({ name, length: 128 }, extractable, usages);
+
+  const target = await aes("AES-GCM", ["encrypt"]);
+  const locked = await aes("AES-GCM", ["encrypt"], false);
+  const wrapper = await aes("AES-GCM", ["wrapKey", "unwrapKey"]);
+  const encryptOnly = await aes("AES-GCM", ["encrypt", "decrypt"]);
+  const encryptAndUnwrap = await aes("AES-GCM", ["encrypt", "unwrapKey"]);
+  const kw = await aes("AES-KW", ["wrapKey", "unwrapKey"]);
+  const otherKw = await aes("AES-KW", ["wrapKey", "unwrapKey"]);
+  const hmac = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign"]);
+  // 160 bits: 20 raw bytes, not a multiple of the 8 AES-KW needs.
+  const hmac160 = await subtle.generateKey({ name: "HMAC", hash: "SHA-256", length: 160 }, true, ["sign"]);
+  const rsa = await subtle.generateKey(
+    { name: "RSA-OAEP", hash: "SHA-256", modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) },
+    true,
+    ["decrypt"],
+  );
+  const ecdh = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const x25519 = await subtle.generateKey({ name: "X25519" }, true, ["deriveBits"]);
+  const kwWrapped = await subtle.wrapKey("raw", target, kw, "AES-KW");
+  const notJson = await subtle.wrapKey("raw", target, wrapper, gcm);
+  const noKty = await subtle.encrypt(gcm, encryptAndUnwrap, new TextEncoder().encode(JSON.stringify({ k: "AAAAAAAAAAAAAAAAAAAAAA" })));
+  const extFalse = await subtle.encrypt(gcm, encryptAndUnwrap, new TextEncoder().encode(JSON.stringify({ kty: "oct", k: "AAAAAAAAAAAAAAAAAAAAAA", ext: false })));
+
+  const results = {
+    // The wrapping key: an algorithm that wraps or encrypts, its own algorithm, and the wrapKey/unwrapKey usage.
+    hmacAlgorithm: await errorName(() => subtle.wrapKey("raw", target, hmac, { name: "HMAC" })),
+    nameMismatch: await errorName(() => subtle.wrapKey("raw", target, wrapper, cbc)),
+    noWrapUsage: await errorName(() => subtle.wrapKey("raw", target, encryptOnly, gcm)),
+    noUnwrapUsage: await errorName(() => subtle.unwrapKey("raw", notJson, encryptOnly, gcm, "AES-GCM", true, ["encrypt"])),
+    // The wrapped key: exportable, in a format it has.
+    notExtractable: await errorName(() => subtle.wrapKey("raw", locked, wrapper, gcm)),
+    rsaRaw: await errorName(() => subtle.wrapKey("raw", rsa.privateKey, wrapper, gcm)),
+    // Only a public key has a raw form; EC's (the public point) isn't implemented.
+    x25519PrivateRaw: await errorName(() => subtle.wrapKey("raw", x25519.privateKey, wrapper, gcm)),
+    ecPrivateRaw: await errorName(() => subtle.wrapKey("raw", ecdh.privateKey, wrapper, gcm)),
+    ecPublicRaw: await errorName(() => subtle.wrapKey("raw", ecdh.publicKey, wrapper, gcm)),
+    x25519PublicRaw: await errorName(() => subtle.wrapKey("raw", x25519.publicKey, wrapper, gcm)),
+    badFormat: await errorName(() => subtle.wrapKey("pem", target, wrapper, gcm)),
+    // AES-KW only wraps: no encrypt, and its integrity check fails with another key.
+    encryptWithKw: await errorName(() => subtle.encrypt({ name: "AES-KW" }, kw, new Uint8Array(16))),
+    wrongKwKey: await errorName(() => subtle.unwrapKey("raw", kwWrapped, otherKw, "AES-KW", "AES-GCM", true, ["encrypt"])),
+    kwTooShort: await errorName(() => subtle.unwrapKey("raw", new Uint8Array(8), kw, "AES-KW", "AES-GCM", true, ["encrypt"])),
+    // The spec's AES-KW "wrap key" step says OperationError (Chrome reports DataError).
+    kwNotMultipleOf8: await errorName(() => subtle.wrapKey("raw", hmac160, kw, "AES-KW")),
+    // The unwrapped bytes go through importKey: a JWK must be JSON with a kty, and a secret key needs usages.
+    notJson: await errorName(() => subtle.unwrapKey("jwk", notJson, wrapper, gcm, "AES-GCM", true, ["encrypt"])),
+    jwkWithoutKty: await errorName(() => subtle.unwrapKey("jwk", noKty, encryptAndUnwrap, gcm, "AES-GCM", true, ["encrypt"])),
+    // A JWK with ext: false can't be unwrapped as extractable, but can as not.
+    extFalseExtractable: await errorName(() => subtle.unwrapKey("jwk", extFalse, encryptAndUnwrap, gcm, "AES-GCM", true, ["encrypt"])),
+    extFalse: await errorName(() => subtle.unwrapKey("jwk", extFalse, encryptAndUnwrap, gcm, "AES-GCM", false, ["encrypt"])),
+    emptyUsages: await errorName(() => subtle.unwrapKey("raw", kwWrapped, kw, "AES-KW", "AES-GCM", true, [])),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("NotSupportedError", results.hmacAlgorithm);
+    testing.expectEqual("InvalidAccessError", results.nameMismatch);
+    testing.expectEqual("InvalidAccessError", results.noWrapUsage);
+    testing.expectEqual("InvalidAccessError", results.noUnwrapUsage);
+    testing.expectEqual("InvalidAccessError", results.notExtractable);
+    testing.expectEqual("NotSupportedError", results.rsaRaw);
+    testing.expectEqual("InvalidAccessError", results.x25519PrivateRaw);
+    testing.expectEqual("InvalidAccessError", results.ecPrivateRaw);
+    testing.expectEqual("NotSupportedError", results.ecPublicRaw);
+    testing.expectEqual(null, results.x25519PublicRaw);
+    testing.expectEqual("TypeError", results.badFormat);
+    testing.expectEqual("NotSupportedError", results.encryptWithKw);
+    testing.expectEqual("OperationError", results.wrongKwKey);
+    testing.expectEqual("OperationError", results.kwTooShort);
+    testing.expectEqual("OperationError", results.kwNotMultipleOf8);
+    testing.expectEqual("DataError", results.notJson);
+    testing.expectEqual("DataError", results.jwkWithoutKty);
+    testing.expectEqual("DataError", results.extFalseExtractable);
+    testing.expectEqual(null, results.extFalse);
+    testing.expectEqual("SyntaxError", results.emptyUsages);
+  });
+</script>
+
+<script id=jwk-symmetric type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const k16 = "AAAAAAAAAAAAAAAAAAAAAA"; // 16 bytes
+  const k24 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 24 bytes
+  const k32 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 32 bytes
+  const aes = { kty: "oct", k: k16, alg: "A128GCM" };
+  const hmac = { kty: "oct", k: k16, alg: "HS256" };
+  const importAes =(jwk, usages = ["encrypt"], extractable = true, name = "AES-GCM") =>
+    errorName(() => subtle.importKey("jwk", jwk, name, extractable, usages));
+  const importHmac = (jwk, usages = ["sign"], hash = "SHA-256") =>
+    errorName(() => subtle.importKey("jwk", jwk, { name: "HMAC", hash }, true, usages));
+
+  // A non-extractable JWK, wrapped as JSON, must not come back extractable.
+  const wrapper = await subtle.generateKey({ name: "AES-GCM", length: 128 }, true, ["encrypt", "unwrapKey"]);
+  const gcm = { name: "AES-GCM", iv: new Uint8Array(12) };
+  const lockedJson = new TextEncoder().encode(JSON.stringify({ ...aes, ext: false }));
+  const wrappedLocked = await subtle.encrypt(gcm, wrapper, lockedJson);
+
+  const results = {
+    // Accepted: matching alg, use and key_ops, ext:false imported as non-extractable.
+    aes: await importAes(aes),
+    aesWithoutAlg: await importAes({ kty: "oct", k: k16 }),
+    kw: await importAes({ kty: "oct", k: k16, alg: "A128KW" }, ["wrapKey"], true, "AES-KW"),
+    cbc192: await importAes({ kty: "oct", k: k24, alg: "A192CBC" }, ["encrypt"], true, "AES-CBC"),
+    ctr256: await importAes({ kty: "oct", k: k32, alg: "A256CTR" }, ["encrypt"], true, "AES-CTR"),
+    hmac: await importHmac(hmac),
+    hmacSha1: await importHmac({ kty: "oct", k: k16, alg: "HS1" }, ["sign"], "SHA-1"),
+    useMatches: await importAes({ ...aes, use: "enc" }),
+    extFalseLocked: await importAes({ ...aes, ext: false }, ["encrypt"], false),
+    keyOpsWider: await importAes({ ...aes, key_ops: ["encrypt", "decrypt"] }),
+    // kty, k and alg (case-sensitive, and naming this algorithm at this length / hash).
+    ktyMissing: await importAes({ k: k16 }),
+    ktyRsa: await importAes({ ...aes, kty: "RSA" }),
+    kMissing: await importAes({ kty: "oct", alg: "A128GCM" }),
+    algLength: await importAes({ ...aes, alg: "A256GCM" }),
+    algMode: await importAes({ ...aes, alg: "A128CBC" }),
+    algLowercase: await importAes({ ...aes, alg: "a128gcm" }),
+    hmacAlgHash: await importHmac({ ...hmac, alg: "HS512" }),
+    // use, key_ops and ext.
+    aesUseSig: await importAes({ ...aes, use: "sig" }),
+    hmacUseEnc: await importHmac({ ...hmac, use: "enc" }),
+    keyOpsMissing: await importAes({ ...aes, key_ops: ["decrypt"] }),
+    keyOpsDuplicate: await importAes({ ...aes, key_ops: ["encrypt", "encrypt"] }),
+    aesExtFalse: await importAes({ ...aes, ext: false }),
+    hmacExtFalse: await importHmac({ ...hmac, ext: false }),
+    unwrapExtFalse: await errorName(() => subtle.unwrapKey("jwk", wrappedLocked, wrapper, gcm, "AES-GCM", true, ["encrypt"])),
+    // The usages are checked before the JWK.
+    badUsageBadKty: await importAes({ ...aes, kty: "RSA" }, ["sign"]),
+    // HKDF and PBKDF2 keys only come in raw.
+    hkdf: await errorName(() => subtle.importKey("jwk", { kty: "oct", k: k16 }, "HKDF", false, ["deriveBits"])),
+    pbkdf2: await errorName(() => subtle.importKey("jwk", { kty: "oct", k: k16 }, "PBKDF2", false, ["deriveBits"])),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    // Compared with the case name, so a failure says which one.
+    for (const ok of ["aes", "aesWithoutAlg", "kw", "cbc192", "ctr256", "hmac", "hmacSha1", "useMatches", "extFalseLocked", "keyOpsWider"]) {
+      testing.expectEqual(`${ok}: null`, `${ok}: ${results[ok]}`);
+    }
+    for (const bad of ["ktyMissing", "ktyRsa", "kMissing", "algLength", "algMode", "algLowercase", "hmacAlgHash",
+      "aesUseSig", "hmacUseEnc", "keyOpsMissing", "keyOpsDuplicate", "aesExtFalse", "hmacExtFalse", "unwrapExtFalse"]) {
+      testing.expectEqual(`${bad}: DataError`, `${bad}: ${results[bad]}`);
+    }
+    testing.expectEqual("SyntaxError", results.badUsageBadKty);
+    testing.expectEqual("NotSupportedError", results.hkdf);
+    testing.expectEqual("NotSupportedError", results.pbkdf2);
   });
 </script>
 

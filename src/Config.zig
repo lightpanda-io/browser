@@ -415,6 +415,7 @@ pub const Commands = cli.Builder(.{
             .{ .name = "cdp_max_message_size", .type = u32, .default = 1024 * 1024 },
             .{ .name = "cdp_max_http_message_size", .type = u32, .default = 1024 * 1024 },
             .{ .name = "http_session_timeout", .type = u32, .default = 60 },
+            .{ .name = "remote_allow_origins", .type = []const u8, .multiple = true },
             .{ .name = "disable_metrics", .type = bool },
         },
         .shared_options = CommonOptions,
@@ -869,6 +870,15 @@ pub fn explicitAdvertiseHost(self: *const Config) ?[]const u8 {
     };
 }
 
+// The origins (or `*`) a WebSocket upgrade may carry, as Chrome's flag of
+// the same name. Empty, any Origin is rejected.
+pub fn remoteAllowOrigins(self: *const Config) []const []const u8 {
+    return switch (self.mode) {
+        .serve => |opts| opts.remote_allow_origins.items,
+        else => &.{},
+    };
+}
+
 // Wildcard bind addresses (0.0.0.0, ::) are not routable for clients
 // resolving /json/version. Fall back to a loopback address so the
 // advertised webSocketDebuggerUrl is at least connectable from the same
@@ -1027,6 +1037,7 @@ pub const DumpFormat = enum {
     wpt,
     semantic_tree,
     semantic_tree_text,
+    structured_data,
 };
 
 pub const Shell = enum { bash, fish, zsh };

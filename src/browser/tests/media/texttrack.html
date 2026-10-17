@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id=addTextTrack>
+{
+  const video = document.createElement("video");
+  testing.expectEqual(video.textTracks, video.textTracks);
+  testing.expectEqual(0, video.textTracks.length);
+
+  const track = video.addTextTrack("captions", "English", "en");
+  testing.expectEqual(true, track instanceof TextTrack);
+  testing.expectEqual("captions", track.kind);
+  testing.expectEqual("English", track.label);
+  testing.expectEqual("en", track.language);
+  testing.expectEqual("", track.id);
+  testing.expectEqual("hidden", track.mode);
+  testing.expectEqual(1, video.textTracks.length);
+  testing.expectEqual(track, video.textTracks[0]);
+  testing.expectError("TypeError", () => video.addTextTrack("bogus"));
+
+  track.mode = "nope";
+  testing.expectEqual("hidden", track.mode);
+  track.mode = "disabled";
+  testing.expectEqual(null, track.cues);
+  testing.expectEqual(null, track.activeCues);
+  track.mode = "showing";
+  testing.expectEqual(track.cues, track.cues);
+}
+</script>
+
+<script id=cues>
+{
+  const video = document.createElement("video");
+  const track = video.addTextTrack("subtitles");
+
+  const late = new VTTCue(5, 6, "late");
+  const early = new VTTCue(1, 2, "early");
+  const longer = new VTTCue(1, 4, "longer");
+  early.id = "e";
+  track.addCue(late);
+  track.addCue(early);
+  track.addCue(longer);
+
+  // start time, then end time descending
+  const cues = track.cues;
+  testing.expectEqual(3, cues.length);
+  testing.expectEqual([longer, early, late], [cues[0], cues[1], cues[2]]);
+  testing.expectEqual(undefined, cues[3]);
+  testing.expectEqual(early, cues.getCueById("e"));
+  testing.expectEqual(null, cues.getCueById(""));
+  testing.expectEqual(track, early.track);
+
+  // the list is live, and kept sorted when times change
+  late.startTime = 0;
+  testing.expectEqual(late, cues[0]);
+
+  // cues only become active once playback runs "time marches on"
+  testing.expectEqual(0, track.activeCues.length);
+  testing.expectEqual(undefined, track.activeCues[0]);
+
+  track.removeCue(late);
+  testing.expectEqual(2, cues.length);
+  testing.expectEqual(null, late.track);
+  testing.expectError("NotFoundError", () => track.removeCue(late));
+
+  // moving a cue to another track removes it from the first
+  const other = video.addTextTrack("metadata");
+  other.addCue(early);
+  testing.expectEqual(1, cues.length);
+  testing.expectEqual(other, early.track);
+}
+</script>
+
+<script id=track_element>
+{
+  const video = document.createElement("video");
+  const el = document.createElement("track");
+  el.id = "t1";
+  el.kind = "chapters";
+  el.label = "Chapters";
+  el.srclang = "fr";
+
+  const track = el.track;
+  testing.expectEqual(track, el.track);
+  testing.expectEqual("chapters", track.kind);
+  testing.expectEqual("Chapters", track.label);
+  testing.expectEqual("fr", track.language);
+  testing.expectEqual("t1", track.id);
+  testing.expectEqual("disabled", track.mode);
+  testing.expectEqual(0, el.readyState);
+
+  const added = video.addTextTrack("subtitles");
+  video.appendChild(el);
+  // <track> children first, then addTextTrack() ones
+  testing.expectEqual(2, video.textTracks.length);
+  testing.expectEqual(track, video.textTracks[0]);
+  testing.expectEqual(added, video.textTracks[1]);
+  testing.expectEqual(track, video.textTracks.getTrackById("t1"));
+
+  el.remove();
+  testing.expectEqual(1, video.textTracks.length);
+  testing.expectEqual(0, el.readyState);
+}
+</script>
+
+<script id=load type=module>
+  const state = await testing.async();
+
+  const vtt = "WEBVTT\n\nintro\n00:00.000 --> 00:01.500 align:start line:10%\nHello <b>world</b>\n\n00:00:02.000 --> 00:00:03.000 position:20%,line-left size:50%\nSecond\r\nline\n\nNOTE comment\n\n00:01.000 --> 00:00.500\nbackwards";
+  const url = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
+
+  const video = document.createElement("video");
+  const el = document.createElement("track");
+  el.src = url;
+  el.default = true;
+  video.appendChild(el);
+  document.body.appendChild(video);
+
+  const evt = await new Promise(resolve => {
+    el.onload = () => resolve("load");
+    el.onerror = () => resolve("error");
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("load", evt);
+    testing.expectEqual(2, el.readyState);
+    // the default subtitles track is selected
+    testing.expectEqual("showing", el.track.mode);
+
+    const cues = el.track.cues;
+    testing.expectEqual(3, cues.length);
+
+    testing.expectEqual("intro", cues[0].id);
+    testing.expectEqual(0, cues[0].startTime);
+    testing.expectEqual(1.5, cues[0].endTime);
+    testing.expectEqual("start", cues[0].align);
+    testing.expectEqual(10, cues[0].line);
+    testing.expectEqual(false, cues[0].snapToLines);
+    testing.expectEqual("Hello <b>world</b>", cues[0].text);
+
+    testing.expectEqual(1, cues[1].startTime);
+    testing.expectEqual(0.5, cues[1].endTime);
+    testing.expectEqual("backwards", cues[1].text);
+
+    testing.expectEqual(20, cues[2].position);
+    testing.expectEqual("line-left", cues[2].positionAlign);
+    testing.expectEqual(50, cues[2].size);
+    testing.expectEqual("Second\nline", cues[2].text);
+  });
+</script>
+
+<script id=not_webvtt type=module>
+  const state = await testing.async();
+
+  const url = URL.createObjectURL(new Blob(["WEBVTTX\n\n00:00.000 --> 00:01.000\nx"]));
+  const video = document.createElement("video");
+  const el = document.createElement("track");
+  el.src = url;
+  el.track.mode = "hidden";
+  video.appendChild(el);
+
+  const evt = await new Promise(resolve => {
+    el.onload = () => resolve("load");
+    el.onerror = () => resolve("error");
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("error", evt);
+    testing.expectEqual(3, el.readyState);
+  });
+</script>
+
+<script id=no_src type=module>
+  const state = await testing.async();
+
+  const video = document.createElement("video");
+  const el = document.createElement("track");
+  el.track.mode = "hidden";
+  video.appendChild(el);
+
+  const evt = await new Promise(resolve => {
+    el.onload = () => resolve("load");
+    el.onerror = () => resolve("error");
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("error", evt);
+  });
+</script>
+
+<!-- Regions are in the spec, WPT and Firefox; Chrome doesn't expose them. -->
+<script id=load_regions type=module>
+  const state = await testing.async();
+
+  const vtt = "WEBVTT\n\nREGION\nid:r1\nlines:2\n\nREGION\nid:r1\nlines:4\n\n00:00.000 --> 00:01.000 region:r1\na\n\n00:00.000 --> 00:01.000 region:nope\nb";
+  const url = URL.createObjectURL(new Blob([vtt]));
+  const video = document.createElement("video");
+  const el = document.createElement("track");
+  el.src = url;
+  el.track.mode = "hidden";
+  video.appendChild(el);
+
+  const evt = await new Promise(resolve => {
+    el.onload = () => resolve("load");
+    el.onerror = () => resolve("error");
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("load", evt);
+    const cues = el.track.cues;
+    // a later region with the same id replaces the earlier one
+    testing.expectEqual(4, cues[0].region.lines);
+    testing.expectEqual("r1", cues[0].region.id);
+    testing.expectEqual(null, cues[1].region);
+  });
+</script>

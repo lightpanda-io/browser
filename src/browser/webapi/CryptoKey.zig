@@ -137,14 +137,6 @@ pub fn acquireRef(self: *CryptoKey) void {
     self._rc.acquire();
 }
 
-pub fn canEncrypt(self: *const CryptoKey) bool {
-    return self._usages & Usages.encrypt != 0;
-}
-
-pub fn canDecrypt(self: *const CryptoKey) bool {
-    return self._usages & Usages.decrypt != 0;
-}
-
 pub fn canSign(self: *const CryptoKey) bool {
     return self._usages & Usages.sign != 0;
 }
