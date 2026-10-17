@@ -16,11 +16,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! RSA-OAEP and RSASSA-PKCS1-v1_5: key generation, import and export
+//! RSA-OAEP, RSASSA-PKCS1-v1_5 and RSA-PSS: key generation, import and export
 //! (spki/pkcs8 DER and JWK), the encrypt/decrypt operations of RSA-OAEP and
-//! the sign/verify operations of RSASSA-PKCS1-v1_5. The key material lives as
-//! a libcrypto EVP_PKEY in `CryptoKey._vary.pkey`. See EC.zig for the
-//! asymmetric-key rationale.
+//! the sign/verify operations of RSASSA-PKCS1-v1_5 and RSA-PSS. The key
+//! material lives as a libcrypto EVP_PKEY in `CryptoKey._vary.pkey`. See
+//! EC.zig for the asymmetric-key rationale.
 
 const std = @import("std");
 
@@ -94,7 +94,7 @@ pub const Scheme = struct {
     /// The JWK `use` of the keys.
     jwk_use: []const u8,
     /// The JWK `alg` for each of `hashes`: the values of JWA, sections 3.1 and
-    /// 4.1, and WebCrypto's "RS1" for RSASSA-PKCS1-v1_5 with SHA-1.
+    /// 4.1, and WebCrypto's "RS1" and "PS1" for the signatures with SHA-1.
     jwk_algs: [hashes.len][]const u8,
 };
 
@@ -112,6 +112,13 @@ const schemes = [_]Scheme{
         .public_usages = &.{"verify"},
         .jwk_use = "sig",
         .jwk_algs = .{ "RS1", "RS256", "RS384", "RS512" },
+    },
+    .{
+        .name = "RSA-PSS",
+        .private_usages = &.{"sign"},
+        .public_usages = &.{"verify"},
+        .jwk_use = "sig",
+        .jwk_algs = .{ "PS1", "PS256", "PS384", "PS512" },
     },
 };
 
@@ -168,8 +175,6 @@ pub fn generate(
     const local = exec.js.local.?;
     try validate(params, key_usages);
 
-    // validate() also accepts RSA-PSS (so its parameter errors are reported
-    // correctly), but it isn't implemented.
     const s = scheme(params.name) orelse return error.NotSupported;
 
     // Generation runs on the main thread and can't be interrupted, and its cost
@@ -280,8 +285,8 @@ pub fn import(
 /// public key, plus `d`, `p`, `q`, `dp`, `dq` and `qi` for a private one (the
 /// presence of `d` decides, as in SubtleCrypto.importKind, which already
 /// validated the usages against it). Follows the "import key" steps of
-/// RSA-OAEP and RSASSA-PKCS1-v1_5: a JWK that doesn't fit the requested key, or
-/// describes an invalid one, is DataError.
+/// RSA-OAEP, RSASSA-PKCS1-v1_5 and RSA-PSS: a JWK that doesn't fit the
+/// requested key, or describes an invalid one, is DataError.
 pub fn importJwk(
     s: *const Scheme,
     jwk: algorithm.KeyData.Jwk,
@@ -521,13 +526,14 @@ pub fn crypt(
     return out[0..out_len];
 }
 
-/// RSASSA-PKCS1-v1_5 signature generation (RFC 8017, section 8.2.1) of `data`
-/// with the key's hash. SubtleCrypto.sign checked the algorithm and the sign
-/// usage; only a private key signs.
-pub fn sign(key: *const CryptoKey, data: []const u8, exec: *const Execution) ![]const u8 {
+/// RSASSA-PKCS1-v1_5 or RSA-PSS signature generation (RFC 8017, sections
+/// 8.2.1 and 8.1.1) of `data` with the key's hash. `salt_length` is RSA-PSS's,
+/// in bytes. SubtleCrypto.sign checked the algorithm and the sign usage; only
+/// a private key signs.
+pub fn sign(key: *const CryptoKey, data: []const u8, salt_length: ?u32, exec: *const Execution) ![]const u8 {
     if (key._kind != .private) return error.InvalidAccessError;
 
-    const ctx = try digestContext(key, false);
+    const ctx = try digestContext(key, false, salt_length);
     defer crypto.EVP_MD_CTX_free(ctx);
 
     // First call (null output) reports the size; the second writes the buffer.
@@ -538,14 +544,15 @@ pub fn sign(key: *const CryptoKey, data: []const u8, exec: *const Execution) ![]
     return out[0..sig_len];
 }
 
-/// RSASSA-PKCS1-v1_5 signature verification (RFC 8017, section 8.2.2) of
-/// `signature` over `data` with the key's hash. SubtleCrypto.verify checked
-/// the algorithm and the verify usage; only a public key verifies. A signature
-/// that doesn't match, whatever its length, is false rather than an error.
-pub fn verify(key: *const CryptoKey, signature: []const u8, data: []const u8) !bool {
+/// RSASSA-PKCS1-v1_5 or RSA-PSS signature verification (RFC 8017, sections
+/// 8.2.2 and 8.1.2) of `signature` over `data` with the key's hash, and
+/// RSA-PSS's `salt_length`. SubtleCrypto.verify checked the algorithm and the
+/// verify usage; only a public key verifies. A signature that doesn't match,
+/// whatever its length or salt, is false rather than an error.
+pub fn verify(key: *const CryptoKey, signature: []const u8, data: []const u8, salt_length: ?u32) !bool {
     if (key._kind != .public) return error.InvalidAccessError;
 
-    const ctx = try digestContext(key, true);
+    const ctx = try digestContext(key, true, salt_length);
     defer crypto.EVP_MD_CTX_free(ctx);
 
     if (crypto.EVP_DigestVerify(ctx, signature.ptr, signature.len, data.ptr, data.len) == 1) return true;
@@ -555,9 +562,10 @@ pub fn verify(key: *const CryptoKey, signature: []const u8, data: []const u8) !b
     return false;
 }
 
-/// A digest context set up to sign or verify with `key`: its hash, and
-/// PKCS #1 v1.5 padding. Free it with EVP_MD_CTX_free.
-fn digestContext(key: *const CryptoKey, verifying: bool) !*crypto.EVP_MD_CTX {
+/// A digest context set up to sign or verify with `key`: its hash, and the
+/// padding of its algorithm (PKCS #1 v1.5, or PSS with MGF1 over the same hash
+/// and `salt_length`). Free it with EVP_MD_CTX_free.
+fn digestContext(key: *const CryptoKey, verifying: bool, salt_length: ?u32) !*crypto.EVP_MD_CTX {
     const hash_name = key._algorithm.hash orelse return error.OperationError;
     const md = crypto.findDigest(hash_name) catch return error.OperationError;
 
@@ -570,7 +578,18 @@ fn digestContext(key: *const CryptoKey, verifying: bool) !*crypto.EVP_MD_CTX {
     else
         crypto.EVP_DigestSignInit(ctx, &pctx, md, null, key.getKeyObject());
     if (init_ok != 1) return error.OperationError;
-    if (crypto.EVP_PKEY_CTX_set_rsa_padding(pctx, crypto.RSA_PKCS1_PADDING) != 1) return error.OperationError;
+
+    if (!std.mem.eql(u8, key._algorithm.name, "RSA-PSS")) {
+        if (crypto.EVP_PKEY_CTX_set_rsa_padding(pctx, crypto.RSA_PKCS1_PADDING) != 1) return error.OperationError;
+        return ctx;
+    }
+    // Negative lengths are libcrypto's special values (the digest's length,
+    // the maximum), so a length past c_int is capped instead: it's longer than
+    // any key allows, and signing or verifying with it fails as it should.
+    const salt: c_int = @intCast(@min(salt_length orelse return error.OperationError, std.math.maxInt(c_int)));
+    if (crypto.EVP_PKEY_CTX_set_rsa_padding(pctx, crypto.RSA_PKCS1_PSS_PADDING) != 1) return error.OperationError;
+    if (crypto.EVP_PKEY_CTX_set_rsa_mgf1_md(pctx, md) != 1) return error.OperationError;
+    if (crypto.EVP_PKEY_CTX_set_rsa_pss_saltlen(pctx, salt) != 1) return error.OperationError;
     return ctx;
 }
 
