@@ -510,8 +510,8 @@ pub export fn v8_inspector__Client__IMPL__valueSubtype(
     _: *v8.InspectorClientImpl,
     c_value: *const v8.Value,
 ) callconv(.c) [*c]const u8 {
-    const external_entry = Inspector.getTaggedOpaque(c_value) orelse return null;
-    return if (external_entry.subtype) |st| @tagName(st) else null;
+    const tao = Inspector.getTaggedOpaque(c_value) orelse return null;
+    return if (inspectorSubtype(tao)) |st| @tagName(st) else null;
 }
 
 // Same as valueSubType above, but for the optional description field.
@@ -527,17 +527,30 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
 
     // Without a description, V8 drops the subtype, except for "error": it
     // then describes the value itself ("name: message", plus the stack).
-    const external_entry = Inspector.getTaggedOpaque(c_value) orelse return null;
-    const subtype = external_entry.subtype orelse return null;
+    const tao = Inspector.getTaggedOpaque(c_value) orelse return null;
+    const subtype = inspectorSubtype(tao) orelse return null;
     if (subtype == .@"error") {
         return null;
     }
     return "";
 }
 
+// The subtype the inspector reports for one of our objects, as Chrome does:
+// "node" for Nodes, "error" for DOMExceptions, none for everything else.
+fn inspectorSubtype(tao: TaggedOpaque) ?bridge.SubType {
+    if (tao.is(@import("../webapi/Node.zig"))) {
+        return .node;
+    }
+    if (tao.is(@import("../webapi/DOMException.zig"))) {
+        return .@"error";
+    }
+    return null;
+}
+
 test "TaggedAnyOpaque" {
     // If we grow this, fine, but it should be a conscious decision
-    try testing.expectEqual(24, @sizeOf(TaggedOpaque));
+    // It used to be 24, and that worked ok.
+    try testing.expectEqual(16, @sizeOf(TaggedOpaque));
 }
 
 test "js: ArrayBuffers crossing Zig don't keep a reference to their backing store" {

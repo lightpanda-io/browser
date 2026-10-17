@@ -42,7 +42,6 @@ pub const JsApi = struct {
     pub const bridge = js.Bridge(TSpan);
     pub const Meta = struct {
         pub const name = "SVGTSpanElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 };

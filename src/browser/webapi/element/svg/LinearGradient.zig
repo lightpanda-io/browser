@@ -58,7 +58,6 @@ pub const JsApi = struct {
     pub const bridge = js.Bridge(LinearGradient);
     pub const Meta = struct {
         pub const name = "SVGLinearGradientElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
     pub const x1 = bridge.accessor(LinearGradient.getX1, null, .{});

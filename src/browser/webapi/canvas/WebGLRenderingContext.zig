@@ -116,7 +116,6 @@ const Extension = union(enum) {
                 pub const Meta = struct {
                     pub const name = "WEBGL_debug_renderer_info";
 
-                    pub const prototype_chain = bridge.prototypeChain();
                     pub var class_id: bridge.ClassId = undefined;
                 };
 
@@ -136,7 +135,6 @@ const Extension = union(enum) {
                 pub const Meta = struct {
                     pub const name = "WEBGL_lose_context";
 
-                    pub const prototype_chain = bridge.prototypeChain();
                     pub var class_id: bridge.ClassId = undefined;
                 };
 
@@ -183,7 +181,6 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "WebGLRenderingContext";
 
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

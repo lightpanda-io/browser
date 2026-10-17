@@ -52,7 +52,6 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "MessageChannel";
         pub var class_id: bridge.ClassId = undefined;
-        pub const prototype_chain = bridge.prototypeChain();
     };
 
     pub const constructor = bridge.constructor(MessageChannel.init, .{});
