@@ -358,7 +358,11 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     try validateElementName(name);
     const ns: Element.Namespace, const normalized_name = blk: {
         if (self._type == .html) {
-            break :blk .{ .html, std.ascii.lowerString(&frame.buf, name) };
+            const lower = if (name.len <= frame.buf.len)
+                std.ascii.lowerString(&frame.buf, name)
+            else
+                try std.ascii.allocLowerString(frame.local_arena, name);
+            break :blk .{ .html, lower };
         }
         // Generic and XML documents create elements with null namespace
         break :blk .{ .null, name };
