@@ -656,11 +656,8 @@
     spkiNoUsages: await errorName(() => subtle.importKey("spki", rsaTestKey.spki, algo, true, [])),
     noHash: await errorName(() => subtle.importKey("spki", rsaTestKey.spki, "RSASSA-PKCS1-v1_5", true, ["verify"])),
     badHash: await errorName(() => subtle.importKey("spki", rsaTestKey.spki, { ...algo, hash: "SHA-224" }, true, ["verify"])),
-    // RSA-PSS isn't implemented yet.
-    pss: await errorName(() => subtle.importKey("spki", rsaTestKey.spki, { name: "RSA-PSS", hash: "SHA-256" }, true, ["verify"])),
-    // Generation: the private key must get "sign". RSA-PSS isn't implemented yet.
+    // Generation: the private key must get "sign".
     verifyOnly: await errorName(() => gen("RSASSA-PKCS1-v1_5", ["verify"])),
-    pssGenerate: await errorName(() => gen("RSA-PSS", ["sign", "verify"])),
     // JWK: a "sig" key whose `alg` names the requested hash.
     publicForSign: await importPublic(pubNoOps, ["sign"]),
     useEnc: await importPublic({ ...publicJwk, use: "enc" }),
@@ -690,15 +687,149 @@
     testing.expectEqual(null, results.spkiNoUsages);
     testing.expectEqual("TypeError", results.noHash);
     testing.expectEqual("NotSupportedError", results.badHash);
-    testing.expectEqual("NotSupportedError", results.pss);
     testing.expectEqual("SyntaxError", results.verifyOnly);
-    testing.expectEqual("NotSupportedError", results.pssGenerate);
     testing.expectEqual("SyntaxError", results.publicForSign);
     testing.expectEqual("DataError", results.useEnc);
     testing.expectEqual("DataError", results.algOtherHash);
     testing.expectEqual("DataError", results.algLower);
     testing.expectEqual("DataError", results.algOaep);
     testing.expectEqual("DataError", results.algPss);
+  });
+</script>
+
+<script id=rsa-pss type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const algo = { name: "RSA-PSS", hash: "SHA-256" };
+  const data = new TextEncoder().encode("lightpanda rsa-pss");
+  const privateKey = await subtle.importKey("pkcs8", rsaTestKey.pkcs8, algo, false, ["sign"]);
+  const publicKey = await subtle.importKey("spki", rsaTestKey.spki, algo, false, ["verify"]);
+
+  // With no salt, PSS is deterministic: this is what OpenSSL (and Chrome)
+  // produce for the shared test key, SHA-256 and MGF1 over SHA-256.
+  const expected = "Y8BivUzQOY0aMtDqK7PaK6scH2T8i6mbTYvrO81MIcYUXmYEvVAhSgTrYTyxPEJd+KH+n0/XM08WdgV4WOwMBjwgezfKyjd21Llir//NrYitf9qlvqRbKprrQLd8rGQ5PBb41pgwkEvM3u3PAVjaeKmeHtfdVZZ59cJwe36P5X+e3aGhjnaxggjFcBk2c+amVnXMjFlkubtkjXecA0dXSdhap6Cpr4q/OajQrnLJTjrsO1kfIzpRCq0IXdx3cKADwagjv6rEoh1I2+2tsk8vsTmugWh4Crxa/IXc/M/qRdVWjZu2RA442B4tB/APpYOOCoSMRQ6qPgw2OO68l/PiXw==";
+  const unsalted = await subtle.sign({ name: "RSA-PSS", saltLength: 0 }, privateKey, data);
+  // A salt makes each signature different; both verify with that salt length only.
+  const salted = await subtle.sign({ name: "rsa-pss", saltLength: 32 }, privateKey, data);
+  const saltedAgain = await subtle.sign({ name: "RSA-PSS", saltLength: 32 }, privateKey, data);
+
+  // Generated keys, and the JWK of each hash ("PS1", "PS256", ...).
+  const pair = await subtle.generateKey(
+    { ...algo, modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) },
+    true,
+    ["sign", "verify"],
+  );
+  const publicJwk = await subtle.exportKey("jwk", pair.publicKey);
+  const privateJwk = await subtle.exportKey("jwk", pair.privateKey);
+  const jwkPrivate = await subtle.importKey("jwk", privateJwk, algo, true, ["sign"]);
+  const algs = [];
+  for (const hash of ["SHA-1", "SHA-256", "SHA-384", "SHA-512"]) {
+    const key = await subtle.importKey("jwk", { kty: "RSA", n: publicJwk.n, e: publicJwk.e }, { ...algo, hash }, true, ["verify"]);
+    algs.push((await subtle.exportKey("jwk", key)).alg);
+  }
+  const pss = (saltLength) => ({ name: "RSA-PSS", saltLength });
+  const generatedSignature = await subtle.sign(pss(20), jwkPrivate, data);
+  const rsassa = await subtle.importKey("spki", rsaTestKey.spki, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
+  // Each hash also drives MGF1.
+  const hashRoundTrips = [];
+  for (const hash of ["SHA-1", "SHA-384", "SHA-512"]) {
+    const signer = await subtle.importKey("pkcs8", rsaTestKey.pkcs8, { name: "RSA-PSS", hash }, false, ["sign"]);
+    const verifier = await subtle.importKey("spki", rsaTestKey.spki, { name: "RSA-PSS", hash }, false, ["verify"]);
+    const signature = await subtle.sign(pss(16), signer, data);
+    hashRoundTrips.push(await subtle.verify(pss(16), verifier, signature, data) && !(await subtle.verify(pss(16), publicKey, signature, data)));
+  }
+  // An invalid saltLength rejects the promise rather than throwing.
+  const noSaltPromise = subtle.sign("RSA-PSS", privateKey, data);
+  const noSaltIsPromise = noSaltPromise instanceof Promise;
+  await noSaltPromise.catch(() => {});
+  const hmac = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign"]);
+
+  const results = {
+    unsaltedValid: await subtle.verify(pss(0), publicKey, unsalted, data),
+    saltedValid: await subtle.verify(pss(32), publicKey, salted, data),
+    saltedAgainValid: await subtle.verify(pss(32), publicKey, saltedAgain, data),
+    wrongSaltLength: await subtle.verify(pss(48), publicKey, salted, data),
+    otherData: await subtle.verify(pss(32), publicKey, salted, new TextEncoder().encode("other")),
+    generatedValid: await subtle.verify(pss(20), pair.publicKey, generatedSignature, data),
+    // The salt must fit the key: 2048 bits with SHA-256 leave room for 222 bytes.
+    maxSalt: await errorName(() => subtle.sign(pss(222), privateKey, data)),
+    saltTooLong: await errorName(() => subtle.sign(pss(223), privateKey, data)),
+    longSaltVerify: await subtle.verify(pss(1000), publicKey, salted, data),
+    // The spec has no error here: past 2^31 - 1 too, it's a signature that
+    // doesn't verify. (Chrome rejects those with OperationError.)
+    hugeSaltVerify: await subtle.verify(pss(4294967295), publicKey, salted, data).catch((err) => err.name),
+    // saltLength is a required [EnforceRange] unsigned long, checked before the key.
+    noSalt: await errorName(() => subtle.sign("RSA-PSS", privateKey, data)),
+    noSaltObject: await errorName(() => subtle.verify({ name: "RSA-PSS" }, publicKey, salted, data)),
+    negativeSalt: await errorName(() => subtle.sign(pss(-1), privateKey, data)),
+    saltOverflow: await errorName(() => subtle.sign(pss(4294967296), privateKey, data)),
+    nanSalt: await errorName(() => subtle.sign(pss(NaN), privateKey, data)),
+    noSaltOnHmac: await errorName(() => subtle.sign("RSA-PSS", hmac, data)),
+    stringSalt: await errorName(() => subtle.sign(pss("32"), privateKey, data)),
+    // null converts to 0, as for any unsigned long.
+    nullSalt: await subtle.verify(pss(0), publicKey, await subtle.sign(pss(null), privateKey, data), data),
+    // Other algorithms ignore the member.
+    hmacWithSalt: await errorName(() => subtle.sign({ name: "HMAC", saltLength: -1 }, hmac, data)),
+    // RSA-PSS and RSASSA-PKCS1-v1_5 keys don't mix.
+    pssOnRsassa: await errorName(() => subtle.verify(pss(32), rsassa, salted, data)),
+    rsassaOnPss: await errorName(() => subtle.sign("RSASSA-PKCS1-v1_5", privateKey, data)),
+    // JWK: a "sig" key whose `alg` is the PS one of the requested hash.
+    jwkAlgOtherHash: await errorName(() => subtle.importKey("jwk", { ...publicJwk, alg: "PS384" }, algo, true, ["verify"])),
+    jwkAlgRs: await errorName(() => subtle.importKey("jwk", { ...publicJwk, alg: "RS256" }, algo, true, ["verify"])),
+    jwkUseEnc: await errorName(() => subtle.importKey("jwk", { ...publicJwk, use: "enc" }, algo, true, ["verify"])),
+    // Usages: sign for the private key, verify for the public one.
+    verifyOnly: await errorName(() => subtle.generateKey(
+      { ...algo, modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) }, true, ["verify"])),
+    spkiForSign: await errorName(() => subtle.importKey("spki", rsaTestKey.spki, algo, true, ["sign"])),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(expected, b64(unsalted));
+    testing.expectEqual(true, results.unsaltedValid);
+    testing.expectEqual(256, salted.byteLength);
+    testing.expectEqual(false, b64(salted) === b64(saltedAgain));
+    testing.expectEqual(true, results.saltedValid);
+    testing.expectEqual(true, results.saltedAgainValid);
+    testing.expectEqual(false, results.wrongSaltLength);
+    testing.expectEqual(false, results.otherData);
+    testing.expectEqual(true, results.generatedValid);
+    testing.expectEqual(null, results.maxSalt);
+    testing.expectEqual("OperationError", results.saltTooLong);
+    testing.expectEqual(false, results.longSaltVerify);
+    testing.expectEqual(false, results.hugeSaltVerify);
+    testing.expectEqual("TypeError", results.noSalt);
+    testing.expectEqual("TypeError", results.noSaltObject);
+    testing.expectEqual("TypeError", results.negativeSalt);
+    testing.expectEqual("TypeError", results.saltOverflow);
+    testing.expectEqual("TypeError", results.nanSalt);
+    testing.expectEqual("TypeError", results.noSaltOnHmac);
+    testing.expectEqual(null, results.stringSalt);
+    testing.expectEqual(true, results.nullSalt);
+    testing.expectEqual("true,true,true", hashRoundTrips.join(","));
+    testing.expectEqual(true, noSaltIsPromise);
+    testing.expectEqual(null, results.hmacWithSalt);
+    testing.expectEqual("InvalidAccessError", results.pssOnRsassa);
+    testing.expectEqual("InvalidAccessError", results.rsassaOnPss);
+    testing.expectEqual("DataError", results.jwkAlgOtherHash);
+    testing.expectEqual("DataError", results.jwkAlgRs);
+    testing.expectEqual("DataError", results.jwkUseEnc);
+    testing.expectEqual("SyntaxError", results.verifyOnly);
+    testing.expectEqual("SyntaxError", results.spkiForSign);
+    testing.expectEqual("RSA-PSS", privateKey.algorithm.name);
+    testing.expectEqual("RSA-PSS", jwkPrivate.algorithm.name);
+    testing.expectEqual("PS256", publicJwk.alg);
+    testing.expectEqual("sign", privateJwk.key_ops.join(","));
+    testing.expectEqual("PS1,PS256,PS384,PS512", algs.join(","));
   });
 </script>
 
@@ -991,6 +1122,74 @@
   await state.done(() => {
     testing.expectEqual(true, verifyFull);
     testing.expectEqual(false, verifyTruncated);
+  });
+</script>
+
+<script id=sign-verify-names type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+  const data = new TextEncoder().encode("names");
+  const hmac = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]);
+  const signOnly = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign"]);
+  const verifyOnly = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["verify"]);
+  const aes = await subtle.generateKey({ name: "AES-GCM", length: 128 }, true, ["encrypt"]);
+  const ecdsa = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const ecdh = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const x25519 = await subtle.generateKey({ name: "X25519" }, true, ["deriveBits"]);
+  const ecdsaAlgo = { name: "ECDSA", hash: "SHA-256" };
+
+  const mac = await subtle.sign("HMAC", hmac, data);
+  const results = {
+    // Algorithm names match case-insensitively, for HMAC as for RSA.
+    lowerSign: hex(await subtle.sign("hmac", hmac, data)),
+    mixedVerify: await subtle.verify({ name: "hMaC" }, hmac, mac, data),
+    // A name that isn't a signing algorithm is NotSupportedError, whatever the key.
+    prefixSign: await errorName(() => subtle.sign("HMACX", hmac, data)),
+    prefixVerify: await errorName(() => subtle.verify("HMAC-SHA256", hmac, mac, data)),
+    unknownOnEcdsa: await errorName(() => subtle.sign("foo", ecdsa.privateKey, data)),
+    ecdhName: await errorName(() => subtle.sign("ECDH", ecdh.privateKey, data)),
+    x25519Name: await errorName(() => subtle.sign("X25519", x25519.privateKey, data)),
+    aesName: await errorName(() => subtle.sign("AES-GCM", aes, data)),
+    // A signing algorithm other than the key's, or a key without the usage,
+    // is InvalidAccessError.
+    hmacOnAes: await errorName(() => subtle.sign("HMAC", aes, data)),
+    hmacOnEcdsa: await errorName(() => subtle.sign("HMAC", ecdsa.privateKey, data)),
+    ecdsaOnHmac: await errorName(() => subtle.verify(ecdsaAlgo, hmac, mac, data)),
+    noSign: await errorName(() => subtle.sign("HMAC", verifyOnly, data)),
+    noVerify: await errorName(() => subtle.verify("HMAC", signOnly, mac, data)),
+    ecdsaPublicSign: await errorName(() => subtle.sign(ecdsaAlgo, ecdsa.publicKey, data)),
+    // ECDSA signing isn't implemented yet.
+    ecdsaSign: await errorName(() => subtle.sign(ecdsaAlgo, ecdsa.privateKey, data)),
+    ecdsaVerify: await errorName(() => subtle.verify(ecdsaAlgo, ecdsa.publicKey, new Uint8Array(64), data)),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(hex(mac), results.lowerSign);
+    testing.expectEqual(true, results.mixedVerify);
+    testing.expectEqual("NotSupportedError", results.prefixSign);
+    testing.expectEqual("NotSupportedError", results.prefixVerify);
+    testing.expectEqual("NotSupportedError", results.unknownOnEcdsa);
+    testing.expectEqual("NotSupportedError", results.ecdhName);
+    testing.expectEqual("NotSupportedError", results.x25519Name);
+    testing.expectEqual("NotSupportedError", results.aesName);
+    testing.expectEqual("InvalidAccessError", results.hmacOnAes);
+    testing.expectEqual("InvalidAccessError", results.hmacOnEcdsa);
+    testing.expectEqual("InvalidAccessError", results.ecdsaOnHmac);
+    testing.expectEqual("InvalidAccessError", results.noSign);
+    testing.expectEqual("InvalidAccessError", results.noVerify);
+    testing.expectEqual("InvalidAccessError", results.ecdsaPublicSign);
+    testing.expectEqual("NotSupportedError", results.ecdsaSign);
+    testing.expectEqual("NotSupportedError", results.ecdsaVerify);
   });
 </script>
 
