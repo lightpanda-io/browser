@@ -333,6 +333,211 @@
 }
 </script>
 
+<style>
+  .carousel-shell { overflow: hidden; }
+  .carousel-slide { width: 300px; flex-shrink: 0; }
+</style>
+
+<script id="carouselPagination">
+{
+  const section = document.createElement('div');
+  const shell = document.createElement('div');
+  shell.className = 'carousel-shell';
+  const track = document.createElement('div');
+  track.className = 'flex-row';
+  for (let i = 0; i < 24; i++) {
+    const slide = document.createElement('div');
+    slide.className = 'carousel-slide';
+    track.appendChild(slide);
+  }
+  shell.appendChild(track);
+  section.appendChild(shell);
+  document.body.appendChild(section);
+
+  const slideWidth = track.firstElementChild.getBoundingClientRect().width + 20;
+  const perPage = Math.floor(shell.offsetWidth / slideWidth);
+  testing.expectTrue(Number.isFinite(perPage) && perPage >= 1);
+  const pages = Math.ceil(track.childElementCount / perPage);
+  const dots = document.createElement('div');
+  for (let i = 0; i < pages && i < 50; i++) {
+    dots.appendChild(document.createElement('button'));
+  }
+  testing.expectTrue(dots.childElementCount > 0 && dots.childElementCount < 50);
+  testing.expectEqual(pages, dots.childElementCount);
+  testing.expectEqual(document.body.offsetWidth, shell.offsetWidth);
+  testing.expectTrue(shell.scrollWidth >= shell.clientWidth);
+  section.style.width = '700px';
+  testing.expectEqual(700, shell.offsetWidth);
+  section.remove();
+}
+</script>
+
+<script id="scrollableFlexPagination">
+{
+  const section = document.createElement('div');
+  section.style.width = '700px';
+  const track = document.createElement('div');
+  track.style.cssText = 'display: flex; overflow-x: auto';
+  for (let i = 0; i < 24; i++) {
+    const slide = document.createElement('div');
+    slide.className = 'carousel-slide';
+    track.appendChild(slide);
+  }
+  section.appendChild(track);
+  document.body.appendChild(section);
+  const slideWidth = track.firstElementChild.getBoundingClientRect().width + 20;
+  testing.expectEqual(700, track.offsetWidth);
+  testing.expectEqual(2, Math.floor(track.offsetWidth / slideWidth));
+  testing.expectEqual(7200, track.scrollWidth);
+  section.remove();
+}
+</script>
+
+<script id="clippingBlockWidths">
+{
+  const section = document.createElement('div');
+  section.style.width = '700px';
+  document.body.appendChild(section);
+  for (const display of ['block', 'flow-root', 'list-item', 'flex', 'grid']) {
+    for (const overflow of ['hidden', 'clip', 'auto', 'scroll', 'overlay']) {
+      const box = document.createElement('div');
+      box.style.cssText = `display: ${display}; overflow-x: ${overflow}`;
+      section.appendChild(box);
+      testing.expectEqual(700, box.offsetWidth);
+      testing.expectEqual(700, box.scrollWidth);
+      box.style.width = '40px';
+      testing.expectEqual(40, box.offsetWidth);
+      testing.expectEqual(40, box.scrollWidth);
+      box.remove();
+    }
+  }
+  section.remove();
+}
+</script>
+
+<script id="clippingDefaultBlocks">
+{
+  const section = document.createElement('div');
+  section.style.width = '700px';
+  document.body.appendChild(section);
+  for (const tag of ['div', 'section', 'form', 'li', 'dd', 'dt', 'details', 'summary', 'menu', 'dir', 'hgroup']) {
+    const box = document.createElement(tag);
+    box.style.overflow = 'hidden';
+    section.appendChild(box);
+    testing.expectEqual(700, box.offsetWidth);
+    box.remove();
+  }
+  section.remove();
+}
+</script>
+
+<script id="clippingWidthExclusions">
+{
+  const section = document.createElement('div');
+  section.style.width = '700px';
+  document.body.appendChild(section);
+  for (const css of ['overflow: visible', 'display: inline-block', 'display: inline-flex', 'display: inline-grid', 'display: table', 'position: absolute', 'position: fixed', 'float: left', 'width: max-content', 'width: min-content', 'width: fit-content']) {
+    const box = document.createElement('div');
+    box.style.cssText = `overflow: hidden; ${css}`;
+    const child = document.createElement('div');
+    child.style.width = '40px';
+    box.appendChild(child);
+    section.appendChild(box);
+    testing.expectEqual(40, box.offsetWidth);
+    testing.expectEqual(40, box.scrollWidth);
+    box.remove();
+  }
+  for (const display of ['flex', 'grid', 'inline-flex', 'inline-grid']) {
+    section.style.display = display;
+    const box = document.createElement('div');
+    box.style.overflow = 'hidden';
+    const child = document.createElement('div');
+    child.style.width = '40px';
+    box.appendChild(child);
+    section.appendChild(box);
+    testing.expectEqual(40, box.offsetWidth);
+    testing.expectEqual(40, box.scrollWidth);
+    box.remove();
+  }
+  section.remove();
+}
+</script>
+
+<script id="clippingSpecialElements">
+{
+  const section = document.createElement('div');
+  section.style.width = '700px';
+  document.body.appendChild(section);
+  for (const tag of ['table', 'img', 'iframe', 'canvas', 'video', 'audio', 'object', 'embed', 'input', 'select', 'textarea', 'button', 'meter', 'progress', 'fieldset']) {
+    const box = document.createElement(tag);
+    box.style.cssText = 'display: block; overflow: hidden';
+    section.appendChild(box);
+    testing.expectEqual(5, box.offsetWidth);
+    testing.expectEqual(5, box.scrollWidth);
+    box.remove();
+  }
+  const table = document.createElement('table');
+  table.style.overflow = 'hidden';
+  section.appendChild(table);
+  testing.expectEqual(5, table.offsetWidth);
+  table.style.overflow = 'visible';
+  const child = document.createElement('div');
+  child.style.overflow = 'hidden';
+  table.appendChild(child);
+  testing.expectEqual(5, child.offsetWidth);
+  section.remove();
+}
+</script>
+
+<script id="clippingWidthAttributes">
+{
+  const section = document.createElement('div');
+  section.style.width = '100px';
+  document.body.appendChild(section);
+  for (const tag of ['img', 'iframe']) {
+    const box = document.createElement(tag);
+    box.setAttribute('width', '400');
+    box.style.cssText = 'display: block; overflow: hidden';
+    section.appendChild(box);
+    testing.expectEqual(400, box.clientWidth);
+    testing.expectEqual(400, box.scrollWidth);
+    box.style.width = '80px';
+    testing.expectEqual(80, box.clientWidth);
+    testing.expectEqual(80, box.scrollWidth);
+    box.remove();
+  }
+  section.remove();
+}
+</script>
+
+<script id="clippingUnresolvedWidths">
+{
+  const section = document.createElement('div');
+  section.style.width = '700px';
+  document.body.appendChild(section);
+  for (const width of ['50%', '2em', 'calc(100% - 20px)']) {
+    const box = document.createElement('div');
+    box.style.cssText = `overflow: hidden; width: ${width}`;
+    const child = document.createElement('div');
+    child.style.cssText = 'width: 40px; overflow: hidden';
+    box.appendChild(child);
+    section.appendChild(box);
+    testing.expectEqual(40, box.offsetWidth);
+    testing.expectEqual(40, box.scrollWidth);
+    child.style.width = 'auto';
+    testing.expectEqual(5, child.offsetWidth);
+    child.style.width = '40px';
+    box.style.display = 'flex';
+    testing.expectEqual(5, box.offsetWidth);
+    testing.expectEqual(40, box.scrollWidth);
+    box.style.width = 'auto';
+    testing.expectEqual(700, box.offsetWidth);
+    box.remove();
+  }
+  section.remove();
+}
+</script>
+
 <script id="scrollHeightFromContent">
 {
   // An empty element has no content to overflow its box.

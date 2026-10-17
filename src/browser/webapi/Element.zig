@@ -1706,12 +1706,29 @@ pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
 
     if (axis == .width) {
         const owner = self.ownerFrame(frame) orelse return own.value;
+        if (owner._style_manager.clipsAtContainingBlock(self)) {
+            return self.containingBlockWidth(owner);
+        }
         if (owner._style_manager.widthFromContainingBlock(self)) {
             return own.value;
         }
     }
 
     return @max(own.value, self.contentAxis(frame, axis));
+}
+
+// Approximate the width through ordinary auto-width blocks. Stop at roots,
+// declared widths and boxes with special sizing; margins, padding and
+// min/max constraints are not resolved here.
+fn containingBlockWidth(self: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    var parent = self.asNode().flatTreeParentElement(owner);
+    while (parent) |el| : (parent = el.asNode().flatTreeParentElement(owner)) {
+        if (!style_manager.fillsContainingBlock(el)) {
+            return el.boxAxis(owner, .width);
+        }
+    }
+    return self.getElementAxis(owner, .width).value;
 }
 
 pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
@@ -1828,12 +1845,23 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
         return 0.0;
     }
 
-    const width = self.getElementAxis(frame, .width).value;
+    const own = self.getElementAxis(frame, .width);
+    var width = own.value;
 
     // Roots don't sum their children side by side. The root scroller
     // reports what the viewport scrolls over.
     if (self.isRootContainer()) {
         return self.rootScrollSize(frame, .width) orelse width;
+    }
+
+    // Never less than the client width of a box that clips at its
+    // containing block.
+    if (!own.explicit) {
+        if (self.ownerFrame(frame)) |owner| {
+            if (owner._style_manager.clipsAtContainingBlock(self)) {
+                width = self.containingBlockWidth(owner);
+            }
+        }
     }
 
     return @max(width, self.contentAxis(frame, .width));
