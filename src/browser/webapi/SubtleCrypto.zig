@@ -652,10 +652,11 @@ pub fn sign(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
+    const salt_length = try pssSaltLength(algo, local);
     try checkSigningKey(algo, key, CryptoKey.Usages.sign);
     const signature = switch (key._type) {
         .hmac => try HMAC.sign(key, data, exec),
-        .rsa => try RSA.sign(key, data, exec),
+        .rsa => try RSA.sign(key, data, salt_length, exec),
         // A signing algorithm with no sign here yet (ECDSA).
         else => {
             log.debug(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
@@ -675,10 +676,11 @@ pub fn verify(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
+    const salt_length = try pssSaltLength(algo, local);
     try checkSigningKey(algo, key, CryptoKey.Usages.verify);
     const valid = switch (key._type) {
         .hmac => try HMAC.verify(key, signature, data),
-        .rsa => try RSA.verify(key, signature, data),
+        .rsa => try RSA.verify(key, signature, data, salt_length),
         // A signing algorithm with no verify here yet (ECDSA).
         else => {
             log.debug(.not_implemented, "SubtleCrypto.verify", .{ .key_type = key._type });
@@ -686,6 +688,17 @@ pub fn verify(
         },
     };
     return local.resolvePromise(valid);
+}
+
+/// The `saltLength` of an RSA-PSS algorithm (RsaPssParams), null for the other
+/// algorithms. Normalization comes before the key checks: a missing member or
+/// one outside [EnforceRange] unsigned long is a TypeError.
+fn pssSaltLength(algo: algorithm.Sign, local: *const js.Local) !?u32 {
+    if (!eqlIgnoreCase(algo.algoName(), "RSA-PSS")) {
+        return null;
+    }
+    const value = algo.saltLength() orelse return local.typeError("RSA-PSS requires a saltLength");
+    return js.enforceRange(u32, try value.toF64()) catch local.typeError("saltLength is out of range");
 }
 
 /// The checks sign/verify make before the algorithm's own, in the spec's
