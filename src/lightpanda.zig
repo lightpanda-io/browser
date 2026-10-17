@@ -523,6 +523,10 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Fram
                 try st.textStringify(writer);
             }
         },
+        .structured_data => {
+            const data = try structured_data.collectStructuredData(state.root, arena.allocator(), frame);
+            try std.json.Stringify.value(data, .{}, writer);
+        },
         .wpt => try dumpWPT(frame, writer),
     }
 }
@@ -697,6 +701,20 @@ test "writeJsonEnvelope: null frame with dump mode and content" {
     try testing.expectJson(.{
         .dump = "html",
         .content = "<html><body>hello</body></html>",
+    }, aw.written());
+}
+
+test "dumpContent: structured_data" {
+    var page = try testing.pageTest("structured_data.html", .{});
+    defer page.close();
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dumpContent(testing.test_app, .structured_data, .{ .dump = .{} }, page.frame().?, &aw.writer);
+    try testing.expectJson(.{
+        .jsonLd = &.{"{\"@type\":\"Product\",\"name\":\"Blue Kettle\"}"},
+        .openGraph = .{ .type = "product" },
+        .meta = .{ .language = "en", .title = "Blue Kettle" },
+        .links = .{ .canonical = "http://127.0.0.1:9582/products/blue-kettle" },
     }, aw.written());
 }
 
