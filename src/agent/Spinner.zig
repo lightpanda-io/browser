@@ -18,9 +18,53 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const builtin = @import("builtin");
 const log = lp.log;
 const ansi = @import("ansi.zig");
 const truncateUtf8 = @import("../string.zig").truncateUtf8;
+
+// std.posix writes need an fd_t, which is a HANDLE on
+// Windows; kernel32's WriteFile is the equivalent.
+extern "kernel32" fn WriteFile(
+    hFile: std.os.windows.HANDLE,
+    lpBuffer: [*]const u8,
+    nNumberOfBytesToWrite: u32,
+    lpNumberOfBytesWritten: *u32,
+    lpOverlapped: ?*anyopaque,
+) std.os.windows.BOOL;
+
+fn writeRaw(handle: std.os.windows.HANDLE, bytes: []const u8) void {
+    var written: u32 = 0;
+    _ = WriteFile(handle, bytes.ptr, @intCast(bytes.len), &written, null);
+}
+
+fn writeErr(bytes: []const u8) void {
+    if (comptime builtin.os.tag == .windows) {
+        writeRaw(std.Io.File.stderr().handle, bytes);
+    } else {
+        _ = std.c.write(std.posix.STDERR_FILENO, bytes.ptr, bytes.len);
+    }
+}
+
+const COORD = extern struct { X: i16, Y: i16 };
+const SMALL_RECT = extern struct {
+    Left: i16,
+    Top: i16,
+    Right: i16,
+    Bottom: i16,
+};
+const CONSOLE_SCREEN_BUFFER_INFO = extern struct {
+    dwSize: COORD,
+    dwCursorPosition: COORD,
+    wAttributes: u16,
+    srWindow: SMALL_RECT,
+    dwMaximumWindowSize: COORD,
+};
+
+extern "kernel32" fn GetConsoleScreenBufferInfo(
+    hConsoleOutput: std.os.windows.HANDLE,
+    lpConsoleScreenBufferInfo: *CONSOLE_SCREEN_BUFFER_INFO,
+) std.os.windows.BOOL;
 
 const Spinner = @This();
 
@@ -145,7 +189,7 @@ pub fn stop(self: *Spinner) void {
         "\r" ++ clear_eol ++ ansi.dim ++ "[agent: worked for {d:.1}s · {d} tool call{s}]" ++ ansi.reset ++ "\n",
         .{ elapsed_s, self.tool_calls, if (self.tool_calls == 1) "" else "s" },
     ) catch return;
-    _ = std.c.write(std.posix.STDERR_FILENO, (summary).ptr, (summary).len);
+    writeErr(summary);
 
     self.state = .idle;
     self.paused = false;
@@ -159,7 +203,7 @@ pub fn cancel(self: *Spinner) void {
     self.mu.lockUncancelable(lp.io);
     defer self.mu.unlock(lp.io);
     if (self.state == .idle) return;
-    _ = std.c.write(std.posix.STDERR_FILENO, ("\r" ++ clear_eol).ptr, ("\r" ++ clear_eol).len);
+    writeErr("\r" ++ clear_eol);
     self.state = .idle;
     self.paused = false;
     self.last_render_len = 0;
@@ -175,7 +219,7 @@ pub fn pause(self: *Spinner) void {
     defer self.mu.unlock(lp.io);
     if (self.state == .idle or self.paused) return;
     self.paused = true;
-    _ = std.c.write(std.posix.STDERR_FILENO, ("\r" ++ clear_eol).ptr, ("\r" ++ clear_eol).len);
+    writeErr("\r" ++ clear_eol);
     self.last_render_len = 0;
     self.cv.signal(lp.io);
 }
@@ -234,10 +278,10 @@ pub fn emitAbove(self: *Spinner, text: []const u8) bool {
     self.mu.lockUncancelable(lp.io);
     defer self.mu.unlock(lp.io);
     if (self.state == .idle) return false;
-    _ = std.c.write(std.posix.STDERR_FILENO, ("\r" ++ clear_eol).ptr, ("\r" ++ clear_eol).len);
-    _ = std.c.write(std.posix.STDERR_FILENO, (text).ptr, (text).len);
+    writeErr("\r" ++ clear_eol);
+    writeErr(text);
     if (text.len == 0 or text[text.len - 1] != '\n') {
-        _ = std.c.write(std.posix.STDERR_FILENO, ("\n").ptr, ("\n").len);
+        writeErr("\n");
     }
     self.last_render_len = 0;
     self.renderLocked();
@@ -307,14 +351,23 @@ fn renderLocked(self: *Spinner) void {
     if (written.len == self.last_render_len and std.mem.eql(u8, written, self.last_render_buf[0..self.last_render_len])) return;
     @memcpy(self.last_render_buf[0..written.len], written);
     self.last_render_len = written.len;
-    _ = std.c.write(std.posix.STDERR_FILENO, (written).ptr, (written).len);
+    writeErr(written);
 }
 
-/// Current terminal width in columns, queried via TIOCGWINSZ on stderr.
-/// Null when stderr isn't a tty, the ioctl fails, or the kernel reports 0
-/// (some pseudo-ttys leave the field unset). Cheap enough to call per render
-/// frame; picks up resizes without SIGWINCH plumbing.
+/// Current terminal width in columns, queried via TIOCGWINSZ on stderr
+/// (GetConsoleScreenBufferInfo on Windows). Null when stderr isn't a tty,
+/// the query fails, or the kernel reports 0 (some pseudo-ttys leave the
+/// field unset). Cheap enough to call per render frame; picks up resizes
+/// without SIGWINCH plumbing.
 fn columns() ?u16 {
+    if (comptime builtin.os.tag == .windows) {
+        var info: CONSOLE_SCREEN_BUFFER_INFO = undefined;
+        if (GetConsoleScreenBufferInfo(std.Io.File.stderr().handle, &info) == .FALSE)
+            return null;
+        const cols = info.srWindow.Right - info.srWindow.Left + 1;
+        if (cols <= 0) return null;
+        return @intCast(cols);
+    }
     var ws: std.posix.winsize = undefined;
     // bitcast via c_uint: on archs where `_IOR` sets the direction bit
     // (MIPS/PPC/SPARC), `IOCGWINSZ` exceeds i32 range, so a plain @intCast
