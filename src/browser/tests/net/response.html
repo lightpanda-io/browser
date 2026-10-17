@@ -146,6 +146,14 @@
   );
   const fd9 = await res9.formData();
 
+  // A part with a filename parses into a File.
+  const res10 = new Response(
+    '--B\r\nContent-Disposition: form-data; name="f"; filename="a.txt"\r\nContent-Type: text/plain\r\n\r\nhello\r\n--B--\r\n',
+    { headers: { 'Content-Type': 'multipart/form-data; boundary=B' } },
+  );
+  const file10 = (await res10.formData()).get('f');
+  const text10 = await file10.text();
+
   state.resolve();
   await state.done(() => {
     testing.expectEqual(true, fd1 instanceof FormData);
@@ -173,6 +181,11 @@
     testing.expectEqual(0, [...fd7].length);
     testing.expectEqual(true, rejected8);
     testing.expectEqual('v', fd9.get('n'));
+
+    testing.expectEqual(true, file10 instanceof File);
+    testing.expectEqual('a.txt', file10.name);
+    testing.expectEqual('text/plain', file10.type);
+    testing.expectEqual('hello', text10);
   });
 </script>
 
