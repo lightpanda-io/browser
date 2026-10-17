@@ -1030,7 +1030,22 @@ fn touch(server: *Server, conn: *Connection, now: u64) void {
     server.http_connections.append(&conn.node);
 }
 
-pub fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
+pub fn buildJSONVersionResponse(app: *const App, port: ?u16) ![]const u8 {
+    // Unix sockets have no connectable TCP WebSocket URL. Do not invent
+    // ws://localhost:0/ and accidentally advertise an unsecured endpoint.
+    // Unix-socket-aware clients should connect directly to the socket path.
+    if (port == null) {
+        const body =
+            "{\"Browser\": \"Lightpanda/1.0\", " ++
+            "\"Protocol-Version\": \"1.3\", " ++
+            "\"User-Agent\": \"Lightpanda/1.0\", " ++
+            "\"Lightpanda-Version\": \"" ++ lp.build_config.version ++ "\", " ++
+            "\"webSocketDebuggerUrl\": null}";
+        return app.allocator.print(
+            "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{s}",
+            .{ body.len, body },
+        );
+    }
     const host = app.config.advertiseHost();
     if (app.config.bindIsWildcard()) {
         // Serve is bound to INADDR_ANY but no --advertise-host was given;
@@ -1049,14 +1064,14 @@ pub fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
         "\"Lightpanda-Version\": \"" ++ lp.build_config.version ++ "\", " ++
         "\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"" ++
         "}}";
-    const body_len = std.fmt.count(body_format, .{ host, port });
+    const body_len = std.fmt.count(body_format, .{ host, port.? });
 
     const response_format =
         "HTTP/1.1 200 OK\r\n" ++
         "Content-Length: {d}\r\n" ++
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
         body_format;
-    return try app.allocator.print(response_format, .{ body_len, host, port });
+    return try app.allocator.print(response_format, .{ body_len, host, port.? });
 }
 
 // Where the upgraded socket goes: a new worker, or an existing session's.

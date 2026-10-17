@@ -68,6 +68,11 @@
     \\              cdp        Chrome DevTools Protocol (WebSocket on /).
     \\              webdriver  WebDriver BiDi (WebSocket on /session) plus the
     \\                         classic WebDriver session endpoints.
+    \\  --socket <PATH>
+    \\          Serve CDP over a local Unix-domain socket instead of TCP.
+    \\          Must be absolute; cannot combine with --host, --port,
+    \\          --advertise-host, or WebDriver BiDi. Owner-only mode 0600.
+    \\          /json/version does not advertise a TCP WebSocket URL.
     \\  --remote-allow-origins <ORIGIN>
     \\          Origin (e.g. http://localhost:3000) allowed in the Origin header
     \\          of CDP and BiDi WebSocket upgrades, or * to allow any. Can be
