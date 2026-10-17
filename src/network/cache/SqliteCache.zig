@@ -441,7 +441,7 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
     });
 }
 
-const testing = std.testing;
+const testing = @import("../../testing.zig");
 
 fn setupCache(allocator: std.mem.Allocator) !Cache {
     return Cache{ .kind = .{ .sqlite = try .init(allocator, .memory, 0) } };
@@ -489,9 +489,9 @@ test "SqliteCache: basic put and get" {
     );
 
     try testing.expect(result == .hit);
-    try testing.expectEqualStrings("hello world", result.hit.data.buffer);
+    try testing.expectEqual("hello world", result.hit.data.buffer);
     try testing.expectEqual(@as(u16, 200), result.hit.status);
-    try testing.expectEqualStrings("text/html", result.hit.content_type);
+    try testing.expectEqual("text/html", result.hit.content_type);
 }
 
 test "SqliteCache: get expiration" {
@@ -538,7 +538,7 @@ test "SqliteCache: get expiration" {
         },
     );
     try testing.expect(stale == .revalidate);
-    try testing.expectEqualStrings("hello world", stale.revalidate.data.buffer);
+    try testing.expectEqual("hello world", stale.revalidate.data.buffer);
 }
 
 test "SqliteCache: get expiration (without validators)" {
@@ -615,7 +615,7 @@ test "SqliteCache: put override" {
             },
         );
         try testing.expect(result == .hit);
-        try testing.expectEqualStrings("hello world", result.hit.data.buffer);
+        try testing.expectEqual("hello world", result.hit.data.buffer);
     }
 
     {
@@ -640,7 +640,7 @@ test "SqliteCache: put override" {
             },
         );
         try testing.expect(result == .hit);
-        try testing.expectEqualStrings("goodbye world", result.hit.data.buffer);
+        try testing.expectEqual("goodbye world", result.hit.data.buffer);
     }
 }
 
@@ -673,7 +673,7 @@ test "SqliteCache: vary hit and miss" {
         .request_headers = &.{.{ .name = "Accept-Encoding", .value = "gzip" }},
     });
     try testing.expect(hit == .hit);
-    try testing.expectEqualStrings("hello world", hit.hit.data.buffer);
+    try testing.expectEqual("hello world", hit.hit.data.buffer);
 
     const mismatch = try cache.get(arena.allocator(), .{
         .url = "https://example.com",
@@ -723,7 +723,7 @@ test "SqliteCache: vary multiple headers" {
         },
     });
     try testing.expect(hit == .hit);
-    try testing.expectEqualStrings("hello world", hit.hit.data.buffer);
+    try testing.expectEqual("hello world", hit.hit.data.buffer);
 
     const mismatch = try cache.get(arena.allocator(), .{
         .url = "https://example.com",
@@ -844,7 +844,7 @@ test "SqliteCache: put after clear works" {
         },
     );
     try testing.expect(result == .hit);
-    try testing.expectEqualStrings("after clear", result.hit.data.buffer);
+    try testing.expectEqual("after clear", result.hit.data.buffer);
 }
 
 test "SqliteCache: evict removes entry" {
@@ -966,7 +966,7 @@ test "SqliteCache: renew preserves body" {
         },
     );
     try testing.expect(result == .hit);
-    try testing.expectEqualStrings("original body", result.hit.data.buffer);
+    try testing.expectEqual("original body", result.hit.data.buffer);
 }
 
 test "SqliteCache: renew merges the 304's headers into the stored ones" {
@@ -1024,8 +1024,8 @@ test "SqliteCache: renew merges the 304's headers into the stored ones" {
     const headers = result.hit.headers;
     try testing.expectEqual(expected.len, headers.len);
     for (expected, headers) |e, h| {
-        try testing.expectEqualStrings(e.name, h.name);
-        try testing.expectEqualStrings(e.value, h.value);
+        try testing.expectEqual(e.name, h.name);
+        try testing.expectEqual(e.value, h.value);
     }
 }
 
@@ -1157,11 +1157,12 @@ test "SqliteCache: evicts oldest entries over the limit" {
             .request_headers = &.{},
         });
         try testing.expect(hit == .hit);
-        try testing.expectEqualStrings(url, hit.hit.data.buffer);
+        try testing.expectEqual(url, hit.hit.data.buffer);
     }
 }
 
 test "SqliteCache: starts over from an unreadable database" {
+    testing.expectLog(&.{.cache});
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "cache.db", .data = "This is not an SQLite database, only a page of text where its header would be." });
@@ -1194,5 +1195,5 @@ test "SqliteCache: starts over from an unreadable database" {
         .request_headers = &.{},
     });
     try testing.expect(result == .hit);
-    try testing.expectEqualStrings("hello world", result.hit.data.buffer);
+    try testing.expectEqual("hello world", result.hit.data.buffer);
 }

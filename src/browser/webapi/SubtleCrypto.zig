@@ -389,16 +389,16 @@ fn exportJwk(key: *CryptoKey, exec: *const Execution) !Jwk {
 }
 
 /// Derive an array of bits from a base key. `length` is in bits and may be null
-/// (the WebIDL type is `unsigned long?`).
+/// (the WebIDL type is `[EnforceRange] unsigned long?`).
 pub fn deriveBits(
     _: *const SubtleCrypto,
     algo: algorithm.Derive,
     base_key: *const CryptoKey,
-    length: ?u32,
+    length: ?js.EnforceRange(u32),
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    const bits = try deriveRaw(algo, base_key, length, base_key.canDeriveBits(), exec);
+    const bits = try deriveRaw(algo, base_key, if (length) |l| l.value else null, base_key.canDeriveBits(), exec);
     return local.resolvePromise(js.ArrayBuffer{ .values = bits });
 }
 

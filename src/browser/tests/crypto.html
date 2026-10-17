@@ -125,6 +125,46 @@
   });
 </script>
 
+<script id=deriveBits-length type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const key = await subtle.importKey("raw", new TextEncoder().encode("password"), "PBKDF2", false, ["deriveBits"]);
+  const pbkdf2 = (iterations) => ({ name: "PBKDF2", hash: "SHA-256", salt: new Uint8Array(16), iterations });
+  const derive = (length, iterations = 1000) => errorName(() => subtle.deriveBits(pbkdf2(iterations), key, length));
+
+  const results = {
+    ok: await derive(256),
+    nullLength: await derive(null),
+    // [EnforceRange]: -8 used to wrap to 2^32 - 8 bits.
+    nan: await derive(NaN),
+    infinity: await derive(Infinity),
+    negative: await derive(-8),
+    tooLarge: await derive(2 ** 32 + 8),
+    // Valid lengths whose cost (blocks * iterations) is over the PBKDF2 limit.
+    hugeLength: await derive(2 ** 32 - 8, 100000),
+    hugeIterations: await derive(256, 2 ** 24 + 1),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(null, results.ok);
+    testing.expectEqual("OperationError", results.nullLength);
+    for (const name of ["nan", "infinity", "negative", "tooLarge"]) {
+      testing.expectEqual(`${name}: TypeError`, `${name}: ${results[name]}`);
+    }
+    testing.expectEqual("OperationError", results.hugeLength);
+    testing.expectEqual("OperationError", results.hugeIterations);
+  });
+</script>
+
 <script id=rsa-oaep-roundtrip type=module>
   const state = await testing.async();
   const { privateKey, publicKey } = await crypto.subtle.generateKey(

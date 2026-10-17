@@ -215,8 +215,8 @@ const RectInit = struct {
 };
 
 const PlaneLayoutInit = struct {
-    offset: f64,
-    stride: f64,
+    offset: js.EnforceRange(u32),
+    stride: js.EnforceRange(u32),
 };
 
 const PlaneLayout = struct {
@@ -226,17 +226,17 @@ const PlaneLayout = struct {
 
 // VideoFrameBufferInit
 const BufferInit = struct {
-    codedHeight: f64,
-    codedWidth: f64,
+    codedHeight: js.EnforceRange(u32),
+    codedWidth: js.EnforceRange(u32),
     colorSpace: ?VideoColorSpace.Init = null,
-    displayHeight: ?f64 = null,
-    displayWidth: ?f64 = null,
-    duration: ?f64 = null,
+    displayHeight: ?js.EnforceRange(u32) = null,
+    displayWidth: ?js.EnforceRange(u32) = null,
+    duration: ?js.EnforceRange(u64) = null,
     flip: bool = false,
     format: []const u8,
     layout: ?[]const PlaneLayoutInit = null,
     rotation: f64 = 0,
-    timestamp: f64,
+    timestamp: js.EnforceRange(i64),
     transfer: []const js.Value = &.{},
     visibleRect: ?RectInit = null,
 };
@@ -244,12 +244,12 @@ const BufferInit = struct {
 // VideoFrameInit
 const ImageInit = struct {
     alpha: []const u8 = "keep",
-    displayHeight: ?f64 = null,
-    displayWidth: ?f64 = null,
-    duration: ?f64 = null,
+    displayHeight: ?js.EnforceRange(u32) = null,
+    displayWidth: ?js.EnforceRange(u32) = null,
+    duration: ?js.EnforceRange(u64) = null,
     flip: bool = false,
     rotation: f64 = 0,
-    timestamp: ?f64 = null,
+    timestamp: ?js.EnforceRange(i64) = null,
     visibleRect: ?RectInit = null,
 };
 
@@ -337,12 +337,12 @@ fn rectMember(value: f64) !u32 {
 
 const DisplaySize = struct { width: u32, height: u32 };
 
-fn explicitDisplaySize(width: ?f64, height: ?f64) !?DisplaySize {
+fn explicitDisplaySize(width: ?js.EnforceRange(u32), height: ?js.EnforceRange(u32)) !?DisplaySize {
     if ((width == null) != (height == null)) {
         return error.TypeError;
     }
-    const w = try common.optionalEnforceRange(u32, width) orelse return null;
-    const h = (try common.optionalEnforceRange(u32, height)).?;
+    const w = (width orelse return null).value;
+    const h = height.?.value;
     if (w == 0 or h == 0) {
         return error.TypeError;
     }
@@ -351,10 +351,10 @@ fn explicitDisplaySize(width: ?f64, height: ?f64) !?DisplaySize {
 
 fn fromBuffer(data: []const u8, init: BufferInit, page: *Page) !*VideoFrame {
     const format = try parseFormat(init.format);
-    const coded_width = try common.enforceRange(u32, init.codedWidth);
-    const coded_height = try common.enforceRange(u32, init.codedHeight);
-    const timestamp = try common.enforceRange(i64, init.timestamp);
-    const duration = try common.optionalEnforceRange(u64, init.duration);
+    const coded_width = init.codedWidth.value;
+    const coded_height = init.codedHeight.value;
+    const timestamp = init.timestamp.value;
+    const duration = if (init.duration) |d| d.value else null;
     const display = try explicitDisplaySize(init.displayWidth, init.displayHeight);
     const rotation = try parseRotation(init.rotation);
     const color_space: VideoColorSpace.Value = if (init.colorSpace) |cs| try cs.toValue() else defaultColorSpace(format);
@@ -447,8 +447,8 @@ fn fromFrame(other: *const VideoFrame, init: ImageInit, page: *Page) !*VideoFram
     const resource = other._resource.?;
     const keep_alpha = try parseAlpha(init.alpha);
     const format = if (keep_alpha) other_format else other_format.opaqueFormat();
-    const timestamp = if (init.timestamp) |t| try common.enforceRange(i64, t) else other._timestamp;
-    const duration = if (init.duration) |d| try common.enforceRange(u64, d) else other._duration;
+    const timestamp = if (init.timestamp) |t| t.value else other._timestamp;
+    const duration = if (init.duration) |d| d.value else other._duration;
 
     const self = try create(resource.acquire(), page);
     errdefer self.deinit(page);
@@ -485,8 +485,8 @@ fn fromCanvas(width: u32, height: u32, init: ImageInit, page: *Page) !*VideoFram
     if (width > max_canvas_dimension or height > max_canvas_dimension or @as(u64, width) * height > max_canvas_pixels) {
         return error.InvalidStateError;
     }
-    const timestamp = try common.enforceRange(i64, init.timestamp orelse return error.TypeError);
-    const duration = try common.optionalEnforceRange(u64, init.duration);
+    const timestamp = (init.timestamp orelse return error.TypeError).value;
+    const duration = if (init.duration) |d| d.value else null;
     const keep_alpha = try parseAlpha(init.alpha);
     const format: PixelFormat = if (keep_alpha) .RGBA else .RGBX;
 
@@ -684,9 +684,9 @@ fn computeLayout(rect: Rect, format: PixelFormat, layout: ?[]const PlaneLayoutIn
             .stride = undefined,
         };
         if (layout) |l| {
-            const stride = try common.enforceRange(u32, l[i].stride);
+            const stride = l[i].stride.value;
             if (stride < computed.source_width_bytes) return error.TypeError;
-            computed.offset = try common.enforceRange(u32, l[i].offset);
+            computed.offset = l[i].offset.value;
             computed.stride = stride;
         } else {
             computed.offset = min_size;

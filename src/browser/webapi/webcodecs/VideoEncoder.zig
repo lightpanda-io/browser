@@ -44,19 +44,19 @@ pub const Config = struct {
     alpha: []const u8 = "discard",
     av1: ?Av1 = null,
     avc: ?Avc = null,
-    bitrate: ?f64 = null,
+    bitrate: ?js.EnforceRange(u64) = null,
     bitrateMode: []const u8 = "variable",
     codec: []const u8,
     contentHint: ?[]const u8 = null,
-    displayHeight: ?f64 = null,
-    displayWidth: ?f64 = null,
+    displayHeight: ?js.EnforceRange(u32) = null,
+    displayWidth: ?js.EnforceRange(u32) = null,
     framerate: ?f64 = null,
     hardwareAcceleration: []const u8 = "no-preference",
-    height: f64,
+    height: js.EnforceRange(u32),
     hevc: ?Hevc = null,
     latencyMode: []const u8 = "quality",
     scalabilityMode: ?[]const u8 = null,
-    width: f64,
+    width: js.EnforceRange(u32),
 
     // the codec registrations' extensions
     const Av1 = struct {
@@ -86,16 +86,18 @@ pub const Config = struct {
             if (std.math.isFinite(framerate) == false) return false;
         }
 
-        const width = common.enforceRange(u32, self.width) catch return false;
-        const height = common.enforceRange(u32, self.height) catch return false;
-        if (width == 0 or height == 0) return false;
-        const display_width = common.optionalEnforceRange(u32, self.displayWidth) catch return false;
-        const display_height = common.optionalEnforceRange(u32, self.displayHeight) catch return false;
-        if (display_width == 0 or display_height == 0) return false;
+        if (self.width.value == 0 or self.height.value == 0) return false;
+        if (self.displayWidth) |w| {
+            if (w.value == 0) return false;
+        }
+        if (self.displayHeight) |h| {
+            if (h.value == 0) return false;
+        }
 
-        const bitrate = common.optionalEnforceRange(u64, self.bitrate) catch return false;
-        // Not in the spec, but every engine and WPT reject it.
-        if (bitrate == 0) return false;
+        if (self.bitrate) |b| {
+            // Not in the spec, but every engine and WPT reject it.
+            if (b.value == 0) return false;
+        }
         return true;
     }
 };

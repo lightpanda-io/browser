@@ -43,12 +43,12 @@ _core: codec.Core(VideoDecoder),
 
 pub const Config = struct {
     codec: []const u8,
-    codedHeight: ?f64 = null,
-    codedWidth: ?f64 = null,
+    codedHeight: ?js.EnforceRange(u32) = null,
+    codedWidth: ?js.EnforceRange(u32) = null,
     colorSpace: ?VideoColorSpace.Init = null,
     description: ?js.Value = null,
-    displayAspectHeight: ?f64 = null,
-    displayAspectWidth: ?f64 = null,
+    displayAspectHeight: ?js.EnforceRange(u32) = null,
+    displayAspectWidth: ?js.EnforceRange(u32) = null,
     flip: bool = false,
     hardwareAcceleration: []const u8 = "no-preference",
     optimizeForLatency: bool = false,
@@ -71,11 +71,10 @@ pub const Config = struct {
     }
 
     // Both or neither, and neither zero.
-    fn pairIsInvalid(a: ?f64, b: ?f64) bool {
-        if ((a == null) != (b == null)) return true;
-        const x = common.optionalEnforceRange(u32, a) catch return true;
-        const y = common.optionalEnforceRange(u32, b) catch return true;
-        return x == 0 or y == 0;
+    fn pairIsInvalid(a: ?js.EnforceRange(u32), b: ?js.EnforceRange(u32)) bool {
+        const x = a orelse return b != null;
+        const y = b orelse return true;
+        return x.value == 0 or y.value == 0;
     }
 };
 

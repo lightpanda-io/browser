@@ -319,6 +319,8 @@ fn cloneMember(local: *const js.Local, object: js.Object, comptime name: []const
         // description: an AllowSharedBufferSource
         const bytes = (try value.toZig(js.AllowSharedBufferSource)).bytes;
         _ = try object.set(name, js.ArrayBuffer{ .values = bytes }, .{});
+    } else if (comptime @typeInfo(T) == .@"struct" and @hasDecl(T, "js_enforce_range")) {
+        _ = try object.set(name, value.value, .{});
     } else if (T != []const u8 and @typeInfo(T) == .@"struct") {
         _ = try object.set(name, try cloneConfig(local, value), .{});
     } else {
