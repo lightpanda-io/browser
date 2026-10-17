@@ -124,45 +124,74 @@ const TokenStream = struct {
     }
 };
 
+/// The declarations of a `style` attribute or of a `cssText` assignment, on an
+/// element's style or a rule's. Browsers don't parse nested rules there: a
+/// `&.x { … }` is an invalid declaration, skipped through the next top-level
+/// `;` along with whatever follows it.
 pub fn parseDeclarationsList(input: []const u8) DeclarationsIterator {
-    return DeclarationsIterator.init(input);
+    return DeclarationsIterator.init(input, false);
 }
 
-const DeclarationsIterator = struct {
+/// The block of a style rule read from a stylesheet (`<style>`, `insertRule`,
+/// `replace`). CSS Nesting applies: a nested rule ends at its own `}`, so the
+/// declarations after it still parse.
+pub fn parseStyleBlock(input: []const u8) DeclarationsIterator {
+    return DeclarationsIterator.init(input, true);
+}
+
+pub const DeclarationsIterator = struct {
     input: []const u8,
     stream: TokenStream,
+    nesting: bool,
 
-    pub fn init(input: []const u8) DeclarationsIterator {
+    pub fn init(input: []const u8, nesting: bool) DeclarationsIterator {
         return .{
             .input = input,
             .stream = TokenStream.init(input),
+            .nesting = nesting,
         };
     }
 
+    /// The block's declarations, skipping the rules nested in it.
     pub fn next(self: *DeclarationsIterator) ?Declaration {
+        while (self.nextItem()) |item| {
+            switch (item) {
+                .declaration => |declaration| return declaration,
+                .rule, .at_rule => {},
+            }
+        }
+        return null;
+    }
+
+    /// The block's contents (css-syntax-3 "consume a block's contents"): its
+    /// declarations and at-rules and, from `parseStyleBlock`, the style rules
+    /// nested in it (CSS Nesting).
+    pub fn nextItem(self: *DeclarationsIterator) ?BlockItem {
         while (true) {
             self.skipTriviaAndSemicolons();
             const peeked = self.stream.peek() orelse return null;
 
-            switch (peeked.token) {
-                .at_keyword => {
-                    _ = self.stream.next();
-                    self.skipAtRule();
-                },
-                .ident => |name| {
-                    _ = self.stream.next();
-                    if (self.consumeDeclaration(name)) |declaration| {
-                        return declaration;
-                    }
-                },
-                else => {
-                    _ = self.stream.next();
-                    self.skipInvalidDeclaration();
-                },
+            if (peeked.token == .at_keyword) {
+                return .{ .at_rule = consumeAtRule(&self.stream, self.input) };
+            }
+
+            const mark = self.stream;
+            if (peeked.token == .ident) {
+                _ = self.stream.next();
+                if (self.consumeDeclaration(peeked.token.ident)) |declaration| {
+                    return .{ .declaration = declaration };
+                }
+            }
+
+            // Not a declaration, e.g. `&.x { … }` or `div:hover { … }`:
+            // consume it again, as a nested rule where nesting applies.
+            self.stream = mark;
+            if (!self.nesting) {
+                skipInvalidDeclaration(&self.stream);
+            } else if (consumeNestedRule(&self.stream, self.input)) |rule| {
+                return .{ .rule = rule };
             }
         }
-
-        return null;
     }
 
     fn consumeDeclaration(self: *DeclarationsIterator, name: []const u8) ?Declaration {
@@ -170,11 +199,13 @@ const DeclarationsIterator = struct {
 
         const colon = self.stream.next() orelse return null;
         if (!isColon(colon.token)) {
-            self.skipInvalidDeclaration();
             return null;
         }
 
-        const value = self.consumeValue() orelse return null;
+        // Only a custom property's value may hold a `{}` block. Anywhere
+        // else, the block makes this a nested rule or, without nesting, an
+        // invalid declaration.
+        const value = self.consumeValue(std.mem.startsWith(u8, name, "--")) orelse return null;
         return .{
             .name = name,
             .value = value.value,
@@ -187,7 +218,7 @@ const DeclarationsIterator = struct {
         important: bool,
     };
 
-    fn consumeValue(self: *DeclarationsIterator) ?ValueResult {
+    fn consumeValue(self: *DeclarationsIterator, allow_block: bool) ?ValueResult {
         self.skipTrivia();
 
         var depth: usize = 0;
@@ -200,6 +231,9 @@ const DeclarationsIterator = struct {
             if (isSemicolon(peeked.token) and depth == 0) {
                 _ = self.stream.next();
                 break;
+            }
+            if (!allow_block and depth == 0 and peeked.token == .curly_bracket_block) {
+                return null;
             }
 
             const span = self.stream.next() orelse break;
@@ -247,45 +281,6 @@ const DeclarationsIterator = struct {
             } else {
                 break;
             }
-        }
-    }
-
-    fn skipAtRule(self: *DeclarationsIterator) void {
-        var depth: usize = 0;
-        var saw_block = false;
-
-        while (true) {
-            const peeked = self.stream.peek() orelse return;
-            if (!saw_block and isSemicolon(peeked.token) and depth == 0) {
-                _ = self.stream.next();
-                return;
-            }
-
-            const span = self.stream.next() orelse return;
-            if (isWhitespaceOrComment(span.token)) continue;
-
-            if (isBlockStart(span.token)) {
-                depth += 1;
-                saw_block = true;
-            } else if (isBlockEnd(span.token)) {
-                if (depth > 0) depth -= 1;
-                if (saw_block and depth == 0) return;
-            }
-        }
-    }
-
-    fn skipInvalidDeclaration(self: *DeclarationsIterator) void {
-        var depth: usize = 0;
-
-        while (self.stream.peek()) |peeked| {
-            if (isSemicolon(peeked.token) and depth == 0) {
-                _ = self.stream.next();
-                return;
-            }
-
-            const span = self.stream.next() orelse return;
-            if (isWhitespaceOrComment(span.token)) continue;
-            updateDepth(span.token, &depth);
         }
     }
 };
@@ -386,6 +381,16 @@ const Rule = union(enum) {
     at_rule: AtRule,
 };
 
+/// An item of a style rule's block. With CSS Nesting, a block holds style
+/// rules and at-rules next to its declarations. A nested style rule's
+/// selector is its raw source (`&.active`, `> li`); `resolveNestedSelector`
+/// resolves it against the enclosing rule's selector.
+pub const BlockItem = union(enum) {
+    declaration: Declaration,
+    rule: StyleRule,
+    at_rule: AtRule,
+};
+
 pub fn parseStylesheet(input: []const u8) RulesIterator {
     return RulesIterator.init(input);
 }
@@ -415,37 +420,18 @@ pub const RulesIterator = struct {
                 }
 
                 const open_brace = self.stream.next() orelse return null;
-                const block_start = open_brace.end;
-                var block_end = block_start;
-
-                var depth: usize = 1;
-                while (true) {
-                    const span = self.stream.next() orelse {
-                        block_end = self.input.len;
-                        break;
-                    };
-                    if (span.token == .curly_bracket_block) {
-                        depth += 1;
-                    } else if (span.token == .close_curly_bracket) {
-                        depth -= 1;
-                        if (depth == 0) {
-                            block_end = span.start;
-                            break;
-                        }
-                    }
-                }
 
                 var selector = self.input[selector_start.?..selector_end.?];
                 selector = std.mem.trim(u8, selector, &std.ascii.whitespace);
 
                 return .{ .style = .{
                     .selector = selector,
-                    .block = self.input[block_start..block_end],
+                    .block = consumeBlockBody(&self.stream, self.input, open_brace.end),
                 } };
             }
 
             if (peeked.token == .at_keyword) {
-                return .{ .at_rule = self.consumeAtRule() };
+                return .{ .at_rule = consumeAtRule(&self.stream, self.input) };
             }
 
             if (selector_start == null and (isWhitespaceOrComment(peeked.token) or isSemicolon(peeked.token))) {
@@ -476,51 +462,218 @@ pub const RulesIterator = struct {
             }
         }
     }
+};
 
-    /// Consume a full at-rule (statement or block form) and return its
-    /// keyword (without `@`) and full source span. Mirrors `skipAtRule`'s
-    /// termination logic but records spans instead of discarding.
-    fn consumeAtRule(self: *RulesIterator) AtRule {
-        const at_span = self.stream.next() orelse unreachable; // caller peeked an at_keyword
-        const start = at_span.start;
-        const keyword = switch (at_span.token) {
-            .at_keyword => |name| name,
-            else => "",
-        };
-        var end = at_span.end;
-        var depth: usize = 0;
-        var saw_block = false;
+/// Consume a full at-rule (statement or block form) and return its keyword
+/// (without `@`) and full source span. The caller peeked the `at_keyword`.
+fn consumeAtRule(stream: *TokenStream, input: []const u8) AtRule {
+    const at_span = stream.next() orelse unreachable; // caller peeked an at_keyword
+    const start = at_span.start;
+    const keyword = switch (at_span.token) {
+        .at_keyword => |name| name,
+        else => "",
+    };
+    var end = at_span.end;
+    var depth: usize = 0;
+    var saw_block = false;
 
-        while (true) {
-            const peeked = self.stream.peek() orelse break;
-            if (!saw_block and isSemicolon(peeked.token) and depth == 0) {
-                const semi = self.stream.next() orelse break;
-                end = semi.end;
-                break;
-            }
-
-            const span = self.stream.next() orelse break;
-            if (isWhitespaceOrComment(span.token)) {
-                end = span.end;
-                continue;
-            }
-
-            end = span.end;
-            if (span.token == .curly_bracket_block) {
-                depth += 1;
-                saw_block = true;
-            } else if (span.token == .close_curly_bracket) {
-                if (depth > 0) depth -= 1;
-                if (saw_block and depth == 0) break;
-            }
+    while (true) {
+        const peeked = stream.peek() orelse break;
+        if (!saw_block and isSemicolon(peeked.token) and depth == 0) {
+            const semi = stream.next() orelse break;
+            end = semi.end;
+            break;
         }
 
-        return .{
-            .keyword = keyword,
-            .text = self.input[start..end],
-        };
+        const span = stream.next() orelse break;
+        if (isWhitespaceOrComment(span.token)) {
+            end = span.end;
+            continue;
+        }
+
+        end = span.end;
+        if (span.token == .curly_bracket_block) {
+            depth += 1;
+            saw_block = true;
+        } else if (span.token == .close_curly_bracket) {
+            if (depth > 0) depth -= 1;
+            if (saw_block and depth == 0) break;
+        }
     }
-};
+
+    return .{
+        .keyword = keyword,
+        .text = input[start..end],
+    };
+}
+
+/// Consume the rest of a `{}` block whose `{` was just consumed (it ended at
+/// `block_start`), through its matching `}`, and return the body between the
+/// braces. An unclosed block runs to the end of the input.
+fn consumeBlockBody(stream: *TokenStream, input: []const u8, block_start: usize) []const u8 {
+    var depth: usize = 1;
+    while (stream.next()) |span| {
+        if (span.token == .curly_bracket_block) {
+            depth += 1;
+        } else if (span.token == .close_curly_bracket) {
+            depth -= 1;
+            if (depth == 0) {
+                return input[block_start..span.start];
+            }
+        }
+    }
+    return input[block_start..];
+}
+
+/// Consume an invalid declaration through the next top-level `;`. A `{}`
+/// block in it is skipped whole, `;`s included.
+fn skipInvalidDeclaration(stream: *TokenStream) void {
+    var depth: usize = 0;
+    while (stream.next()) |span| {
+        if (depth == 0 and isSemicolon(span.token)) {
+            return;
+        }
+        updateDepth(span.token, &depth);
+    }
+}
+
+/// Consume a style rule nested in a block: a selector then a `{}` block.
+/// Returns null, having consumed it, for anything that reaches a top-level
+/// `;` before a block, or a block with no selector.
+fn consumeNestedRule(stream: *TokenStream, input: []const u8) ?StyleRule {
+    var start: ?usize = null;
+    var end: usize = 0;
+    var depth: usize = 0;
+
+    while (stream.next()) |span| {
+        if (depth == 0) {
+            if (span.token == .curly_bracket_block) {
+                const body = consumeBlockBody(stream, input, span.end);
+                const selector_start = start orelse return null;
+                return .{ .selector = input[selector_start..end], .block = body };
+            }
+            if (isSemicolon(span.token)) {
+                return null;
+            }
+        }
+        if (isWhitespaceOrComment(span.token)) {
+            continue;
+        }
+        if (start == null) start = span.start;
+        end = span.end;
+        updateDepth(span.token, &depth);
+    }
+    return null;
+}
+
+/// Upper bound on a resolved nested selector, in bytes. Each `&` copies the
+/// whole parent, so `& &` nested N deep doubles the text N times: a hostile
+/// stylesheet would reach gigabytes well within MAX_AT_RULE_NESTING. A rule
+/// whose selector would outgrow this is dropped instead.
+pub const MAX_NESTED_SELECTOR_LEN: usize = 64 * 1024;
+
+/// Resolve the selector list of a style rule nested in `parent` (CSS Nesting
+/// §3): each `&` becomes `:is(<parent>)`, and a relative selector (one that
+/// starts with a combinator, or has no `&`) is prefixed with `:is(<parent>) `.
+/// Using `:is()` keeps the spec's specificity (the most specific parent
+/// selector) and lets a parent selector list stand in for a single `&`.
+/// Selectors are split on the commas outside parentheses and brackets; tokens
+/// are copied verbatim. Returns null when the result would exceed
+/// MAX_NESTED_SELECTOR_LEN.
+pub fn resolveNestedSelector(allocator: std.mem.Allocator, parent: []const u8, nested: []const u8) !?[]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var stream = TokenStream.init(nested);
+
+    // Start of the current complex selector in `out`, whether it holds an `&`
+    // yet, and whether it starts with a combinator. Each selector is written
+    // as it streams by, and the parent is inserted at `selector_start` when it
+    // turns out to be relative.
+    var selector_start: usize = 0;
+    var has_nesting = false;
+    var starts_with_combinator = false;
+    var pending_space = false;
+    // A comment with no whitespace on either side separates tokens without
+    // being a descendant combinator: it is kept rather than turned into one.
+    var pending_comment: ?[]const u8 = null;
+    var depth: usize = 0;
+
+    while (true) {
+        if (out.items.len > MAX_NESTED_SELECTOR_LEN) {
+            out.deinit(allocator);
+            return null;
+        }
+        const span = stream.next();
+        const at_comma = if (span) |sp| depth == 0 and sp.token == .comma else true;
+        if (at_comma) {
+            if (out.items.len > selector_start and (starts_with_combinator or !has_nesting)) {
+                // Inserted back to front, to read `:is(<parent>) <selector>`.
+                try out.insertSlice(allocator, selector_start, ") ");
+                try out.insertSlice(allocator, selector_start, parent);
+                try out.insertSlice(allocator, selector_start, ":is(");
+            }
+            if (span == null) {
+                break;
+            }
+            if (out.items.len > selector_start) {
+                try out.appendSlice(allocator, ", ");
+            }
+            selector_start = out.items.len;
+            has_nesting = false;
+            starts_with_combinator = false;
+            pending_space = false;
+            pending_comment = null;
+            continue;
+        }
+
+        const sp = span.?;
+        switch (sp.token) {
+            .white_space => {
+                pending_space = out.items.len > selector_start;
+                pending_comment = null;
+                continue;
+            },
+            .comment => {
+                if (!pending_space and out.items.len > selector_start) {
+                    pending_comment = nested[sp.start..sp.end];
+                }
+                continue;
+            },
+            else => {},
+        }
+        if (pending_space) {
+            try out.append(allocator, ' ');
+        } else if (pending_comment) |comment| {
+            try out.appendSlice(allocator, comment);
+        }
+        pending_space = false;
+        pending_comment = null;
+        if (out.items.len == selector_start) {
+            starts_with_combinator = switch (sp.token) {
+                .delim => |c| c == '>' or c == '+' or c == '~',
+                else => false,
+            };
+        }
+        updateDepth(sp.token, &depth);
+        switch (sp.token) {
+            .delim => |c| if (c == '&') {
+                try out.appendSlice(allocator, ":is(");
+                try out.appendSlice(allocator, parent);
+                try out.append(allocator, ')');
+                has_nesting = true;
+                continue;
+            },
+            else => {},
+        }
+        try out.appendSlice(allocator, nested[sp.start..sp.end]);
+    }
+
+    if (out.items.len > MAX_NESTED_SELECTOR_LEN) {
+        out.deinit(allocator);
+        return null;
+    }
+    return try out.toOwnedSlice(allocator);
+}
 
 const testing = std.testing;
 
@@ -597,4 +750,118 @@ test "RulesIterator: top-level semicolons" {
     rule = it.next() orelse return error.MissingRule;
     try testing.expectEqualStrings("p", rule.style.selector);
     try testing.expectEqual(@as(?Rule, null), it.next());
+}
+
+test "DeclarationsIterator: nested rules end at their own block" {
+    var it = parseStyleBlock(
+        \\ color: red;
+        \\ &.active { color: blue; }
+        \\ .child { display: none }
+        \\ div:hover { color: green; }
+        \\ margin: 0;
+        \\ @media (min-width: 1px) { padding: 0 }
+        \\ --custom: { a: b };
+    );
+
+    var item = it.nextItem() orelse return error.MissingItem;
+    try testing.expectEqualStrings("color", item.declaration.name);
+
+    item = it.nextItem() orelse return error.MissingItem;
+    try testing.expectEqualStrings("&.active", item.rule.selector);
+    try testing.expectEqualStrings(" color: blue; ", item.rule.block);
+
+    item = it.nextItem() orelse return error.MissingItem;
+    try testing.expectEqualStrings(".child", item.rule.selector);
+
+    item = it.nextItem() orelse return error.MissingItem;
+    try testing.expectEqualStrings("div:hover", item.rule.selector);
+    try testing.expectEqualStrings(" color: green; ", item.rule.block);
+
+    item = it.nextItem() orelse return error.MissingItem;
+    try testing.expectEqualStrings("margin", item.declaration.name);
+    try testing.expectEqualStrings("0", item.declaration.value);
+
+    item = it.nextItem() orelse return error.MissingItem;
+    try testing.expectEqualStrings("media", item.at_rule.keyword);
+    try testing.expectEqualStrings("@media (min-width: 1px) { padding: 0 }", item.at_rule.text);
+
+    item = it.nextItem() orelse return error.MissingItem;
+    try testing.expectEqualStrings("--custom", item.declaration.name);
+    try testing.expectEqualStrings("{ a: b }", item.declaration.value);
+
+    try testing.expectEqual(null, it.nextItem());
+}
+
+test "DeclarationsIterator: next skips nested rules" {
+    var it = parseStyleBlock("&.a { color: blue; } color: red; .b { x: y } invalid; margin: 0");
+    var declaration = it.next() orelse return error.MissingDeclaration;
+    try testing.expectEqualStrings("color", declaration.name);
+    try testing.expectEqualStrings("red", declaration.value);
+    declaration = it.next() orelse return error.MissingDeclaration;
+    try testing.expectEqualStrings("margin", declaration.name);
+    try testing.expectEqual(null, it.next());
+}
+
+test "DeclarationsIterator: a declarations list has no nested rules" {
+    // `style=` and cssText: a nested rule is an invalid declaration, skipped
+    // through the next top-level `;`, so `display: none` goes with it.
+    var it = parseDeclarationsList("color: red; &.x { color: blue; } display: none; div:hover { color: green } opacity: 0; --custom: { a: b }; margin: 0");
+
+    var item = it.nextItem() orelse return error.MissingItem;
+    try testing.expectEqualStrings("color", item.declaration.name);
+
+    item = it.nextItem() orelse return error.MissingItem;
+    try testing.expectEqualStrings("--custom", item.declaration.name);
+    try testing.expectEqualStrings("{ a: b }", item.declaration.value);
+
+    item = it.nextItem() orelse return error.MissingItem;
+    try testing.expectEqualStrings("margin", item.declaration.name);
+
+    try testing.expectEqual(null, it.nextItem());
+}
+
+test "resolveNestedSelector" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const cases = [_]struct { parent: []const u8, nested: []const u8, want: []const u8 }{
+        .{ .parent = ".a", .nested = "&.b", .want = ":is(.a).b" },
+        .{ .parent = ".a", .nested = ".b", .want = ":is(.a) .b" },
+        .{ .parent = ".a", .nested = "> li", .want = ":is(.a) > li" },
+        .{ .parent = ".a", .nested = "& + &", .want = ":is(.a) + :is(.a)" },
+        .{ .parent = ".a", .nested = ".x &", .want = ".x :is(.a)" },
+        .{ .parent = ".a", .nested = ":not(&) .b", .want = ":not(:is(.a)) .b" },
+        .{ .parent = ".a, .b", .nested = "&:hover", .want = ":is(.a, .b):hover" },
+        .{ .parent = ".a", .nested = "&.b, .c ,  :is(.d, .e)", .want = ":is(.a).b, :is(.a) .c, :is(.a) :is(.d, .e)" },
+        .{ .parent = ".a", .nested = "[data-x='&']", .want = ":is(.a) [data-x='&']" },
+        .{ .parent = ".a", .nested = "  /* c */ &  .b  ", .want = ":is(.a) .b" },
+        // A selector starting with a combinator is relative even with an `&`.
+        .{ .parent = ".a", .nested = "> .x &", .want = ":is(.a) > .x :is(.a)" },
+        // A comment between two tokens is not a descendant combinator.
+        .{ .parent = ".a", .nested = "&/* c */.b", .want = ":is(.a)/* c */.b" },
+        .{ .parent = ".a", .nested = "& /* c */.b", .want = ":is(.a) .b" },
+    };
+    for (cases) |c| {
+        const got = try resolveNestedSelector(allocator, c.parent, c.nested) orelse return error.TooLong;
+        try testing.expectEqualStrings(c.want, got);
+    }
+}
+
+test "resolveNestedSelector: `& &` stops doubling at the cap" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // Each level doubles the selector: without the cap, 32 levels would be
+    // tens of gigabytes.
+    var selector: []const u8 = ".a";
+    var levels: usize = 0;
+    while (try resolveNestedSelector(allocator, selector, "& &")) |resolved| {
+        try testing.expect(resolved.len <= MAX_NESTED_SELECTOR_LEN);
+        selector = resolved;
+        levels += 1;
+        try testing.expect(levels < 32);
+    }
+    try testing.expect(levels > 0);
 }
