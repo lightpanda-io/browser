@@ -652,18 +652,17 @@ pub fn sign(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    switch (key._type) {
-        // Call sign for HMAC.
-        .hmac => return HMAC.sign(algo, key, data, exec),
-        .rsa => {
-            try checkSigningKey(algo, key, CryptoKey.Usages.sign);
-            return local.resolvePromise(js.ArrayBuffer{ .values = try RSA.sign(key, data, exec) });
-        },
+    try checkSigningKey(algo, key, CryptoKey.Usages.sign);
+    const signature = switch (key._type) {
+        .hmac => try HMAC.sign(key, data, exec),
+        .rsa => try RSA.sign(key, data, exec),
+        // A signing algorithm with no sign here yet (ECDSA).
         else => {
             log.debug(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
-            return error.InvalidAccessError;
+            return error.NotSupported;
         },
-    }
+    };
+    return local.resolvePromise(js.ArrayBuffer{ .values = signature });
 }
 
 /// Verify a digital signature.
@@ -676,24 +675,23 @@ pub fn verify(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    switch (key._type) {
-        .hmac => {
-            if (!algo.isHMAC()) {
-                return error.InvalidAccessError;
-            }
-            return HMAC.verify(key, signature, data, exec);
+    try checkSigningKey(algo, key, CryptoKey.Usages.verify);
+    const valid = switch (key._type) {
+        .hmac => try HMAC.verify(key, signature, data),
+        .rsa => try RSA.verify(key, signature, data),
+        // A signing algorithm with no verify here yet (ECDSA).
+        else => {
+            log.debug(.not_implemented, "SubtleCrypto.verify", .{ .key_type = key._type });
+            return error.NotSupported;
         },
-        .rsa => {
-            try checkSigningKey(algo, key, CryptoKey.Usages.verify);
-            return local.resolvePromise(try RSA.verify(key, signature, data));
-        },
-        else => return error.InvalidAccessError,
-    }
+    };
+    return local.resolvePromise(valid);
 }
 
 /// The checks sign/verify make before the algorithm's own, in the spec's
 /// order: an algorithm that signs (else NotSupported), the key's own algorithm,
-/// and the sign or verify usage (else InvalidAccessError).
+/// and the sign or verify usage (else InvalidAccessError). The names match
+/// case-insensitively, as algorithm normalization does.
 fn checkSigningKey(algo: algorithm.Sign, key: *const CryptoKey, usage: u8) !void {
     const name = algo.algoName();
     const signing = [_][]const u8{ "HMAC", "RSASSA-PKCS1-v1_5", "RSA-PSS", "ECDSA", "Ed25519", "Ed448" };

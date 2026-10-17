@@ -232,12 +232,4 @@ pub const Sign = union(enum) {
             .object => |object| object.name,
         };
     }
-
-    pub fn isHMAC(self: Sign) bool {
-        const name = self.algoName();
-
-        if (name.len < 4) return false;
-        const hmac: u32 = @bitCast([4]u8{ 'H', 'M', 'A', 'C' });
-        return @as(u32, @bitCast(name[0..4].*)) == hmac;
-    }
 };
