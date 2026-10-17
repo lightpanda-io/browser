@@ -1847,6 +1847,10 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception },
         );
         if (wait_for_interception) {
+            // The conn is released below: keep the response so that
+            // cancelAuthChallenge can still deliver it.
+            try transfer.materializeResponse(msg.conn, .{});
+
             self.intercepted += 1;
             if (comptime lp.IS_DEBUG) {
                 log.debug(.http, "wait for auth interception", .{ .intercepted = self.intercepted });
@@ -2264,6 +2268,33 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
 
     transfer.unpark();
     self.processTransfer(transfer) catch |err| {
+        transfer.abortPipelineError(err);
+        return err;
+    };
+}
+
+// CDP Fetch.continueWithAuth with Default or CancelAuth: drop the challenge
+// and deliver the 401/407 response that raised it, materialized before the
+// transfer was parked.
+pub fn cancelAuthChallenge(self: *Client, transfer: *Transfer) !void {
+    if (comptime lp.IS_DEBUG) {
+        log.debug(.http, "cancel auth challenge", .{ .intercepted = self.intercepted });
+    }
+
+    transfer.unpark();
+    transfer._auth_challenge = null;
+
+    if (transfer._cors_cross_origin and transfer.req.request_mode == .cors) {
+        CorsGate.validateResponse(transfer) catch |err| {
+            return transfer.failAsync(err);
+        };
+    }
+
+    if (self.interceptResponse(transfer, .final)) {
+        return;
+    }
+
+    self.deliverResponse(transfer) catch |err| {
         transfer.abortPipelineError(err);
         return err;
     };
@@ -3737,9 +3768,13 @@ pub const Transfer = struct {
         const url = try conn.getEffectiveUrl();
 
         var status = try conn.getResponseCode();
-        if (status == 0 and self._auth_challenge != null) {
-            // A proxy that refuses the CONNECT gives us no status code
-            status = try conn.getConnectCode();
+        if (status == 0) {
+            // A proxy that refuses the CONNECT gives us no status code. Not
+            // tied to _auth_challenge: a 407 may come without Proxy-Authenticate.
+            const connect_status = try conn.getConnectCode();
+            if (connect_status >= 300) {
+                status = connect_status;
+            }
         }
 
         self.res.header = .{
@@ -3910,7 +3945,9 @@ pub const Transfer = struct {
         } else if (conn.getConnectHeader("Proxy-Authenticate", 0)) |hdr| {
             transfer._auth_challenge = http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
         } else {
-            transfer._auth_challenge = .{ .status = status, .source = null, .scheme = null, .realm = null };
+            // A 401/407 without a challenge header is a plain response, not
+            // an auth challenge (e.g. a JSON API with session auth).
+            transfer._auth_challenge = null;
         }
     }
 

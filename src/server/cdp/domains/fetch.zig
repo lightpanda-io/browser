@@ -374,7 +374,9 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
     });
 
     if (params.authChallengeResponse.response != .ProvideCredentials) {
-        transfer.abortAuthChallenge();
+        // Like Chrome: give up on the challenge and let the page see the
+        // 401/407 that raised it.
+        try client.cancelAuthChallenge(transfer);
         return cmd.sendResult(null, .{});
     }
 
@@ -885,12 +887,19 @@ test "cdp.Fetch: enable compiles patterns, disable clears them" {
 // the outcome through the request's own callbacks.
 const ResponseStageProbe = struct {
     streaming: bool = false,
+    status: u16 = 0,
     body: std.ArrayList(u8) = .empty,
     done: bool = false,
     err: ?anyerror = null,
 
     fn deinit(self: *ResponseStageProbe) void {
         self.body.deinit(testing.allocator);
+    }
+
+    fn headerCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.HeaderResult {
+        const self: *ResponseStageProbe = @ptrCast(@alignCast(transfer.req.ctx));
+        self.status = transfer.responseStatus() orelse 0;
+        return .proceed;
     }
 
     fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
@@ -922,6 +931,7 @@ const ResponseStageProbe = struct {
             .streaming = self.streaming,
             .notification = bc.session.notification,
             .ctx = self,
+            .header_callback = headerCallback,
             .data_callback = dataCallback,
             .done_callback = doneCallback,
             .error_callback = errorCallback,
@@ -1236,6 +1246,128 @@ test "cdp.Fetch: closing the browser context releases a response-stage pause" {
     // testing allocator fails the test if anything it held leaks.
     ctx.cdp().disposeBrowserContext();
     try testing.expectEqual(false, probe.done);
+}
+
+fn enableAuthHandling(ctx: anytype) !void {
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Fetch.enable",
+        .params = .{ .patterns = .{.{ .urlPattern = "*" }}, .handleAuthRequests = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+}
+
+fn sentEventCount(ctx: anytype, method: []const u8) usize {
+    var count: usize = 0;
+    for (ctx.received.items) |message| {
+        const m = message.object.get("method") orelse continue;
+        if (std.mem.eql(u8, m.string, method)) count += 1;
+    }
+    return count;
+}
+
+test "cdp.Fetch: a 401 without WWW-Authenticate is delivered, not an auth challenge" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-AU", .session_id = "SID-AU" });
+    try enableAuthHandling(&ctx);
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/status/401");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expect(probe.done);
+    try testing.expectEqual(401, probe.status);
+    try testing.expectEqual(0, sentEventCount(&ctx, "Fetch.authRequired"));
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+fn expectAuthDeclinedDeliversResponse(response: []const u8) !void {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-AU", .session_id = "SID-AU" });
+    try enableAuthHandling(&ctx);
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/xhr/401");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.expectSentEvent("Fetch.authRequired", .{
+        .requestId = "INT-0000000002",
+        .request = .{ .url = "http://127.0.0.1:9582/xhr/401" },
+        .authChallenge = .{ .source = "Server", .scheme = "basic" },
+    }, .{ .session_id = "SID-AU" });
+    try testing.expectEqual(false, probe.done);
+
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueWithAuth", .params = .{
+        .requestId = "INT-0000000002",
+        .authChallengeResponse = .{ .response = response },
+    } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    // Like Chrome, declining the challenge delivers the original response.
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expect(probe.done);
+    try testing.expectEqual(401, probe.status);
+    try testing.expectEqualSlices(u8, "No", probe.body.items);
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: continueWithAuth Default delivers the 401" {
+    try expectAuthDeclinedDeliversResponse("Default");
+}
+
+test "cdp.Fetch: continueWithAuth CancelAuth delivers the 401" {
+    try expectAuthDeclinedDeliversResponse("CancelAuth");
+}
+
+test "cdp.Fetch: continueWithAuth ProvideCredentials retries, a declined retry delivers the 401" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-AU", .session_id = "SID-AU" });
+    try enableAuthHandling(&ctx);
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/xhr/401");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    // The test server rejects any credentials: the retry is challenged again.
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueWithAuth", .params = .{
+        .requestId = "INT-0000000002",
+        .authChallengeResponse = .{ .response = "ProvideCredentials", .username = "u", .password = "p" },
+    } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.authRequired", .{ .requestId = "INT-0000000003" }, .{ .session_id = "SID-AU" });
+
+    try ctx.processMessage(.{ .id = 4, .method = "Fetch.continueWithAuth", .params = .{
+        .requestId = "INT-0000000003",
+        .authChallengeResponse = .{ .response = "CancelAuth" },
+    } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqual(401, probe.status);
+    try testing.expectEqualSlices(u8, "No", probe.body.items);
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
 }
 
 test "cdp.Fetch: cdpErrorReason" {
