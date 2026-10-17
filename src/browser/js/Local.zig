@@ -892,9 +892,9 @@ pub const dictionary_group_marker = "js_grouped_dictionary";
 // automatically, but it's a lot easier just to check it and ask for a manual fix.
 pub fn assertDictionaryFieldOrder(comptime T: type) void {
     const field_names = @typeInfo(T).@"struct".field_names;
-    var i: usize = 1;
-    while (i < field_names.len) : (i += 1) {
-        if (std.mem.order(u8, field_names[i - 1], field_names[i]) == .gt) {
+    if (field_names.len < 2) return;
+    for (field_names[0 .. field_names.len - 1], field_names[1..]) |prev, next| {
+        if (std.mem.order(u8, prev, next) == .gt) {
             @compileError("dictionary fields must be declared in lexicographic order: " ++ @typeName(T));
         }
     }

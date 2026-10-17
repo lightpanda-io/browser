@@ -269,13 +269,12 @@ pub fn Builder(comptime commands: anytype) type {
             const Tag = std.math.IntFittingRange(0, len);
             var names: [len][:0]const u8 = undefined;
 
-            var i: usize = 0;
-            while (i < commands.len) : (i += 1) {
-                names[i] = commands[i].name;
+            for (commands, 0..) |command, i| {
+                names[i] = command.name;
             }
 
             // Entry for help.
-            names[i] = "help";
+            names[commands.len] = "help";
 
             break :blk @Enum(Tag, .exhaustive, &names, &std.simd.iota(Tag, len));
         };
@@ -396,9 +395,7 @@ pub fn Builder(comptime commands: anytype) type {
             var names: [len][:0]const u8 = undefined;
             var types: [len]type = undefined;
 
-            var i: usize = 0;
-            while (i < commands.len) : (i += 1) {
-                const command = commands[i];
+            for (commands, 0..) |command, i| {
                 const Command = @TypeOf(command);
                 const options = command.options;
 
@@ -417,8 +414,8 @@ pub fn Builder(comptime commands: anytype) type {
             }
 
             // Entry for help; just takes `Enum` itself.
-            names[i] = "help";
-            types[i] = Enum;
+            names[commands.len] = "help";
+            types[commands.len] = Enum;
 
             break :blk @Union(.auto, Enum, &names, &types, &@splat(.{}));
         };
