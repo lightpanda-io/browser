@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const builtin = @import("builtin");
 
 const App = @import("../App.zig");
 const sys_net = @import("../sys/net.zig");
@@ -262,7 +263,10 @@ pub const Connection = struct {
                 try self.ensureCapacity(@min(self.buf.len * 2, self.max));
             }
 
-            const n = try posix.read(socket, self.buf[len..]);
+            const n = if (comptime builtin.os.tag == .windows)
+                try sys_net.readSocket(socket, self.buf[len..])
+            else
+                try posix.read(socket, self.buf[len..]);
             if (n == 0) {
                 return error.ConnectionClosed;
             }
@@ -329,7 +333,12 @@ pub const Connection = struct {
             }
 
             conn.node = .{};
-            conn.socket = -1;
+            conn.socket = if (comptime builtin.os.tag == .windows)
+                // INVALID_SOCKET: socket_t is a HANDLE
+                // on Windows, ~0 is its invalid sentinel.
+                @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))))
+            else
+                -1;
             conn.address = .{ .ip4 = .unspecified(0) };
             conn.deadline = 0;
             conn.pending = null;
@@ -346,7 +355,12 @@ pub const Connection = struct {
             errdefer allocator.destroy(conn);
             conn.* = .{
                 .node = .{},
-                .socket = -1,
+                .socket = if (comptime builtin.os.tag == .windows)
+                    // INVALID_SOCKET: socket_t is a HANDLE
+                    // on Windows, ~0 is its invalid sentinel.
+                    @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))))
+                else
+                    -1,
                 .address = .{ .ip4 = .unspecified(0) },
                 .deadline = 0,
                 .pending = null,
