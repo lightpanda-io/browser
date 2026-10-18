@@ -1933,6 +1933,19 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
                     .arena = try self.getArena(.large, "Frame.navigate"),
                 } };
             },
+            .text_xml, .other_xml => {
+                // XML ignores <meta charset>. Priority is BOM, header and XML declaration
+                // declaration (a BOM overrides both when decoding).
+                const label = if (mime.is_default_charset) Mime.xmlDeclarationEncoding(data) else mime.charsetString();
+                if (h5e.EncodingInfo.forLabel(label)) |info| {
+                    self.charset = info.name();
+                }
+                self._parse_state = .{ .html = .{
+                    .buffer = .empty,
+                    .arena = try self.getArena(.large, "Frame.navigate"),
+                    .xml = true,
+                } };
+            },
             .application_json, .text_javascript, .text_css, .text_plain, .text_markdown => {
                 var arr: std.ArrayList(u8) = .empty;
                 try arr.appendSlice(self.page_arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>");
@@ -2025,7 +2038,17 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
 
                 preload.prescan(self, raw_html);
 
-                if (std.mem.eql(u8, self.charset, "UTF-8")) {
+                if (html.xml) {
+                    const encoding = h5e.EncodingInfo.forLabel(self.charset) orelse h5e.EncodingInfo.utf8();
+                    const xml = try h5e.validUtf8(html.arena.allocator(), encoding, raw_html);
+                    if (Parser.isWellFormedXML(xml)) {
+                        parser.parseXML(xml);
+                    } else {
+                        log.info(.frame, "malformed xml parsed as html", .{ .url = self.url });
+                        // try to pass it through the HTML parser
+                        parser.parse(xml);
+                    }
+                } else if (std.mem.eql(u8, self.charset, "UTF-8")) {
                     parser.parse(raw_html);
                 } else {
                     parser.parseWithEncoding(raw_html, self.charset);
@@ -3708,6 +3731,7 @@ const ParseState = union(enum) {
     err: anyerror,
     html: struct {
         arena: *lp.Arena,
+        xml: bool = false,
         buffer: std.ArrayList(u8),
     },
     text: std.ArrayList(u8),

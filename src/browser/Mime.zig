@@ -298,6 +298,42 @@ pub fn prescanCharset(html: []const u8) ?[]const u8 {
     return null;
 }
 
+/// The encoding named by an XML declaration:
+///   <?xml version="1.0" encoding="X"?>
+/// optionally at the very start of `xml`
+pub fn xmlDeclarationEncoding(xml: []const u8) ?[]const u8 {
+    if (std.mem.startsWith(u8, xml, "<?xml") == false) {
+        return null;
+    }
+    const end = std.mem.findPos(u8, xml, 5, "?>") orelse return null;
+    const decl = xml[5..end];
+
+    var pos: usize = 0;
+    while (std.mem.findPos(u8, decl, pos, "encoding")) |index| {
+        pos = index + "encoding".len;
+        // Only as an attribute name: "1.0" or "standalone" values can't
+        // contain it, but a pseudo-attribute like "xencoding" could.
+        if (index == 0 or std.ascii.isWhitespace(decl[index - 1]) == false) {
+            continue;
+        }
+        var rest = std.mem.trimStart(u8, decl[pos..], " \t\r\n");
+        if (rest.len == 0 or rest[0] != '=') {
+            continue;
+        }
+        rest = std.mem.trimStart(u8, rest[1..], " \t\r\n");
+        if (rest.len == 0 or (rest[0] != '"' and rest[0] != '\'')) {
+            return null;
+        }
+        const close = std.mem.findScalarPos(u8, rest, 1, rest[0]) orelse return null;
+        const encoding = rest[1..close];
+        if (encoding.len == 0 or encoding.len > 40) {
+            return null;
+        }
+        return encoding;
+    }
+    return null;
+}
+
 fn findAttrValue(attrs: []const u8, name: []const u8) ?[]const u8 {
     var pos: usize = 0;
     while (pos < attrs.len) {
@@ -1066,6 +1102,29 @@ test "Mime: isXML" {
     try assert(false, "application/json");
     try assert(false, "application/xmlfoo");
     try assert(false, "text/xm");
+}
+
+test "Mime: xmlDeclarationEncoding" {
+    const assert = struct {
+        fn assert(expected: ?[]const u8, input: []const u8) !void {
+            const actual = Mime.xmlDeclarationEncoding(input);
+            if (expected) |e| {
+                try testing.expectEqual(e, actual.?);
+            } else {
+                try testing.expectEqual(null, actual);
+            }
+        }
+    }.assert;
+    try assert("ISO-8859-1", "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><html/>");
+    try assert("windows-1252", "<?xml version='1.0' encoding = 'windows-1252' standalone='yes'?>");
+    try assert("utf-8", "<?xml version=\"1.0\"\n\tencoding=\"utf-8\"?>");
+    try assert(null, "<?xml version=\"1.0\"?><html/>");
+    try assert(null, "<?xml version=\"1.0\" xencoding=\"utf-8\"?>");
+    try assert(null, "<?xml version=\"1.0\" encoding=utf-8?>");
+    try assert(null, "<?xml version=\"1.0\" encoding=\"\"?>");
+    try assert(null, " <?xml version=\"1.0\" encoding=\"utf-8\"?>");
+    try assert(null, "<html><?xml version=\"1.0\" encoding=\"utf-8\"?>");
+    try assert(null, "<?xml version=\"1.0\" encoding=\"utf-8\"");
 }
 
 test "Mime: sniff" {
