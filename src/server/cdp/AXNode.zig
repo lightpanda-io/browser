@@ -482,6 +482,42 @@ pub const Writer = struct {
                     },
                     else => {},
                 }
+
+                // Expose explicit ARIA states on custom widgets. Never infer
+                // these states from the presence of an attribute alone.
+                if (el.getAttributeSafe(.wrap("aria-expanded"))) |expanded| {
+                    // Native select already writes an expanded property above.
+                    if (el.getTag() != .select) {
+                        if (std.mem.eql(u8, expanded, "true")) {
+                            try self.writeAXProperty(.{ .name = .expanded, .value = .{ .booleanOrUndefined = true } }, w);
+                        } else if (std.mem.eql(u8, expanded, "false")) {
+                            try self.writeAXProperty(.{ .name = .expanded, .value = .{ .booleanOrUndefined = false } }, w);
+                        }
+                    }
+                }
+                if (axnode.role_attr) |role| {
+                    if (el.getTag() != .input and std.ascii.eqlIgnoreCase(role, "checkbox")) {
+                        if (el.getAttributeSafe(.wrap("aria-checked"))) |checked| {
+                            if (std.mem.eql(u8, checked, "true") or
+                                std.mem.eql(u8, checked, "false") or
+                                std.mem.eql(u8, checked, "mixed"))
+                            {
+                                try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = checked } }, w);
+                            }
+                        }
+                    }
+                }
+
+                // Reuse actual element focus eligibility: tabindex=-1 is still
+                // focusable; inert, hidden and invalid tabindex are not. Native
+                // controls already emit focusability in their tag branches.
+                const native_focusability_written = switch (el.getTag()) {
+                    .a, .input, .textarea, .select, .button, .option => true,
+                    else => false,
+                };
+                if (!native_focusability_written and el.isFocusable(frame)) {
+                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                }
             },
             else => |tag| {
                 log.debug(.cdp, "invalid tag", .{ .tag = tag });
@@ -2246,4 +2282,76 @@ test "AXNode: aria-hidden is case-insensitive" {
     try testing.expect(std.mem.find(u8, json, "hidden-upper") == null);
     try testing.expect(std.mem.find(u8, json, "hidden-mixed") == null);
     try testing.expect(std.mem.find(u8, json, "visible-false") != null);
+}
+
+test "AXNode: custom ARIA states and tabindex focusability" {
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/ax_aria_states.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer temp_arena.release();
+
+    const node = try registry.register(frame.window._document.asNode());
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = node,
+        .registry = &registry,
+        .frame = frame,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+    }, .{});
+    defer testing.allocator.free(json);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+    const nodes = parsed.value.array.items;
+
+    const expanded = findNode(nodes, "button", "Expanded details") orelse return error.ExpandedButtonNotFound;
+    const expanded_state = nodeProperty(expanded, "expanded") orelse return error.ExpandedPropertyNotFound;
+    try testing.expectEqual(true, expanded_state.get("value").?.bool);
+
+    const collapsed = findNode(nodes, "button", "Collapsed details") orelse return error.CollapsedButtonNotFound;
+    const collapsed_state = nodeProperty(collapsed, "expanded") orelse return error.CollapsedPropertyNotFound;
+    try testing.expectEqual(false, collapsed_state.get("value").?.bool);
+
+    const invalid_expanded = findNode(nodes, "button", "Invalid details") orelse return error.InvalidButtonNotFound;
+    try testing.expect(nodeProperty(invalid_expanded, "expanded") == null);
+
+    const mixed = findNode(nodes, "checkbox", "Mixed terms") orelse return error.MixedCheckboxNotFound;
+    const mixed_state = nodeProperty(mixed, "checked") orelse return error.MixedStateNotFound;
+    try testing.expectEqual("mixed", mixed_state.get("value").?.string);
+    const mixed_focus = nodeProperty(mixed, "focusable") orelse return error.MixedFocusNotFound;
+    try testing.expectEqual(true, mixed_focus.get("value").?.bool);
+
+    // A negative tabindex is focusable through script, but not Tab navigation.
+    const checked = findNode(nodes, "checkbox", "Checked terms") orelse return error.CheckedCheckboxNotFound;
+    const checked_state = nodeProperty(checked, "checked") orelse return error.CheckedStateNotFound;
+    try testing.expectEqual("true", checked_state.get("value").?.string);
+    try testing.expect(nodeProperty(checked, "focusable") != null);
+
+    const unfocusable = findNode(nodes, "checkbox", "Unfocusable terms") orelse return error.UnfocusableCheckboxNotFound;
+    const unchecked_state = nodeProperty(unfocusable, "checked") orelse return error.UncheckedStateNotFound;
+    try testing.expectEqual("false", unchecked_state.get("value").?.string);
+    try testing.expect(nodeProperty(unfocusable, "focusable") == null);
+
+    // Native input serialization already includes checked; do not emit it twice.
+    const native = findNode(nodes, "checkbox", "Native terms") orelse return error.NativeCheckboxNotFound;
+    var checked_count: usize = 0;
+    for (native.get("properties").?.array.items) |property| {
+        if (std.mem.eql(u8, property.object.get("name").?.string, "checked")) {
+            checked_count += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), checked_count);
+
+    const invalid = findNode(nodes, "checkbox", "Invalid state") orelse return error.InvalidCheckboxNotFound;
+    try testing.expect(nodeProperty(invalid, "checked") == null);
+    try testing.expect(nodeProperty(invalid, "focusable") == null);
+
+    try testing.expect(findNode(nodes, "checkbox", "Inert terms") == null);
+    try testing.expect(findNode(nodes, "checkbox", "Hidden terms") == null);
 }

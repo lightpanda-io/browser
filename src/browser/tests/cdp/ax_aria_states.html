@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><title>AX ARIA states</title></head><body>
+<button aria-label="Expanded details" aria-expanded="true">Details</button>
+<button aria-label="Collapsed details" aria-expanded="false">Details</button>
+<button aria-label="Invalid details" aria-expanded="sometimes">Details</button>
+<div role="checkbox" aria-checked="mixed" tabindex="0">Mixed terms</div>
+<div role="checkbox" aria-checked="true" tabindex="-1">Checked terms</div>
+<div role="checkbox" aria-checked="false">Unfocusable terms</div>
+<div role="checkbox" aria-checked="garbage" tabindex="xyz">Invalid state</div>
+<input type="checkbox" role="checkbox" checked aria-checked="true" aria-label="Native terms">
+<div role="checkbox" aria-checked="mixed" tabindex="0" inert>Inert terms</div>
+<div role="checkbox" aria-checked="mixed" tabindex="0" hidden>Hidden terms</div>
+</body></html>
