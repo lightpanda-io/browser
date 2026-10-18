@@ -3806,13 +3806,9 @@ pub const Transfer = struct {
         const url = try conn.getEffectiveUrl();
 
         var status = try conn.getResponseCode();
-        if (status == 0) {
-            // A proxy that refuses the CONNECT gives us no status code. Not
-            // tied to _auth_challenge: a 407 may come without Proxy-Authenticate.
-            const connect_status = try conn.getConnectCode();
-            if (connect_status >= 300) {
-                status = connect_status;
-            }
+        if (status == 0 and self._auth_challenge != null) {
+            // A proxy that refuses the CONNECT gives us no status code
+            status = try conn.getConnectCode();
         }
 
         self.res.header = .{
