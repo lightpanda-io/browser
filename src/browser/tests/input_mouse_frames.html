@@ -1,0 +1,4 @@
+<!doctype html>
+<input id="outer" style="width: 80px; height: 10px">
+<iframe id="child" style="width: 300px; height: 300px" srcdoc="<!doctype html><input id=middle style='width:80px;height:10px'><iframe id=nested style='width:200px;height:200px' srcdoc='<!doctype html><input id=inner style=width:80px;height:10px>'></iframe>"></iframe>
+<iframe id="sibling" style="width: 200px; height: 200px" srcdoc="<!doctype html><body></body>"></iframe>

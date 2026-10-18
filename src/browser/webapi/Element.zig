@@ -1332,25 +1332,7 @@ pub fn focus(self: *Element, frame: *Frame) !void {
         return;
     }
 
-    // The focus chain runs through navigable containers: each <iframe> holding
-    // the focused document is the focused area of its parent document, so the
-    // parent's activeElement is that <iframe>. Like Chrome, ancestors blur
-    // their previous element first, and the <iframe> itself gets no focus events.
-    // https://html.spec.whatwg.org/multipage/interaction.html#focus-chain
-    var child = owner;
-    while (child.iframe) |container| {
-        const parent = child.parent orelse break;
-        const parent_doc = parent.document;
-        const old = parent_doc._active_element;
-        if (old == container.asElement()) {
-            break;
-        }
-        parent_doc.setActiveElement(container.asElement(), parent);
-        if (old) |o| {
-            _ = try blurFocusedArea(o, null, parent);
-        }
-        child = parent;
-    }
+    try focusFrameAncestors(owner);
 
     if (already_active) {
         return;
@@ -1372,6 +1354,29 @@ pub fn focus(self: *Element, frame: *Frame) !void {
     // Dispatch focusin on new element (bubbles, composed)
     const focusin_event = try FocusEvent.initTrusted(comptime .wrap("focusin"), .{ .bubbles = true, .composed = true, .relatedTarget = old_related }, owner);
     try owner._event_manager.dispatch(new_target, focusin_event.asEvent());
+}
+
+/// Establish the iframe containers of a focused element or document viewport.
+pub fn focusFrameAncestors(owner: *Frame) !void {
+    // The focus chain runs through navigable containers: each <iframe> holding
+    // the focused document is the focused area of its parent document, so the
+    // parent's activeElement is that <iframe>. Like Chrome, ancestors blur
+    // their previous element first, and the <iframe> itself gets no focus events.
+    // https://html.spec.whatwg.org/multipage/interaction.html#focus-chain
+    var child = owner;
+    while (child.iframe) |container| {
+        const parent = child.parent orelse break;
+        const parent_doc = parent.document;
+        const old = parent_doc._active_element;
+        if (old == container.asElement()) {
+            break;
+        }
+        parent_doc.setActiveElement(container.asElement(), parent);
+        if (old) |o| {
+            _ = try blurFocusedArea(o, null, parent);
+        }
+        child = parent;
+    }
 }
 
 // `old` just lost focus in `frame`'s document. When it's an <iframe> holding
