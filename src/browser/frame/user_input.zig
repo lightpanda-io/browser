@@ -59,19 +59,12 @@ const HoverContext = struct {
     y: f64 = 0,
     buttons: u16 = 0,
     modifiers: Modifiers = .{},
-    root_point: ?Point = null,
 
-    fn freeze(self: HoverContext, frame: *Frame) HoverContext {
+    fn offset(self: HoverContext, dx: f64, dy: f64) HoverContext {
         var ctx = self;
-        const origin = viewportOrigin(frame);
-        ctx.root_point = .{ .x = self.x + origin.x, .y = self.y + origin.y };
+        ctx.x += dx;
+        ctx.y += dy;
         return ctx;
-    }
-
-    fn pointInOwner(self: HoverContext, frame: *Frame, owner: *Frame) Point {
-        const point = self.root_point orelse return pointInFrame(frame, owner, self.x, self.y);
-        const origin = viewportOrigin(owner);
-        return .{ .x = point.x - origin.x, .y = point.y - origin.y };
     }
 
     fn emit(ctx: HoverContext, frame: *Frame, target: *Element, comptime suffix: []const u8, related: ?*Element, bubbling: bool) void {
@@ -85,8 +78,8 @@ const HoverContext = struct {
 const CompatHover = struct {
     ctx: HoverContext,
 
-    fn freeze(self: CompatHover, frame: *Frame) CompatHover {
-        return .{ .ctx = self.ctx.freeze(frame) };
+    fn offset(self: CompatHover, dx: f64, dy: f64) CompatHover {
+        return .{ .ctx = self.ctx.offset(dx, dy) };
     }
 
     fn emit(self: CompatHover, frame: *Frame, target: *Element, comptime suffix: []const u8, related: ?*Element, bubbling: bool) void {
@@ -98,9 +91,7 @@ const CompatHover = struct {
 // hovered item so that trasitions can fire the correct events. e.g. mouseout
 // bubbles up normally, but mouseleave will only fire on parents where the new
 // target isn't part of.
-pub fn updateHoverTarget(frame: *Frame, to: ?*Element, input_emitter: anytype) void {
-    // Keep the physical point stable if a boundary listener moves an iframe.
-    const emitter = input_emitter.freeze(frame);
+pub fn updateHoverTarget(frame: *Frame, to: ?*Element, emitter: anytype) void {
     const page = frame.page;
     const from = page.input_hover_target;
     if (from == to) {
@@ -110,7 +101,7 @@ pub fn updateHoverTarget(frame: *Frame, to: ?*Element, input_emitter: anytype) v
     const from_owner = if (from) |el| el.ownerFrame(frame) else null;
     const to_owner = if (to) |el| el.ownerFrame(frame) else null;
     if (from_owner == to_owner) {
-        dispatchBoundaryEvents(frame, from, to, emitter);
+        dispatchBoundaryEvents(frame, from, to, emitterIn(emitter, frame, to_owner));
         return;
     }
 
@@ -129,7 +120,7 @@ pub fn updateHoverTarget(frame: *Frame, to: ?*Element, input_emitter: anytype) v
     var current = from_owner;
     while (current != common) {
         const owner = current orelse break;
-        dispatchBoundaryEvents(frame, old, null, emitter);
+        dispatchBoundaryEvents(frame, old, null, emitterIn(emitter, frame, owner));
         old = if (owner.iframe) |iframe| iframe.asElement() else null;
         current = owner.parent;
     }
@@ -143,7 +134,7 @@ pub fn updateHoverTarget(frame: *Frame, to: ?*Element, input_emitter: anytype) v
         current = owner.parent;
         depth += 1;
     }
-    if (common != null) dispatchBoundaryEvents(frame, old, new, emitter);
+    if (common != null) dispatchBoundaryEvents(frame, old, new, emitterIn(emitter, frame, common));
 
     // Enter the new browsing contexts outermost first. A context crossed in
     // either direction has no relatedTarget from the other document.
@@ -156,8 +147,19 @@ pub fn updateHoverTarget(frame: *Frame, to: ?*Element, input_emitter: anytype) v
             new = if (owner.iframe) |iframe| iframe.asElement() else null;
             current = owner.parent;
         }
-        dispatchBoundaryEvents(frame, null, new, emitter);
+        dispatchBoundaryEvents(frame, null, new, emitterIn(emitter, frame, current));
     }
+}
+
+/// `emitter`'s point is in `frame`'s viewport; boundary events in `owner`'s
+/// document carry it in that document's viewport.
+fn emitterIn(emitter: anytype, frame: *Frame, owner: ?*Frame) @TypeOf(emitter) {
+    const doc_frame = owner orelse return emitter;
+    if (doc_frame == frame) {
+        return emitter;
+    }
+    const point = pointInFrame(frame, doc_frame, 0, 0);
+    return emitter.offset(point.x, point.y);
 }
 
 /// `emitter.emit` fires one boundary event, named by its suffix ("out",
@@ -217,18 +219,15 @@ fn dispatchBoundaryEvents(frame: *Frame, from: ?*Element, to: ?*Element, emitter
 fn dispatchPointerBoundary(frame: *Frame, target: *Element, comptime pointer_typ: []const u8, related: ?*Element, bubbling: bool, ctx: HoverContext) void {
     const owner = target.ownerFrame(frame) orelse return;
     if (owner.window._closed) return;
-    const point = ctx.pointInOwner(frame, owner);
     const modifiers = ctx.modifiers;
-    const related_target = if (related) |r|
-        if (r.ownerFrame(frame) == owner) r.asEventTarget() else null
-    else
-        null;
+    // Hover transitions never pair elements from different documents.
+    const related_target = if (related) |r| r.asEventTarget() else null;
     const pointer_event = PointerEvent.initTrusted(pointer_typ, .{
         .bubbles = bubbling,
         .cancelable = bubbling,
         .composed = bubbling,
-        .clientX = point.x,
-        .clientY = point.y,
+        .clientX = ctx.x,
+        .clientY = ctx.y,
         // No button changed state: https://www.w3.org/TR/pointerevents3/#the-button-property
         .button = -1,
         .buttons = ctx.buttons,
@@ -252,18 +251,15 @@ fn dispatchPointerBoundary(frame: *Frame, target: *Element, comptime pointer_typ
 fn dispatchMouseBoundary(frame: *Frame, target: *Element, comptime mouse_typ: []const u8, related: ?*Element, bubbling: bool, ctx: HoverContext) void {
     const owner = target.ownerFrame(frame) orelse return;
     if (owner.window._closed) return;
-    const point = ctx.pointInOwner(frame, owner);
     const modifiers = ctx.modifiers;
-    const related_target = if (related) |r|
-        if (r.ownerFrame(frame) == owner) r.asEventTarget() else null
-    else
-        null;
+    // Hover transitions never pair elements from different documents.
+    const related_target = if (related) |r| r.asEventTarget() else null;
     const mouse_event = MouseEvent.initTrusted(comptime .wrap(mouse_typ), .{
         .bubbles = bubbling,
         .cancelable = bubbling,
         .composed = bubbling,
-        .clientX = point.x,
-        .clientY = point.y,
+        .clientX = ctx.x,
+        .clientY = ctx.y,
         .buttons = ctx.buttons,
         .relatedTarget = related_target,
         .ctrlKey = modifiers.ctrl,
@@ -293,7 +289,9 @@ const Gesture = struct {
     pressure: f64 = 0.5,
 };
 
-/// Dispatch a trusted pointer event; returns whether preventDefault() cancelled it.
+/// Dispatch a trusted pointer event; returns whether its default action is off:
+/// preventDefault() cancelled it, or its frame is gone (a listener can remove
+/// the iframe).
 fn emitPointer(
     frame: *Frame,
     target: *Element,
@@ -302,7 +300,7 @@ fn emitPointer(
     detail: u32,
 ) !bool {
     const owner = target.ownerFrame(frame) orelse frame;
-    if (owner.window._closed) return false;
+    if (owner.window._closed) return true;
     const boundary = comptime std.mem.eql(u8, typ, "pointerenter") or std.mem.eql(u8, typ, "pointerleave");
     const event: *PointerEvent = try .initTrusted(typ, .{
         .bubbles = !boundary,
@@ -324,10 +322,12 @@ fn emitPointer(
         .altKey = g.modifiers.alt,
         .metaKey = g.modifiers.meta,
     }, owner);
-    return owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
+    const cancelled = try owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
+    return cancelled or owner.window._closed;
 }
 
-/// Dispatch a trusted mouse event; returns whether preventDefault() cancelled it.
+/// Dispatch a trusted mouse event; returns whether its default action is off,
+/// as for `emitPointer`.
 fn emitMouse(
     frame: *Frame,
     target: *Element,
@@ -336,7 +336,7 @@ fn emitMouse(
     detail: u32,
 ) !bool {
     const owner = target.ownerFrame(frame) orelse frame;
-    if (owner.window._closed) return false;
+    if (owner.window._closed) return true;
     const event: *MouseEvent = try .initTrusted(comptime .wrap(typ), .{
         .bubbles = true,
         .cancelable = true,
@@ -351,7 +351,8 @@ fn emitMouse(
         .altKey = g.modifiers.alt,
         .metaKey = g.modifiers.meta,
     }, owner);
-    return owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
+    const cancelled = try owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
+    return cancelled or owner.window._closed;
 }
 
 /// MouseEvent/PointerEvent.buttons bitmask for a MouseEvent.button value.
@@ -474,8 +475,6 @@ fn pressSequence(frame: *Frame, target: *Element, g: Gesture, chord_suppressed: 
         _ = try emitPointer(frame, target, "pointermove", g, 0);
         break :blk chord_suppressed;
     };
-    // A pointerdown listener may remove the iframe containing the target.
-    if ((target.ownerFrame(frame) orelse frame).window._closed) return suppressed;
     if (!suppressed) {
         try mouseDown(frame, target, g);
     }
@@ -491,7 +490,6 @@ fn pressSequence(frame: *Frame, target: *Element, g: Gesture, chord_suppressed: 
 /// no mouse events, click or focus, as in Chrome.
 fn mouseDown(frame: *Frame, target: *Element, g: Gesture) !void {
     if (!target.isDisabled() and !try emitMouse(frame, target, "mousedown", g, g.click_count)) {
-        if ((target.ownerFrame(frame) orelse frame).window._closed) return;
         focusForMouseDown(frame, target) catch |err| log.debug(.app, "mousedown focus", .{ .err = err });
     }
 }
@@ -546,48 +544,72 @@ pub fn triggerClick(frame: *Frame, target: *Element, modifiers: Modifiers) !void
 }
 
 const MouseHit = struct {
+    /// The innermost frame the point reached, and the point in its viewport.
     frame: *Frame,
-    target: *Element,
+    /// Null when nothing in `frame`'s document takes the point.
+    target: ?*Element,
     x: f64,
     y: f64,
 };
 
 /// Input coordinates start in the caller's viewport. Unlike the DOM API,
 /// native hit testing descends into the hit iframe's document.
-fn mouseHitTest(frame: *Frame, x: f64, y: f64) !?MouseHit {
-    if (frame.window._closed) return null;
-    var hit: MouseHit = .{
-        .frame = frame,
-        .target = (try frame.document.elementFromPoint(x, y, frame)) orelse return null,
-        .x = x,
-        .y = y,
-    };
-    while (hit.target.is(Element.Html.IFrame)) |iframe| {
+fn mouseHitTest(frame: *Frame, x: f64, y: f64) !MouseHit {
+    var hit: MouseHit = .{ .frame = frame, .target = null, .x = x, .y = y };
+    if (frame.window._closed) {
+        return hit;
+    }
+    const viewport = frame.page.getViewport();
+    hit.target = try documentHit(frame, x, y, @floatFromInt(viewport.width), @floatFromInt(viewport.height));
+    while (hit.target) |target| {
+        const iframe = target.is(Element.Html.IFrame) orelse break;
         const window = iframe._window orelse break;
         if (window._closed) break;
         const child = window._frame;
-        const rect = hit.target.boundingClientRectValues(hit.frame);
-        const child_x = hit.x - rect.x - hit.target.getClientLeft();
-        const child_y = hit.y - rect.y - hit.target.getClientTop();
+        const rect = target.boundingClientRectValues(hit.frame);
+        const child_x = hit.x - rect.x - target.getClientLeft();
+        const child_y = hit.y - rect.y - target.getClientTop();
+        const width = target.getClientWidth(hit.frame);
+        const height = target.getClientHeight(hit.frame);
         // The iframe's client box is the child viewport. A point in its border
         // stays on the iframe in the parent document.
-        if (child_x < 0 or child_y < 0 or
-            child_x >= hit.target.getClientWidth(hit.frame) or
-            child_y >= hit.target.getClientHeight(hit.frame)) break;
-        const target = if (try child.document.elementFromPoint(child_x, child_y, child)) |target| target else blk: {
-            const root = child.document.getDocumentElement() orelse break;
-            if (child._style_manager.hasDisplayNone(root) or !child._style_manager.isHitTestable(root)) return null;
-            break :blk root;
+        if (!inBox(child_x, child_y, width, height)) break;
+        hit = .{
+            .frame = child,
+            .target = try documentHit(child, child_x, child_y, width, height),
+            .x = child_x,
+            .y = child_y,
         };
-        hit = .{ .frame = child, .target = target, .x = child_x, .y = child_y };
     }
     return hit;
 }
 
+/// Like Chrome, a point inside the viewport that no element box covers lands
+/// on the root element, unless the root itself can't be hit.
+fn documentHit(frame: *Frame, x: f64, y: f64, width: f64, height: f64) !?*Element {
+    if (try frame.document.elementFromPoint(x, y, frame)) |target| {
+        return target;
+    }
+    if (!inBox(x, y, width, height)) {
+        return null;
+    }
+    const root = frame.document.getDocumentElement() orelse return null;
+    const style_manager = &frame._style_manager;
+    if (style_manager.hasDisplayNone(root) or !style_manager.isHitTestable(root)) {
+        return null;
+    }
+    return root;
+}
+
+fn inBox(x: f64, y: f64, width: f64, height: f64) bool {
+    return x >= 0 and y >= 0 and x < width and y < height;
+}
+
 const Point = struct { x: f64, y: f64 };
 
-// The existing faux layout has no transform scaling and client borders are
-// zero. Use the same rects as hit testing, including each parent's scroll.
+/// Where `frame`'s viewport sits in the top-level viewport. The faux layout
+/// has no transform scaling and client borders are zero; this uses the same
+/// rects as hit testing, including each parent's scroll.
 fn viewportOrigin(frame: *Frame) Point {
     var point: Point = .{ .x = 0, .y = 0 };
     var current = frame;
@@ -601,7 +623,8 @@ fn viewportOrigin(frame: *Frame) Point {
     return point;
 }
 
-fn pointInFrame(from: *Frame, to: *Frame, x: f64, y: f64) Point {
+/// Converts a point in `from`'s viewport to `to`'s viewport.
+pub fn pointInFrame(from: *Frame, to: *Frame, x: f64, y: f64) Point {
     if (from == to) return .{ .x = x, .y = y };
     const from_origin = viewportOrigin(from);
     const to_origin = viewportOrigin(to);
@@ -609,12 +632,12 @@ fn pointInFrame(from: *Frame, to: *Frame, x: f64, y: f64) Point {
 }
 
 pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
-    const hit = (try mouseHitTest(frame, x, y)) orelse {
+    const hit = try mouseHitTest(frame, x, y);
+    const target = hit.target orelse {
         // Don't leave a prior gesture's state for the next message to misread.
         frame.page.input_pointer.reset();
         return;
     };
-    const target = hit.target;
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame mouse press", .{
             .url = frame.url,
@@ -637,19 +660,18 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count
 }
 
 pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
-    if (frame.window._closed) return;
-    const hit = (try mouseHitTest(frame, x, y)) orelse {
+    const hit = try mouseHitTest(frame, x, y);
+    const target = hit.target orelse {
         // A miss ends hover without releasing a held button.
         updateHoverTarget(frame, null, HoverContext{ .x = x, .y = y, .buttons = frame.page.input_pointer.held });
         return;
     };
-    const target = hit.target;
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame mouse move", .{
             .url = frame.url,
             .node = target,
-            .x = x,
-            .y = y,
+            .x = hit.x,
+            .y = hit.y,
             .type = frame._type,
         });
     }
@@ -661,15 +683,14 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
     const pointer = &frame.page.input_pointer;
     // A release that misses every element still lets go of the button, so
     // the next message doesn't read it as held.
-    const result = mouseHitTest(frame, x, y) catch |err| {
+    const hit = mouseHitTest(frame, x, y) catch |err| {
         pointer.releaseButton(button);
         return err;
     };
-    const hit = result orelse {
+    const target = hit.target orelse {
         pointer.releaseButton(button);
         return;
     };
-    const target = hit.target;
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame mouse release", .{
             .url = frame.url,
@@ -690,27 +711,19 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
 }
 
 pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f64) !void {
-    const document = frame.window._document;
-    const hit = if (try mouseHitTest(frame, x, y)) |hit| hit else blk: {
-        // A point over an iframe with no child hit does not fall back to the
-        // parent document element. Keep the root fallback for top-level misses.
-        if (try document.elementFromPoint(x, y, frame)) |target| {
-            if (target.is(Element.Html.IFrame) != null) return;
-        }
-        break :blk MouseHit{
-            .frame = frame,
-            .target = document.getDocumentElement() orelse return,
-            .x = x,
-            .y = y,
-        };
+    const hit = try mouseHitTest(frame, x, y);
+    const target = hit.target orelse blk: {
+        // Over an iframe whose document takes nothing, the wheel goes nowhere.
+        // A top-level miss still scrolls the root.
+        if (hit.frame != frame) return;
+        break :blk frame.document.getDocumentElement() orelse return;
     };
-    const target = hit.target;
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame mouse wheel", .{
             .url = frame.url,
             .node = target,
-            .x = x,
-            .y = y,
+            .x = hit.x,
+            .y = hit.y,
             .delta_x = delta_x,
             .delta_y = delta_y,
             .type = frame._type,
@@ -739,12 +752,11 @@ pub fn wheel(frame: *Frame, target: *Element, x: f64, y: f64, delta_x: f64, delt
         .deltaY = delta_y,
     }, owner);
     event.asEvent()._cancelable_unless_passive = true;
-    if (try owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent())) {
+    const cancelled = try owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
+    // A wheel listener may remove the iframe before the default action.
+    if (cancelled or owner.window._closed) {
         return;
     }
-
-    // A wheel listener may remove the iframe before the default action.
-    if (owner.window._closed) return;
 
     // Deltas come from the wire, so guard NaN and saturate the addition.
     try scrollAxis(target, .width, deltaToScroll(delta_x), owner);
@@ -2003,6 +2015,42 @@ test "user_input: mouse release in another document does not click" {
     try testing.expect(main.page.input_pointer.down_target == null);
 }
 
+test "user_input: a blank viewport point hovers the root; only leaving the viewport leaves the document" {
+    const page = try testing.pageTest("input_mouse_frames.html", .{});
+    defer page.close();
+    const main = page.frame().?;
+    const outer = main.document.getElementById("outer", main).?;
+    const rect = outer.boundingClientRectValues(main);
+    const viewport = main.page.getViewport();
+    const blank_y: f64 = @floatFromInt(viewport.height - 1);
+    try testing.expect((try main.document.elementFromPoint(1, blank_y, main)) == null);
+
+    var ls: js.Local.Scope = undefined;
+    main.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun(
+        \\window.events = [];
+        \\for (const type of ['mouseover', 'mouseout', 'mouseleave', 'mousedown', 'click']) {
+        \\  document.documentElement.addEventListener(type, e => events.push(`${type}:${e.target.tagName}`));
+        \\}
+    , null);
+    try triggerMouseMove(main, rect.x + 1, rect.y + 1);
+    _ = try ls.local.compileAndRun("events = []", null);
+
+    try triggerMouseMove(main, 1, blank_y);
+    try testing.expect(main.page.input_hover_target == main.document.getDocumentElement().?);
+    try triggerMousePress(main, 1, blank_y, mouse_button.main, 1);
+    try triggerMouseRelease(main, 1, blank_y, mouse_button.main, 1);
+    try testing.expect((try ls.local.compileAndRun(
+        \\events.join(',') === 'mouseout:INPUT,mouseover:HTML,mousedown:HTML,click:HTML'
+    , null)).isTrue());
+
+    _ = try ls.local.compileAndRun("events = []", null);
+    try triggerMouseMove(main, 1, blank_y + 10);
+    try testing.expect(main.page.input_hover_target == null);
+    try testing.expect((try ls.local.compileAndRun("events.join(',') === 'mouseout:HTML,mouseleave:HTML'", null)).isTrue());
+}
+
 test "user_input: removing hit iframe in pointerdown stops its mouse sequence" {
     const page = try testing.pageTest("input_mouse_frames.html", .{});
     defer page.close();
@@ -2086,9 +2134,8 @@ test "user_input: mouse hit testing still enters a blank child document" {
     const x = rect.x + 1;
     const y = rect.y + 1;
     const edge_hit = try mouseHitTest(main, rect.x + iframe.asElement().getClientWidth(main), y);
-    try testing.expect(edge_hit != null);
-    try testing.expect(edge_hit.?.frame == main);
-    try testing.expect(edge_hit.?.target == iframe.asElement());
+    try testing.expect(edge_hit.frame == main);
+    try testing.expect(edge_hit.target == iframe.asElement());
 
     var ls: js.Local.Scope = undefined;
     child.js.localScope(&ls);
@@ -2098,9 +2145,8 @@ test "user_input: mouse hit testing still enters a blank child document" {
     const hit = try mouseHitTest(main, x, y);
     try testing.expect((try main.document.elementFromPoint(x, y, main)) == iframe.asElement());
     try testing.expect((try child.document.elementFromPoint(1, 1, child)) == null);
-    try testing.expect(hit != null);
-    try testing.expect(hit.?.frame == child);
-    try testing.expect(hit.?.target == child.document.getDocumentElement().?);
+    try testing.expect(hit.frame == child);
+    try testing.expect(hit.target == child.document.getDocumentElement().?);
 
     _ = try ls.local.compileAndRun(
         \\window.events = [];
@@ -2415,12 +2461,6 @@ test "user_input: mouse blank iframe takes document focus" {
     const rect = child.iframe.?.asElement().boundingClientRectValues(main);
     try triggerMousePress(main, rect.x + 1, rect.y + 1, mouse_button.main, 1);
     try triggerMouseRelease(main, rect.x + 1, rect.y + 1, mouse_button.main, 1);
-    if (main.document._active_element != child.iframe.?.asElement()) {
-        std.debug.print("blank iframe focus: parent still focuses outer={}, keyboard routes to main={}\n", .{
-            main.document._active_element == outer,
-            focusedFrame(main) == main,
-        });
-    }
     try testing.expect(main.document._active_element == child.iframe.?.asElement());
     try testing.expect(focusedFrame(main) == child);
     try insertText(focusedFrame(main), "wrong-document");
