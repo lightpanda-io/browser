@@ -171,16 +171,16 @@ fn setDefaultSelected(self: *Option, value: bool, frame: *Frame) !void {
     }
 }
 
-// https://html.spec.whatwg.org/multipage/form-elements.html#dom-option-label
-// On getting, return the `label` content attribute if present (verbatim, even
-// when empty), otherwise the value of the `text` IDL attribute. On setting,
-// reflect to the `label` content attribute.
 // https://html.spec.whatwg.org/multipage/form-elements.html#dom-option-index
 fn getIndex(self: *Option) u32 {
     const select = self.ownerSelect() orelse return 0;
     return select.optionIndex(self) orelse 0;
 }
 
+// https://html.spec.whatwg.org/multipage/form-elements.html#dom-option-label
+// On getting, return the `label` content attribute if present (verbatim, even
+// when empty), otherwise the value of the `text` IDL attribute. On setting,
+// reflect to the `label` content attribute.
 fn getLabel(self: *Option, frame: *Frame) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("label")) orelse self.getText(frame);
 }
