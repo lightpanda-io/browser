@@ -45,7 +45,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "HTMLFrameSetElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
@@ -60,6 +59,23 @@ pub const JsApi = struct {
     pub const onload = Window.reflectingHandlerAccessor(FrameSet, "load");
     pub const onresize = Window.reflectingHandlerAccessor(FrameSet, "resize");
     pub const onscroll = Window.reflectingHandlerAccessor(FrameSet, "scroll");
+    // WindowEventHandlers
+    pub const onafterprint = Window.reflectingHandlerAccessor(FrameSet, "afterprint");
+    pub const onbeforeprint = Window.reflectingHandlerAccessor(FrameSet, "beforeprint");
+    pub const onbeforeunload = Window.reflectingHandlerAccessor(FrameSet, "beforeunload");
+    pub const onhashchange = Window.reflectingHandlerAccessor(FrameSet, "hashchange");
+    pub const onlanguagechange = Window.reflectingHandlerAccessor(FrameSet, "languagechange");
+    pub const onmessage = Window.reflectingHandlerAccessor(FrameSet, "message");
+    pub const onmessageerror = Window.reflectingHandlerAccessor(FrameSet, "messageerror");
+    pub const onoffline = Window.reflectingHandlerAccessor(FrameSet, "offline");
+    pub const ononline = Window.reflectingHandlerAccessor(FrameSet, "online");
+    pub const onpagehide = Window.reflectingHandlerAccessor(FrameSet, "pagehide");
+    pub const onpageshow = Window.reflectingHandlerAccessor(FrameSet, "pageshow");
+    pub const onpopstate = Window.reflectingHandlerAccessor(FrameSet, "popstate");
+    pub const onrejectionhandled = Window.reflectingHandlerAccessor(FrameSet, "rejectionhandled");
+    pub const onstorage = Window.reflectingHandlerAccessor(FrameSet, "storage");
+    pub const onunhandledrejection = Window.reflectingHandlerAccessor(FrameSet, "unhandledrejection");
+    pub const onunload = Window.reflectingHandlerAccessor(FrameSet, "unload");
 };
 
 const testing = @import("../../../../testing.zig");

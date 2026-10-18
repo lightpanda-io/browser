@@ -247,7 +247,6 @@ pub const JsApi = struct {
         pub const name = "CryptoKey";
 
         pub var class_id: bridge.ClassId = undefined;
-        pub const prototype_chain = bridge.prototypeChain();
     };
 
     pub const @"type" = bridge.accessor(CryptoKey.getType, null, .{});

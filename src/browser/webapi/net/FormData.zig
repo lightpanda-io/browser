@@ -700,18 +700,10 @@ fn parseMultipart(self: *FormData, bytes: []const u8, boundary: []const u8, exec
 
         // Got a file.
         if (parsed.filename) |filename| {
-            const blob = try Blob.initFromBytes(content, content_type, exec);
-            errdefer blob.deinit(exec.page);
+            const decoded_filename = try decodeMultipartName(self._arena.allocator(), filename);
+            const file = try fileFromBytes(content, content_type, decoded_filename, exec);
+            errdefer file.releaseRef(exec.page);
 
-            const file = try blob._arena.create(File);
-            file.* = .{
-                ._proto = blob,
-                ._name = try blob._arena.dupe(u8, try decodeMultipartName(self._arena.allocator(), filename)),
-                ._last_modified = @intCast(lp.datetime.milliTimestamp(.real)),
-            };
-            blob._type = .{ .file = file };
-
-            file.acquireRef();
             try self._entries.append(self._arena.allocator(), .{
                 .name = try String.init(self._arena.allocator(), name, .{}),
                 .value = .{ .file = file },
@@ -972,7 +964,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "FormData";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

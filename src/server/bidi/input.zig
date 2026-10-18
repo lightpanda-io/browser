@@ -666,9 +666,12 @@ fn resolveOrigin(bidi: *BiDi, frame: *Frame, source: *const Source, origin: Orig
                 return error.NoSuchElement;
             };
             const element = node.is(Node.Element) orelse return error.NotAnElement;
-            // relative to the element's center
+            // relative to the element's center, in the context's viewport even
+            // when the element is inside one of its iframes
             const rect = element.boundingClientRectValues(frame);
-            return .{ .x = rect.x + rect.width / 2 + x, .y = rect.y + rect.height / 2 + y };
+            const owner = element.ownerFrame(frame) orelse frame;
+            const corner = user_input.pointInFrame(owner, frame, rect.x, rect.y);
+            return .{ .x = corner.x + rect.width / 2 + x, .y = corner.y + rect.height / 2 + y };
         },
     }
 }

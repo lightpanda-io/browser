@@ -345,33 +345,13 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
 
     // Store our TAO inside the internal field of the global object. This
     // maps the v8::Object -> Zig instance.
-    const tao = try params.identity_arena.create(@import("TaggedOpaque.zig"));
-    tao.* = if (comptime is_frame) .{
-        .value = @ptrCast(global.window),
-        .prototype_chain = (&Window.JsApi.Meta.prototype_chain).ptr,
-        .prototype_len = @intCast(Window.JsApi.Meta.prototype_chain.len),
-        .subtype = null,
-    } else switch (global._type) {
-        .dedicated => |scope| .{
-            .value = @ptrCast(scope),
-            .prototype_chain = (&DedicatedWorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
-            .prototype_len = @intCast(DedicatedWorkerGlobalScope.JsApi.Meta.prototype_chain.len),
-            .subtype = null,
-        },
-        .shared => |scope| .{
-            .value = @ptrCast(scope),
-            .prototype_chain = (&SharedWorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
-            .prototype_len = @intCast(SharedWorkerGlobalScope.JsApi.Meta.prototype_chain.len),
-            .subtype = null,
-        },
-        .service => |scope| .{
-            .value = @ptrCast(scope),
-            .prototype_chain = (&ServiceWorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
-            .prototype_len = @intCast(ServiceWorkerGlobalScope.JsApi.Meta.prototype_chain.len),
-            .subtype = null,
-        },
+    const TaggedOpaque = @import("TaggedOpaque.zig");
+    const tao: TaggedOpaque = if (comptime is_frame) .init(Window, global.window) else switch (global._type) {
+        .dedicated => |scope| .init(DedicatedWorkerGlobalScope, scope),
+        .shared => |scope| .init(SharedWorkerGlobalScope, scope),
+        .service => |scope| .init(ServiceWorkerGlobalScope, scope),
     };
-    v8.v8__Object__SetAlignedPointerInInternalField(global_obj, 0, tao);
+    try tao.store(global_obj, params.identity_arena);
 
     const context_id = self.context_id;
     self.context_id = context_id + 1;

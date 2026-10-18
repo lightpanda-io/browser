@@ -148,7 +148,6 @@ fn EncodedChunk(comptime interface_name: [:0]const u8) type {
 
             pub const Meta = struct {
                 pub const name = interface_name;
-                pub const prototype_chain = bridge.prototypeChain();
                 pub var class_id: bridge.ClassId = undefined;
             };
 

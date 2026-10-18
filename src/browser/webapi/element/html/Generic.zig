@@ -45,7 +45,6 @@ pub const JsApi = struct {
     pub const bridge = js.Bridge(Generic);
 
     pub const Meta = struct {
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 };

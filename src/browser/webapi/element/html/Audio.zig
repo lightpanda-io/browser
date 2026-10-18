@@ -64,7 +64,6 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "HTMLAudioElement";
         pub const constructor_alias = "Audio";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

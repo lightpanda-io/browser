@@ -472,7 +472,7 @@ const Cloner = struct {
         return .{ .object = try self.properties(object) };
     }
 
-    fn platform(self: *Cloner, tao: *const js.TaggedOpaque) !?Value {
+    fn platform(self: *Cloner, tao: js.TaggedOpaque) !?Value {
         if (tao.as(Node)) |node| {
             // Non-elements will be serialized via properties()
             const element = node.is(Node.Element) orelse return null;

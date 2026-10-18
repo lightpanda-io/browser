@@ -151,7 +151,6 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "History";
         pub var class_id: bridge.ClassId = 0;
-        pub const prototype_chain = bridge.prototypeChain();
     };
 
     pub const length = bridge.accessor(History.getLength, null, .{});

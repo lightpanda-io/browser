@@ -42,7 +42,6 @@ pub const JsApi = struct {
     pub const bridge = js.Bridge(Title);
     pub const Meta = struct {
         pub const name = "SVGTitleElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 };

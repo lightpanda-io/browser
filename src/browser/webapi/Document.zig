@@ -1633,7 +1633,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "Document";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
@@ -1752,6 +1751,8 @@ pub const JsApi = struct {
     pub const onvolumechange = EventTarget.handlerAccessor(Document, "volumechange");
     pub const onwaiting = EventTarget.handlerAccessor(Document, "waiting");
     pub const onwheel = EventTarget.handlerAccessor(Document, "wheel");
+    pub const onreadystatechange = EventTarget.handlerAccessor(Document, "readystatechange");
+    pub const onvisibilitychange = EventTarget.handlerAccessor(Document, "visibilitychange");
     pub const URL = bridge.accessor(Document.getURL, null, .{});
     pub const location = bridge.accessor(Document.getLocation, Document.setLocation, .{});
     pub const documentURI = bridge.accessor(Document.getURL, null, .{});
