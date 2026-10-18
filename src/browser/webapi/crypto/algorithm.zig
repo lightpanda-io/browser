@@ -224,12 +224,26 @@ pub const Encrypt = union(enum) {
 /// For `sign()` functionality.
 pub const Sign = union(enum) {
     string: []const u8,
-    object: struct { name: []const u8 },
+    object: struct {
+        name: []const u8,
+        /// RSA-PSS. Kept as a value: it's only converted (an [EnforceRange]
+        /// unsigned long) when the algorithm is RSA-PSS, so another algorithm
+        /// ignores the member, as normalization does.
+        saltLength: ?js.Value = null,
+    },
 
     pub fn algoName(self: Sign) []const u8 {
         return switch (self) {
             .string => |string| string,
             .object => |object| object.name,
+        };
+    }
+
+    /// The `saltLength` member, if present.
+    pub fn saltLength(self: Sign) ?js.Value {
+        return switch (self) {
+            .string => null,
+            .object => |object| object.saltLength,
         };
     }
 };

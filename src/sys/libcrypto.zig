@@ -158,6 +158,7 @@ pub extern fn d2i_AutoPrivateKey(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_l
 pub const EVP_PKEY_RSA = 6; // NID_rsaEncryption
 pub const RSA_PKCS1_PADDING = 1;
 pub const RSA_PKCS1_OAEP_PADDING = 4;
+pub const RSA_PKCS1_PSS_PADDING = 6;
 
 const struct_rsa_st = opaque {};
 pub const RSA = struct_rsa_st;
@@ -217,6 +218,9 @@ pub extern fn EVP_PKEY_decrypt(ctx: ?*EVP_PKEY_CTX, out: [*c]u8, out_len: *usize
 pub extern fn EVP_PKEY_CTX_set_rsa_padding(ctx: ?*EVP_PKEY_CTX, padding: c_int) c_int;
 pub extern fn EVP_PKEY_CTX_set_rsa_oaep_md(ctx: ?*EVP_PKEY_CTX, md: *const EVP_MD) c_int;
 pub extern fn EVP_PKEY_CTX_set_rsa_mgf1_md(ctx: ?*EVP_PKEY_CTX, md: *const EVP_MD) c_int;
+/// Negative values are special: -1 is the digest's length; -2 is the maximum
+/// when signing, and any length (read from the signature) when verifying.
+pub extern fn EVP_PKEY_CTX_set_rsa_pss_saltlen(ctx: ?*EVP_PKEY_CTX, salt_len: c_int) c_int;
 /// Takes ownership of `label` (an OPENSSL_malloc buffer) on success only.
 pub extern fn EVP_PKEY_CTX_set0_rsa_oaep_label(ctx: ?*EVP_PKEY_CTX, label: [*]u8, label_len: usize) c_int;
 
