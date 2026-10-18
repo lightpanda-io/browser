@@ -220,6 +220,30 @@ fn setDevicePixelRatio(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "devicePixelRatio");
 }
 
+fn setOuterWidth(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "outerWidth");
+}
+
+fn setOuterHeight(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "outerHeight");
+}
+
+fn setScreenX(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "screenX");
+}
+
+fn setScreenY(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "screenY");
+}
+
+fn setScreenLeft(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "screenLeft");
+}
+
+fn setScreenTop(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "screenTop");
+}
+
 fn setScrollX(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "scrollX");
 }
@@ -781,6 +805,20 @@ fn getDevicePixelRatio(_: *const Window, frame: *Frame) f32 {
     return frame.page.getViewport().scale;
 }
 
+// There is no window frame around the viewport and no window position on a
+// screen, so the outer size is the viewport and the position is 0.
+fn getOuterWidth(_: *const Window, frame: *Frame) u32 {
+    return frame.page.getViewport().width;
+}
+
+fn getOuterHeight(_: *const Window, frame: *Frame) u32 {
+    return frame.page.getViewport().height;
+}
+
+fn getScreenPosition(_: *const Window) i32 {
+    return 0;
+}
+
 pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts.offsets(y);
     const size = self._frame.document.scrollSize();
@@ -1163,6 +1201,12 @@ pub const JsApi = struct {
     pub const innerWidth = bridge.accessor(Window.getInnerWidth, Window.setInnerWidth, .{});
     pub const innerHeight = bridge.accessor(Window.getInnerHeight, Window.setInnerHeight, .{});
     pub const devicePixelRatio = bridge.accessor(Window.getDevicePixelRatio, Window.setDevicePixelRatio, .{});
+    pub const outerWidth = bridge.accessor(Window.getOuterWidth, Window.setOuterWidth, .{});
+    pub const outerHeight = bridge.accessor(Window.getOuterHeight, Window.setOuterHeight, .{});
+    pub const screenX = bridge.accessor(Window.getScreenPosition, Window.setScreenX, .{});
+    pub const screenY = bridge.accessor(Window.getScreenPosition, Window.setScreenY, .{});
+    pub const screenLeft = bridge.accessor(Window.getScreenPosition, Window.setScreenLeft, .{});
+    pub const screenTop = bridge.accessor(Window.getScreenPosition, Window.setScreenTop, .{});
 
     pub const opener = bridge.accessor(Window.getOpener, Window.setOpener, .{});
     pub const closed = bridge.accessor(Window.getClosed, null, .{});

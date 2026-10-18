@@ -405,8 +405,9 @@ pub const Commands = cli.Builder(.{
     .{
         .name = "serve",
         .options = .{
-            .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
-            .{ .name = "port", .type = u16, .default = 9222 },
+            .{ .name = "host", .type = ?[]const u8 },
+            .{ .name = "port", .type = ?u16 },
+            .{ .name = "unix_socket", .type = ?[:0]const u8, .path = true },
             .{ .name = "advertise_host", .type = ?[]const u8 },
             // Repeatable; one server can speak several on the same port.
             .{ .name = "protocol", .type = Protocol, .multiple = true },
@@ -509,6 +510,7 @@ pub const Commands = cli.Builder(.{
 const RunMode = Commands.Enum;
 pub const Mode = Commands.Union;
 pub const Agent = @FieldType(Mode, "agent");
+const Serve = @FieldType(Mode, "serve");
 
 mode: Mode,
 // The command as typed. Mirrors `mode`, except `run` normalizes to `.agent`
@@ -846,15 +848,20 @@ pub fn cookieJarFile(self: *const Config) ?[]const u8 {
 
 pub fn port(self: *const Config) u16 {
     return switch (self.mode) {
-        .serve => |opts| opts.port,
+        .serve => |opts| opts.port orelse 9222,
         .mcp => |opts| opts.cdp_port orelse 0,
         else => unreachable,
     };
 }
 
+// Optional in the option table so --unix-socket can reject an explicit one.
+pub fn serveHost(self: *const Config) []const u8 {
+    return self.mode.serve.host orelse "127.0.0.1";
+}
+
 pub fn advertiseHost(self: *const Config) []const u8 {
     return switch (self.mode) {
-        .serve => |opts| opts.advertise_host orelse advertiseHostFallback(opts.host),
+        .serve => |opts| opts.advertise_host orelse advertiseHostFallback(self.serveHost()),
         .mcp => "127.0.0.1",
         else => unreachable,
     };
@@ -879,13 +886,6 @@ pub fn remoteAllowOrigins(self: *const Config) []const []const u8 {
     };
 }
 
-// Wildcard bind addresses (0.0.0.0, ::) are not routable for clients
-// resolving /json/version. Fall back to a loopback address so the
-// advertised webSocketDebuggerUrl is at least connectable from the same
-// host (covers the official Docker image, which exposes 9222 via the
-// container's published port, and the WSL localhost bridge).
-// For remote hosts, users can still pin the URL with --advertise-host.
-// See issue #1922.
 fn advertiseHostFallback(host: []const u8) []const u8 {
     if (isHostWildcard(host)) {
         return "127.0.0.1";
@@ -899,7 +899,7 @@ fn advertiseHostFallback(host: []const u8) []const u8 {
 // resolvable, but the caller still benefits from emitting a guidance log.
 pub fn bindIsWildcard(self: *const Config) bool {
     return switch (self.mode) {
-        .serve => |opts| opts.advertise_host == null and isHostWildcard(opts.host),
+        .serve => |opts| opts.advertise_host == null and isHostWildcard(self.serveHost()),
         else => false,
     };
 }
@@ -1302,6 +1302,25 @@ pub fn parseArgs(allocator: Allocator, proc_args: std.process.Args) !Config {
             @field(agent_opts, field_name) = @field(run, field_name);
         }
         command = .{ .agent = agent_opts };
+    }
+
+    if (command == .serve) {
+        if (command.serve.unix_socket) |path| {
+            const opts = command.serve;
+            if (opts.host != null or opts.port != null or opts.advertise_host != null) {
+                log.fatal(.app, "invalid argument", .{ .arg = "--unix-socket", .hint = "cannot be combined with --host, --port or --advertise-host" });
+                return error.InvalidArgument;
+            }
+            // `:` would end the path in the advertised ws+unix:// URL.
+            if (std.fs.path.isAbsolute(path) == false or std.mem.findScalar(u8, path, ':') != null) {
+                log.fatal(.app, "invalid argument", .{ .arg = "--unix-socket", .value = path, .hint = "must be an absolute path without ':'" });
+                return error.InvalidArgument;
+            }
+            if (path.len >= @sizeOf(@FieldType(std.posix.sockaddr.un, "path"))) {
+                log.fatal(.app, "invalid argument", .{ .arg = "--unix-socket", .value = path, .hint = "path is too long" });
+                return error.InvalidArgument;
+            }
+        }
     }
 
     if (command == .fetch and command.fetch.url.items.len == 0) {
@@ -1848,4 +1867,30 @@ test "Config: parseArgs --load-resources defaults stylesheets on for mcp and age
         try std.testing.expectEqual(case.stylesheet, resources.stylesheet);
         try std.testing.expectEqual(case.image, resources.image);
     }
+}
+
+test "Config: --unix-socket rejects TCP flags and bad paths" {
+    log.expectLog(&.{ .app, .app, .app, .app, .app });
+    var long: [120:0]u8 = @splat('a');
+    long[0] = '/';
+    const cases = [_][]const [*:0]const u8{
+        &.{ "lightpanda", "serve", "--unix-socket", "/tmp/lp.sock", "--port", "9322" },
+        &.{ "lightpanda", "serve", "--unix-socket", "/tmp/lp.sock", "--host", "127.0.0.1" },
+        &.{ "lightpanda", "serve", "--unix-socket", "lp.sock" },
+        &.{ "lightpanda", "serve", "--unix-socket", "/tmp/lp:1.sock" },
+        &.{ "lightpanda", "serve", "--unix-socket", &long },
+    };
+    for (cases) |vector| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        try std.testing.expectError(error.InvalidArgument, parseArgs(arena.allocator(), .{ .vector = vector }));
+    }
+}
+
+test "Config: --unix-socket" {
+    const vector = [_][*:0]const u8{ "lightpanda", "serve", "--unix-socket", "/tmp/lp.sock", "--protocol", "webdriver" };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const config = try parseArgs(arena.allocator(), .{ .vector = &vector });
+    try std.testing.expectEqualStrings("/tmp/lp.sock", config.mode.serve.unix_socket.?);
 }

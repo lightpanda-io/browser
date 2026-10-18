@@ -994,6 +994,74 @@
   });
 </script>
 
+<script id=sign-verify-names type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+  const data = new TextEncoder().encode("names");
+  const hmac = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]);
+  const signOnly = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign"]);
+  const verifyOnly = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["verify"]);
+  const aes = await subtle.generateKey({ name: "AES-GCM", length: 128 }, true, ["encrypt"]);
+  const ecdsa = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const ecdh = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const x25519 = await subtle.generateKey({ name: "X25519" }, true, ["deriveBits"]);
+  const ecdsaAlgo = { name: "ECDSA", hash: "SHA-256" };
+
+  const mac = await subtle.sign("HMAC", hmac, data);
+  const results = {
+    // Algorithm names match case-insensitively, for HMAC as for RSA.
+    lowerSign: hex(await subtle.sign("hmac", hmac, data)),
+    mixedVerify: await subtle.verify({ name: "hMaC" }, hmac, mac, data),
+    // A name that isn't a signing algorithm is NotSupportedError, whatever the key.
+    prefixSign: await errorName(() => subtle.sign("HMACX", hmac, data)),
+    prefixVerify: await errorName(() => subtle.verify("HMAC-SHA256", hmac, mac, data)),
+    unknownOnEcdsa: await errorName(() => subtle.sign("foo", ecdsa.privateKey, data)),
+    ecdhName: await errorName(() => subtle.sign("ECDH", ecdh.privateKey, data)),
+    x25519Name: await errorName(() => subtle.sign("X25519", x25519.privateKey, data)),
+    aesName: await errorName(() => subtle.sign("AES-GCM", aes, data)),
+    // A signing algorithm other than the key's, or a key without the usage,
+    // is InvalidAccessError.
+    hmacOnAes: await errorName(() => subtle.sign("HMAC", aes, data)),
+    hmacOnEcdsa: await errorName(() => subtle.sign("HMAC", ecdsa.privateKey, data)),
+    ecdsaOnHmac: await errorName(() => subtle.verify(ecdsaAlgo, hmac, mac, data)),
+    noSign: await errorName(() => subtle.sign("HMAC", verifyOnly, data)),
+    noVerify: await errorName(() => subtle.verify("HMAC", signOnly, mac, data)),
+    ecdsaPublicSign: await errorName(() => subtle.sign(ecdsaAlgo, ecdsa.publicKey, data)),
+    // ECDSA signing isn't implemented yet.
+    ecdsaSign: await errorName(() => subtle.sign(ecdsaAlgo, ecdsa.privateKey, data)),
+    ecdsaVerify: await errorName(() => subtle.verify(ecdsaAlgo, ecdsa.publicKey, new Uint8Array(64), data)),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(hex(mac), results.lowerSign);
+    testing.expectEqual(true, results.mixedVerify);
+    testing.expectEqual("NotSupportedError", results.prefixSign);
+    testing.expectEqual("NotSupportedError", results.prefixVerify);
+    testing.expectEqual("NotSupportedError", results.unknownOnEcdsa);
+    testing.expectEqual("NotSupportedError", results.ecdhName);
+    testing.expectEqual("NotSupportedError", results.x25519Name);
+    testing.expectEqual("NotSupportedError", results.aesName);
+    testing.expectEqual("InvalidAccessError", results.hmacOnAes);
+    testing.expectEqual("InvalidAccessError", results.hmacOnEcdsa);
+    testing.expectEqual("InvalidAccessError", results.ecdsaOnHmac);
+    testing.expectEqual("InvalidAccessError", results.noSign);
+    testing.expectEqual("InvalidAccessError", results.noVerify);
+    testing.expectEqual("InvalidAccessError", results.ecdsaPublicSign);
+    testing.expectEqual("NotSupportedError", results.ecdsaSign);
+    testing.expectEqual("NotSupportedError", results.ecdsaVerify);
+  });
+</script>
+
 <script>
   // helper: runs generateKey and captures the rejection's error name (or null
   // if it unexpectedly resolved). Returns { algo, expected, actual } so the

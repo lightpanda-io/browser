@@ -74,6 +74,10 @@
     \\          passed multiple times. Upgrades without an Origin header are
     \\          always accepted.
     \\          Defaults to none, rejecting any upgrade that sends an Origin.
+    \\  --unix-socket <PATH>
+    \\          Listen on this Unix-domain socket (mode 0600) instead of TCP.
+    \\          Must be absolute. Cannot be combined with --host, --port or
+    \\          --advertise-host.
     ,
     .fetch =
     \\usage: {0s} fetch <url>... [OPTIONS] [COMMON_OPTIONS]
@@ -465,9 +469,10 @@
     \\             iframe      When enabled, <iframe> elements are fully loaded.
     \\
     \\             image       <img> sources, so that load/error reflects the real
-    \\                         HTTP status. Only the response headers are read;
-    \\                         images are never decoded, so naturalWidth and
-    \\                         naturalHeight stay 0. Delays the window load event.
+    \\                         HTTP status. Images are never decoded: only the
+    \\                         first 16KB is read, for naturalWidth and
+    \\                         naturalHeight (PNG, GIF, JPEG and WebP; 0 for
+    \\                         other formats). Delays the window load event.
     \\
     \\             stylesheet  Fetch external <link rel=stylesheet> resources so
     \\                         their rules contribute to computed styles (and

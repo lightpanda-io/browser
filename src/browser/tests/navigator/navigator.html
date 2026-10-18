@@ -92,6 +92,14 @@
     await state.done(() => {
       testing.expectEqual('prompt', status.state);
       testing.expectEqual('notifications', status.name);
+      testing.expectTrue(status instanceof PermissionStatus);
+      testing.expectTrue(status instanceof EventTarget);
+      testing.expectEqual(null, status.onchange);
+      let fired = 0;
+      status.onchange = () => fired += 1;
+      status.addEventListener('change', () => fired += 1);
+      status.dispatchEvent(new Event('change'));
+      testing.expectEqual(2, fired);
     });
   }
 </script>

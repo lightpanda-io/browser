@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 
 const DOMException = @This();
 
@@ -163,6 +164,18 @@ pub fn toString(self: *const DOMException, exec: *js.Execution) ![]const u8 {
         }
     };
     return std.mem.print(exec.buf, "{s}: {s}", .{ self.getName(), msg }) catch return msg;
+}
+
+pub fn structuredSerialize(self: *const DOMException, writer: *js.StructuredWriter) !void {
+    writer.writeBytes(self.getName());
+    writer.writeBytes(self.getMessage());
+}
+
+pub fn structuredDeserialize(reader: *js.StructuredReader, _: *Page) !DOMException {
+    const arena = reader.local.ctx.arena.allocator();
+    const name = try arena.dupe(u8, try reader.readBytes());
+    const message = try arena.dupe(u8, try reader.readBytes());
+    return init(message, name);
 }
 
 const Code = enum(u8) {

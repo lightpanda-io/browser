@@ -47,6 +47,8 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
         code: ?[]const u8 = null,
         modifiers: u4 = 0,
         text: []const u8 = "",
+        // Reported as keyCode and which by keydown and keyup, as in Chrome.
+        windowsVirtualKeyCode: u32 = 0,
         // Many optional parameters are not implemented yet, see documentation url.
 
         const Type = enum {
@@ -73,6 +75,7 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
     const opts: KeyboardEvent.Options = .{
         .key = if (params.key.len > 0) params.key else params.text,
         .code = params.code,
+        .keyCode = params.windowsVirtualKeyCode,
         .altKey = modifiers.alt,
         .ctrlKey = modifiers.ctrl,
         .metaKey = modifiers.meta,
@@ -2424,6 +2427,68 @@ test "cdp.input: dispatchKeyEvent char honors keypress and beforeinput vetoes" {
     }
     try testing.expect((try ls.local.compileAndRun(
         \\inp.value === 'ab' && window.keypresses.join('') === 'a1x2b'
+    , null)).isTrue());
+}
+
+test "cdp.input: dispatchKeyEvent legacy keyCode, which and charCode" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Editors such as ProseMirror read keyCode on keydown and cancel what
+    // they take for Delete (46) or an arrow key (37-40).
+    _ = try ls.local.compileAndRun(
+        \\const inp = document.getElementById('inp');
+        \\inp.value = '';
+        \\inp.focus();
+        \\window.events = [];
+        \\for (const t of ['keydown', 'keypress', 'keyup']) {
+        \\  inp.addEventListener(t, (e) => window.events.push(t + ':' + e.keyCode + '/' + e.which + '/' + e.charCode));
+        \\}
+        \\inp.addEventListener('keydown', (e) => {
+        \\  if (e.keyCode === 46 || (e.keyCode >= 37 && e.keyCode <= 40)) e.preventDefault();
+        \\});
+    , null);
+
+    // Puppeteer and Playwright send windowsVirtualKeyCode with every key:
+    // keydown and keyup report it, keypress reports the character's code point.
+    try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = ".", .code = "Period", .text = ".", .windowsVirtualKeyCode = 190 } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyUp", .key = ".", .code = "Period", .windowsVirtualKeyCode = 190 } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ctx.processMessage(.{ .id = 3, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "%", .code = "Digit5", .text = "%", .modifiers = 8, .windowsVirtualKeyCode = 53 } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ctx.processMessage(.{ .id = 4, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyUp", .key = "%", .code = "Digit5", .modifiers = 8, .windowsVirtualKeyCode = 53 } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expect((try ls.local.compileAndRun(
+        \\inp.value === '.%' && window.events.join() ===
+        \\  'keydown:190/190/0,keypress:46/46/46,keyup:190/190/0,' +
+        \\  'keydown:53/53/0,keypress:37/37/37,keyup:53/53/0'
+    , null)).isTrue());
+
+    // Without windowsVirtualKeyCode the code comes from `code`, then from the
+    // US layout position of `key`, never from the character itself.
+    _ = try ls.local.compileAndRun("inp.value = ''; window.events = [];", null);
+    try ctx.processMessage(.{ .id = 5, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "-", .code = "NumpadSubtract", .text = "-" } });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try ctx.processMessage(.{ .id = 6, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "(", .text = "(" } });
+    try ctx.expectSentResult(null, .{ .id = 6 });
+    try ctx.processMessage(.{ .id = 7, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "ж", .text = "ж" } });
+    try ctx.expectSentResult(null, .{ .id = 7 });
+    try ctx.processMessage(.{ .id = 8, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "a", .text = "a" } });
+    try ctx.expectSentResult(null, .{ .id = 8 });
+    try testing.expect((try ls.local.compileAndRun(
+        \\inp.value === '-(жa' && window.events.join() ===
+        \\  'keydown:109/109/0,keypress:45/45/45,' +
+        \\  'keydown:57/57/0,keypress:40/40/40,' +
+        \\  'keydown:0/0/0,keypress:1078/1078/1078,' +
+        \\  'keydown:65/65/0,keypress:97/97/97'
     , null)).isTrue());
 }
 

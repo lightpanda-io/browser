@@ -120,6 +120,13 @@ available to adjust waiting time before dump.
 ```console
 ./lightpanda serve --obey-robots --log-format pretty  --log-level info --host 127.0.0.1 --port 9222
 ```
+
+To listen on a Unix-domain socket (owner-only, mode 0600) instead of TCP:
+
+```console
+./lightpanda serve --unix-socket /run/user/1000/lightpanda.sock
+```
+
 Once the CDP server started, you can run a Puppeteer script by configuring the
 `browserWSEndpoint`.
 

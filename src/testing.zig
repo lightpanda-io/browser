@@ -654,7 +654,7 @@ test "tests:afterAll" {
 fn serveCDP(wg: *lp.WaitGroup) !void {
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
 
-    test_cdp_server = Server.init(test_app, address) catch |err| {
+    test_cdp_server = Server.init(test_app, .{ .ip = address }) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
