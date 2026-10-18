@@ -42,7 +42,7 @@ pub const ConstructorSettings = struct {
     pixelFormat: String = .wrap("rgba-unorm8"),
 };
 
-pub fn init( width: u32, height: u32, maybe_settings: ?ConstructorSettings, exec: *Execution) !*ImageData {
+pub fn init(width: u32, height: u32, maybe_settings: ?ConstructorSettings, exec: *Execution) !*ImageData {
     try validateDimension(width);
     try validateDimension(height);
     try validateSettings(maybe_settings);
@@ -186,7 +186,7 @@ pub const JsApi = struct {
     ///
     /// We currently support only the first 2.
     pub const constructor = bridge.constructor(struct {
-        fn wrap(first: js.Value,second: u32,third: ?js.Value,fourth: ?ConstructorSettings,exec: *Execution) !*ImageData {
+        fn wrap(first: js.Value, second: u32, third: ?js.Value, fourth: ?ConstructorSettings, exec: *Execution) !*ImageData {
             if (first.isUint8ClampedArray()) {
                 return initWithData(first, second, third, fourth, exec);
             }
