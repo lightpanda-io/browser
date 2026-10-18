@@ -4402,6 +4402,7 @@ test "Frame: a failed navigation commits an error document over the superseded o
 }
 
 test "Frame: readystatechange during an aborted load may renavigate or throw" {
+    testing.expectLog(&.{.page_error});
     const page = try testing.pageTest("hi.html", .{});
     defer page.close();
     const frame = page.frame().?;

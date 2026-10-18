@@ -38,6 +38,7 @@ pub const Scope = enum {
     mcp,
     note,
     not_implemented,
+    page_error,
     scheduler,
     serve,
     storage,
