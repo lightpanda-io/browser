@@ -146,3 +146,29 @@
     testing.expectEqual(true, err instanceof Error);
   }, () => link.appendChild(content));
 </script>
+
+<script id=structured_clone>
+  {
+    const named = structuredClone(new DOMException('boom', 'NotFoundError'));
+    testing.expectEqual(true, named instanceof DOMException);
+    testing.expectEqual('NotFoundError', named.name);
+    testing.expectEqual('boom', named.message);
+    testing.expectEqual(8, named.code);
+
+    const plain = structuredClone(new DOMException());
+    testing.expectEqual('Error', plain.name);
+    testing.expectEqual('', plain.message);
+    testing.expectEqual(0, plain.code);
+
+    // An exception raised from Zig carries only a code; name and message
+    // still survive the round trip.
+    testing.withError((err) => {
+      const c = structuredClone({a: err, b: err});
+      testing.expectEqual(true, c.a === c.b);
+      testing.expectEqual(false, c.a === err);
+      testing.expectEqual('HierarchyRequestError', c.a.name);
+      testing.expectEqual(err.message, c.a.message);
+      testing.expectEqual(3, c.a.code);
+    }, () => link.appendChild(content));
+  }
+</script>
