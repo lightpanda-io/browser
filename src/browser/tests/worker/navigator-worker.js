@@ -32,6 +32,7 @@ onmessage = async function(event) {
       permissions_distinct: navigator.permissions !== navigator,
       permission_name: status.name,
       permission_state: status.state,
+      permission_is_target: status instanceof EventTarget,
 
       // StorageManager
       storage_quota: estimate.quota,

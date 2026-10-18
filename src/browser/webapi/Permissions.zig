@@ -20,6 +20,9 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+
+const EventTarget = @import("EventTarget.zig");
+
 const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
@@ -48,22 +51,26 @@ pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution)
     errdefer arena.release();
 
     const state = exec.session.browser.permissions.get(qd.name) orelse .prompt;
-    const status = try arena.create(PermissionStatus);
-    status.* = .{
+    const status = try exec._factory.eventTargetWithAllocator(arena.allocator(), PermissionStatus{
         ._arena = arena,
+        ._proto = undefined,
         ._state = state,
         ._name = try arena.dupe(u8, qd.name),
-    };
+    });
     return exec.js.local.?.resolvePromise(status);
 }
 
-const PermissionStatus = struct {
+pub const PermissionStatus = struct {
     _rc: lp.RC = .{},
     _arena: *lp.Arena,
+    _proto: *EventTarget,
     _name: []const u8,
     _state: State,
 
-    pub fn deinit(self: *PermissionStatus, _: *Page) void {
+    pub const Proto = EventTarget;
+
+    pub fn deinit(self: *PermissionStatus, page: *Page) void {
+        page.removeTarget(self._proto);
         self._arena.release();
     }
 
@@ -73,6 +80,10 @@ const PermissionStatus = struct {
 
     pub fn acquireRef(self: *PermissionStatus) void {
         self._rc.acquire();
+    }
+
+    pub fn asEventTarget(self: *PermissionStatus) *EventTarget {
+        return self._proto;
     }
 
     fn getName(self: *const PermissionStatus) []const u8 {
@@ -91,6 +102,7 @@ const PermissionStatus = struct {
         };
         pub const name = bridge.accessor(getName, null, .{});
         pub const state = bridge.accessor(getState, null, .{});
+        pub const onchange = EventTarget.handlerAccessor(PermissionStatus, "change");
     };
 };
 
