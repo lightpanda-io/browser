@@ -60,6 +60,9 @@ const TextTrackList = @import("media/TextTrackList.zig");
 
 const Animation = @import("animation/Animation.zig");
 
+const AudioNode = @import("webaudio/AudioNode.zig");
+const BaseAudioContext = @import("webaudio/BaseAudioContext.zig");
+
 const AudioDecoder = @import("webcodecs/AudioDecoder.zig");
 const AudioEncoder = @import("webcodecs/AudioEncoder.zig");
 const VideoDecoder = @import("webcodecs/VideoDecoder.zig");
@@ -82,6 +85,8 @@ pub const Type = enum(u8) {
     animation,
     audio_decoder,
     audio_encoder,
+    audio_node,
+    base_audio_context,
     broadcast_channel,
     cookie_store,
     event_source,
@@ -126,6 +131,8 @@ pub fn Subtype(comptime tag: Type) type {
         .animation => Animation,
         .audio_decoder => AudioDecoder,
         .audio_encoder => AudioEncoder,
+        .audio_node => AudioNode,
+        .base_audio_context => BaseAudioContext,
         .broadcast_channel => BroadcastChannel,
         .cookie_store => CookieStore,
         .event_source => EventSource,
@@ -390,6 +397,8 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .animation => writer.writeAll("<Animation>"),
         .audio_decoder => writer.writeAll("<AudioDecoder>"),
         .audio_encoder => writer.writeAll("<AudioEncoder>"),
+        .audio_node => self.subtype(AudioNode).format(writer),
+        .base_audio_context => writer.writeAll("<BaseAudioContext>"),
         .video_decoder => writer.writeAll("<VideoDecoder>"),
         .video_encoder => writer.writeAll("<VideoEncoder>"),
         .media_query_list => writer.writeAll("<MediaQueryList>"),
@@ -422,6 +431,8 @@ pub fn toString(self: *EventTarget) []const u8 {
         .animation => return "[object Animation]",
         .audio_decoder => return "[object AudioDecoder]",
         .audio_encoder => return "[object AudioEncoder]",
+        .audio_node => return self.subtype(AudioNode).toString(),
+        .base_audio_context => return "[object BaseAudioContext]",
         .broadcast_channel => return "[object BroadcastChannel]",
         .cookie_store => return "[object CookieStore]",
         .event_source => return "[object EventSource]",
