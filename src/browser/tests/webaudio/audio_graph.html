@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=connect>
+{
+  const ctx = new OfflineAudioContext(1, 128, 8000);
+  const other = new OfflineAudioContext(1, 128, 8000);
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+
+  testing.expectEqual(gain, osc.connect(gain));
+  testing.expectEqual(gain, osc.connect(gain));
+  testing.expectEqual(undefined, osc.connect(gain.gain));
+  testing.expectError('IndexSizeError', () => osc.connect(gain, 1));
+  testing.expectError('IndexSizeError', () => gain.connect(osc));
+  testing.expectError('InvalidAccessError', () => osc.connect(other.destination));
+  testing.expectError('InvalidAccessError', () => osc.connect(other.createGain().gain));
+  testing.expectError('TypeError', () => osc.connect({}));
+
+  osc.disconnect(gain);
+  testing.expectError('InvalidAccessError', () => osc.disconnect(gain));
+  osc.disconnect(gain.gain);
+  testing.expectError('InvalidAccessError', () => osc.disconnect(gain.gain));
+  testing.expectError('IndexSizeError', () => osc.disconnect(1));
+  osc.connect(gain);
+  osc.disconnect();
+  testing.expectError('InvalidAccessError', () => osc.disconnect(gain));
+}
+</script>
+
+<script id=scheduling>
+{
+  const ctx = new OfflineAudioContext(1, 128, 8000);
+  const osc = ctx.createOscillator();
+  testing.expectError('InvalidStateError', () => osc.stop());
+  testing.expectError('RangeError', () => osc.start(-1));
+  osc.start();
+  testing.expectError('InvalidStateError', () => osc.start());
+  testing.expectError('RangeError', () => osc.stop(-1));
+  osc.stop(1);
+
+  const src = ctx.createBufferSource();
+  testing.expectError('RangeError', () => src.start(0, -1));
+  testing.expectError('RangeError', () => src.start(0, 0, -1));
+}
+</script>
+
+<script id=param_automation type=module>
+  const state = await testing.async();
+
+  const ctx = new OfflineAudioContext(1, 1024, 1024 * 8);
+  const source = ctx.createConstantSource();
+  const gain = ctx.createGain();
+  source.connect(gain).connect(ctx.destination);
+  const param = gain.gain;
+
+  testing.expectEqual(param, param.setValueAtTime(0, 0));
+  param.linearRampToValueAtTime(1, 256 / ctx.sampleRate);
+  param.setValueAtTime(2, 512 / ctx.sampleRate);
+  param.exponentialRampToValueAtTime(8, 768 / ctx.sampleRate);
+  param.setValueCurveAtTime([8, 0], 768 / ctx.sampleRate, 128 / ctx.sampleRate);
+  // automation doesn't show in value until rendering
+  testing.expectEqual(1, param.value);
+
+  testing.expectError('RangeError', () => param.exponentialRampToValueAtTime(0, 1));
+  testing.expectError('RangeError', () => param.setValueAtTime(1, -1));
+  testing.expectError('TypeError', () => param.setValueAtTime(NaN, 1));
+  testing.expectError('RangeError', () => param.setTargetAtTime(1, 0, -1));
+  testing.expectError('InvalidStateError', () => param.setValueCurveAtTime([1], 0, 1));
+  testing.expectError('RangeError', () => param.setValueCurveAtTime([1, 2], 0, 0));
+  testing.expectError('NotSupportedError', () => param.setValueAtTime(1, 800 / ctx.sampleRate));
+  testing.expectError('NotSupportedError', () => param.setValueCurveAtTime([1, 2], 700 / ctx.sampleRate, 200 / ctx.sampleRate));
+
+  source.start();
+  const data = (await ctx.startRendering()).getChannelData(0);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, data[0]);
+    testing.expectEqual(0.5, data[128]);
+    testing.expectEqual(1, data[300]);
+    testing.expectEqual(2, data[512]);
+    testing.expectEqual(true, Math.abs(data[640] - 4) < 1e-5);
+    testing.expectEqual(8, data[768]);
+    testing.expectEqual(4, data[832]);
+    testing.expectEqual(0, data[1000]);
+    testing.expectEqual(0, param.value);
+  });
+</script>
+
+<script id=curve_then_ramp type=module>
+  const state = await testing.async();
+
+  const sr = 8192;
+  const ctx = new OfflineAudioContext(1, 1024, sr);
+  const source = ctx.createConstantSource();
+  const gain = ctx.createGain();
+  source.connect(gain).connect(ctx.destination);
+  gain.gain.setValueCurveAtTime([0, 4, 4], 128 / sr, 256 / sr);
+  gain.gain.linearRampToValueAtTime(8, 640 / sr);
+  source.start();
+  const data = (await ctx.startRendering()).getChannelData(0);
+
+  state.resolve();
+  await state.done(() => {
+    // the curve plays out, then the ramp starts from its end
+    testing.expectEqual(0, data[128]);
+    testing.expectEqual(2, data[192]);
+    testing.expectEqual(4, data[256]);
+    testing.expectEqual(4, data[320]);
+    testing.expectEqual(4, data[384]);
+    testing.expectEqual(6, data[512]);
+    testing.expectEqual(8, data[700]);
+  });
+</script>
+
+<script id=set_target_and_cancel type=module>
+  const state = await testing.async();
+
+  const sr = 8192;
+  const ctx = new OfflineAudioContext(1, 1024, sr);
+  const source = ctx.createConstantSource();
+  const gain = ctx.createGain();
+  source.connect(gain).connect(ctx.destination);
+  gain.gain.setValueAtTime(0, 0);
+  gain.gain.setTargetAtTime(1, 0, 256 / sr);
+  gain.gain.cancelAndHoldAtTime(512 / sr);
+  gain.gain.setValueAtTime(5, 768 / sr);
+  gain.gain.cancelScheduledValues(768 / sr);
+  source.start();
+  const data = (await ctx.startRendering()).getChannelData(0);
+
+  state.resolve();
+  await state.done(() => {
+    const near = (expected, actual) => Math.abs(expected - actual) < 1e-6;
+    testing.expectEqual(0, data[0]);
+    testing.expectEqual(true, near(1 - Math.exp(-1), data[256]));
+    testing.expectEqual(true, near(1 - Math.exp(-2), data[512]));
+    // held from the cancel on; the later setValueAtTime was cancelled
+    testing.expectEqual(true, near(1 - Math.exp(-2), data[1000]));
+  });
+</script>
+
+<script id=param_input type=module>
+  const state = await testing.async();
+
+  // A node connected to a param adds to its value.
+  const ctx = new OfflineAudioContext(1, 128, 8000);
+  const source = new ConstantSourceNode(ctx, {offset: 2});
+  const modulator = new ConstantSourceNode(ctx, {offset: 0.5});
+  const gain = new GainNode(ctx, {gain: 1});
+  source.connect(gain).connect(ctx.destination);
+  modulator.connect(gain.gain);
+  source.start();
+  modulator.start();
+  const data = (await ctx.startRendering()).getChannelData(0);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(3, data[0]);
+    testing.expectEqual(3, data[127]);
+  });
+</script>
+
+<script id=ended type=module>
+  const state = await testing.async();
+
+  const ctx = new OfflineAudioContext(1, 1024, 8000);
+  const osc = ctx.createOscillator();
+  osc.connect(ctx.destination);
+  const events = [];
+  osc.onended = (e) => events.push([e.type, e.target === osc, ctx.state]);
+  ctx.oncomplete = () => events.push('complete');
+  osc.start(0);
+  osc.stop(100 / 8000);
+  const data = (await ctx.startRendering()).getChannelData(0);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([['ended', true, 'running'], 'complete'], events);
+    testing.expectEqual(true, data[99] != 0);
+    testing.expectEqual(0, data[100]);
+  });
+</script>
+
+<script id=periodic_wave type=module>
+  const state = await testing.async();
+
+  const ctx = new OfflineAudioContext(1, 128, 44100);
+  testing.expectError('IndexSizeError', () => ctx.createPeriodicWave([0, 1], [0]));
+  testing.expectError('IndexSizeError', () => ctx.createPeriodicWave([0], [0]));
+
+  const osc = ctx.createOscillator();
+  testing.expectError('InvalidStateError', () => osc.type = 'custom');
+  osc.type = 'bogus';
+  testing.expectEqual('sine', osc.type);
+
+  // the default wave is a sine, as is imag = [0, 1]
+  osc.setPeriodicWave(new PeriodicWave(ctx));
+  testing.expectEqual('custom', osc.type);
+  osc.frequency.value = 1000;
+  osc.connect(ctx.destination);
+  osc.start();
+  const custom = (await ctx.startRendering()).getChannelData(0);
+
+  const unnormalized = new OfflineAudioContext(1, 128, 44100);
+  const half = unnormalized.createOscillator();
+  half.setPeriodicWave(unnormalized.createPeriodicWave([0, 0], [0, 0.5], {disableNormalization: true}));
+  half.frequency.value = 1000;
+  half.connect(unnormalized.destination);
+  half.start();
+  const scaled = (await unnormalized.startRendering()).getChannelData(0);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, Math.abs(custom[1] - 0.14199429750442505) < 1e-6);
+    testing.expectEqual(true, Math.abs(scaled[11] - 0.5) < 1e-4);
+  });
+</script>
+
+<script id=robustness type=module>
+  const state = await testing.async();
+
+  const ctx = new OfflineAudioContext(2, 2048, 44100);
+
+  // a feedback cycle with no delay renders, as silence on the back edge
+  const source = new ConstantSourceNode(ctx, {offset: 0.5});
+  const merge = new GainNode(ctx, {channelCount: 2, channelCountMode: 'explicit'});
+  source.connect(merge);
+  merge.connect(merge.gain);
+  merge.connect(ctx.destination);
+  source.start();
+
+  // a negative frequency with a start between frames
+  const osc = new OscillatorNode(ctx, {frequency: -440});
+  osc.connect(ctx.destination);
+  osc.start(0.00001);
+
+  // many automation events, and a long chain
+  for (let i = 0; i < 2000; i++) {
+    source.offset.setTargetAtTime(0.5, i / 44100, 0.001);
+    source.offset.value = 0.5;
+  }
+  let node = source;
+  for (let i = 0; i < 2000; i++) {
+    const gain = ctx.createGain();
+    node.connect(gain);
+    node = gain;
+  }
+  node.connect(ctx.destination);
+
+  const data = (await ctx.startRendering()).getChannelData(1);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(2048, data.length);
+    testing.expectEqual(false, data.some(isNaN));
+  });
+</script>

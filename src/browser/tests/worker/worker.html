@@ -283,6 +283,7 @@
       testing.expectEqual(true, r.permissions_distinct);
       testing.expectEqual('geolocation', r.permission_name);
       testing.expectEqual('prompt', r.permission_state);
+      testing.expectEqual(true, r.permission_is_target);
 
       // StorageManager (transitive: StorageManager -> StorageEstimate)
       testing.expectEqual(0, r.storage_usage);

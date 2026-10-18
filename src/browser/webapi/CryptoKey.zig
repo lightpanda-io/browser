@@ -137,14 +137,6 @@ pub fn acquireRef(self: *CryptoKey) void {
     self._rc.acquire();
 }
 
-pub fn canSign(self: *const CryptoKey) bool {
-    return self._usages & Usages.sign != 0;
-}
-
-pub fn canVerify(self: *const CryptoKey) bool {
-    return self._usages & Usages.verify != 0;
-}
-
 pub fn canDeriveBits(self: *const CryptoKey) bool {
     return self._usages & Usages.deriveBits != 0;
 }

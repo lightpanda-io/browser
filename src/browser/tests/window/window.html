@@ -12,6 +12,15 @@
   testing.expectEqual(1920, innerWidth);
 </script>
 
+<script id=outer_size_and_screen_position>
+  testing.expectEqual(innerWidth, outerWidth);
+  testing.expectEqual(innerHeight, outerHeight);
+  testing.expectEqual(0, screenX);
+  testing.expectEqual(0, screenY);
+  testing.expectEqual(0, screenLeft);
+  testing.expectEqual(0, screenTop);
+</script>
+
 <script id=is_secure_context>
   {
     // The test server is on 127.0.0.1: loopback is potentially trustworthy.
