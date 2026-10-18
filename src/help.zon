@@ -74,6 +74,10 @@
     \\          passed multiple times. Upgrades without an Origin header are
     \\          always accepted.
     \\          Defaults to none, rejecting any upgrade that sends an Origin.
+    \\  --unix-socket <PATH>
+    \\          Listen on this Unix-domain socket (mode 0600) instead of TCP.
+    \\          Must be absolute. Cannot be combined with --host, --port or
+    \\          --advertise-host.
     ,
     .fetch =
     \\usage: {0s} fetch <url>... [OPTIONS] [COMMON_OPTIONS]

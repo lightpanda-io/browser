@@ -1030,8 +1030,7 @@ fn touch(server: *Server, conn: *Connection, now: u64) void {
     server.http_connections.append(&conn.node);
 }
 
-pub fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
-    const host = app.config.advertiseHost();
+pub fn buildJSONVersionResponse(app: *const App, ws_url: []const u8) ![]const u8 {
     if (app.config.bindIsWildcard()) {
         // Serve is bound to INADDR_ANY but no --advertise-host was given;
         // advertiseHost() falls back to 127.0.0.1 so clients can still
@@ -1047,16 +1046,18 @@ pub fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
         "\"Protocol-Version\": \"1.3\", " ++
         "\"User-Agent\": \"Lightpanda/1.0\", " ++
         "\"Lightpanda-Version\": \"" ++ lp.build_config.version ++ "\", " ++
-        "\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"" ++
+        "\"webSocketDebuggerUrl\": {f}" ++
         "}}";
-    const body_len = std.fmt.count(body_format, .{ host, port });
+    // A unix socket path is user input: escape it.
+    const url = std.json.fmt(ws_url, .{});
+    const body_len = std.fmt.count(body_format, .{url});
 
     const response_format =
         "HTTP/1.1 200 OK\r\n" ++
         "Content-Length: {d}\r\n" ++
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
         body_format;
-    return try app.allocator.print(response_format, .{ body_len, host, port });
+    return try app.allocator.print(response_format, .{ body_len, url });
 }
 
 // Where the upgraded socket goes: a new worker, or an existing session's.
@@ -1072,6 +1073,7 @@ fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target:
     const accept_key = webSocketAccept(req.head, &accept_buf, .{
         .host = server.advertise_host,
         .origins = server.remote_allow_origins,
+        .check_host = server.unix_path == null,
     }) catch |err| {
         const response: []const u8 = switch (err) {
             error.ForbiddenOrigin => forbidden_origin_response,
@@ -1107,6 +1109,9 @@ fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target:
 // from the old Handshake path. `allow` holds the explicit --advertise-host and
 // --remote-allow-origins, if any.
 const Allow = struct {
+    // DNS rebinding needs a TCP connection: a browser can't reach a unix
+    // socket, and its clients send a bare `Host: localhost`.
+    check_host: bool = true,
     host: ?[]const u8 = null,
     origins: []const []const u8 = &.{},
 };
@@ -1146,7 +1151,7 @@ fn webSocketAccept(head: []const u8, out: *[28]u8, allow: Allow) ![]const u8 {
                 log.warn(.serve, "rejected websocket origin", .{ .origin = h.value[0..@min(h.value.len, 64)], .note = "See `--remote-allow-origins <origins>` if this is a legitimate origin" });
                 return error.ForbiddenOrigin;
             }
-        } else if (std.ascii.eqlIgnoreCase(h.key, "host")) {
+        } else if (allow.check_host and std.ascii.eqlIgnoreCase(h.key, "host")) {
             if (isAllowedHost(h.value, allow.host) == false) {
                 log.warn(.serve, "rejected websocket host", .{ .host = h.value[0..@min(h.value.len, 64)], .note = "See `--advertise-host <host>` if this is a legitimate host" });
                 return error.ForbiddenHost;
@@ -1229,6 +1234,8 @@ test "http: webSocketAccept honours the advertised host" {
     var out: [28]u8 = undefined;
     try testing.expectError(error.ForbiddenHost, webSocketAccept(head, &out, .{}));
     try testing.expectString("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", try webSocketAccept(head, &out, .{ .host = "lightpanda" }));
+    // Over a unix socket any Host is fine.
+    try testing.expectString("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", try webSocketAccept(head, &out, .{ .check_host = false }));
 }
 
 test "http: isAllowedOrigin" {
