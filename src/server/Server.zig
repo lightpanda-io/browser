@@ -124,26 +124,12 @@ bidi_session_url: []const u8,
 
 json_version_response: []const u8,
 
-const ListenerTransport = union(enum) {
-    tcp: sys_net.IpAddress,
-    unix: [:0]const u8,
+pub const Address = union(enum) {
+    ip: sys_net.IpAddress,
+    unix: [:0]const u8, // Absolute path, validated by Config
 };
 
-pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
-    return initWithTransport(app, .{ .tcp = address });
-}
-
-/// Bind the existing HTTP/WebSocket protocol on a local Unix socket.
-/// Does not remove a pre-existing pathname (which might belong to another service).
-pub fn initUnix(app: *App, path: [:0]const u8) !*Server {
-    if (path.len == 0 or path.len >= @sizeOf(@FieldType(posix.sockaddr.un, "path"))) {
-        return error.InvalidSocketPath;
-    }
-    if (path[0] != '/') return error.SocketPathMustBeAbsolute;
-    return initWithTransport(app, .{ .unix = path });
-}
-
-fn initWithTransport(app: *App, transport: ListenerTransport) !*Server {
+pub fn init(app: *App, address: Address) !*Server {
     const config = app.config;
     const allocator = app.allocator;
 
@@ -153,73 +139,42 @@ fn initWithTransport(app: *App, transport: ListenerTransport) !*Server {
     var scratch = try std.Io.Writer.Allocating.initCapacity(allocator, 8192);
     errdefer scratch.deinit();
 
-    var json_version_response: []const u8 = "";
-    var bidi_session_url: []const u8 = "";
-
     const max_connections = fdBudget(config);
 
-    var unix_bound = false;
-    errdefer if (unix_bound) switch (transport) {
-        .unix => |path| {
-            _ = std.c.unlink(path.ptr);
-        },
-        .tcp => {},
+    const listener = switch (address) {
+        .ip => |ip| try listenIp(ip, config.maxPendingConnections()),
+        .unix => |path| try listenUnix(path, config.maxPendingConnections()),
     };
-
-    const listener = blk: {
-        const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
-        const l = switch (transport) {
-            .tcp => |address| try sys_net.socket(sys_net.family(&address), flags, posix.IPPROTO.TCP),
-            .unix => try sys_net.socket(posix.AF.UNIX, flags, 0),
-        };
-        errdefer sys_net.close(l);
-
-        const bound_port: u16 = switch (transport) {
-            .tcp => |address| tcp_bound: {
-                try posix.setsockopt(l, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-                if (@hasDecl(posix.TCP, "NODELAY")) {
-                    try posix.setsockopt(l, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
-                }
-                const sa = sys_net.sockaddrFromAddress(&address);
-                try sys_net.bind(l, sa.ptr(), sa.len);
-                break :tcp_bound (try sys_net.boundAddress(l)).getPort();
-            },
-            .unix => |path| unix_socket: {
-                var sa: posix.sockaddr.un = std.mem.zeroes(posix.sockaddr.un);
-                sa.family = posix.AF.UNIX;
-                @memcpy(sa.path[0..path.len], path);
-                try sys_net.bind(l, @ptrCast(&sa), @intCast(@offsetOf(posix.sockaddr.un, "path") + path.len + 1));
-                unix_bound = true;
-                if (std.c.chmod(path.ptr, 0o600) != 0) return error.SocketPermissions;
-                break :unix_socket 0;
-            },
-        };
-
-        json_version_response = try http.buildJSONVersionResponse(app, switch (transport) {
-            .tcp => bound_port,
-            .unix => null,
-        });
-        errdefer allocator.free(json_version_response);
-        bidi_session_url = try allocator.print("ws://{s}:{d}/session/", .{ config.advertiseHost(), bound_port });
-        errdefer allocator.free(bidi_session_url);
-
-        try sys_net.listen(l, config.maxPendingConnections());
-        switch (transport) {
-            .tcp => log.note(.note, "server running", .{
-                .address = try sys_net.boundAddress(l),
-                .max_connections = max_connections,
-                .max_browser_connections = config.maxConnections(),
-            }),
-            .unix => |path| log.note(.note, "server running on unix socket", .{
-                .path = path,
-                .max_connections = max_connections,
-                .max_browser_connections = config.maxConnections(),
-            }),
-        }
-
-        break :blk l;
+    const unix_path: ?[:0]const u8 = switch (address) {
+        .ip => null,
+        .unix => |path| path,
     };
-    errdefer sys_net.close(listener);
+    errdefer closeListener(listener, unix_path);
+
+    const ws_url = switch (address) {
+        .ip => try allocator.print("ws://{s}:{d}/", .{ config.advertiseHost(), (try sys_net.boundAddress(listener)).getPort() }),
+        .unix => |path| try allocator.print("ws+unix://{s}:/", .{path}),
+    };
+    defer allocator.free(ws_url);
+
+    const json_version_response = try http.buildJSONVersionResponse(app, ws_url);
+    errdefer allocator.free(json_version_response);
+
+    const bidi_session_url = try allocator.print("{s}session/", .{ws_url});
+    errdefer allocator.free(bidi_session_url);
+
+    switch (address) {
+        .ip => log.note(.note, "server running", .{
+            .address = try sys_net.boundAddress(listener),
+            .max_connections = max_connections,
+            .max_browser_connections = config.maxConnections(),
+        }),
+        .unix => |path| log.note(.note, "server running", .{
+            .path = path,
+            .max_connections = max_connections,
+            .max_browser_connections = config.maxConnections(),
+        }),
+    }
 
     var http_connection_pool = try Connection.Pool.init(app);
     errdefer http_connection_pool.deinit();
@@ -254,10 +209,7 @@ fn initWithTransport(app: *App, transport: ListenerTransport) !*Server {
         .app = app,
         .io_engine = io_engine,
         .listener = listener,
-        .unix_path = switch (transport) {
-            .tcp => null,
-            .unix => |path| path,
-        },
+        .unix_path = unix_path,
         .listener_paused = false,
         .scratch = scratch,
         .request_arena = std.heap.ArenaAllocator.init(allocator),
@@ -283,6 +235,53 @@ fn initWithTransport(app: *App, transport: ListenerTransport) !*Server {
     return self;
 }
 
+fn listenIp(address: sys_net.IpAddress, backlog: u31) !posix.socket_t {
+    const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
+    const l = try sys_net.socket(sys_net.family(&address), flags, posix.IPPROTO.TCP);
+    errdefer sys_net.close(l);
+
+    try posix.setsockopt(l, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+    if (@hasDecl(posix.TCP, "NODELAY")) {
+        try posix.setsockopt(l, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+    }
+
+    const sa = sys_net.sockaddrFromAddress(&address);
+    try sys_net.bind(l, sa.ptr(), sa.len);
+    try sys_net.listen(l, backlog);
+    return l;
+}
+
+// An existing file at `path` fails the bind with AddressInUse: it may be
+// another server's socket, so it is never removed.
+fn listenUnix(path: [:0]const u8, backlog: u31) !posix.socket_t {
+    var sa = std.mem.zeroes(posix.sockaddr.un);
+    lp.assert(path.len < sa.path.len, "unix socket path too long", .{ .len = path.len });
+    sa.family = posix.AF.UNIX;
+    @memcpy(sa.path[0..path.len], path);
+
+    const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
+    const l = try sys_net.socket(posix.AF.UNIX, flags, 0);
+    errdefer sys_net.close(l);
+
+    try sys_net.bind(l, @ptrCast(&sa), @intCast(@offsetOf(posix.sockaddr.un, "path") + path.len + 1));
+    errdefer std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+
+    // Not atomic with the bind, but connecting needs write permission,
+    // which a umask rarely grants to anyone but the owner.
+    if (std.c.chmod(path.ptr, 0o600) != 0) {
+        return error.SocketPermissions;
+    }
+    try sys_net.listen(l, backlog);
+    return l;
+}
+
+fn closeListener(listener: posix.socket_t, unix_path: ?[:0]const u8) void {
+    sys_net.close(listener);
+    if (unix_path) |path| {
+        std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+    }
+}
+
 pub fn deinit(self: *Server) void {
     const allocator = self.app.allocator;
 
@@ -301,10 +300,7 @@ pub fn deinit(self: *Server) void {
     self.http_connection_pool.deinit();
     allocator.free(self.json_version_response);
     allocator.free(self.bidi_session_url);
-    sys_net.close(self.listener);
-    if (self.unix_path) |path| {
-        _ = std.c.unlink(path.ptr);
-    }
+    closeListener(self.listener, self.unix_path);
     self.io_engine.deinit();
     allocator.destroy(self);
 }
@@ -403,12 +399,12 @@ fn accept(self: *Server, now: u64) !void {
             }
         };
         errdefer sys_net.close(socket);
-        if (self.unix_path == null) configureSocket(socket);
-
-        const peer: sys_net.IpAddress = if (self.unix_path != null)
-            .{ .ip4 = .loopback(0) }
-        else
-            sys_net.addressFromSockaddr(@ptrCast(&address));
+        // A Unix socket has neither TCP options nor a peer IP.
+        var peer: sys_net.IpAddress = .{ .ip4 = .unspecified(0) };
+        if (self.unix_path == null) {
+            configureSocket(socket);
+            peer = sys_net.addressFromSockaddr(@ptrCast(&address));
+        }
         if (comptime lp.IS_DEBUG) {
             log.debug(.serve, "client connected", .{ .address = peer });
         }
@@ -1490,7 +1486,7 @@ const WorkerRequest = struct {
 
 const testing = @import("../testing.zig");
 test "server: buildJSONVersionResponse" {
-    const res = try http.buildJSONVersionResponse(testing.test_app, testing.test_app.config.port());
+    const res = try http.buildJSONVersionResponse(testing.test_app, "ws://127.0.0.1:9222/");
     defer testing.test_app.allocator.free(res);
 
     // The response includes the build version, so check structure rather than exact bytes.
@@ -1505,6 +1501,10 @@ test "server: buildJSONVersionResponse" {
     try testing.expect(std.mem.find(u8, res, "\"User-Agent\": \"Lightpanda/") != null);
     try testing.expect(std.mem.find(u8, res, "\"Lightpanda-Version\": \"" ++ lp.build_config.version ++ "\"") != null);
     try testing.expect(std.mem.find(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
+
+    const unix = try http.buildJSONVersionResponse(testing.test_app, "ws+unix:///tmp/a\"b.sock:/");
+    defer testing.test_app.allocator.free(unix);
+    try testing.expect(std.mem.find(u8, unix, "\"webSocketDebuggerUrl\": \"ws+unix:///tmp/a\\\"b.sock:/\"}") != null);
 }
 
 test "Client: http header past the initial buffer" {
@@ -3460,7 +3460,7 @@ const LoopTest = struct {
     address: sys_net.IpAddress,
 
     fn init() !LoopTest {
-        const server = try Server.init(testing.test_app, .{ .ip4 = .loopback(0) });
+        const server = try Server.init(testing.test_app, .{ .ip = .{ .ip4 = .loopback(0) } });
         errdefer server.deinit();
         server.protocols = .{ .cdp = true, .webdriver = true };
         // run() does this; runOnce() on its own would never see an accept
@@ -3689,11 +3689,12 @@ test "server: unix listener accepts a client and removes owned socket on shutdow
     const path = try std.fmt.allocPrintSentinel(testing.allocator, "{s}/cdp.sock", .{absolute_dir}, 0);
     defer testing.allocator.free(path);
 
-    const server = try Server.initUnix(testing.test_app, path);
+    const server = try Server.init(testing.test_app, .{ .unix = path });
     var live = true;
     defer if (live) server.deinit();
-    try testing.expectEqual(@as(c_int, 0), std.c.access(path.ptr, 0));
-    try testing.expectError(error.AddressInUse, Server.initUnix(testing.test_app, path));
+    try testing.expectEqual(0, std.c.access(path.ptr, 0));
+    try testing.expect(std.mem.indexOf(u8, server.json_version_response, "\"ws+unix://") != null);
+    try testing.expectError(error.AddressInUse, Server.init(testing.test_app, .{ .unix = path }));
     try server.io_engine.monitorListener(server.listener);
 
     const client = try sys_net.socket(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
@@ -3701,16 +3702,10 @@ test "server: unix listener accepts a client and removes owned socket on shutdow
     var address: posix.sockaddr.un = std.mem.zeroes(posix.sockaddr.un);
     address.family = posix.AF.UNIX;
     @memcpy(address.path[0..path.len], path);
-    try testing.expectEqual(@as(c_int, 0), std.c.connect(client, @ptrCast(&address), @intCast(@offsetOf(posix.sockaddr.un, "path") + path.len + 1)));
+    try testing.expectEqual(0, std.c.connect(client, @ptrCast(&address), @intCast(@offsetOf(posix.sockaddr.un, "path") + path.len + 1)));
     try server.accept(lp.datetime.milliTimestamp(.boot));
     try testing.expect(server.http_connections.first != null);
     server.deinit();
     live = false;
     try testing.expect(std.c.access(path.ptr, 0) != 0);
-}
-
-test "server: unix listener refuses non-absolute and overlong paths" {
-    try testing.expectError(error.SocketPathMustBeAbsolute, Server.initUnix(testing.test_app, "cdp.sock"));
-    const too_long = "/" ++ "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    try testing.expectError(error.InvalidSocketPath, Server.initUnix(testing.test_app, too_long));
 }

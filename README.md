@@ -120,27 +120,12 @@ available to adjust waiting time before dump.
 ```console
 ./lightpanda serve --obey-robots --log-format pretty  --log-level info --host 127.0.0.1 --port 9222
 ```
-For an optional **local Unix-domain socket listener** instead of TCP (on
-Unix-like hosts), use an absolute socket path:
 
-```sh
-./lightpanda serve --socket /run/user/1000/lightpanda.sock
-curl --unix-socket /run/user/1000/lightpanda.sock http://localhost/json/version
+To listen on a Unix-domain socket (owner-only, mode 0600) instead of TCP:
+
+```console
+./lightpanda serve --unix-socket /run/user/1000/lightpanda.sock
 ```
-
-`--socket` cannot be combined with `--host`, `--port`, or
-`--advertise-host`. The socket is created with owner-only (`0600`)
-permissions, is not replaced if already present, and is unlinked on normal
-server shutdown. Clients must support HTTP/WebSocket over Unix sockets and
-connect directly to the specified socket path; `/json/version` reports a
-null `webSocketDebuggerUrl` because no TCP endpoint exists. Ordinary
-Puppeteer/Playwright connections to `ws://127.0.0.1:9222` still use the
-existing TCP mode.
-
-Unix socket permissions are **not** isolation from other processes sharing
-the same Unix identity, including processes that can inspect or change the
-server's runtime. Use separate OS users or an execution sandbox when
-running untrusted agents.
 
 Once the CDP server started, you can run a Puppeteer script by configuring the
 `browserWSEndpoint`.

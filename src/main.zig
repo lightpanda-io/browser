@@ -123,26 +123,29 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
     switch (args.mode) {
         .serve => |opts| {
             log.debug(.app, "startup", .{ .mode = "serve", .snapshot = app.snapshot.fromEmbedded() });
-            const server = if (opts.socket) |path| blk: {
-                if (opts.host != null or opts.port != null or opts.advertise_host != null) {
-                    log.fatal(.app, "socket conflicts with TCP", .{});
-                    return error.InvalidArgument;
-                }
-                break :blk lp.Server.initUnix(app, path) catch |err| {
-                    log.fatal(.app, "unix socket server error", .{ .err = err, .path = path });
-                    return err;
-                };
-            } else blk: {
-                const host = opts.host orelse "127.0.0.1";
-                const port = opts.port orelse 9222;
-                const address = std.Io.net.IpAddress.parse(host, port) catch |err| {
-                    log.fatal(.app, "invalid server address", .{ .err = err, .host = host, .port = port });
+            const address: lp.Server.Address = if (opts.unix_socket) |path| .{ .unix = path } else .{
+                .ip = std.Io.net.IpAddress.parse(args.serveHost(), args.port()) catch |err| {
+                    log.fatal(.app, "invalid server address", .{ .err = err, .host = args.serveHost(), .port = args.port() });
                     return args.printUsageAndExit(main_arena, .serve, false);
-                };
-                break :blk lp.Server.init(app, address) catch |err| {
-                    log.fatal(.app, "server run error", .{ .err = err, .host = host, .port = port });
-                    return err;
-                };
+                },
+            };
+
+            var server = lp.Server.init(app, address) catch |err| {
+                if (err != error.AddressInUse) {
+                    log.fatal(.app, "server run error", .{ .err = err });
+                } else switch (address) {
+                    .ip => log.fatal(.app, "address already in use", .{
+                        .host = args.serveHost(),
+                        .port = args.port(),
+                        .hint = "Another process is already listening on this address. " ++
+                            "Stop the other process or use --port to choose a different port.",
+                    }),
+                    .unix => |path| log.fatal(.app, "address already in use", .{
+                        .path = path,
+                        .hint = "The path already exists. If no other process is listening on it, delete it.",
+                    }),
+                }
+                return err;
             };
             defer server.deinit();
 
@@ -258,7 +261,7 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                     log.fatal(.mcp, "invalid cdp address", .{ .err = err, .port = port });
                     return;
                 };
-                cdp_server = try lp.Server.init(app, address);
+                cdp_server = try lp.Server.init(app, .{ .ip = address });
                 try sighandler.on(lp.Server.shutdown, .{cdp_server.?});
             }
             defer if (cdp_server) |s| s.deinit();
