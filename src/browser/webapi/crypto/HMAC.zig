@@ -159,77 +159,37 @@ pub fn import(
     return local.resolvePromise(crypto_key);
 }
 
-pub fn sign(
-    algo: algorithm.Sign,
-    crypto_key: *const CryptoKey,
-    data: []const u8,
-    exec: *const Execution,
-) !js.Promise {
-    var resolver = exec.js.local.?.createPromiseResolver();
-
-    if (!algo.isHMAC() or !crypto_key.canSign()) {
-        resolver.rejectError("HMAC.sign", .{ .dom_exception = .{ .err = error.InvalidAccessError } });
-        return resolver.promise();
-    }
-
+/// The MAC of `data` with the key. SubtleCrypto.sign checked the algorithm
+/// and the sign usage.
+pub fn sign(crypto_key: *const CryptoKey, data: []const u8, exec: *const Execution) ![]const u8 {
     const buffer = try exec.local_arena.alloc(u8, crypto.EVP_MD_size(crypto_key.getDigest()));
-    var out_len: u32 = 0;
-    // Try to sign.
+    return compute(crypto_key, data, buffer);
+}
+
+/// Whether `signature` is the MAC of `data` with the key. SubtleCrypto.verify
+/// checked the algorithm and the verify usage.
+pub fn verify(crypto_key: *const CryptoKey, signature: []const u8, data: []const u8) !bool {
+    var buffer: [crypto.EVP_MAX_MD_SIZE]u8 = undefined;
+    const mac = try compute(crypto_key, data, &buffer);
+    // Check that lengths match; CRYPTO_memcmp can't cover this.
+    if (signature.len != mac.len) {
+        return false;
+    }
+    // CRYPTO_memcmp compare in constant time so prohibits time-based attacks.
+    return crypto.CRYPTO_memcmp(mac.ptr, signature.ptr, signature.len) == 0;
+}
+
+/// The MAC of `data`, written to `out` (at least the digest's size).
+fn compute(crypto_key: *const CryptoKey, data: []const u8, out: []u8) ![]const u8 {
+    var out_len: c_uint = 0;
     _ = crypto.HMAC(
         crypto_key.getDigest(),
         @ptrCast(crypto_key._key.ptr),
         crypto_key._key.len,
         data.ptr,
         data.len,
-        buffer.ptr,
+        out.ptr,
         &out_len,
-    ) orelse {
-        // Failure.
-        resolver.rejectError("HMAC.sign", .{ .dom_exception = .{ .err = error.InvalidAccessError } });
-        return resolver.promise();
-    };
-
-    // Success.
-    resolver.resolve("HMAC.sign", js.ArrayBuffer{ .values = buffer[0..out_len] });
-    return resolver.promise();
-}
-
-pub fn verify(
-    crypto_key: *const CryptoKey,
-    signature: []const u8,
-    data: []const u8,
-    exec: *const Execution,
-) !js.Promise {
-    var resolver = exec.js.local.?.createPromiseResolver();
-
-    if (!crypto_key.canVerify()) {
-        resolver.rejectError("HMAC.verify", .{ .dom_exception = .{ .err = error.InvalidAccessError } });
-        return resolver.promise();
-    }
-
-    var buffer: [crypto.EVP_MAX_MD_BLOCK_SIZE]u8 = undefined;
-    var out_len: u32 = 0;
-    // Try to sign.
-    const signed = crypto.HMAC(
-        crypto_key.getDigest(),
-        @ptrCast(crypto_key._key.ptr),
-        crypto_key._key.len,
-        data.ptr,
-        data.len,
-        &buffer,
-        &out_len,
-    ) orelse {
-        resolver.resolve("HMAC.verify", false);
-        return resolver.promise();
-    };
-    // Check that lengths match; CRYPTO_memcmp can't cover this.
-    if (@as(u32, @intCast(signature.len)) != out_len) {
-        resolver.resolve("HMAC.verify", false);
-        return resolver.promise();
-    }
-
-    // CRYPTO_memcmp compare in constant time so prohibits time-based attacks.
-    const res = crypto.CRYPTO_memcmp(signed, @ptrCast(signature.ptr), signature.len);
-    resolver.resolve("HMAC.verify", res == 0);
-    return resolver.promise();
+    ) orelse return error.OperationError;
+    return out[0..out_len];
 }
