@@ -34,6 +34,7 @@ const FileReader = @import("FileReader.zig");
 const AbortSignal = @import("AbortSignal.zig");
 const MessagePort = @import("MessagePort.zig");
 const Performance = @import("Performance.zig");
+const Permissions = @import("Permissions.zig");
 const Notification = @import("Notification.zig");
 const SharedWorker = @import("SharedWorker.zig");
 const ServiceWorker = @import("ServiceWorker.zig");
@@ -97,6 +98,7 @@ pub const Type = enum(u8) {
     node,
     notification,
     performance,
+    permission_status,
     screen,
     screen_orientation,
     service_worker,
@@ -140,6 +142,7 @@ pub fn Subtype(comptime tag: Type) type {
         .node => Node,
         .notification => Notification,
         .performance => Performance,
+        .permission_status => Permissions.PermissionStatus,
         .screen => Screen,
         .screen_orientation => Screen.Orientation,
         .service_worker => ServiceWorker,
@@ -408,6 +411,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .idb_database => writer.writeAll("<IDBDatabase>"),
         .idb_transaction => writer.writeAll("<IDBTransaction>"),
         .notification => writer.writeAll("<Notification>"),
+        .permission_status => writer.writeAll("<PermissionStatus>"),
         .navigation_history_entry => writer.writeAll("<NavigationHistoryEntry>"),
     };
 }
@@ -434,6 +438,7 @@ pub fn toString(self: *EventTarget) []const u8 {
         .node => return "[object Node]",
         .notification => return "[object Notification]",
         .performance => return "[object Performance]",
+        .permission_status => return "[object PermissionStatus]",
         .screen => return "[object Screen]",
         .screen_orientation => return "[object ScreenOrientation]",
         .service_worker => return "[object ServiceWorker]",
