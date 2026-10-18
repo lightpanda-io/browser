@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<head>
+  <script src="../testing.js"></script>
+</head>
+
+<!--
+  The resolved transform is "none" or a single matrix()/matrix3d(), as in
+  Chrome. Animation libraries (popmotion) regex it and crash otherwise.
+-->
+
+<div id=translate_scale style="transform: translateX(10px) scale(2)"></div>
+<div id=rotate style="transform: rotate(45deg)"></div>
+<div id=rotate90 style="transform: rotate(90deg)"></div>
+<div id=three_d style="transform: translate3d(1px, 2px, 3px)"></div>
+<div id=identity style="transform: translate(0)"></div>
+<div id=explicit_none style="transform: none"></div>
+<div id=unset></div>
+<div id=matrix style="transform: matrix(1, 2, 3, 4, 5, 6)"></div>
+
+<script id=resolved_transform>
+  const t = (id) => getComputedStyle(document.getElementById(id)).transform;
+  testing.expectEqual('matrix(2, 0, 0, 2, 10, 0)', t('translate_scale'));
+  testing.expectEqual('matrix(0.707107, 0.707107, -0.707107, 0.707107, 0, 0)', t('rotate'));
+  testing.expectEqual('matrix(6.12323e-17, 1, -1, 6.12323e-17, 0, 0)', t('rotate90'));
+  testing.expectEqual('matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 2, 3, 1)', t('three_d'));
+  testing.expectEqual('matrix(1, 0, 0, 1, 0, 0)', t('identity'));
+  testing.expectEqual('none', t('explicit_none'));
+  testing.expectEqual('none', t('unset'));
+  testing.expectEqual('matrix(1, 2, 3, 4, 5, 6)', t('matrix'));
+
+  // getPropertyValue goes through the same path; el.style keeps the
+  // specified value.
+  const el = document.getElementById('translate_scale');
+  testing.expectEqual('matrix(2, 0, 0, 2, 10, 0)', getComputedStyle(el).getPropertyValue('transform'));
+  testing.expectEqual('translateX(10px) scale(2)', el.style.transform);
+</script>
+
+<script id=popmotion_pattern>
+  {
+    // What popmotion's measurement does with the resolved value.
+    const style = getComputedStyle(document.getElementById('translate_scale'));
+    const m = style.transform.match(/^matrix\((.+)\)$/);
+    testing.expectEqual(10, parseFloat(m[1].split(', ')[4]));
+  }
+</script>
