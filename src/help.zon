@@ -469,9 +469,10 @@
     \\             iframe      When enabled, <iframe> elements are fully loaded.
     \\
     \\             image       <img> sources, so that load/error reflects the real
-    \\                         HTTP status. Only the response headers are read;
-    \\                         images are never decoded, so naturalWidth and
-    \\                         naturalHeight stay 0. Delays the window load event.
+    \\                         HTTP status. Images are never decoded: only the
+    \\                         first 16KB is read, for naturalWidth and
+    \\                         naturalHeight (PNG, GIF, JPEG and WebP; 0 for
+    \\                         other formats). Delays the window load event.
     \\
     \\             stylesheet  Fetch external <link rel=stylesheet> resources so
     \\                         their rules contribute to computed styles (and
