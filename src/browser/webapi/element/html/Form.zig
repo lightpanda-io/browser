@@ -98,7 +98,7 @@ pub fn setMethod(self: *Form, method: []const u8, frame: *Frame) !void {
 }
 
 pub fn getElements(self: *Form, frame: *Frame) !*HTMLFormControlsCollection {
-    const node_live = self.iterator(.{ .image_buttons = false }, frame);
+    const node_live = self.iterator(.{ .image_buttons = false, .listed = true }, frame);
     const elements = try frame._factory.chained(.{
         node_live.htmlCollectionValue(),
         HTMLFormControlsCollection{ ._proto = undefined },
@@ -110,6 +110,7 @@ pub fn getElements(self: *Form, frame: *Frame) !*HTMLFormControlsCollection {
 const IteratorOpts = struct {
     image_buttons: bool = true, // form.elements doesn't incude input type=image
     outputs: bool = false, // only reset() wants <output>
+    listed: bool = false, // form.elements also lists <fieldset>, <object> and <output>
 };
 
 pub fn iterator(self: *Form, opts: IteratorOpts, frame: *Frame) NodeLive(.form) {
@@ -119,7 +120,7 @@ pub fn iterator(self: *Form, opts: IteratorOpts, frame: *Frame) NodeLive(.form) 
     else
         self.asNode(); // No ID: walk only form subtree (no external controls possible)
 
-    return NodeLive(.form).init(root, .{ .form = self, .form_id = form_id, .image_buttons = opts.image_buttons, .outputs = opts.outputs }, frame);
+    return NodeLive(.form).init(root, .{ .form = self, .form_id = form_id, .image_buttons = opts.image_buttons, .outputs = opts.outputs, .listed = opts.listed }, frame);
 }
 
 fn getAction(self: *Form, frame: *Frame) ![]const u8 {
@@ -287,7 +288,7 @@ pub fn ownerOf(element: *Element, frame: *Frame) ?*Form {
 }
 
 fn getAtIndex(self: *Form, index: usize, frame: *Frame) ?*Element {
-    var it = self.iterator(.{ .image_buttons = false }, frame);
+    var it = self.iterator(.{ .image_buttons = false, .listed = true }, frame);
     return it.getAtIndex(index, frame);
 }
 
@@ -299,7 +300,7 @@ fn namedItem(self: *Form, name: []const u8, frame: *Frame) !?HTMLFormControlsCol
     }
 
     var first: ?*Element = null;
-    var it = self.iterator(.{ .image_buttons = false }, frame);
+    var it = self.iterator(.{ .image_buttons = false, .listed = true }, frame);
     while (it.next()) |element| {
         if (HTMLFormControlsCollection.matchesName(element, name) == false) {
             continue;
@@ -354,7 +355,7 @@ pub const JsApi = struct {
                 return error.NotHandled;
             }
 
-            var it = self.iterator(.{ .image_buttons = false }, frame);
+            var it = self.iterator(.{ .image_buttons = false, .listed = true }, frame);
             while (it.next()) |element| {
                 if (HTMLFormControlsCollection.matchesName(element, field_name)) {
                     return js.v8.DontEnum;

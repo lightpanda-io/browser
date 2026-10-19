@@ -750,6 +750,29 @@
 }
 </script>
 
+<form id="listed_form">
+  <fieldset name="fs">
+    <input name="q" value="1">
+  </fieldset>
+  <output name="out">x</output>
+  <object name="obj"></object>
+</form>
+<fieldset form="listed_form" name="outside"></fieldset>
+
+<script id="elements_includes_listed_elements">
+{
+  // fieldset, output and object are listed elements, but none of them submits
+  const form = $('#listed_form')
+  testing.expectEqual('FIELDSET,INPUT,OUTPUT,OBJECT,FIELDSET', Array.from(form.elements).map((e) => e.tagName).join(','))
+  testing.expectEqual(5, form.length)
+  testing.expectEqual('outside', form.elements[4].name)
+  testing.expectEqual('FIELDSET', form.elements.fs.tagName)
+  testing.expectEqual(form.elements.fs, form.fs)
+  testing.expectEqual(form.elements[2], form[2])
+  testing.expectEqual('q=1', Array.from(new FormData(form)).map(([k, v]) => k + '=' + v).join('&'))
+}
+</script>
+
 <form id="button_type_form">
   <button type="invalid" id="invalid_type"></button>
   <button type="SUBMIT" id="upper_type"></button>
