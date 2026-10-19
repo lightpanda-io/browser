@@ -370,6 +370,9 @@ pub fn NodeLive(comptime mode: Mode) type {
                 },
                 .form => {
                     const el = node.is(Element) orelse return false;
+                    if (el._type != .html) {
+                        return false;
+                    }
                     const is_control = isFormControl(el) or switch (el.getTag()) {
                         .output => self._filter.outputs or self._filter.listed,
                         .fieldset, .object => self._filter.listed,
@@ -420,7 +423,6 @@ pub fn NodeLive(comptime mode: Mode) type {
         }
 
         fn isFormControl(el: *Element) bool {
-            if (el._type != .html) return false;
             const html = el.subtype(Element.Html);
             return switch (html._type) {
                 .input, .button, .select, .textarea => true,
