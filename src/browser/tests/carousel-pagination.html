@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<style>
+  .carousel-shell { overflow: hidden; }
+  .carousel-track { display: flex; }
+  .carousel-slide { width: 300px; flex-shrink: 0; }
+</style>
+
+<body>
+<script id="carouselPagination">
+{
+  const section = document.createElement('div');
+  const shell = document.createElement('div');
+  shell.className = 'carousel-shell';
+  const track = document.createElement('div');
+  track.className = 'carousel-track';
+  for (let i = 0; i < 24; i++) {
+    const slide = document.createElement('div');
+    slide.className = 'carousel-slide';
+    track.appendChild(slide);
+  }
+  shell.appendChild(track);
+  section.appendChild(shell);
+  document.body.appendChild(section);
+
+  const slideWidth = track.firstElementChild.getBoundingClientRect().width + 20;
+  const perPage = Math.floor(shell.offsetWidth / slideWidth);
+  const pages = Math.ceil(track.childElementCount / perPage);
+  const dots = document.createElement('div');
+  for (let i = 0; i < pages && i < 50; i++) {
+    dots.appendChild(document.createElement('button'));
+  }
+  section.remove();
+
+  testing.expectTrue(Number.isFinite(pages));
+  testing.expectTrue(dots.childElementCount > 0 && dots.childElementCount < 50);
+  testing.expectEqual(pages, dots.childElementCount);
+}
+</script>

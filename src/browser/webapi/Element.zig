@@ -2944,6 +2944,11 @@ test "WebApi: Element" {
     try testing.htmlRunner("element", .{});
 }
 
+test "WebApi: Element carousel pagination" {
+    if (true) return error.SkipZigTest;
+    try testing.htmlRunner("carousel-pagination.html", .{});
+}
+
 test "Element: scroll extent" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
