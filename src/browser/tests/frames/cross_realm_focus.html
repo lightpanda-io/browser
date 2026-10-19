@@ -93,6 +93,36 @@ Chrome to cross-check.
   });
 </script>
 
+<script id="has_focus_follows_focus_chain">
+  testing.onload(() => {
+    const idf = document.getElementById('idf');
+    const idoc = idf.contentDocument;
+    const inp = idoc.getElementById('fin');
+    const pout = document.getElementById('pout');
+
+    // The top-level document always has focus; an iframe's only while its
+    // <iframe> is the parent's focused area.
+    pout.focus();
+    testing.expectTrue(document.hasFocus());
+    testing.expectFalse(idoc.hasFocus());
+
+    inp.focus();
+    testing.expectTrue(document.hasFocus());
+    testing.expectTrue(idoc.hasFocus());
+
+    // Blurring inside the iframe leaves focus on its viewport.
+    inp.blur();
+    testing.expectTrue(idoc.hasFocus());
+
+    pout.focus();
+    testing.expectFalse(idoc.hasFocus());
+    pout.blur();
+
+    testing.expectFalse(new DOMParser().parseFromString('', 'text/html').hasFocus());
+    testing.expectFalse(document.implementation.createHTMLDocument('').hasFocus());
+  });
+</script>
+
 <script id="frameless_document_is_not_focusable">
   testing.onload(() => {
     const doc = new DOMParser().parseFromString('<input id=x>', 'text/html');
