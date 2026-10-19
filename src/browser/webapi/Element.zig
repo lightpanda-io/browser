@@ -2945,7 +2945,7 @@ test "WebApi: Element" {
 }
 
 test "WebApi: Element carousel pagination" {
-    // Pending a general solution: https://github.com/lightpanda-io/browser/pull/4045
+    // Pending a general solution: https://github.com/lightpanda-io/browser/issues/4065
     if (true) return error.SkipZigTest;
     try testing.htmlRunner("carousel-pagination.html", .{});
 }
