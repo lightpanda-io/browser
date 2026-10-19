@@ -456,7 +456,7 @@ pub const Tool = enum {
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
                     \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output; same groups as the html tool's strip. `shell` (page chrome by markup) and `clutter` (keep only the main content, in the manner of reader modes) are the ones that matter for reading; `ui` also drops images.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering. An empty string is treated as omitted." },
-                    \\    "alternate": { "type": "boolean", "description": "Optional. When the page links a markdown version of itself (<link rel=\"alternate\" type=\"text/markdown\">), return that file instead of converting the page. It is the author's file and can differ from the rendered page; the output then starts with a comment naming its URL. Falls back to the page when there is no such link or it does not load as markdown. Cannot be combined with selector or backendNodeId. Defaults to false." },
+                    \\    "alternate": { "type": "boolean", "description": "Optional. When the page links a markdown version of itself (<link rel=\"alternate\" type=\"text/markdown\">), return that file instead of converting the page. It is the author's file and can differ from the rendered page; the output then starts with a comment naming its URL, which maxBytes does not count. Falls back to the page when there is no such link, the page itself failed to load (HTTP error status or bot challenge), or the alternate does not load as markdown within what is left of the timeout. Cannot be combined with selector or backendNodeId. Defaults to false." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -1650,12 +1650,18 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
         timeout: ?u32 = null,
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
+    const timer: std.Io.Timestamp = .now(lp.io, .boot);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
     if (args.alternate) {
         // The alternate stands for the whole page, like `fetch --markdown-alternate`.
         if (args.selector != null or args.backendNodeId != null) return ToolError.InvalidParams;
-        if (try readMarkdownAlternate(arena, session, page, args.maxBytes, args.timeout)) |text| return text;
+        if (lp.markdown.canFollowAlternate(page)) {
+            // One timeout for the call: the alternate gets what loading the page left.
+            const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
+            const remaining = (args.timeout orelse default_nav_timeout_ms) -| elapsed;
+            if (try readMarkdownAlternate(arena, session, page, args.maxBytes, remaining)) |text| return text;
+        }
     }
 
     const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
@@ -1668,16 +1674,20 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
 
 /// The page's `<link rel="alternate" type="text/markdown">`, loaded in a page
 /// of its own so the current page stays where it is. Null when there is no
-/// such link or it doesn't load as markdown.
-fn readMarkdownAlternate(arena: std.mem.Allocator, session: *lp.Session, frame: *lp.Frame, max_bytes: ?u32, timeout: ?u32) ToolError!?[]const u8 {
+/// such link or it doesn't load as markdown within `timeout_ms`.
+fn readMarkdownAlternate(arena: std.mem.Allocator, session: *lp.Session, frame: *lp.Frame, max_bytes: ?u32, timeout_ms: u32) ToolError!?[]const u8 {
     const url = (lp.markdown.alternateUrl(arena, frame) catch return ToolError.InternalError) orelse return null;
     const page = openPage(session, url) catch return null;
     defer page.close();
 
     var runner = session.runner(.{});
     var conditions = [_]lp.Session.Runner.WaitCondition{.{ .frame_id = page.frame_id, .until = default_nav_wait }};
-    _ = runner.waitResult(timeout orelse default_nav_timeout_ms, &conditions) catch |err| {
-        return if (err == error.Cancelled) ToolError.Cancelled else null;
+    // A timeout leaves the alternate unloaded, so the check below falls back
+    // to the page; a failed wait is an error.
+    _ = runner.waitResult(timeout_ms, &conditions) catch |err| return switch (err) {
+        error.Cancelled => ToolError.Cancelled,
+        error.OutOfMemory => ToolError.OutOfMemory,
+        else => ToolError.InternalError,
     };
 
     const alternate = page.frame() orelse return null;
@@ -3573,6 +3583,15 @@ test "markdown: alternate reads the page's text/markdown link" {
     const fallback = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"alternate\":true,\"url\":\"" ++ base ++ "markdown_alternate_html.html\"}", .{}), .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, fallback.text, "Alternate is HTML") != null);
     try std.testing.expectEqual(1, session.pages.items.len);
+
+    // A page that failed keeps its own content: the alternate's 200 would hide it.
+    _ = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ base ++ "markdown_alternate.html\"}", .{}), .{ .source = .user });
+    session.currentFrame().?._http_status = 404;
+    const failed = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"alternate":true}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, failed.text, "Rendered page") != null);
+    try std.testing.expect(std.mem.find(u8, failed.text, "markdown alternate") == null);
 }
 
 test "markdown: a same-url page whose navigation failed is navigated again" {

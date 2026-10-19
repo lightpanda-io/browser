@@ -1953,7 +1953,9 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
             },
             .application_json, .text_javascript, .text_css, .text_plain, .text_markdown => {
                 var arr: std.ArrayList(u8) = .empty;
-                try arr.appendSlice(self.page_arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>");
+                // The parser drops a newline right after <pre>; this one
+                // keeps a body that starts with a newline intact.
+                try arr.appendSlice(self.page_arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>\n");
                 self._parse_state = .{ .text = arr };
             },
             .image_jpeg, .image_gif, .image_png, .image_webp => {

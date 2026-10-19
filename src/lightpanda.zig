@@ -349,14 +349,6 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         }
     }
 
-    // Pages swapped for their markdown alternate.
-    const alternates = try session.arena.allocator().alloc(bool, pages.items.len);
-    @memset(alternates, false);
-    if (opts.markdown_alternate) {
-        const remaining = opts.wait_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
-        try followMarkdownAlternates(session, pages.items, errors, remaining, alternates);
-    }
-
     var http_error = false;
     for (pages.items, errors) |page, *err| {
         const frame = page.frame() orelse {
@@ -383,6 +375,16 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
                 http_error = true;
             }
         }
+    }
+
+    // Pages swapped for their markdown alternate. This runs after the errors
+    // and HTTP statuses above are recorded, and skips pages that failed, so an
+    // alternate's 200 can't hide a failed page.
+    const alternates = try session.arena.allocator().alloc(bool, pages.items.len);
+    @memset(alternates, false);
+    if (opts.markdown_alternate) {
+        const remaining = opts.wait_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
+        try followMarkdownAlternates(session, pages.items, errors, remaining, alternates);
     }
 
     try writeResults(app, opts, pages.items, errors, alternates);
@@ -414,7 +416,8 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
 /// Loads each page's markdown alternate in a page of its own (same session, so
 /// same cookies, robots and proxy) and swaps it in for the page when it loads
 /// as markdown, marking it in `followed`. Otherwise the page is kept and
-/// converted as usual.
+/// converted as usual. Pages with an error, a bot challenge or an HTTP error
+/// status are kept as they are.
 fn followMarkdownAlternates(session: *Session, pages: []Session.PageHandle, errors: []const ?anyerror, timeout_ms: u32, followed: []bool) !void {
     const arena = session.arena.allocator();
     const alternates = try arena.alloc(?Session.PageHandle, pages.len);
@@ -423,6 +426,7 @@ fn followMarkdownAlternates(session: *Session, pages: []Session.PageHandle, erro
         alternate.* = null;
         if (err != null) continue;
         const frame = page.frame() orelse continue;
+        if (!markdown.canFollowAlternate(frame)) continue;
         const url = try markdown.alternateUrl(arena, frame) orelse continue;
         const alt = try session.createPage();
         alt.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } }) catch {
@@ -838,6 +842,30 @@ test "fetch: followMarkdownAlternates swaps in a page's markdown alternate" {
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     try dumpContent(testing.test_app, .markdown, .{ .dump = .{} }, pages[3].frame().?, true, &aw.writer);
     try testing.expectString(@embedFile("browser/tests/markdown_source.txt"), aw.written());
+}
+
+test "fetch: followMarkdownAlternates keeps a page that failed" {
+    const session = testing.test_session;
+    defer session.closeAllPages();
+
+    var pages = [_]Session.PageHandle{
+        try testing.pageTest("markdown_alternate.html", .{ .wait_until_done = true }),
+        try testing.pageTest("markdown_alternate.html", .{ .wait_until_done = true }),
+    };
+    // A 404 page with a markdown link: its alternate's 200 would hide the 404
+    // from --fail-on-http-error.
+    pages[0].frame().?._http_status = 404;
+    pages[1].frame().?._bot_challenge = .cloudflare;
+    var errors = [_]?anyerror{ null, null };
+    var followed = [_]bool{ false, false };
+    try followMarkdownAlternates(session, &pages, &errors, 2000, &followed);
+
+    const page_url = "http://127.0.0.1:9582/src/browser/tests/markdown_alternate.html";
+    try testing.expectString(page_url, pages[0].frame().?.url);
+    try testing.expectString(page_url, pages[1].frame().?.url);
+    try testing.expectEqual(false, followed[0]);
+    try testing.expectEqual(false, followed[1]);
+    try testing.expectEqual(2, session.pages.items.len);
 }
 
 test {

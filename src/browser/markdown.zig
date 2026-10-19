@@ -520,6 +520,15 @@ pub fn alternateUrl(arena: std.mem.Allocator, frame: *Frame) !?[:0]const u8 {
     return url;
 }
 
+/// Whether a page may be swapped for its alternate: only one that loaded
+/// fine. The alternate of a 404 or a bot challenge page would hide the
+/// failure behind its own 200.
+pub fn canFollowAlternate(frame: *Frame) bool {
+    if (frame._last_navigate_error != null or frame._bot_challenge != null) return false;
+    const status = frame._http_status orelse return true;
+    return status < 400;
+}
+
 /// Whether a followed alternate can stand in for the page: a 2xx
 /// text/markdown or text/plain response.
 pub fn isAlternateLoaded(frame: *Frame) bool {
@@ -1024,6 +1033,16 @@ test "browser.markdown: a text/markdown document is written as-is" {
     var capped: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     try dump(.{ .root = frame.window._document.asNode() }, .{ .max_bytes = 7 }, &capped.writer, frame);
     try testing.expectString("# Title" ++ truncation_marker, capped.written());
+}
+
+test "browser.markdown: a text/markdown document keeps its leading newlines" {
+    var page = try testing.pageTest("markdown_leading_blank.md", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dump(.{ .root = frame.window._document.asNode() }, .{}, &aw.writer, frame);
+    try testing.expectString(@embedFile("tests/markdown_leading_blank.md"), aw.written());
 }
 
 test "browser.markdown: text/plain is written as-is only as a followed alternate" {
