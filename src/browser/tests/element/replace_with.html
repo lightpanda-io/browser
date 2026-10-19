@@ -425,3 +425,28 @@
   testing.expectEqual(1, seenParentNodeType16); // ELEMENT_NODE
   testing.expectEqual(parent16, seenParentElement16);
 </script>
+
+<!-- Test 17: Nodes from another document are adopted, as insertBefore does -->
+<script id=test17-adopts>
+  const other17 = document.implementation.createHTMLDocument('other');
+  const node17 = other17.createElement('div');
+  const nested17 = other17.createElement('span');
+  node17.appendChild(nested17);
+  const moved17 = other17.createElement('div');
+  other17.body.appendChild(moved17);
+
+  const parent17 = document.createElement('div');
+  const old17 = document.createElement('div');
+  parent17.appendChild(old17);
+  document.body.appendChild(parent17);
+
+  old17.replaceWith(node17, moved17);
+
+  testing.expectEqual(parent17, node17.parentNode);
+  testing.expectEqual(document, node17.ownerDocument);
+  testing.expectEqual(document, nested17.ownerDocument);
+  testing.expectEqual(document, moved17.ownerDocument);
+  testing.expectEqual(0, other17.body.childNodes.length);
+  // Layout walks the document's elements, asserting each is its own.
+  testing.expectEqual(true, document.documentElement.scrollWidth > 0);
+</script>
