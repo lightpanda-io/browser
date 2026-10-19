@@ -63,6 +63,20 @@
   testing.expectEqual('', d5.decode());
 </script>
 
+<script id=bom>
+  // Only a BOM of the decoder's own encoding is stripped; nothing is sniffed.
+  testing.expectEqual('\ufffd\ufffdA\u0000', new TextDecoder().decode(new Uint8Array([0xFF, 0xFE, 0x41, 0x00])));
+  testing.expectEqual('\u00ef\u00bb\u00bf\u00e9', new TextDecoder('windows-1252').decode(new Uint8Array([0xEF, 0xBB, 0xBF, 0xE9])));
+  testing.expectEqual('A', new TextDecoder('utf-16le').decode(new Uint8Array([0xFF, 0xFE, 0x41, 0x00])));
+  testing.expectEqual('\ufeffA', new TextDecoder('utf-8', {ignoreBOM: true}).decode(new Uint8Array([0xEF, 0xBB, 0xBF, 0x41])));
+
+  // A BOM split across chunks is still stripped, and again after a flush.
+  let d6 = new TextDecoder();
+  testing.expectEqual('', d6.decode(new Uint8Array([0xEF, 0xBB]), { stream: true }));
+  testing.expectEqual('A', d6.decode(new Uint8Array([0xBF, 0x41])));
+  testing.expectEqual('B', d6.decode(new Uint8Array([0xEF, 0xBB, 0xBF, 0x42])));
+</script>
+
 <script id=slice>
   const buf1 = new ArrayBuffer(7);
   const arr1 = new Uint8Array(buf1)
