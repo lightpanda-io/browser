@@ -45,6 +45,9 @@ console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 console_observer: ?ConsoleObserver = null,
 /// When set, every console line writes here — stderr-bound methods included.
 console_sink: ?*std.Io.Writer = null,
+/// When set, the script's return value writes here instead of as a console
+/// line, so a caller can cap console output without losing it.
+result_sink: ?*std.Io.Writer = null,
 /// In-flight async `goto`s; emptied before each `runSource` returns.
 pending_gotos: std.ArrayList(PendingGoto),
 /// Restarted per `runSource`; backs `PendingGoto.deadline_ms`.
@@ -374,6 +377,10 @@ fn printCompletion(self: *Runtime, context: *const v8.Context, value: *const v8.
     var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena_state.deinit();
     const text = self.displayString(arena_state.allocator(), context, value) catch return;
+    if (self.result_sink) |sink| {
+        sink.print("{s}\n", .{text}) catch {};
+        return;
+    }
     self.writeConsoleLine(.log, text);
 }
 

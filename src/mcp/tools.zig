@@ -97,7 +97,7 @@ const run_schema = browser_tools.minify(
     \\  "type": "object",
     \\  "properties": {
     \\    "script": { "type": "string", "description": "The agent script source, as `save` writes it or `lightpanda run` takes it." },
-    \\    "timeout": { "type": "integer", "description": "Optional. Milliseconds before the script is stopped and reported as an error with its output so far. Defaults to 60000." }
+    \\    "timeout": { "type": "integer", "description": "Optional. Milliseconds before the script is stopped and reported as an error with its output so far. At least 1; defaults to 60000." }
     \\  },
     \\  "required": ["script"]
     \\}
@@ -281,6 +281,7 @@ fn handleRun(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Val
     const Args = struct { script: []const u8, timeout: ?u32 = null };
     const args = browser_tools.parseArgs(Args, arena, arguments) catch
         return .{ .invalid_params = "expected { script: string, timeout?: integer }" };
+    if (args.timeout == 0) return .{ .invalid_params = "timeout must be at least 1 ms" };
 
     const active = server.active_session;
     const session = active.session;
@@ -291,14 +292,19 @@ fn handleRun(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Val
     for (session.pages.items) |page| {
         before.append(arena, page.frame._frame_id) catch return .{ .fail = "out of memory" };
     }
-    defer closePagesOpenedSince(arena, session, before.items);
+    defer closePagesOpenedSince(arena, session, &active.registry, before.items);
 
     const runtime = lp.Runtime.init(server.allocator, server.app, session, &active.registry) catch |err|
         return .{ .fail = @errorName(err) };
     defer runtime.deinit();
 
-    var output: std.Io.Writer.Allocating = .init(arena);
-    runtime.console_sink = &output.writer;
+    // Capped like the session's console capture. The extra byte tells a
+    // buffer that was cut off from one that is exactly full.
+    const console_buf = arena.alloc(u8, lp.Session.max_console_bytes + 1) catch return .{ .fail = "out of memory" };
+    var console: std.Io.Writer = .fixed(console_buf);
+    runtime.console_sink = &console;
+    var returned: std.Io.Writer.Allocating = .init(arena);
+    runtime.result_sink = &returned.writer;
 
     const timeout_ms = args.timeout orelse default_run_timeout_ms;
     var timer: RunTimer = .{ .runtime = runtime, .browser_env = &session.browser.env, .timeout_ms = timeout_ms };
@@ -319,6 +325,9 @@ fn handleRun(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Val
     }
 
     const message = result catch return .{ .fail = "out of memory" };
+    var output: std.Io.Writer.Allocating = .init(arena);
+    writeRunConsole(&output.writer, console.buffered()) catch return .{ .fail = "out of memory" };
+    output.writer.writeAll(returned.written()) catch return .{ .fail = "out of memory" };
     if (timed_out) {
         output.writer.print("script timed out after {d} ms\n", .{timeout_ms}) catch return .{ .fail = "out of memory" };
         return .{ .fail = output.written() };
@@ -330,13 +339,29 @@ fn handleRun(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Val
     return .{ .ok = output.written() };
 }
 
-fn closePagesOpenedSince(arena: std.mem.Allocator, session: *lp.Session, before: []const u32) void {
+fn writeRunConsole(w: *std.Io.Writer, console: []const u8) !void {
+    const max = lp.Session.max_console_bytes;
+    if (console.len <= max) return w.writeAll(console);
+    // Do not cut a UTF-8 sequence in half.
+    var end: usize = max;
+    while (end > 0 and console[end] & 0xC0 == 0x80) end -= 1;
+    try w.writeAll(console[0..end]);
+    if (end > 0 and console[end - 1] != '\n') try w.writeByte('\n');
+    try w.print("[console output truncated at {d} bytes]\n", .{max});
+}
+
+fn closePagesOpenedSince(arena: std.mem.Allocator, session: *lp.Session, registry: *lp.NodeRegistry, before: []const u32) void {
     var opened: std.ArrayList(u32) = .empty;
     for (session.pages.items) |page| {
         const id = page.frame._frame_id;
         if (std.mem.findScalar(u32, before, id) == null) opened.append(arena, id) catch return;
     }
-    for (opened.items) |id| session.closePage(id);
+    for (opened.items) |id| {
+        // Nodes the script registered point into the page; evict them before
+        // it is freed, as every other page close does.
+        if (session.livePage(id)) |page| registry.resetFrame(arena, &page.frame);
+        session.closePage(id);
+    }
 }
 
 /// Stops a `run` script that outlives its timeout, the way Ctrl-C stops
@@ -1357,6 +1382,52 @@ test "MCP - run: closes the pages it opened, keeps cookies and earlier pages" {
     );
     try testing.expectEqual("login=1\n", try testToolText(aa, out.written()));
     try testing.expectEqual(1, session.pages.items.len);
+}
+
+test "MCP - run: closing its pages drops their registry nodes" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nreturn page.waitForSelector({ selector: '#btn' });"}}}
+    );
+    try testing.expectEqual(0, server.active_session.registry.lookup_by_id.count());
+
+    // A re-goto runs resetFrame over every registry entry.
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nreturn 'ok';"}}}
+    );
+    try testing.expectEqual("ok\n", try testToolText(aa, out.written()));
+}
+
+test "MCP - run: console output is capped" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"for (let i = 0; i < 100; i++) console.log('x'.repeat(1000));\nreturn 'done';"}}}
+    );
+    const text = try testToolText(aa, out.written());
+    const note = "\n[console output truncated at 65536 bytes]\ndone\n";
+    try testing.expect(std.mem.endsWith(u8, text, note));
+    try testing.expectEqual(lp.Session.max_console_bytes, text.len - note.len);
+}
+
+test "MCP - run: a zero timeout is rejected" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"timeout":0,"script":"return 1;"}}}
+    );
+    try testing.expectJson(.{ .id = 1, .@"error" = .{ .code = -32602 } }, out.written());
 }
 
 test "MCP - run: a script that outlives its timeout is stopped" {
