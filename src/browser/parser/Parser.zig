@@ -313,6 +313,12 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
     };
 }
 
+pub fn isWellFormedXML(xml: []const u8) bool {
+    var has_error = false;
+    h5e.xml5ever_validate_document(xml.ptr, xml.len, &has_error, validateErrorCallback);
+    return has_error == false;
+}
+
 pub fn parseFragment(self: *Parser, html: []const u8) void {
     self.fragment = true;
     const context_el = self.context orelse self.container.node.is(Element);
@@ -478,16 +484,28 @@ fn parseErrorCallback(ctx: *anyopaque, err: h5e.StringSlice) callconv(.c) void {
 // xml5ever xml error callback indicating a well-formedness violating.
 fn xmlParseErrorCallback(ctx: *anyopaque, err: h5e.StringSlice) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
-    const msg = err.slice();
+    if (isWellFormednessError(err.slice())) {
+        self.xml_error = true;
+    }
+}
+
+fn validateErrorCallback(ctx: *anyopaque, err: h5e.StringSlice) callconv(.c) void {
+    const has_error: *bool = @ptrCast(@alignCast(ctx));
+    if (isWellFormednessError(err.slice())) {
+        has_error.* = true;
+    }
+}
+
+fn isWellFormednessError(msg: []const u8) bool {
     if (std.mem.startsWith(u8, msg, "Bad character") and msg.len > "Bad character".len) {
         // discouraged by legal code point
-        return;
+        return false;
     }
     if (std.mem.startsWith(u8, msg, "Invalid character reference")) {
         // xml5ever doesn't know about this entity, but it could be valid
-        return;
+        return false;
     }
-    self.xml_error = true;
+    return true;
 }
 
 fn popCallback(ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void {
@@ -1051,4 +1069,14 @@ fn pollTerminate(self: *Parser) bool {
     const terminated = self.frame.js.env.terminatePending();
     self.terminated = terminated;
     return terminated;
+}
+
+const testing = @import("../../testing.zig");
+test "Parser: isWellFormedXML" {
+    try testing.expectEqual(true, isWellFormedXML("<?xml version=\"1.0\"?><a><b/>&nbsp;&amp;</a>"));
+    try testing.expectEqual(true, isWellFormedXML("<!DOCTYPE svg [ <!ENTITY x \"y\"> ]><svg/>"));
+    try testing.expectEqual(false, isWellFormedXML("<a><b></a>"));
+    try testing.expectEqual(false, isWellFormedXML("<a>unclosed"));
+    try testing.expectEqual(false, isWellFormedXML("<a x=1/>"));
+    try testing.expectEqual(false, isWellFormedXML("<?xml version=\"2.0\"?><a/>"));
 }

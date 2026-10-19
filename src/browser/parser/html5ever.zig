@@ -233,6 +233,13 @@ pub extern "c" fn xml5ever_parse_document(
     allow_declarative_shadow: bool,
 ) void;
 
+pub extern "c" fn xml5ever_validate_document(
+    xml: [*c]const u8,
+    len: usize,
+    ctx: *anyopaque,
+    parseErrorCallback: *const fn (ctx: *anyopaque, StringSlice) callconv(.c) void,
+) void;
+
 // 0: no reference starts with `name`, 1: `name` is a prefix of one,
 // 2: `name` is one, its codepoints are in `out` (out[1] == 0 for a single one).
 pub extern "c" fn html5ever_named_character_reference(name: [*]const u8, len: usize, out: *[2]u32) u8;
