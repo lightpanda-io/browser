@@ -51,7 +51,12 @@ pub const Init = union(enum) {
         },
         /// This should be at least 2048.
         /// Some organizations are now recommending that it should be 4096.
-        modulusLength: u32,
+        /// An [EnforceRange] unsigned long, kept as a value: this dictionary
+        /// is probed before the others, so converting it here would reject
+        /// another algorithm's object that happens to carry one. RSA's
+        /// generateKey converts it (RSA.modulusLength). It stays required, so
+        /// an object without one is probed as the other dictionaries.
+        modulusLength: js.Value,
         name: []const u8,
         publicExponent: js.TypedArray(u8),
     };
