@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
@@ -73,7 +74,10 @@ pub fn init(
     // The Link owns the socket from here on
     errdefer sys_net.close(socket);
 
-    if (lp.IS_TEST == false) {
+    // The nonblocking assertion is POSIX-only: Windows
+    // sockets created here are blocking, and fcntl does not
+    // exist there.
+    if (lp.IS_TEST == false and comptime builtin.os.tag != .windows) {
         const socket_flags = try sys_net.fcntl(socket, posix.F.GETFL, 0);
         const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
         lp.assert(socket_flags & nonblocking == nonblocking, "Link.init blocking", .{});
@@ -151,6 +155,12 @@ pub fn send(self: *Link, data: []const u8) !void {
             // file description, so a flip would reach the loop's reads too.
             // Should virtually never happen.
             error.WouldBlock => {
+                if (builtin.os.tag == .windows) {
+                    // Windows sockets here are blocking, so WouldBlock
+                    // does not occur; posix.poll() has no Windows
+                    // equivalent anyway.
+                    return error.WouldBlock;
+                }
                 // The socket is nonblocking so that the main read loop doesn't
                 // block. But we don't want to make writes truly async, because
                 // then we'd need to allocate the message and hook that back into
@@ -243,10 +253,15 @@ pub fn readAvailable(self: *Link, budget: usize) !Read {
             return error.TooLarge;
         }
         const want = dst[0..@min(dst.len, remaining)];
-        const n = posix.read(self.socket, want) catch |err| switch (err) {
-            error.WouldBlock => break,
-            else => return err,
-        };
+        const n = if (comptime builtin.os.tag == .windows)
+            // A blocking Windows socket never yields
+            // WouldBlock.
+            try sys_net.readSocket(self.socket, want)
+        else
+            posix.read(self.socket, want) catch |err| switch (err) {
+                error.WouldBlock => break,
+                else => return err,
+            };
         if (n == 0) {
             return error.Closed;
         }
