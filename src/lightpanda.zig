@@ -685,7 +685,7 @@ test "writeJsonEnvelope: null frame" {
 }
 
 test "writeJsonEnvelope: page status" {
-    testing.expectLog(&.{.page_error, .page_error});
+    testing.expectLog(&.{ .page_error, .page_error });
     var page = try testing.pageTest("page_js_error.html", .{});
     defer page.close();
 
