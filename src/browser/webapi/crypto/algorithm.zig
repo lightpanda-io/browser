@@ -18,14 +18,19 @@
 
 //! This file provides various arguments needed for crypto APIs.
 
+const std = @import("std");
+
 const js = @import("../../js/js.zig");
 
 const CryptoKey = @import("../CryptoKey.zig");
+const common = @import("common.zig");
 
 /// The TypeError of an algorithm identifier object without a `name`.
 pub const missing_name = "required member name is undefined";
 
-/// A HashAlgorithmIdentifier: either `"SHA-256"` or `{name: "SHA-256"}`.
+/// A HashAlgorithmIdentifier: either `"SHA-256"` or `{name: "SHA-256"}`. The
+/// same conversion as any AlgorithmIdentifier's, which Derive reads its name
+/// with.
 pub const Hash = union(enum) {
     string: []const u8,
     object: struct { name: []const u8 },
@@ -38,6 +43,12 @@ pub const Hash = union(enum) {
             .object => |o| o.name,
             .nameless => local.typeError(missing_name),
         };
+    }
+
+    /// The hash's registered name, matched case-insensitively: a TypeError
+    /// without a name, NotSupportedError for a hash that isn't supported.
+    pub fn canonical(self: Hash, local: *const js.Local) error{ TypeError, NotSupported }![]const u8 {
+        return common.canonicalHash(try self.name(local)) orelse error.NotSupported;
     }
 };
 
@@ -102,32 +113,55 @@ pub const Init = union(enum) {
         name: []const u8,
     };
     const EcdhKeyDeriveParams = struct {
-        /// Can be Ed25519 or X25519.
+        /// ECDH or X25519.
         name: []const u8,
         public: *const CryptoKey,
     };
 };
 
-/// Algorithm for deriveBits() and deriveKey(). Variants are distinguished by
-/// their required members (`iterations` for PBKDF2, `info` for HKDF, `public`
-/// for ECDH/X25519), so probe order doesn't cause ambiguity.
+/// Algorithm for deriveBits() and deriveKey(), an AlgorithmIdentifier
+/// normalized as the spec does: its name picks the algorithm (an unknown one
+/// is NotSupportedError), then the value is converted to that algorithm's
+/// params dictionary (a TypeError without a required member). Taken as a
+/// js.Value, not probed by shape, so the name decides, not the members.
 pub const Derive = union(enum) {
     pbkdf2: Pbkdf2Params,
     hkdf: HkdfParams,
     ecdh_or_x25519: Init.EcdhKeyDeriveParams,
 
-    /// The hash of PBKDF2's or HKDF's params; null for ECDH and X25519.
-    pub fn hash(self: Derive) ?Hash {
-        return switch (self) {
-            .pbkdf2 => |p| p.hash,
-            .hkdf => |p| p.hash,
-            .ecdh_or_x25519 => null,
+    pub fn fromJs(value: js.Value, local: *const js.Local) !Derive {
+        const identifier = try convert(Hash, value, local);
+        const name = try identifier.name(local);
+        if (std.ascii.eqlIgnoreCase(name, "PBKDF2")) {
+            const params = try convert(Pbkdf2Params, value, local);
+            _ = try params.hash.canonical(local);
+            return .{ .pbkdf2 = params };
+        }
+        if (std.ascii.eqlIgnoreCase(name, "HKDF")) {
+            const params = try convert(HkdfParams, value, local);
+            _ = try params.hash.canonical(local);
+            return .{ .hkdf = params };
+        }
+        if (std.ascii.eqlIgnoreCase(name, "ECDH") or std.ascii.eqlIgnoreCase(name, "X25519")) {
+            return .{ .ecdh_or_x25519 = try convert(Init.EcdhKeyDeriveParams, value, local) };
+        }
+        return error.NotSupported;
+    }
+
+    /// `value` as `T`. A value that isn't one (a string for a dictionary, a
+    /// missing member) is a TypeError; the page's own exception stays pending.
+    fn convert(comptime T: type, value: js.Value, local: *const js.Local) !T {
+        return local.jsValueToZig(T, value) catch |err| switch (err) {
+            error.JsException, error.OutOfMemory => err,
+            else => local.typeError("algorithm is missing a required member"),
         };
     }
 
     pub const Pbkdf2Params = struct {
         hash: Hash,
-        iterations: u32,
+        /// An [EnforceRange] unsigned long: converted once the name is known
+        /// to be PBKDF2's, so it's a TypeError out of range, not wrapped.
+        iterations: js.EnforceRange(u32),
         name: []const u8,
         salt: js.TypedArray(u8),
     };

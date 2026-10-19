@@ -69,7 +69,7 @@ pub fn pbkdf2(
     exec: *const Execution,
 ) Error![]const u8 {
     // Normalizing the params (the hash) comes before the key checks.
-    const digest = crypto.findDigest(try params.hash.name(exec.js.local.?)) catch return error.NotSupported;
+    const digest = crypto.findDigest(try params.hash.canonical(exec.js.local.?)) catch return error.NotSupported;
     try checkBaseKey(base_key, "PBKDF2", usage_ok);
     const out_len = try outputLen(length);
     // A zero-length derivation is valid and yields an empty buffer; the C
@@ -79,8 +79,8 @@ pub fn pbkdf2(
     }
 
     const blocks = std.math.divCeil(usize, out_len, crypto.EVP_MD_size(digest)) catch unreachable;
-    if (@as(u64, blocks) * params.iterations > PBKDF2_MAX_WORK) {
-        log.warn(.js, "PBKDF2 work limit", .{ .length = out_len, .iterations = params.iterations });
+    if (@as(u64, blocks) * params.iterations.value > PBKDF2_MAX_WORK) {
+        log.warn(.js, "PBKDF2 work limit", .{ .length = out_len, .iterations = params.iterations.value });
         return error.OperationError;
     }
 
@@ -92,7 +92,7 @@ pub fn pbkdf2(
         base_key._key.len,
         @ptrCast(salt.ptr),
         salt.len,
-        params.iterations,
+        params.iterations.value,
         digest,
         out.len,
         out.ptr,
@@ -111,7 +111,7 @@ pub fn hkdf(
     exec: *const Execution,
 ) Error![]const u8 {
     // Normalizing the params (the hash) comes before the key checks.
-    const digest = crypto.findDigest(try params.hash.name(exec.js.local.?)) catch return error.NotSupported;
+    const digest = crypto.findDigest(try params.hash.canonical(exec.js.local.?)) catch return error.NotSupported;
     try checkBaseKey(base_key, "HKDF", usage_ok);
     const out = try exec.local_arena.alloc(u8, try outputLen(length));
     // A zero-length derivation is valid and yields an empty buffer; the C

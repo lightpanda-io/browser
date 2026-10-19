@@ -1927,6 +1927,102 @@
   });
 </script>
 
+<script id=derive-algorithm-names type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+  const raw = new Uint8Array(16);
+  const hkdfKey = await subtle.importKey("raw", raw, "HKDF", false, ["deriveBits", "deriveKey"]);
+  const pbkdf2Key = await subtle.importKey("raw", raw, "PBKDF2", false, ["deriveBits"]);
+  const ecdh = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+  const hkdf = { name: "HKDF", hash: "SHA-256", salt: raw, info: raw };
+  const pbkdf2 = { name: "PBKDF2", hash: "SHA-256", salt: raw, iterations: 1 };
+  const aes = { name: "AES-GCM", length: 128 };
+
+  const results = {
+    hkdf: hex(await subtle.deriveBits(hkdf, hkdfKey, 128)),
+    pbkdf2: hex(await subtle.deriveBits(pbkdf2, pbkdf2Key, 128)),
+    // The name picks the algorithm, case-insensitively for ASCII only
+    // (U+212A KELVIN SIGN isn't "K").
+    lower: hex(await subtle.deriveBits({ ...hkdf, name: "hkdf" }, hkdfKey, 128)),
+    hkdfKelvin: await errorName(() => subtle.deriveBits({ ...hkdf, name: "H\u212ADF" }, hkdfKey, 128)),
+    pbkdf2Kelvin: await errorName(() => subtle.deriveBits({ ...pbkdf2, name: "PB\u212ADF2" }, pbkdf2Key, 128)),
+    unknownName: await errorName(() => subtle.deriveBits({ ...hkdf, name: "foo" }, hkdfKey, 128)),
+    unknownString: await errorName(() => subtle.deriveBits("foo", pbkdf2Key, 128)),
+    unknownNull: await errorName(() => subtle.deriveBits(null, pbkdf2Key, 128)),
+    unknownDeriveKey: await errorName(() => subtle.deriveKey({ ...hkdf, name: "foo" }, hkdfKey, aes, true, ["encrypt"])),
+    // Another algorithm's members are ignored, not taken as its params.
+    hkdfIterations: hex(await subtle.deriveBits({ ...hkdf, iterations: 1 }, hkdfKey, 128)),
+    pbkdf2Info: hex(await subtle.deriveBits({ ...pbkdf2, info: raw }, pbkdf2Key, 128)),
+    // The params of the named algorithm are required: a TypeError without one
+    // of its members, a bare string name, or an object without a name.
+    hkdfMissingInfo: await errorName(() => subtle.deriveBits({ ...pbkdf2, name: "HKDF" }, hkdfKey, 128)),
+    pbkdf2MissingIterations: await errorName(() => subtle.deriveBits({ ...hkdf, name: "PBKDF2" }, pbkdf2Key, 128)),
+    ecdhMissingPublic: await errorName(() => subtle.deriveBits({ ...hkdf, name: "ECDH" }, ecdh.privateKey, 128)),
+    bareName: await errorName(() => subtle.deriveBits("PBKDF2", pbkdf2Key, 128)),
+    noName: await errorName(() => subtle.deriveBits({}, pbkdf2Key, 128)),
+    badSalt: await errorName(() => subtle.deriveBits({ ...pbkdf2, salt: "x" }, pbkdf2Key, 128)),
+    // iterations is an [EnforceRange] unsigned long: truncated, not wrapped.
+    iterationsFraction: hex(await subtle.deriveBits({ ...pbkdf2, iterations: 1.9 }, pbkdf2Key, 128)),
+    iterationsNegative: await errorName(() => subtle.deriveBits({ ...pbkdf2, iterations: -1 }, pbkdf2Key, 128)),
+    iterationsTooLarge: await errorName(() => subtle.deriveBits({ ...pbkdf2, iterations: 2 ** 32 + 1 }, pbkdf2Key, 128)),
+    iterationsNaN: await errorName(() => subtle.deriveBits({ ...pbkdf2, iterations: NaN }, pbkdf2Key, 128)),
+    hashWithoutName: await errorName(() => subtle.deriveBits({ ...hkdf, hash: {} }, hkdfKey, 128)),
+    unknownHash: await errorName(() => subtle.deriveBits({ ...hkdf, hash: "foo" }, hkdfKey, 128)),
+    // The hash is normalized with the algorithm: matched case-insensitively,
+    // and an unknown one is rejected before derivedKeyType.
+    lowerHash: hex(await subtle.deriveBits({ ...pbkdf2, hash: "sha-256" }, pbkdf2Key, 128)),
+    lowerHashObject: hex(await subtle.deriveBits({ ...hkdf, hash: { name: "sha-256" } }, hkdfKey, 128)),
+    unknownHashBeforeDerived: await errorName(() => subtle.deriveKey({ ...hkdf, hash: "SHA-999" }, hkdfKey, {}, true, ["encrypt"])),
+    // deriveKey normalizes the algorithm before derivedKeyType.
+    unknownBeforeDerived: await errorName(() => subtle.deriveKey({ ...hkdf, name: "foo" }, hkdfKey, "AES-FOO", true, ["encrypt"])),
+    missingBeforeDerived: await errorName(() => subtle.deriveKey({ ...hkdf, info: undefined }, hkdfKey, "AES-FOO", true, ["encrypt"])),
+    // The key checks come after.
+    otherKey: await errorName(() => subtle.deriveBits(hkdf, pbkdf2Key, 128)),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(32, results.hkdf.length);
+    testing.expectEqual(32, results.pbkdf2.length);
+    testing.expectEqual(results.hkdf, results.lower);
+    testing.expectEqual("NotSupportedError", results.hkdfKelvin);
+    testing.expectEqual("NotSupportedError", results.pbkdf2Kelvin);
+    testing.expectEqual("NotSupportedError", results.unknownName);
+    testing.expectEqual("NotSupportedError", results.unknownString);
+    testing.expectEqual("NotSupportedError", results.unknownNull);
+    testing.expectEqual("NotSupportedError", results.unknownDeriveKey);
+    testing.expectEqual(results.hkdf, results.hkdfIterations);
+    testing.expectEqual(results.pbkdf2, results.pbkdf2Info);
+    testing.expectEqual("TypeError", results.hkdfMissingInfo);
+    testing.expectEqual("TypeError", results.pbkdf2MissingIterations);
+    testing.expectEqual("TypeError", results.ecdhMissingPublic);
+    testing.expectEqual("TypeError", results.bareName);
+    testing.expectEqual("TypeError", results.noName);
+    testing.expectEqual("TypeError", results.badSalt);
+    testing.expectEqual(results.pbkdf2, results.iterationsFraction);
+    testing.expectEqual("TypeError", results.iterationsNegative);
+    testing.expectEqual("TypeError", results.iterationsTooLarge);
+    testing.expectEqual("TypeError", results.iterationsNaN);
+    testing.expectEqual("TypeError", results.hashWithoutName);
+    testing.expectEqual("NotSupportedError", results.unknownHash);
+    testing.expectEqual(results.pbkdf2, results.lowerHash);
+    testing.expectEqual(results.hkdf, results.lowerHashObject);
+    testing.expectEqual("NotSupportedError", results.unknownHashBeforeDerived);
+    testing.expectEqual("NotSupportedError", results.unknownBeforeDerived);
+    testing.expectEqual("TypeError", results.missingBeforeDerived);
+    testing.expectEqual("InvalidAccessError", results.otherKey);
+  });
+</script>
+
 <script id="digest" type=module>
   const state = await testing.async();
   async function hash(algo, data) {
