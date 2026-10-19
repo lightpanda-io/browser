@@ -1686,6 +1686,13 @@
     unwrapUnknownFirst: await errorName(() => subtle.unwrapKey("raw", wrapped, kw, "foo", {}, true, ["encrypt"])),
     unwrapBeforeKey: await errorName(() => subtle.unwrapKey("raw", wrapped, aes, "AES-KW", {}, true, ["encrypt"])),
     unwrapHashBeforeKey: await errorName(() => subtle.unwrapKey("raw", wrapped, aes, "AES-KW", { name: "HMAC", hash: {} }, true, ["sign"])),
+    // For HMAC and RSA, which take a hash, a missing or unknown one is
+    // rejected there too; another algorithm's stray hash is ignored.
+    unwrapNoHashBeforeKey: await errorName(() => subtle.unwrapKey("raw", wrapped, aes, "AES-KW", "HMAC", true, ["sign"])),
+    unwrapUnknownHashBeforeKey: await errorName(() => subtle.unwrapKey("raw", wrapped, aes, "AES-KW", { name: "HMAC", hash: "SHA-999" }, true, ["sign"])),
+    unwrapRsaUnknownHash: await errorName(() => subtle.unwrapKey("raw", wrapped, aes, "AES-KW", { name: "RSA-OAEP", hash: "SHA-999" }, true, ["encrypt"])),
+    unwrapAesStrayHash: await errorName(() => subtle.unwrapKey("raw", wrapped, kw, "AES-KW", { name: "AES-GCM", hash: {} }, true, ["encrypt"])),
+    unwrapAesStrayHashKey: await errorName(() => subtle.unwrapKey("raw", wrapped, aes, "AES-KW", { name: "AES-GCM", hash: {} }, true, ["encrypt"])),
     // deriveKey normalizes the algorithm before derivedKeyType.
     deriveHashFirst: await errorName(() => subtle.deriveKey(pbkdf2Params({}), pbkdf2, "AES-FOO", true, ["encrypt"])),
     // A name that isn't a known algorithm stays NotSupportedError: a
@@ -1730,6 +1737,11 @@
     testing.expectEqual("NotSupportedError", results.unwrapUnknownFirst);
     testing.expectEqual("TypeError", results.unwrapBeforeKey);
     testing.expectEqual("TypeError", results.unwrapHashBeforeKey);
+    testing.expectEqual("TypeError", results.unwrapNoHashBeforeKey);
+    testing.expectEqual("NotSupportedError", results.unwrapUnknownHashBeforeKey);
+    testing.expectEqual("NotSupportedError", results.unwrapRsaUnknownHash);
+    testing.expectEqual(null, results.unwrapAesStrayHash);
+    testing.expectEqual("InvalidAccessError", results.unwrapAesStrayHashKey);
     testing.expectEqual("TypeError", results.deriveHashFirst);
     testing.expectEqual("NotSupportedError", results.importFunction);
     testing.expectEqual("NotSupportedError", results.importNull);

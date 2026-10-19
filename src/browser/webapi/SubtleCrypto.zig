@@ -565,12 +565,16 @@ pub fn unwrapKey(
 ) !js.Promise {
     const local = exec.js.local.?;
     const name = try wrapAlgorithmName(algo, local);
-    // The unwrapped key's algorithm (its name and hash) is normalized next,
-    // before the key checks.
-    if (unwrapped_key_algo.algoName() == null) {
-        return local.typeError(missing_name);
+    // The unwrapped key's algorithm is normalized next, before the key checks:
+    // its name and, for HMAC and RSA, which take one, a known hash. Another
+    // algorithm's stray `hash` is ignored, as importKey does.
+    const unwrapped_name = unwrapped_key_algo.algoName() orelse return local.typeError(missing_name);
+    if (eqlIgnoreCase(unwrapped_name, "HMAC") or RSA.scheme(unwrapped_name) != null) {
+        const hash_name = try importHash(unwrapped_key_algo, local) orelse return local.typeError("the unwrapped key's algorithm requires a hash");
+        if (common.canonicalHash(hash_name) == null) {
+            return error.NotSupported;
+        }
     }
-    _ = try importHash(unwrapped_key_algo, local);
     try checkWrappingKey(name, unwrapping_key, .unwrap);
 
     const bytes = try cryptBytes(algo, unwrapping_key, wrapped_key.values, .unwrap, exec);
