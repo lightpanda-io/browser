@@ -404,6 +404,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         ._proto = undefined,
         ._document = self.document,
         ._location = undefined,
+        ._history = .{ ._frame = self },
         ._performance = try .init(factory, page_arena),
         ._screen = screen,
         ._visual_viewport = visual_viewport,
