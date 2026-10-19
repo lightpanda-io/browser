@@ -1497,6 +1497,132 @@
   });
 </script>
 
+<script id=hmac-length-and-hash type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+  const raw = new Uint8Array(32).map((_, i) => i + 1);
+  const gen = (params) => subtle.generateKey({ name: "HMAC", hash: "SHA-256", ...params }, true, ["sign"]);
+  const imp = (params) => subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256", ...params }, true, ["sign"]);
+
+  // The hash matches case-insensitively and is reported in canonical form.
+  const lowerHash = await gen({ hash: "sha-256" });
+  const objectHash = await gen({ hash: { name: "sHa-384" } });
+  const lowerImport = await imp({ hash: "sha-512" });
+  const lowerJwk = await subtle.exportKey("jwk", lowerImport);
+
+  // A generated length needn't be whole bytes: the bits past it are zero.
+  let lowBits = 0;
+  const sizes = new Set();
+  for (let i = 0; i < 32; i++) {
+    const seven = new Uint8Array(await subtle.exportKey("raw", await gen({ length: 7 })));
+    const odd = new Uint8Array(await subtle.exportKey("raw", await gen({ length: 257 })));
+    sizes.add(`${seven.length},${odd.length}`);
+    lowBits |= (seven[0] & 0x01) | (odd[32] & 0x7f);
+  }
+  const k7 = await gen({ length: 7 });
+  const k257 = await gen({ length: 257 });
+  // A JWK has no length: re-imported, the key is whole bytes again.
+  const k257Jwk = await subtle.exportKey("jwk", k257);
+  const reimported = await subtle.importKey("jwk", k257Jwk, { name: "HMAC", hash: "SHA-256" }, true, ["sign"]);
+
+  // Importing, a length must end in the key's last byte; the key isn't cut.
+  const whole = await imp({});
+  const k255 = await imp({ length: 255 });
+  const sameMac = hex(await subtle.sign("HMAC", whole, raw)) === hex(await subtle.sign("HMAC", k255, raw));
+  const k255Raw = await subtle.exportKey("raw", k255);
+  const b64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const jwk = { kty: "oct", k: b64url(raw), alg: "HS256" };
+  const jwk250 = await subtle.importKey("jwk", jwk, { name: "HMAC", hash: "SHA-256", length: 250 }, true, ["sign"]);
+
+  // deriveKey takes the same length, and a lowercase hash.
+  const pbkdf2 = await subtle.importKey("raw", raw, "PBKDF2", false, ["deriveKey"]);
+  const derived = await subtle.deriveKey(
+    { name: "PBKDF2", hash: "SHA-256", salt: new Uint8Array(8), iterations: 2 },
+    pbkdf2,
+    { name: "HMAC", hash: "sha-256", length: 128 },
+    true,
+    ["sign"],
+  );
+
+  const results = {
+    // [EnforceRange] unsigned long: out of range is a TypeError, before the usages.
+    genHuge: await errorName(() => gen({ length: 2 ** 32 + 128 })),
+    genHugeNoUsages: await errorName(() => subtle.generateKey({ name: "HMAC", hash: "SHA-256", length: 2 ** 32 + 128 }, true, [])),
+    genNegative: await errorName(() => gen({ length: -1 })),
+    genNaN: await errorName(() => gen({ length: NaN })),
+    genZero: await errorName(() => gen({ length: 0 })),
+    importHuge: await errorName(() => imp({ length: 2 ** 32 + 8 })),
+    deriveHuge: await errorName(() => subtle.deriveKey(
+      { name: "PBKDF2", hash: "SHA-256", salt: new Uint8Array(8), iterations: 2 }, pbkdf2,
+      { name: "HMAC", hash: "SHA-256", length: -8 }, true, ["sign"])),
+    import256: await errorName(() => imp({ length: 256 })),
+    import249: await errorName(() => imp({ length: 249 })),
+    import248: await errorName(() => imp({ length: 248 })),
+    import257: await errorName(() => imp({ length: 257 })),
+    import0: await errorName(() => imp({ length: 0 })),
+    jwk200: await errorName(() => subtle.importKey("jwk", jwk, { name: "HMAC", hash: "SHA-256", length: 200 }, true, ["sign"])),
+    // RSA imports share HMAC's dictionary shape, and ignore a stray length.
+    rsaWithLength: await errorName(() => subtle.importKey("spki", rsaTestKey.spki, { name: "RSA-OAEP", hash: "SHA-256", length: -1 }, true, ["encrypt"])),
+    // null converts to 0, as for any unsigned long.
+    genNull: await errorName(() => gen({ length: null })),
+    importNull: await errorName(() => imp({ length: null })),
+    // deriveKey goes by the name: not an HMAC key for another algorithm with a hash.
+    deriveUnknown: await errorName(() => subtle.deriveKey(
+      { name: "PBKDF2", hash: "SHA-256", salt: new Uint8Array(8), iterations: 2 }, pbkdf2,
+      { name: "Foo", hash: "SHA-256" }, true, ["sign"])),
+  };
+  const aesWithHash = await subtle.deriveKey(
+    { name: "PBKDF2", hash: "SHA-256", salt: new Uint8Array(8), iterations: 2 }, pbkdf2,
+    { name: "AES-GCM", length: 128, hash: "SHA-256" }, true, ["encrypt"],
+  );
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("SHA-256 512", `${lowerHash.algorithm.hash.name} ${lowerHash.algorithm.length}`);
+    testing.expectEqual("SHA-384 1024", `${objectHash.algorithm.hash.name} ${objectHash.algorithm.length}`);
+    testing.expectEqual("SHA-512 HS512", `${lowerImport.algorithm.hash.name} ${lowerJwk.alg}`);
+    testing.expectEqual("1,33", [...sizes].join("|"));
+    testing.expectEqual(0, lowBits);
+    testing.expectEqual(7, k7.algorithm.length);
+    testing.expectEqual(257, k257.algorithm.length);
+    testing.expectEqual("HS256", k257Jwk.alg);
+    testing.expectEqual(264, reimported.algorithm.length);
+    testing.expectEqual(256, whole.algorithm.length);
+    testing.expectEqual(255, k255.algorithm.length);
+    testing.expectEqual(32, k255Raw.byteLength);
+    testing.expectEqual(true, sameMac);
+    testing.expectEqual(250, jwk250.algorithm.length);
+    testing.expectEqual("SHA-256 128", `${derived.algorithm.hash.name} ${derived.algorithm.length}`);
+    testing.expectEqual("TypeError", results.genHuge);
+    testing.expectEqual("TypeError", results.genHugeNoUsages);
+    testing.expectEqual("TypeError", results.genNegative);
+    testing.expectEqual("TypeError", results.genNaN);
+    testing.expectEqual("OperationError", results.genZero);
+    testing.expectEqual("TypeError", results.importHuge);
+    testing.expectEqual("TypeError", results.deriveHuge);
+    testing.expectEqual(null, results.import256);
+    testing.expectEqual(null, results.import249);
+    testing.expectEqual("DataError", results.import248);
+    testing.expectEqual("DataError", results.import257);
+    testing.expectEqual("DataError", results.import0);
+    testing.expectEqual("DataError", results.jwk200);
+    testing.expectEqual(null, results.rsaWithLength);
+    testing.expectEqual("OperationError", results.genNull);
+    testing.expectEqual("DataError", results.importNull);
+    testing.expectEqual("NotSupportedError", results.deriveUnknown);
+    testing.expectEqual("AES-GCM 128", `${aesWithHash.algorithm.name} ${aesWithHash.algorithm.length}`);
+  });
+</script>
+
 <script id=generateKey-edxxx-validation type=module>
   const state = await testing.async();
   // Ed25519 / Ed448 only allow sign/verify; X448 only allows deriveKey/deriveBits.

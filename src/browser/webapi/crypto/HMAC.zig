@@ -42,12 +42,13 @@ pub fn init(
     if (!std.ascii.eqlIgnoreCase(params.name, "HMAC")) {
         return error.NotSupported;
     }
-    const hash_name = switch (params.hash) {
+    // Normalization converts the dictionary's members, then the hash: an
+    // unrecognized one surfaces as NotSupportedError, before the usages.
+    const length = try lengthParam(params.length, local);
+    const hash_name = common.canonicalHash(switch (params.hash) {
         .string => |str| str,
         .object => |obj| obj.name,
-    };
-    // Per spec, an unrecognized hash is caught during algorithm normalization
-    // and surfaces as NotSupportedError.
+    }) orelse return error.NotSupported;
     const digest = crypto.findDigest(hash_name) catch return error.NotSupported;
 
     // HMAC only accepts sign / verify; any other usage is a SyntaxError per
@@ -66,60 +67,66 @@ pub fn init(
         return error.SyntaxError;
     }
 
-    const block_size: usize = blk: {
-        // Caller provides this in bits, not bytes.
-        if (params.length) |length| {
-            break :blk length >> 3;
-        }
-        // Prefer block size of the hash function instead.
-        break :blk crypto.EVP_MD_block_size(digest);
-    };
-    // `block_size` cannot be 0.
-    if (block_size == 0) {
+    // In bits; by default, the block size of the hash function.
+    const bits: u32 = length orelse @intCast(crypto.EVP_MD_block_size(digest) * 8);
+    if (bits == 0) {
         return error.OperationError;
     }
 
-    // Should we reject this in promise too?
-    const key = try exec.local_arena.alloc(u8, block_size);
+    // Enough bytes for `bits`, the ones past it in the last byte left zero.
+    const key = try exec.local_arena.alloc(u8, (@as(usize, bits) + 7) / 8);
 
     // HMAC is simply CSPRNG.
     const res = crypto.RAND_bytes(key.ptr, key.len);
     lp.assert(res == 1, "HMAC.init", .{ .res = res });
+    const remainder_bits: u3 = @intCast(bits % 8);
+    if (remainder_bits != 0) {
+        key[key.len - 1] &= ~(@as(u8, 0xFF) >> remainder_bits);
+    }
 
     const crypto_key = try CryptoKey.init(exec, .{
         ._type = .hmac,
         ._extractable = extractable,
         ._usages = mask,
         ._key = key,
-        ._algorithm = .{ .name = "HMAC", .hash = hash_name },
+        ._algorithm = .{ .name = "HMAC", .hash = hash_name, .length = bits },
         ._vary = .{ .digest = digest },
     });
 
     return local.resolvePromise(crypto_key);
 }
 
+/// HmacKeyGenParams' and HmacImportParams' optional `length`, in bits: an
+/// [EnforceRange] unsigned long, so a value outside u32 (NaN, the infinities)
+/// is a TypeError. Undefined is no length; null converts to 0.
+pub fn lengthParam(value: ?js.Value, local: *const js.Local) !?u32 {
+    const v = value orelse return null;
+    return js.enforceRange(u32, try v.toF64()) catch local.typeError("length is out of range");
+}
+
 /// Imports an HMAC key from a JWK, following the "jwk" steps of HMAC's "import
 /// key": the usages first (SyntaxError), then kty "oct", the key in `k`, an
 /// `alg` that names the hash ("HS256", ...), and the common use/key_ops/ext
-/// checks (DataError).
+/// checks (DataError). `length` is as for `import`.
 pub fn importJwk(
     hash_name: []const u8,
     jwk: algorithm.KeyData.Jwk,
+    length: ?u32,
     extractable: bool,
     key_usages: []const []const u8,
     exec: *const Execution,
 ) !js.Promise {
-    _ = crypto.findDigest(hash_name) catch return error.NotSupported;
+    const hash = common.canonicalHash(hash_name) orelse return error.NotSupported;
     const mask = try common.usageMask(&.{ "sign", "verify" }, key_usages);
 
     const raw = try common.octKey(jwk, exec.local_arena);
     if (jwk.alg) |alg| {
-        if (!std.mem.eql(u8, alg, try jwkAlg(hash_name, exec))) return error.DataError;
+        if (!std.mem.eql(u8, alg, try jwkAlg(hash, exec))) return error.DataError;
     }
     try common.checkJwk(jwk, "sig", mask, extractable);
 
-    // import() rejects an empty key (DataError).
-    return import(hash_name, raw, extractable, key_usages, exec);
+    // import() rejects an empty key, or a length that doesn't fit it (DataError).
+    return import(hash, raw, length, extractable, key_usages, exec);
 }
 
 /// The JWK `alg` of an HMAC key with the given hash ("SHA-256" → "HS256").
@@ -127,22 +134,31 @@ pub fn jwkAlg(hash_name: []const u8, exec: *const Execution) ![]const u8 {
     return exec.local_arena.print("HS{s}", .{hash_name[4..]}); // strip "SHA-"
 }
 
-/// Imports raw HMAC key material (from the `raw` format, or the `k` of a JWK
-/// that `importJwk` checked).
+/// Imports raw HMAC key material (from the `raw` format, the `k` of a JWK
+/// that `importJwk` checked, or deriveKey's bits). `length`, in bits, is
+/// HmacImportParams': when given, it must end in the key's last byte (it can
+/// leave some of its bits out), else DataError. The key bytes are kept whole.
 pub fn import(
     hash_name: []const u8,
     raw: []const u8,
+    length: ?u32,
     extractable: bool,
     key_usages: []const []const u8,
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
 
-    const digest = crypto.findDigest(hash_name) catch return error.NotSupported;
+    const hash = common.canonicalHash(hash_name) orelse return error.NotSupported;
+    const digest = crypto.findDigest(hash) catch return error.NotSupported;
 
     const mask = try common.usageMask(&.{ "sign", "verify" }, key_usages);
 
     if (raw.len == 0) {
+        return error.DataError;
+    }
+    const data_bits = raw.len * 8;
+    const bits: usize = length orelse data_bits;
+    if (bits > data_bits or bits + 8 <= data_bits) {
         return error.DataError;
     }
 
@@ -152,7 +168,7 @@ pub fn import(
         ._extractable = extractable,
         ._usages = mask,
         ._key = raw,
-        ._algorithm = .{ .name = "HMAC", .hash = hash_name },
+        ._algorithm = .{ .name = "HMAC", .hash = hash, .length = std.math.cast(u32, bits) orelse return error.DataError },
         ._vary = .{ .digest = digest },
     });
 
