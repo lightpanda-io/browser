@@ -47,6 +47,13 @@
     ta.select()
     testing.expectEqual(6, ta.selectionEnd)
   }
+  {
+    const ta = document.createElement('textarea')
+    ta.defaultValue = 'a\r\nb\rc'
+    testing.expectEqual('a\r\nb\rc', ta.defaultValue)
+    testing.expectEqual('a\nb\nc', ta.value)
+    testing.expectEqual(5, ta.textLength)
+  }
 </script>
 
 <script id="textLength">

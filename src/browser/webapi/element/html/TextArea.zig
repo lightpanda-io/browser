@@ -70,7 +70,7 @@ pub fn getValue(self: *const TextArea) []const u8 {
 }
 
 pub fn setValue(self: *TextArea, raw_value: []const u8, frame: *Frame) !void {
-    const value = try normalizeNewlines(raw_value, frame);
+    const value = try normalizeNewlines(raw_value, frame.call_arena);
     const changed = std.mem.eql(u8, self.getValue(), value) == false;
     if (changed == false and self._value != null) {
         // _value itself isn't changing (not to be mixed up with setValue
@@ -92,10 +92,10 @@ pub fn setValue(self: *TextArea, raw_value: []const u8, frame: *Frame) !void {
 }
 
 // The API value has LF newlines: CRLF and lone CR become LF.
-fn normalizeNewlines(value: []const u8, frame: *Frame) ![]const u8 {
-    const first = std.mem.findAny(u8, value, "\r") orelse return value;
+fn normalizeNewlines(value: []const u8, arena: std.mem.Allocator) ![]const u8 {
+    const first = std.mem.findScalar(u8, value, '\r') orelse return value;
 
-    var result = try frame.page_arena.alloc(u8, value.len);
+    var result = try arena.alloc(u8, value.len);
     @memcpy(result[0..first], value[0..first]);
 
     var i: usize = first;
@@ -112,10 +112,6 @@ fn normalizeNewlines(value: []const u8, frame: *Frame) ![]const u8 {
         i += 1;
     }
     return result[0..i];
-}
-
-pub fn getTextLength(self: *const TextArea) u32 {
-    return @intCast(Node.CData.utf16Len(self.getValue()));
 }
 
 pub fn reset(self: *TextArea) void {
@@ -295,8 +291,21 @@ pub const JsApi = struct {
     pub const reportValidity = bridge.function(TextArea.reportValidity, .{});
     pub const setCustomValidity = bridge.function(TextArea.setCustomValidity, .{});
     pub const @"type" = bridge.property("textarea", .{ .template = false, .readonly = true });
-    pub const value = bridge.accessor(TextArea.getValue, TextArea.setValue, .{});
-    pub const textLength = bridge.accessor(TextArea.getTextLength, null, .{});
+    pub const value = bridge.accessor(_getApiValue, TextArea.setValue, .{});
+    // _value is already normalized; the default value (text content) may not be.
+    fn _getApiValue(self: *const TextArea, frame: *Frame) ![]const u8 {
+        if (self._value) |v| {
+            return v;
+        }
+        return normalizeNewlines(self.getDefaultValue(), frame.call_arena);
+    }
+
+    pub const textLength = bridge.accessor(struct {
+        fn wrap(self: *const TextArea, frame: *Frame) !u32 {
+            return @intCast(Node.CData.utf16Len(try _getApiValue(self, frame)));
+        }
+    }.wrap, null, .{});
+
     pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, TextArea.setDefaultValue, .{ .ce_reactions = true });
     pub const disabled = reflect.boolean("disabled");
     pub const name = reflect.string("name");
