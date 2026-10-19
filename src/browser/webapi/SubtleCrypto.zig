@@ -652,12 +652,13 @@ pub fn sign(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    const salt_length = try pssSaltLength(algo, local);
+    const params = try signParams(algo, local);
     try checkSigningKey(algo, key, CryptoKey.Usages.sign);
     const signature = switch (key._type) {
         .hmac => try HMAC.sign(key, data, exec),
-        .rsa => try RSA.sign(key, data, salt_length, exec),
-        // A signing algorithm with no sign here yet (ECDSA).
+        .rsa => try RSA.sign(key, data, params.salt_length, exec),
+        .ec => try EC.sign(key, data, params.hash orelse return error.OperationError, exec),
+        // A signing algorithm with no sign here yet (Ed25519, Ed448).
         else => {
             log.debug(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
             return error.NotSupported;
@@ -676,12 +677,13 @@ pub fn verify(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    const salt_length = try pssSaltLength(algo, local);
+    const params = try signParams(algo, local);
     try checkSigningKey(algo, key, CryptoKey.Usages.verify);
     const valid = switch (key._type) {
         .hmac => try HMAC.verify(key, signature, data),
-        .rsa => try RSA.verify(key, signature, data, salt_length),
-        // A signing algorithm with no verify here yet (ECDSA).
+        .rsa => try RSA.verify(key, signature, data, params.salt_length),
+        .ec => try EC.verify(key, signature, data, params.hash orelse return error.OperationError),
+        // A signing algorithm with no verify here yet (Ed25519, Ed448).
         else => {
             log.debug(.not_implemented, "SubtleCrypto.verify", .{ .key_type = key._type });
             return error.NotSupported;
@@ -690,15 +692,48 @@ pub fn verify(
     return local.resolvePromise(valid);
 }
 
-/// The `saltLength` of an RSA-PSS algorithm (RsaPssParams), null for the other
-/// algorithms. Normalization comes before the key checks: a missing member or
-/// one outside [EnforceRange] unsigned long is a TypeError.
-fn pssSaltLength(algo: algorithm.Sign, local: *const js.Local) !?u32 {
-    if (!eqlIgnoreCase(algo.algoName(), "RSA-PSS")) {
-        return null;
+/// The members of a sign/verify algorithm that normalization converts:
+/// RSA-PSS's `saltLength` (RsaPssParams) and ECDSA's `hash` (EcdsaParams).
+/// The other algorithms ignore them.
+const SignParams = struct {
+    salt_length: ?u32 = null,
+    /// A canonical hash name.
+    hash: ?[]const u8 = null,
+};
+
+/// Normalizes `algo`'s params, before the key checks: a missing member, a
+/// saltLength outside [EnforceRange] unsigned long or a hash that isn't an
+/// algorithm identifier is a TypeError, an unknown hash NotSupportedError.
+fn signParams(algo: algorithm.Sign, local: *const js.Local) !SignParams {
+    const name = algo.algoName();
+    if (eqlIgnoreCase(name, "RSA-PSS")) {
+        const value = algo.saltLength() orelse return local.typeError("RSA-PSS requires a saltLength");
+        const salt_length = js.enforceRange(u32, try value.toF64()) catch return local.typeError("saltLength is out of range");
+        return .{ .salt_length = salt_length };
     }
-    const value = algo.saltLength() orelse return local.typeError("RSA-PSS requires a saltLength");
-    return js.enforceRange(u32, try value.toF64()) catch local.typeError("saltLength is out of range");
+    if (eqlIgnoreCase(name, "ECDSA")) {
+        const value = algo.hash() orelse return local.typeError("ECDSA requires a hash");
+        return .{ .hash = common.canonicalHash(try hashName(value, local)) orelse return error.NotSupported };
+    }
+    return .{};
+}
+
+/// The name of a HashAlgorithmIdentifier, `(object or DOMString)`: an object's
+/// `name`, required (a TypeError without one), or the value as a string.
+fn hashName(value: js.Value, local: *const js.Local) ![]const u8 {
+    const Algorithm = struct { name: []const u8 };
+    const name = blk: {
+        if (value.isObject()) {
+            const object = local.jsValueToZig(Algorithm, value) catch |err| break :blk err;
+            break :blk object.name;
+        }
+        break :blk local.jsValueToZig([]const u8, value);
+    } catch |err| switch (err) {
+        // The page's own exception (a throwing getter or toString), pending.
+        error.JsException => return err,
+        else => return local.typeError("hash is not an algorithm identifier"),
+    };
+    return name;
 }
 
 /// The checks sign/verify make before the algorithm's own, in the spec's

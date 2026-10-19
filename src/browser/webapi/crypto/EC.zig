@@ -16,8 +16,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! ECDSA / ECDH key generation, import (spki/pkcs8 via DER) and ECDH key
-//! agreement. Key bytes live as a libcrypto EVP_PKEY in `CryptoKey._vary.pkey`.
+//! ECDSA / ECDH key generation, import (spki/pkcs8 via DER), ECDSA sign and
+//! verify, and ECDH key agreement. Key bytes live as a libcrypto EVP_PKEY in
+//! `CryptoKey._vary.pkey`.
 
 const std = @import("std");
 const crypto = @import("../../../sys/libcrypto.zig");
@@ -252,6 +253,83 @@ pub fn deriveBits(
         out[out.len - 1] &= ~(@as(u8, 0xFF) >> remainder_bits);
     }
     return out;
+}
+
+/// The size in bytes of each of r and s in an ECDSA signature with `ec`: that
+/// of its curve's order (32, 48 and 66 for P-256, P-384 and P-521). Read from
+/// the key itself rather than its `namedCurve`.
+fn scalarBytes(ec: *const crypto.EC_KEY) ?usize {
+    const group = crypto.EC_KEY_get0_group(ec) orelse return null;
+    const order = crypto.EC_GROUP_get0_order(group) orelse return null;
+    return crypto.BN_num_bytes(order);
+}
+
+/// ECDSA signature generation (FIPS 186-5, section 6.4.1) of `data` hashed
+/// with `hash_name`, the hash of the operation's params (not of the key). The
+/// signature is r followed by s, each a big-endian integer of the curve
+/// order's size: the IEEE P1363 form WebCrypto uses, not DER. SubtleCrypto.sign
+/// checked the algorithm and the sign usage; only a private key signs.
+pub fn sign(key: *const CryptoKey, data: []const u8, hash_name: []const u8, exec: *const Execution) ![]const u8 {
+    if (key._kind != .private) return error.InvalidAccessError;
+    const ec = crypto.EVP_PKEY_get0_EC_KEY(key.getKeyObject()) orelse return error.OperationError;
+    const n = scalarBytes(ec) orelse return error.OperationError;
+
+    var buf: [crypto.EVP_MAX_MD_SIZE]u8 = undefined;
+    const digest = try digestOf(data, hash_name, &buf);
+    const sig = crypto.ECDSA_do_sign(digest.ptr, digest.len, ec) orelse return error.OperationError;
+    defer crypto.ECDSA_SIG_free(sig);
+
+    var r: ?*const crypto.BIGNUM = null;
+    var s: ?*const crypto.BIGNUM = null;
+    crypto.ECDSA_SIG_get0(sig, &r, &s);
+    const out = try exec.local_arena.alloc(u8, 2 * n);
+    if (crypto.BN_bn2bin_padded(out.ptr, n, r orelse return error.OperationError) != 1) return error.OperationError;
+    if (crypto.BN_bn2bin_padded(out[n..].ptr, n, s orelse return error.OperationError) != 1) return error.OperationError;
+    return out;
+}
+
+/// ECDSA signature verification (FIPS 186-5, section 6.4.2) of `signature`
+/// (r followed by s, as `sign` produces) over `data` hashed with `hash_name`.
+/// SubtleCrypto.verify checked the algorithm and the verify usage; only a
+/// public key verifies. A signature that doesn't match is false, whatever its
+/// length: one with extra padding, for one, isn't of the curve's size.
+pub fn verify(key: *const CryptoKey, signature: []const u8, data: []const u8, hash_name: []const u8) !bool {
+    if (key._kind != .public) return error.InvalidAccessError;
+    const ec = crypto.EVP_PKEY_get0_EC_KEY(key.getKeyObject()) orelse return error.OperationError;
+    const n = scalarBytes(ec) orelse return error.OperationError;
+
+    var buf: [crypto.EVP_MAX_MD_SIZE]u8 = undefined;
+    const digest = try digestOf(data, hash_name, &buf);
+    if (signature.len != 2 * n) {
+        return false;
+    }
+
+    const sig = crypto.ECDSA_SIG_new() orelse return error.OutOfMemory;
+    defer crypto.ECDSA_SIG_free(sig);
+    const r = crypto.BN_bin2bn(signature.ptr, n, null) orelse return error.OutOfMemory;
+    const s = crypto.BN_bin2bn(signature[n..].ptr, n, null) orelse {
+        crypto.BN_free(r);
+        return error.OutOfMemory;
+    };
+    if (crypto.ECDSA_SIG_set0(sig, r, s) != 1) {
+        crypto.BN_free(r);
+        crypto.BN_free(s);
+        return error.OutOfMemory;
+    }
+
+    if (crypto.ECDSA_do_verify(digest.ptr, digest.len, sig, ec) == 1) return true;
+    // A bad signature is an expected outcome, not a failure: don't leave it on
+    // the thread's error queue for the next libcrypto caller.
+    crypto.ERR_clear_error();
+    return false;
+}
+
+/// The `hash_name` digest of `data`, written to `out`.
+fn digestOf(data: []const u8, hash_name: []const u8, out: *[crypto.EVP_MAX_MD_SIZE]u8) ![]const u8 {
+    const md = crypto.findDigest(hash_name) catch return error.OperationError;
+    var len: c_uint = 0;
+    if (crypto.EVP_Digest(data.ptr, data.len, out, &len, md, null) != 1) return error.OperationError;
+    return out[0..len];
 }
 
 fn contains(set: []const []const u8, usage: []const u8) bool {
