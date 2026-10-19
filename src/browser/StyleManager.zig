@@ -764,60 +764,9 @@ pub fn inlineSize(self: *StyleManager, el: *Element, comptime axis: Element.Axis
 pub fn widthFromContainingBlock(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
-    if (!self.visibilityProps(el).block_flex_or_grid) {
+    if (!self.visibilityProps(el).block_flex_or_grid or self.geometryProps(el).width.unit != .auto) {
         return false;
     }
-    switch (self.geometryProps(el).width.unit) {
-        .auto, .unresolved => {},
-        else => return false,
-    }
-    return self.isNormalFlowNonItem(el);
-}
-
-/// Use an ancestor-width estimate for eligible clipping blocks, without
-/// changing the content-sized fallback for other blocks.
-pub fn clipsAtContainingBlock(self: *StyleManager, el: *Element) bool {
-    self.assertOwns(el);
-    self.rebuildIfDirty() catch return false;
-    return self.geometryProps(el).overflow_x_clips and self.fillsContainingBlock(el);
-}
-
-/// Ordinary auto-width block sizing, excluding layout-dependent lengths,
-/// special elements and boxes whose parent lays out flex or grid items.
-pub fn fillsContainingBlock(self: *StyleManager, el: *Element) bool {
-    self.assertOwns(el);
-    self.rebuildIfDirty() catch return false;
-    if (el.isRootContainer() or self.geometryProps(el).width.unit != .auto) {
-        return false;
-    }
-    switch (el.getTag()) {
-        .table,
-        .fieldset,
-        .img,
-        .iframe,
-        .canvas,
-        .video,
-        .audio,
-        .media,
-        .object,
-        .embed,
-        .input,
-        .select,
-        .textarea,
-        .button,
-        .meter,
-        .progress,
-        .svg,
-        => return false,
-        else => {},
-    }
-    if (!self.visibilityProps(el).block_level) {
-        return false;
-    }
-    return self.isNormalFlowNonItem(el);
-}
-
-fn isNormalFlowNonItem(self: *StyleManager, el: *Element) bool {
     const flow = self.flow.ownProps(self.arena.allocator(), el, self.frame);
     if (flow.absolutely_positioned or flow.floated) {
         return false;
@@ -1426,29 +1375,27 @@ pub const TextTransform = enum(u3) {
     }
 };
 
-/// Layout-dependent lengths win the cascade but remain unresolved. Keep
-/// them separate from auto so ancestor-width estimates don't replace them.
+/// A declared width or height. Values that need layout (auto, %, em) are
+/// `auto`: they win the cascade but give no size. The intrinsic sizes, which
+/// follow the content, are `content`.
 pub const Length = packed struct(u35) {
     value: f32 = 0,
     unit: Unit = .auto,
 
-    const Unit = enum(u3) { auto, content, px, vw, vh, unresolved };
+    const Unit = enum(u3) { auto, content, px, vw, vh };
 
     fn parse(text: []const u8) Length {
-        if (std.ascii.eqlIgnoreCase(text, "auto") or std.ascii.eqlIgnoreCase(text, "initial") or std.ascii.eqlIgnoreCase(text, "unset")) {
-            return .{};
-        }
         if (isIntrinsic(text)) {
             return .{ .unit = .content };
         }
-        const parsed = units.parse(text) catch return .{ .unit = .unresolved };
+        const parsed = units.parse(text) catch return .{};
         if (parsed.value < 0) {
             return .{};
         }
         return switch (parsed.unit) {
             inline .vw, .vh => |unit| .{ .value = @floatCast(parsed.value), .unit = @field(Unit, @tagName(unit)) },
             else => .{
-                .value = @floatCast(parsed.value * (units.absoluteLengthFactor(parsed.unit) orelse return .{ .unit = .unresolved })),
+                .value = @floatCast(parsed.value * (units.absoluteLengthFactor(parsed.unit) orelse return .{})),
                 .unit = .px,
             },
         };
@@ -1466,7 +1413,7 @@ pub const Length = packed struct(u35) {
     fn resolve(self: Length, viewport: Viewport) ?f64 {
         const value: f64 = self.value;
         return switch (self.unit) {
-            .auto, .content, .unresolved => null,
+            .auto, .content => null,
             .px => value,
             .vw, .vh => value * @as(f64, @floatFromInt(if (self.unit == .vw) viewport.width else viewport.height)) / 100.0,
         };
@@ -1480,7 +1427,6 @@ const Visibility = struct {
 
         display: ?Display = null,
         block_flex_or_grid: ?bool = null,
-        block_level: ?bool = null,
         // Inner null: an explicit inherit, which still wins the cascade
         visibility_hidden: ??bool = null,
         opacity_zero: ?bool = null,
@@ -1490,7 +1436,6 @@ const Visibility = struct {
             if (std.ascii.eqlIgnoreCase(name, "display")) {
                 self.display = Display.parse(value);
                 self.block_flex_or_grid = std.ascii.eqlIgnoreCase(value, "flex") or std.ascii.eqlIgnoreCase(value, "grid");
-                self.block_level = isBlockLevel(value);
             } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
                 self.visibility_hidden = parseInheritedFlag(value, &.{ "hidden", "collapse" }, &.{ "visible", "initial" });
             } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
@@ -1503,13 +1448,6 @@ const Visibility = struct {
                 });
             }
         }
-
-        fn isBlockLevel(value: []const u8) bool {
-            inline for (.{ "block", "flow-root", "list-item", "flex", "grid" }) |keyword| {
-                if (std.ascii.eqlIgnoreCase(value, keyword)) return true;
-            }
-            return false;
-        }
     };
 
     // The element's own values, from the cascade.
@@ -1518,8 +1456,6 @@ const Visibility = struct {
         // fallback: .none when matchesUaDisplayNoneRule, else .other.
         display: Display = .other,
         block_flex_or_grid: bool = false,
-        // Without `author_display` it's the tag's UA default
-        block_level: bool = false,
         author_display: bool = false,
         // Null takes the parent's value
         visibility_hidden: ?bool = null,
@@ -1527,10 +1463,9 @@ const Visibility = struct {
         pointer_events_none: ?bool = null,
     };
 
-    const Computed = packed struct(u9) {
+    const Computed = packed struct(u8) {
         display: Display = .other,
         block_flex_or_grid: bool = false,
-        block_level: bool = false,
         author_display: bool = false,
         visibility_hidden: bool = false, // inherited
         pointer_events_none: bool = false, // inherited
@@ -1541,7 +1476,6 @@ const Visibility = struct {
             return .{
                 .display = own.display,
                 .block_flex_or_grid = own.block_flex_or_grid,
-                .block_level = own.block_level,
                 .author_display = own.author_display,
                 .visibility_hidden = own.visibility_hidden orelse parent.visibility_hidden,
                 .pointer_events_none = own.pointer_events_none orelse parent.pointer_events_none,
@@ -1564,13 +1498,6 @@ const Visibility = struct {
     // `<div class="x" hidden>` must report visible.
     pub fn finish(p: *Cascaded, el: *Element, frame: *Frame, priorities: *const Priorities(Declared)) void {
         p.author_display = priorities.get(.display) != 0;
-        if (!p.author_display) {
-            p.block_level = switch (el.getTag()) {
-                .table, .fieldset => false,
-                .form, .li, .dd, .dt, .details, .summary, .menu, .dir, .hgroup => true,
-                else => el.getTag().isBlock(),
-            };
-        }
         if (!p.author_display and matchesUaDisplayNoneRule(el, frame)) {
             p.display = .none;
         }
@@ -1583,7 +1510,6 @@ const Geometry = struct {
         const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height" };
 
         overflow_x_scrolls: ?bool = null,
-        overflow_x_clips: ?bool = null,
         overflow_y_scrolls: ?bool = null,
         overscroll_x_contains: ?bool = null,
         overscroll_y_contains: ?bool = null,
@@ -1593,7 +1519,6 @@ const Geometry = struct {
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "overflow-x")) {
                 self.overflow_x_scrolls = overflowScrolls(value);
-                self.overflow_x_clips = overflowClips(value);
             } else if (std.ascii.eqlIgnoreCase(name, "overflow-y")) {
                 self.overflow_y_scrolls = overflowScrolls(value);
             } else if (std.ascii.eqlIgnoreCase(name, "overscroll-behavior-x")) {
@@ -1614,13 +1539,6 @@ const Geometry = struct {
                 std.ascii.eqlIgnoreCase(value, "overlay");
         }
 
-        // A box that clips its overflow, scrollable or not.
-        fn overflowClips(value: []const u8) bool {
-            return overflowScrolls(value) or
-                std.ascii.eqlIgnoreCase(value, "hidden") or
-                std.ascii.eqlIgnoreCase(value, "clip");
-        }
-
         // `contain` keeps the scroll in the box, `none` also kills the bounce we
         // don't render anyway; only `auto` lets a scroll chain outward.
         fn overscrollContains(value: []const u8) bool {
@@ -1629,9 +1547,8 @@ const Geometry = struct {
         }
     };
 
-    const Computed = packed struct(u75) {
+    const Computed = packed struct(u74) {
         overflow_x_scrolls: bool = false,
-        overflow_x_clips: bool = false,
         overflow_y_scrolls: bool = false,
         overscroll_x_contains: bool = false,
         overscroll_y_contains: bool = false,
@@ -2408,29 +2325,29 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         \\<i style="width: fit-content(10px); position: relative; float: none"></i>
     );
     const expected = [_]Declarations{
-        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false, .block_level = false } },
-        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false, .block_level = false } },
-        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false, .block_level = false } },
-        .{ .visibility = .{ .display = .other, .block_flex_or_grid = false, .block_level = true } },
-        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false, .block_level = false, .visibility_hidden = true } },
+        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false } },
+        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false } },
+        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false } },
+        .{ .visibility = .{ .display = .other, .block_flex_or_grid = false } },
+        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false, .visibility_hidden = true } },
         .{ .visibility = .{ .opacity_zero = true, .pointer_events_none = true } },
         .{ .visibility = .{ .opacity_zero = false, .pointer_events_none = true } },
         .{ .visibility = .{ .visibility_hidden = true } },
         .{},
         .{},
-        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = false } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_y_scrolls = false } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = true } },
         .{},
         .{ .geometry = .{ .width = .{ .value = 100, .unit = .px }, .height = .{ .value = 96, .unit = .px } } },
         .{ .geometry = .{ .height = .{} } },
-        .{ .geometry = .{ .width = .{ .unit = .unresolved }, .height = .{} } },
-        .{ .geometry = .{ .width = .{ .unit = .unresolved } } },
-        .{ .visibility = .{ .display = .flex, .block_flex_or_grid = true, .block_level = true } },
-        .{ .visibility = .{ .display = .grid, .block_flex_or_grid = false, .block_level = false } },
+        .{ .geometry = .{ .width = .{}, .height = .{} } },
+        .{ .geometry = .{ .width = .{} } },
+        .{ .visibility = .{ .display = .flex, .block_flex_or_grid = true } },
+        .{ .visibility = .{ .display = .grid, .block_flex_or_grid = false } },
         .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = true, .floated = true } },
         .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = false, .floated = false } },
     };
@@ -2554,7 +2471,7 @@ test "StyleManager: memo: inherited values, any query order" {
     try testing.expectEqual(6, sm.visibility.memo.count());
     try testing.expectEqual(Visibility.Computed{ .visibility_hidden = true, .pointer_events_none = true, .in_opacity_zero = true }, sm.visibility.memo.get(u).?);
     try testing.expectEqual(Visibility.Computed{ .visibility_hidden = true, .pointer_events_none = true }, sm.visibility.memo.get(i).?);
-    try testing.expectEqual(Visibility.Computed{ .block_level = true }, sm.visibility.memo.get(p).?);
+    try testing.expectEqual(Visibility.Computed{}, sm.visibility.memo.get(p).?);
 
     try testing.expectEqual(false, sm.isHidden(u, .{}));
     try testing.expectEqual(true, sm.isHidden(u, .{ .check_visibility = true }));
