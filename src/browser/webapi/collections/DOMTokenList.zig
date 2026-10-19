@@ -34,7 +34,22 @@ pub const DOMTokenList = @This();
 // is that lists tend to be very short (often just 1 item).
 
 _element: *Element,
-_attribute_name: String,
+_attribute: Attribute,
+
+pub const Attribute = enum {
+    class,
+    part,
+    rel,
+    sizes,
+    sandbox,
+    @"for",
+
+    fn name(self: Attribute) String {
+        return switch (self) {
+            inline else => |a| comptime .wrap(@tagName(a)),
+        };
+    }
+};
 
 pub const KeyIterator = GenericIterator(Iterator, "0");
 pub const ValueIterator = GenericIterator(Iterator, "1");
@@ -73,27 +88,19 @@ pub fn item(self: *const DOMTokenList, index: usize, frame: *Frame) !?[]const u8
 pub fn supports(self: *const DOMTokenList, token: []const u8, frame: *Frame) !bool {
     const lower = try std.ascii.allocLowerString(frame.local_arena, token);
 
-    if (std.ascii.eqlIgnoreCase(self._attribute_name.str(), "sandbox")) {
-        const supported = [_][]const u8{
+    const supported: []const []const u8 = switch (self._attribute) {
+        // we don't currently sandbox anything, so every known value is allowed
+        .sandbox => &.{
             "allow-downloads",                         "allow-forms",                              "allow-modals",                            "allow-orientation-lock",
             "allow-pointer-lock",                      "allow-popups",                             "allow-popups-to-escape-sandbox",          "allow-presentation",
             "allow-same-origin",                       "allow-scripts",                            "allow-storage-access-by-user-activation", "allow-top-navigation",
             "allow-top-navigation-by-user-activation", "allow-top-navigation-to-custom-protocols",
-        };
-        for (supported) |s| {
-            if (std.mem.eql(u8, lower, s)) {
-                // we don't currently sandbox anything, so everything is allowed
-                // (except an unknown value)
-                return true;
-            }
-        }
-        return false;
-    }
+        },
+        .rel => &.{ "stylesheet", "preload", "modulepreload" },
+        // no supported tokens defined
+        .class, .part, .sizes, .@"for" => return error.TypeError,
+    };
 
-    if (!std.ascii.eqlIgnoreCase(self._attribute_name.str(), "rel")) {
-        return error.TypeError;
-    }
-    const supported = [_][]const u8{ "stylesheet", "preload", "modulepreload" };
     for (supported) |s| {
         if (std.mem.eql(u8, lower, s)) return true;
     }
@@ -228,11 +235,11 @@ pub fn replace(self: *DOMTokenList, old_token: []const u8, new_token: []const u8
 }
 
 pub fn getValue(self: *const DOMTokenList) []const u8 {
-    return self._element.getAttributeSafe(self._attribute_name) orelse "";
+    return self._element.getAttributeSafe(self._attribute.name()) orelse "";
 }
 
 pub fn setValue(self: *DOMTokenList, value: String, frame: *Frame) !void {
-    try self._element.setAttribute(self._attribute_name, value, frame);
+    try self._element.setAttribute(self._attribute.name(), value, frame);
 }
 
 pub fn keys(self: *DOMTokenList, frame: *Frame) !*KeyIterator {
@@ -299,13 +306,13 @@ fn validateToken(token: []const u8) !void {
 fn updateAttribute(self: *DOMTokenList, tokens: Lookup, frame: *Frame) !void {
     if (tokens.count() > 0) {
         const joined = try std.mem.join(frame.call_arena, " ", tokens.keys());
-        return self._element.setAttribute(self._attribute_name, .wrap(joined), frame);
+        return self._element.setAttribute(self._attribute.name(), .wrap(joined), frame);
     }
 
     // Only remove attribute if it didn't exist before (was null)
     // If it existed (even as ""), set it to "" to preserve its existence
-    if (self._element.hasAttributeSafe(self._attribute_name)) {
-        try self._element.setAttribute(self._attribute_name, .wrap(""), frame);
+    if (self._element.hasAttributeSafe(self._attribute.name())) {
+        try self._element.setAttribute(self._attribute.name(), .wrap(""), frame);
     }
 }
 

@@ -1115,7 +1115,7 @@ pub fn getClassList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
-            ._attribute_name = comptime .wrap("class"),
+            ._attribute = .class,
         });
     }
     return gop.value_ptr.*;
@@ -1137,7 +1137,7 @@ pub fn getPartList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
-            ._attribute_name = comptime .wrap("part"),
+            ._attribute = .part,
         });
     }
     return gop.value_ptr.*;
@@ -1149,7 +1149,7 @@ pub fn getRelList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
-            ._attribute_name = comptime .wrap("rel"),
+            ._attribute = .rel,
         });
     }
     return gop.value_ptr.*;
@@ -1167,7 +1167,7 @@ pub fn getTokenList(self: *Element, comptime attribute: TokenListAttribute, fram
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
-            ._attribute_name = comptime .wrap(@tagName(attribute)),
+            ._attribute = @field(collections.DOMTokenList.Attribute, @tagName(attribute)),
         });
     }
     return gop.value_ptr.*;
