@@ -157,7 +157,9 @@ pub fn responseIntercept(arena: Allocator, bc: *CDP.BrowserContext, intercept: *
     const session_id = bc.fetch_session_id orelse return;
 
     const transfer = intercept.transfer;
-    if (!bc.intercept_state.matches(.Response, transfer.req.url, transfer.req.resource_type)) {
+    // continueRequest's interceptResponse overrides the patterns for this hop.
+    const pause = transfer._intercept_response orelse bc.intercept_state.matches(.Response, transfer.req.url, transfer.req.resource_type);
+    if (pause == false) {
         // Leaves wait_for_interception false: the response is delivered untouched.
         return;
     }
@@ -275,12 +277,8 @@ fn continueRequest(cmd: *CDP.Command) !void {
         method: ?[]const u8 = null,
         postData: ?[]const u8 = null,
         headers: ?[]const http.Header = null,
-        interceptResponse: bool = false,
+        interceptResponse: ?bool = null,
     })) orelse return error.InvalidParams;
-
-    if (params.interceptResponse) {
-        return error.NotImplemented;
-    }
 
     if (try pausedResponse(bc, params.requestId)) |transfer| {
         // The request has already been sent: like Chrome, its overrides are
@@ -333,6 +331,10 @@ fn continueRequest(cmd: *CDP.Command) !void {
         const body = try arena.alloc(u8, try decoder.calcSizeForSlice(b));
         try decoder.decode(body, b);
         request.body = body;
+    }
+
+    if (params.interceptResponse) |intercept_response| {
+        transfer._intercept_response = intercept_response;
     }
 
     try client.continueIntercepted(transfer);
@@ -1186,6 +1188,104 @@ test "cdp.Fetch: response stage continueRequest ignores request overrides, but a
     try probe.tickUntilSettled(bc);
     try testing.expectEqual(null, probe.err);
     try testing.expectEqual(1024, probe.body.items.len);
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: continueRequest interceptResponse pauses the response without a Response pattern" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RS", .session_id = "SID-RS" });
+    try ctx.processMessage(.{ .id = 1, .method = "Fetch.enable", .params = .{ .patterns = .{.{ .urlPattern = "*" }} } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/xhr");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001", .interceptResponse = true } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.requestPaused", .{
+        .requestId = "INT-0000000002",
+        .request = .{ .url = "http://127.0.0.1:9582/xhr" },
+        .responseStatusCode = 200,
+    }, .{ .session_id = "SID-RS" });
+    try testing.expectEqual(false, probe.done);
+
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.getResponseBody", .params = .{ .requestId = "INT-0000000002" } });
+    try ctx.expectSentResult(.{ .body = "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MA==", .base64Encoded = true }, .{ .id = 3 });
+
+    try ctx.processMessage(.{ .id = 4, .method = "Fetch.continueResponse", .params = .{ .requestId = "INT-0000000002" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqualSlices(u8, repeat("1234567890", 10), probe.body.items);
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: continueRequest interceptResponse covers one hop, its redirect included" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RS", .session_id = "SID-RS" });
+    try ctx.processMessage(.{ .id = 1, .method = "Fetch.enable", .params = .{ .patterns = .{.{ .urlPattern = "*" }} } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/xhr/redirect");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001", .interceptResponse = true } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.requestPaused", .{
+        .requestId = "INT-0000000002",
+        .request = .{ .url = "http://127.0.0.1:9582/xhr/redirect" },
+        .responseStatusCode = 302,
+    }, .{ .session_id = "SID-RS" });
+
+    // Following the redirect starts a new hop: its request pauses, and
+    // without a new interceptResponse its response does not.
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueResponse", .params = .{ .requestId = "INT-0000000002" } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.requestPaused", .{
+        .requestId = "INT-0000000003",
+        .request = .{ .url = "http://127.0.0.1:9582/xhr" },
+    }, .{ .session_id = "SID-RS" });
+    try testing.expectEqual(null, (try sentPausedParams(&ctx, "INT-0000000003")).get("responseStatusCode"));
+
+    try ctx.processMessage(.{ .id = 4, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000003" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqualSlices(u8, repeat("1234567890", 10), probe.body.items);
+    try testing.expectEqual(error.PausedEventNotSent, sentPausedParams(&ctx, "INT-0000000004"));
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: continueRequest interceptResponse false skips a matching Response pattern" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RS", .session_id = "SID-RS" });
+    try ctx.processMessage(.{ .id = 1, .method = "Fetch.enable", .params = .{ .patterns = .{
+        .{ .urlPattern = "*" },
+        .{ .urlPattern = "*", .requestStage = "Response" },
+    } } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/xhr");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001", .interceptResponse = false } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqualSlices(u8, repeat("1234567890", 10), probe.body.items);
+    try testing.expectEqual(error.PausedEventNotSent, sentPausedParams(&ctx, "INT-0000000002"));
     try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
 }
 

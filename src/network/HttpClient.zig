@@ -2632,6 +2632,9 @@ pub const Transfer = struct {
     // need to restore (and hence capture) the original headers.
     _intercept_original_headers: ?[]const RequestHeader = null,
 
+    // Fetch.continueRequest's interceptResponse override.
+    _intercept_response: ?bool = null,
+
     // Linked into client.pending_queue while .queued and client.delayed_queue
     // while .delayed; reused to link the retired transfer into
     // client.graveyard (deinit unlinks it from those queues first, so the
@@ -3873,6 +3876,7 @@ pub const Transfer = struct {
         const arena = transfer.arena;
 
         transfer._redirect_count += 1;
+        transfer._intercept_response = null;
         if (transfer._redirect_count > transfer.client.network.config.httpMaxRedirects()) {
             return error.TooManyRedirects;
         }
