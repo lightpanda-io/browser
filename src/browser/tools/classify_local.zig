@@ -57,7 +57,22 @@ pub const Preset = struct {
     value: f32,
 
     pub const Kind = enum(u8) { linear = 0, constant = 1 };
+
+    /// `score` rescaled so the threshold falls at 0.5, where a probability
+    /// from Jev is read: [0, threshold] maps onto [0, 0.5] and
+    /// [threshold, 1] onto [0.5, 1].
+    pub fn calibrated(self: Preset, score: f64) f64 {
+        const t: f64 = self.threshold;
+        if (t <= 0 or t >= 1) return score;
+        return if (score < t) 0.5 * score / t else 0.5 + 0.5 * (score - t) / (1 - t);
+    }
 };
+
+/// How far from 0.5 a calibrated score has to be for classify to answer the
+/// preset without asking Jev: below this, or above 1 minus it. On held-out
+/// pages this answered about 70% of them, agreeing with Jev on 99%
+/// (evaluate.py --sweep, at --sure 0.1).
+pub const sure = 0.1;
 
 const Subject = enum { html, visible, title, path, url };
 
@@ -573,7 +588,7 @@ const Reader = struct {
 fn readFamily(r: *Reader, a: Allocator) Reader.Error!Family {
     const n = try r.int();
     const buckets = try r.array(a, u32, n);
-    for (1..n) |i| if (buckets[i - 1] >= buckets[i]) return error.InvalidModel;
+    for (0..n -| 1) |i| if (buckets[i] >= buckets[i + 1]) return error.InvalidModel;
     return .{ .buckets = buckets, .idf = try r.array(a, f32, n) };
 }
 

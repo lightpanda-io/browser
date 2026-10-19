@@ -195,7 +195,7 @@ fn buildState(arena: std.mem.Allocator, read: State) !Content {
     return .{ .json = .{ .object = state } };
 }
 
-const AskedResponse = zenai.typesafe.Client.Response(zenai.typesafe.types.AskResponse);
+pub const AskedResponse = zenai.typesafe.Client.Response(zenai.typesafe.types.AskResponse);
 
 /// One Jev request about the current page: `.failed` carries what to tell the
 /// caller, so a key that is not set or an API that is down reads the same
