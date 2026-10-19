@@ -1381,9 +1381,22 @@ fn exitFullscreen(_: *Document, frame: *Frame) js.Promise {
     return frame.js.local.?.rejectPromise(.{ .type_error = "Document not in fullscreen" });
 }
 
-pub fn hasFocus(_: *Document) bool {
-    log.debug(.not_implemented, "Document.hasFocus", .{});
-    return true;
+pub fn hasFocus(self: *Document) bool {
+    var top = self._frame orelse return false;
+    while (top.parent) |parent| {
+        top = parent;
+    }
+
+    var candidate = top;
+    while (true) {
+        if (candidate.document == self) {
+            return true;
+        }
+        const active = candidate.document._active_element orelse return false;
+        const iframe = active.is(Element.Html.IFrame) orelse return false;
+        const window = iframe._window orelse return false;
+        candidate = window._frame;
+    }
 }
 
 fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
