@@ -3038,7 +3038,7 @@ test "tools: goto says what a full browser would have shown" {
     const iframes = session.load_resources.iframe;
     session.load_resources.iframe = false;
     defer session.load_resources.iframe = iframes;
-    testing.expectLog(&.{.disabled});
+    testing.expectLog(&.{.disabled, .page_error});
 
     const aa = testing.arena_allocator;
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,

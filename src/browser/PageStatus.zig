@@ -182,6 +182,7 @@ fn Counts(comptime E: type) type {
 
 const testing = @import("../testing.zig");
 test "PageStatus: missing globals from uncaught ReferenceErrors" {
+    testing.expectLog(&.{.page_error, .page_error, .page_error, .page_error});
     const page = try testing.pageTest("page_missing_global.html", .{});
     defer page.close();
 

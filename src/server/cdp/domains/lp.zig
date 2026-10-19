@@ -758,6 +758,8 @@ test "cdp.lp: getContentSignal" {
 }
 
 test "cdp.lp: getPageStatus" {
+    testing.expectLog(&.{.page_error});
+
     var ctx = try testing.context();
     defer ctx.deinit();
 
