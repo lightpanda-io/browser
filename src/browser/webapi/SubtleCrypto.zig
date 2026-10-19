@@ -402,12 +402,13 @@ fn exportJwk(key: *CryptoKey, exec: *const Execution) !Jwk {
 /// (the WebIDL type is `[EnforceRange] unsigned long?`).
 pub fn deriveBits(
     _: *const SubtleCrypto,
-    algo: algorithm.Derive,
+    algo_value: js.Value,
     base_key: *const CryptoKey,
     length: ?js.EnforceRange(u32),
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
+    const algo = try algorithm.Derive.fromJs(algo_value, local);
     const bits = try deriveRaw(algo, base_key, if (length) |l| l.value else null, base_key.canDeriveBits(), exec);
     return local.resolvePromise(js.ArrayBuffer{ .values = bits });
 }
@@ -416,7 +417,7 @@ pub fn deriveBits(
 /// `derived`, then import them as that key type.
 pub fn deriveKey(
     _: *const SubtleCrypto,
-    algo: algorithm.Derive,
+    algo_value: js.Value,
     base_key: *const CryptoKey,
     derived: algorithm.DerivedKey,
     extractable: bool,
@@ -424,10 +425,8 @@ pub fn deriveKey(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    // The algorithm (its hash) is normalized before derivedKeyType.
-    if (algo.hash()) |hash| {
-        _ = try hash.name(local);
-    }
+    // The algorithm is normalized before derivedKeyType.
+    const algo = try algorithm.Derive.fromJs(algo_value, local);
     // The base key's deriveKey usage (not deriveBits) gates this operation.
     const usage_ok = base_key.canDeriveKey();
 

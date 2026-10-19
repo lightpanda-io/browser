@@ -79,8 +79,8 @@ pub fn pbkdf2(
     }
 
     const blocks = std.math.divCeil(usize, out_len, crypto.EVP_MD_size(digest)) catch unreachable;
-    if (@as(u64, blocks) * params.iterations > PBKDF2_MAX_WORK) {
-        log.warn(.js, "PBKDF2 work limit", .{ .length = out_len, .iterations = params.iterations });
+    if (@as(u64, blocks) * params.iterations.value > PBKDF2_MAX_WORK) {
+        log.warn(.js, "PBKDF2 work limit", .{ .length = out_len, .iterations = params.iterations.value });
         return error.OperationError;
     }
 
@@ -92,7 +92,7 @@ pub fn pbkdf2(
         base_key._key.len,
         @ptrCast(salt.ptr),
         salt.len,
-        params.iterations,
+        params.iterations.value,
         digest,
         out.len,
         out.ptr,
