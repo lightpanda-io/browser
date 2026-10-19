@@ -69,7 +69,8 @@ pub fn getValue(self: *const TextArea) []const u8 {
     return self._value orelse self.getDefaultValue();
 }
 
-pub fn setValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
+pub fn setValue(self: *TextArea, raw_value: []const u8, frame: *Frame) !void {
+    const value = try normalizeNewlines(raw_value, frame);
     const changed = std.mem.eql(u8, self.getValue(), value) == false;
     if (changed == false and self._value != null) {
         // _value itself isn't changing (not to be mixed up with setValue
@@ -88,6 +89,33 @@ pub fn setValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
         self._selection_end = @intCast(owned.len);
         self._selection_direction = .none;
     }
+}
+
+// The API value has LF newlines: CRLF and lone CR become LF.
+fn normalizeNewlines(value: []const u8, frame: *Frame) ![]const u8 {
+    const first = std.mem.findAny(u8, value, "\r") orelse return value;
+
+    var result = try frame.page_arena.alloc(u8, value.len);
+    @memcpy(result[0..first], value[0..first]);
+
+    var i: usize = first;
+    var j: usize = first;
+    while (j < value.len) : (j += 1) {
+        if (value[j] == '\r') {
+            result[i] = '\n';
+            if (j + 1 < value.len and value[j + 1] == '\n') {
+                j += 1;
+            }
+        } else {
+            result[i] = value[j];
+        }
+        i += 1;
+    }
+    return result[0..i];
+}
+
+pub fn getTextLength(self: *const TextArea) u32 {
+    return @intCast(Node.CData.utf16Len(self.getValue()));
 }
 
 pub fn reset(self: *TextArea) void {
@@ -268,6 +296,7 @@ pub const JsApi = struct {
     pub const setCustomValidity = bridge.function(TextArea.setCustomValidity, .{});
     pub const @"type" = bridge.property("textarea", .{ .template = false, .readonly = true });
     pub const value = bridge.accessor(TextArea.getValue, TextArea.setValue, .{});
+    pub const textLength = bridge.accessor(TextArea.getTextLength, null, .{});
     pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, TextArea.setDefaultValue, .{ .ce_reactions = true });
     pub const disabled = reflect.boolean("disabled");
     pub const name = reflect.string("name");
