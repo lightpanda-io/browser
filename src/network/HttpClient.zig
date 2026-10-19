@@ -703,6 +703,7 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
             if (owned.frame_id == 0) owned.frame_id = o.frame_id;
             if (owned.loader_id == 0) owned.loader_id = o.loader_id;
             if (owned.document_frame_id == null) owned.document_frame_id = o.document_frame_id;
+            if (owned.root_frame_id == 0) owned.root_frame_id = o.root_frame_id;
             if (owned.notification == null) owned.notification = o.scope.notification();
             cookie_jar = o.scope.cookieJar();
         }
@@ -2178,6 +2179,10 @@ pub const Request = struct {
     // The document frame this request belongs to. Differs from frame_id for
     // Workers.
     document_frame_id: ?u32 = null,
+    // The root frame of the Page the request belongs to (a popup's or worker's
+    // is its page's). Unlike frame_id, it still names the page once the frame
+    // is gone, so a late event reaches it (CDP routes by it). 0 for none.
+    root_frame_id: u32 = 0,
     notification: ?*Notification = null,
 
     // The site for SameSite checks. null = the owner's (Owner.siteForCookies).
@@ -2509,6 +2514,7 @@ pub const Owner = struct {
     // Copied onto every request made through this owner, see Request.
     frame_id: u32,
     document_frame_id: u32,
+    root_frame_id: u32,
     loader_id: u32,
 
     // Entered around delivery, so the consumer's callbacks log as its page.
@@ -4775,6 +4781,7 @@ fn testOwner(url: ?*const [:0]const u8, parent: ?*const Owner) Owner {
         .parent = parent,
         .frame_id = 0,
         .document_frame_id = 0,
+        .root_frame_id = 0,
         .loader_id = 0,
     };
 }

@@ -20,6 +20,7 @@ const std = @import("std");
 
 const CDP = @import("../CDP.zig");
 const js = @import("../../../browser/js/js.zig");
+const Frame = @import("../../../browser/Frame.zig");
 const Notification = @import("../../../Notification.zig");
 const repeat = @import("../../../string.zig").repeat;
 
@@ -58,30 +59,30 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         // Bookkeeping that can neither observe nor change the page's global.
         .releaseObjectGroup, .discardConsoleEntries, .getHeapUsage, .getIsolateId, .setCustomObjectFormatterEnabled, .setMaxCallStackSizeToCapture => return sendInspector(cmd),
         else => {
-            const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-            bc.main_world_touched = true;
+            const target = try cmd.target();
+            target.main_world_touched = true;
             return sendInspector(cmd);
         },
     }
 }
 
 fn enable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try bc.runtimeEnable();
+    const target = try cmd.target();
+    try target.runtimeEnable();
     return sendInspector(cmd);
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    bc.runtimeDisable();
+    const target = try cmd.target();
+    target.runtimeDisable();
     return sendInspector(cmd);
 }
 
 fn sendInspector(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
 
     // the result to return is handled directly by the inspector.
-    try bc.callInspector(cmd);
+    try target.callInspector(cmd);
 }
 
 // Object arguments stay remote handles; serializing them would execute page JS.
@@ -120,6 +121,13 @@ const RemoteObject = struct {
     }
 };
 
+// The frame an event happened in: its values are wrapped in that frame's
+// context, and its executionContextId is that context's. The main frame when
+// the frame is gone.
+fn eventFrame(target: *CDP.Target, frame_id: u32) ?*Frame {
+    return target.findFrame(frame_id) orelse target.mainFrame();
+}
+
 const ConsoleMessage = struct {
     type: []const u8,
     executionContextId: i32,
@@ -127,18 +135,18 @@ const ConsoleMessage = struct {
     args: []RemoteObject,
 };
 
-pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.ConsoleMessage) !void {
+pub fn consoleMessage(arena: Allocator, target: *CDP.Target, event: *const Notification.ConsoleMessage) !void {
     // The event goes to the primary session, so its argument handles are
     // minted on the primary's inspector session.
-    const session_id = bc.session_id orelse return;
-    const inspector_session = try bc.inspectorSession(session_id);
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const session_id = target.session_id orelse return;
+    const inspector_session = try target.inspectorSession(session_id);
+    const frame = eventFrame(target, event.frame_id) orelse return error.FrameNotLoaded;
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    const context_id = bc.inspector().getContextId(&ls.local);
+    const context_id = target.bc.inspector().getContextId(&ls.local);
 
     var args: std.ArrayList(RemoteObject) = .empty;
     for (event.values) |value| {
@@ -160,7 +168,7 @@ pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
         try arg.setPrimitive(arena, value);
     }
 
-    return bc.cdp.sendEvent("Runtime.consoleAPICalled", ConsoleMessage{
+    return target.cdp.sendEvent("Runtime.consoleAPICalled", ConsoleMessage{
         .type = @tagName(event.type),
         .timestamp = event.timestamp,
         .executionContextId = context_id,
@@ -178,11 +186,11 @@ const ExceptionDetails = struct {
     executionContextId: i32,
 };
 
-pub fn exceptionThrown(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.ExceptionThrown) !void {
+pub fn exceptionThrown(arena: Allocator, target: *CDP.Target, event: *const Notification.ExceptionThrown) !void {
     // Like consoleAPICalled: the primary session's inspector mints the handle.
-    const session_id = bc.session_id orelse return;
-    const inspector_session = try bc.inspectorSession(session_id);
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const session_id = target.session_id orelse return;
+    const inspector_session = try target.inspectorSession(session_id);
+    const frame = eventFrame(target, event.frame_id) orelse return error.FrameNotLoaded;
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -203,10 +211,10 @@ pub fn exceptionThrown(arena: Allocator, bc: *CDP.BrowserContext, event: *const 
 
     // The location is 1-based, CDP's is 0-based.
     const location = event.location;
-    const exception_id = bc.next_exception_id;
-    bc.next_exception_id += 1;
+    const exception_id = target.next_exception_id;
+    target.next_exception_id += 1;
 
-    return bc.cdp.sendEvent("Runtime.exceptionThrown", .{
+    return target.cdp.sendEvent("Runtime.exceptionThrown", .{
         .timestamp = event.timestamp,
         .exceptionDetails = ExceptionDetails{
             .exceptionId = exception_id,
@@ -215,7 +223,7 @@ pub fn exceptionThrown(arena: Allocator, bc: *CDP.BrowserContext, event: *const 
             .columnNumber = location.column -| 1,
             .url = if (location.url.len == 0) null else location.url,
             .exception = exception,
-            .executionContextId = bc.inspector().getContextId(&ls.local),
+            .executionContextId = target.bc.inspector().getContextId(&ls.local),
         },
     }, .{ .session_id = session_id });
 }
@@ -245,7 +253,7 @@ test "cdp.runtime: inspector responses go to the session that sent the command" 
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RT2", .url = "hi.html", .target_id = "FID-0000000RT2".*, .session_id = "SID-PRIMARY" });
-    _ = try bc.attachSession("SID-AUX", null);
+    _ = try bc.attachSession(bc.firstTarget().?, "SID-AUX", null);
 
     try ctx.processMessage(.{ .id = 60, .method = "Runtime.evaluate", .sessionId = "SID-AUX", .params = .{ .expression = "1 + 1", .returnByValue = true } });
     try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 2, .description = "2" } }, .{ .id = 60, .session_id = "SID-AUX" });
@@ -292,7 +300,7 @@ test "cdp.runtime: inspector events go to the session that enabled them" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RT3", .url = "hi.html", .target_id = "FID-0000000RT3".*, .session_id = "SID-PRIMARY" });
-    _ = try bc.attachSession("SID-AUX", null);
+    _ = try bc.attachSession(bc.firstTarget().?, "SID-AUX", null);
 
     try ctx.processMessage(.{ .id = 70, .method = "Runtime.enable", .sessionId = "SID-AUX" });
     try ctx.expectSentResult(null, .{ .id = 70, .session_id = "SID-AUX" });
@@ -316,7 +324,7 @@ test "cdp.runtime: an uncaught exception emits Runtime.exceptionThrown" {
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC", .url = "hi.html", .target_id = "FID-0000000EXC".* });
     try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
 
-    const frame = bc.mainFrame() orelse unreachable;
+    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -344,7 +352,7 @@ test "cdp.runtime: Runtime.exceptionThrown locates an Error where it was created
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC3", .url = "hi.html", .target_id = "FID-000000EXC3".* });
     try ctx.processMessage(.{ .id = 62, .method = "Runtime.enable" });
 
-    const frame = bc.mainFrame() orelse unreachable;
+    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -368,7 +376,7 @@ test "cdp.runtime: an exception whose error event is cancelled is not reported" 
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC2", .url = "hi.html", .target_id = "FID-000000EXC2".* });
     try ctx.processMessage(.{ .id = 61, .method = "Runtime.enable" });
 
-    const frame = bc.mainFrame() orelse unreachable;
+    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -388,6 +396,38 @@ test "cdp.runtime: an exception whose error event is cancelled is not reported" 
     try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
 }
 
+test "cdp.runtime: console and exceptions of an iframe report the iframe's context" {
+    testing.silenceLog(&.{.js});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-IFR", .url = "cdp/empty_iframe.html", .target_id = "FID-0000000IFR".* });
+    try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
+
+    const main_frame = bc.firstTarget().?.mainFrame().?;
+    const main_context_id = blk: {
+        var ls: js.Local.Scope = undefined;
+        main_frame.js.localScope(&ls);
+        defer ls.deinit();
+        break :blk bc.inspector().getContextId(&ls.local);
+    };
+
+    const child = main_frame.child_frames.items[0];
+    var ls: js.Local.Scope = undefined;
+    child.js.localScope(&ls);
+    defer ls.deinit();
+    const child_context_id = bc.inspector().getContextId(&ls.local);
+    try testing.expect(child_context_id != main_context_id);
+
+    _ = try ls.local.exec("console.log('child'); reportError('child error');", null);
+
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .executionContextId = child_context_id }, .{});
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{ .executionContextId = child_context_id },
+    }, .{});
+}
+
 test "cdp.runtime: consoleAPICalled type matches the console method" {
     testing.silenceLog(&.{.js});
 
@@ -400,7 +440,7 @@ test "cdp.runtime: consoleAPICalled type matches the console method" {
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-CONS", .url = "hi.html", .target_id = "FID-0000000CON".* });
     try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
 
-    const frame = bc.mainFrame() orelse unreachable;
+    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -422,7 +462,7 @@ test "cdp.runtime: consoleAPICalled only carries values for primitives" {
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-CONS", .url = "hi.html", .target_id = "FID-0000000CON".* });
     try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
 
-    const frame = bc.mainFrame() orelse unreachable;
+    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -489,7 +529,7 @@ test "cdp.runtime: console notifications run no page JS" {
     try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
     try ctx.processMessage(.{ .id = 61, .method = "Console.enable" });
 
-    const frame = bc.mainFrame() orelse unreachable;
+    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
