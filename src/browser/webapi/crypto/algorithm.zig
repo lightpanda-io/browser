@@ -76,7 +76,10 @@ pub const Init = union(enum) {
             object: struct { name: []const u8 },
         },
         /// If omitted, default is the block size of the chosen hash function.
-        length: ?usize,
+        /// An [EnforceRange] unsigned long, kept as a value: HMAC.init converts
+        /// it (HMAC.lengthParam) once the name is known to be HMAC's, since
+        /// another algorithm's object can be probed into this dictionary.
+        length: ?js.Value = null,
         /// Always HMAC.
         name: []const u8,
     };
@@ -127,7 +130,8 @@ pub const Derive = union(enum) {
 /// produce. HMAC carries a hash; AES carries a length. Probed in that order so
 /// the more specific shapes win.
 pub const DerivedKey = union(enum) {
-    hmac: struct { hash: Derive.Hash, length: ?u32 = null, name: []const u8 },
+    /// `length` as in Import.hmac.
+    hmac: struct { hash: Derive.Hash, length: ?js.Value = null, name: []const u8 },
     keyed: struct { length: u32, name: []const u8 },
     object: struct { name: []const u8 },
     name: []const u8,
@@ -142,7 +146,9 @@ pub const Import = union(enum) {
             string: []const u8,
             object: struct { name: []const u8 },
         },
-        length: ?u32 = null,
+        /// HMAC's [EnforceRange] unsigned long, kept as a value: RSA imports
+        /// share this variant and ignore it. HMAC.lengthParam converts it.
+        length: ?js.Value = null,
         name: []const u8,
     },
     ec: struct { name: []const u8, namedCurve: []const u8 },

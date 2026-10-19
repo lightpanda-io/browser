@@ -169,8 +169,9 @@ pub fn importKey(
             return AES.importJwk(name, jwk, extractable, key_usages, exec);
         }
         if (eqlIgnoreCase(name, "HMAC")) {
+            const length = try HMAC.lengthParam(importLength(algo), local);
             const hash_name = importHash(algo) orelse return local.typeError("HMAC import requires a hash");
-            return HMAC.importJwk(hash_name, jwk, extractable, key_usages, exec);
+            return HMAC.importJwk(hash_name, jwk, length, extractable, key_usages, exec);
         }
         // HKDF and PBKDF2 keys only come in "raw".
         log.debug(.not_implemented, "SubtleCrypto.importKey", .{ .name = name, .format = format });
@@ -210,8 +211,9 @@ pub fn importKey(
         }
     }
     if (eqlIgnoreCase(name, "HMAC")) {
+        const length = try HMAC.lengthParam(importLength(algo), local);
         const hash_name = importHash(algo) orelse return local.typeError("HMAC import requires a hash");
-        return HMAC.import(hash_name, raw, extractable, key_usages, exec);
+        return HMAC.import(hash_name, raw, length, extractable, key_usages, exec);
     }
 
     log.debug(.not_implemented, "SubtleCrypto.importKey", .{ .name = name });
@@ -227,6 +229,15 @@ fn importHash(algo: algorithm.Import) ?[]const u8 {
             .string => |s| s,
             .object => |o| o.name,
         },
+        else => null,
+    };
+}
+
+/// The `length` member of an HMAC importKey algorithm, unconverted (see
+/// HMAC.lengthParam). Null when absent, or for the other variants.
+fn importLength(algo: algorithm.Import) ?js.Value {
+    return switch (algo) {
+        .hmac => |h| h.length,
         else => null,
     };
 }
@@ -426,12 +437,24 @@ pub fn deriveKey(
             return AES.import(k.name, bits, extractable, key_usages, exec);
         },
         .hmac => |h| {
-            const hash_name = h.hash.name();
+            const local = exec.js.local.?;
+            // This shape ({name, hash, length?}) also matches an AES algorithm
+            // carrying a stray `hash`, or another algorithm's: go by the name.
+            if (AES.canonicalName(h.name) != null) {
+                const length = try HMAC.lengthParam(h.length, local) orelse return local.typeError("AES requires a length");
+                const bits = try deriveRaw(algo, base_key, length, usage_ok, exec);
+                return AES.import(h.name, bits, extractable, key_usages, exec);
+            }
+            if (!eqlIgnoreCase(h.name, "HMAC")) {
+                return error.NotSupported;
+            }
+            const requested = try HMAC.lengthParam(h.length, local);
+            const hash_name = common.canonicalHash(h.hash.name()) orelse return error.NotSupported;
             const hash_md = crypto.findDigest(hash_name) catch return error.NotSupported;
             // Default length, per spec, is the hash's block size (in bits).
-            const length: u32 = h.length orelse @intCast(crypto.EVP_MD_block_size(hash_md) * 8);
+            const length: u32 = requested orelse @intCast(crypto.EVP_MD_block_size(hash_md) * 8);
             const bits = try deriveRaw(algo, base_key, length, usage_ok, exec);
-            return HMAC.import(hash_name, bits, extractable, key_usages, exec);
+            return HMAC.import(hash_name, bits, length, extractable, key_usages, exec);
         },
         .object, .name => {
             log.debug(.not_implemented, "SubtleCrypto.deriveKey", .{});

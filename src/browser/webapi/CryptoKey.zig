@@ -62,6 +62,8 @@ pub const Algorithm = struct {
     hash: ?[]const u8 = null,
     named_curve: ?[]const u8 = null,
     modulus_length: ?u32 = null,
+    /// HMAC: the key's length in bits, which needn't fill its last byte.
+    length: ?u32 = null,
     /// RSA: big-endian, duped into the key's arena by init.
     public_exponent: ?[]const u8 = null,
 };
@@ -168,8 +170,9 @@ pub fn getExtractable(self: *const CryptoKey) bool {
 }
 
 /// The shape of the `.algorithm` dictionary depends on the algorithm. AES and
-/// HMAC expose a `length` (in bits, derived from the key material); HMAC also
-/// exposes a nested `hash`.
+/// HMAC expose a `length` in bits (AES's from the key material, HMAC's as
+/// stored, since it needn't fill the last byte); HMAC also exposes a nested
+/// `hash`.
 const AlgorithmReport = union(enum) {
     keyed: struct { name: []const u8, length: u32 },
     hmac: struct { name: []const u8, length: u32, hash: struct { name: []const u8 } },
@@ -184,12 +187,12 @@ const AlgorithmReport = union(enum) {
 };
 
 pub fn getAlgorithm(self: *const CryptoKey) AlgorithmReport {
-    const length: u32 = @intCast(self._key.len * 8);
     return switch (self._type) {
-        .aes => .{ .keyed = .{ .name = self._algorithm.name, .length = length } },
+        // AES keys are 16, 24 or 32 bytes.
+        .aes => .{ .keyed = .{ .name = self._algorithm.name, .length = @intCast(self._key.len * 8) } },
         .hmac => .{ .hmac = .{
             .name = self._algorithm.name,
-            .length = length,
+            .length = self._algorithm.length orelse 0,
             .hash = .{ .name = self._algorithm.hash orelse "" },
         } },
         .ec => .{ .ec = .{
