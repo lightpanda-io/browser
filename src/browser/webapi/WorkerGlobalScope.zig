@@ -340,6 +340,9 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rej
 
     if (no_handler) {
         self.page.recordJsError(error.JsException);
+        if (rejection.reason()) |reason| {
+            self.page.status.noteException(reason.toStringSlice() catch "");
+        }
     }
 
     const target = self.asEventTarget();
@@ -435,6 +438,7 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     defer self.js.call_depth = call_depth;
 
     self.page.recordJsError(error.JsException);
+    self.page.status.noteException(err.toStringSlice() catch "");
 
     self._reporting_error = true;
     defer self._reporting_error = false;

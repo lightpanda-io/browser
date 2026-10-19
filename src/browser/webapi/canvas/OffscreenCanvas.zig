@@ -20,6 +20,7 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 
 const Blob = @import("../Blob.zig");
+const Canvas = @import("../element/html/Canvas.zig");
 const OffscreenCanvasRenderingContext2D = @import("OffscreenCanvasRenderingContext2D.zig");
 
 const Execution = js.Execution;
@@ -75,6 +76,9 @@ fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execution
         return self._cached;
     }
 
+    if (Canvas.isWebGL(context_type)) {
+        exec.page.status.noteUnsupported(.webgl);
+    }
     return null;
 }
 

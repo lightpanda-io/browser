@@ -549,6 +549,8 @@ fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.
         .dump = if (dump_mode) |mode| @tagName(mode) else "",
         .content = content,
         .@"error" = if (err) |e| @errorName(e) else null,
+        .bot_challenge = if (frame) |f| f._bot_challenge else null,
+        .page_status = if (frame) |f| &f.page.status else null,
     }, .{}, writer);
 }
 
@@ -679,6 +681,27 @@ test "writeJsonEnvelope: null frame" {
         .content = "",
     }, aw.written());
     try testing.expect(std.mem.find(u8, aw.written(), "\"error\":null") != null);
+    try testing.expect(std.mem.find(u8, aw.written(), "\"page_status\":null") != null);
+}
+
+test "writeJsonEnvelope: page status" {
+    var page = try testing.pageTest("page_js_error.html", .{});
+    defer page.close();
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    try writeJsonEnvelope(&aw.writer, page.frame().?, null, "", null);
+    try testing.expectJson(.{
+        .http_status = 200,
+        .page_status = .{
+            .js_errors = 2,
+            .unsupported = .{ .webgl = 0, .canvas2d = 0 },
+            .skipped = .{ .iframe = 0, .worker = 0, .image = 0, .stylesheet = 0 },
+            .missing_globals = &[_][]const u8{},
+        },
+    }, aw.written());
+    try testing.expect(std.mem.find(u8, aw.written(), "\"bot_challenge\":null") != null);
 }
 
 test "writeJsonEnvelope: page error" {

@@ -1061,6 +1061,9 @@ fn callInner(
     if (session.currentFrame()) |frame| result.navigated = frame._frame_id != frame_before;
     if (opts.nav_note) {
         if (session.currentFrame()) |frame| {
+            if (result.navigated) {
+                if (try weaknessNote(arena, frame)) |n| result.text = try arena.print("{s}\n\n{s}", .{ n, result.text });
+            }
             const note = if (result.navigated)
                 try navErrorNote(arena, frame)
             else if (tool.navigatesToUrl())
@@ -1251,6 +1254,25 @@ fn movedNote(arena: std.mem.Allocator, arguments: ?std.json.Value, frame: *const
     };
     if (url.len == 0 or std.mem.eql(u8, url, frame.url)) return null;
     return try arena.print("The page is at {s}, not {s}: a redirect or an in-page navigation moved it, and this reads it as it is. Use goto to reload {s}.", .{ frame.url, url, url });
+}
+
+/// What a full browser would have shown that this page's reads will lack.
+/// Only the signals that change what the model should do; canvas 2D is left
+/// out because fingerprinting scripts paint on most pages.
+fn weaknessNote(arena: std.mem.Allocator, frame: *const lp.Frame) !?[]const u8 {
+    const status = &frame.page.status;
+    var notes: std.ArrayList([]const u8) = .empty;
+    if (status.unsupported.get(.webgl) > 0) {
+        try notes.append(arena, "The page asked for WebGL, which Lightpanda does not provide: anything it renders that way is missing.");
+    }
+    const iframes = status.skipped.get(.iframe);
+    if (iframes > 0) {
+        try notes.append(arena, try arena.print("{d} iframe(s) were not loaded: subframe loading is off.", .{iframes}));
+    }
+    if (notes.items.len == 0) {
+        return null;
+    }
+    return try std.mem.join(arena, " ", notes.items);
 }
 
 /// Error and challenge pages would otherwise read as the requested content.
@@ -3004,6 +3026,26 @@ test "tools: goto flags an error status instead of reporting success" {
     , .{});
     const r = try call(aa, session, &registry, "goto", args, .{ .nav_note = true, .source = .user });
     try std.testing.expectEqualStrings("HTTP 429 Too Many Requests: this is likely an error or rate-limit page, not the requested content.\n\nNavigated. HTTP 429 Too Many Requests.", r.text);
+}
+
+test "tools: goto says what a full browser would have shown" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const iframes = session.load_resources.iframe;
+    session.load_resources.iframe = false;
+    defer session.load_resources.iframe = iframes;
+    testing.expectLog(&.{.disabled});
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/src/browser/tests/cdp/page_status.html"}
+    , .{});
+    const r = try call(aa, session, &registry, "goto", args, .{ .nav_note = true, .source = .user });
+    try std.testing.expectEqualStrings("The page asked for WebGL, which Lightpanda does not provide: anything it renders that way is missing. 1 iframe(s) were not loaded: subframe loading is off.\n\nNavigated. HTTP 200 OK.", r.text);
 }
 
 test "tools: a read tool navigating by url flags an error status" {

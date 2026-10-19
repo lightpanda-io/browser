@@ -82,7 +82,9 @@ fn createImageData(
     }
 }
 
-fn putImageData(_: *const OffscreenCanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
+fn putImageData(_: *const OffscreenCanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, exec: *const Execution) void {
+    painted(exec);
+}
 
 fn getImageData(
     _: *const OffscreenCanvasRenderingContext2D,
@@ -157,8 +159,12 @@ pub fn transform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, 
 fn setTransform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 fn resetTransform(_: *OffscreenCanvasRenderingContext2D) void {}
 fn clearRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-fn fillRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-fn strokeRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
+fn fillRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, exec: *const Execution) void {
+    painted(exec);
+}
+fn strokeRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, exec: *const Execution) void {
+    painted(exec);
+}
 fn beginPath(_: *OffscreenCanvasRenderingContext2D) void {}
 fn closePath(_: *OffscreenCanvasRenderingContext2D) void {}
 fn moveTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
@@ -168,11 +174,23 @@ fn bezierCurveTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, 
 pub fn arc(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: ?bool) void {}
 fn arcTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn rect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn fill(_: *OffscreenCanvasRenderingContext2D) void {}
-pub fn stroke(_: *OffscreenCanvasRenderingContext2D) void {}
+pub fn fill(_: *OffscreenCanvasRenderingContext2D, exec: *const Execution) void {
+    painted(exec);
+}
+pub fn stroke(_: *OffscreenCanvasRenderingContext2D, exec: *const Execution) void {
+    painted(exec);
+}
 pub fn clip(_: *OffscreenCanvasRenderingContext2D) void {}
-fn fillText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
-fn strokeText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
+fn fillText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64, exec: *const Execution) void {
+    painted(exec);
+}
+fn strokeText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64, exec: *const Execution) void {
+    painted(exec);
+}
+
+fn painted(exec: *const Execution) void {
+    exec.page.status.noteUnsupported(.canvas2d);
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(OffscreenCanvasRenderingContext2D);
@@ -221,7 +239,7 @@ pub const JsApi = struct {
     pub const fillStyle = bridge.accessor(OffscreenCanvasRenderingContext2D.getFillStyle, OffscreenCanvasRenderingContext2D.setFillStyle, .{});
     pub const createImageData = bridge.function(OffscreenCanvasRenderingContext2D.createImageData, .{});
 
-    pub const putImageData = bridge.function(OffscreenCanvasRenderingContext2D.putImageData, .{ .noop = true });
+    pub const putImageData = bridge.function(OffscreenCanvasRenderingContext2D.putImageData, .{});
     pub const getImageData = bridge.function(OffscreenCanvasRenderingContext2D.getImageData, .{});
     pub const save = bridge.function(OffscreenCanvasRenderingContext2D.save, .{ .noop = true });
     pub const restore = bridge.function(OffscreenCanvasRenderingContext2D.restore, .{ .noop = true });
@@ -232,8 +250,8 @@ pub const JsApi = struct {
     pub const setTransform = bridge.function(OffscreenCanvasRenderingContext2D.setTransform, .{ .noop = true });
     pub const resetTransform = bridge.function(OffscreenCanvasRenderingContext2D.resetTransform, .{ .noop = true });
     pub const clearRect = bridge.function(OffscreenCanvasRenderingContext2D.clearRect, .{ .noop = true });
-    pub const fillRect = bridge.function(OffscreenCanvasRenderingContext2D.fillRect, .{ .noop = true });
-    pub const strokeRect = bridge.function(OffscreenCanvasRenderingContext2D.strokeRect, .{ .noop = true });
+    pub const fillRect = bridge.function(OffscreenCanvasRenderingContext2D.fillRect, .{});
+    pub const strokeRect = bridge.function(OffscreenCanvasRenderingContext2D.strokeRect, .{});
     pub const beginPath = bridge.function(OffscreenCanvasRenderingContext2D.beginPath, .{ .noop = true });
     pub const closePath = bridge.function(OffscreenCanvasRenderingContext2D.closePath, .{ .noop = true });
     pub const moveTo = bridge.function(OffscreenCanvasRenderingContext2D.moveTo, .{ .noop = true });
@@ -243,9 +261,9 @@ pub const JsApi = struct {
     pub const arc = bridge.function(OffscreenCanvasRenderingContext2D.arc, .{ .noop = true });
     pub const arcTo = bridge.function(OffscreenCanvasRenderingContext2D.arcTo, .{ .noop = true });
     pub const rect = bridge.function(OffscreenCanvasRenderingContext2D.rect, .{ .noop = true });
-    pub const fill = bridge.function(OffscreenCanvasRenderingContext2D.fill, .{ .noop = true });
-    pub const stroke = bridge.function(OffscreenCanvasRenderingContext2D.stroke, .{ .noop = true });
+    pub const fill = bridge.function(OffscreenCanvasRenderingContext2D.fill, .{});
+    pub const stroke = bridge.function(OffscreenCanvasRenderingContext2D.stroke, .{});
     pub const clip = bridge.function(OffscreenCanvasRenderingContext2D.clip, .{ .noop = true });
-    pub const fillText = bridge.function(OffscreenCanvasRenderingContext2D.fillText, .{ .noop = true });
-    pub const strokeText = bridge.function(OffscreenCanvasRenderingContext2D.strokeText, .{ .noop = true });
+    pub const fillText = bridge.function(OffscreenCanvasRenderingContext2D.fillText, .{});
+    pub const strokeText = bridge.function(OffscreenCanvasRenderingContext2D.strokeText, .{});
 };

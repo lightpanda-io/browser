@@ -40,6 +40,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         getNodeDetails,
         getStructuredData,
         getContentSignal,
+        getPageStatus,
         detectForms,
         clickNode,
         fillNode,
@@ -59,6 +60,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .getNodeDetails => return getNodeDetails(cmd),
         .getStructuredData => return getStructuredData(cmd),
         .getContentSignal => return getContentSignal(cmd),
+        .getPageStatus => return getPageStatus(cmd),
         .detectForms => return detectForms(cmd),
         .clickNode => return clickNode(cmd),
         .fillNode => return fillNode(cmd),
@@ -310,6 +312,23 @@ fn getContentSignal(cmd: anytype) !void {
     return cmd.sendResult(.{
         .available = signals != null,
         .contentSignals = signals orelse empty,
+    }, .{});
+}
+
+fn getPageStatus(cmd: anytype) !void {
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const status = &frame.page.status;
+
+    return cmd.sendResult(.{
+        .url = frame.url,
+        .httpStatus = frame._http_status,
+        .botChallenge = frame._bot_challenge,
+        .navigateError = if (frame._last_navigate_error) |err| @errorName(err) else null,
+        .jsErrors = status.js_errors,
+        .unsupported = status.unsupported,
+        .skipped = status.skipped,
+        .missingGlobals = status.missing_globals,
     }, .{});
 }
 
@@ -736,6 +755,56 @@ test "cdp.lp: getContentSignal" {
     const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expectEqual(false, result.get("available").?.bool);
     try testing.expect(result.get("contentSignals") != null);
+}
+
+test "cdp.lp: getPageStatus" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    bc.session.load_resources = .{};
+    // The iframe and worker skips warn; image and stylesheet are debug.
+    testing.expectLog(&.{ .disabled, .disabled });
+
+    const url = "http://localhost:9582/src/browser/tests/cdp/page_status.html";
+    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    try ctx.processMessage(.{ .id = 1, .method = "LP.getPageStatus" });
+    var result = (try dumpReply(&ctx, 1)).get("result").?.object;
+    try testing.expectEqual(url, result.get("url").?.string);
+    try testing.expectEqual(200, result.get("httpStatus").?.integer);
+    try testing.expectEqual(null, result.get("botChallenge"));
+    try testing.expectEqual(null, result.get("navigateError"));
+    try testing.expectEqual(1, result.get("jsErrors").?.integer);
+
+    // Two webgl probes, three paint calls; the 2d context itself and its
+    // path setup don't count.
+    var unsupported = result.get("unsupported").?.object;
+    try testing.expectEqual(2, unsupported.get("webgl").?.integer);
+    try testing.expectEqual(3, unsupported.get("canvas2d").?.integer);
+
+    try testing.expectEqual(0, result.get("missingGlobals").?.array.items.len);
+
+    var skipped = result.get("skipped").?.object;
+    try testing.expectEqual(1, skipped.get("iframe").?.integer);
+    try testing.expectEqual(1, skipped.get("worker").?.integer);
+    try testing.expectEqual(1, skipped.get("image").?.integer);
+    try testing.expectEqual(1, skipped.get("stylesheet").?.integer);
+
+    // A new top-level navigation starts over.
+    try bc.session.initiateRootNavigation(page.frame_id, "http://localhost:9582/src/browser/tests/cdp/dialog.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    try ctx.processMessage(.{ .id = 2, .method = "LP.getPageStatus" });
+    result = (try dumpReply(&ctx, 2)).get("result").?.object;
+    try testing.expectEqual(0, result.get("jsErrors").?.integer);
+    unsupported = result.get("unsupported").?.object;
+    try testing.expectEqual(0, unsupported.get("webgl").?.integer);
+    try testing.expectEqual(0, unsupported.get("canvas2d").?.integer);
+    skipped = result.get("skipped").?.object;
+    try testing.expectEqual(0, skipped.get("iframe").?.integer);
 }
 
 test "cdp.lp: action tools" {
