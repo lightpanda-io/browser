@@ -833,6 +833,132 @@
   });
 </script>
 
+<script id=ecdsa-sign-verify type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const fromB64 = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const data = new TextEncoder().encode("lightpanda ecdsa");
+  // Throwaway keys, and signatures of `data` that OpenSSL made with them,
+  // converted from DER to WebCrypto's r || s.
+  const p256 = {
+    spki: fromB64("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoLfGjL6RrYuRawPRHVMVVWbfQjA0SUPVcXxj4+OpAd0YGC6lz0zcwfw4T+jGcunCMagRwyhFvrGXWtSUfTFwqg=="),
+    pkcs8: fromB64("MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgbrRKMgf6KKhsWivZyuUW3iAiSirTaww3eop42SkjMg2hRANCAASgt8aMvpGti5FrA9EdUxVVZt9CMDRJQ9VxfGPj46kB3RgYLqXPTNzB/DhP6MZy6cIxqBHDKEW+sZda1JR9MXCq"),
+    // SHA-256.
+    signature: fromB64("mJ/UOhqLiZvLoi3d+N93gDe2oNSOT69aUhAHVfAnX3fPK9LSkG/zJRoBhp6urX0wwL8ASw/e6ALW1G0tsZKYew=="),
+  };
+  const p521 = {
+    spki: fromB64("MIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQBRaetQGuHTbgL1x0ddDqG21VmJRsM1E9TgE8oGSz82+b0d9Zlwx6jaN5UQnEn0S/47b8hwxnrQIyXz45aiDlnaWgB9uH2ytl/9TA4W7gqMjK6zSsP13IgZeAc68s0PTRSubL2ipe7+rpJ6kJONBnUGSVZ5skllnLm1sQrKICI8kR4690="),
+    // SHA-384; r starts with a zero byte, kept to fill its 66 bytes.
+    signature: fromB64("AKNno4WltwC1Sj70LqtrcxbpkJVWfgwPoao6KxBJV+zljaja/YvlQbAA3hnp2pSwoI6FCi3oqr2LlMM1zfU2PT+qAE1FbZR5OB3/4eb/0cg6HX/y/assF4OqYPDHJJ/c394darQGfoiBDj5t3ygmI1G1rGbJwJf6Yw8eaGC3QKNZCZav"),
+  };
+  const ecdsa = (namedCurve) => ({ name: "ECDSA", namedCurve });
+  const withHash = (hash) => ({ name: "ECDSA", hash });
+  const publicKey = await subtle.importKey("spki", p256.spki, ecdsa("P-256"), false, ["verify"]);
+  const privateKey = await subtle.importKey("pkcs8", p256.pkcs8, ecdsa("P-256"), false, ["sign"]);
+  const p521Public = await subtle.importKey("spki", p521.spki, ecdsa("P-521"), false, ["verify"]);
+
+  const sig = p256.signature;
+  const tampered = sig.slice();
+  tampered[5] ^= 1;
+  const n = sig.length / 2;
+  const padded = new Uint8Array([0, ...sig.subarray(0, n), 0, ...sig.subarray(n)]);
+
+  // Signatures made here: randomized, so two differ, and both verify.
+  const signed = await subtle.sign(withHash("SHA-256"), privateKey, data);
+  const signedAgain = await subtle.sign(withHash("sha-256"), privateKey, data);
+  // The hash is the operation's, not the key's: any of them, as a string or an object.
+  const sha512 = await subtle.sign(withHash({ name: "SHA-512" }), privateKey, data);
+  const pair = await subtle.generateKey(ecdsa("P-384"), true, ["sign", "verify"]);
+  const p384Signature = await subtle.sign(withHash("SHA-1"), pair.privateKey, data);
+  // P-521's scalars are 521 bits, so r and s are each padded to 66 bytes.
+  const p521Pair = await subtle.generateKey(ecdsa("P-521"), true, ["sign", "verify"]);
+  const p521Signatures = [];
+  for (let i = 0; i < 8; i++) p521Signatures.push(await subtle.sign(withHash("SHA-512"), p521Pair.privateKey, data));
+  const ecdh = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const hmac = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign"]);
+  const noHashPromise = subtle.sign("ECDSA", privateKey, data);
+  const noHashIsPromise = noHashPromise instanceof Promise;
+  await noHashPromise.catch(() => {});
+
+  const results = {
+    // Verifying OpenSSL's signatures.
+    openssl: await subtle.verify(withHash("SHA-256"), publicKey, sig, data),
+    opensslP521: await subtle.verify(withHash("SHA-384"), p521Public, p521.signature, data),
+    otherHash: await subtle.verify(withHash("SHA-384"), publicKey, sig, data),
+    otherData: await subtle.verify(withHash("SHA-256"), publicKey, sig, new TextEncoder().encode("other")),
+    tampered: await subtle.verify(withHash("SHA-256"), publicKey, tampered, data),
+    // Only r || s of the curve's size verifies: not a shorter, padded, empty or zero one.
+    truncated: await subtle.verify(withHash("SHA-256"), publicKey, sig.subarray(0, sig.length - 1), data),
+    padded: await subtle.verify(withHash("SHA-256"), publicKey, padded, data),
+    empty: await subtle.verify(withHash("SHA-256"), publicKey, new Uint8Array(0), data),
+    zeros: await subtle.verify(withHash("SHA-256"), publicKey, new Uint8Array(64), data),
+    // Verifying ours.
+    signedValid: await subtle.verify(withHash("SHA-256"), publicKey, signed, data),
+    signedAgainValid: await subtle.verify(withHash("SHA-256"), publicKey, signedAgain, data),
+    sha512Valid: await subtle.verify(withHash("SHA-512"), publicKey, sha512, data),
+    sha512AsSha256: await subtle.verify(withHash("SHA-256"), publicKey, sha512, data),
+    p384Valid: await subtle.verify(withHash("SHA-1"), pair.publicKey, p384Signature, data),
+    p521Valid: (await Promise.all(p521Signatures.map((s) => subtle.verify(withHash("SHA-512"), p521Pair.publicKey, s, data)))).every((v) => v),
+    // EcdsaParams: the hash is required (TypeError) and must be a known one
+    // (NotSupportedError), checked before the key.
+    noHash: await errorName(() => subtle.sign("ECDSA", privateKey, data)),
+    noHashObject: await errorName(() => subtle.verify({ name: "ECDSA" }, publicKey, sig, data)),
+    noDash: await errorName(() => subtle.verify(withHash("SHA256"), publicKey, sig, data)),
+    // An object hash needs its name.
+    hashWithoutName: await errorName(() => subtle.sign(withHash({}), privateKey, data)),
+    sha224: await errorName(() => subtle.sign(withHash("SHA-224"), privateKey, data)),
+    badHashOnHmac: await errorName(() => subtle.sign(withHash("SHA256"), hmac, data)),
+    // The key: its own algorithm, its usage, its half.
+    publicSign: await errorName(() => subtle.sign(withHash("SHA-256"), pair.publicKey, data)),
+    privateVerify: await errorName(() => subtle.verify(withHash("SHA-256"), pair.privateKey, sig, data)),
+    ecdhKey: await errorName(() => subtle.sign(withHash("SHA-256"), ecdh.privateKey, data)),
+    // Other algorithms ignore a stray hash.
+    hmacWithHash: await errorName(() => subtle.sign({ name: "HMAC", hash: "bogus" }, hmac, data)),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, results.openssl);
+    testing.expectEqual(true, results.opensslP521);
+    testing.expectEqual(false, results.otherHash);
+    testing.expectEqual(false, results.otherData);
+    testing.expectEqual(false, results.tampered);
+    testing.expectEqual(false, results.truncated);
+    testing.expectEqual(false, results.padded);
+    testing.expectEqual(false, results.empty);
+    testing.expectEqual(false, results.zeros);
+    testing.expectEqual(64, signed.byteLength);
+    testing.expectEqual(false, Array.from(new Uint8Array(signed)).join() === Array.from(new Uint8Array(signedAgain)).join());
+    testing.expectEqual(true, results.signedValid);
+    testing.expectEqual(true, results.signedAgainValid);
+    testing.expectEqual(true, results.sha512Valid);
+    testing.expectEqual(false, results.sha512AsSha256);
+    testing.expectEqual(96, p384Signature.byteLength);
+    testing.expectEqual(true, results.p384Valid);
+    testing.expectEqual("132", p521Signatures.map((s) => s.byteLength).join().split(",").filter((l, i, all) => all.indexOf(l) === i).join());
+    testing.expectEqual(true, results.p521Valid);
+    testing.expectEqual("TypeError", results.noHash);
+    testing.expectEqual("TypeError", results.noHashObject);
+    testing.expectEqual(true, noHashIsPromise);
+    testing.expectEqual("NotSupportedError", results.noDash);
+    testing.expectEqual("TypeError", results.hashWithoutName);
+    testing.expectEqual("NotSupportedError", results.sha224);
+    testing.expectEqual("NotSupportedError", results.badHashOnHmac);
+    testing.expectEqual("InvalidAccessError", results.publicSign);
+    testing.expectEqual("InvalidAccessError", results.privateVerify);
+    testing.expectEqual("InvalidAccessError", results.ecdhKey);
+    testing.expectEqual(null, results.hmacWithHash);
+  });
+</script>
+
 <script id=wrap-unwrap type=module>
   const state = await testing.async();
   const subtle = crypto.subtle;
@@ -1167,9 +1293,6 @@
     noSign: await errorName(() => subtle.sign("HMAC", verifyOnly, data)),
     noVerify: await errorName(() => subtle.verify("HMAC", signOnly, mac, data)),
     ecdsaPublicSign: await errorName(() => subtle.sign(ecdsaAlgo, ecdsa.publicKey, data)),
-    // ECDSA signing isn't implemented yet.
-    ecdsaSign: await errorName(() => subtle.sign(ecdsaAlgo, ecdsa.privateKey, data)),
-    ecdsaVerify: await errorName(() => subtle.verify(ecdsaAlgo, ecdsa.publicKey, new Uint8Array(64), data)),
   };
 
   state.resolve();
@@ -1188,8 +1311,6 @@
     testing.expectEqual("InvalidAccessError", results.noSign);
     testing.expectEqual("InvalidAccessError", results.noVerify);
     testing.expectEqual("InvalidAccessError", results.ecdsaPublicSign);
-    testing.expectEqual("NotSupportedError", results.ecdsaSign);
-    testing.expectEqual("NotSupportedError", results.ecdsaVerify);
   });
 </script>
 

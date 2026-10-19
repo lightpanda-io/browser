@@ -26,6 +26,19 @@ const Allocator = std.mem.Allocator;
 const CryptoKey = @import("../CryptoKey.zig");
 const algorithm = @import("algorithm.zig");
 
+/// The hashes the algorithms take (their `hash` member).
+pub const hashes = [_][]const u8{ "SHA-1", "SHA-256", "SHA-384", "SHA-512" };
+
+/// The registered hash name (case-insensitive), or null if not a supported
+/// hash. Stored on the key, so `.algorithm.hash.name` reports it and
+/// `findDigest` (which is case-sensitive) can look it up.
+pub fn canonicalHash(name: []const u8) ?[]const u8 {
+    for (hashes) |canonical| {
+        if (std.ascii.eqlIgnoreCase(name, canonical)) return canonical;
+    }
+    return null;
+}
+
 /// Maps a usage string to its `CryptoKey.Usages` bit, or null if unknown.
 pub fn usageBit(name: []const u8) ?u8 {
     const U = CryptoKey.Usages;

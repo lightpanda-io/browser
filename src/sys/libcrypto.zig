@@ -25,7 +25,7 @@ pub const EVP_MD = struct_env_md_st;
 const struct_engine_st = opaque {};
 const ENGINE = struct_engine_st;
 const struct_ec_key_st = opaque {};
-const EC_KEY = struct_ec_key_st;
+pub const EC_KEY = struct_ec_key_st;
 const struct_evp_pkey_st = opaque {};
 pub const EVP_PKEY = struct_evp_pkey_st;
 const struct_evp_pkey_ctx_st = opaque {};
@@ -149,6 +149,23 @@ pub extern fn EC_KEY_generate_key(key: *EC_KEY) c_int;
 pub extern fn EC_KEY_free(key: ?*EC_KEY) void;
 pub extern fn EC_KEY_get0_public_key(key: *const EC_KEY) ?*const EC_POINT;
 pub extern fn EC_KEY_set_public_key(key: *EC_KEY, point: *const EC_POINT) c_int;
+pub extern fn EVP_PKEY_get0_EC_KEY(pkey: *const EVP_PKEY) ?*EC_KEY;
+const struct_ec_group_st = opaque {};
+const EC_GROUP = struct_ec_group_st;
+pub extern fn EC_KEY_get0_group(key: *const EC_KEY) ?*const EC_GROUP;
+pub extern fn EC_GROUP_get0_order(group: *const EC_GROUP) ?*const BIGNUM;
+
+// ECDSA over a digest, with the signature as an (r, s) pair.
+const struct_ecdsa_sig_st = opaque {};
+pub const ECDSA_SIG = struct_ecdsa_sig_st;
+pub extern fn ECDSA_do_sign(digest: [*]const u8, digest_len: usize, key: *const EC_KEY) ?*ECDSA_SIG;
+/// Returns 1 for a valid signature, 0 otherwise (on the error queue).
+pub extern fn ECDSA_do_verify(digest: [*]const u8, digest_len: usize, sig: *const ECDSA_SIG, key: *const EC_KEY) c_int;
+pub extern fn ECDSA_SIG_new() ?*ECDSA_SIG;
+pub extern fn ECDSA_SIG_free(sig: ?*ECDSA_SIG) void;
+pub extern fn ECDSA_SIG_get0(sig: *const ECDSA_SIG, out_r: *?*const BIGNUM, out_s: *?*const BIGNUM) void;
+/// Takes ownership of `r` and `s` on success only.
+pub extern fn ECDSA_SIG_set0(sig: *ECDSA_SIG, r: *BIGNUM, s: *BIGNUM) c_int;
 
 // DER decoders (advance `inp` past the parsed structure).
 pub extern fn d2i_PUBKEY(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
@@ -207,6 +224,8 @@ pub extern fn BN_free(bn: ?*BIGNUM) void;
 pub extern fn BN_bin2bn(in: [*c]const u8, len: usize, ret: ?*BIGNUM) ?*BIGNUM;
 pub extern fn BN_num_bytes(bn: *const BIGNUM) c_uint;
 pub extern fn BN_bn2bin(in: *const BIGNUM, out: [*]u8) usize;
+/// Big-endian, left-padded with zeros to exactly `len` bytes; 0 if it doesn't fit.
+pub extern fn BN_bn2bin_padded(out: [*]u8, len: usize, in: *const BIGNUM) c_int;
 
 pub extern fn OPENSSL_malloc(size: usize) ?*anyopaque;
 pub extern fn OPENSSL_free(ptr: ?*anyopaque) void;

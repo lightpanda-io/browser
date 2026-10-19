@@ -131,17 +131,8 @@ pub fn scheme(name: []const u8) ?*const Scheme {
     return null;
 }
 
-const hashes = [_][]const u8{ "SHA-1", "SHA-256", "SHA-384", "SHA-512" };
-
-/// The registered hash name (case-insensitive), or null if not a supported
-/// hash. Stored on the key, so `.algorithm.hash.name` reports it and
-/// `findDigest` (which is case-sensitive) can look it up.
-pub fn canonicalHash(name: []const u8) ?[]const u8 {
-    for (hashes) |canonical| {
-        if (eql(name, canonical)) return canonical;
-    }
-    return null;
-}
+const hashes = common.hashes;
+const canonicalHash = common.canonicalHash;
 
 /// The JWK `alg` of `s` for a canonical hash name.
 fn jwkAlgOfHash(s: *const Scheme, hash: []const u8) ?[]const u8 {

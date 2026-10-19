@@ -225,6 +225,9 @@ pub const Encrypt = union(enum) {
 pub const Sign = union(enum) {
     string: []const u8,
     object: struct {
+        /// ECDSA. Kept as a value, like `saltLength`: it's only converted
+        /// (a HashAlgorithmIdentifier) when the algorithm is ECDSA.
+        hash: ?js.Value = null,
         name: []const u8,
         /// RSA-PSS. Kept as a value: it's only converted (an [EnforceRange]
         /// unsigned long) when the algorithm is RSA-PSS, so another algorithm
@@ -236,6 +239,14 @@ pub const Sign = union(enum) {
         return switch (self) {
             .string => |string| string,
             .object => |object| object.name,
+        };
+    }
+
+    /// The `hash` member, if present.
+    pub fn hash(self: Sign) ?js.Value {
+        return switch (self) {
+            .string => null,
+            .object => |object| object.hash,
         };
     }
 
