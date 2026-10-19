@@ -35,8 +35,8 @@ const log = lp.log;
 /// its cost.
 const PBKDF2_MAX_WORK: u64 = 1 << 24;
 
-/// Errors a derivation can raise, each mapping to a specific DOMException name.
-pub const Error = error{ InvalidAccessError, NotSupported, OperationError, OutOfMemory };
+/// Errors a derivation can raise: a TypeError, or one mapping to a DOMException.
+pub const Error = error{ InvalidAccessError, NotSupported, OperationError, OutOfMemory, TypeError };
 
 /// Validates the base key against the requested algorithm (shared by PBKDF2 and
 /// HKDF). `usage_ok` is the caller-checked usage gate (deriveBits for
@@ -68,8 +68,9 @@ pub fn pbkdf2(
     usage_ok: bool,
     exec: *const Execution,
 ) Error![]const u8 {
+    // Normalizing the params (the hash) comes before the key checks.
+    const digest = crypto.findDigest(try params.hash.name(exec.js.local.?)) catch return error.NotSupported;
     try checkBaseKey(base_key, "PBKDF2", usage_ok);
-    const digest = crypto.findDigest(params.hash.name()) catch return error.NotSupported;
     const out_len = try outputLen(length);
     // A zero-length derivation is valid and yields an empty buffer; the C
     // routines reject a zero output length, so short-circuit here.
@@ -109,8 +110,9 @@ pub fn hkdf(
     usage_ok: bool,
     exec: *const Execution,
 ) Error![]const u8 {
+    // Normalizing the params (the hash) comes before the key checks.
+    const digest = crypto.findDigest(try params.hash.name(exec.js.local.?)) catch return error.NotSupported;
     try checkBaseKey(base_key, "HKDF", usage_ok);
-    const digest = crypto.findDigest(params.hash.name()) catch return error.NotSupported;
     const out = try exec.local_arena.alloc(u8, try outputLen(length));
     // A zero-length derivation is valid and yields an empty buffer; the C
     // routines reject a zero output length, so short-circuit here.

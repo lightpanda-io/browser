@@ -22,6 +22,25 @@ const js = @import("../../js/js.zig");
 
 const CryptoKey = @import("../CryptoKey.zig");
 
+/// The TypeError of an algorithm identifier object without a `name`.
+pub const missing_name = "required member name is undefined";
+
+/// A HashAlgorithmIdentifier: either `"SHA-256"` or `{name: "SHA-256"}`.
+pub const Hash = union(enum) {
+    string: []const u8,
+    object: struct { name: []const u8 },
+    /// An object without a `name`: a TypeError, as for the algorithm itself.
+    nameless: js.Object,
+
+    pub fn name(self: Hash, local: *const js.Local) error{TypeError}![]const u8 {
+        return switch (self) {
+            .string => |s| s,
+            .object => |o| o.name,
+            .nameless => local.typeError(missing_name),
+        };
+    }
+};
+
 /// Passed for `generateKey()`.
 pub const Init = union(enum) {
     /// For RSASSA-PKCS1-v1_5, RSA-PSS, or RSA-OAEP: pass an RsaHashedKeyGenParams object.
@@ -45,10 +64,7 @@ pub const Init = union(enum) {
 
     /// https://developer.mozilla.org/en-US/docs/Web/API/RsaHashedKeyGenParams
     pub const RsaHashedKeyGen = struct {
-        hash: union(enum) {
-            string: []const u8,
-            object: struct { name: []const u8 },
-        },
+        hash: Hash,
         /// This should be at least 2048.
         /// Some organizations are now recommending that it should be 4096.
         /// An [EnforceRange] unsigned long, kept as a value: this dictionary
@@ -76,10 +92,7 @@ pub const Init = union(enum) {
     /// https://developer.mozilla.org/en-US/docs/Web/API/HmacKeyGenParams
     pub const HmacKeyGen = struct {
         /// Its also possible to pass this in an object.
-        hash: union(enum) {
-            string: []const u8,
-            object: struct { name: []const u8 },
-        },
+        hash: Hash,
         /// If omitted, default is the block size of the chosen hash function.
         /// An [EnforceRange] unsigned long, kept as a value: HMAC.init converts
         /// it (HMAC.lengthParam) once the name is known to be HMAC's, since
@@ -103,18 +116,14 @@ pub const Derive = union(enum) {
     hkdf: HkdfParams,
     ecdh_or_x25519: Init.EcdhKeyDeriveParams,
 
-    /// A hash AlgorithmIdentifier — either `"SHA-256"` or `{name: "SHA-256"}`.
-    pub const Hash = union(enum) {
-        string: []const u8,
-        object: struct { name: []const u8 },
-
-        pub fn name(self: Hash) []const u8 {
-            return switch (self) {
-                .string => |s| s,
-                .object => |o| o.name,
-            };
-        }
-    };
+    /// The hash of PBKDF2's or HKDF's params; null for ECDH and X25519.
+    pub fn hash(self: Derive) ?Hash {
+        return switch (self) {
+            .pbkdf2 => |p| p.hash,
+            .hkdf => |p| p.hash,
+            .ecdh_or_x25519 => null,
+        };
+    }
 
     pub const Pbkdf2Params = struct {
         hash: Hash,
@@ -136,9 +145,12 @@ pub const Derive = union(enum) {
 /// the more specific shapes win.
 pub const DerivedKey = union(enum) {
     /// `length` as in Import.hmac.
-    hmac: struct { hash: Derive.Hash, length: ?js.Value = null, name: []const u8 },
+    hmac: struct { hash: Hash, length: ?js.Value = null, name: []const u8 },
     keyed: struct { length: u32, name: []const u8 },
     object: struct { name: []const u8 },
+    /// An object without a `name`: a TypeError, as for every algorithm
+    /// identifier. Probed before the string, which would coerce it.
+    nameless: js.Object,
     name: []const u8,
 };
 
@@ -147,10 +159,7 @@ pub const DerivedKey = union(enum) {
 /// JS value coerces to a string).
 pub const Import = union(enum) {
     hmac: struct {
-        hash: union(enum) {
-            string: []const u8,
-            object: struct { name: []const u8 },
-        },
+        hash: Hash,
         /// HMAC's [EnforceRange] unsigned long, kept as a value: RSA imports
         /// share this variant and ignore it. HMAC.lengthParam converts it.
         length: ?js.Value = null,
@@ -158,13 +167,18 @@ pub const Import = union(enum) {
     },
     ec: struct { name: []const u8, namedCurve: []const u8 },
     object: struct { name: []const u8 },
+    /// An object without a `name`: a TypeError, as for every algorithm
+    /// identifier. Probed before the string, which would coerce it.
+    nameless: js.Object,
     name: []const u8,
 
-    pub fn algoName(self: Import) []const u8 {
+    /// Null for an object without a name.
+    pub fn algoName(self: Import) ?[]const u8 {
         return switch (self) {
             .hmac => |h| h.name,
             .ec => |e| e.name,
             .object => |o| o.name,
+            .nameless => null,
             .name => |n| n,
         };
     }
@@ -226,11 +240,16 @@ pub const Encrypt = union(enum) {
         name: []const u8,
         tagLength: ?u32 = null,
     },
+    /// An object without a `name`: a TypeError, as for every algorithm
+    /// identifier. Probed before the string, which would coerce it.
+    nameless: js.Object,
     name: []const u8,
 
-    pub fn algoName(self: Encrypt) []const u8 {
+    /// Null for an object without a name.
+    pub fn algoName(self: Encrypt) ?[]const u8 {
         return switch (self) {
             .params => |p| p.name,
+            .nameless => null,
             .name => |n| n,
         };
     }
@@ -249,18 +268,23 @@ pub const Sign = union(enum) {
         /// ignores the member, as normalization does.
         saltLength: ?js.Value = null,
     },
+    /// An object without a `name`: a TypeError, as for every algorithm
+    /// identifier. Probed after the object, which needs the name.
+    nameless: js.Object,
 
-    pub fn algoName(self: Sign) []const u8 {
+    /// Null for an object without a name.
+    pub fn algoName(self: Sign) ?[]const u8 {
         return switch (self) {
             .string => |string| string,
             .object => |object| object.name,
+            .nameless => null,
         };
     }
 
     /// The `hash` member, if present.
     pub fn hash(self: Sign) ?js.Value {
         return switch (self) {
-            .string => null,
+            .string, .nameless => null,
             .object => |object| object.hash,
         };
     }
@@ -268,7 +292,7 @@ pub const Sign = union(enum) {
     /// The `saltLength` member, if present.
     pub fn saltLength(self: Sign) ?js.Value {
         return switch (self) {
-            .string => null,
+            .string, .nameless => null,
             .object => |object| object.saltLength,
         };
     }
