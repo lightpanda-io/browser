@@ -89,7 +89,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     try frame.trackWorker(self);
 
     if (session.load_resources.worker == false) {
-        log.warnDisabledWorker();
+        frame.page.status.noteSkipped(.worker);
         return self;
     }
 

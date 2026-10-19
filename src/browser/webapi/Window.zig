@@ -502,6 +502,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     defer frame.js.call_depth = call_depth;
 
     frame.page.recordJsError(error.JsException);
+    frame.page.status.noteException(err.toStringSlice() catch "");
 
     const location = err.errorLocation(frame.call_arena) catch js.Value.ErrorLocation{};
 
@@ -908,6 +909,9 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.
 
     if (no_handler) {
         frame.page.recordJsError(error.JsException);
+        if (rejection.reason()) |reason| {
+            frame.page.status.noteException(reason.toStringSlice() catch "");
+        }
     }
 
     const target = self.asEventTarget();

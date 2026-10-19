@@ -869,6 +869,10 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         return;
     }
 
+    if (is_root) {
+        // Status counts are per top-level navigation.
+        page.status = .{};
+    }
     self._http_status = null;
     self._bot_challenge = null;
     self._http_headers = .empty;
@@ -2267,7 +2271,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         return;
     }
     if (self._session.load_resources.iframe == false) {
-        log.warnDisabledIFrame();
+        self.page.status.noteSkipped(.iframe);
         iframe._executed = true;
         return;
     }
@@ -2732,6 +2736,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     const session = self._session;
 
     if (session.load_resources.stylesheet == false) {
+        self.page.status.noteSkipped(.stylesheet);
         return self.queueLoad(Factory.protoOf(link));
     }
 

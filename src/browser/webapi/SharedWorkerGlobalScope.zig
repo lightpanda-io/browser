@@ -85,7 +85,7 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
     errdefer proto.deinit();
 
     if (session.load_resources.worker == false) {
-        log.warnDisabledWorker();
+        frame.page.status.noteSkipped(.worker);
         return self;
     }
 

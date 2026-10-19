@@ -94,13 +94,22 @@ fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingC
         // catch the throw, reset, re-render, and loop forever.
         // Spec-correct signal for "no WebGL" is null, so apps that check
         // (Three.js does) can degrade gracefully.
-        if (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")) {
-            return null;
+        if (isWebGL(context_type)) {
+            frame.page.status.noteUnsupported(.webgl);
         }
         return null;
     };
     self._cached = drawing_context;
     return drawing_context;
+}
+
+pub fn isWebGL(context_type: []const u8) bool {
+    inline for (&.{ "webgl", "webgl2", "experimental-webgl" }) |needle| {
+        if (std.mem.eql(u8, context_type, needle)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn hasBitmap(self: *const Canvas) bool {
