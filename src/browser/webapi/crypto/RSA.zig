@@ -31,7 +31,7 @@ const js = @import("../../js/js.zig");
 const CryptoKey = @import("../CryptoKey.zig");
 const Execution = js.Execution;
 
-pub fn validate(params: algorithm.Init.RsaHashedKeyGen, key_usages: []const []const u8) !void {
+pub fn validate(params: algorithm.Init.RsaHashedKeyGen, hash_name: []const u8, key_usages: []const []const u8) !void {
     const allowed: []const []const u8 = blk: {
         if (eql(params.name, "RSASSA-PKCS1-v1_5") or eql(params.name, "RSA-PSS")) {
             break :blk &.{ "sign", "verify" };
@@ -42,10 +42,6 @@ pub fn validate(params: algorithm.Init.RsaHashedKeyGen, key_usages: []const []co
         return error.NotSupported;
     };
 
-    const hash_name = switch (params.hash) {
-        .string => |s| s,
-        .object => |o| o.name,
-    };
     if (canonicalHash(hash_name) == null) {
         return error.NotSupported;
     }
@@ -174,7 +170,8 @@ pub fn generate(
     // the hash (validate). The usages come after.
     const s = scheme(params.name) orelse return error.NotSupported;
     const requested_bits = try modulusLength(params, local);
-    try validate(params, key_usages);
+    const requested_hash = try params.hash.name(local);
+    try validate(params, requested_hash, key_usages);
 
     // Generation runs on the main thread and can't be interrupted, and its cost
     // grows steeply with the size: 8192 bits takes seconds, 16384 (BoringSSL's
@@ -182,10 +179,7 @@ pub fn generate(
     // 2048 or 4096 in practice. Chrome allows 16384 but generates off-thread.
     if (requested_bits > max_modulus_length) return error.OperationError;
 
-    const hash_name = canonicalHash(switch (params.hash) {
-        .string => |str| str,
-        .object => |o| o.name,
-    }).?;
+    const hash_name = canonicalHash(requested_hash).?;
     const private_mask = maskOf(s.private_usages, key_usages);
     const public_mask = maskOf(s.public_usages, key_usages);
     // The private key must end up with at least one usage.

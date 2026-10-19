@@ -1639,6 +1639,118 @@
   });
 </script>
 
+<script id=algorithm-without-name type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const raw = new Uint8Array(16);
+  const data = new Uint8Array(8);
+  const e = new Uint8Array([1, 0, 1]);
+  const aes = await subtle.generateKey({ name: "AES-GCM", length: 128 }, true, ["encrypt", "decrypt"]);
+  const kw = await subtle.generateKey({ name: "AES-KW", length: 128 }, true, ["wrapKey", "unwrapKey"]);
+  const hmac = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]);
+  const ecdsa = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]);
+  const rsa = await subtle.generateKey({ name: "RSA-OAEP", modulusLength: 1024, publicExponent: e, hash: "SHA-256" }, true, ["encrypt", "decrypt"]);
+  const spki = await subtle.exportKey("spki", rsa.publicKey);
+  const pbkdf2 = await subtle.importKey("raw", raw, "PBKDF2", false, ["deriveBits", "deriveKey"]);
+  const deriveKeyOnly = await subtle.importKey("raw", raw, "PBKDF2", false, ["deriveKey"]);
+  const hkdf = await subtle.importKey("raw", raw, "HKDF", false, ["deriveBits"]);
+  const pbkdf2Params = (hash) => ({ name: "PBKDF2", hash, salt: raw, iterations: 1 });
+  const wrapped = await subtle.wrapKey("raw", aes, kw, "AES-KW");
+
+  const results = {
+    // An algorithm object without a name is a TypeError, whatever its other
+    // members, instead of the name "[object Object]".
+    importEmpty: await errorName(() => subtle.importKey("raw", raw, {}, true, ["encrypt"])),
+    importHashOnly: await errorName(() => subtle.importKey("raw", raw, { hash: "SHA-256" }, true, ["sign"])),
+    importCurveOnly: await errorName(() => subtle.importKey("raw", raw, { namedCurve: "P-256" }, true, [])),
+    importArray: await errorName(() => subtle.importKey("raw", raw, [], true, ["encrypt"])),
+    importJwk: await errorName(() => subtle.importKey("jwk", { kty: "oct", k: "AAAAAAAAAAAAAAAAAAAAAA" }, {}, true, ["encrypt"])),
+    encrypt: await errorName(() => subtle.encrypt({ iv: new Uint8Array(12) }, aes, data)),
+    decrypt: await errorName(() => subtle.decrypt({}, aes, data)),
+    sign: await errorName(() => subtle.sign({ hash: "SHA-256" }, hmac, data)),
+    verify: await errorName(() => subtle.verify({}, hmac, data, data)),
+    deriveKeyType: await errorName(() => subtle.deriveKey(pbkdf2Params("SHA-256"), pbkdf2, { length: 128 }, true, ["encrypt"])),
+    wrapKey: await errorName(() => subtle.wrapKey("raw", aes, kw, {})),
+    unwrapKey: await errorName(() => subtle.unwrapKey("raw", wrapped, kw, {}, "AES-GCM", true, ["encrypt"])),
+    unwrappedKey: await errorName(() => subtle.unwrapKey("raw", wrapped, kw, "AES-KW", {}, true, ["encrypt"])),
+    // The unwrapping algorithm is normalized first, the unwrapped key's next,
+    // and the key checks come after both.
+    unwrapUnknownFirst: await errorName(() => subtle.unwrapKey("raw", wrapped, kw, "foo", {}, true, ["encrypt"])),
+    unwrapBeforeKey: await errorName(() => subtle.unwrapKey("raw", wrapped, aes, "AES-KW", {}, true, ["encrypt"])),
+    unwrapHashBeforeKey: await errorName(() => subtle.unwrapKey("raw", wrapped, aes, "AES-KW", { name: "HMAC", hash: {} }, true, ["sign"])),
+    // deriveKey normalizes the algorithm before derivedKeyType.
+    deriveHashFirst: await errorName(() => subtle.deriveKey(pbkdf2Params({}), pbkdf2, "AES-FOO", true, ["encrypt"])),
+    // A name that isn't a known algorithm stays NotSupportedError: a
+    // function's own name (""), null as a string, a number.
+    importFunction: await errorName(() => subtle.importKey("raw", raw, function () {}, true, ["encrypt"])),
+    importNull: await errorName(() => subtle.importKey("raw", raw, null, true, ["encrypt"])),
+    importNumberName: await errorName(() => subtle.importKey("raw", raw, { name: 1 }, true, ["encrypt"])),
+    // So is a hash without a name, for every algorithm that takes one.
+    generateHmacHash: await errorName(() => subtle.generateKey({ name: "HMAC", hash: {} }, true, ["sign"])),
+    generateRsaHash: await errorName(() => subtle.generateKey({ name: "RSA-OAEP", modulusLength: 1024, publicExponent: e, hash: {} }, true, ["sign"])),
+    importHmacHash: await errorName(() => subtle.importKey("raw", raw, { name: "HMAC", hash: {} }, true, ["sign"])),
+    importRsaHash: await errorName(() => subtle.importKey("spki", spki, { name: "RSA-OAEP", hash: {} }, true, ["encrypt"])),
+    pbkdf2Hash: await errorName(() => subtle.deriveBits(pbkdf2Params({}), pbkdf2, 128)),
+    hkdfHash: await errorName(() => subtle.deriveBits({ name: "HKDF", hash: {}, salt: raw, info: raw }, hkdf, 128)),
+    deriveHmacHash: await errorName(() => subtle.deriveKey(pbkdf2Params("SHA-256"), pbkdf2, { name: "HMAC", hash: {} }, true, ["sign"])),
+    ecdsaHashArray: await errorName(() => subtle.sign({ name: "ECDSA", hash: [] }, ecdsa.privateKey, data)),
+    ecdsaHashFunction: await errorName(() => subtle.sign({ name: "ECDSA", hash: function () {} }, ecdsa.privateKey, data)),
+    // The hash is normalized before the base key's checks.
+    pbkdf2HashBeforeUsage: await errorName(() => subtle.deriveBits(pbkdf2Params({}), deriveKeyOnly, 128)),
+    pbkdf2UnknownBeforeUsage: await errorName(() => subtle.deriveBits(pbkdf2Params("foo"), deriveKeyOnly, 128)),
+    pbkdf2UnknownBeforeKey: await errorName(() => subtle.deriveBits(pbkdf2Params("foo"), hkdf, 128)),
+    // A stray hash without a name on an algorithm that takes none is ignored.
+    aesStrayHash: await errorName(() => subtle.importKey("raw", raw, { name: "AES-GCM", hash: {} }, true, ["encrypt"])),
+    deriveAesStrayHash: await errorName(() => subtle.deriveKey(pbkdf2Params("SHA-256"), pbkdf2, { name: "AES-GCM", length: 128, hash: {} }, true, ["encrypt"])),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("TypeError", results.importEmpty);
+    testing.expectEqual("TypeError", results.importHashOnly);
+    testing.expectEqual("TypeError", results.importCurveOnly);
+    testing.expectEqual("TypeError", results.importArray);
+    testing.expectEqual("TypeError", results.importJwk);
+    testing.expectEqual("TypeError", results.encrypt);
+    testing.expectEqual("TypeError", results.decrypt);
+    testing.expectEqual("TypeError", results.sign);
+    testing.expectEqual("TypeError", results.verify);
+    testing.expectEqual("TypeError", results.deriveKeyType);
+    testing.expectEqual("TypeError", results.wrapKey);
+    testing.expectEqual("TypeError", results.unwrapKey);
+    testing.expectEqual("TypeError", results.unwrappedKey);
+    testing.expectEqual("NotSupportedError", results.unwrapUnknownFirst);
+    testing.expectEqual("TypeError", results.unwrapBeforeKey);
+    testing.expectEqual("TypeError", results.unwrapHashBeforeKey);
+    testing.expectEqual("TypeError", results.deriveHashFirst);
+    testing.expectEqual("NotSupportedError", results.importFunction);
+    testing.expectEqual("NotSupportedError", results.importNull);
+    testing.expectEqual("NotSupportedError", results.importNumberName);
+    testing.expectEqual("TypeError", results.generateHmacHash);
+    testing.expectEqual("TypeError", results.generateRsaHash);
+    testing.expectEqual("TypeError", results.importHmacHash);
+    testing.expectEqual("TypeError", results.importRsaHash);
+    testing.expectEqual("TypeError", results.pbkdf2Hash);
+    testing.expectEqual("TypeError", results.hkdfHash);
+    testing.expectEqual("TypeError", results.deriveHmacHash);
+    testing.expectEqual("TypeError", results.ecdsaHashArray);
+    testing.expectEqual("NotSupportedError", results.ecdsaHashFunction);
+    testing.expectEqual("TypeError", results.pbkdf2HashBeforeUsage);
+    testing.expectEqual("NotSupportedError", results.pbkdf2UnknownBeforeUsage);
+    testing.expectEqual("NotSupportedError", results.pbkdf2UnknownBeforeKey);
+    testing.expectEqual(null, results.aesStrayHash);
+    testing.expectEqual(null, results.deriveAesStrayHash);
+  });
+</script>
+
 <script id="digest" type=module>
   const state = await testing.async();
   async function hash(algo, data) {

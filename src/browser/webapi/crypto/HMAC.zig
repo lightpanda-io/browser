@@ -45,10 +45,7 @@ pub fn init(
     // Normalization converts the dictionary's members, then the hash: an
     // unrecognized one surfaces as NotSupportedError, before the usages.
     const length = try lengthParam(params.length, local);
-    const hash_name = common.canonicalHash(switch (params.hash) {
-        .string => |str| str,
-        .object => |obj| obj.name,
-    }) orelse return error.NotSupported;
+    const hash_name = common.canonicalHash(try params.hash.name(local)) orelse return error.NotSupported;
     const digest = crypto.findDigest(hash_name) catch return error.NotSupported;
 
     // HMAC only accepts sign / verify; any other usage is a SyntaxError per
