@@ -83,7 +83,7 @@ pub fn validate(params: algorithm.Init.EcKeyGen, key_usages: []const []const u8)
     };
     // A usage that belongs to neither the private nor the public set is illegal.
     for (key_usages) |usage| {
-        if (!contains(sets.private, usage) and !contains(sets.public, usage)) {
+        if (!common.usageIn(sets.private, usage) and !common.usageIn(sets.public, usage)) {
             return error.SyntaxError;
         }
     }
@@ -114,8 +114,8 @@ pub fn generate(
 
     // Split the requested usages across the pair: each key keeps only the
     // usages legal for it. validate() already rejected anything illegal.
-    const private_mask = maskOf(sets.private, key_usages);
-    const public_mask = maskOf(sets.public, key_usages);
+    const private_mask = common.usageIntersection(sets.private, key_usages);
+    const public_mask = common.usageIntersection(sets.public, key_usages);
 
     const ec = crypto.EC_KEY_new_by_curve_name(curve.nid) orelse return error.OutOfMemory;
     defer crypto.EC_KEY_free(ec);
@@ -239,21 +239,13 @@ pub fn importJwk(
     const n = curve.size;
     const point = try exec.local_arena.alloc(u8, 1 + 2 * n);
     point[0] = 0x04;
-    @memcpy(point[1 .. 1 + n], try jwkCoordinate(jwk.x, n, exec));
-    @memcpy(point[1 + n ..], try jwkCoordinate(jwk.y, n, exec));
-    const d = if (jwk.d) |member| try jwkCoordinate(member, n, exec) else null;
+    @memcpy(point[1 .. 1 + n], try common.jwkBytes(exec.local_arena, jwk.x, n));
+    @memcpy(point[1 + n ..], try common.jwkBytes(exec.local_arena, jwk.y, n));
+    const d = if (jwk.d) |member| try common.jwkBytes(exec.local_arena, member, n) else null;
 
     const pkey = try keyFromPoint(curve, point, d);
     errdefer crypto.EVP_PKEY_free(pkey);
     return local.resolvePromise(try newKey(pkey, canonical, curve.name, d != null, extractable, usages_mask, exec));
-}
-
-/// A JWK coordinate or private scalar: base64url of exactly the curve's size.
-/// A missing member or one of another size is DataError.
-fn jwkCoordinate(member: ?[]const u8, n: usize, exec: *const Execution) ![]const u8 {
-    const bytes = try common.base64Decode(exec.local_arena, member orelse return error.DataError);
-    if (bytes.len != n) return error.DataError;
-    return bytes;
 }
 
 /// An EC EVP_PKEY on `curve` from an encoded public point and, for a private
@@ -511,26 +503,6 @@ fn digestOf(data: []const u8, hash_name: []const u8, out: *[crypto.EVP_MAX_MD_SI
     var len: c_uint = 0;
     if (crypto.EVP_Digest(data.ptr, data.len, out, &len, md, null) != 1) return error.OperationError;
     return out[0..len];
-}
-
-fn contains(set: []const []const u8, usage: []const u8) bool {
-    for (set) |s| {
-        if (std.mem.eql(u8, s, usage)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/// The usage bitmask of those `usages` that belong to `set`.
-fn maskOf(set: []const []const u8, usages: []const []const u8) u8 {
-    var mask: u8 = 0;
-    for (usages) |u| {
-        if (contains(set, u)) {
-            mask |= common.usageBit(u).?;
-        }
-    }
-    return mask;
 }
 
 fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {

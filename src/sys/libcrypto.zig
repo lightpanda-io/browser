@@ -265,6 +265,15 @@ pub const EVP_PKEY_ED25519 = NID_ED25519;
 
 pub extern fn EVP_PKEY_new_raw_private_key(@"type": c_int, unused: ?*ENGINE, in: [*c]const u8, len: usize) ?*EVP_PKEY;
 pub extern fn EVP_PKEY_new_raw_public_key(@"type": c_int, unused: ?*ENGINE, in: [*c]const u8, len: usize) ?*EVP_PKEY;
+/// With `out` null, sets `out_len` to the key's size; otherwise writes it.
+pub extern fn EVP_PKEY_get_raw_private_key(pkey: *const EVP_PKEY, out: [*c]u8, out_len: *usize) c_int;
+pub extern fn EVP_PKEY_get_raw_public_key(pkey: *const EVP_PKEY, out: [*c]u8, out_len: *usize) c_int;
+
+pub const ED25519_PUBLIC_KEY_LEN = 32;
+/// BoringSSL's Ed25519 private key: the 32-byte seed, then the public key.
+pub const ED25519_PRIVATE_KEY_LEN = 64;
+pub const ED25519_SIGNATURE_LEN = 64;
+pub extern fn ED25519_keypair(out_public_key: *[ED25519_PUBLIC_KEY_LEN]u8, out_private_key: *[ED25519_PRIVATE_KEY_LEN]u8) void;
 pub extern fn EVP_PKEY_CTX_new(pkey: ?*EVP_PKEY, e: ?*ENGINE) ?*EVP_PKEY_CTX;
 pub extern fn EVP_PKEY_CTX_free(ctx: ?*EVP_PKEY_CTX) void;
 pub extern fn EVP_PKEY_derive_init(ctx: ?*EVP_PKEY_CTX) c_int;
