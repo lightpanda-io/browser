@@ -23,8 +23,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const crypto = @import("../../../sys/libcrypto.zig");
+const js = @import("../../js/js.zig");
 const CryptoKey = @import("../CryptoKey.zig");
 const algorithm = @import("algorithm.zig");
+const Execution = js.Execution;
 
 /// The hashes the algorithms take (their `hash` member).
 pub const hashes = [_][]const u8{ "SHA-1", "SHA-256", "SHA-384", "SHA-512" };
@@ -149,4 +152,27 @@ pub fn base64Encode(allocator: Allocator, bytes: []const u8) error{OutOfMemory}!
     const encoder = std.base64.url_safe_no_pad.Encoder;
     const out = try allocator.alloc(u8, encoder.calcSize(bytes.len));
     return encoder.encode(out, bytes);
+}
+
+/// Exports an asymmetric key (RSA, EC) as DER: `spki` for a public key,
+/// `pkcs8` for a private one. Asking for the other half's format is
+/// InvalidAccessError.
+pub fn exportDer(format: []const u8, key: *const CryptoKey, exec: *const Execution) ![]const u8 {
+    const pkey = key.getKeyObject();
+
+    var out: [*c]u8 = null;
+    const len = blk: {
+        if (std.mem.eql(u8, format, "spki")) {
+            if (key._kind != .public) return error.InvalidAccessError;
+            break :blk crypto.i2d_PUBKEY(pkey, &out);
+        }
+        if (key._kind != .private) return error.InvalidAccessError;
+        const info = crypto.EVP_PKEY2PKCS8(pkey) orelse return error.OperationError;
+        defer crypto.PKCS8_PRIV_KEY_INFO_free(info);
+        break :blk crypto.i2d_PKCS8_PRIV_KEY_INFO(info, &out);
+    };
+    defer crypto.OPENSSL_free(out);
+    if (len <= 0) return error.OperationError;
+
+    return exec.local_arena.dupe(u8, out[0..@intCast(len)]);
 }

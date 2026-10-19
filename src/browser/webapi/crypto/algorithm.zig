@@ -187,11 +187,13 @@ pub const KeyData = union(enum) {
 
     /// The JWK fields we read on import. Symmetric ("oct") keys only need `kty`
     /// and `k`; `d` marks an asymmetric private key. RSA keys carry `n`/`e`
-    /// (public) plus `d`, `p`, `q`, `dp`, `dq`, `qi` (private). Every member is
-    /// optional in the JsonWebKey dictionary, `kty` included: a missing `kty`
-    /// is a DataError of the algorithm's import, not a binding TypeError.
+    /// (public) plus `d`, `p`, `q`, `dp`, `dq`, `qi` (private); EC keys `crv`,
+    /// `x`, `y` (public) plus `d` (private). Every member is optional in the
+    /// JsonWebKey dictionary, `kty` included: a missing `kty` is a DataError
+    /// of the algorithm's import, not a binding TypeError.
     pub const Jwk = struct {
         alg: ?[]const u8 = null,
+        crv: ?[]const u8 = null,
         d: ?[]const u8 = null,
         dp: ?[]const u8 = null,
         dq: ?[]const u8 = null,
@@ -205,6 +207,8 @@ pub const KeyData = union(enum) {
         q: ?[]const u8 = null,
         qi: ?[]const u8 = null,
         use: ?[]const u8 = null,
+        x: ?[]const u8 = null,
+        y: ?[]const u8 = null,
     };
 };
 

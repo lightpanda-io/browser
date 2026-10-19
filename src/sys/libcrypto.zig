@@ -149,11 +149,26 @@ pub extern fn EC_KEY_generate_key(key: *EC_KEY) c_int;
 pub extern fn EC_KEY_free(key: ?*EC_KEY) void;
 pub extern fn EC_KEY_get0_public_key(key: *const EC_KEY) ?*const EC_POINT;
 pub extern fn EC_KEY_set_public_key(key: *EC_KEY, point: *const EC_POINT) c_int;
+pub extern fn EC_KEY_get0_private_key(key: *const EC_KEY) ?*const BIGNUM;
+pub extern fn EC_KEY_set_private_key(key: *EC_KEY, priv: *const BIGNUM) c_int;
+/// 1 when the public key is a valid point (not infinity) and matches the
+/// private key, if any.
+pub extern fn EC_KEY_check_key(key: *const EC_KEY) c_int;
 pub extern fn EVP_PKEY_get0_EC_KEY(pkey: *const EVP_PKEY) ?*EC_KEY;
 const struct_ec_group_st = opaque {};
 const EC_GROUP = struct_ec_group_st;
 pub extern fn EC_KEY_get0_group(key: *const EC_KEY) ?*const EC_GROUP;
 pub extern fn EC_GROUP_get0_order(group: *const EC_GROUP) ?*const BIGNUM;
+pub extern fn EC_GROUP_get_curve_name(group: *const EC_GROUP) c_int;
+
+// SEC 1 point encodings: 0x04 || x || y, or compressed 0x02/0x03 || x.
+pub const POINT_CONVERSION_UNCOMPRESSED = 4;
+pub extern fn EC_POINT_new(group: *const EC_GROUP) ?*EC_POINT;
+pub extern fn EC_POINT_free(point: ?*EC_POINT) void;
+/// Fails for an encoding that isn't a point on the curve.
+pub extern fn EC_POINT_oct2point(group: *const EC_GROUP, point: *EC_POINT, buf: [*]const u8, len: usize, ctx: ?*anyopaque) c_int;
+/// With a null `buf`, returns the encoding's length; 0 on error.
+pub extern fn EC_POINT_point2oct(group: *const EC_GROUP, point: *const EC_POINT, form: c_int, buf: ?[*]u8, len: usize, ctx: ?*anyopaque) usize;
 
 // ECDSA over a digest, with the signature as an (r, s) pair.
 const struct_ecdsa_sig_st = opaque {};

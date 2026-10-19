@@ -134,11 +134,17 @@ pub fn importKey(
         // Public keys may have empty usages; secret/private keys may not.
         const mask = try common.usageMaskInner(allowed, key_usages, is_private);
         if (EC.canonicalName(name) != null) {
-            const der = switch (key_data) {
-                .bytes => |b| b.values,
-                .jwk => return error.NotSupported,
-            };
-            return EC.import(name, algo.namedCurve(), format, der, is_private, extractable, mask, exec);
+            const is_jwk = std.mem.eql(u8, format, "jwk");
+            switch (key_data) {
+                .bytes => |b| {
+                    if (is_jwk) return local.typeError("jwk format expects an object");
+                    return EC.import(name, algo.namedCurve(), format, b.values, is_private, extractable, mask, exec);
+                },
+                .jwk => |jwk| {
+                    if (!is_jwk) return local.typeError("this format expects a BufferSource");
+                    return EC.importJwk(name, algo.namedCurve(), jwk, extractable, mask, exec);
+                },
+            }
         }
         if (RSA.scheme(name)) |scheme| {
             const hash_name = importHash(algo) orelse return local.typeError("RSA import requires a hash");
@@ -308,11 +314,12 @@ const Exported = union(enum) {
 const Jwk = union(enum) {
     secret: JwkSecret,
     rsa: RSA.Jwk,
+    ec: EC.Jwk,
 
     fn toJs(self: Jwk, local: *const js.Local) !js.Value {
         return switch (self) {
             .secret => |jwk| local.zigValueToJs(jwk, .{}),
-            .rsa => |rsa| switch (rsa) {
+            inline .rsa, .ec => |asymmetric| switch (asymmetric) {
                 inline else => |jwk| local.zigValueToJs(jwk, .{}),
             },
         };
@@ -323,7 +330,7 @@ const Jwk = union(enum) {
     fn toJson(self: Jwk, allocator: std.mem.Allocator) ![]const u8 {
         return switch (self) {
             .secret => |jwk| std.json.Stringify.valueAlloc(allocator, jwk, .{}),
-            .rsa => |rsa| switch (rsa) {
+            inline .rsa, .ec => |asymmetric| switch (asymmetric) {
                 inline else => |jwk| std.json.Stringify.valueAlloc(allocator, jwk, .{}),
             },
         };
@@ -347,10 +354,9 @@ fn exportAs(format: []const u8, key: *CryptoKey, exec: *const Execution) !Export
             return error.InvalidAccessError;
         }
         // EC keys live in `_vary.pkey` too, with no bytes in `_key`: their raw
-        // form (the public point) isn't implemented, and an empty buffer
-        // would pass for one.
+        // form is the public point.
         if (key._type == .ec) {
-            return error.NotSupported;
+            return .{ .bytes = try EC.exportRaw(key, exec) };
         }
         return .{ .bytes = key._key };
     }
@@ -361,8 +367,8 @@ fn exportAs(format: []const u8, key: *CryptoKey, exec: *const Execution) !Export
 
     const is_der = std.mem.eql(u8, format, "pkcs8") or std.mem.eql(u8, format, "spki");
     if (is_der) {
-        if (key._type == .rsa) {
-            return .{ .bytes = try RSA.exportDer(format, key, exec) };
+        if (key._type == .rsa or key._type == .ec) {
+            return .{ .bytes = try common.exportDer(format, key, exec) };
         }
         log.debug(.not_implemented, "SubtleCrypto.exportKey", .{ .format = format });
         return error.NotSupported;
@@ -386,6 +392,7 @@ fn exportJwk(key: *CryptoKey, exec: *const Execution) !Jwk {
         .aes => try AES.jwkAlg(key._algorithm.name, key._key.len, exec),
         .hmac => try HMAC.jwkAlg(key._algorithm.hash orelse "SHA-", exec),
         .rsa => return .{ .rsa = try RSA.exportJwk(key, exec) },
+        .ec => return .{ .ec = try EC.exportJwk(key, exec) },
         else => {
             log.debug(.not_implemented, "SubtleCrypto.exportKey", .{ .format = "jwk", .type = key._type });
             return error.NotSupported;

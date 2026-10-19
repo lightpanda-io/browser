@@ -959,6 +959,170 @@
   });
 </script>
 
+<script id=ec-key-formats type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+  const b64urlLen = (s) => atob(s.replace(/-/g, "+").replace(/_/g, "/")).length;
+  const ecdsa = (namedCurve) => ({ name: "ECDSA", namedCurve });
+  const ecdh = (namedCurve) => ({ name: "ECDH", namedCurve });
+  const data = new TextEncoder().encode("ec key formats");
+
+  // Every format round trips: spki/pkcs8 byte for byte, raw as 0x04 || x || y.
+  const pair = await subtle.generateKey(ecdsa("P-256"), true, ["sign", "verify"]);
+  const raw = new Uint8Array(await subtle.exportKey("raw", pair.publicKey));
+  const spki = await subtle.exportKey("spki", pair.publicKey);
+  const pkcs8 = await subtle.exportKey("pkcs8", pair.privateKey);
+  const publicJwk = await subtle.exportKey("jwk", pair.publicKey);
+  const privateJwk = await subtle.exportKey("jwk", pair.privateKey);
+  const fromRaw = await subtle.importKey("raw", raw, ecdsa("P-256"), true, ["verify"]);
+  const fromSpki = await subtle.importKey("spki", spki, ecdsa("P-256"), true, ["verify"]);
+  const fromPkcs8 = await subtle.importKey("pkcs8", pkcs8, ecdsa("P-256"), true, ["sign"]);
+  const fromPublicJwk = await subtle.importKey("jwk", publicJwk, ecdsa("P-256"), true, ["verify"]);
+  const fromPrivateJwk = await subtle.importKey("jwk", privateJwk, ecdsa("P-256"), true, ["sign"]);
+  // A compressed point (0x02/0x03 || x) imports to the same key.
+  const compressed = new Uint8Array(33);
+  compressed[0] = raw[64] & 1 ? 3 : 2;
+  compressed.set(raw.subarray(1, 33), 1);
+  const fromCompressed = await subtle.importKey("raw", compressed, ecdsa("P-256"), true, ["verify"]);
+  // The imported keys work: one signs, the others verify.
+  const signature = await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, fromPrivateJwk, data);
+  const verified = [];
+  for (const key of [fromRaw, fromSpki, fromPublicJwk, fromCompressed, pair.publicKey]) {
+    verified.push(await subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, signature, data));
+  }
+
+  // ECDH: the sizes of each curve, and JWK keys that derive the same secret.
+  const sizes = [];
+  for (const curve of ["P-256", "P-384", "P-521"]) {
+    const k = await subtle.generateKey(ecdh(curve), true, ["deriveBits"]);
+    const j = await subtle.exportKey("jwk", k.privateKey);
+    sizes.push(`${(await subtle.exportKey("raw", k.publicKey)).byteLength}/${b64urlLen(j.x)}/${b64urlLen(j.d)}`);
+  }
+  const alice = await subtle.generateKey(ecdh("P-384"), true, ["deriveBits"]);
+  const bob = await subtle.generateKey(ecdh("P-384"), true, ["deriveBits"]);
+  const aliceJwk = await subtle.importKey("jwk", await subtle.exportKey("jwk", alice.privateKey), ecdh("P-384"), false, ["deriveBits"]);
+  const bobRaw = await subtle.importKey("raw", await subtle.exportKey("raw", bob.publicKey), ecdh("P-384"), true, []);
+  const secret = hex(await subtle.deriveBits({ name: "ECDH", public: bob.publicKey }, alice.privateKey, 384));
+  // P-521: 66-byte coordinates, compressed too, and ES512.
+  const p521 = await subtle.generateKey(ecdsa("P-521"), true, ["sign", "verify"]);
+  const p521Raw = new Uint8Array(await subtle.exportKey("raw", p521.publicKey));
+  const p521Compressed = new Uint8Array(67);
+  p521Compressed[0] = p521Raw[132] & 1 ? 3 : 2;
+  p521Compressed.set(p521Raw.subarray(1, 67), 1);
+  const p521FromCompressed = hex(await subtle.exportKey("raw", await subtle.importKey("raw", p521Compressed, ecdsa("P-521"), true, ["verify"])));
+  const p521Jwk = await subtle.exportKey("jwk", p521.publicKey);
+  const p521ES512 = await errorName(() => subtle.importKey("jwk", { ...p521Jwk, alg: "ES512" }, ecdsa("P-521"), true, ["verify"]));
+  const p521ES256 = await errorName(() => subtle.importKey("jwk", { ...p521Jwk, alg: "ES256" }, ecdsa("P-521"), true, ["verify"]));
+  const secretFromImports = hex(await subtle.deriveBits({ name: "ECDH", public: bobRaw }, aliceJwk, 384));
+  const dhPublicJwk = await subtle.exportKey("jwk", alice.publicKey);
+  const dhPrivateJwk = await subtle.exportKey("jwk", alice.privateKey);
+
+  const other = await subtle.exportKey("jwk", (await subtle.generateKey(ecdsa("P-256"), true, ["sign"])).privateKey);
+  const zeroPrefixed = (b64url) => btoa("\0" + atob(b64url.replace(/-/g, "+").replace(/_/g, "/"))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const offCurve = raw.slice();
+  offCurve[64] ^= 1;
+  const { y: _y, ...noY } = publicJwk;
+  const importPublic = (jwk) => errorName(() => subtle.importKey("jwk", jwk, ecdsa("P-256"), true, ["verify"]));
+
+  const results = {
+    // raw is the public point only, of the requested curve.
+    rawShort: await errorName(() => subtle.importKey("raw", raw.slice(0, 64), ecdsa("P-256"), true, ["verify"])),
+    rawOffCurve: await errorName(() => subtle.importKey("raw", offCurve, ecdsa("P-256"), true, ["verify"])),
+    rawOtherCurve: await errorName(() => subtle.importKey("raw", raw, ecdsa("P-384"), true, ["verify"])),
+    rawForSign: await errorName(() => subtle.importKey("raw", raw, ecdsa("P-256"), true, ["sign"])),
+    rawOfPrivate: await errorName(() => subtle.exportKey("raw", pair.privateKey)),
+    dhRawWithUsage: await errorName(() => subtle.importKey("raw", raw, ecdh("P-256"), true, ["deriveBits"])),
+    // DER of another key type, or of another curve than the requested one, is DataError.
+    rsaSpki: await errorName(() => subtle.importKey("spki", rsaTestKey.spki, ecdsa("P-256"), true, ["verify"])),
+    rsaPkcs8: await errorName(() => subtle.importKey("pkcs8", rsaTestKey.pkcs8, ecdh("P-256"), true, ["deriveBits"])),
+    spkiOtherCurve: await errorName(() => subtle.importKey("spki", spki, ecdsa("P-384"), true, ["verify"])),
+    pkcs8OtherCurve: await errorName(() => subtle.importKey("pkcs8", pkcs8, ecdsa("P-521"), true, ["sign"])),
+    spkiOfPrivate: await errorName(() => subtle.exportKey("spki", pair.privateKey)),
+    pkcs8OfPublic: await errorName(() => subtle.exportKey("pkcs8", pair.publicKey)),
+    // JWK: kty "EC" and crv, matched case-sensitively; ECDSA's alg names the curve.
+    ktyLower: await importPublic({ ...publicJwk, kty: "ec" }),
+    crvLower: await importPublic({ ...publicJwk, crv: "p-256" }),
+    crvOther: await importPublic({ ...publicJwk, crv: "P-384" }),
+    algES256: await importPublic({ ...publicJwk, alg: "ES256" }),
+    algES384: await importPublic({ ...publicJwk, alg: "ES384" }),
+    useEnc: await importPublic({ ...publicJwk, use: "enc" }),
+    noY: await importPublic(noY),
+    shortX: await importPublic({ ...publicJwk, x: publicJwk.x.slice(0, -2) }),
+    paddedD: await errorName(() => subtle.importKey("jwk", { ...privateJwk, d: zeroPrefixed(privateJwk.d) }, ecdsa("P-256"), true, ["sign"])),
+    otherD: await errorName(() => subtle.importKey("jwk", { ...privateJwk, d: other.d }, ecdsa("P-256"), true, ["sign"])),
+    // ECDH ignores alg, and its keys are "enc" ones (checked when usages are asked for).
+    dhAlg: await errorName(() => subtle.importKey("jwk", { ...dhPublicJwk, alg: "bogus" }, ecdh("P-384"), true, [])),
+    dhPublicUseSig: await errorName(() => subtle.importKey("jwk", { ...dhPublicJwk, use: "sig" }, ecdh("P-384"), true, [])),
+    dhPrivateUseSig: await errorName(() => subtle.importKey("jwk", { ...dhPrivateJwk, use: "sig" }, ecdh("P-384"), true, ["deriveBits"])),
+    // Other algorithms ignore a stray namedCurve.
+    aesWithCurve: await errorName(() => subtle.importKey("raw", new Uint8Array(16), { name: "AES-GCM", namedCurve: "P-256" }, true, ["encrypt"])),
+  };
+  const again = {
+    raw: hex(await subtle.exportKey("raw", fromRaw)),
+    compressed: hex(await subtle.exportKey("raw", fromCompressed)),
+    spki: hex(await subtle.exportKey("spki", fromSpki)),
+    pkcs8: hex(await subtle.exportKey("pkcs8", fromPkcs8)),
+    privateJwk: JSON.stringify(await subtle.exportKey("jwk", fromPrivateJwk)),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("65 4", `${raw.length} ${raw[0]}`);
+    testing.expectEqual(hex(raw), again.raw);
+    testing.expectEqual(hex(raw), again.compressed);
+    testing.expectEqual(hex(spki), again.spki);
+    testing.expectEqual(hex(pkcs8), again.pkcs8);
+    testing.expectEqual(JSON.stringify(privateJwk), again.privateJwk);
+    testing.expectEqual("crv,ext,key_ops,kty,x,y", Object.keys(publicJwk).join(","));
+    testing.expectEqual("crv,d,ext,key_ops,kty,x,y", Object.keys(privateJwk).join(","));
+    testing.expectEqual("P-256 EC verify sign", `${publicJwk.crv} ${publicJwk.kty} ${publicJwk.key_ops} ${privateJwk.key_ops}`);
+    testing.expectEqual("ECDSA P-256 public", `${fromPublicJwk.algorithm.name} ${fromPublicJwk.algorithm.namedCurve} ${fromPublicJwk.type}`);
+    testing.expectEqual("private", fromPrivateJwk.type);
+    testing.expectEqual("true,true,true,true,true", verified.join(","));
+    testing.expectEqual("65/32/32,97/48/48,133/66/66", sizes.join(","));
+    testing.expectEqual(secret, secretFromImports);
+    testing.expectEqual(hex(p521Raw), p521FromCompressed);
+    testing.expectEqual(null, p521ES512);
+    testing.expectEqual("DataError", p521ES256);
+    testing.expectEqual("", dhPublicJwk.key_ops.join(","));
+    testing.expectEqual("DataError", results.rawShort);
+    testing.expectEqual("DataError", results.rawOffCurve);
+    testing.expectEqual("DataError", results.rawOtherCurve);
+    testing.expectEqual("SyntaxError", results.rawForSign);
+    testing.expectEqual("InvalidAccessError", results.rawOfPrivate);
+    testing.expectEqual("SyntaxError", results.dhRawWithUsage);
+    testing.expectEqual("DataError", results.rsaSpki);
+    testing.expectEqual("DataError", results.rsaPkcs8);
+    testing.expectEqual("DataError", results.spkiOtherCurve);
+    testing.expectEqual("DataError", results.pkcs8OtherCurve);
+    testing.expectEqual("InvalidAccessError", results.spkiOfPrivate);
+    testing.expectEqual("InvalidAccessError", results.pkcs8OfPublic);
+    testing.expectEqual("DataError", results.ktyLower);
+    testing.expectEqual("DataError", results.crvLower);
+    testing.expectEqual("DataError", results.crvOther);
+    testing.expectEqual(null, results.algES256);
+    testing.expectEqual("DataError", results.algES384);
+    testing.expectEqual("DataError", results.useEnc);
+    testing.expectEqual("DataError", results.noY);
+    testing.expectEqual("DataError", results.shortX);
+    testing.expectEqual("DataError", results.paddedD);
+    testing.expectEqual("DataError", results.otherD);
+    testing.expectEqual(null, results.dhAlg);
+    testing.expectEqual(null, results.dhPublicUseSig);
+    testing.expectEqual("DataError", results.dhPrivateUseSig);
+    testing.expectEqual(null, results.aesWithCurve);
+  });
+</script>
+
 <script id=wrap-unwrap type=module>
   const state = await testing.async();
   const subtle = crypto.subtle;
@@ -1065,7 +1229,7 @@
     // The wrapped key: exportable, in a format it has.
     notExtractable: await errorName(() => subtle.wrapKey("raw", locked, wrapper, gcm)),
     rsaRaw: await errorName(() => subtle.wrapKey("raw", rsa.privateKey, wrapper, gcm)),
-    // Only a public key has a raw form; EC's (the public point) isn't implemented.
+    // Only a public key has a raw form (EC's is the public point).
     x25519PrivateRaw: await errorName(() => subtle.wrapKey("raw", x25519.privateKey, wrapper, gcm)),
     ecPrivateRaw: await errorName(() => subtle.wrapKey("raw", ecdh.privateKey, wrapper, gcm)),
     ecPublicRaw: await errorName(() => subtle.wrapKey("raw", ecdh.publicKey, wrapper, gcm)),
@@ -1096,7 +1260,7 @@
     testing.expectEqual("NotSupportedError", results.rsaRaw);
     testing.expectEqual("InvalidAccessError", results.x25519PrivateRaw);
     testing.expectEqual("InvalidAccessError", results.ecPrivateRaw);
-    testing.expectEqual("NotSupportedError", results.ecPublicRaw);
+    testing.expectEqual(null, results.ecPublicRaw);
     testing.expectEqual(null, results.x25519PublicRaw);
     testing.expectEqual("TypeError", results.badFormat);
     testing.expectEqual("NotSupportedError", results.encryptWithKw);
