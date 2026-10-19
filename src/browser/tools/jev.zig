@@ -56,6 +56,9 @@ pub const Preset = enum {
     isPaywall,
     isUnsupportedBrowser,
     isLoading,
+    isAgeGate,
+    isRegionBlocked,
+    isRateLimited,
 
     pub fn description(self: Preset) []const u8 {
         return switch (self) {
@@ -68,6 +71,9 @@ pub const Preset = enum {
             .isPaywall => "Is the content hidden or cut off behind a subscription or payment prompt?",
             .isUnsupportedBrowser => "Does the page say this browser is unsupported or out of date, or that JavaScript must be enabled, instead of showing its content?",
             .isLoading => "Is the main content still loading, shown only as spinners, skeleton placeholders or loading text?",
+            .isAgeGate => "Is the primary view obstructed by an age check, asking the visitor to confirm they are an adult or to enter their date of birth before continuing?",
+            .isRegionBlocked => "Does the page say its content is not available in the visitor's country or region, instead of showing it?",
+            .isRateLimited => "Does the page say too many requests were sent and to slow down or try again later, instead of showing its content?",
         };
     }
 
