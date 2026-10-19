@@ -837,6 +837,11 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
     defer ctx.call_depth -= 1;
 
     const no_handler = promise_event == v8.kPromiseRejectWithNoHandler;
+    if (no_handler and log.enabled(.page_error, .debug)) {
+        // debug because it can still get a handler later, so it might get handled
+        logUnhandledRejection(&local, v8.v8__PromiseRejectMessage__GetValue(&message_handle));
+    }
+
     switch (ctx.global) {
         .frame => |frame| {
             frame.window.unhandledPromiseRejection(no_handler, .{
@@ -855,6 +860,21 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
             };
         },
     }
+}
+
+fn logUnhandledRejection(local: *const js.Local, reason_handle: ?*const v8.Value) void {
+    const handle = reason_handle orelse {
+        log.debug(.page_error, "unhandled rejection", .{ .reason = "undefined" });
+        return;
+    };
+    const reason = js.Value{ .local = local, .handle = handle };
+    const location = reason.errorLocation(local.call_arena) catch js.Value.ErrorLocation{};
+    log.debug(.page_error, "unhandled rejection", .{
+        .reason = reason.toStringSlice() catch "Unknown reason",
+        .url = location.url,
+        .line = location.line,
+        .column = location.column,
+    });
 }
 
 // V8 reports an exception that escapes to the top without a TryCatch. We
