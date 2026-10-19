@@ -73,9 +73,6 @@ fn generateKeyFromName(
     key_usages: []const []const u8,
     exec: *const Execution,
 ) !js.Promise {
-    if (name.eql(comptime .wrap("X25519"))) {
-        return X25519.init(extractable, key_usages, exec);
-    }
     if (OKP.curveOf(name.str())) |curve| {
         return OKP.generate(curve, extractable, key_usages, exec);
     }
@@ -281,8 +278,8 @@ fn importKind(format: []const u8, key_data: algorithm.KeyData) bool {
 
 /// The usages permitted for an EC/OKP/RSA key of the given privacy, or null if
 /// the algorithm isn't one of the asymmetric algorithms handled here. Only EC,
-/// RSA and Ed25519 import their keys; for the others this only drives usage
-/// validation.
+/// RSA, Ed25519 and X25519 import their keys; for the others this only drives
+/// usage validation.
 fn asymmetricAllowedUsages(name: []const u8, is_private: bool) ?[]const []const u8 {
     if (eqlIgnoreCase(name, "ECDSA") or eqlIgnoreCase(name, "Ed25519") or eqlIgnoreCase(name, "Ed448")) {
         return if (is_private) &.{"sign"} else &.{"verify"};
@@ -374,7 +371,7 @@ fn exportAs(format: []const u8, key: *CryptoKey, exec: *const Execution) !Export
         if (key._type == .ec) {
             return .{ .bytes = try EC.exportRaw(key, exec) };
         }
-        if (key._type == .ed25519) {
+        if (key._type == .ed25519 or key._type == .x25519) {
             return .{ .bytes = try OKP.exportRaw(key, exec) };
         }
         return .{ .bytes = key._key };
@@ -386,7 +383,7 @@ fn exportAs(format: []const u8, key: *CryptoKey, exec: *const Execution) !Export
 
     const is_der = std.mem.eql(u8, format, "pkcs8") or std.mem.eql(u8, format, "spki");
     if (is_der) {
-        if (key._type == .rsa or key._type == .ec or key._type == .ed25519) {
+        if (key._type == .rsa or key._type == .ec or key._type == .ed25519 or key._type == .x25519) {
             return .{ .bytes = try common.exportDer(format, key, exec) };
         }
         log.debug(.not_implemented, "SubtleCrypto.exportKey", .{ .format = format });
@@ -412,7 +409,7 @@ fn exportJwk(key: *CryptoKey, exec: *const Execution) !Jwk {
         .hmac => try HMAC.jwkAlg(key._algorithm.hash orelse "SHA-", exec),
         .rsa => return .{ .rsa = try RSA.exportJwk(key, exec) },
         .ec => return .{ .ec = try EC.exportJwk(key, exec) },
-        .ed25519 => return .{ .okp = try OKP.exportJwk(key, exec) },
+        .ed25519, .x25519 => return .{ .okp = try OKP.exportJwk(key, exec) },
         else => {
             log.debug(.not_implemented, "SubtleCrypto.exportKey", .{ .format = "jwk", .type = key._type });
             return error.NotSupported;
@@ -515,17 +512,7 @@ fn deriveRaw(
                 return error.InvalidAccessError;
             }
             if (eqlIgnoreCase(params.name, "X25519")) {
-                // The peer must be an X25519 public key: another key may hold
-                // no EVP_PKEY at all for X25519.deriveBits to read.
-                if (params.public._type != .x25519 or params.public._kind != .public) {
-                    return error.InvalidAccessError;
-                }
-                // null length means "derive the full shared secret" (256 bits).
-                const result = X25519.deriveBits(base_key, params.public, length orelse 256, exec) catch |err| switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => return error.OperationError,
-                };
-                return result.values;
+                return X25519.deriveBits(base_key, params.public, length, exec);
             }
             if (eqlIgnoreCase(params.name, "ECDH")) {
                 return EC.deriveBits(base_key, params.public, length, exec);

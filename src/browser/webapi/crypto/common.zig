@@ -140,6 +140,23 @@ pub fn checkJwk(
     }
 }
 
+/// The first `length_in_bits` bits of a derived `secret`, all of it when null:
+/// whole bytes, with the unused low bits of a partial last byte zeroed. A
+/// length beyond the secret is OperationError.
+pub fn leadingBits(secret: []u8, length_in_bits: ?u32) error{OperationError}![]u8 {
+    const bits = length_in_bits orelse return secret;
+    const byte_len = (@as(usize, bits) + 7) / 8;
+    if (byte_len > secret.len) {
+        return error.OperationError;
+    }
+    const out = secret[0..byte_len];
+    const remainder_bits: u3 = @intCast(bits % 8);
+    if (remainder_bits != 0) {
+        out[out.len - 1] &= ~(@as(u8, 0xFF) >> remainder_bits);
+    }
+    return out;
+}
+
 /// A JWK key member (a coordinate, `x`, `d`, ...): base64url of exactly `n`
 /// bytes. A missing member or one of another size is DataError.
 pub fn jwkBytes(allocator: Allocator, member: ?[]const u8, n: usize) error{ OutOfMemory, DataError }![]u8 {

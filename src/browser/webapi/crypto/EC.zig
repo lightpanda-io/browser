@@ -377,7 +377,7 @@ pub fn exportJwk(key: *const CryptoKey, exec: *const Execution) !Jwk {
 }
 
 /// ECDH key agreement: derive `length_in_bits` from `private` + the peer
-/// `public`. Mirrors X25519's truncation rules.
+/// `public` (common.leadingBits, as X25519).
 pub fn deriveBits(
     private: *const CryptoKey,
     public: *const CryptoKey,
@@ -413,19 +413,7 @@ pub fn deriveBits(
     }
 
     // null length means "the full shared secret".
-    const bits = length_in_bits orelse @as(u32, @intCast(secret_len * 8));
-    const byte_len = (bits + 7) / 8;
-    if (byte_len > secret_len) {
-        return error.OperationError;
-    }
-    const out = secret[0..byte_len];
-
-    // Zero the unused trailing bits of the final byte.
-    const remainder_bits: u3 = @intCast(bits % 8);
-    if (remainder_bits != 0 and out.len > 0) {
-        out[out.len - 1] &= ~(@as(u8, 0xFF) >> remainder_bits);
-    }
-    return out;
+    return common.leadingBits(secret[0..secret_len], length_in_bits);
 }
 
 /// The size in bytes of each of r and s in an ECDSA signature with `ec`: that
