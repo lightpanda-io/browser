@@ -162,6 +162,12 @@ fn hashOfJwkAlg(s: *const Scheme, alg: []const u8) ?[]const u8 {
 
 const max_modulus_length = 4096;
 
+/// RsaKeyGenParams' `modulusLength`, an [EnforceRange] unsigned long: a value
+/// outside u32 (NaN, undefined, the infinities) is a TypeError.
+fn modulusLength(params: algorithm.Init.RsaHashedKeyGen, local: *const js.Local) !u32 {
+    return js.enforceRange(u32, try params.modulusLength.toF64()) catch local.typeError("modulusLength is out of range");
+}
+
 /// Generates an RSA key pair of `modulusLength` bits with the given public
 /// exponent. Mirrors EC.generate: each key keeps the EVP_PKEY of its half, and
 /// the requested usages are split across the pair (validate() rejected illegal
@@ -173,15 +179,17 @@ pub fn generate(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    try validate(params, key_usages);
-
+    // Normalization: the algorithm name, then the dictionary's members, then
+    // the hash (validate). The usages come after.
     const s = scheme(params.name) orelse return error.NotSupported;
+    const requested_bits = try modulusLength(params, local);
+    try validate(params, key_usages);
 
     // Generation runs on the main thread and can't be interrupted, and its cost
     // grows steeply with the size: 8192 bits takes seconds, 16384 (BoringSSL's
     // ceiling) tens of seconds, several times that on a vCPU. Pages generate
     // 2048 or 4096 in practice. Chrome allows 16384 but generates off-thread.
-    if (params.modulusLength > max_modulus_length) return error.OperationError;
+    if (requested_bits > max_modulus_length) return error.OperationError;
 
     const hash_name = canonicalHash(switch (params.hash) {
         .string => |str| str,
@@ -200,7 +208,7 @@ pub fn generate(
 
     const rsa = crypto.RSA_new() orelse return error.OutOfMemory;
     defer crypto.RSA_free(rsa);
-    if (crypto.RSA_generate_key_ex(rsa, @intCast(params.modulusLength), e, null) != 1) {
+    if (crypto.RSA_generate_key_ex(rsa, @intCast(requested_bits), e, null) != 1) {
         return error.OperationError;
     }
 
