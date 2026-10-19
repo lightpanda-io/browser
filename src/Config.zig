@@ -292,6 +292,7 @@ const CommonOptions = .{
     .{ .name = "adblock_lists", .type = ?[]const u8, .validator = accumulateValidator, .path = true },
     .{ .name = "cookie", .type = ?[]const u8, .path = true },
     .{ .name = "cookie_jar", .type = ?[]const u8, .path = true },
+    .{ .name = "classify_model", .type = ?[]const u8, .path = true },
     .{ .name = "disable_subframes", .type = bool, .deprecated = "subframes are now disabled by default, use \"--load-resources iframe\" to enable" },
     .{ .name = "disable_workers", .type = bool, .deprecated = "workers are now disabled by default, use \"--load-resources worker\" to enable" },
     .{ .name = "enable_external_stylesheets", .type = bool, .deprecated = "use \"--load-resources stylesheet\" to enable" },
@@ -839,6 +840,13 @@ pub fn httpCacheEntryLimit(self: *const Config) u32 {
 pub fn cookieFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.cookie,
+        else => null,
+    };
+}
+
+pub fn classifyModel(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.classify_model,
         else => null,
     };
 }

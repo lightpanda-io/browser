@@ -49,6 +49,8 @@ arena_pool: ArenaPool,
 app_dir_path: ?[]const u8,
 
 regex_context: *Regex.Context,
+/// The local model classify answers presets with, from --classify-model.
+classify_model: ?*lp.tools.classify_local.Model,
 default_sanitizer: *Sanitizer,
 render_fonts: screenshot.Fonts,
 
@@ -71,6 +73,9 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     const regex_context: *Regex.Context = try .init(allocator);
     errdefer regex_context.deinit();
 
+    const classify_model = if (config.classifyModel()) |path| try loadClassifyModel(allocator, regex_context, path) else null;
+    errdefer if (classify_model) |model| model.deinit();
+
     var render_fonts: screenshot.Fonts = try .load(allocator, config.renderFonts());
     errdefer render_fonts.deinit(allocator);
 
@@ -83,6 +88,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
         .platform = platform,
         .snapshot = snapshot,
         .regex_context = regex_context,
+        .classify_model = classify_model,
         .render_fonts = render_fonts,
         .network = undefined,
         .app_dir_path = undefined,
@@ -127,7 +133,8 @@ pub fn deinit(self: *App) void {
     }
     self.telemetry.deinit(allocator);
     self.network.deinit();
-    // After `network`: its adblock regexes free through this context.
+    // After `network` and the model: their regexes free through this context.
+    if (self.classify_model) |model| model.deinit();
     self.regex_context.deinit();
     self.snapshot.deinit();
     self.platform.deinit();
@@ -138,6 +145,18 @@ pub fn deinit(self: *App) void {
     self.typesafe.deinit();
 
     allocator.destroy(self);
+}
+
+fn loadClassifyModel(allocator: Allocator, regexes: *const Regex.Context, path: []const u8) !*lp.tools.classify_local.Model {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(lp.io, path, allocator, .unlimited) catch |err| {
+        log.err(.app, "read classify model", .{ .err = err, .path = path });
+        return err;
+    };
+    defer allocator.free(bytes);
+    return lp.tools.classify_local.Model.parse(allocator, regexes, bytes) catch |err| {
+        log.err(.app, "parse classify model", .{ .err = err, .path = path });
+        return err;
+    };
 }
 
 fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {
