@@ -1866,7 +1866,10 @@ pub const JsApi = struct {
     fn _getRootNode(self: *Node, opts: ?GetRootNodeOpts) *Node {
         return self.getRootNode(opts orelse .{});
     }
-    pub const isEqualNode = bridge.function(Node.isEqualNode, .{});
+    pub const isEqualNode = bridge.function(_isEqualNode, .{});
+    fn _isEqualNode(self: *Node, other: js.Nullable(*Node)) bool {
+        return self.isEqualNode(other.value orelse return false);
+    }
     pub const lookupNamespaceURI = bridge.function(_lookupNamespaceURI, .{});
     fn _lookupNamespaceURI(self: *Node, prefix: js.Nullable([]const u8), frame: *Frame) ?[]const u8 {
         return self.lookupNamespaceURI(prefix.value, frame);
