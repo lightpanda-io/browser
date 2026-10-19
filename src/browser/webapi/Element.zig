@@ -1212,17 +1212,26 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame
             continue;
         }
 
+        // A node from another document is adopted, as insertBefore does
+        const child_owner = child.ownerDocument(frame);
+        const parent_owner = parent.ownerDocument(frame) orelse parent.as(Node.Document);
+        const adopting = child_owner != null and child_owner.? != parent_owner;
+
         var previous_root: ?*Node = null;
         if (child._parent) |current_parent| {
             previous_root = child.getRootNode(.{});
-            frame.removeNode(current_parent, child, .{ .reconnect_to = parent });
+            frame.removeNode(current_parent, child, .{ .reconnect_to = if (adopting) null else parent });
+        }
+
+        if (adopting) {
+            try frame.adoptNodeTree(child, child_owner.?, parent_owner);
         }
 
         try frame.insertNodeRelative(
             parent,
             child,
             .{ .before = ref_node },
-            .{ .previous_root = previous_root },
+            .{ .previous_root = previous_root, .adopting_to_new_document = adopting },
         );
     }
 
