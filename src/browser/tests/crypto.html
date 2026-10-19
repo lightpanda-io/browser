@@ -165,6 +165,48 @@
   });
 </script>
 
+<script id=derive-key-import type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const secret = new Uint8Array(16);
+  const imp = (name, extractable) => errorName(() => subtle.importKey("raw", secret, name, extractable, ["deriveBits"]));
+
+  // HKDF and PBKDF2 keys are never extractable: asking is a SyntaxError.
+  const results = {
+    hkdf: await imp("HKDF", false),
+    pbkdf2: await imp("PBKDF2", false),
+    hkdfExtractable: await imp("HKDF", true),
+    pbkdf2Extractable: await imp("PBKDF2", true),
+  };
+
+  // HKDF yields at most 255 blocks of its hash (RFC 5869): 8160 bytes for
+  // SHA-256. One more is an OperationError, before any buffer is allocated.
+  const hkdfKey = await subtle.importKey("raw", secret, "HKDF", false, ["deriveBits"]);
+  const hkdf = { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(16), info: new Uint8Array(0) };
+  results.hkdfMax = await errorName(() => subtle.deriveBits(hkdf, hkdfKey, 255 * 32 * 8));
+  results.hkdfOverMax = await errorName(() => subtle.deriveBits(hkdf, hkdfKey, 255 * 32 * 8 + 8));
+  results.hkdfHuge = await errorName(() => subtle.deriveBits(hkdf, hkdfKey, 2 ** 32 - 8));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(null, results.hkdf);
+    testing.expectEqual(null, results.pbkdf2);
+    testing.expectEqual("SyntaxError", results.hkdfExtractable);
+    testing.expectEqual("SyntaxError", results.pbkdf2Extractable);
+    testing.expectEqual(null, results.hkdfMax);
+    testing.expectEqual("OperationError", results.hkdfOverMax);
+    testing.expectEqual("OperationError", results.hkdfHuge);
+  });
+</script>
+
 <script id=rsa-oaep-roundtrip type=module>
   const state = await testing.async();
   const { privateKey, publicKey } = await crypto.subtle.generateKey(
@@ -694,6 +736,83 @@
     testing.expectEqual("DataError", results.algLower);
     testing.expectEqual("DataError", results.algOaep);
     testing.expectEqual("DataError", results.algPss);
+  });
+</script>
+
+<script id=der-import-strict type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const rsa = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
+  const ec = { name: "ECDSA", namedCurve: "P-256" };
+  const ecPair = await subtle.generateKey(ec, true, ["sign", "verify"]);
+  const ecSpki = new Uint8Array(await subtle.exportKey("spki", ecPair.publicKey));
+  const ecPkcs8 = new Uint8Array(await subtle.exportKey("pkcs8", ecPair.privateKey));
+  const edPair = await subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+  const edSpki = new Uint8Array(await subtle.exportKey("spki", edPair.publicKey));
+  const edPkcs8 = new Uint8Array(await subtle.exportKey("pkcs8", edPair.privateKey));
+
+  // Three zero bytes after the structure. d2i_* used to stop at its end.
+  const withTrailing = (der) => {
+    const out = new Uint8Array(der.length + 3);
+    out.set(der);
+    return out;
+  };
+  // The DER length of the TLV at `i`, and the offset of its contents.
+  const tlv = (der, i) => {
+    let len = der[i + 1];
+    let at = i + 2;
+    if (len & 0x80) {
+      const n = len & 0x7f;
+      len = 0;
+      for (let j = 0; j < n; j++) len = (len << 8) | der[at++];
+    }
+    return { len, at };
+  };
+  // The privateKey OCTET STRING inside a PrivateKeyInfo: the legacy
+  // RSAPrivateKey (PKCS #1) or ECPrivateKey (SEC 1) encoding, which
+  // d2i_AutoPrivateKey used to accept as "pkcs8".
+  const innerKey = (pkcs8) => {
+    let { at } = tlv(pkcs8, 0); // PrivateKeyInfo
+    at = tlv(pkcs8, at).at + tlv(pkcs8, at).len; // version
+    at = tlv(pkcs8, at).at + tlv(pkcs8, at).len; // AlgorithmIdentifier
+    const { len, at: start } = tlv(pkcs8, at); // privateKey
+    return pkcs8.slice(start, start + len);
+  };
+
+  const results = {
+    rsaSpki: await errorName(() => subtle.importKey("spki", rsaTestKey.spki, rsa, true, ["verify"])),
+    rsaPkcs8: await errorName(() => subtle.importKey("pkcs8", rsaTestKey.pkcs8, rsa, true, ["sign"])),
+    rsaSpkiTrailing: await errorName(() => subtle.importKey("spki", withTrailing(rsaTestKey.spki), rsa, true, ["verify"])),
+    rsaPkcs8Trailing: await errorName(() => subtle.importKey("pkcs8", withTrailing(rsaTestKey.pkcs8), rsa, true, ["sign"])),
+    rsaPkcs1: await errorName(() => subtle.importKey("pkcs8", innerKey(rsaTestKey.pkcs8), rsa, true, ["sign"])),
+    ecSpki: await errorName(() => subtle.importKey("spki", ecSpki, ec, true, ["verify"])),
+    ecPkcs8: await errorName(() => subtle.importKey("pkcs8", ecPkcs8, ec, true, ["sign"])),
+    ecSpkiTrailing: await errorName(() => subtle.importKey("spki", withTrailing(ecSpki), ec, true, ["verify"])),
+    ecPkcs8Trailing: await errorName(() => subtle.importKey("pkcs8", withTrailing(ecPkcs8), ec, true, ["sign"])),
+    ecSec1: await errorName(() => subtle.importKey("pkcs8", innerKey(ecPkcs8), ec, true, ["sign"])),
+    edSpki: await errorName(() => subtle.importKey("spki", edSpki, "Ed25519", true, ["verify"])),
+    edPkcs8: await errorName(() => subtle.importKey("pkcs8", edPkcs8, "Ed25519", true, ["sign"])),
+    edSpkiTrailing: await errorName(() => subtle.importKey("spki", withTrailing(edSpki), "Ed25519", true, ["verify"])),
+    edPkcs8Trailing: await errorName(() => subtle.importKey("pkcs8", withTrailing(edPkcs8), "Ed25519", true, ["sign"])),
+    empty: await errorName(() => subtle.importKey("spki", new Uint8Array(0), rsa, true, ["verify"])),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    for (const ok of ["rsaSpki", "rsaPkcs8", "ecSpki", "ecPkcs8", "edSpki", "edPkcs8"]) {
+      testing.expectEqual(`${ok}: null`, `${ok}: ${results[ok]}`);
+    }
+    for (const bad of ["rsaSpkiTrailing", "rsaPkcs8Trailing", "rsaPkcs1", "ecSpkiTrailing", "ecPkcs8Trailing", "ecSec1", "edSpkiTrailing", "edPkcs8Trailing", "empty"]) {
+      testing.expectEqual(`${bad}: DataError`, `${bad}: ${results[bad]}`);
+    }
   });
 </script>
 
@@ -1337,6 +1456,18 @@
     pbkdf2: await errorName(() => subtle.importKey("jwk", { kty: "oct", k: k16 }, "PBKDF2", false, ["deriveBits"])),
   };
 
+  // An exported JWK lists its members in lexicographic order, the WebIDL
+  // dictionary order Chrome returns, and wrapKey serializes the same order.
+  const aesKey = await subtle.generateKey({ name: "AES-GCM", length: 128 }, true, ["encrypt"]);
+  const hmacKey = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign"]);
+  const order = {
+    aes: Object.keys(await subtle.exportKey("jwk", aesKey)).join(),
+    hmac: Object.keys(await subtle.exportKey("jwk", hmacKey)).join(),
+  };
+  const decrypter = await subtle.generateKey({ name: "AES-GCM", length: 128 }, false, ["wrapKey", "decrypt"]);
+  const wrapped = await subtle.wrapKey("jwk", aesKey, decrypter, gcm);
+  const wrappedText = new TextDecoder().decode(await subtle.decrypt(gcm, decrypter, wrapped));
+
   state.resolve();
   await state.done(() => {
     // Compared with the case name, so a failure says which one.
@@ -1350,6 +1481,10 @@
     testing.expectEqual("SyntaxError", results.badUsageBadKty);
     testing.expectEqual("NotSupportedError", results.hkdf);
     testing.expectEqual("NotSupportedError", results.pbkdf2);
+    testing.expectEqual("alg,ext,k,key_ops,kty", order.aes);
+    testing.expectEqual("alg,ext,k,key_ops,kty", order.hmac);
+    testing.expectEqual(JSON.stringify(JSON.parse(wrappedText)), wrappedText);
+    testing.expectEqual(true, wrappedText.startsWith('{"alg":"A128GCM","ext":true,"k":"'));
   });
 </script>
 
@@ -1739,6 +1874,11 @@
     // null converts to 0, as for any unsigned long.
     genNull: await errorName(() => gen({ length: null })),
     importNull: await errorName(() => imp({ length: null })),
+    // Generation is capped at 2^16 bits: any longer key is hashed down to the
+    // block size anyway, and an unsigned long could ask for 512MB.
+    genMax: await errorName(() => gen({ length: 2 ** 16 })),
+    genOverMax: await errorName(() => gen({ length: 2 ** 16 + 8 })),
+    genGigantic: await errorName(() => gen({ length: 2 ** 31 })),
     // deriveKey goes by the name: not an HMAC key for another algorithm with a hash.
     deriveUnknown: await errorName(() => subtle.deriveKey(
       { name: "PBKDF2", hash: "SHA-256", salt: new Uint8Array(8), iterations: 2 }, pbkdf2,
@@ -1782,6 +1922,9 @@
     testing.expectEqual(null, results.rsaWithLength);
     testing.expectEqual("OperationError", results.genNull);
     testing.expectEqual("DataError", results.importNull);
+    testing.expectEqual(null, results.genMax);
+    testing.expectEqual("OperationError", results.genOverMax);
+    testing.expectEqual("OperationError", results.genGigantic);
     testing.expectEqual("NotSupportedError", results.deriveUnknown);
     testing.expectEqual("AES-GCM 128", `${aesWithHash.algorithm.name} ${aesWithHash.algorithm.length}`);
   });

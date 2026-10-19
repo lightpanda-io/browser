@@ -182,9 +182,15 @@ pub extern fn ECDSA_SIG_get0(sig: *const ECDSA_SIG, out_r: *?*const BIGNUM, out_
 /// Takes ownership of `r` and `s` on success only.
 pub extern fn ECDSA_SIG_set0(sig: *ECDSA_SIG, r: *BIGNUM, s: *BIGNUM) c_int;
 
-// DER decoders (advance `inp` past the parsed structure).
-pub extern fn d2i_PUBKEY(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
-pub extern fn d2i_AutoPrivateKey(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
+// DER decoders over a CBS (a byte string cursor, advanced past the parsed
+// structure). Unlike the d2i_* family, these parse exactly one SubjectPublicKeyInfo
+// or PrivateKeyInfo: no legacy RSAPrivateKey / ECPrivateKey fallback.
+pub const CBS = extern struct {
+    data: [*]const u8,
+    len: usize,
+};
+pub extern fn EVP_parse_public_key(cbs: *CBS) ?*EVP_PKEY;
+pub extern fn EVP_parse_private_key(cbs: *CBS) ?*EVP_PKEY;
 
 // RSA: key generation, import, and the encrypt/decrypt and sign/verify operations.
 pub const EVP_PKEY_RSA = 6; // NID_rsaEncryption

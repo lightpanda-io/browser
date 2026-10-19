@@ -197,6 +197,27 @@ pub fn base64Encode(allocator: Allocator, bytes: []const u8) error{OutOfMemory}!
     return encoder.encode(out, bytes);
 }
 
+/// Parses the DER of an asymmetric key (RSA, EC, OKP): a SubjectPublicKeyInfo for
+/// `spki`, a PrivateKeyInfo for `pkcs8`. Anything libcrypto can't parse as
+/// exactly that structure, trailing bytes included, is DataError, as in
+/// Chrome. The caller checks the key's type and frees it.
+pub fn parseDer(format: []const u8, der: []const u8) error{ DataError, NotSupported }!*crypto.EVP_PKEY {
+    var cbs: crypto.CBS = .{ .data = der.ptr, .len = der.len };
+    const pkey = blk: {
+        if (std.mem.eql(u8, format, "spki")) break :blk crypto.EVP_parse_public_key(&cbs);
+        if (std.mem.eql(u8, format, "pkcs8")) break :blk crypto.EVP_parse_private_key(&cbs);
+        return error.NotSupported;
+    } orelse {
+        crypto.ERR_clear_error();
+        return error.DataError;
+    };
+    if (cbs.len != 0) {
+        crypto.EVP_PKEY_free(pkey);
+        return error.DataError;
+    }
+    return pkey;
+}
+
 /// Exports an asymmetric key (RSA, EC) as DER: `spki` for a public key,
 /// `pkcs8` for a private one. Asking for the other half's format is
 /// InvalidAccessError.
