@@ -1774,6 +1774,18 @@ pub fn flatTreeParentElement(self: *Node, frame: *const Frame) ?*Element {
     return (parent.flatTreeParent(frame) orelse return null).is(Element);
 }
 
+/// Like flatTreeParent, but never a shadow root: the parent as
+/// TreeWalker.Flat walks, which doesn't visit shadow roots.
+pub fn flatParent(self: *Node, frame: *const Frame) ?*Node {
+    const parent = self.flatTreeParent(frame) orelse return null;
+    // A shadow tree's top-level nodes have the shadow root as their parent;
+    // skip to its host.
+    if (parent.is(ShadowRoot)) |shadow| {
+        return shadow._host.asNode();
+    }
+    return parent;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Node);
 
