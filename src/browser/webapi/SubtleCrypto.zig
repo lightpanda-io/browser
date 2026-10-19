@@ -450,7 +450,7 @@ pub fn deriveKey(
                 return error.NotSupported;
             }
             const requested = try HMAC.lengthParam(h.length, local);
-            const hash_name = common.canonicalHash(try h.hash.name(local)) orelse return error.NotSupported;
+            const hash_name = try h.hash.canonical(local);
             const hash_md = crypto.findDigest(hash_name) catch return error.NotSupported;
             // Default length, per spec, is the hash's block size (in bits).
             const length: u32 = requested orelse @intCast(crypto.EVP_MD_block_size(hash_md) * 8);

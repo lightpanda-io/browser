@@ -1813,6 +1813,11 @@
     iterationsNaN: await errorName(() => subtle.deriveBits({ ...pbkdf2, iterations: NaN }, pbkdf2Key, 128)),
     hashWithoutName: await errorName(() => subtle.deriveBits({ ...hkdf, hash: {} }, hkdfKey, 128)),
     unknownHash: await errorName(() => subtle.deriveBits({ ...hkdf, hash: "foo" }, hkdfKey, 128)),
+    // The hash is normalized with the algorithm: matched case-insensitively,
+    // and an unknown one is rejected before derivedKeyType.
+    lowerHash: hex(await subtle.deriveBits({ ...pbkdf2, hash: "sha-256" }, pbkdf2Key, 128)),
+    lowerHashObject: hex(await subtle.deriveBits({ ...hkdf, hash: { name: "sha-256" } }, hkdfKey, 128)),
+    unknownHashBeforeDerived: await errorName(() => subtle.deriveKey({ ...hkdf, hash: "SHA-999" }, hkdfKey, {}, true, ["encrypt"])),
     // deriveKey normalizes the algorithm before derivedKeyType.
     unknownBeforeDerived: await errorName(() => subtle.deriveKey({ ...hkdf, name: "foo" }, hkdfKey, "AES-FOO", true, ["encrypt"])),
     missingBeforeDerived: await errorName(() => subtle.deriveKey({ ...hkdf, info: undefined }, hkdfKey, "AES-FOO", true, ["encrypt"])),
@@ -1845,6 +1850,9 @@
     testing.expectEqual("TypeError", results.iterationsNaN);
     testing.expectEqual("TypeError", results.hashWithoutName);
     testing.expectEqual("NotSupportedError", results.unknownHash);
+    testing.expectEqual(results.pbkdf2, results.lowerHash);
+    testing.expectEqual(results.hkdf, results.lowerHashObject);
+    testing.expectEqual("NotSupportedError", results.unknownHashBeforeDerived);
     testing.expectEqual("NotSupportedError", results.unknownBeforeDerived);
     testing.expectEqual("TypeError", results.missingBeforeDerived);
     testing.expectEqual("InvalidAccessError", results.otherKey);

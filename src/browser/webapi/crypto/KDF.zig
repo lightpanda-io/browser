@@ -69,7 +69,7 @@ pub fn pbkdf2(
     exec: *const Execution,
 ) Error![]const u8 {
     // Normalizing the params (the hash) comes before the key checks.
-    const digest = crypto.findDigest(try params.hash.name(exec.js.local.?)) catch return error.NotSupported;
+    const digest = crypto.findDigest(try params.hash.canonical(exec.js.local.?)) catch return error.NotSupported;
     try checkBaseKey(base_key, "PBKDF2", usage_ok);
     const out_len = try outputLen(length);
     // A zero-length derivation is valid and yields an empty buffer; the C
@@ -111,7 +111,7 @@ pub fn hkdf(
     exec: *const Execution,
 ) Error![]const u8 {
     // Normalizing the params (the hash) comes before the key checks.
-    const digest = crypto.findDigest(try params.hash.name(exec.js.local.?)) catch return error.NotSupported;
+    const digest = crypto.findDigest(try params.hash.canonical(exec.js.local.?)) catch return error.NotSupported;
     try checkBaseKey(base_key, "HKDF", usage_ok);
     const out = try exec.local_arena.alloc(u8, try outputLen(length));
     // A zero-length derivation is valid and yields an empty buffer; the C

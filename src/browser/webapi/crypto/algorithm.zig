@@ -23,6 +23,7 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 
 const CryptoKey = @import("../CryptoKey.zig");
+const common = @import("common.zig");
 
 /// The TypeError of an algorithm identifier object without a `name`.
 pub const missing_name = "required member name is undefined";
@@ -42,6 +43,12 @@ pub const Hash = union(enum) {
             .object => |o| o.name,
             .nameless => local.typeError(missing_name),
         };
+    }
+
+    /// The hash's registered name, matched case-insensitively: a TypeError
+    /// without a name, NotSupportedError for a hash that isn't supported.
+    pub fn canonical(self: Hash, local: *const js.Local) error{ TypeError, NotSupported }![]const u8 {
+        return common.canonicalHash(try self.name(local)) orelse error.NotSupported;
     }
 };
 
@@ -127,12 +134,12 @@ pub const Derive = union(enum) {
         const name = try identifier.name(local);
         if (std.ascii.eqlIgnoreCase(name, "PBKDF2")) {
             const params = try convert(Pbkdf2Params, value, local);
-            _ = try params.hash.name(local);
+            _ = try params.hash.canonical(local);
             return .{ .pbkdf2 = params };
         }
         if (std.ascii.eqlIgnoreCase(name, "HKDF")) {
             const params = try convert(HkdfParams, value, local);
-            _ = try params.hash.name(local);
+            _ = try params.hash.canonical(local);
             return .{ .hkdf = params };
         }
         if (std.ascii.eqlIgnoreCase(name, "ECDH") or std.ascii.eqlIgnoreCase(name, "X25519")) {
