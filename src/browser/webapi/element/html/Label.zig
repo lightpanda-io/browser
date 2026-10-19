@@ -44,7 +44,13 @@ pub fn asNode(self: *Label) *Node {
 
 pub fn getControl(self: *Label, frame: *Frame) ?*Element {
     if (self.asElement().getAttributeInterned("for")) |id| {
-        const el = frame.getElementByIdFromNode(self.asElement().asNode(), id) orelse return null;
+        // Like Chrome: `for` only resolves in a document or shadow tree, so a
+        // detached label has no control by id.
+        const node = self.asNode();
+        if (!node.isConnected() and !node.isInShadowTree()) {
+            return null;
+        }
+        const el = frame.getElementByIdFromNode(node, id) orelse return null;
         if (!isLabelable(el)) {
             return null;
         }
@@ -104,33 +110,61 @@ pub const LabelByForIndex = struct {
     }
 };
 
-/// Collects the `<label>` elements associated with a labellable form control.
-/// Matches HTMLInputElement.labels (and the equivalent on button/select/etc).
-/// Includes every `<label for="id">` reference plus the nearest ancestor
-/// `<label>` wrapping the control.
+/// The `<label>` elements whose labeled control is `control`, in tree order.
 pub fn getControlLabels(control: *Element, frame: *Frame) !js.Array {
     const local = frame.js.local orelse return error.NotHandled;
     var arr = local.newArray(0);
     var idx: u32 = 0;
 
-    if (control.getId()) |id_value| {
-        if (id_value.len > 0) {
-            const doc = control.asNode().ownerDocument(frame);
-            const search_root: *Node = if (doc) |d| d.asNode() else control.asNode();
-            var it = TreeWalker.Full.Elements.init(search_root, .{});
-            while (it.next()) |el| {
-                if (el.getTag() != .label) continue;
-                const for_attr = el.getAttributeInterned("for") orelse continue;
-                if (!std.mem.eql(u8, for_attr, id_value)) continue;
-                _ = try arr.set(idx, el, .{});
-                idx += 1;
+    // Like Chrome: a control outside a document or shadow tree has no labels,
+    // not even a wrapping one.
+    const node = control.asNode();
+    if (!node.isConnected() and !node.isInShadowTree()) {
+        return arr;
+    }
+
+    const root = node.getRootNode(.{});
+
+    // Only an id can pull in a `for` label from elsewhere in the tree, and only
+    // if this control is the first element with it. Then walk the whole tree.
+    const by_id = if (control.getId()) |id|
+        id.len > 0 and frame.getElementByIdFromNode(root, id) == control
+    else
+        false;
+
+    if (by_id) {
+        var it = TreeWalker.Full.Elements.init(root, .{});
+        while (it.next()) |el| {
+            const label = el.is(Label) orelse continue;
+            if (label.getControl(frame) != control) {
+                continue;
             }
+            _ = try arr.set(idx, el, .{});
+            idx += 1;
+        }
+        return arr;
+    }
+
+    // Otherwise only ancestor labels can apply. Count first so nested labels
+    // land outermost-first, i.e. in tree order.
+    var count: u32 = 0;
+    var current: ?*Node = node._parent;
+    while (current) |n| : (current = n._parent) {
+        const label = n.is(Label) orelse continue;
+        if (label.getControl(frame) == control) {
+            count += 1;
         }
     }
 
-    if (findWrappingLabel(control)) |wrap_label| {
-        _ = try arr.set(idx, wrap_label, .{});
-        idx += 1;
+    idx = count;
+    current = node._parent;
+    while (current) |n| : (current = n._parent) {
+        const label = n.is(Label) orelse continue;
+        if (label.getControl(frame) != control) {
+            continue;
+        }
+        idx -= 1;
+        _ = try arr.set(idx, label.asElement(), .{});
     }
 
     return arr;
