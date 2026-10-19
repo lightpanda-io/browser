@@ -243,7 +243,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                 target = origin.local.jsValueToZig(*Element, origin) catch null;
             } else {
                 const y = readI32(action, "y", 0);
-                if (frame.document.elementFromVerticalPoint(@floatFromInt(y), frame) catch null) |el| {
+                if (frame.document.hitTestVertical(@floatFromInt(y), frame) catch null) |el| {
                     target = el;
                 } else if (frame.document.getDocumentElement()) |root| {
                     target = root;
@@ -333,7 +333,7 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
         } else {
             // "viewport"/"pointer" origins: approximate hit-testing with
             // the faux layout's vertical axis, falling back to the root.
-            el = frame.document.elementFromVerticalPoint(@floatFromInt(y), frame) catch null;
+            el = frame.document.hitTestVertical(@floatFromInt(y), frame) catch null;
             if (el == null) {
                 el = frame.document.getDocumentElement();
             }

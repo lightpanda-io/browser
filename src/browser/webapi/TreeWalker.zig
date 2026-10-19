@@ -16,12 +16,19 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
+const Frame = @import("../Frame.zig");
 
-pub const Full = TreeWalker(.full);
-pub const FullExcludeSelf = TreeWalker(.exclude_self);
-pub const Children = TreeWalker(.children);
+pub const Full = TreeWalker(.full, .dom);
+pub const FullExcludeSelf = TreeWalker(.exclude_self, .dom);
+pub const Children = TreeWalker(.children, .dom);
+
+// Pierces the shadow roots, apply slots/fallback and skip unslotted light children
+pub const Flat = TreeWalker(.full, .flat);
+pub const FlatChildren = TreeWalker(.children, .flat);
 
 const Mode = enum {
     full,
@@ -29,21 +36,29 @@ const Mode = enum {
     exclude_self,
 };
 
-pub fn TreeWalker(comptime mode: Mode) type {
+const Tree = enum {
+    dom,
+    flat,
+};
+
+pub fn TreeWalker(comptime mode: Mode, comptime tree: Tree) type {
     return struct {
         _current: ?*Node = null,
         _next: ?*Node,
         _root: *Node,
+        _frame: if (tree == .flat) *const Frame else void,
 
         const Self = @This();
-        const Opts = struct {};
+        const Opts = if (tree == .flat) struct { frame: *const Frame } else struct {};
 
         pub fn init(root: *Node, opts: Opts) Self {
-            _ = opts;
-            return .{
-                ._next = firstNext(root),
+            var self: Self = .{
+                ._next = null,
                 ._root = root,
+                ._frame = if (comptime tree == .flat) opts.frame else {},
             };
+            self._next = self.firstNext();
+            return self;
         }
 
         pub fn next(self: *Self) ?*Node {
@@ -51,20 +66,20 @@ pub fn TreeWalker(comptime mode: Mode) type {
             self._current = node;
 
             if (comptime mode == .children) {
-                self._next = node.nextSibling();
+                self._next = self.nextSiblingOf(node);
                 return node;
             }
 
-            if (node.firstChild()) |child| {
+            if (self.firstChildOf(node)) |child| {
                 self._next = child;
             } else {
                 var current: *Node = node;
                 while (current != self._root) {
-                    if (current.nextSibling()) |sibling| {
+                    if (self.nextSiblingOf(current)) |sibling| {
                         self._next = sibling;
                         return node;
                     }
-                    current = current._parent orelse break;
+                    current = self.parentOf(current) orelse break;
                 }
                 self._next = null;
             }
@@ -77,27 +92,27 @@ pub fn TreeWalker(comptime mode: Mode) type {
 
             var current: *Node = current_node;
             while (current != self._root) {
-                if (current.nextSibling()) |sibling| {
+                if (self.nextSiblingOf(current)) |sibling| {
                     self._next = sibling;
                     return;
                 }
-                current = current._parent orelse break;
+                current = self.parentOf(current) orelse break;
             }
             self._next = null;
         }
 
         pub fn reset(self: *Self) void {
             self._current = null;
-            self._next = firstNext(self._root);
+            self._next = self.firstNext();
         }
 
         pub fn contains(self: *const Self, target: *const Node) bool {
             const root = self._root;
 
             if (comptime mode == .children) {
-                var it = root.childrenIterator();
-                while (it.next()) |child| {
-                    if (child == target) {
+                var child = self.firstChildOf(root);
+                while (child) |c| : (child = self.nextSiblingOf(c)) {
+                    if (c == target) {
                         return true;
                     }
                 }
@@ -113,30 +128,66 @@ pub fn TreeWalker(comptime mode: Mode) type {
                 if (node == root) {
                     return true;
                 }
-                node = node._parent orelse return false;
+                node = self.parentOf(@constCast(node)) orelse return false;
             }
         }
 
         pub fn clone(self: *const Self) Self {
-            const root = self._root;
-            return .{
-                ._next = firstNext(root),
-                ._root = root,
+            var copy: Self = .{
+                ._next = null,
+                ._root = self._root,
+                ._frame = self._frame,
+            };
+            copy._next = copy.firstNext();
+            return copy;
+        }
+
+        fn firstNext(self: *const Self) ?*Node {
+            return switch (comptime mode) {
+                .full => self._root,
+                .exclude_self, .children => self.firstChildOf(self._root),
             };
         }
 
-        fn firstNext(root: *Node) ?*Node {
-            return switch (comptime mode) {
-                .full => root,
-                .exclude_self => root.firstChild(),
-                .children => root.firstChild(),
-            };
+        fn firstChildOf(self: *const Self, node: *Node) ?*Node {
+            if (comptime tree == .flat) {
+                if (node.is(Element)) |el| {
+                    if (el.hostedShadowRoot(self._frame)) |shadow| {
+                        return shadow.asNode().firstChild();
+                    }
+                }
+                if (node.is(Element.Html.Slot)) |slot| {
+                    // empty while the slot isn't in a shadow tree
+                    if (slot._assigned.items.len > 0) {
+                        return slot._assigned.items[0];
+                    }
+                }
+            }
+            return node.firstChild();
+        }
+
+        fn nextSiblingOf(self: *const Self, node: *Node) ?*Node {
+            if (comptime tree == .flat) {
+                if (node.assignedSlot(self._frame)) |slot| {
+                    const assigned = slot._assigned.items;
+                    const i = std.mem.indexOfScalar(*Node, assigned, node) orelse return null;
+                    return if (i + 1 < assigned.len) assigned[i + 1] else null;
+                }
+            }
+            return node.nextSibling();
+        }
+
+        fn parentOf(self: *const Self, node: *Node) ?*Node {
+            if (comptime tree == .flat) {
+                return node.flatParent(self._frame);
+            }
+            return node._parent;
         }
 
         pub const Elements = struct {
             tw: Self,
 
-            pub fn init(root: *Node, comptime opts: Opts) Elements {
+            pub fn init(root: *Node, opts: Opts) Elements {
                 return .{
                     .tw = Self.init(root, opts),
                 };
