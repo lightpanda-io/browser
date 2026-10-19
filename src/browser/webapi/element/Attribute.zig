@@ -747,7 +747,7 @@ fn formatAttribute(name: []const u8, value: []const u8, writer: *std.Io.Writer) 
     }
 
     try writer.writeByte('"');
-    const offset = std.mem.findAny(u8, value, "`' &\"<>=\xc2") orelse {
+    const offset = std.mem.findAny(u8, value, "&\"<>\xc2") orelse {
         try writer.writeAll(value);
         return writer.writeByte('"');
     };
