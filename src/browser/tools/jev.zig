@@ -32,6 +32,7 @@ const Frame = lp.Frame;
 const DOMNode = @import("../webapi/Node.zig");
 
 const tools = @import("../tools.zig");
+const classify_local = @import("classify_local.zig");
 const Tool = tools.Tool;
 const ToolError = tools.ToolError;
 const ToolResult = tools.ToolResult;
@@ -144,8 +145,12 @@ pub fn presetQuestions(
 }
 
 /// How much of the page `buildState` sends. The options budget in choose.zig
-/// is sized against it.
+/// is sized against it, and the local model reads the same text, so its cap
+/// is the same.
 const max_state_bytes = 8192;
+comptime {
+    std.debug.assert(max_state_bytes == classify_local.max_tree_bytes);
+}
 
 pub const StateOpts = struct {
     /// Where each link goes. Worth the room it takes within
@@ -156,24 +161,42 @@ pub const StateOpts = struct {
     ids: bool = false,
 };
 
+/// The page as `buildState` sends it, before it becomes JSON.
+pub const State = struct {
+    url: []const u8,
+    title: ?[]const u8,
+    status: ?u16,
+    tree: []const u8,
+};
+
 /// The page as Jev sees it: url, title, status, and the semantic tree of
 /// `node` as text. The tree keeps what markdown drops and the questions turn
 /// on (form fields, dialogs, the title of an iframe holding a CAPTCHA) and,
 /// without node ids, is about as long.
-pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode, registry: *NodeRegistry, opts: StateOpts) !Content {
+pub fn readState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode, registry: *NodeRegistry, opts: StateOpts) !State {
     const tree = lp.SemanticTree.init(arena, node, registry, page, .{ .ids = opts.ids, .link_urls = opts.link_urls }) catch return error.InternalError;
     var aw: std.Io.Writer.Allocating = .init(arena);
     tree.textStringify(&aw.writer) catch return error.InternalError;
 
-    var state: std.json.ObjectMap = .empty;
     // Copied: a helper thread serializes these while page JS frees them.
-    try state.put(arena, "url", .{ .string = try arena.dupe(u8, page.url) });
     const title = page.getTitle() catch null;
-    try state.put(arena, "title", if (title) |t| .{ .string = try arena.dupe(u8, t) } else .null);
-    if (page._http_status) |status| {
+    return .{
+        .url = try arena.dupe(u8, page.url),
+        .title = if (title) |t| try arena.dupe(u8, t) else null,
+        .status = page._http_status,
+        .tree = truncateUtf8(aw.written(), max_state_bytes),
+    };
+}
+
+/// `read` as the JSON Jev is sent.
+pub fn buildState(arena: std.mem.Allocator, read: State) !Content {
+    var state: std.json.ObjectMap = .empty;
+    try state.put(arena, "url", .{ .string = read.url });
+    try state.put(arena, "title", if (read.title) |title| .{ .string = title } else .null);
+    if (read.status) |status| {
         try state.put(arena, "status", .{ .integer = status });
     }
-    try state.put(arena, "content", .{ .string = truncateUtf8(aw.written(), max_state_bytes) });
+    try state.put(arena, "content", .{ .string = read.tree });
     return .{ .json = .{ .object = state } };
 }
 
@@ -194,6 +217,9 @@ pub const Ask = struct {
     /// The subtree the model is shown.
     node: *DOMNode,
     state: StateOpts = .{},
+    /// The page as already read, for a caller that returns it beside the
+    /// answers. `node` and `state` are then unused.
+    read: ?State = null,
 };
 
 pub fn askPage(
@@ -204,7 +230,8 @@ pub fn askPage(
 ) ToolError!Asked {
     const page = try requireFrame(session);
     const loader_id = page._loader_id;
-    const state = buildState(arena, page, ask.node, registry, ask.state) catch |err| return internalUnlessOom(err);
+    const read = ask.read orelse readState(arena, page, ask.node, registry, ask.state) catch |err| return internalUnlessOom(err);
+    const state = buildState(arena, read) catch |err| return internalUnlessOom(err);
 
     var detail: Failure = .{};
     // On a helper thread, pumping here until it answers: a blocking read on

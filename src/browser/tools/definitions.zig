@@ -214,7 +214,8 @@ pub fn of(tool: Tool) Definition {
                 \\  "properties": {
                 \\    "questions": { "type": "string", "description": "JSON string: array of categories, or object of questions (`{}` for every preset)" },
                 \\    "selector": { "type": "string", "description": "Optional CSS selector to classify a specific element subtree instead of the full page" },
-                \\    "presets": { "type": "boolean", "description": "Also ask every preset in the same call, each answered under its own name beside the questions. Needs the object form." }
+                \\    "presets": { "type": "boolean", "description": "Also ask every preset in the same call, each answered under its own name beside the questions. Needs the object form." },
+                \\    "includeInput": { "type": "boolean", "description": "Also return what the questions were asked about: the result becomes `{answers, input}`, with `input` holding the `url`, `title`, `status` and semantic `tree` sent to the model, and the document's `html`." }
                 \\  },
                 \\  "required": ["questions"]
                 \\}

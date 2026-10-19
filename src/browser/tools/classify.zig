@@ -25,6 +25,8 @@ const std = @import("std");
 const lp = @import("../../lightpanda.zig");
 const zenai = @import("zenai");
 const jev = @import("jev.zig");
+const classify_local = @import("classify_local.zig");
+const truncateUtf8 = @import("../../string.zig").truncateUtf8;
 
 const json = zenai.typesafe.json;
 
@@ -53,6 +55,7 @@ pub fn exec(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
         questions: std.json.Value,
         selector: ?[]const u8 = null,
         presets: bool = false,
+        includeInput: bool = false,
     };
     const args = try parseArgs(Params, arena, arguments);
     const page = try requireFrame(session);
@@ -63,10 +66,12 @@ pub fn exec(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
         else => return .{ .text = try arena.print("classify: invalid questions: {s}", .{@errorName(err)}), .is_error = true },
     };
 
+    const read = jev.readState(arena, page, node, registry, .{}) catch |err| return internalUnlessOom(err);
     var response = switch (try askPage(arena, session, registry, .{
         .tool = .classify,
         .questions = prepared.questions,
         .node = node,
+        .read = read,
     })) {
         .failed => |result| return result,
         .ok => |ok| ok,
@@ -74,8 +79,28 @@ pub fn exec(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     defer response.deinit();
 
     const formatted = zenai.typesafe.json.formatAnswers(arena, response.value, prepared) catch |err| return internalUnlessOom(err);
+    if (!args.includeInput) return .{ .text = formatted };
 
-    return .{ .text = formatted };
+    const input = localPage(arena, page, read) catch |err| return internalUnlessOom(err);
+    return .{ .text = try arena.print("{{\"answers\":{s},\"input\":{f}}}", .{ formatted, std.json.fmt(input, .{}) }) };
+}
+
+/// What the local model reads of a page: `read`, what Jev is sent, plus the
+/// document's HTML as the html tool renders it. `includeInput` returns this,
+/// which is how the model's training data is collected, so the model scores
+/// the same text it learned from.
+pub fn localPage(arena: std.mem.Allocator, page: *lp.Frame, read: jev.State) !classify_local.Page {
+    const document = page.document.asNode();
+    const render = try lp.RenderTree.resolve(arena, document, .{}, page);
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try lp.dump.render(render, .{}, &aw.writer, page);
+    return .{
+        .url = read.url,
+        .title = read.title orelse "",
+        .status = read.status orelse 0,
+        .tree = read.tree,
+        .html = truncateUtf8(aw.written(), classify_local.max_html_bytes),
+    };
 }
 
 const testing = @import("../../testing.zig");
