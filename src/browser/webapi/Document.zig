@@ -82,6 +82,11 @@ _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
 // Track IDs that were removed from the map - they might have duplicates in the tree
 _removed_ids: std.StringHashMapUnmanaged(void) = .empty,
+// Ids seen more than once in this tree scope. The id map keeps a single
+// element per id, which is only authoritative for selector matching while
+// the id is unique; the selector engine consults this set to know when the
+// O(1) id fast paths are unsound and it must fall back to a tree walk.
+_duplicated_ids: std.StringHashMapUnmanaged(void) = .empty,
 _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
 _implementation: ?*DOMImplementation = null,
@@ -1279,6 +1284,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
 
     // reset the document
     self._elements_by_id.clearAndFree(frame.page_arena);
+    self._duplicated_ids.clearAndFree(frame.page_arena);
     self.setActiveElement(null, frame);
     self._open_popovers = .empty;
     self._style_sheets = null;

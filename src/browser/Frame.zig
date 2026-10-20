@@ -2517,7 +2517,11 @@ pub fn styleChanged(self: *Frame) void {
     self.page.style_version += 1;
 }
 
-const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
+const ElementIdMaps = struct {
+    lookup: *std.StringHashMapUnmanaged(*Element),
+    removed_ids: *std.StringHashMapUnmanaged(void),
+    duplicated_ids: *std.StringHashMapUnmanaged(void),
+};
 
 fn getElementIdMap(frame: *Frame, node: *Node) ElementIdMaps {
     return idMapsForRoot(node.getRootNode(.{})) orelse {
@@ -2528,6 +2532,7 @@ fn getElementIdMap(frame: *Frame, node: *Node) ElementIdMaps {
         return .{
             .lookup = &frame.document._elements_by_id,
             .removed_ids = &frame.document._removed_ids,
+            .duplicated_ids = &frame.document._duplicated_ids,
         };
     };
 }
@@ -2539,6 +2544,7 @@ fn idMapsForRoot(root: *Node) ?ElementIdMaps {
         return .{
             .lookup = &shadow_root._elements_by_id,
             .removed_ids = &shadow_root._removed_ids,
+            .duplicated_ids = &shadow_root._duplicated_ids,
         };
     }
     if (root._type == .document) {
@@ -2546,6 +2552,7 @@ fn idMapsForRoot(root: *Node) ?ElementIdMaps {
         return .{
             .lookup = &doc._elements_by_id,
             .removed_ids = &doc._removed_ids,
+            .duplicated_ids = &doc._duplicated_ids,
         };
     }
     return null;
@@ -2570,6 +2577,16 @@ fn addElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, element: *Element,
     if (!gop.found_existing) {
         gop.value_ptr.* = element;
         return;
+    }
+
+    // The id already exists in this scope: remember that it is duplicated.
+    // The lookup map can only hold one element per id, so anything resolving
+    // ids through it (getElementById's first-in-tree-order semantics are
+    // fine) must know when it is not authoritative; the selector engine uses
+    // this to decide whether its id fast paths are sound.
+    const dup_gop = try id_maps.duplicated_ids.getOrPut(self.page_arena, gop.key_ptr.*);
+    if (!dup_gop.found_existing) {
+        dup_gop.value_ptr.* = {};
     }
 
     const existing = gop.value_ptr.*.asNode();
@@ -2617,6 +2634,22 @@ pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Eleme
         }
     }
     return null;
+}
+
+/// Whether more than one element in `node`'s tree scope carries `id`. When
+/// true, the id map's single entry per id is not authoritative for selector
+/// matching, which must consider every element. A detached scope has no map
+/// at all; report true so callers take the safe path.
+pub fn idHasDuplicates(self: *Frame, node: *Node, id: []const u8) bool {
+    _ = self;
+    const root = node.getRootNode(.{});
+    if (root.is(ShadowRoot)) |shadow_root| {
+        return shadow_root._duplicated_ids.contains(id);
+    }
+    if (root._type == .document) {
+        return root.subtype(Document)._duplicated_ids.contains(id);
+    }
+    return true;
 }
 
 pub fn performance(self: *Frame) *Performance {

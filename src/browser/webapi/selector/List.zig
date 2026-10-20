@@ -108,8 +108,20 @@ fn optimizeSelector(root: *Node, selector: *const Selector.Selector, nth: *NthCa
     const id_element = frame.getElementByIdFromNode(root, id) orelse return null;
     const id_node = id_element.asNode();
 
-    if (!root.contains(id_node)) {
-        return null;
+    // The id map holds the tree-scope-wide first element with this id, so
+    // narrowing the traversal to its subtree is only sound while it is a
+    // strict descendant of the queried root AND the id is unique in the tree
+    // scope. Otherwise fall back to the general traversal of the root's
+    // descendants: with duplicate ids (invalid HTML, but common in the wild)
+    // a later duplicate inside the queried root must be reachable too, both
+    // for first-match and collect-all walks. The queried root itself is also
+    // never a match.
+    if (id_node == root or !root.contains(id_node) or frame.idHasDuplicates(root, id)) {
+        return .{
+            .root = root,
+            .selector = selector.*,
+            .exclude_root = true,
+        };
     }
 
     // If the ID is in the first compound

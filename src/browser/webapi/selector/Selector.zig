@@ -451,17 +451,23 @@ pub fn query(selectors: []const Selector, root: *Node, frame: *Frame) !?*Node.El
     defer nth.deinit();
 
     for (selectors) |selector| {
-        // Fast path: single compound with only an ID selector
-        if (selector.segments.len == 0 and selector.first.parts.len == 1) {
-            const first = selector.first.parts[0];
-            if (first == .id) {
-                const el = frame.getElementByIdFromNode(root, first.id) orelse continue;
-                // Check if the element is within the root subtree
+        // Fast path: single compound with only an ID selector. The id map
+        // holds the first element with that id in tree order for the whole
+        // tree scope; when it is a descendant of the queried root it is also
+        // the first match within the subtree, so it can be returned directly.
+        // When it is not (the id is absent, or with invalid-but-common
+        // duplicate ids the tree-scope-first match lives outside the queried
+        // root, or is the root itself), fall through to the general
+        // traversal, which scopes matching to the root's descendants.
+        if (selector.segments.len == 0 and selector.first.parts.len == 1 and
+            selector.first.parts[0] == .id)
+        {
+            const id = selector.first.parts[0].id;
+            if (frame.getElementByIdFromNode(root, id)) |el| {
                 const node = el.asNode();
                 if (node != root and root.contains(node)) {
                     return el;
                 }
-                continue;
             }
         }
 

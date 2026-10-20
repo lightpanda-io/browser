@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!-- Invalid but common in the wild: the same id in two sibling subtrees. -->
+<div data-flow="one"><div id="dup">first</div></div>
+<div data-flow="two"><div id="dup">second</div></div>
+
+<script>
+  function assertList(expected, result) {
+    testing.expectEqual(expected.length, result.length);
+    testing.expectEqual(expected, Array.from(result).map((e) => e.textContent));
+  }
+</script>
+
+<script id=duplicateIdScopedQuerySelector>
+{
+  // querySelector('#id') matches descendants of the queried root, in tree
+  // order. The document-wide id map keeps only the first element per id, so
+  // querying from the subtree holding a later duplicate must not return null.
+  const one = document.querySelector('[data-flow="one"]');
+  const two = document.querySelector('[data-flow="two"]');
+
+  testing.expectEqual('first', one.querySelector('#dup').textContent);
+  testing.expectEqual('second', two.querySelector('#dup').textContent);
+
+  // the attribute-selector path agrees
+  testing.expectEqual('second', two.querySelector('[id="dup"]').textContent);
+
+  // an absent id is still null
+  testing.expectEqual(null, two.querySelector('#nope'));
+
+  // getElementById keeps its tree-scope, first-in-tree-order semantics
+  testing.expectEqual('first', document.getElementById('dup').textContent);
+}
+</script>
+
+<script id=duplicateIdQuerySelectorAll>
+{
+  // querySelectorAll('#id') returns every match, in tree order.
+  assertList(['first', 'second'], document.querySelectorAll('#dup'));
+  assertList(['first'], document.querySelector('[data-flow="one"]').querySelectorAll('#dup'));
+  assertList(['second'], document.querySelector('[data-flow="two"]').querySelectorAll('#dup'));
+}
+</script>
+
+<script id=duplicateIdRootItself>
+{
+  // Selectors only match descendants: the queried root is never a match,
+  // even when it carries the id itself.
+  const first = document.querySelector('[data-flow="one"] #dup');
+  testing.expectEqual('first', first.textContent);
+  testing.expectEqual(null, first.querySelector('#dup'));
+  testing.expectEqual(0, first.querySelectorAll('#dup').length);
+}
+</script>
+
+<script id=duplicateIdAddedLater>
+{
+  // A third duplicate injected via script must be found too: the id map
+  // keeps pointing at the first element, but the selector engine must not.
+  const two = document.querySelector('[data-flow="two"]');
+  const third = document.createElement('div');
+  third.id = 'dup';
+  third.textContent = 'third';
+  two.appendChild(third);
+
+  assertList(['first', 'second', 'third'], document.querySelectorAll('#dup'));
+  testing.expectEqual('second', two.querySelector('#dup').textContent);
+  testing.expectEqual('first', document.getElementById('dup').textContent);
+}
+</script>
+
+<script id=duplicateIdDescendantSelectors>
+{
+  // The id anchor optimization must not hide matches under later duplicates.
+  const one = document.querySelector('[data-flow="one"]');
+  const two = document.querySelector('[data-flow="two"]');
+
+  const deep_two = document.createElement('p');
+  deep_two.id = 'deep';
+  deep_two.textContent = 'deep-two';
+  two.querySelector('#dup').appendChild(deep_two);
+
+  const deep_one = document.createElement('p');
+  deep_one.id = 'deep';
+  deep_one.textContent = 'deep-one';
+  one.appendChild(deep_one);
+
+  // #deep exists (map: first) under "one", but queried from "two" the match
+  // under "two" must be found.
+  testing.expectEqual('deep-two', two.querySelector('#deep').textContent);
+  assertList(['deep-two'], two.querySelectorAll('#deep'));
+  assertList(['deep-one', 'deep-two'], document.querySelectorAll('#deep'));
+}
+</script>

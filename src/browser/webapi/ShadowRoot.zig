@@ -62,6 +62,8 @@ _declarative: bool,
 _available_to_internals: bool = false,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .{},
 _removed_ids: std.StringHashMapUnmanaged(void) = .{},
+// As Document._duplicated_ids: ids seen more than once in this scope.
+_duplicated_ids: std.StringHashMapUnmanaged(void) = .{},
 _adopted_style_sheets: ?js.Object.Global = null,
 
 pub fn init(host: *Element, opts: AttachOptions, frame: *Frame) !*ShadowRoot {
