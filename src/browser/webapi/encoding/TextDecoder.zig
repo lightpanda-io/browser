@@ -178,12 +178,21 @@ fn _decode(self: *TextDecoder, arena: std.mem.Allocator, input: []const u8, deco
 
     // The decoder does no BOM sniffing, so a BOM of this encoding is a
     // leading U+FEFF in the first output; other bytes stay as decoded.
+    // Only UTF-8 and UTF-16 have a BOM: in gb18030, U+FEFF is a character.
     if (!self._bom_seen and decoded.len > 0) {
-        if (!self._ignore_bom) decoded = stripBom(decoded);
+        if (self._ignore_bom == false and hasBom(self._encoding_name)) {
+            decoded = stripBom(decoded);
+        }
         self._bom_seen = true;
     }
 
     return decoded;
+}
+
+fn hasBom(encoding_name: []const u8) bool {
+    return std.mem.eql(u8, encoding_name, "UTF-8") or
+        std.mem.eql(u8, encoding_name, "UTF-16LE") or
+        std.mem.eql(u8, encoding_name, "UTF-16BE");
 }
 
 fn stripBom(data: []const u8) []const u8 {
