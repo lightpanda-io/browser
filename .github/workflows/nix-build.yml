@@ -27,8 +27,6 @@ jobs:
             system: x86_64-linux
           - os: ubuntu-24.04-arm
             system: aarch64-linux
-          - os: macos-13
-            system: x86_64-darwin
           - os: macos-latest
             system: aarch64-darwin
 
