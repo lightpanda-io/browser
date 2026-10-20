@@ -377,9 +377,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         }
     }
 
-    // Pages swapped for their markdown alternate. This runs after the errors
-    // and HTTP statuses above are recorded, and skips pages that failed, so an
-    // alternate's 200 can't hide a failed page.
+    // After the errors above are recorded, so a failed page keeps them.
     const alternates = try session.arena.allocator().alloc(bool, pages.items.len);
     @memset(alternates, false);
     if (opts.markdown_alternate) {
@@ -416,8 +414,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
 /// Loads each page's markdown alternate in a page of its own (same session, so
 /// same cookies, robots and proxy) and swaps it in for the page when it loads
 /// as markdown, marking it in `followed`. Otherwise the page is kept and
-/// converted as usual. Pages with an error, a bot challenge or an HTTP error
-/// status are kept as they are.
+/// converted as usual.
 fn followMarkdownAlternates(session: *Session, pages: []Session.PageHandle, errors: []const ?anyerror, timeout_ms: u32, followed: []bool) !void {
     const arena = session.arena.allocator();
     const alternates = try arena.alloc(?Session.PageHandle, pages.len);
@@ -426,13 +423,7 @@ fn followMarkdownAlternates(session: *Session, pages: []Session.PageHandle, erro
         alternate.* = null;
         if (err != null) continue;
         const frame = page.frame() orelse continue;
-        if (!markdown.canFollowAlternate(frame)) continue;
-        const url = try markdown.alternateUrl(arena, frame) orelse continue;
-        const alt = try session.createPage();
-        alt.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } }) catch {
-            alt.close();
-            continue;
-        };
+        const alt = try markdown.openAlternate(arena, session, frame) orelse continue;
         alternate.* = alt;
         try conditions.append(arena, .{ .frame_id = alt.frame_id, .until = .load });
     }
@@ -556,12 +547,15 @@ fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
 }
 
 fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Frame, alternate: bool, writer: *std.Io.Writer) !void {
+    if (alternate) {
+        return markdown.dumpAlternate(frame, opts.dump.max_bytes, writer);
+    }
     var arena: std.heap.ArenaAllocator = .init(app.allocator);
     defer arena.deinit();
     const state = try RenderTree.resolve(arena.allocator(), try dumpRoot(frame, opts.selector), opts.dump.strip, frame);
     switch (mode) {
         .html => try dump.render(state, opts.dump, writer, frame),
-        .markdown => try markdown.dump(state, .{ .max_bytes = opts.dump.max_bytes, .alternate = alternate }, writer, frame),
+        .markdown => try markdown.dump(state, .{ .max_bytes = opts.dump.max_bytes }, writer, frame),
         .png => {
             _ = try screenshot.png(arena.allocator(), state, pngOpts(frame), writer, frame);
         },
@@ -832,10 +826,7 @@ test "fetch: followMarkdownAlternates swaps in a page's markdown alternate" {
     try testing.expectString(base ++ "markdown_flex.html", pages[2].frame().?.url);
     // Many servers send .md files as text/plain; the link already says it's markdown.
     try testing.expectString(base ++ "markdown_source.txt", pages[3].frame().?.url);
-    try testing.expectEqual(true, followed[0]);
-    try testing.expectEqual(false, followed[1]);
-    try testing.expectEqual(false, followed[2]);
-    try testing.expectEqual(true, followed[3]);
+    try testing.expectEqualSlices(bool, &.{ true, false, false, true }, &followed);
     try testing.expectEqual(4, session.pages.items.len);
 
     // A followed text/plain alternate is written as-is, not fenced.
@@ -863,8 +854,7 @@ test "fetch: followMarkdownAlternates keeps a page that failed" {
     const page_url = "http://127.0.0.1:9582/src/browser/tests/markdown_alternate.html";
     try testing.expectString(page_url, pages[0].frame().?.url);
     try testing.expectString(page_url, pages[1].frame().?.url);
-    try testing.expectEqual(false, followed[0]);
-    try testing.expectEqual(false, followed[1]);
+    try testing.expectEqualSlices(bool, &.{ false, false }, &followed);
     try testing.expectEqual(2, session.pages.items.len);
 }
 

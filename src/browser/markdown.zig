@@ -20,6 +20,7 @@ const std = @import("std");
 
 const URL = @import("URL.zig");
 const Frame = @import("Frame.zig");
+const Session = @import("Session.zig");
 const Selector = @import("webapi/selector/Selector.zig");
 const RenderTree = @import("RenderTree.zig");
 const StyleManager = @import("StyleManager.zig");
@@ -35,10 +36,6 @@ const repeat = @import("../string.zig").repeat;
 
 pub const Opts = struct {
     max_bytes: ?u32 = null,
-    /// The document is a followed `<link rel="alternate" type="text/markdown">`.
-    /// The link already says the file is markdown, and many servers send `.md`
-    /// files as text/plain, so a text/plain alternate is written as-is too.
-    alternate: bool = false,
 };
 
 const truncation_marker = LimitedWriter.truncation_marker;
@@ -485,20 +482,16 @@ const Context = struct {
 
 /// A text/markdown response is loaded as a text document, its body a single
 /// `<pre>`. Converting that would fence the whole file, so the document's
-/// text, which is the markdown the server sent, is written as-is. A text/plain
-/// document counts only as a followed alternate: plain text loaded directly
-/// isn't necessarily markdown and stays fenced.
-fn markdownSource(node: *Node, alternate: bool) ?*Node {
+/// text, which is the markdown the server sent, is written as-is.
+fn markdownSource(node: *Node) ?*Node {
     const doc = node.is(Document) orelse return null;
-    const content_type = doc.getContentType();
-    if (!std.mem.eql(u8, content_type, "text/markdown") and
-        !(alternate and std.mem.eql(u8, content_type, "text/plain"))) return null;
+    if (!std.mem.eql(u8, doc.getContentType(), "text/markdown")) return null;
     const root = doc.getDocumentElement() orelse return null;
     return root.asNode();
 }
 
-fn writeSource(source: *Node, opts: Opts, writer: *std.Io.Writer) !void {
-    var lw = LimitedWriter.init(writer, opts.max_bytes);
+fn writeSource(source: *Node, max_bytes: ?u32, writer: *std.Io.Writer) !void {
+    var lw = LimitedWriter.init(writer, max_bytes);
     source.getTextContent(&lw.writer) catch |err| {
         if (!lw.truncated) return err;
         try writer.writeAll(truncation_marker);
@@ -515,33 +508,49 @@ pub fn alternateUrl(arena: std.mem.Allocator, frame: *Frame) !?[:0]const u8 {
         error.TypeError => return null,
         else => return err,
     };
-    const protocol = URL.getProtocol(url);
-    if (!std.mem.eql(u8, protocol, "http:") and !std.mem.eql(u8, protocol, "https:")) return null;
+    if (!URL.isRemoteScheme(url)) return null;
     return url;
 }
 
-/// Whether a page may be swapped for its alternate: only one that loaded
-/// fine. The alternate of a 404 or a bot challenge page would hide the
-/// failure behind its own 200.
-pub fn canFollowAlternate(frame: *Frame) bool {
-    if (frame._last_navigate_error != null or frame._bot_challenge != null) return false;
-    const status = frame._http_status orelse return true;
-    return status < 400;
+/// Starts loading the page's markdown alternate in a new page of the same
+/// session. Null when the page has no alternate, or failed itself: the
+/// alternate of a 404 or a bot challenge page would hide the failure behind
+/// its own 200.
+pub fn openAlternate(arena: std.mem.Allocator, session: *Session, frame: *Frame) !?Session.PageHandle {
+    if (frame._last_navigate_error != null or frame._bot_challenge != null) return null;
+    if (frame._http_status) |status| {
+        if (status >= 400) return null;
+    }
+    const url = try alternateUrl(arena, frame) orelse return null;
+    const page = try session.createPage();
+    page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } }) catch {
+        page.close();
+        return null;
+    };
+    return page;
 }
 
-/// Whether a followed alternate can stand in for the page: a 2xx
-/// text/markdown or text/plain response.
+/// Whether a loaded alternate can stand in for the page: a 2xx text/markdown
+/// or text/plain response. The link already says the file is markdown, and
+/// many servers send `.md` files as text/plain.
 pub fn isAlternateLoaded(frame: *Frame) bool {
     if (frame._last_navigate_error != null) return false;
     const status = frame._http_status orelse return false;
     if (status < 200 or status >= 300) return false;
-    return markdownSource(frame.document.asNode(), true) != null;
+    const content_type = frame.document.getContentType();
+    return std.mem.eql(u8, content_type, "text/markdown") or std.mem.eql(u8, content_type, "text/plain");
+}
+
+/// Writes an alternate that passed `isAlternateLoaded` as-is.
+pub fn dumpAlternate(frame: *Frame, max_bytes: ?u32, writer: *std.Io.Writer) !void {
+    const root = frame.document.getDocumentElement() orelse return;
+    return writeSource(root.asNode(), max_bytes, writer);
 }
 
 pub fn dump(state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
     const node = state.root;
-    if (markdownSource(node, opts.alternate)) |source| {
-        return writeSource(source, opts, writer);
+    if (markdownSource(node)) |source| {
+        return writeSource(source, opts.max_bytes, writer);
     }
     if (opts.max_bytes) |limit| {
         var lw = LimitedWriter.init(writer, limit);
@@ -1058,7 +1067,7 @@ test "browser.markdown: text/plain is written as-is only as a followed alternate
     try testing.expect(!std.mem.eql(u8, direct.written(), source));
 
     var followed: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    try dump(.{ .root = frame.window._document.asNode() }, .{ .alternate = true }, &followed.writer, frame);
+    try dumpAlternate(frame, null, &followed.writer);
     try testing.expectString(source, followed.written());
 }
 

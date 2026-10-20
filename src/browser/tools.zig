@@ -1656,12 +1656,9 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     if (args.alternate) {
         // The alternate stands for the whole page, like `fetch --markdown-alternate`.
         if (args.selector != null or args.backendNodeId != null) return ToolError.InvalidParams;
-        if (lp.markdown.canFollowAlternate(page)) {
-            // One timeout for the call: the alternate gets what loading the page left.
-            const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
-            const remaining = (args.timeout orelse default_nav_timeout_ms) -| elapsed;
-            if (try readMarkdownAlternate(arena, session, page, args.maxBytes, remaining)) |text| return text;
-        }
+        const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
+        const remaining = (args.timeout orelse default_nav_timeout_ms) -| elapsed;
+        if (try readMarkdownAlternate(arena, session, page, args.maxBytes, remaining)) |text| return text;
     }
 
     const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
@@ -1674,10 +1671,13 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
 
 /// The page's `<link rel="alternate" type="text/markdown">`, loaded in a page
 /// of its own so the current page stays where it is. Null when there is no
-/// such link or it doesn't load as markdown within `timeout_ms`.
+/// such link, the page failed, or the alternate doesn't load as markdown
+/// within `timeout_ms`.
 fn readMarkdownAlternate(arena: std.mem.Allocator, session: *lp.Session, frame: *lp.Frame, max_bytes: ?u32, timeout_ms: u32) ToolError!?[]const u8 {
-    const url = (lp.markdown.alternateUrl(arena, frame) catch return ToolError.InternalError) orelse return null;
-    const page = openPage(session, url) catch return null;
+    const page = (lp.markdown.openAlternate(arena, session, frame) catch |err| return switch (err) {
+        error.OutOfMemory => ToolError.OutOfMemory,
+        else => ToolError.InternalError,
+    }) orelse return null;
     defer page.close();
 
     var runner = session.runner(.{});
@@ -1695,8 +1695,7 @@ fn readMarkdownAlternate(arena: std.mem.Allocator, session: *lp.Session, frame: 
     // Say which source this is: the alternate can differ from the rendered page.
     var aw: std.Io.Writer.Allocating = .init(arena);
     aw.writer.print("<!-- markdown alternate: {s} -->\n", .{alternate.url}) catch return ToolError.OutOfMemory;
-    lp.markdown.dump(.{ .root = alternate.document.asNode() }, .{ .max_bytes = max_bytes, .alternate = true }, &aw.writer, alternate) catch
-        return ToolError.InternalError;
+    lp.markdown.dumpAlternate(alternate, max_bytes, &aw.writer) catch return ToolError.InternalError;
     return aw.written();
 }
 
