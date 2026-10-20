@@ -74,7 +74,7 @@
           buildDeps =
             pkgs:
             if pkgs.stdenv.isDarwin then
-              [ ]
+              [ pkgs.apple-sdk ]
             else
               (with pkgs; [
                 gcc
