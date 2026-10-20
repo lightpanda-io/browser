@@ -180,11 +180,11 @@ pub fn selectionAvailable(_: *const TextArea) bool {
 
 // Non-null unlike input
 fn getSelectionStart(self: *const TextArea) u32 {
-    return self._selection_start;
+    return entry.selectionOffsetToJs(self, self._selection_start);
 }
 
 fn getSelectionEnd(self: *const TextArea) u32 {
-    return self._selection_end;
+    return entry.selectionOffsetToJs(self, self._selection_end);
 }
 
 pub fn getForm(self: *TextArea, frame: *Frame) ?*Form {
