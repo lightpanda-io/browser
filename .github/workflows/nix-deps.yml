@@ -1,4 +1,4 @@
-name: nix
+name: nix-deps
 
 # Checks the flake, then regenerates nix/v8-deps.nix (hashes for the
 # prebuilt V8 archives pinned in .github/actions/install/action.yml) and
