@@ -591,6 +591,26 @@
   }
 </script>
 
+<script id="selection_utf16_offsets">
+  {
+    // Offsets count UTF-16 code units, like value.length.
+    const el = document.createElement('input');
+    el.value = 'h\u00e9llo';
+    testing.expectEqual(5, el.selectionStart);
+    testing.expectEqual(5, el.selectionEnd);
+    el.setSelectionRange(1, 3);
+    testing.expectEqual('\u00e9l', el.value.substring(el.selectionStart, el.selectionEnd));
+
+    el.value = 'a\u{1F600}b';
+    testing.expectEqual(4, el.selectionEnd);
+    el.selectionStart = 3;
+    testing.expectEqual(3, el.selectionStart);
+    el.setSelectionRange(10, 20);
+    testing.expectEqual(4, el.selectionStart);
+    testing.expectEqual(4, el.selectionEnd);
+  }
+</script>
+
 <script id="select_without_selection_api">
   {
     // select() never throws, even where the selection APIs don't apply.

@@ -1011,17 +1011,21 @@ pub const Script = struct {
             return;
         }
 
-        const caught = try_catch.caughtOrError(frame.local_arena, error.Unknown);
         lp.metrics.script_errors.incr();
-        log.debug(.js, "eval script", .{
-            .url = url,
-            .caught = caught,
-        });
 
+        // Report before caughtOrError: reading the exception's stack drops
+        // the frames reportError needs for the error's location.
         if (try_catch.exceptionValue()) |exc| {
             frame.window.reportError(exc, frame) catch |err| {
                 log.debug(.js, "eval script report error", .{ .url = url, .err = err });
             };
+        }
+
+        if (log.enabled(.js, .debug)) {
+            log.debug(.js, "eval script", .{
+                .url = url,
+                .caught = try_catch.caughtOrError(frame.local_arena, error.Unknown),
+            });
         }
 
         // a classic script that throws is still "loaded". For a module, we can't

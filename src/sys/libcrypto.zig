@@ -25,7 +25,7 @@ pub const EVP_MD = struct_env_md_st;
 const struct_engine_st = opaque {};
 const ENGINE = struct_engine_st;
 const struct_ec_key_st = opaque {};
-const EC_KEY = struct_ec_key_st;
+pub const EC_KEY = struct_ec_key_st;
 const struct_evp_pkey_st = opaque {};
 pub const EVP_PKEY = struct_evp_pkey_st;
 const struct_evp_pkey_ctx_st = opaque {};
@@ -149,15 +149,54 @@ pub extern fn EC_KEY_generate_key(key: *EC_KEY) c_int;
 pub extern fn EC_KEY_free(key: ?*EC_KEY) void;
 pub extern fn EC_KEY_get0_public_key(key: *const EC_KEY) ?*const EC_POINT;
 pub extern fn EC_KEY_set_public_key(key: *EC_KEY, point: *const EC_POINT) c_int;
+pub extern fn EC_KEY_get0_private_key(key: *const EC_KEY) ?*const BIGNUM;
+pub extern fn EC_KEY_set_private_key(key: *EC_KEY, priv: *const BIGNUM) c_int;
+/// 1 when the public key is a valid point (not infinity) and matches the
+/// private key, if any.
+pub extern fn EC_KEY_check_key(key: *const EC_KEY) c_int;
+pub extern fn EVP_PKEY_get0_EC_KEY(pkey: *const EVP_PKEY) ?*EC_KEY;
+const struct_ec_group_st = opaque {};
+const EC_GROUP = struct_ec_group_st;
+pub extern fn EC_KEY_get0_group(key: *const EC_KEY) ?*const EC_GROUP;
+pub extern fn EC_GROUP_get0_order(group: *const EC_GROUP) ?*const BIGNUM;
+pub extern fn EC_GROUP_get_curve_name(group: *const EC_GROUP) c_int;
 
-// DER decoders (advance `inp` past the parsed structure).
-pub extern fn d2i_PUBKEY(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
-pub extern fn d2i_AutoPrivateKey(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
+// SEC 1 point encodings: 0x04 || x || y, or compressed 0x02/0x03 || x.
+pub const POINT_CONVERSION_UNCOMPRESSED = 4;
+pub extern fn EC_POINT_new(group: *const EC_GROUP) ?*EC_POINT;
+pub extern fn EC_POINT_free(point: ?*EC_POINT) void;
+/// Fails for an encoding that isn't a point on the curve.
+pub extern fn EC_POINT_oct2point(group: *const EC_GROUP, point: *EC_POINT, buf: [*]const u8, len: usize, ctx: ?*anyopaque) c_int;
+/// With a null `buf`, returns the encoding's length; 0 on error.
+pub extern fn EC_POINT_point2oct(group: *const EC_GROUP, point: *const EC_POINT, form: c_int, buf: ?[*]u8, len: usize, ctx: ?*anyopaque) usize;
+
+// ECDSA over a digest, with the signature as an (r, s) pair.
+const struct_ecdsa_sig_st = opaque {};
+pub const ECDSA_SIG = struct_ecdsa_sig_st;
+pub extern fn ECDSA_do_sign(digest: [*]const u8, digest_len: usize, key: *const EC_KEY) ?*ECDSA_SIG;
+/// Returns 1 for a valid signature, 0 otherwise (on the error queue).
+pub extern fn ECDSA_do_verify(digest: [*]const u8, digest_len: usize, sig: *const ECDSA_SIG, key: *const EC_KEY) c_int;
+pub extern fn ECDSA_SIG_new() ?*ECDSA_SIG;
+pub extern fn ECDSA_SIG_free(sig: ?*ECDSA_SIG) void;
+pub extern fn ECDSA_SIG_get0(sig: *const ECDSA_SIG, out_r: *?*const BIGNUM, out_s: *?*const BIGNUM) void;
+/// Takes ownership of `r` and `s` on success only.
+pub extern fn ECDSA_SIG_set0(sig: *ECDSA_SIG, r: *BIGNUM, s: *BIGNUM) c_int;
+
+// DER decoders over a CBS (a byte string cursor, advanced past the parsed
+// structure). Unlike the d2i_* family, these parse exactly one SubjectPublicKeyInfo
+// or PrivateKeyInfo: no legacy RSAPrivateKey / ECPrivateKey fallback.
+pub const CBS = extern struct {
+    data: [*]const u8,
+    len: usize,
+};
+pub extern fn EVP_parse_public_key(cbs: *CBS) ?*EVP_PKEY;
+pub extern fn EVP_parse_private_key(cbs: *CBS) ?*EVP_PKEY;
 
 // RSA: key generation, import, and the encrypt/decrypt and sign/verify operations.
 pub const EVP_PKEY_RSA = 6; // NID_rsaEncryption
 pub const RSA_PKCS1_PADDING = 1;
 pub const RSA_PKCS1_OAEP_PADDING = 4;
+pub const RSA_PKCS1_PSS_PADDING = 6;
 
 const struct_rsa_st = opaque {};
 pub const RSA = struct_rsa_st;
@@ -206,6 +245,8 @@ pub extern fn BN_free(bn: ?*BIGNUM) void;
 pub extern fn BN_bin2bn(in: [*c]const u8, len: usize, ret: ?*BIGNUM) ?*BIGNUM;
 pub extern fn BN_num_bytes(bn: *const BIGNUM) c_uint;
 pub extern fn BN_bn2bin(in: *const BIGNUM, out: [*]u8) usize;
+/// Big-endian, left-padded with zeros to exactly `len` bytes; 0 if it doesn't fit.
+pub extern fn BN_bn2bin_padded(out: [*]u8, len: usize, in: *const BIGNUM) c_int;
 
 pub extern fn OPENSSL_malloc(size: usize) ?*anyopaque;
 pub extern fn OPENSSL_free(ptr: ?*anyopaque) void;
@@ -217,6 +258,9 @@ pub extern fn EVP_PKEY_decrypt(ctx: ?*EVP_PKEY_CTX, out: [*c]u8, out_len: *usize
 pub extern fn EVP_PKEY_CTX_set_rsa_padding(ctx: ?*EVP_PKEY_CTX, padding: c_int) c_int;
 pub extern fn EVP_PKEY_CTX_set_rsa_oaep_md(ctx: ?*EVP_PKEY_CTX, md: *const EVP_MD) c_int;
 pub extern fn EVP_PKEY_CTX_set_rsa_mgf1_md(ctx: ?*EVP_PKEY_CTX, md: *const EVP_MD) c_int;
+/// Negative values are special: -1 is the digest's length; -2 is the maximum
+/// when signing, and any length (read from the signature) when verifying.
+pub extern fn EVP_PKEY_CTX_set_rsa_pss_saltlen(ctx: ?*EVP_PKEY_CTX, salt_len: c_int) c_int;
 /// Takes ownership of `label` (an OPENSSL_malloc buffer) on success only.
 pub extern fn EVP_PKEY_CTX_set0_rsa_oaep_label(ctx: ?*EVP_PKEY_CTX, label: [*]u8, label_len: usize) c_int;
 
@@ -227,6 +271,15 @@ pub const EVP_PKEY_ED25519 = NID_ED25519;
 
 pub extern fn EVP_PKEY_new_raw_private_key(@"type": c_int, unused: ?*ENGINE, in: [*c]const u8, len: usize) ?*EVP_PKEY;
 pub extern fn EVP_PKEY_new_raw_public_key(@"type": c_int, unused: ?*ENGINE, in: [*c]const u8, len: usize) ?*EVP_PKEY;
+/// With `out` null, sets `out_len` to the key's size; otherwise writes it.
+pub extern fn EVP_PKEY_get_raw_private_key(pkey: *const EVP_PKEY, out: [*c]u8, out_len: *usize) c_int;
+pub extern fn EVP_PKEY_get_raw_public_key(pkey: *const EVP_PKEY, out: [*c]u8, out_len: *usize) c_int;
+
+pub const ED25519_PUBLIC_KEY_LEN = 32;
+/// BoringSSL's Ed25519 private key: the 32-byte seed, then the public key.
+pub const ED25519_PRIVATE_KEY_LEN = 64;
+pub const ED25519_SIGNATURE_LEN = 64;
+pub extern fn ED25519_keypair(out_public_key: *[ED25519_PUBLIC_KEY_LEN]u8, out_private_key: *[ED25519_PRIVATE_KEY_LEN]u8) void;
 pub extern fn EVP_PKEY_CTX_new(pkey: ?*EVP_PKEY, e: ?*ENGINE) ?*EVP_PKEY_CTX;
 pub extern fn EVP_PKEY_CTX_free(ctx: ?*EVP_PKEY_CTX) void;
 pub extern fn EVP_PKEY_derive_init(ctx: ?*EVP_PKEY_CTX) c_int;

@@ -89,7 +89,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     try frame.trackWorker(self);
 
     if (session.load_resources.worker == false) {
-        log.warnDisabledWorker();
+        frame.page.status.noteSkipped(.worker);
         return self;
     }
 
@@ -233,7 +233,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
 
             js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_arena.?.allocator(), err);
-            log.debug(.browser, "worker script error", .{ .url = self._url, .caught = caught });
+            log.warn(.page_error, "uncaught exception", .{ .url = self._url, .caught = caught });
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);
             return;
         },
@@ -244,7 +244,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
 
             js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_arena.?.allocator(), err);
-            log.debug(.browser, "worker module error", .{ .url = self._url, .caught = caught });
+            log.warn(.page_error, "uncaught exception", .{ .url = self._url, .caught = caught });
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);
             return;
         },
@@ -443,6 +443,8 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Worker" {
     testing.silenceLog(&.{ .http, .browser, .browser });
+    // report-error-worker.js throws five uncaught exceptions on purpose.
+    testing.expectLog(&.{ .page_error, .page_error, .page_error, .page_error, .page_error });
 
     // Worker tests chain a worker-script fetch with a dynamic-import fetch
     // and a cross-context postMessage. The default 2 s assertion budget can

@@ -747,7 +747,7 @@ fn formatAttribute(name: []const u8, value: []const u8, writer: *std.Io.Writer) 
     }
 
     try writer.writeByte('"');
-    const offset = std.mem.findAny(u8, value, "`' &\"<>=") orelse {
+    const offset = std.mem.findAny(u8, value, "&\"<>\xc2") orelse {
         try writer.writeAll(value);
         return writer.writeByte('"');
     };
@@ -790,28 +790,29 @@ const boolean_attributes_lookup = std.StaticStringMap(void).initComptime(blk: {
 fn writeEscapedAttributeValue(value: []const u8, first_offset: usize, writer: *std.Io.Writer) !void {
     // Write everything before the first special character
     try writer.writeAll(value[0..first_offset]);
-    try writer.writeAll(switch (value[first_offset]) {
-        '&' => "&amp;",
-        '"' => "&quot;",
-        '<' => "&lt;",
-        '>' => "&gt;",
-        '=' => "=",
-        ' ' => " ",
-        '`' => "`",
-        '\'' => "'",
-        else => unreachable,
-    });
 
-    var remaining = value[first_offset + 1 ..];
-    while (std.mem.findAny(u8, remaining, "&\"<>")) |offset| {
+    var remaining = value[first_offset..];
+    while (std.mem.findAny(u8, remaining, "&\"<>\xc2")) |offset| {
         try writer.writeAll(remaining[0..offset]);
-        try writer.writeAll(switch (remaining[offset]) {
+        const escaped: []const u8 = switch (remaining[offset]) {
             '&' => "&amp;",
             '"' => "&quot;",
             '<' => "&lt;",
             '>' => "&gt;",
+            0xC2 => {
+                // non breaking space (U+00A0, C2 A0 in UTF-8)
+                if (remaining.len > offset + 1 and remaining[offset + 1] == 0xA0) {
+                    try writer.writeAll("&nbsp;");
+                    remaining = remaining[offset + 2 ..];
+                } else {
+                    try writer.writeByte(0xC2);
+                    remaining = remaining[offset + 1 ..];
+                }
+                continue;
+            },
             else => unreachable,
-        });
+        };
+        try writer.writeAll(escaped);
         remaining = remaining[offset + 1 ..];
     }
 

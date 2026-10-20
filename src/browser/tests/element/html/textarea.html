@@ -38,6 +38,36 @@
   testing.expectEqual('new value', $('#textarea2').value)
 </script>
 
+<script id="value_newlines">
+  {
+    const ta = document.createElement('textarea')
+    ta.value = 'a\rb\r\nc\n'
+    testing.expectEqual('a\nb\nc\n', ta.value)
+    testing.expectEqual(6, ta.selectionStart)
+    ta.select()
+    testing.expectEqual(6, ta.selectionEnd)
+  }
+  {
+    const ta = document.createElement('textarea')
+    ta.defaultValue = 'a\r\nb\rc'
+    testing.expectEqual('a\r\nb\rc', ta.defaultValue)
+    testing.expectEqual('a\nb\nc', ta.value)
+    testing.expectEqual(5, ta.textLength)
+  }
+</script>
+
+<script id="textLength">
+  {
+    const ta = document.createElement('textarea')
+    testing.expectEqual(0, ta.textLength)
+    ta.value = 'é😀x'
+    testing.expectEqual(4, ta.textLength)
+    ta.value = 'a\r\nb'
+    testing.expectEqual(3, ta.textLength)
+    testing.expectEqual(13, $('#textarea3').textLength)
+  }
+</script>
+
 <script id="defaultValue">
   testing.expectEqual('initial text', $('#textarea1').defaultValue)
   testing.expectEqual('', $('#textarea2').defaultValue)
@@ -382,5 +412,25 @@
     testing.expectEqual(0, dflt.selectionEnd);
     dflt.defaultValue = 'bar';
     testing.expectEqual('foo', dflt.value);
+  }
+</script>
+
+<script id="selection_utf16_offsets">
+  {
+    // Offsets count UTF-16 code units, like value.length.
+    const el = document.createElement('textarea');
+    el.value = 'h\u00e9llo';
+    testing.expectEqual(5, el.selectionStart);
+    testing.expectEqual(5, el.selectionEnd);
+    el.setSelectionRange(1, 3);
+    testing.expectEqual('\u00e9l', el.value.substring(el.selectionStart, el.selectionEnd));
+
+    el.value = 'a\u{1F600}b';
+    testing.expectEqual(4, el.selectionEnd);
+    el.selectionStart = 3;
+    testing.expectEqual(3, el.selectionStart);
+    el.setSelectionRange(10, 20);
+    testing.expectEqual(4, el.selectionStart);
+    testing.expectEqual(4, el.selectionEnd);
   }
 </script>

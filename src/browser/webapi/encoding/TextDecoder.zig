@@ -124,24 +124,21 @@ pub fn decode(self: *TextDecoder, input_: ?[]const u8, opts_: ?DecodeOpts, exec:
                 return error.OutOfMemory;
             }
         }
-        return self._decode(exec.call_arena, input, self._decoder, false);
+        return self._decode(exec.call_arena, input, self._decoder.?, false);
     }
 
-    if (self._decoder) |decoder| {
-        // Non-streaming with existing decoder: flush with is_last=true, then free
-        const result = try self._decode(exec.call_arena, input, decoder, true);
-
-        // on error, _decode will free the decoder. So we only free it on non-error
-        html5ever.encoding_decoder_free(decoder);
-        self._decoder = null;
-        return result;
-    }
-
-    // non-streaming, no existing decoder
-    return self._decode(exec.call_arena, input, null, true);
+    // Non-streaming: flush the decoder from earlier streaming calls (or a new
+    // one) with is_last=true, then free it. On error, _decode frees it.
+    const decoder = self._decoder orelse html5ever.encoding_decoder_new(self._encoding_handle) orelse return error.OutOfMemory;
+    self._decoder = decoder;
+    const result = try self._decode(exec.call_arena, input, decoder, true);
+    html5ever.encoding_decoder_free(decoder);
+    self._decoder = null;
+    self._bom_seen = false;
+    return result;
 }
 
-fn _decode(self: *TextDecoder, arena: std.mem.Allocator, input: []const u8, streaming_decoder: ?*anyopaque, is_last: bool) ![]const u8 {
+fn _decode(self: *TextDecoder, arena: std.mem.Allocator, input: []const u8, decoder: *anyopaque, is_last: bool) ![]const u8 {
     if (input.len == 0 and !is_last) {
         return "";
     }
@@ -159,48 +156,43 @@ fn _decode(self: *TextDecoder, arena: std.mem.Allocator, input: []const u8, stre
     // Allocate output buffer
     const output = try arena.alloc(u8, max_out);
 
-    // Decode using either streaming or one-shot decoder
-    const result = if (streaming_decoder) |decoder|
-        html5ever.encoding_decoder_decode(
-            decoder,
-            input.ptr,
-            input.len,
-            output.ptr,
-            output.len,
-            @intFromBool(is_last),
-        )
-    else
-        html5ever.encoding_decode(
-            self._encoding_handle,
-            input.ptr,
-            input.len,
-            output.ptr,
-            output.len,
-            1, // is_last = true for one-shot
-        );
+    const result = html5ever.encoding_decoder_decode(
+        decoder,
+        input.ptr,
+        input.len,
+        output.ptr,
+        output.len,
+        @intFromBool(is_last),
+    );
 
     // Handle errors in fatal mode
     if (self._fatal and result.hadErrors()) {
-        if (streaming_decoder != null) {
-            // Reset decoder on error
-            if (self._decoder) |decoder| {
-                html5ever.encoding_decoder_free(decoder);
-                self._decoder = null;
-            }
-        }
+        // Reset decoder on error
+        html5ever.encoding_decoder_free(decoder);
+        self._decoder = null;
         self._bom_seen = false;
         return error.TypeError;
     }
 
     var decoded: []const u8 = output[0..result.bytes_written];
 
-    // Handle BOM stripping
-    if (!self._bom_seen and !self._ignore_bom) {
-        decoded = stripBom(decoded);
+    // The decoder does no BOM sniffing, so a BOM of this encoding is a
+    // leading U+FEFF in the first output; other bytes stay as decoded.
+    // Only UTF-8 and UTF-16 have a BOM: in gb18030, U+FEFF is a character.
+    if (!self._bom_seen and decoded.len > 0) {
+        if (self._ignore_bom == false and hasBom(self._encoding_name)) {
+            decoded = stripBom(decoded);
+        }
         self._bom_seen = true;
     }
 
     return decoded;
+}
+
+fn hasBom(encoding_name: []const u8) bool {
+    return std.mem.eql(u8, encoding_name, "UTF-8") or
+        std.mem.eql(u8, encoding_name, "UTF-16LE") or
+        std.mem.eql(u8, encoding_name, "UTF-16BE");
 }
 
 fn stripBom(data: []const u8) []const u8 {

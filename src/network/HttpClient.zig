@@ -1841,6 +1841,20 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // In case of auth challenge
     // TODO give a way to configure the number of auth retries.
     if (transfer._auth_challenge != null and transfer._tries < 10) {
+        // The conn is released if CDP parks the transfer: keep what
+        // cancelAuthChallenge will deliver. Done before notifying, so a
+        // failure here never leaves CDP holding a transfer that isn't parked.
+        if (try msg.conn.getResponseCode() == 0) {
+            // A proxy refused the CONNECT: there is no response from the
+            // origin. Like Chrome (ERR_TUNNEL_CONNECTION_FAILED), declining
+            // the challenge fails the request instead of showing the proxy's
+            // 407 as the origin's response.
+            transfer._auth_declined_err = effective_err orelse error.CouldntConnect;
+        } else {
+            transfer._auth_declined_err = null;
+            try transfer.materializeResponse(msg.conn, .{ .check_content_length = false });
+        }
+
         var wait_for_interception = false;
         transfer.notify(
             .http_request_auth_required,
@@ -2269,6 +2283,46 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
     };
 }
 
+// CDP Fetch.continueWithAuth with Default or CancelAuth: drop the challenge
+// and deliver the 401/407 response that raised it, materialized before the
+// transfer was parked. A refused CONNECT has no such response and fails.
+pub fn cancelAuthChallenge(self: *Client, transfer: *Transfer) !void {
+    if (comptime lp.IS_DEBUG) {
+        log.debug(.http, "cancel auth challenge", .{ .intercepted = self.intercepted });
+    }
+
+    transfer.unpark();
+    transfer._auth_challenge = null;
+
+    if (transfer._auth_declined_err) |err| {
+        if (self.interceptResponse(transfer, .{ .failed = .{ .err = err, .header_first = false } })) {
+            return;
+        }
+        return transfer.failAsync(err);
+    }
+
+    if (transfer.getContentLength()) |cl| {
+        if (cl > self.max_response_size) {
+            return transfer.failAsync(error.ResponseTooLarge);
+        }
+    }
+
+    if (transfer._cors_cross_origin and transfer.req.request_mode == .cors) {
+        CorsGate.validateResponse(transfer) catch |err| {
+            return transfer.failAsync(err);
+        };
+    }
+
+    if (self.interceptResponse(transfer, .final)) {
+        return;
+    }
+
+    self.deliverResponse(transfer) catch |err| {
+        transfer.abortPipelineError(err);
+        return err;
+    };
+}
+
 // CDP Fetch.continueResponse (or continueRequest on a response-stage pause):
 // release what the transfer is holding, unchanged — deliver the response,
 // follow the redirect, or report the network failure.
@@ -2565,6 +2619,10 @@ pub const Transfer = struct {
 
     _auth_challenge: ?http.AuthChallenge = null,
 
+    // What declining _auth_challenge fails with (a refused CONNECT), instead
+    // of delivering the response. Set when the challenge is offered to CDP.
+    _auth_declined_err: ?anyerror = null,
+
     // number of times the transfer has been tried.
     // incremented by reset func.
     _tries: u8 = 0,
@@ -2573,6 +2631,9 @@ pub const Transfer = struct {
     // Fetch.continueRequest header overrides apply to a single network hop. We
     // need to restore (and hence capture) the original headers.
     _intercept_original_headers: ?[]const RequestHeader = null,
+
+    // Fetch.continueRequest's interceptResponse override.
+    _intercept_response: ?bool = null,
 
     // Linked into client.pending_queue while .queued and client.delayed_queue
     // while .delayed; reused to link the retired transfer into
@@ -3596,6 +3657,28 @@ pub const Transfer = struct {
 
         // libcurl returns -1 if the connection wasn't used. We want to avoid
         // negative, so -1 -> 0 and everything else += 1;
+        // An auth challenge materializes the response before it is offered
+        // to CDP; when it isn't parked, the regular path gets here again.
+        if (!self.res.materialized) {
+            try self.materializeFromConn(conn);
+        }
+
+        // A partial fetch is exempt: the cap exists to bound how much body we
+        // buffer, and this transfer buffers at most PARTIAL_DRAIN_MAX of it. Failing a 4 MB image
+        // we were never going to read would turn the size limit into a
+        // spurious `error` event on a perfectly good response.
+        if (opts.check_content_length and self.req.partial == null) {
+            if (self.getContentLength()) |cl| {
+                if (cl > self.client.max_response_size) {
+                    return error.ResponseTooLarge;
+                }
+            }
+        }
+    }
+
+    fn materializeFromConn(self: *Transfer, conn: *http.Connection) !void {
+        // libcurl returns -1 if the connection wasn't used. We want to avoid
+        // negative, so -1 -> 0 and everything else += 1;
         const conn_id = conn.getConnId() catch -1;
         self._conn_id = if (conn_id < 0) 0 else conn_id + 1;
         self._conn_reused = conn.isConnReused() catch false;
@@ -3624,18 +3707,7 @@ pub const Transfer = struct {
                 }
             }
         }
-
-        // A partial fetch is exempt: the cap exists to bound how much body we
-        // buffer, and this transfer buffers at most PARTIAL_DRAIN_MAX of it. Failing a 4 MB image
-        // we were never going to read would turn the size limit into a
-        // spurious `error` event on a perfectly good response.
-        if (opts.check_content_length and self.req.partial == null) {
-            if (self.getContentLength()) |cl| {
-                if (cl > self.client.max_response_size) {
-                    return error.ResponseTooLarge;
-                }
-            }
-        }
+        self.res.materialized = true;
     }
 
     fn configureConn(self: *Transfer, conn: *http.Connection) anyerror!void {
@@ -3804,6 +3876,7 @@ pub const Transfer = struct {
         const arena = transfer.arena;
 
         transfer._redirect_count += 1;
+        transfer._intercept_response = null;
         if (transfer._redirect_count > transfer.client.network.config.httpMaxRedirects()) {
             return error.TooManyRedirects;
         }
@@ -3910,7 +3983,9 @@ pub const Transfer = struct {
         } else if (conn.getConnectHeader("Proxy-Authenticate", 0)) |hdr| {
             transfer._auth_challenge = http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
         } else {
-            transfer._auth_challenge = .{ .status = status, .source = null, .scheme = null, .realm = null };
+            // A 401/407 without a challenge header is a plain response, not
+            // an auth challenge (e.g. a JSON API with session auth).
+            transfer._auth_challenge = null;
         }
     }
 
@@ -4578,6 +4653,10 @@ const Response = struct {
 
     // The final (non-1xx) response's header block has been fully received.
     headers_complete: bool = false,
+
+    // materializeResponse has copied the status, headers and cookies out of
+    // the conn.
+    materialized: bool = false,
 
     // Set when dataCallback deliberately killed the transfer to satisfy
     // `Request.partial`. processOneMessage uses it to tell our own abort

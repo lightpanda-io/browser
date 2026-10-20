@@ -301,7 +301,7 @@ fn loadInitialScript(self: *ServiceWorkerGlobalScope, script: []const u8) !void 
             }
             js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_load.?.arena.allocator(), err);
-            log.debug(.browser, "SWGS module error", .{ .url = url, .caught = caught });
+            log.warn(.page_error, "uncaught exception", .{ .url = url, .caught = caught });
             evaluated = false;
         };
     } else {
@@ -311,7 +311,7 @@ fn loadInitialScript(self: *ServiceWorkerGlobalScope, script: []const u8) !void 
             }
             js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_load.?.arena.allocator(), err);
-            log.debug(.browser, "SWGS script error", .{ .url = url, .caught = caught });
+            log.warn(.page_error, "uncaught exception", .{ .url = url, .caught = caught });
             evaluated = false;
         };
     }

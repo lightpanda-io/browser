@@ -336,18 +336,13 @@ pub fn structuredClone(_: *const WorkerGlobalScope, value: JS.Value) !JS.Value {
 }
 
 pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rejection: JS.PromiseRejection) !void {
-    if (comptime lp.IS_DEBUG) {
-        log.debug(.js, "unhandled rejection", .{
-            .target = "worker",
-            .value = rejection.reason(),
-            .stack = rejection.local.stackTrace() catch |err| @errorName(err) orelse "???",
-        });
-    }
-
     const event_name = if (no_handler) "unhandledrejection" else "rejectionhandled";
 
     if (no_handler) {
         self.page.recordJsError(error.JsException);
+        if (rejection.reason()) |reason| {
+            self.page.status.noteException(reason.toStringSlice() catch "");
+        }
     }
 
     const target = self.asEventTarget();
@@ -424,7 +419,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     _ = ls.local.eval(response.body.items, url) catch |err| {
         self.page.recordJsError(err);
         const caught = try_catch.caughtOrError(arena, err);
-        log.debug(.browser, "importScript", .{ .url = resolved_url, .caught = caught });
+        log.warn(.page_error, "uncaught exception", .{ .url = resolved_url, .caught = caught });
         return;
     };
 
@@ -443,13 +438,19 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     defer self.js.call_depth = call_depth;
 
     self.page.recordJsError(error.JsException);
+    self.page.status.noteException(err.toStringSlice() catch "");
 
     self._reporting_error = true;
     defer self._reporting_error = false;
 
+    const location = err.errorLocation(err.local.call_arena) catch JS.Value.ErrorLocation{};
+
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.persist(),
         .message = err.toStringSlice() catch "Unknown error",
+        .filename = location.url,
+        .lineno = location.line,
+        .colno = location.column,
         .bubbles = false,
         .cancelable = true,
     }, self.page);
@@ -462,15 +463,13 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     // onerror is called with the event's fields (see Listener.run).
     try self.dispatch(self.asEventTarget(), event, .{});
 
-    if (comptime lp.IS_TEST == false) {
-        if (!event._prevent_default) {
-            log.debug(.js, "worker.reportError", .{
-                .message = error_event._message,
-                .filename = error_event._filename,
-                .line_number = error_event._line_number,
-                .column_number = error_event._column_number,
-            });
-        }
+    if (!event._prevent_default) {
+        log.warn(.page_error, "uncaught exception", .{
+            .message = error_event._message,
+            .url = error_event._filename,
+            .line = error_event._line_number,
+            .column = error_event._column_number,
+        });
     }
 }
 

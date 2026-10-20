@@ -85,7 +85,7 @@ _caches: ?*CacheStorage = null,
 _reporting_error: bool = false,
 _current_event: ?*Event = null,
 _location: *Location,
-_history: History = .{},
+_history: History,
 _timers: Timers = .{},
 _scheduler: Scheduler = .{},
 _custom_elements: CustomElementRegistry = .{},
@@ -218,6 +218,30 @@ fn setInnerHeight(self: *Window, value: js.Value) void {
 
 fn setDevicePixelRatio(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "devicePixelRatio");
+}
+
+fn setOuterWidth(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "outerWidth");
+}
+
+fn setOuterHeight(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "outerHeight");
+}
+
+fn setScreenX(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "screenX");
+}
+
+fn setScreenY(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "screenY");
+}
+
+fn setScreenLeft(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "screenLeft");
+}
+
+fn setScreenTop(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "screenTop");
 }
 
 fn setScrollX(self: *Window, value: js.Value) void {
@@ -478,16 +502,18 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     defer frame.js.call_depth = call_depth;
 
     frame.page.recordJsError(error.JsException);
+    frame.page.status.noteException(err.toStringSlice() catch "");
 
     const location = err.errorLocation(frame.call_arena) catch js.Value.ErrorLocation{};
 
     const target = self.asEventTarget();
     if (!frame._event_manager.hasDirectListeners(target, "error")) {
-        if (comptime lp.IS_TEST == false) {
-            log.debug(.js, "window.reportError", .{
-                .message = err.toStringSlice() catch "Unknown error",
-            });
-        }
+        log.warn(.page_error, "uncaught exception", .{
+            .message = err.toStringSlice() catch "Unknown error",
+            .url = location.url,
+            .line = location.line,
+            .column = location.column,
+        });
         notifyExceptionThrown(err, location, frame);
         return;
     }
@@ -515,17 +541,13 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
         .run_microtasks = false,
     });
 
-    if (comptime lp.IS_TEST == false) {
-        if (!event._prevent_default) {
-            log.debug(.js, "window.reportError", .{
-                .message = error_event._message,
-                .filename = error_event._filename,
-                .line_number = error_event._line_number,
-                .column_number = error_event._column_number,
-            });
-        }
-    }
     if (!event._prevent_default) {
+        log.warn(.page_error, "uncaught exception", .{
+            .message = error_event._message,
+            .url = error_event._filename,
+            .line = error_event._line_number,
+            .column = error_event._column_number,
+        });
         notifyExceptionThrown(err, location, frame);
     }
 }
@@ -781,6 +803,20 @@ fn getDevicePixelRatio(_: *const Window, frame: *Frame) f32 {
     return frame.page.getViewport().scale;
 }
 
+// There is no window frame around the viewport and no window position on a
+// screen, so the outer size is the viewport and the position is 0.
+fn getOuterWidth(_: *const Window, frame: *Frame) u32 {
+    return frame.page.getViewport().width;
+}
+
+fn getOuterHeight(_: *const Window, frame: *Frame) u32 {
+    return frame.page.getViewport().height;
+}
+
+fn getScreenPosition(_: *const Window) i32 {
+    return 0;
+}
+
 pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts.offsets(y);
     const size = self._frame.document.scrollSize();
@@ -869,18 +905,13 @@ fn getWebDriver(_: *const Window) @import("WebDriver.zig") {
 }
 
 pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.PromiseRejection, frame: *Frame) !void {
-    if (comptime lp.IS_DEBUG) {
-        log.debug(.js, "unhandled rejection", .{
-            .target = "window",
-            .value = rejection.reason(),
-            .stack = rejection.local.stackTrace() catch |err| @errorName(err) orelse "???",
-        });
-    }
-
     const event_name = if (no_handler) "unhandledrejection" else "rejectionhandled";
 
     if (no_handler) {
         frame.page.recordJsError(error.JsException);
+        if (rejection.reason()) |reason| {
+            frame.page.status.noteException(reason.toStringSlice() catch "");
+        }
     }
 
     const target = self.asEventTarget();
@@ -1163,6 +1194,12 @@ pub const JsApi = struct {
     pub const innerWidth = bridge.accessor(Window.getInnerWidth, Window.setInnerWidth, .{});
     pub const innerHeight = bridge.accessor(Window.getInnerHeight, Window.setInnerHeight, .{});
     pub const devicePixelRatio = bridge.accessor(Window.getDevicePixelRatio, Window.setDevicePixelRatio, .{});
+    pub const outerWidth = bridge.accessor(Window.getOuterWidth, Window.setOuterWidth, .{});
+    pub const outerHeight = bridge.accessor(Window.getOuterHeight, Window.setOuterHeight, .{});
+    pub const screenX = bridge.accessor(Window.getScreenPosition, Window.setScreenX, .{});
+    pub const screenY = bridge.accessor(Window.getScreenPosition, Window.setScreenY, .{});
+    pub const screenLeft = bridge.accessor(Window.getScreenPosition, Window.setScreenLeft, .{});
+    pub const screenTop = bridge.accessor(Window.getScreenPosition, Window.setScreenTop, .{});
 
     pub const opener = bridge.accessor(Window.getOpener, Window.setOpener, .{});
     pub const closed = bridge.accessor(Window.getClosed, null, .{});

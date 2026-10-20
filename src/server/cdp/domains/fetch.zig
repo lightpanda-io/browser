@@ -157,7 +157,9 @@ pub fn responseIntercept(arena: Allocator, bc: *CDP.BrowserContext, intercept: *
     const session_id = bc.fetch_session_id orelse return;
 
     const transfer = intercept.transfer;
-    if (!bc.intercept_state.matches(.Response, transfer.req.url, transfer.req.resource_type)) {
+    // continueRequest's interceptResponse overrides the patterns for this hop.
+    const pause = transfer._intercept_response orelse bc.intercept_state.matches(.Response, transfer.req.url, transfer.req.resource_type);
+    if (pause == false) {
         // Leaves wait_for_interception false: the response is delivered untouched.
         return;
     }
@@ -275,12 +277,8 @@ fn continueRequest(cmd: *CDP.Command) !void {
         method: ?[]const u8 = null,
         postData: ?[]const u8 = null,
         headers: ?[]const http.Header = null,
-        interceptResponse: bool = false,
+        interceptResponse: ?bool = null,
     })) orelse return error.InvalidParams;
-
-    if (params.interceptResponse) {
-        return error.NotImplemented;
-    }
 
     if (try pausedResponse(bc, params.requestId)) |transfer| {
         // The request has already been sent: like Chrome, its overrides are
@@ -335,6 +333,10 @@ fn continueRequest(cmd: *CDP.Command) !void {
         request.body = body;
     }
 
+    if (params.interceptResponse) |intercept_response| {
+        transfer._intercept_response = intercept_response;
+    }
+
     try client.continueIntercepted(transfer);
     return cmd.sendResult(null, .{});
 }
@@ -361,11 +363,18 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
     var intercept_state = &bc.intercept_state;
     const intercept_id = try idFromRequestId(params.requestId);
 
-    const transfer_id = intercept_state.remove(intercept_id) orelse return error.RequestNotFound;
+    const transfer_id = intercept_state.get(intercept_id) orelse return error.RequestNotFound;
     const transfer = client.findTransfer(transfer_id) orelse {
+        _ = intercept_state.remove(intercept_id);
         log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "auth" });
         return cmd.sendResult(null, .{});
     };
+    // Only an authRequired pause can be answered with continueWithAuth: a
+    // request- or response-stage pause stays paused, as in Chrome.
+    if (transfer.state != .parked or transfer.state.parked != .intercept_auth) {
+        return cmd.sendError(-32000, "Invalid InterceptionId.", .{});
+    }
+    _ = intercept_state.remove(intercept_id);
 
     log.debug(.cdp, "request intercept", .{
         .state = "continue with auth",
@@ -374,7 +383,9 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
     });
 
     if (params.authChallengeResponse.response != .ProvideCredentials) {
-        transfer.abortAuthChallenge();
+        // Like Chrome: give up on the challenge and let the page see the
+        // 401/407 that raised it.
+        try client.cancelAuthChallenge(transfer);
         return cmd.sendResult(null, .{});
     }
 
@@ -885,12 +896,19 @@ test "cdp.Fetch: enable compiles patterns, disable clears them" {
 // the outcome through the request's own callbacks.
 const ResponseStageProbe = struct {
     streaming: bool = false,
+    status: u16 = 0,
     body: std.ArrayList(u8) = .empty,
     done: bool = false,
     err: ?anyerror = null,
 
     fn deinit(self: *ResponseStageProbe) void {
         self.body.deinit(testing.allocator);
+    }
+
+    fn headerCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.HeaderResult {
+        const self: *ResponseStageProbe = @ptrCast(@alignCast(transfer.req.ctx));
+        self.status = transfer.responseStatus() orelse 0;
+        return .proceed;
     }
 
     fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
@@ -922,6 +940,7 @@ const ResponseStageProbe = struct {
             .streaming = self.streaming,
             .notification = bc.session.notification,
             .ctx = self,
+            .header_callback = headerCallback,
             .data_callback = dataCallback,
             .done_callback = doneCallback,
             .error_callback = errorCallback,
@@ -1172,6 +1191,104 @@ test "cdp.Fetch: response stage continueRequest ignores request overrides, but a
     try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
 }
 
+test "cdp.Fetch: continueRequest interceptResponse pauses the response without a Response pattern" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RS", .session_id = "SID-RS" });
+    try ctx.processMessage(.{ .id = 1, .method = "Fetch.enable", .params = .{ .patterns = .{.{ .urlPattern = "*" }} } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/xhr");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001", .interceptResponse = true } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.requestPaused", .{
+        .requestId = "INT-0000000002",
+        .request = .{ .url = "http://127.0.0.1:9582/xhr" },
+        .responseStatusCode = 200,
+    }, .{ .session_id = "SID-RS" });
+    try testing.expectEqual(false, probe.done);
+
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.getResponseBody", .params = .{ .requestId = "INT-0000000002" } });
+    try ctx.expectSentResult(.{ .body = "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MA==", .base64Encoded = true }, .{ .id = 3 });
+
+    try ctx.processMessage(.{ .id = 4, .method = "Fetch.continueResponse", .params = .{ .requestId = "INT-0000000002" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqualSlices(u8, repeat("1234567890", 10), probe.body.items);
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: continueRequest interceptResponse covers one hop, its redirect included" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RS", .session_id = "SID-RS" });
+    try ctx.processMessage(.{ .id = 1, .method = "Fetch.enable", .params = .{ .patterns = .{.{ .urlPattern = "*" }} } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/xhr/redirect");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001", .interceptResponse = true } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.requestPaused", .{
+        .requestId = "INT-0000000002",
+        .request = .{ .url = "http://127.0.0.1:9582/xhr/redirect" },
+        .responseStatusCode = 302,
+    }, .{ .session_id = "SID-RS" });
+
+    // Following the redirect starts a new hop: its request pauses, and
+    // without a new interceptResponse its response does not.
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueResponse", .params = .{ .requestId = "INT-0000000002" } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.requestPaused", .{
+        .requestId = "INT-0000000003",
+        .request = .{ .url = "http://127.0.0.1:9582/xhr" },
+    }, .{ .session_id = "SID-RS" });
+    try testing.expectEqual(null, (try sentPausedParams(&ctx, "INT-0000000003")).get("responseStatusCode"));
+
+    try ctx.processMessage(.{ .id = 4, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000003" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqualSlices(u8, repeat("1234567890", 10), probe.body.items);
+    try testing.expectEqual(error.PausedEventNotSent, sentPausedParams(&ctx, "INT-0000000004"));
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: continueRequest interceptResponse false skips a matching Response pattern" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RS", .session_id = "SID-RS" });
+    try ctx.processMessage(.{ .id = 1, .method = "Fetch.enable", .params = .{ .patterns = .{
+        .{ .urlPattern = "*" },
+        .{ .urlPattern = "*", .requestStage = "Response" },
+    } } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/xhr");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001", .interceptResponse = false } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqualSlices(u8, repeat("1234567890", 10), probe.body.items);
+    try testing.expectEqual(error.PausedEventNotSent, sentPausedParams(&ctx, "INT-0000000002"));
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
 test "cdp.Fetch: response stage pauses a network failure with responseErrorReason" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1236,6 +1353,167 @@ test "cdp.Fetch: closing the browser context releases a response-stage pause" {
     // testing allocator fails the test if anything it held leaks.
     ctx.cdp().disposeBrowserContext();
     try testing.expectEqual(false, probe.done);
+}
+
+fn enableAuthHandling(ctx: anytype) !void {
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Fetch.enable",
+        .params = .{ .patterns = .{.{ .urlPattern = "*" }}, .handleAuthRequests = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+}
+
+fn sentEventCount(ctx: anytype, method: []const u8) usize {
+    var count: usize = 0;
+    for (ctx.received.items) |message| {
+        const m = message.object.get("method") orelse continue;
+        if (std.mem.eql(u8, m.string, method)) count += 1;
+    }
+    return count;
+}
+
+test "cdp.Fetch: a 401 without WWW-Authenticate is delivered, not an auth challenge" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-AU", .session_id = "SID-AU" });
+    try enableAuthHandling(&ctx);
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/status/401");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expect(probe.done);
+    try testing.expectEqual(401, probe.status);
+    try testing.expectEqual(0, sentEventCount(&ctx, "Fetch.authRequired"));
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+fn expectAuthDeclinedDeliversResponse(response: []const u8) !void {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-AU", .session_id = "SID-AU" });
+    try enableAuthHandling(&ctx);
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/xhr/401");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.expectSentEvent("Fetch.authRequired", .{
+        .requestId = "INT-0000000002",
+        .request = .{ .url = "http://127.0.0.1:9582/xhr/401" },
+        .authChallenge = .{ .source = "Server", .scheme = "basic" },
+    }, .{ .session_id = "SID-AU" });
+    try testing.expectEqual(false, probe.done);
+
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueWithAuth", .params = .{
+        .requestId = "INT-0000000002",
+        .authChallengeResponse = .{ .response = response },
+    } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    // Like Chrome, declining the challenge delivers the original response.
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expect(probe.done);
+    try testing.expectEqual(401, probe.status);
+    try testing.expectEqualSlices(u8, "No", probe.body.items);
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: continueWithAuth Default delivers the 401" {
+    try expectAuthDeclinedDeliversResponse("Default");
+}
+
+test "cdp.Fetch: continueWithAuth CancelAuth delivers the 401" {
+    try expectAuthDeclinedDeliversResponse("CancelAuth");
+}
+
+test "cdp.Fetch: continueWithAuth ProvideCredentials retries, a declined retry delivers the 401" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-AU", .session_id = "SID-AU" });
+    try enableAuthHandling(&ctx);
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/xhr/401");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    // The test server rejects any credentials: the retry is challenged again.
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueWithAuth", .params = .{
+        .requestId = "INT-0000000002",
+        .authChallengeResponse = .{ .response = "ProvideCredentials", .username = "u", .password = "p" },
+    } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.authRequired", .{ .requestId = "INT-0000000003" }, .{ .session_id = "SID-AU" });
+
+    try ctx.processMessage(.{ .id = 4, .method = "Fetch.continueWithAuth", .params = .{
+        .requestId = "INT-0000000003",
+        .authChallengeResponse = .{ .response = "CancelAuth" },
+    } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expect(probe.done);
+    try testing.expectEqual(401, probe.status);
+    try testing.expectEqualSlices(u8, "No", probe.body.items);
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: continueWithAuth on a request-stage pause is rejected and keeps the pause" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-AU", .session_id = "SID-AU" });
+    try enableAuthHandling(&ctx);
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/xhr/401");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    for ([_][]const u8{ "CancelAuth", "ProvideCredentials" }, 2..) |response, cmd_id| {
+        try ctx.processMessage(.{ .id = cmd_id, .method = "Fetch.continueWithAuth", .params = .{
+            .requestId = "INT-0000000001",
+            .authChallengeResponse = .{ .response = response },
+        } });
+        try ctx.expectSentError(-32000, "Invalid InterceptionId.", .{ .id = cmd_id });
+    }
+    try testing.expectEqual(false, probe.done);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqual(1, bc.cdp.browser.http_client.intercepted);
+
+    // Still paused at the request stage: continueRequest resumes it.
+    try ctx.processMessage(.{ .id = 4, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.authRequired", .{ .requestId = "INT-0000000002" }, .{ .session_id = "SID-AU" });
+
+    try ctx.processMessage(.{ .id = 5, .method = "Fetch.continueWithAuth", .params = .{
+        .requestId = "INT-0000000002",
+        .authChallengeResponse = .{ .response = "Default" },
+    } });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try probe.tickUntilSettled(bc);
+    try testing.expect(probe.done);
+    try testing.expectEqual(401, probe.status);
 }
 
 test "cdp.Fetch: cdpErrorReason" {

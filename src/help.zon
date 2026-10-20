@@ -74,6 +74,10 @@
     \\          passed multiple times. Upgrades without an Origin header are
     \\          always accepted.
     \\          Defaults to none, rejecting any upgrade that sends an Origin.
+    \\  --unix-socket <PATH>
+    \\          Listen on this Unix-domain socket (mode 0600) instead of TCP.
+    \\          Must be absolute. Cannot be combined with --host, --port or
+    \\          --advertise-host.
     ,
     .fetch =
     \\usage: {0s} fetch <url>... [OPTIONS] [COMMON_OPTIONS]
@@ -132,6 +136,16 @@
     \\          "error" field: null, or the name of the navigation, wait or
     \\          dump failure for that URL. One failed URL does not stop the
     \\          others; the process exits 1 if any URL failed.
+    \\  --markdown-alternate
+    \\          With --dump markdown, when a page links a markdown version of
+    \\          itself (<link rel="alternate" type="text/markdown">), dump that
+    \\          file instead of converting the page. The file is the author's
+    \\          and can differ from the rendered page. Falls back to converting
+    \\          the page when there is no such link or it does not load as
+    \\          markdown (text/markdown, or text/plain since many servers send
+    \\          .md files that way). The alternate's URL is logged; with
+    \\          --json, "url" is where the markdown came from. The alternate
+    \\          loads within what is left of --wait-ms. Defaults to false.
     \\  --metrics
     \\          Write metrics (Prometheus text format) to stdout on exit, after
     \\          any --dump output.
@@ -465,9 +479,10 @@
     \\             iframe      When enabled, <iframe> elements are fully loaded.
     \\
     \\             image       <img> sources, so that load/error reflects the real
-    \\                         HTTP status. Only the response headers are read;
-    \\                         images are never decoded, so naturalWidth and
-    \\                         naturalHeight stay 0. Delays the window load event.
+    \\                         HTTP status. Images are never decoded: only the
+    \\                         first 16KB is read, for naturalWidth and
+    \\                         naturalHeight (PNG, GIF, JPEG and WebP; 0 for
+    \\                         other formats). Delays the window load event.
     \\
     \\             stylesheet  Fetch external <link rel=stylesheet> resources so
     \\                         their rules contribute to computed styles (and

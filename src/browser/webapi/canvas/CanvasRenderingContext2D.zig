@@ -83,11 +83,15 @@ fn createImageData(
     }
 }
 
-fn putImageData(_: *const CanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
+fn putImageData(_: *const CanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, exec: *const Execution) void {
+    painted(exec);
+}
 
 // CanvasImageSource (HTMLImageElement, HTMLCanvasElement, ImageBitmap, ...) is
 // just taken as a js.Value for now since we don't use it, and that's much easier.
-fn drawImage(_: *const CanvasRenderingContext2D, _: js.Value, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
+fn drawImage(_: *const CanvasRenderingContext2D, _: js.Value, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, exec: *const Execution) void {
+    painted(exec);
+}
 
 fn getImageData(
     _: *const CanvasRenderingContext2D,
@@ -162,8 +166,12 @@ pub fn transform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _
 fn setTransform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 fn resetTransform(_: *CanvasRenderingContext2D) void {}
 fn clearRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-fn fillRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-fn strokeRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
+fn fillRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, exec: *const Execution) void {
+    painted(exec);
+}
+fn strokeRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, exec: *const Execution) void {
+    painted(exec);
+}
 fn beginPath(_: *CanvasRenderingContext2D) void {}
 fn closePath(_: *CanvasRenderingContext2D) void {}
 fn moveTo(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
@@ -173,11 +181,23 @@ fn bezierCurveTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _
 pub fn arc(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: ?bool) void {}
 fn arcTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn rect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn fill(_: *CanvasRenderingContext2D) void {}
-pub fn stroke(_: *CanvasRenderingContext2D) void {}
+pub fn fill(_: *CanvasRenderingContext2D, exec: *const Execution) void {
+    painted(exec);
+}
+pub fn stroke(_: *CanvasRenderingContext2D, exec: *const Execution) void {
+    painted(exec);
+}
 pub fn clip(_: *CanvasRenderingContext2D) void {}
-fn fillText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
-fn strokeText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
+fn fillText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64, exec: *const Execution) void {
+    painted(exec);
+}
+fn strokeText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64, exec: *const Execution) void {
+    painted(exec);
+}
+
+fn painted(exec: *const Execution) void {
+    exec.page.status.noteUnsupported(.canvas2d);
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CanvasRenderingContext2D);
@@ -226,8 +246,8 @@ pub const JsApi = struct {
     pub const fillStyle = bridge.accessor(CanvasRenderingContext2D.getFillStyle, CanvasRenderingContext2D.setFillStyle, .{});
     pub const createImageData = bridge.function(CanvasRenderingContext2D.createImageData, .{});
 
-    pub const putImageData = bridge.function(CanvasRenderingContext2D.putImageData, .{ .noop = true });
-    pub const drawImage = bridge.function(CanvasRenderingContext2D.drawImage, .{ .noop = true });
+    pub const putImageData = bridge.function(CanvasRenderingContext2D.putImageData, .{});
+    pub const drawImage = bridge.function(CanvasRenderingContext2D.drawImage, .{});
     pub const getImageData = bridge.function(CanvasRenderingContext2D.getImageData, .{});
     pub const save = bridge.function(CanvasRenderingContext2D.save, .{ .noop = true });
     pub const restore = bridge.function(CanvasRenderingContext2D.restore, .{ .noop = true });
@@ -238,8 +258,8 @@ pub const JsApi = struct {
     pub const setTransform = bridge.function(CanvasRenderingContext2D.setTransform, .{ .noop = true });
     pub const resetTransform = bridge.function(CanvasRenderingContext2D.resetTransform, .{ .noop = true });
     pub const clearRect = bridge.function(CanvasRenderingContext2D.clearRect, .{ .noop = true });
-    pub const fillRect = bridge.function(CanvasRenderingContext2D.fillRect, .{ .noop = true });
-    pub const strokeRect = bridge.function(CanvasRenderingContext2D.strokeRect, .{ .noop = true });
+    pub const fillRect = bridge.function(CanvasRenderingContext2D.fillRect, .{});
+    pub const strokeRect = bridge.function(CanvasRenderingContext2D.strokeRect, .{});
     pub const beginPath = bridge.function(CanvasRenderingContext2D.beginPath, .{ .noop = true });
     pub const closePath = bridge.function(CanvasRenderingContext2D.closePath, .{ .noop = true });
     pub const moveTo = bridge.function(CanvasRenderingContext2D.moveTo, .{ .noop = true });
@@ -249,11 +269,11 @@ pub const JsApi = struct {
     pub const arc = bridge.function(CanvasRenderingContext2D.arc, .{ .noop = true });
     pub const arcTo = bridge.function(CanvasRenderingContext2D.arcTo, .{ .noop = true });
     pub const rect = bridge.function(CanvasRenderingContext2D.rect, .{ .noop = true });
-    pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{ .noop = true });
-    pub const stroke = bridge.function(CanvasRenderingContext2D.stroke, .{ .noop = true });
+    pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{});
+    pub const stroke = bridge.function(CanvasRenderingContext2D.stroke, .{});
     pub const clip = bridge.function(CanvasRenderingContext2D.clip, .{ .noop = true });
-    pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{ .noop = true });
-    pub const strokeText = bridge.function(CanvasRenderingContext2D.strokeText, .{ .noop = true });
+    pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{});
+    pub const strokeText = bridge.function(CanvasRenderingContext2D.strokeText, .{});
 };
 
 const testing = @import("../../../testing.zig");

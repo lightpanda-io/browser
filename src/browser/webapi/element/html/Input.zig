@@ -673,12 +673,12 @@ pub fn selectionAvailable(self: *const Input) bool {
 // Nullable here, unlike <textarea>'s, which is why these two aren't shared.
 fn getSelectionStart(self: *const Input) !?u32 {
     if (!self.selectionAvailable()) return null;
-    return self._selection_start;
+    return entry.selectionOffsetToJs(self, self._selection_start);
 }
 
 fn getSelectionEnd(self: *const Input) !?u32 {
     if (!self.selectionAvailable()) return null;
-    return self._selection_end;
+    return entry.selectionOffsetToJs(self, self._selection_end);
 }
 
 fn getLabels(self: *Input, frame: *Frame) !js.Array {

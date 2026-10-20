@@ -38,6 +38,7 @@ pub const Scope = enum {
     mcp,
     note,
     not_implemented,
+    page_error,
     scheduler,
     serve,
     storage,
@@ -222,20 +223,6 @@ pub fn note(scope: Scope, comptime msg: []const u8, data: anytype) void {
     comptime validateMsg(msg);
     if (comptime lp.IS_TEST == false) {
         log(scope, .note, msg, data);
-    }
-}
-
-var warned_disabled_worker = std.atomic.Value(bool).init(false);
-pub fn warnDisabledWorker() void {
-    if (warned_disabled_worker.swap(true, .monotonic) == false) {
-        warn(.disabled, "workers disabled", .{ .hint = "enable via --load-resources worker" });
-    }
-}
-
-var warned_disabled_iframe = std.atomic.Value(bool).init(false);
-pub fn warnDisabledIFrame() void {
-    if (warned_disabled_iframe.swap(true, .monotonic) == false) {
-        warn(.disabled, "iframes disabled", .{ .hint = "enable via --load-resources iframe" });
     }
 }
 
