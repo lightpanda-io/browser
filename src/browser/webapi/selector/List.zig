@@ -661,6 +661,8 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .only_of_type => return isFirstOfType(el) and isLastOfType(el),
         .nth_child => |pattern| return matchesNthChild(el, pattern, nth),
         .nth_last_child => |pattern| return matchesNthLastChild(el, pattern, nth),
+        .nth_child_of => |nth_of| return matchesNthChildOf(el, nth_of, false, scope, nth, frame),
+        .nth_last_child_of => |nth_of| return matchesNthChildOf(el, nth_of, true, scope, nth, frame),
         .nth_of_type => |pattern| return matchesNthOfType(el, pattern, nth),
         .nth_last_of_type => |pattern| return matchesNthLastOfType(el, pattern, nth),
 
@@ -849,6 +851,32 @@ fn matchesNthChild(el: *Node.Element, pattern: Selector.NthPattern, nth: ?*NthCa
 
 fn matchesNthLastChild(el: *Node.Element, pattern: Selector.NthPattern, nth: ?*NthCache) bool {
     return matchesNthPattern(getChildIndexFromEnd(el, nth), pattern);
+}
+
+fn matchesNthChildOf(el: *Node.Element, nth_of: Selector.NthOf, from_end: bool, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
+    const node = el.asNode();
+    if (!matchesAny(node, nth_of.selectors, scope, nth, frame)) {
+        return false;
+    }
+
+    var index: usize = 1;
+    var sibling = if (from_end) node.nextSibling() else node.previousSibling();
+    while (sibling) |s| {
+        if (s.is(Node.Element) != null and matchesAny(s, nth_of.selectors, scope, nth, frame)) {
+            index += 1;
+        }
+        sibling = if (from_end) s.nextSibling() else s.previousSibling();
+    }
+    return matchesNthPattern(index, nth_of.pattern);
+}
+
+fn matchesAny(node: *Node, selectors: []const Selector.Selector, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
+    for (selectors) |selector| {
+        if (matches(node, selector, scope, nth, frame)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn matchesNthOfType(el: *Node.Element, pattern: Selector.NthPattern, nth: ?*NthCache) bool {

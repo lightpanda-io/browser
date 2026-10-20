@@ -1425,6 +1425,17 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
                         classes.* += (max_nested >> 10) & 0x3FF;
                         elements.* += max_nested & 0x3FF;
                     },
+                    // :nth-child(An+B of S) is a pseudo-class plus its most specific argument
+                    .nth_child_of, .nth_last_child_of => |nth_of| {
+                        var max_nested: u32 = 0;
+                        for (nth_of.selectors) |nested_sel| {
+                            const spec = computeSpecificity(nested_sel);
+                            if (spec > max_nested) max_nested = spec;
+                        }
+                        ids.* += (max_nested >> 20) & 0x3FF;
+                        classes.* += 1 + ((max_nested >> 10) & 0x3FF);
+                        elements.* += max_nested & 0x3FF;
+                    },
                     // All other pseudo-classes count as class-level specificity
                     else => classes.* += 1,
                 }

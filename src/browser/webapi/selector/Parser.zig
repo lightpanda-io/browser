@@ -530,17 +530,21 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
 
         if (std.mem.eql(u8, name, "nth-child")) {
             const pattern = try self.parseNthPattern();
+            const of = try self.parseNthOf(arena);
             _ = self.skipSpaces();
             if (self.peek() != ')') return error.InvalidPseudoClass;
             self.input = self.input[1..];
+            if (of) |selectors| return .{ .nth_child_of = .{ .pattern = pattern, .selectors = selectors } };
             return .{ .nth_child = pattern };
         }
 
         if (std.mem.eql(u8, name, "nth-last-child")) {
             const pattern = try self.parseNthPattern();
+            const of = try self.parseNthOf(arena);
             _ = self.skipSpaces();
             if (self.peek() != ')') return error.InvalidPseudoClass;
             self.input = self.input[1..];
+            if (of) |selectors| return .{ .nth_last_child_of = .{ .pattern = pattern, .selectors = selectors } };
             return .{ .nth_last_child = pattern };
         }
 
@@ -775,6 +779,39 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
     }
 
     return error.UnknownPseudoClass;
+}
+
+// Parses the optional "of S" part of :nth-child() and :nth-last-child()
+fn parseNthOf(self: *Parser, arena: Allocator) !?[]const Selector.Selector {
+    // "of" needs whitespace before it; parseNthPattern may already have skipped it
+    const spaced = std.ascii.isWhitespace((self.input.ptr - 1)[0]);
+    if (!self.skipSpacesConsumed() and !spaced) {
+        return null;
+    }
+    const input = self.input;
+    if (input.len < 3 or !std.mem.eql(u8, input[0..2], "of")) {
+        return null;
+    }
+    // "of" followed by a name character is a longer identifier, not the keyword
+    const c = input[2];
+    if (std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '\\' or c >= 0x80) {
+        return null;
+    }
+    self.input = input[2..];
+    _ = self.skipSpaces();
+
+    var selectors: std.ArrayList(Selector.Selector) = .empty;
+    while (true) {
+        if (self.peek() == ')' or self.peek() == 0) return error.InvalidPseudoClass;
+
+        try selectors.append(arena, try parse(arena, self.consumeUntilCommaOrParen()));
+
+        _ = self.skipSpaces();
+        if (self.peek() != ',') break;
+        self.input = self.input[1..];
+        _ = self.skipSpaces();
+    }
+    return selectors.items;
 }
 
 fn parseNthPattern(self: *Parser) !Selector.NthPattern {
