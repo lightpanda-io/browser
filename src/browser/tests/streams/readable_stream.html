@@ -451,6 +451,19 @@
   });
 </script>
 
+<script id=readable_stream_start_throws>
+  {
+    const e = new Error('boom');
+    let caught;
+    try {
+      new ReadableStream({ start() { throw e; } });
+    } catch (x) {
+      caught = x;
+    }
+    testing.expectEqual(e, caught);
+  }
+</script>
+
 <script id=stored_error type=module>
   const state = await testing.async();
 
