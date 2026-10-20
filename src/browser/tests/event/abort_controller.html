@@ -125,6 +125,8 @@
   testing.expectEqual(true, signal.aborted);
   testing.expectEqual(true, signal.reason instanceof DOMException);
   testing.expectEqual("AbortError", signal.reason.name);
+  testing.expectEqual("signal is aborted without reason", signal.reason.message);
+  testing.expectEqual(20, signal.reason.code);
 }
 </script>
 
@@ -139,14 +141,9 @@
   controller.abort();
 
   // Should throw after abort
-  let didThrow = false;
-  try {
+  testing.expectError('AbortError: signal is aborted without reason', () => {
     signal.throwIfAborted();
-  } catch (e) {
-    didThrow = true;
-  }
-
-  testing.expectEqual(true, didThrow);
+  });
 }
 </script>
 
@@ -327,7 +324,9 @@
       testing.expectEqual(true, s3.aborted);
       testing.expectEqual(true, s3.reason instanceof DOMException);
       testing.expectEqual('TimeoutError', s3.reason.name);
-      testing.expectError('TimeoutError: The operation timed out', () => {
+      testing.expectEqual('signal timed out', s3.reason.message);
+      testing.expectEqual(23, s3.reason.code);
+      testing.expectError('TimeoutError: signal timed out', () => {
         s3.throwIfAborted()
       });
     });

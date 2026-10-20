@@ -199,7 +199,7 @@ pub fn deinit(self: *HttpServer) void {
             sys_net.shutdown(socket, .both) catch {};
         }
     }
-    while (self.active_conns.load(.monotonic) > 0) {
+    while (self.active_conns.load(.acquire) > 0) {
         lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
     }
 
@@ -524,7 +524,7 @@ fn isInitialize(arena: std.mem.Allocator, body: []const u8) bool {
 }
 
 fn handleConn(self: *HttpServer, socket: posix.socket_t) void {
-    defer _ = self.active_conns.fetchSub(1, .monotonic);
+    defer _ = self.active_conns.fetchSub(1, .release);
     const stream: std.Io.net.Stream = .{ .socket = .{ .handle = socket, .address = .{ .ip4 = .unspecified(0) } } };
     defer stream.close(lp.io);
     // Runs before close (defers are LIFO): deinit's shutdown sweep must

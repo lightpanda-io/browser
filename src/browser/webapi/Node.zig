@@ -1512,6 +1512,35 @@ pub fn prependNodes(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void
     _ = try self.insertBefore(fragment_node, self.firstChild(), frame);
 }
 
+/// Element and CharacterData replaceWith.
+pub fn replaceWithNodes(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void {
+    const parent = self._parent orelse return;
+    const viable_next = NodeOrText.viableNextSibling(self, nodes);
+
+    if (nodes.len == 1) {
+        const node = try nodes[0].toNode(self.getDocument(frame));
+        _ = try parent.replaceChild(node, self, frame);
+        return;
+    }
+
+    const fragment = try DocumentFragment.init(self.getDocument(frame), frame);
+    const fragment_node = fragment.asNode();
+    defer if (fragment_node.firstChild() == null) {
+        frame._factory.destroy(fragment);
+    };
+    for (nodes) |node_or_text| {
+        const child = try node_or_text.toNode(self.getDocument(frame));
+        _ = try fragment_node.appendChild(child, frame);
+    }
+
+    // self may itself be one of the nodes, now moved into the fragment.
+    if (self._parent == parent) {
+        _ = try parent.replaceChild(fragment_node, self, frame);
+    } else {
+        _ = try parent.insertBefore(fragment_node, viable_next, frame);
+    }
+}
+
 /// Shared implementation of replaceChildren for Element, Document, and DocumentFragment.
 pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void {
     if (nodes.len > 1) {
