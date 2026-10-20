@@ -144,6 +144,11 @@ mkZigDerivation {
     homepage = "https://lightpanda.io";
     license = lib.licenses.agpl3Only;
     mainProgram = "lightpanda";
-    platforms = [ "x86_64-linux" ];
+    platforms = [
+      "x86_64-linux"
+      "aarch64-linux"
+      "x86_64-darwin"
+      "aarch64-darwin"
+    ];
   };
 }
