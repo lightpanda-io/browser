@@ -892,14 +892,55 @@ pub const Function = struct {
             }
         };
 
-        const js_value = _call(T, &caller.local, info, func, opts) catch |err| {
-            handleError(T, @TypeOf(func), &caller.local, err, info);
-            return;
-        };
+        const js_value = if (comptime returnsPromise(@TypeOf(func)))
+            callRejecting(T, &caller.local, info, func, opts) orelse return
+        else
+            _call(T, &caller.local, info, func, opts) catch |err| {
+                handleError(T, @TypeOf(func), &caller.local, err, info);
+                return;
+            };
 
         if (comptime opts.cache) |cache| {
             cache_state.save(cache, js_value);
         }
+    }
+
+    /// `_call` for an operation that returns a promise, which WebIDL says must
+    /// never throw: an exception the page's own code throws while it runs (a
+    /// getter or toString during argument conversion, say) rejects the promise
+    /// it returns instead. A terminating execution still propagates, and so
+    /// does an exception left behind by a call that otherwise succeeded, as
+    /// before. The returned value on success; null once the call has set its
+    /// rejection (or thrown).
+    fn callRejecting(comptime T: type, local: *const Local, info: FunctionCallbackInfo, func: anytype, comptime opts: Opts) ?js.Value {
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(local);
+        defer try_catch.deinit();
+
+        const js_value = _call(T, local, info, func, opts) catch |err| {
+            if (try_catch.hasCaught()) {
+                const terminating = local.ctx.env.terminatePending() or
+                    v8.v8__Isolate__IsExecutionTerminating(local.isolate.handle);
+                if (!terminating) {
+                    if (try_catch.exceptionValue()) |exception| {
+                        const err_local = errorLocal(T, local, info);
+                        const resolver = js.PromiseResolver.init(&err_local);
+                        resolver.rejectValue(exception) catch |reject_err| {
+                            log.err(.bug, "callRejecting reject", .{ .err = reject_err });
+                        };
+                        info.getReturnValue().set(resolver.promise().toValue());
+                        return null;
+                    }
+                }
+                try_catch.rethrow();
+            }
+            handleError(T, @TypeOf(func), local, err, info);
+            return null;
+        };
+        if (try_catch.hasCaught()) {
+            try_catch.rethrow();
+        }
+        return js_value;
     }
 
     fn _call(comptime T: type, local: *const Local, info: FunctionCallbackInfo, func: anytype, comptime opts: Opts) !js.Value {
