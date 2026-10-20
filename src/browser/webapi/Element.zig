@@ -1189,57 +1189,7 @@ pub fn replaceChildren(self: *Element, nodes: []const Node.NodeOrText, frame: *F
 }
 
 pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    const ref_node = self.asNode();
-    const parent = ref_node._parent orelse return;
-    frame.domChanged();
-
-    // Detect if the ref_node must be removed (by default) or kept.
-    // We kept it when ref_node is present into the nodes list.
-    var rm_ref_node = true;
-
-    for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(self.getDocument(frame));
-
-        // If a child is the ref node. We keep it at its own current position.
-        if (child == ref_node) {
-            rm_ref_node = false;
-            continue;
-        }
-
-        // A DocumentFragment contributes its children, not itself
-        if (child.is(Node.DocumentFragment)) |_| {
-            try frame.insertAllChildrenBefore(child, parent, ref_node);
-            continue;
-        }
-
-        // A node from another document is adopted, as insertBefore does
-        const child_owner = child.ownerDocument(frame);
-        const parent_owner = parent.ownerDocument(frame) orelse parent.as(Node.Document);
-        const adopting = child_owner != null and child_owner.? != parent_owner;
-
-        var previous_root: ?*Node = null;
-        if (child._parent) |current_parent| {
-            previous_root = child.getRootNode(.{});
-            frame.removeNode(current_parent, child, .{ .reconnect_to = if (adopting) null else parent });
-        }
-
-        if (adopting) {
-            try frame.adoptNodeTree(child, child_owner.?, parent_owner);
-        }
-
-        try frame.insertNodeRelative(
-            parent,
-            child,
-            .{ .before = ref_node },
-            .{ .previous_root = previous_root, .adopting_to_new_document = adopting },
-        );
-    }
-
-    // Re-check parent after insertNodeRelative since callbacks (e.g. connectedCallback)
-    // could have already removed ref_node from parent.
-    if (rm_ref_node and ref_node._parent == parent) {
-        frame.removeNode(parent, ref_node, .{ .reconnect_to = null });
-    }
+    return self.asNode().replaceWithNodes(nodes, frame);
 }
 
 pub fn remove(self: *Element, frame: *Frame) void {

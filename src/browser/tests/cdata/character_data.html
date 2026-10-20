@@ -728,3 +728,13 @@
   testing.expectEqual(null, comment.previousElementSibling);
 }
 </script>
+
+<script id="replaceWithAncestor">
+  {
+    const outer = document.createElement('div');
+    const text = document.createTextNode('t');
+    outer.appendChild(text);
+    testing.expectError('HierarchyRequestError', () => text.replaceWith(outer));
+    testing.expectEqual(outer, text.parentNode);
+  }
+</script>
