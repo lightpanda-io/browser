@@ -65,19 +65,23 @@
           rustToolchain = fenix.packages.${system}.stable.toolchain;
           craneLib = (crane.mkLib pkgs).overrideToolchain minimalRustToolchain;
 
-          # We need crtbeginS.o for building.
+          # We need crtbeginS.o for building on Linux.
           crtFiles = pkgs.runCommand "crt-files" { } ''
             mkdir -p $out/lib
             cp -r ${pkgs.gcc.cc}/lib/gcc $out/lib/gcc
           '';
 
           buildDeps =
-            pkgs: with pkgs; [
-              gcc
-              gcc.cc.lib
-              crtFiles
-              glibc.dev
-            ];
+            pkgs:
+            if pkgs.stdenv.isDarwin then
+              [ ]
+            else
+              (with pkgs; [
+                gcc
+                gcc.cc.lib
+                crtFiles
+                glibc.dev
+              ]);
 
           v8BuildDeps =
             pkgs: with pkgs; [
