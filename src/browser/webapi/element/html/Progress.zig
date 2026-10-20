@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
@@ -26,6 +27,7 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 
 const HtmlElement = @import("../Html.zig");
+const reflection = @import("../reflection.zig");
 
 const Progress = @This();
 
@@ -41,6 +43,43 @@ pub fn asNode(self: *Progress) *Node {
     return self.asElement().asNode();
 }
 
+// "limited to only positive numbers", default 1
+fn getMax(self: *const Progress) f64 {
+    const max = reflection.getDouble(Factory.protoOf(self).asElement(), "max") orelse return 1;
+    return if (max > 0) max else 1;
+}
+
+fn setMax(self: *Progress, value: f64, frame: *Frame) !void {
+    if (std.math.isFinite(value) and value <= 0) {
+        return;
+    }
+    return reflection.setDouble(self.asElement(), "max", value, frame);
+}
+
+fn currentValue(self: *const Progress) ?f64 {
+    const el = Factory.protoOf(self).asElement();
+    if (el.getAttributeSafe(comptime .wrap("value")) == null) {
+        // null when there's no value...
+        return null;
+    }
+    // but 0 when when the value is not parsable.
+    const value = reflection.getDouble(el, "value") orelse 0;
+    return std.math.clamp(value, 0, self.getMax());
+}
+
+fn getValue(self: *const Progress) f64 {
+    return self.currentValue() orelse 0;
+}
+
+fn setValue(self: *Progress, value: f64, frame: *Frame) !void {
+    return reflection.setDouble(self.asElement(), "value", value, frame);
+}
+
+fn getPosition(self: *const Progress) f64 {
+    const value = self.currentValue() orelse return -1;
+    return value / self.getMax();
+}
+
 fn getLabels(self: *Progress, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
@@ -53,8 +92,14 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    const reflect = Element.Reflect(Progress);
-    pub const max = reflect.double("max", 1.0, true);
+    pub const max = bridge.accessor(Progress.getMax, Progress.setMax, .{ .ce_reactions = true });
+    pub const value = bridge.accessor(Progress.getValue, Progress.setValue, .{ .ce_reactions = true });
+    pub const position = bridge.accessor(Progress.getPosition, null, .{});
 
     pub const labels = bridge.accessor(Progress.getLabels, null, .{});
 };
+
+const testing = @import("../../../../testing.zig");
+test "WebApi: HTML.Progress" {
+    try testing.htmlRunner("element/html/progress.html", .{});
+}
