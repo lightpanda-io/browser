@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="iframes_in_connected_shadow_subtrees">
+(async () => {
+  const state = await testing.async();
+  const pending = [];
+
+  function addFrame(parent, label) {
+    const iframe = document.createElement('iframe');
+    iframe.srcdoc = '<p id="marker">Loaded</p>';
+    const loaded = new Promise(resolve => {
+      iframe.addEventListener('load', () => resolve(label));
+    });
+    parent.appendChild(iframe);
+    pending.push({ iframe, label, loaded });
+  }
+
+  for (const mode of ['open', 'closed']) {
+    const host = document.createElement('section');
+    const shadow = host.attachShadow({ mode });
+    addFrame(shadow, mode);
+    // Unslotted light children still get browsing contexts.
+    addFrame(host, mode + '-light');
+    document.body.appendChild(host);
+  }
+
+  const outer = document.createElement('section');
+  const outerShadow = outer.attachShadow({ mode: 'open' });
+  document.body.appendChild(outer);
+  const inner = document.createElement('article');
+  const innerShadow = inner.attachShadow({ mode: 'closed' });
+  addFrame(innerShadow, 'nested');
+  outerShadow.appendChild(inner);
+
+  const result = await Promise.race([
+    Promise.all(pending.map(item => item.loaded)),
+    new Promise(resolve => setTimeout(() => resolve('timeout'), 500)),
+  ]);
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['open', 'open-light', 'closed', 'closed-light', 'nested'], result);
+    for (const { iframe } of pending) {
+      testing.expectTrue(iframe.contentWindow !== null);
+      testing.expectEqual('Loaded', iframe.contentDocument.getElementById('marker').textContent);
+    }
+  });
+})();
+</script>

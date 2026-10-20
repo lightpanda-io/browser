@@ -3626,16 +3626,32 @@ fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, child_i
 // children, for its descendants in tree order: appending a subtree
 // containing scripts must execute them all, after the whole insertion.
 fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
-    if (node._type != .element or node.firstChild() == null) {
+    if (node._type != .element) {
+        return self.nodeIsReady(false, node);
+    }
+    if (node.firstChild() == null and node.as(Element).hostedShadowRoot(self) == null) {
         return self.nodeIsReady(false, node);
     }
 
     // Scripts can mutate the tree. Safe to do this since nodeIsReady re-checks
     // connectivity.
     var elements: std.ArrayList(*Node) = .empty;
-    var tw = TreeWalker.Full.Elements.init(node, .{});
-    while (tw.next()) |el| {
-        try elements.append(self.call_arena, el.asNode());
+    var pending: std.ArrayList(*Node) = .empty;
+    try pending.append(self.call_arena, node);
+    while (pending.pop()) |current| {
+        if (current.is(Element)) |_| {
+            try elements.append(self.call_arena, current);
+        }
+        var child = current.lastChild();
+        while (child) |c| : (child = c.previousSibling()) {
+            try pending.append(self.call_arena, c);
+        }
+        // Shadow-including order also activates unslotted light children.
+        if (current.is(Element)) |el| {
+            if (el.hostedShadowRoot(self)) |shadow| {
+                try pending.append(self.call_arena, shadow.asNode());
+            }
+        }
     }
     for (elements.items) |el| {
         try self.nodeIsReady(false, el);
