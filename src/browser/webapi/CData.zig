@@ -461,22 +461,7 @@ pub fn after(self: *CData, nodes: []const Node.NodeOrText, frame: *Frame) !void 
 }
 
 pub fn replaceWith(self: *CData, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    const ref_node = self.asNode();
-    const parent = ref_node.parentNode() orelse return;
-
-    var rm_ref_node = true;
-    for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(ref_node.getDocument(frame));
-        if (child == ref_node) {
-            rm_ref_node = false;
-            continue;
-        }
-        _ = try parent.insertBefore(child, ref_node, frame);
-    }
-
-    if (rm_ref_node) {
-        _ = try parent.removeChild(ref_node, frame);
-    }
+    return self.asNode().replaceWithNodes(nodes, frame);
 }
 
 pub fn nextElementSibling(self: *CData) ?*Node.Element {
