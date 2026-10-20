@@ -515,6 +515,11 @@ fn deriveRaw(
                 return error.InvalidAccessError;
             }
             if (eqlIgnoreCase(params.name, "X25519")) {
+                // The peer must be an X25519 public key: another key may hold
+                // no EVP_PKEY at all for X25519.deriveBits to read.
+                if (params.public._type != .x25519 or params.public._kind != .public) {
+                    return error.InvalidAccessError;
+                }
                 // null length means "derive the full shared secret" (256 bits).
                 const result = X25519.deriveBits(base_key, params.public, length orelse 256, exec) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,

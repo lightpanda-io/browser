@@ -2165,6 +2165,43 @@
   });
 </script>
 
+<script id=x25519-peer-check type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const x25519 = await subtle.generateKey("X25519", false, ["deriveBits"]);
+  const aes = await subtle.generateKey({ name: "AES-GCM", length: 128 }, false, ["encrypt"]);
+  const hmac = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const ecdh = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+  const derive = (peer) => subtle.deriveBits({ name: "X25519", public: peer }, x25519.privateKey, 256);
+
+  // The peer must be an X25519 public key. An AES or HMAC key, which holds
+  // no EVP_PKEY, used to crash here.
+  const results = {
+    aes: await errorName(() => derive(aes)),
+    hmac: await errorName(() => derive(hmac)),
+    ecdh: await errorName(() => derive(ecdh.publicKey)),
+    privateKey: await errorName(() => derive(x25519.privateKey)),
+    publicKey: (await derive(x25519.publicKey)).byteLength,
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("InvalidAccessError", results.aes);
+    testing.expectEqual("InvalidAccessError", results.hmac);
+    testing.expectEqual("InvalidAccessError", results.ecdh);
+    testing.expectEqual("InvalidAccessError", results.privateKey);
+    testing.expectEqual(32, results.publicKey);
+  });
+</script>
+
 <script id="digest" type=module>
   const state = await testing.async();
   async function hash(algo, data) {
