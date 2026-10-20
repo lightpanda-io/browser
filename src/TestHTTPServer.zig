@@ -166,6 +166,10 @@ fn getContentType(file_path: []const u8) []const u8 {
         return "application/xhtml+xml";
     }
 
+    if (std.mem.endsWith(u8, file_path, ".md")) {
+        return "text/markdown";
+    }
+
     if (std.mem.endsWith(u8, file_path, ".xml")) {
         // some wpt tests do this
         return "text/xml";

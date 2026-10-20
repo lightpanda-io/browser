@@ -20,10 +20,13 @@ const std = @import("std");
 
 const URL = @import("URL.zig");
 const Frame = @import("Frame.zig");
+const Session = @import("Session.zig");
+const Selector = @import("webapi/selector/Selector.zig");
 const RenderTree = @import("RenderTree.zig");
 const StyleManager = @import("StyleManager.zig");
 
 const Node = @import("webapi/Node.zig");
+const Document = @import("webapi/Document.zig");
 const Element = @import("webapi/Element.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
 
@@ -477,8 +480,78 @@ const Context = struct {
     }
 };
 
+/// A text/markdown response is loaded as a text document, its body a single
+/// `<pre>`. Converting that would fence the whole file, so the document's
+/// text, which is the markdown the server sent, is written as-is.
+fn markdownSource(node: *Node) ?*Node {
+    const doc = node.is(Document) orelse return null;
+    if (!std.mem.eql(u8, doc.getContentType(), "text/markdown")) return null;
+    const root = doc.getDocumentElement() orelse return null;
+    return root.asNode();
+}
+
+fn writeSource(source: *Node, max_bytes: ?u32, writer: *std.Io.Writer) !void {
+    var lw = LimitedWriter.init(writer, max_bytes);
+    source.getTextContent(&lw.writer) catch |err| {
+        if (!lw.truncated) return err;
+        try writer.writeAll(truncation_marker);
+    };
+}
+
+/// The http(s) URL of the page's `<link rel="alternate" type="text/markdown">`:
+/// the author's own markdown version of the page.
+pub fn alternateUrl(arena: std.mem.Allocator, frame: *Frame) !?[:0]const u8 {
+    const selector = "link[rel~=alternate i][type=\"text/markdown\" i][href]";
+    const link = try Selector.querySelector(frame.document.asNode(), selector, frame) orelse return null;
+    const href = link.getAttributeInterned("href") orelse return null;
+    const url = URL.resolve(arena, frame.base(), href, .{ .encoding = frame.charset }) catch |err| switch (err) {
+        error.TypeError => return null,
+        else => return err,
+    };
+    if (!URL.isRemoteScheme(url)) return null;
+    return url;
+}
+
+/// Starts loading the page's markdown alternate in a new page of the same
+/// session. Null when the page has no alternate, or failed itself: the
+/// alternate of a 404 or a bot challenge page would hide the failure behind
+/// its own 200.
+pub fn openAlternate(arena: std.mem.Allocator, session: *Session, frame: *Frame) !?Session.PageHandle {
+    if (frame._last_navigate_error != null or frame._bot_challenge != null) return null;
+    if (frame._http_status) |status| {
+        if (status >= 400) return null;
+    }
+    const url = try alternateUrl(arena, frame) orelse return null;
+    const page = try session.createPage();
+    page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } }) catch {
+        page.close();
+        return null;
+    };
+    return page;
+}
+
+/// Whether a loaded alternate can stand in for the page: a 2xx text/markdown
+/// or text/plain response. The link already says the file is markdown, and
+/// many servers send `.md` files as text/plain.
+pub fn isAlternateLoaded(frame: *Frame) bool {
+    if (frame._last_navigate_error != null) return false;
+    const status = frame._http_status orelse return false;
+    if (status < 200 or status >= 300) return false;
+    const content_type = frame.document.getContentType();
+    return std.mem.eql(u8, content_type, "text/markdown") or std.mem.eql(u8, content_type, "text/plain");
+}
+
+/// Writes an alternate that passed `isAlternateLoaded` as-is.
+pub fn dumpAlternate(frame: *Frame, max_bytes: ?u32, writer: *std.Io.Writer) !void {
+    const root = frame.document.getDocumentElement() orelse return;
+    return writeSource(root.asNode(), max_bytes, writer);
+}
+
 pub fn dump(state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
     const node = state.root;
+    if (markdownSource(node)) |source| {
+        return writeSource(source, opts.max_bytes, writer);
+    }
     if (opts.max_bytes) |limit| {
         var lw = LimitedWriter.init(writer, limit);
         var ctx: Context = .{
@@ -954,6 +1027,68 @@ test "browser.markdown: max_bytes truncates with marker" {
     const out = aw.written();
     try testing.expect(std.mem.endsWith(u8, out, "[truncated]\n"));
     try testing.expect(out.len <= 50 + truncation_marker.len);
+}
+
+test "browser.markdown: a text/markdown document is written as-is" {
+    var page = try testing.pageTest("markdown_source.md", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    const source = @embedFile("tests/markdown_source.md");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dump(.{ .root = frame.window._document.asNode() }, .{}, &aw.writer, frame);
+    try testing.expectString(source, aw.written());
+
+    var capped: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dump(.{ .root = frame.window._document.asNode() }, .{ .max_bytes = 7 }, &capped.writer, frame);
+    try testing.expectString("# Title" ++ truncation_marker, capped.written());
+}
+
+test "browser.markdown: a text/markdown document keeps its leading newlines" {
+    var page = try testing.pageTest("markdown_leading_blank.md", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dump(.{ .root = frame.window._document.asNode() }, .{}, &aw.writer, frame);
+    try testing.expectString(@embedFile("tests/markdown_leading_blank.md"), aw.written());
+}
+
+test "browser.markdown: text/plain is written as-is only as a followed alternate" {
+    var page = try testing.pageTest("markdown_source.txt", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    const source = @embedFile("tests/markdown_source.txt");
+
+    // Plain text loaded directly isn't necessarily markdown: it stays fenced.
+    var direct: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dump(.{ .root = frame.window._document.asNode() }, .{}, &direct.writer, frame);
+    try testing.expect(std.mem.find(u8, direct.written(), "```") != null);
+    try testing.expect(!std.mem.eql(u8, direct.written(), source));
+
+    var followed: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dumpAlternate(frame, null, &followed.writer);
+    try testing.expectString(source, followed.written());
+}
+
+test "browser.markdown: alternateUrl" {
+    {
+        var page = try testing.pageTest("markdown_alternate.html", .{});
+        defer page.close();
+        const url = try alternateUrl(testing.arena_allocator, page.frame().?);
+        try testing.expectString("http://127.0.0.1:9582/src/browser/tests/markdown_source.md", url.?);
+    }
+    {
+        // Only http(s): a page can't point the reader at a local file.
+        var page = try testing.pageTest("markdown_alternate_file.html", .{});
+        defer page.close();
+        try testing.expect(try alternateUrl(testing.arena_allocator, page.frame().?) == null);
+    }
+    {
+        var page = try testing.pageTest("markdown_flex.html", .{});
+        defer page.close();
+        try testing.expect(try alternateUrl(testing.arena_allocator, page.frame().?) == null);
+    }
 }
 
 // Builds a shadow host <div>, populates its light DOM with `light` and its
