@@ -18,9 +18,39 @@
 
 //! This file provides various arguments needed for crypto APIs.
 
+const std = @import("std");
+
 const js = @import("../../js/js.zig");
 
 const CryptoKey = @import("../CryptoKey.zig");
+const common = @import("common.zig");
+
+/// The TypeError of an algorithm identifier object without a `name`.
+pub const missing_name = "required member name is undefined";
+
+/// A HashAlgorithmIdentifier: either `"SHA-256"` or `{name: "SHA-256"}`. The
+/// same conversion as any AlgorithmIdentifier's, which Derive reads its name
+/// with.
+pub const Hash = union(enum) {
+    string: []const u8,
+    object: struct { name: []const u8 },
+    /// An object without a `name`: a TypeError, as for the algorithm itself.
+    nameless: js.Object,
+
+    pub fn name(self: Hash, local: *const js.Local) error{TypeError}![]const u8 {
+        return switch (self) {
+            .string => |s| s,
+            .object => |o| o.name,
+            .nameless => local.typeError(missing_name),
+        };
+    }
+
+    /// The hash's registered name, matched case-insensitively: a TypeError
+    /// without a name, NotSupportedError for a hash that isn't supported.
+    pub fn canonical(self: Hash, local: *const js.Local) error{ TypeError, NotSupported }![]const u8 {
+        return common.canonicalHash(try self.name(local)) orelse error.NotSupported;
+    }
+};
 
 /// Passed for `generateKey()`.
 pub const Init = union(enum) {
@@ -45,13 +75,15 @@ pub const Init = union(enum) {
 
     /// https://developer.mozilla.org/en-US/docs/Web/API/RsaHashedKeyGenParams
     pub const RsaHashedKeyGen = struct {
-        hash: union(enum) {
-            string: []const u8,
-            object: struct { name: []const u8 },
-        },
+        hash: Hash,
         /// This should be at least 2048.
         /// Some organizations are now recommending that it should be 4096.
-        modulusLength: u32,
+        /// An [EnforceRange] unsigned long, kept as a value: this dictionary
+        /// is probed before the others, so converting it here would reject
+        /// another algorithm's object that happens to carry one. RSA's
+        /// generateKey converts it (RSA.modulusLength). It stays required, so
+        /// an object without one is probed as the other dictionaries.
+        modulusLength: js.Value,
         name: []const u8,
         publicExponent: js.TypedArray(u8),
     };
@@ -71,46 +103,65 @@ pub const Init = union(enum) {
     /// https://developer.mozilla.org/en-US/docs/Web/API/HmacKeyGenParams
     pub const HmacKeyGen = struct {
         /// Its also possible to pass this in an object.
-        hash: union(enum) {
-            string: []const u8,
-            object: struct { name: []const u8 },
-        },
+        hash: Hash,
         /// If omitted, default is the block size of the chosen hash function.
-        length: ?usize,
+        /// An [EnforceRange] unsigned long, kept as a value: HMAC.init converts
+        /// it (HMAC.lengthParam) once the name is known to be HMAC's, since
+        /// another algorithm's object can be probed into this dictionary.
+        length: ?js.Value = null,
         /// Always HMAC.
         name: []const u8,
     };
     const EcdhKeyDeriveParams = struct {
-        /// Can be Ed25519 or X25519.
+        /// ECDH or X25519.
         name: []const u8,
         public: *const CryptoKey,
     };
 };
 
-/// Algorithm for deriveBits() and deriveKey(). Variants are distinguished by
-/// their required members (`iterations` for PBKDF2, `info` for HKDF, `public`
-/// for ECDH/X25519), so probe order doesn't cause ambiguity.
+/// Algorithm for deriveBits() and deriveKey(), an AlgorithmIdentifier
+/// normalized as the spec does: its name picks the algorithm (an unknown one
+/// is NotSupportedError), then the value is converted to that algorithm's
+/// params dictionary (a TypeError without a required member). Taken as a
+/// js.Value, not probed by shape, so the name decides, not the members.
 pub const Derive = union(enum) {
     pbkdf2: Pbkdf2Params,
     hkdf: HkdfParams,
     ecdh_or_x25519: Init.EcdhKeyDeriveParams,
 
-    /// A hash AlgorithmIdentifier — either `"SHA-256"` or `{name: "SHA-256"}`.
-    pub const Hash = union(enum) {
-        string: []const u8,
-        object: struct { name: []const u8 },
-
-        pub fn name(self: Hash) []const u8 {
-            return switch (self) {
-                .string => |s| s,
-                .object => |o| o.name,
-            };
+    pub fn fromJs(value: js.Value, local: *const js.Local) !Derive {
+        const identifier = try convert(Hash, value, local);
+        const name = try identifier.name(local);
+        if (std.ascii.eqlIgnoreCase(name, "PBKDF2")) {
+            const params = try convert(Pbkdf2Params, value, local);
+            _ = try params.hash.canonical(local);
+            return .{ .pbkdf2 = params };
         }
-    };
+        if (std.ascii.eqlIgnoreCase(name, "HKDF")) {
+            const params = try convert(HkdfParams, value, local);
+            _ = try params.hash.canonical(local);
+            return .{ .hkdf = params };
+        }
+        if (std.ascii.eqlIgnoreCase(name, "ECDH") or std.ascii.eqlIgnoreCase(name, "X25519")) {
+            return .{ .ecdh_or_x25519 = try convert(Init.EcdhKeyDeriveParams, value, local) };
+        }
+        return error.NotSupported;
+    }
+
+    /// `value` as `T`. A value that isn't one (a string for a dictionary, a
+    /// missing member) is a TypeError; the page's own exception stays pending.
+    fn convert(comptime T: type, value: js.Value, local: *const js.Local) !T {
+        return local.jsValueToZig(T, value) catch |err| switch (err) {
+            error.JsException, error.OutOfMemory => err,
+            else => local.typeError("algorithm is missing a required member"),
+        };
+    }
 
     pub const Pbkdf2Params = struct {
         hash: Hash,
-        iterations: u32,
+        /// An [EnforceRange] unsigned long: converted once the name is known
+        /// to be PBKDF2's, so it's a TypeError out of range, not wrapped.
+        iterations: js.EnforceRange(u32),
         name: []const u8,
         salt: js.TypedArray(u8),
     };
@@ -127,9 +178,13 @@ pub const Derive = union(enum) {
 /// produce. HMAC carries a hash; AES carries a length. Probed in that order so
 /// the more specific shapes win.
 pub const DerivedKey = union(enum) {
-    hmac: struct { hash: Derive.Hash, length: ?u32 = null, name: []const u8 },
+    /// `length` as in Import.hmac.
+    hmac: struct { hash: Hash, length: ?js.Value = null, name: []const u8 },
     keyed: struct { length: u32, name: []const u8 },
     object: struct { name: []const u8 },
+    /// An object without a `name`: a TypeError, as for every algorithm
+    /// identifier. Probed before the string, which would coerce it.
+    nameless: js.Object,
     name: []const u8,
 };
 
@@ -138,22 +193,26 @@ pub const DerivedKey = union(enum) {
 /// JS value coerces to a string).
 pub const Import = union(enum) {
     hmac: struct {
-        hash: union(enum) {
-            string: []const u8,
-            object: struct { name: []const u8 },
-        },
-        length: ?u32 = null,
+        hash: Hash,
+        /// HMAC's [EnforceRange] unsigned long, kept as a value: RSA imports
+        /// share this variant and ignore it. HMAC.lengthParam converts it.
+        length: ?js.Value = null,
         name: []const u8,
     },
     ec: struct { name: []const u8, namedCurve: []const u8 },
     object: struct { name: []const u8 },
+    /// An object without a `name`: a TypeError, as for every algorithm
+    /// identifier. Probed before the string, which would coerce it.
+    nameless: js.Object,
     name: []const u8,
 
-    pub fn algoName(self: Import) []const u8 {
+    /// Null for an object without a name.
+    pub fn algoName(self: Import) ?[]const u8 {
         return switch (self) {
             .hmac => |h| h.name,
             .ec => |e| e.name,
             .object => |o| o.name,
+            .nameless => null,
             .name => |n| n,
         };
     }
@@ -176,11 +235,13 @@ pub const KeyData = union(enum) {
 
     /// The JWK fields we read on import. Symmetric ("oct") keys only need `kty`
     /// and `k`; `d` marks an asymmetric private key. RSA keys carry `n`/`e`
-    /// (public) plus `d`, `p`, `q`, `dp`, `dq`, `qi` (private). Every member is
-    /// optional in the JsonWebKey dictionary, `kty` included: a missing `kty`
-    /// is a DataError of the algorithm's import, not a binding TypeError.
+    /// (public) plus `d`, `p`, `q`, `dp`, `dq`, `qi` (private); EC keys `crv`,
+    /// `x`, `y` (public) plus `d` (private). Every member is optional in the
+    /// JsonWebKey dictionary, `kty` included: a missing `kty` is a DataError
+    /// of the algorithm's import, not a binding TypeError.
     pub const Jwk = struct {
         alg: ?[]const u8 = null,
+        crv: ?[]const u8 = null,
         d: ?[]const u8 = null,
         dp: ?[]const u8 = null,
         dq: ?[]const u8 = null,
@@ -194,6 +255,8 @@ pub const KeyData = union(enum) {
         q: ?[]const u8 = null,
         qi: ?[]const u8 = null,
         use: ?[]const u8 = null,
+        x: ?[]const u8 = null,
+        y: ?[]const u8 = null,
     };
 };
 
@@ -211,11 +274,16 @@ pub const Encrypt = union(enum) {
         name: []const u8,
         tagLength: ?u32 = null,
     },
+    /// An object without a `name`: a TypeError, as for every algorithm
+    /// identifier. Probed before the string, which would coerce it.
+    nameless: js.Object,
     name: []const u8,
 
-    pub fn algoName(self: Encrypt) []const u8 {
+    /// Null for an object without a name.
+    pub fn algoName(self: Encrypt) ?[]const u8 {
         return switch (self) {
             .params => |p| p.name,
+            .nameless => null,
             .name => |n| n,
         };
     }
@@ -224,12 +292,42 @@ pub const Encrypt = union(enum) {
 /// For `sign()` functionality.
 pub const Sign = union(enum) {
     string: []const u8,
-    object: struct { name: []const u8 },
+    object: struct {
+        /// ECDSA. Kept as a value, like `saltLength`: it's only converted
+        /// (a HashAlgorithmIdentifier) when the algorithm is ECDSA.
+        hash: ?js.Value = null,
+        name: []const u8,
+        /// RSA-PSS. Kept as a value: it's only converted (an [EnforceRange]
+        /// unsigned long) when the algorithm is RSA-PSS, so another algorithm
+        /// ignores the member, as normalization does.
+        saltLength: ?js.Value = null,
+    },
+    /// An object without a `name`: a TypeError, as for every algorithm
+    /// identifier. Probed after the object, which needs the name.
+    nameless: js.Object,
 
-    pub fn algoName(self: Sign) []const u8 {
+    /// Null for an object without a name.
+    pub fn algoName(self: Sign) ?[]const u8 {
         return switch (self) {
             .string => |string| string,
             .object => |object| object.name,
+            .nameless => null,
+        };
+    }
+
+    /// The `hash` member, if present.
+    pub fn hash(self: Sign) ?js.Value {
+        return switch (self) {
+            .string, .nameless => null,
+            .object => |object| object.hash,
+        };
+    }
+
+    /// The `saltLength` member, if present.
+    pub fn saltLength(self: Sign) ?js.Value {
+        return switch (self) {
+            .string, .nameless => null,
+            .object => |object| object.saltLength,
         };
     }
 };

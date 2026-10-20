@@ -16,148 +16,45 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Interprets `CryptoKey` for X25519.
+//! X25519's deriveBits. Its keys are generated, imported and exported in
+//! OKP.zig.
 
-const std = @import("std");
-const lp = @import("lightpanda");
 const crypto = @import("../../../sys/libcrypto.zig");
 
 const js = @import("../../js/js.zig");
 
 const CryptoKey = @import("../CryptoKey.zig");
+const common = @import("common.zig");
 
 const Execution = js.Execution;
 
-pub fn init(
-    extractable: bool,
-    key_usages: []const []const u8,
-    exec: *const Execution,
-) !js.Promise {
-    // This code has too many allocations here and there, might be nice to
-    // gather them together with a single alloc call. Not sure if factory
-    // pattern is suitable for it though.
-
-    const local = exec.js.local.?;
-
-    // Calculate usages; only matters for private key.
-    // Only deriveKey() and deriveBits() be used for X25519.
-    if (key_usages.len == 0) {
-        return error.SyntaxError;
-    }
-    var mask: u8 = 0;
-    iter_usages: for (key_usages) |usage| {
-        inline for ([_][]const u8{ "deriveKey", "deriveBits" }) |name| {
-            if (std.mem.eql(u8, name, usage)) {
-                mask |= @field(CryptoKey.Usages, name);
-                continue :iter_usages;
-            }
-        }
-        // Unknown usage if got here.
-        return error.SyntaxError;
-    }
-
-    const public_value = try exec.local_arena.alloc(u8, crypto.X25519_PUBLIC_VALUE_LEN);
-    const private_key = try exec.local_arena.alloc(u8, crypto.X25519_PRIVATE_KEY_LEN);
-
-    // There's no info about whether this can fail; so I assume it cannot.
-    crypto.X25519_keypair(@ptrCast(public_value), @ptrCast(private_key));
-
-    // Create EVP_PKEY for public key.
-    // Seems we can use `EVP_PKEY_from_raw_private_key` for this, Chrome
-    // prefer not to, yet BoringSSL added it and recommends instead of what
-    // we're doing currently.
-    const public_pkey = crypto.EVP_PKEY_new_raw_public_key(
-        crypto.EVP_PKEY_X25519,
-        null,
-        public_value.ptr,
-        public_value.len,
-    ) orelse return error.OutOfMemory;
-
-    // Create EVP_PKEY for private key.
-    // Seems we can use `EVP_PKEY_from_raw_private_key` for this, Chrome
-    // prefer not to, yet BoringSSL added it and recommends instead of what
-    // we're doing currently.
-    const private_pkey = crypto.EVP_PKEY_new_raw_private_key(
-        crypto.EVP_PKEY_X25519,
-        null,
-        private_key.ptr,
-        private_key.len,
-    ) orelse return error.OutOfMemory;
-
-    const private = try CryptoKey.init(exec, .{
-        ._type = .x25519,
-        ._kind = .private,
-        ._extractable = extractable,
-        ._usages = mask,
-        ._key = private_key,
-        ._algorithm = .{ .name = "X25519" },
-        ._vary = .{ .pkey = private_pkey },
-    });
-
-    const public = try CryptoKey.init(exec, .{
-        ._type = .x25519,
-        ._kind = .public,
-        // Public keys are always extractable.
-        ._extractable = true,
-        // Always empty for public key.
-        ._usages = 0,
-        ._key = public_value,
-        ._algorithm = .{ .name = "X25519" },
-        ._vary = .{ .pkey = public_pkey },
-    });
-
-    return local.resolvePromise(CryptoKey.Pair{ .privateKey = private, .publicKey = public });
-}
-
+/// X25519 key agreement (RFC 7748): the shared secret of `private` and the
+/// peer `public`, cut to `length_in_bits` (all 256 bits when null). The peer
+/// must be an X25519 public key, else InvalidAccessError. An all-zero secret
+/// (a peer of small order, which libcrypto refuses) or a length beyond the
+/// secret is OperationError.
 pub fn deriveBits(
     private: *const CryptoKey,
     public: *const CryptoKey,
-    length_in_bits: usize,
+    length_in_bits: ?u32,
     exec: *const Execution,
-) !js.ArrayBuffer {
-    const ctx = crypto.EVP_PKEY_CTX_new(private.getKeyObject(), null) orelse {
-        // Failed on our end.
-        return error.Internal;
-    };
-    // Context is valid, free it on failure.
-    errdefer crypto.EVP_PKEY_CTX_free(ctx);
-
-    // Init derive operation and set public key as peer.
-    if (crypto.EVP_PKEY_derive_init(ctx) != 1 or
-        crypto.EVP_PKEY_derive_set_peer(ctx, public.getKeyObject()) != 1)
-    {
-        // Failed on our end.
-        return error.Internal;
+) error{ InvalidAccessError, OperationError, OutOfMemory }![]const u8 {
+    if (public._type != .x25519 or public._kind != .public) {
+        return error.InvalidAccessError;
     }
 
-    const derived_key = try exec.local_arena.alloc(u8, 32);
-    errdefer exec.local_arena.free(derived_key);
-
-    var out_key_len: usize = derived_key.len;
-    const result = crypto.EVP_PKEY_derive(ctx, derived_key.ptr, &out_key_len);
-    if (result != 1) {
-        // Failed on our end.
-        return error.Internal;
-    }
-    // Sanity check.
-    lp.assert(derived_key.len == out_key_len, "X25519.deriveBits", .{});
-
-    // Length is in bits, convert to byte length.
-    const length = (length_in_bits / 8) + (7 + (length_in_bits % 8)) / 8;
-    // Truncate the slice to specified length.
-    // Same as `derived_key`.
-    const tailored = blk: {
-        if (length > derived_key.len) {
-            return error.LengthTooLong;
-        }
-        break :blk derived_key[0..length];
-    };
-
-    // Zero any "unused bits" in the final byte.
-    const remainder_bits: u3 = @intCast(length_in_bits % 8);
-    if (remainder_bits != 0) {
-        tailored[tailored.len - 1] &= ~(@as(u8, 0xFF) >> remainder_bits);
+    const ctx = crypto.EVP_PKEY_CTX_new(private.getKeyObject(), null) orelse return error.OutOfMemory;
+    defer crypto.EVP_PKEY_CTX_free(ctx);
+    if (crypto.EVP_PKEY_derive_init(ctx) != 1 or crypto.EVP_PKEY_derive_set_peer(ctx, public.getKeyObject()) != 1) {
+        crypto.ERR_clear_error();
+        return error.OperationError;
     }
 
-    return js.ArrayBuffer{ .values = tailored };
+    const secret = try exec.local_arena.alloc(u8, 32);
+    var secret_len: usize = secret.len;
+    if (crypto.EVP_PKEY_derive(ctx, secret.ptr, &secret_len) != 1 or secret_len != secret.len) {
+        crypto.ERR_clear_error();
+        return error.OperationError;
+    }
+    return common.leadingBits(secret, length_in_bits);
 }

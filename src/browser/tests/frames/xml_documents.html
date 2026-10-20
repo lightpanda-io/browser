@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script>
+  function loadFrame(src) {
+    return new Promise((resolve) => {
+      const f = document.createElement('iframe');
+      f.onload = () => resolve(f);
+      f.src = src;
+      document.documentElement.appendChild(f);
+    });
+  }
+</script>
+
+<script id=xhtml type=module>
+  {
+    const state = await testing.async();
+    const f = await loadFrame('support/xhtml_page.xhtml');
+    state.resolve(f);
+    await state.done((f) => {
+      const doc = f.contentDocument;
+      testing.expectEqual('application/xhtml+xml', doc.contentType);
+      testing.expectEqual('XHTML page', doc.title);
+      testing.expectEqual('http://www.w3.org/1999/xhtml', doc.documentElement.namespaceURI);
+      testing.expectEqual(true, doc.body instanceof f.contentWindow.HTMLBodyElement);
+
+      // Scripts run as they're parsed.
+      testing.expectEqual(false, f.contentWindow.sawAfter);
+
+      // Self-closing non-void elements are empty, not left open.
+      testing.expectEqual(0, doc.getElementById('empty').childNodes.length);
+      testing.expectEqual('root', doc.getElementById('after').parentNode.id);
+
+      testing.expectEqual('a\u00a0b&c', doc.getElementById('after').textContent);
+      testing.expectEqual('http://www.w3.org/2000/svg', doc.getElementById('rect').namespaceURI);
+    });
+  }
+</script>
+
+<script id=malformed type=module>
+  {
+    // Not well-formed: falls back to the HTML parser, scripts run once.
+    // Chrome fails this on purpose: it stops at the first error and shows
+    // the partial tree.
+    const state = await testing.async();
+    const f = await loadFrame('support/xhtml_malformed.xhtml');
+    state.resolve(f);
+    await state.done((f) => {
+      const doc = f.contentDocument;
+      testing.expectEqual('application/xhtml+xml', doc.contentType);
+      testing.expectEqual('unclosed bold', doc.getElementById('p').textContent);
+      // HTML parsing: <div/> stays open.
+      testing.expectEqual('d', doc.getElementById('s').parentNode.id);
+      testing.expectEqual(1, f.contentWindow.ran);
+    });
+  }
+</script>
+
+<script id=xml_declaration_encoding type=module>
+  {
+    const state = await testing.async();
+    const f = await loadFrame('support/xhtml_latin1.xhtml');
+    state.resolve(f);
+    await state.done((f) => {
+      const doc = f.contentDocument;
+      testing.expectEqual('windows-1252', doc.characterSet);
+      testing.expectEqual('caf\u00e9', doc.getElementById('p').textContent);
+    });
+  }
+</script>
+
+<script id=text_xml type=module>
+  {
+    const state = await testing.async();
+    const f = await loadFrame('support/feed.xml');
+    state.resolve(f);
+    await state.done((f) => {
+      const doc = f.contentDocument;
+      testing.expectEqual('rss', doc.documentElement.localName);
+      testing.expectEqual(null, doc.documentElement.namespaceURI);
+      testing.expectEqual('First', doc.querySelector('item > title').textContent);
+    });
+  }
+</script>

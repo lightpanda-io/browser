@@ -308,7 +308,7 @@ test "cdp.runtime: inspector events go to the session that enabled them" {
 }
 
 test "cdp.runtime: an uncaught exception emits Runtime.exceptionThrown" {
-    testing.silenceLog(&.{.js});
+    testing.expectLog(&.{.page_error});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -336,7 +336,7 @@ test "cdp.runtime: an uncaught exception emits Runtime.exceptionThrown" {
 }
 
 test "cdp.runtime: Runtime.exceptionThrown locates an Error where it was created" {
-    testing.silenceLog(&.{.js});
+    testing.expectLog(&.{.page_error});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -360,7 +360,7 @@ test "cdp.runtime: Runtime.exceptionThrown locates an Error where it was created
 }
 
 test "cdp.runtime: an exception whose error event is cancelled is not reported" {
-    testing.silenceLog(&.{.js});
+    testing.expectLog(&.{.page_error});
 
     var ctx = try testing.context();
     defer ctx.deinit();

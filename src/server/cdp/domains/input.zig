@@ -2201,6 +2201,12 @@ test "cdp.input: dispatchKeyEvent caret movement keys move the text entry cursor
     id += 1;
     try testing.expect((try ls.local.compileAndRun("t.value === 'aXé'", null)).isTrue());
 
+    // A caret set from JS counts UTF-16 code units, so text goes after the é.
+    _ = try ls.local.compileAndRun("t.value = 'éa'; t.setSelectionRange(1, 1)", null);
+    try ctx.processMessage(.{ .id = id, .method = "Input.insertText", .params = .{ .text = "X" } });
+    id += 1;
+    try testing.expect((try ls.local.compileAndRun("t.value === 'éXa' && sel(t) === '2,2,none'", null)).isTrue());
+
     // <textarea>: Home/End stop at the enclosing line break, ArrowLeft crosses it.
     _ = try ls.local.compileAndRun("ta.focus(); ta.value = 'ab\\ncd'; ta.setSelectionRange(5, 5)", null);
     const textarea_steps = [_]Step{

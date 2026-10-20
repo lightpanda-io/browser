@@ -85,7 +85,7 @@ _caches: ?*CacheStorage = null,
 _reporting_error: bool = false,
 _current_event: ?*Event = null,
 _location: *Location,
-_history: History = .{},
+_history: History,
 _timers: Timers = .{},
 _scheduler: Scheduler = .{},
 _custom_elements: CustomElementRegistry = .{},
@@ -502,16 +502,18 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     defer frame.js.call_depth = call_depth;
 
     frame.page.recordJsError(error.JsException);
+    frame.page.status.noteException(err.toStringSlice() catch "");
 
     const location = err.errorLocation(frame.call_arena) catch js.Value.ErrorLocation{};
 
     const target = self.asEventTarget();
     if (!frame._event_manager.hasDirectListeners(target, "error")) {
-        if (comptime lp.IS_TEST == false) {
-            log.debug(.js, "window.reportError", .{
-                .message = err.toStringSlice() catch "Unknown error",
-            });
-        }
+        log.warn(.page_error, "uncaught exception", .{
+            .message = err.toStringSlice() catch "Unknown error",
+            .url = location.url,
+            .line = location.line,
+            .column = location.column,
+        });
         notifyExceptionThrown(err, location, frame);
         return;
     }
@@ -539,17 +541,13 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
         .run_microtasks = false,
     });
 
-    if (comptime lp.IS_TEST == false) {
-        if (!event._prevent_default) {
-            log.debug(.js, "window.reportError", .{
-                .message = error_event._message,
-                .filename = error_event._filename,
-                .line_number = error_event._line_number,
-                .column_number = error_event._column_number,
-            });
-        }
-    }
     if (!event._prevent_default) {
+        log.warn(.page_error, "uncaught exception", .{
+            .message = error_event._message,
+            .url = error_event._filename,
+            .line = error_event._line_number,
+            .column = error_event._column_number,
+        });
         notifyExceptionThrown(err, location, frame);
     }
 }
@@ -907,18 +905,13 @@ fn getWebDriver(_: *const Window) @import("WebDriver.zig") {
 }
 
 pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.PromiseRejection, frame: *Frame) !void {
-    if (comptime lp.IS_DEBUG) {
-        log.debug(.js, "unhandled rejection", .{
-            .target = "window",
-            .value = rejection.reason(),
-            .stack = rejection.local.stackTrace() catch |err| @errorName(err) orelse "???",
-        });
-    }
-
     const event_name = if (no_handler) "unhandledrejection" else "rejectionhandled";
 
     if (no_handler) {
         frame.page.recordJsError(error.JsException);
+        if (rejection.reason()) |reason| {
+            frame.page.status.noteException(reason.toStringSlice() catch "");
+        }
     }
 
     const target = self.asEventTarget();

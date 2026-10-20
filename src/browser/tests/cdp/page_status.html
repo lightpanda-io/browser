@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!-- Fixture for LP.getPageStatus: every resource type is skipped (the test
+       turns them all off), two WebGL probes, three 2D paints, one uncaught
+       error. Nothing here is ever fetched, so the targets need not exist. -->
+  <link rel="stylesheet" href="/src/browser/tests/cdp/page_status.css">
+</head>
+<body>
+  <iframe src="/src/browser/tests/cdp/iframe/target.html"></iframe>
+  <img src="/src/browser/tests/cdp/page_status.png">
+  <canvas id="c" width="10" height="10"></canvas>
+  <script>
+    const c = document.getElementById('c');
+    c.getContext('webgl');
+    c.getContext('experimental-webgl');
+    const ctx = c.getContext('2d');
+    ctx.beginPath();
+    ctx.rect(0, 0, 5, 5);
+    ctx.fill();
+    ctx.fillRect(0, 0, 1, 1);
+    ctx.fillText('x', 0, 0);
+    new Worker('/src/browser/tests/cdp/page_status_worker.js');
+    throw new Error('boom');
+  </script>
+</body>
+</html>

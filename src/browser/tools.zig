@@ -456,6 +456,7 @@ pub const Tool = enum {
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
                     \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output; same groups as the html tool's strip. `shell` (page chrome by markup) and `clutter` (keep only the main content, in the manner of reader modes) are the ones that matter for reading; `ui` also drops images.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering. An empty string is treated as omitted." },
+                    \\    "alternate": { "type": "boolean", "description": "Optional. When the page links a markdown version of itself (<link rel=\"alternate\" type=\"text/markdown\">), return that file instead of converting the page. It is the author's file and can differ from the rendered page; the output then starts with a comment naming its URL, which maxBytes does not count. Falls back to the page when there is no such link, the page itself failed to load (HTTP error status or bot challenge), or the alternate does not load as markdown within what is left of the timeout. Cannot be combined with selector or backendNodeId. Defaults to false." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -1061,6 +1062,9 @@ fn callInner(
     if (session.currentFrame()) |frame| result.navigated = frame._frame_id != frame_before;
     if (opts.nav_note) {
         if (session.currentFrame()) |frame| {
+            if (result.navigated) {
+                if (try weaknessNote(arena, frame)) |n| result.text = try arena.print("{s}\n\n{s}", .{ n, result.text });
+            }
             const note = if (result.navigated)
                 try navErrorNote(arena, frame)
             else if (tool.navigatesToUrl())
@@ -1251,6 +1255,25 @@ fn movedNote(arena: std.mem.Allocator, arguments: ?std.json.Value, frame: *const
     };
     if (url.len == 0 or std.mem.eql(u8, url, frame.url)) return null;
     return try arena.print("The page is at {s}, not {s}: a redirect or an in-page navigation moved it, and this reads it as it is. Use goto to reload {s}.", .{ frame.url, url, url });
+}
+
+/// What a full browser would have shown that this page's reads will lack.
+/// Only the signals that change what the model should do; canvas 2D is left
+/// out because fingerprinting scripts paint on most pages.
+fn weaknessNote(arena: std.mem.Allocator, frame: *const lp.Frame) !?[]const u8 {
+    const status = &frame.page.status;
+    var notes: std.ArrayList([]const u8) = .empty;
+    if (status.unsupported.get(.webgl) > 0) {
+        try notes.append(arena, "The page asked for WebGL, which Lightpanda does not provide: anything it renders that way is missing.");
+    }
+    const iframes = status.skipped.get(.iframe);
+    if (iframes > 0) {
+        try notes.append(arena, try arena.print("{d} iframe(s) were not loaded: subframe loading is off.", .{iframes}));
+    }
+    if (notes.items.len == 0) {
+        return null;
+    }
+    return try std.mem.join(arena, " ", notes.items);
 }
 
 /// Error and challenge pages would otherwise read as the requested content.
@@ -1623,16 +1646,56 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
         maxBytes: ?u32 = null,
         strip: lp.dump.Opts.Strip = .{},
         url: ?[:0]const u8 = null,
+        alternate: bool = false,
         timeout: ?u32 = null,
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
+    const timer: std.Io.Timestamp = .now(lp.io, .boot);
     const page = try ensurePage(session, registry, args.url, args.timeout);
+
+    if (args.alternate) {
+        // The alternate stands for the whole page, like `fetch --markdown-alternate`.
+        if (args.selector != null or args.backendNodeId != null) return ToolError.InvalidParams;
+        const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
+        const remaining = (args.timeout orelse default_nav_timeout_ms) -| elapsed;
+        if (try readMarkdownAlternate(arena, session, page, args.maxBytes, remaining)) |text| return text;
+    }
 
     const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
     const state = lp.RenderTree.resolve(arena, node, args.strip, page) catch return ToolError.OutOfMemory;
 
     var aw: std.Io.Writer.Allocating = .init(arena);
     lp.markdown.dump(state, .{ .max_bytes = args.maxBytes }, &aw.writer, page) catch return ToolError.InternalError;
+    return aw.written();
+}
+
+/// The page's `<link rel="alternate" type="text/markdown">`, loaded in a page
+/// of its own so the current page stays where it is. Null when there is no
+/// such link, the page failed, or the alternate doesn't load as markdown
+/// within `timeout_ms`.
+fn readMarkdownAlternate(arena: std.mem.Allocator, session: *lp.Session, frame: *lp.Frame, max_bytes: ?u32, timeout_ms: u32) ToolError!?[]const u8 {
+    const page = (lp.markdown.openAlternate(arena, session, frame) catch |err| return switch (err) {
+        error.OutOfMemory => ToolError.OutOfMemory,
+        else => ToolError.InternalError,
+    }) orelse return null;
+    defer page.close();
+
+    var runner = session.runner(.{});
+    var conditions = [_]lp.Session.Runner.WaitCondition{.{ .frame_id = page.frame_id, .until = default_nav_wait }};
+    // A timeout leaves the alternate unloaded, so the check below falls back
+    // to the page; a failed wait is an error.
+    _ = runner.waitResult(timeout_ms, &conditions) catch |err| return switch (err) {
+        error.Cancelled => ToolError.Cancelled,
+        error.OutOfMemory => ToolError.OutOfMemory,
+        else => ToolError.InternalError,
+    };
+
+    const alternate = page.frame() orelse return null;
+    if (!lp.markdown.isAlternateLoaded(alternate)) return null;
+    // Say which source this is: the alternate can differ from the rendered page.
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    aw.writer.print("<!-- markdown alternate: {s} -->\n", .{alternate.url}) catch return ToolError.OutOfMemory;
+    lp.markdown.dumpAlternate(alternate, max_bytes, &aw.writer) catch return ToolError.InternalError;
     return aw.written();
 }
 
@@ -3006,6 +3069,26 @@ test "tools: goto flags an error status instead of reporting success" {
     try std.testing.expectEqualStrings("HTTP 429 Too Many Requests: this is likely an error or rate-limit page, not the requested content.\n\nNavigated. HTTP 429 Too Many Requests.", r.text);
 }
 
+test "tools: goto says what a full browser would have shown" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const iframes = session.load_resources.iframe;
+    session.load_resources.iframe = false;
+    defer session.load_resources.iframe = iframes;
+    testing.expectLog(&.{ .disabled, .page_error });
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/src/browser/tests/cdp/page_status.html"}
+    , .{});
+    const r = try call(aa, session, &registry, "goto", args, .{ .nav_note = true, .source = .user });
+    try std.testing.expectEqualStrings("The page asked for WebGL, which Lightpanda does not provide: anything it renders that way is missing. 1 iframe(s) were not loaded: subframe loading is off.\n\nNavigated. HTTP 200 OK.", r.text);
+}
+
 test "tools: a read tool navigating by url flags an error status" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
@@ -3456,6 +3539,58 @@ test "isPathSafe: absolute paths and traversal are rejected" {
     try std.testing.expect(!isPathSafe("sub/../etc/passwd"));
     try std.testing.expect(!isPathSafe("sub/.."));
     try std.testing.expect(!isPathSafe(".."));
+}
+
+test "markdown: alternate reads the page's text/markdown link" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const base = "http://localhost:9582/src/browser/tests/";
+    const source = @embedFile("tests/markdown_source.md");
+
+    const page = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ base ++ "markdown_alternate.html\"}", .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, page.text, "Rendered page") != null);
+
+    const followed = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"alternate":true}
+    , .{}), .{ .source = .user });
+    try std.testing.expectEqualStrings("<!-- markdown alternate: " ++ base ++ "markdown_source.md -->\n" ++ source, followed.text);
+    // Read in a page of its own: the current page stays put.
+    try std.testing.expect(!followed.navigated);
+    try std.testing.expectEqual(1, session.pages.items.len);
+    try std.testing.expectEqualStrings(base ++ "markdown_alternate.html", session.currentFrame().?.url);
+
+    const capped = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"alternate":true,"maxBytes":7}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, capped.text, "-->\n# Title\n\n[truncated]") != null);
+
+    // The alternate stands for the whole page: no scoping, as in `fetch`.
+    try std.testing.expectError(ToolError.InvalidParams, call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"alternate":true,"selector":"p"}
+    , .{}), .{ .source = .user }));
+
+    // Many servers send .md files as text/plain; followed, it is written as-is.
+    const plain = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"alternate\":true,\"url\":\"" ++ base ++ "markdown_alternate_plain.html\"}", .{}), .{ .source = .user });
+    try std.testing.expectEqualStrings("<!-- markdown alternate: " ++ base ++ "markdown_source.txt -->\n" ++ source, plain.text);
+
+    // An alternate that doesn't load as markdown falls back to the page.
+    const fallback = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"alternate\":true,\"url\":\"" ++ base ++ "markdown_alternate_html.html\"}", .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, fallback.text, "Alternate is HTML") != null);
+    try std.testing.expectEqual(1, session.pages.items.len);
+
+    // A page that failed keeps its own content: the alternate's 200 would hide it.
+    _ = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ base ++ "markdown_alternate.html\"}", .{}), .{ .source = .user });
+    session.currentFrame().?._http_status = 404;
+    const failed = try call(aa, session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"alternate":true}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, failed.text, "Rendered page") != null);
+    try std.testing.expect(std.mem.find(u8, failed.text, "markdown alternate") == null);
 }
 
 test "markdown: a same-url page whose navigation failed is navigated again" {

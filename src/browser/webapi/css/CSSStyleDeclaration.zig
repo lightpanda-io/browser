@@ -46,11 +46,11 @@ pub fn parseInlineStyle(self: *CSSStyleDeclaration, frame: *Frame) !void {
     }
     const el = self._element orelse return;
     const attr_value = el.getAttributeInterned("style") orelse return;
-    try self.applyDeclarations(attr_value, frame);
+    try self.applyDeclarations(CssParser.parseDeclarationsList(attr_value), frame);
 }
 
-fn applyDeclarations(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !void {
-    var it = CssParser.parseDeclarationsList(text);
+fn applyDeclarations(self: *CSSStyleDeclaration, declarations: CssParser.DeclarationsIterator, frame: *Frame) !void {
+    var it = declarations;
     while (it.next()) |declaration| {
         try self.applyParsedDeclaration(declaration, frame);
     }
@@ -425,7 +425,7 @@ pub fn styleAttributeChanged(self: *CSSStyleDeclaration, text: ?[]const u8, fram
     // we need to get this declaration back in sync
     self.clearProperties(frame);
     if (text) |t| {
-        try self.applyDeclarations(t, frame);
+        try self.applyDeclarations(CssParser.parseDeclarationsList(t), frame);
     }
 }
 
@@ -464,15 +464,20 @@ pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !
     if (self._is_computed) {
         return error.NoModificationAllowed;
     }
-    try self.replaceCssText(text, frame);
+    try self.replaceDeclarations(CssParser.parseDeclarationsList(text), frame);
 }
 
-// setCssText without the read-only check, for declarations that are never
-// computed (a CSSStyleRule's style).
-pub fn replaceCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !void {
+// A CSSStyleRule's style, from the rule's block in a stylesheet. Unlike
+// cssText, the block may nest rules (CSS Nesting); its declarations are the
+// ones around them.
+pub fn replaceStyleBlock(self: *CSSStyleDeclaration, block: []const u8, frame: *Frame) !void {
+    try self.replaceDeclarations(CssParser.parseStyleBlock(block), frame);
+}
+
+fn replaceDeclarations(self: *CSSStyleDeclaration, declarations: CssParser.DeclarationsIterator, frame: *Frame) !void {
     self.clearProperties(frame);
 
-    try self.applyDeclarations(text, frame);
+    try self.applyDeclarations(declarations, frame);
     try self.syncStyleAttribute(frame);
 }
 

@@ -71,3 +71,27 @@
     });
   }
 </script>
+
+<!-- A History method acts on its own window, whatever realm the function
+     came from: this document's pushState called on a frame's history
+     updates that frame. -->
+<script id=history_borrowed_method type=module>
+  {
+    const state = await testing.async();
+    const c = await loadFrame('c');
+    const top_hash = location.hash;
+
+    history.pushState.call(c.contentWindow.history, null, '', '#c1');
+    history.pushState.call(c.contentWindow.history, null, '', '#c2');
+    const after_push = [location.hash, c.contentWindow.location.hash];
+
+    history.replaceState.call(c.contentWindow.history, null, '', '#c3');
+    const after_replace = [location.hash, c.contentWindow.location.hash];
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual([top_hash, '#c2'], after_push);
+      testing.expectEqual([top_hash, '#c3'], after_replace);
+    });
+  }
+</script>

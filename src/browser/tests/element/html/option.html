@@ -292,6 +292,28 @@
   }
 </script>
 
+<script id="index">
+  {
+    testing.expectEqual(0, new Option().index)
+
+    const select = document.createElement('select')
+    select.innerHTML = '<option>a</option><optgroup><option>b</option><option>c</option></optgroup><option>d</option>'
+    testing.expectEqual([0, 1, 2, 3], Array.from(select.options, (o) => o.index))
+
+    const d = select.options[3]
+    select.insertBefore(new Option('z'), select.firstChild)
+    testing.expectEqual(4, d.index)
+
+    d.remove()
+    testing.expectEqual(0, d.index)
+
+    // Options in a datalist are not in a list of options.
+    const list = document.createElement('datalist')
+    list.innerHTML = '<option>x</option><option>y</option>'
+    testing.expectEqual(0, list.children[1].index)
+  }
+</script>
+
 <script id="legacy_factory_function">
   // https://webidl.spec.whatwg.org/#legacy-factory-functions
   testing.expectEqual(true, Option !== HTMLOptionElement)

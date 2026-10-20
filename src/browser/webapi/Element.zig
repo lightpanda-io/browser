@@ -27,8 +27,8 @@ const text_measure = @import("../text_measure.zig");
 
 const CSS = @import("CSS.zig");
 const Node = @import("Node.zig");
-const TreeWalker = @import("TreeWalker.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
+const TreeWalker = @import("TreeWalker.zig");
 const EventTarget = @import("EventTarget.zig");
 const collections = @import("collections.zig");
 const Sanitizer = @import("Sanitizer.zig");
@@ -1115,7 +1115,7 @@ pub fn getClassList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
-            ._attribute_name = comptime .wrap("class"),
+            ._attribute = .class,
         });
     }
     return gop.value_ptr.*;
@@ -1137,7 +1137,7 @@ pub fn getPartList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
-            ._attribute_name = comptime .wrap("part"),
+            ._attribute = .part,
         });
     }
     return gop.value_ptr.*;
@@ -1149,7 +1149,7 @@ pub fn getRelList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
-            ._attribute_name = comptime .wrap("rel"),
+            ._attribute = .rel,
         });
     }
     return gop.value_ptr.*;
@@ -1167,7 +1167,7 @@ pub fn getTokenList(self: *Element, comptime attribute: TokenListAttribute, fram
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
-            ._attribute_name = comptime .wrap(@tagName(attribute)),
+            ._attribute = @field(collections.DOMTokenList.Attribute, @tagName(attribute)),
         });
     }
     return gop.value_ptr.*;
@@ -1212,17 +1212,26 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame
             continue;
         }
 
+        // A node from another document is adopted, as insertBefore does
+        const child_owner = child.ownerDocument(frame);
+        const parent_owner = parent.ownerDocument(frame) orelse parent.as(Node.Document);
+        const adopting = child_owner != null and child_owner.? != parent_owner;
+
         var previous_root: ?*Node = null;
         if (child._parent) |current_parent| {
             previous_root = child.getRootNode(.{});
-            frame.removeNode(current_parent, child, .{ .reconnect_to = parent });
+            frame.removeNode(current_parent, child, .{ .reconnect_to = if (adopting) null else parent });
+        }
+
+        if (adopting) {
+            try frame.adoptNodeTree(child, child_owner.?, parent_owner);
         }
 
         try frame.insertNodeRelative(
             parent,
             child,
             .{ .before = ref_node },
-            .{ .previous_root = previous_root },
+            .{ .previous_root = previous_root, .adopting_to_new_document = adopting },
         );
     }
 
@@ -1740,7 +1749,7 @@ pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect
     const window = (self.ownerFrame(frame) orelse frame).window;
     return .{
         .x = self.horizontalPosition(frame) - @as(f64, @floatFromInt(window.getScrollX())),
-        .y = calculateDocumentPosition(self.asNode()) - @as(f64, @floatFromInt(window.getScrollY())),
+        .y = calculateDocumentPosition(self.asNode(), frame) - @as(f64, @floatFromInt(window.getScrollY())),
         .width = self.boxAxis(frame, .width),
         .height = self.boxAxis(frame, .height),
     };
@@ -1795,7 +1804,8 @@ pub fn scrollContainer(self: *Element, axes: ScrollAxes, frame: *Frame) ScrollTa
     const owner = self.ownerFrame(frame) orelse return .viewport;
     const style_manager = &owner._style_manager;
     var current: ?*Element = self;
-    while (current) |el| : (current = el.parentElement()) {
+    // Shadow content scrolls its host's containers: walk the flat tree.
+    while (current) |el| : (current = el.asNode().flatTreeParentElement(frame)) {
         if (el.isRootContainer()) break;
         const scrolls = style_manager.overflowAxes(el);
         if ((axes.x and scrolls.x) or (axes.y and scrolls.y)) {
@@ -1896,8 +1906,8 @@ pub fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
         }
     }
 
-    var child = self.asNode().firstChild();
-    while (child) |node| : (child = node.nextSibling()) {
+    var children: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = frame });
+    while (children.next()) |node| {
         if (node.is(Element)) |el| {
             if (!style_manager.hasDisplayNone(el)) {
                 total += el.getElementAxis(frame, axis).value;
@@ -1935,7 +1945,7 @@ pub fn getOffsetTop(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
     }
-    return calculateDocumentPosition(self.asNode());
+    return calculateDocumentPosition(self.asNode(), frame);
 }
 
 pub fn getOffsetLeft(self: *Element, frame: *Frame) f64 {
@@ -2025,18 +2035,17 @@ pub fn getClientLeft(_: *Element) f64 {
 // - Linear scaling: 5px per node
 // - Perfect document order, guaranteed unique positions
 // - Compact coordinates (1000 nodes ≈ 5,000px)
-fn calculateDocumentPosition(node: *Node) f64 {
+fn calculateDocumentPosition(node: *Node, frame: *const Frame) f64 {
     var position: f64 = 0.0;
     var current = node;
 
     // Walk up to root, counting preceding nodes
-    while (current.parentNode()) |parent| {
+    while (current.flatParent(frame)) |parent| {
         // Count all previous siblings and their descendants
-        var sibling = parent.firstChild();
-        while (sibling) |s| {
+        var siblings: TreeWalker.FlatChildren = .init(parent, .{ .frame = frame });
+        while (siblings.next()) |s| {
             if (s == current) break;
-            position += countSubtreeNodes(s);
-            sibling = s.nextSibling();
+            position += countSubtreeNodes(s, frame);
         }
 
         // Count the parent itself
@@ -2047,11 +2056,11 @@ fn calculateDocumentPosition(node: *Node) f64 {
     return position * 5.0; // 5px per node
 }
 
-// Counts total nodes in a subtree (node + all descendants)
-fn countSubtreeNodes(node: *Node) f64 {
+// Counts total nodes in a flat-tree subtree (node + all descendants)
+fn countSubtreeNodes(node: *Node, frame: *const Frame) f64 {
     var count: f64 = 0;
-    var tw = TreeWalker.Full.init(node, .{});
-    while (tw.next()) |_| {
+    var walker: TreeWalker.Flat = .init(node, .{ .frame = frame });
+    while (walker.next()) |_| {
         count += 1;
     }
     return count;
@@ -2073,14 +2082,14 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
         x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
     }
 
-    while (current.parentNode()) |parent| {
+    while (current.flatParent(frame)) |parent| {
         if (parent.is(Element)) |el| {
             if (el.inlineStyle(frame)) |style| {
                 x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
             }
         }
-        var sibling = parent.firstChild();
-        while (sibling) |s| : (sibling = s.nextSibling()) {
+        var siblings: TreeWalker.FlatChildren = .init(parent, .{ .frame = frame });
+        while (siblings.next()) |s| {
             if (s == current) break;
             if (s.is(Element)) |el| {
                 if (!style_manager.hasDisplayNone(el)) {
@@ -2150,7 +2159,7 @@ pub fn clone(self: *Element, deep: bool, document: *const Node.Document, frame: 
 
 pub fn scrollIntoViewIfNeeded(self: *Element, center_if_needed: ?bool, frame: *Frame) void {
     _ = center_if_needed;
-    const y = calculateDocumentPosition(self.asNode());
+    const y = calculateDocumentPosition(self.asNode(), frame);
     const scroll_y: f64 = @floatFromInt(frame.window.getScrollY());
     const viewport_height: f64 = @floatFromInt(frame.window.getInnerHeight(frame));
     if (y >= scroll_y and y < scroll_y + viewport_height) {
@@ -2168,7 +2177,7 @@ pub fn scrollIntoView(self: *Element, opts: ?ScrollIntoViewOpts, frame: *Frame) 
     // Scroll the window so the element's top is brought into the viewport.
     // Positions come from the faux-layout document position (top = preorder
     // depth-scaled y), the same source getBoundingClientRect uses.
-    const y = calculateDocumentPosition(self.asNode());
+    const y = calculateDocumentPosition(self.asNode(), frame);
     frame.window.scrollTo(.{ .x = 0 }, @trunc(@max(0, y)), frame) catch {};
 }
 

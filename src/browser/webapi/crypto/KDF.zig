@@ -35,8 +35,8 @@ const log = lp.log;
 /// its cost.
 const PBKDF2_MAX_WORK: u64 = 1 << 24;
 
-/// Errors a derivation can raise, each mapping to a specific DOMException name.
-pub const Error = error{ InvalidAccessError, NotSupported, OperationError, OutOfMemory };
+/// Errors a derivation can raise: a TypeError, or one mapping to a DOMException.
+pub const Error = error{ InvalidAccessError, NotSupported, OperationError, OutOfMemory, TypeError };
 
 /// Validates the base key against the requested algorithm (shared by PBKDF2 and
 /// HKDF). `usage_ok` is the caller-checked usage gate (deriveBits for
@@ -68,8 +68,9 @@ pub fn pbkdf2(
     usage_ok: bool,
     exec: *const Execution,
 ) Error![]const u8 {
+    // Normalizing the params (the hash) comes before the key checks.
+    const digest = crypto.findDigest(try params.hash.canonical(exec.js.local.?)) catch return error.NotSupported;
     try checkBaseKey(base_key, "PBKDF2", usage_ok);
-    const digest = crypto.findDigest(params.hash.name()) catch return error.NotSupported;
     const out_len = try outputLen(length);
     // A zero-length derivation is valid and yields an empty buffer; the C
     // routines reject a zero output length, so short-circuit here.
@@ -78,8 +79,8 @@ pub fn pbkdf2(
     }
 
     const blocks = std.math.divCeil(usize, out_len, crypto.EVP_MD_size(digest)) catch unreachable;
-    if (@as(u64, blocks) * params.iterations > PBKDF2_MAX_WORK) {
-        log.warn(.js, "PBKDF2 work limit", .{ .length = out_len, .iterations = params.iterations });
+    if (@as(u64, blocks) * params.iterations.value > PBKDF2_MAX_WORK) {
+        log.warn(.js, "PBKDF2 work limit", .{ .length = out_len, .iterations = params.iterations.value });
         return error.OperationError;
     }
 
@@ -91,7 +92,7 @@ pub fn pbkdf2(
         base_key._key.len,
         @ptrCast(salt.ptr),
         salt.len,
-        params.iterations,
+        params.iterations.value,
         digest,
         out.len,
         out.ptr,
@@ -109,14 +110,21 @@ pub fn hkdf(
     usage_ok: bool,
     exec: *const Execution,
 ) Error![]const u8 {
+    // Normalizing the params (the hash) comes before the key checks.
+    const digest = crypto.findDigest(try params.hash.canonical(exec.js.local.?)) catch return error.NotSupported;
     try checkBaseKey(base_key, "HKDF", usage_ok);
-    const digest = crypto.findDigest(params.hash.name()) catch return error.NotSupported;
-    const out = try exec.local_arena.alloc(u8, try outputLen(length));
+    const out_len = try outputLen(length);
     // A zero-length derivation is valid and yields an empty buffer; the C
     // routines reject a zero output length, so short-circuit here.
-    if (out.len == 0) {
-        return out;
+    if (out_len == 0) {
+        return &.{};
     }
+    // RFC 5869 caps the output at 255 blocks of the hash. libcrypto rejects
+    // more too, but only once the buffer (up to 512MB) has been allocated.
+    if (out_len > 255 * crypto.EVP_MD_size(digest)) {
+        return error.OperationError;
+    }
+    const out = try exec.local_arena.alloc(u8, out_len);
 
     const salt = params.salt.values;
     const info = params.info.values;

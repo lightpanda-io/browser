@@ -404,6 +404,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         ._proto = undefined,
         ._document = self.document,
         ._location = undefined,
+        ._history = .{ ._frame = self },
         ._performance = try .init(factory, page_arena),
         ._screen = screen,
         ._visual_viewport = visual_viewport,
@@ -868,6 +869,10 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         return;
     }
 
+    if (is_root) {
+        // Status counts are per top-level navigation.
+        page.status = .{};
+    }
     self._http_status = null;
     self._bot_challenge = null;
     self._http_headers = .empty;
@@ -1933,9 +1938,24 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
                     .arena = try self.getArena(.large, "Frame.navigate"),
                 } };
             },
+            .text_xml, .other_xml => {
+                // XML ignores <meta charset>. Priority is BOM, header and XML declaration
+                // declaration (a BOM overrides both when decoding).
+                const label = if (mime.is_default_charset) Mime.xmlDeclarationEncoding(data) else mime.charsetString();
+                if (h5e.EncodingInfo.forLabel(label)) |info| {
+                    self.charset = info.name();
+                }
+                self._parse_state = .{ .html = .{
+                    .buffer = .empty,
+                    .arena = try self.getArena(.large, "Frame.navigate"),
+                    .xml = true,
+                } };
+            },
             .application_json, .text_javascript, .text_css, .text_plain, .text_markdown => {
                 var arr: std.ArrayList(u8) = .empty;
-                try arr.appendSlice(self.page_arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>");
+                // The parser drops a newline right after <pre>; this one
+                // keeps a body that starts with a newline intact.
+                try arr.appendSlice(self.page_arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>\n");
                 self._parse_state = .{ .text = arr };
             },
             .image_jpeg, .image_gif, .image_png, .image_webp => {
@@ -2025,7 +2045,17 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
 
                 preload.prescan(self, raw_html);
 
-                if (std.mem.eql(u8, self.charset, "UTF-8")) {
+                if (html.xml) {
+                    const encoding = h5e.EncodingInfo.forLabel(self.charset) orelse h5e.EncodingInfo.utf8();
+                    const xml = try h5e.validUtf8(html.arena.allocator(), encoding, raw_html);
+                    if (Parser.isWellFormedXML(xml)) {
+                        parser.parseXML(xml);
+                    } else {
+                        log.info(.frame, "malformed xml parsed as html", .{ .url = self.url });
+                        // try to pass it through the HTML parser
+                        parser.parse(xml);
+                    }
+                } else if (std.mem.eql(u8, self.charset, "UTF-8")) {
                     parser.parse(raw_html);
                 } else {
                     parser.parseWithEncoding(raw_html, self.charset);
@@ -2243,7 +2273,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         return;
     }
     if (self._session.load_resources.iframe == false) {
-        log.warnDisabledIFrame();
+        self.page.status.noteSkipped(.iframe);
         iframe._executed = true;
         return;
     }
@@ -2708,6 +2738,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     const session = self._session;
 
     if (session.load_resources.stylesheet == false) {
+        self.page.status.noteSkipped(.stylesheet);
         return self.queueLoad(Factory.protoOf(link));
     }
 
@@ -3708,6 +3739,7 @@ const ParseState = union(enum) {
     err: anyerror,
     html: struct {
         arena: *lp.Arena,
+        xml: bool = false,
         buffer: std.ArrayList(u8),
     },
     text: std.ArrayList(u8),
@@ -4402,6 +4434,7 @@ test "Frame: a failed navigation commits an error document over the superseded o
 }
 
 test "Frame: readystatechange during an aborted load may renavigate or throw" {
+    testing.expectLog(&.{.page_error});
     const page = try testing.pageTest("hi.html", .{});
     defer page.close();
     const frame = page.frame().?;

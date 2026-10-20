@@ -305,6 +305,17 @@ pub fn setValue(self: *Select, value: []const u8, frame: *Frame) !void {
     frame.domChanged();
 }
 
+/// The position of `option` in the list of options, or null when the option
+/// is not in it.
+pub fn optionIndex(self: *const Select, option: *const Option) ?u32 {
+    var index: u32 = 0;
+    var it = OptionIterator.init(self);
+    while (it.next()) |o| : (index += 1) {
+        if (o == option) return index;
+    }
+    return null;
+}
+
 pub fn getSelectedIndex(self: *Select) i32 {
     var index: i32 = 0;
     var it = OptionIterator.init(self);

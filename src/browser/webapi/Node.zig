@@ -1774,6 +1774,18 @@ pub fn flatTreeParentElement(self: *Node, frame: *const Frame) ?*Element {
     return (parent.flatTreeParent(frame) orelse return null).is(Element);
 }
 
+/// Like flatTreeParent, but never a shadow root: the parent as
+/// TreeWalker.Flat walks, which doesn't visit shadow roots.
+pub fn flatParent(self: *Node, frame: *const Frame) ?*Node {
+    const parent = self.flatTreeParent(frame) orelse return null;
+    // A shadow tree's top-level nodes have the shadow root as their parent;
+    // skip to its host.
+    if (parent.is(ShadowRoot)) |shadow| {
+        return shadow._host.asNode();
+    }
+    return parent;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Node);
 
@@ -1866,7 +1878,10 @@ pub const JsApi = struct {
     fn _getRootNode(self: *Node, opts: ?GetRootNodeOpts) *Node {
         return self.getRootNode(opts orelse .{});
     }
-    pub const isEqualNode = bridge.function(Node.isEqualNode, .{});
+    pub const isEqualNode = bridge.function(_isEqualNode, .{});
+    fn _isEqualNode(self: *Node, other: js.Nullable(*Node)) bool {
+        return self.isEqualNode(other.value orelse return false);
+    }
     pub const lookupNamespaceURI = bridge.function(_lookupNamespaceURI, .{});
     fn _lookupNamespaceURI(self: *Node, prefix: js.Nullable([]const u8), frame: *Frame) ?[]const u8 {
         return self.lookupNamespaceURI(prefix.value, frame);

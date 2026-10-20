@@ -190,6 +190,14 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 log.fatal(.app, "--dump-max-bytes needs text", .{ .dump = opts.dump, .allowed = "html, markdown" });
                 return error.InvalidArgument;
             }
+            if (opts.markdown_alternate and opts.dump != .markdown) {
+                log.fatal(.app, "invalid --markdown-alternate", .{ .needs = "--dump markdown" });
+                return error.InvalidArgument;
+            }
+            if (opts.markdown_alternate and opts.dump_selector != null) {
+                log.fatal(.app, "invalid --markdown-alternate", .{ .conflicts_with = "--dump-selector" });
+                return error.InvalidArgument;
+            }
 
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = opts.wait_ms,
@@ -200,6 +208,7 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 .dump_mode = opts.dump,
                 .selector = opts.dump_selector,
                 .fail_on_http_error = opts.fail_on_http_error,
+                .markdown_alternate = opts.markdown_alternate,
                 .dump = .{
                     .strip = opts.strip_mode,
                     .with_base = opts.with_base,

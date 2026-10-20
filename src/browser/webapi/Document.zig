@@ -36,6 +36,7 @@ const Location = @import("Location.zig");
 const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
 const DOMTreeWalker = @import("DOMTreeWalker.zig");
+const TreeWalker = @import("TreeWalker.zig");
 const DOMNodeIterator = @import("DOMNodeIterator.zig");
 const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
@@ -430,7 +431,7 @@ pub fn getElementById(self: *Document, id: []const u8, frame: *Frame) ?*Element 
 
     //ID was removed but might have duplicates
     if (self._removed_ids.remove(id)) {
-        var tw = @import("TreeWalker.zig").Full.Elements.init(self.asNode(), .{});
+        var tw = TreeWalker.Full.Elements.init(self.asNode(), .{});
         while (tw.next()) |el| {
             const element_id = el.getId() orelse continue;
             if (std.mem.eql(u8, element_id, id)) {
@@ -504,11 +505,12 @@ pub fn extent(self: *Document) Extent {
     // its auto-height ancestors count as 5px each. Body's own children are
     // stacked below instead. Only inline heights: virtualizers set theirs
     // inline, and the cascade per element is too slow on every mutation.
+    // Walks the flat tree, the order Element positions are numbered in.
     var index: f64 = 0;
-    var tw = @import("TreeWalker.zig").Full.init(self.asNode(), .{});
+    var tw: TreeWalker.Flat = .init(self.asNode(), .{ .frame = frame });
     while (tw.next()) |node| : (index += 1) {
         const el = node.is(Element) orelse continue;
-        const parent = el.parentElement() orelse continue;
+        const parent = el.asNode().flatTreeParentElement(frame) orelse continue;
         if (parent.isRootContainer()) {
             continue;
         }
@@ -523,8 +525,8 @@ pub fn extent(self: *Document) Extent {
             const body = html_body.asElement();
             size.height = @max(size.height, body.contentAxis(frame, .height), style_manager.inlineSize(body, .height) orelse 0);
             size.width = style_manager.inlineSize(body, .width) orelse 0;
-            var child = body.asNode().firstChild();
-            while (child) |node| : (child = node.nextSibling()) {
+            var children: TreeWalker.FlatChildren = .init(body.asNode(), .{ .frame = frame });
+            while (children.next()) |node| {
                 const el = node.is(Element) orelse continue;
                 if (!style_manager.hasDisplayNone(el)) {
                     size.width = @max(size.width, el.getElementAxis(frame, .width).value);
@@ -950,19 +952,37 @@ pub fn moveBefore(self: *Document, node: js.Value, child: js.Value, frame: *Fram
     return self.asNode().moveBefore(node, child, frame);
 }
 
-pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
-    return self.elementFromPointImpl(x, y, false, frame);
+/// The deepest element at the point, shadow trees included
+pub fn hitTest(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
+    return self.hitTestImpl(x, y, false, frame);
+}
+
+// document.elementFromPoint only sees the document's tree: a hit inside a
+// shadow tree reports its outermost host, as in Chrome.
+fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
+    const hit = (try self.hitTest(x, y, frame)) orelse return null;
+    return retargetToDocumentTree(hit);
+}
+
+fn retargetToDocumentTree(element: *Element) *Element {
+    var current = element;
+    while (current.asNode().containingShadowRoot()) |shadow| {
+        current = shadow._host;
+    }
+    return current;
 }
 
 // The faux layout gives most elements no useful horizontal extent, so
 // viewport-relative hit-testing (WebDriver scroll actions) matches on the
 // vertical axis only.
-pub fn elementFromVerticalPoint(self: *Document, y: f64, frame: *Frame) !?*Element {
-    return self.elementFromPointImpl(0, y, true, frame);
+pub fn hitTestVertical(self: *Document, y: f64, frame: *Frame) !?*Element {
+    return self.hitTestImpl(0, y, true, frame);
 }
 
-fn elementFromPointImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool, frame: *Frame) !?*Element {
-    // DFS in document order; topmost = last visited element whose rect contains (x, y).
+fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool, frame: *Frame) !?*Element {
+    // DFS in flat-tree order (shadow content inside its host, slotted nodes
+    // inside their slot, as Element.calculateDocumentPosition lays them out);
+    // topmost = last visited element whose rect contains (x, y).
     //
     // Faux-layout shortcut: rect.top is calculateDocumentPosition × 5, which is
     // monotonically increasing in document order. So we maintain a running
@@ -1020,12 +1040,13 @@ fn elementFromPointImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignor
             }
         }
 
-        // Add children to stack in reverse order so we process them in document order
-        var child = node.lastChild();
-        while (child) |c| {
+        // Push the children, then reverse them so they pop in flat-tree order
+        const first = stack.items.len;
+        var children: TreeWalker.FlatChildren = .init(node, .{ .frame = frame });
+        while (children.next()) |c| {
             try stack.append(frame.local_arena, .{ .node = c, .hidden = hidden });
-            child = c.previousSibling();
         }
+        std.mem.reverse(Entry, stack.items[first..]);
     }
 
     return topmost;
@@ -1047,7 +1068,7 @@ fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *E
 }
 
 fn getDocType(self: *Document) ?*Node {
-    var tw = @import("TreeWalker.zig").Full.init(self.asNode(), .{});
+    var tw = TreeWalker.Full.init(self.asNode(), .{});
     while (tw.next()) |node| {
         if (node._type == .document_type) {
             return node;
@@ -1381,9 +1402,22 @@ fn exitFullscreen(_: *Document, frame: *Frame) js.Promise {
     return frame.js.local.?.rejectPromise(.{ .type_error = "Document not in fullscreen" });
 }
 
-pub fn hasFocus(_: *Document) bool {
-    log.debug(.not_implemented, "Document.hasFocus", .{});
-    return true;
+pub fn hasFocus(self: *Document) bool {
+    var top = self._frame orelse return false;
+    while (top.parent) |parent| {
+        top = parent;
+    }
+
+    var candidate = top;
+    while (true) {
+        if (candidate.document == self) {
+            return true;
+        }
+        const active = candidate.document._active_element orelse return false;
+        const iframe = active.is(Element.Html.IFrame) orelse return false;
+        const window = iframe._window orelse return false;
+        candidate = window._frame;
+    }
 }
 
 fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {

@@ -147,6 +147,7 @@ fn imageAddedCallback(self: *Image, frame: *Frame) !void {
 
     // If image loading not desired, we just do fake "load" event.
     if (frame._session.load_resources.image == false) {
+        frame.page.status.noteSkipped(.image);
         return frame.queueImageEvent(self, .load);
     }
 

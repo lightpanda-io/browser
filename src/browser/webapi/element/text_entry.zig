@@ -23,6 +23,7 @@ const std = @import("std");
 
 const Frame = @import("../../Frame.zig");
 
+const CData = @import("../CData.zig");
 const Event = @import("../Event.zig");
 const Selection = @import("../Selection.zig");
 const InputEvent = @import("../event/InputEvent.zig");
@@ -274,11 +275,22 @@ pub fn TextEntry(comptime T: type) type {
             return @tagName(self._selection_direction);
         }
 
+        // Selection offsets are kept as byte offsets into the UTF-8 value, while
+        // the JS API counts UTF-16 code units.
+        pub fn selectionOffsetToJs(self: *const T, offset: u32) u32 {
+            const value = self.getValue();
+            return @intCast(CData.utf16Len(value[0..@min(offset, value.len)]));
+        }
+
+        fn selectionOffsetFromJs(self: *const T, offset: u32) u32 {
+            return @intCast(CData.utf16OffsetToUtf8Floor(self.getValue(), offset));
+        }
+
         pub fn setSelectionStart(self: *T, value: u32, frame: *Frame) !void {
             if (self.selectionAvailable() == false) {
                 return error.InvalidStateError;
             }
-            self._selection_start = value;
+            self._selection_start = selectionOffsetFromJs(self, value);
             try dispatchSelectionChangeEvent(self, frame);
         }
 
@@ -286,7 +298,7 @@ pub fn TextEntry(comptime T: type) type {
             if (self.selectionAvailable() == false) {
                 return error.InvalidStateError;
             }
-            self._selection_end = value;
+            self._selection_end = selectionOffsetFromJs(self, value);
             try dispatchSelectionChangeEvent(self, frame);
         }
 
@@ -307,7 +319,7 @@ pub fn TextEntry(comptime T: type) type {
                 } else break :blk .none;
             };
 
-            return applySelectionRange(self, selection_start, selection_end, direction, frame);
+            return applySelectionRange(self, selectionOffsetFromJs(self, selection_start), selectionOffsetFromJs(self, selection_end), direction, frame);
         }
 
         fn applySelectionRange(
