@@ -396,8 +396,7 @@ pub const Writer = struct {
                                 try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeInterned("required") } }, w);
                             },
                             .checkbox, .radio => {
-                                const is_checked = el.hasAttributeInterned("checked");
-                                try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = if (is_checked) "true" else "false" } }, w);
+                                try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = if (input._checked) "true" else "false" } }, w);
                             },
                             .range, .color, .date, .time, .@"datetime-local", .month, .week => {
                                 if (!is_disabled) {
@@ -1624,20 +1623,18 @@ test "AXNode: writer" {
     var label_index: Label.LabelByForIndex = .{};
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
-    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+    const json = try std.json.Stringify.valueAlloc(testing.arena_allocator, Writer{
         .root = node,
         .registry = &registry,
         .frame = frame,
         .label_index = &label_index,
         .temp_arena = temp_arena,
     }, .{});
-    defer testing.allocator.free(json);
 
     // Check that the document node is present with proper structure
-    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
-    defer parsed.deinit();
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, json, .{});
 
-    const nodes = parsed.value.array.items;
+    const nodes = parsed.array.items;
     try testing.expect(nodes.len > 0);
 
     // First node should be the document
@@ -1699,18 +1696,16 @@ test "AXNode: writer prunes hidden and resolves labels" {
     var label_index: Label.LabelByForIndex = .{};
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
-    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+    const json = try std.json.Stringify.valueAlloc(testing.arena_allocator, Writer{
         .root = node,
         .registry = &registry,
         .frame = frame,
         .label_index = &label_index,
         .temp_arena = temp_arena,
     }, .{});
-    defer testing.allocator.free(json);
 
-    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
-    defer parsed.deinit();
-    const nodes = parsed.value.array.items;
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, json, .{});
+    const nodes = parsed.array.items;
 
     // No hidden-subtree text should have leaked into the tree.
     const hidden_texts = [_][]const u8{
@@ -1782,7 +1777,7 @@ test "AXNode: Writer query filters by role" {
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
 
-    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+    const json = try std.json.Stringify.valueAlloc(testing.arena_allocator, Writer{
         .root = node,
         .registry = &registry,
         .frame = frame,
@@ -1790,12 +1785,10 @@ test "AXNode: Writer query filters by role" {
         .temp_arena = temp_arena,
         .filter = .{ .role = "heading" },
     }, .{});
-    defer testing.allocator.free(json);
 
-    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
-    defer parsed.deinit();
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, json, .{});
 
-    const nodes = parsed.value.array.items;
+    const nodes = parsed.array.items;
     // Fixture has one <h1>Visible</h1>.
     try testing.expectEqual(1, nodes.len);
 
@@ -1862,22 +1855,72 @@ test "AXNode: writer maps password input to textbox" {
     var label_index: Label.LabelByForIndex = .{};
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
-    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+    const json = try std.json.Stringify.valueAlloc(testing.arena_allocator, Writer{
         .root = node,
         .registry = &registry,
         .frame = frame,
         .label_index = &label_index,
         .temp_arena = temp_arena,
     }, .{});
-    defer testing.allocator.free(json);
 
-    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
-    defer parsed.deinit();
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, json, .{});
 
-    const textbox = findNode(parsed.value.array.items, "textbox", "Password") orelse return error.PasswordTextboxNodeNotFound;
+    const textbox = findNode(parsed.array.items, "textbox", "Password") orelse return error.PasswordTextboxNodeNotFound;
     try testing.expectEqual(false, textbox.get("ignored").?.bool);
     const required = nodeProperty(textbox, "required") orelse return error.PasswordRequiredPropertyNotFound;
     try testing.expectEqual(true, required.get("value").?.bool);
+}
+
+test "AXNode: writer reports the current checked state, not the attribute" {
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    var doc = frame.window._document;
+
+    const body = (try doc.querySelector(comptime .wrap("body"), frame)).?;
+
+    const Case = struct { label: []const u8, type: []const u8, attribute: bool, checked: bool };
+    const cases = [_]Case{
+        .{ .label = "Unticked box", .type = "checkbox", .attribute = true, .checked = false },
+        .{ .label = "Ticked box", .type = "checkbox", .attribute = false, .checked = true },
+        .{ .label = "Picked radio", .type = "radio", .attribute = false, .checked = true },
+    };
+    for (cases) |case| {
+        const label = try doc.createElement("label", null, frame);
+        const input = try doc.createElement("input", null, frame);
+        try input.setAttributeSafe(comptime .wrap("type"), .wrap(case.type), frame);
+        if (case.attribute) {
+            try input.setAttributeSafe(comptime .wrap("checked"), comptime .wrap(""), frame);
+        }
+        try input.as(DOMNode.Element.Html.Input).setChecked(case.checked, frame);
+        _ = try label.asNode().appendChild(input.asNode(), frame);
+        _ = try label.asNode().appendChild(try doc.createTextNode(case.label), frame);
+        _ = try body.asNode().appendChild(label.asNode(), frame);
+    }
+
+    const node = try registry.register(doc.asNode());
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer temp_arena.release();
+    const json = try std.json.Stringify.valueAlloc(testing.arena_allocator, Writer{
+        .root = node,
+        .registry = &registry,
+        .frame = frame,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+    }, .{});
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, json, .{});
+
+    for (cases) |case| {
+        const ax = findNode(parsed.array.items, case.type, case.label) orelse return error.InputNotFound;
+        const checked = nodeProperty(ax, "checked") orelse return error.CheckedPropertyNotFound;
+        try testing.expectEqual(if (case.checked) "true" else "false", checked.get("value").?.string);
+    }
 }
 
 test "AXNode: Writer query filters by accessible name" {
@@ -1895,7 +1938,7 @@ test "AXNode: Writer query filters by accessible name" {
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
 
-    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+    const json = try std.json.Stringify.valueAlloc(testing.arena_allocator, Writer{
         .root = node,
         .registry = &registry,
         .frame = frame,
@@ -1903,12 +1946,10 @@ test "AXNode: Writer query filters by accessible name" {
         .temp_arena = temp_arena,
         .filter = .{ .accessible_name = "Search" },
     }, .{});
-    defer testing.allocator.free(json);
 
-    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
-    defer parsed.deinit();
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, json, .{});
 
-    const nodes = parsed.value.array.items;
+    const nodes = parsed.array.items;
     // Fixture has <label for="search-input">Search</label> — its accessible
     // name is "Search". The label itself plus the input it labels both
     // surface as candidates; verify at least one match with the right name.
@@ -1939,13 +1980,11 @@ test "AXNode: Writer query and subtree root see a hiding ancestor" {
         .temp_arena = temp_arena,
         .filter = .{ .accessible_name = "under-inert" },
     };
-    const query = try std.json.Stringify.valueAlloc(testing.allocator, writer, .{});
-    defer testing.allocator.free(query);
+    const query = try std.json.Stringify.valueAlloc(testing.arena_allocator, writer, .{});
 
-    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, query, .{});
-    defer parsed.deinit();
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, query, .{});
     // Chrome returns no match (an ignored node has no name); we may, but ignored
-    for (parsed.value.array.items) |n| {
+    for (parsed.array.items) |n| {
         try testing.expectEqual(true, n.object.get("ignored").?.bool);
     }
 
@@ -1956,8 +1995,7 @@ test "AXNode: Writer query and subtree root see a hiding ancestor" {
     writer.filter = null;
     for ([_]*DOMNode.Element{ button, shadow_button }) |root| {
         writer.root = try registry.register(root.asNode());
-        const tree = try std.json.Stringify.valueAlloc(testing.allocator, writer, .{});
-        defer testing.allocator.free(tree);
+        const tree = try std.json.Stringify.valueAlloc(testing.arena_allocator, writer, .{});
 
         try testing.expect(std.mem.find(u8, tree, "\"ignored\":true") != null);
         try testing.expect(std.mem.find(u8, tree, "\"childIds\":[]") != null);
@@ -1985,7 +2023,7 @@ test "AXNode: Writer query combined role+name filter promotes hidden-input label
     //   - the hidden input (intrinsic role="checkbox", ignored=true)
     // The label is the actionable target — a real client searching by role
     // would act on the entry with ignored=false.
-    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+    const json = try std.json.Stringify.valueAlloc(testing.arena_allocator, Writer{
         .root = node,
         .registry = &registry,
         .frame = frame,
@@ -1993,12 +2031,10 @@ test "AXNode: Writer query combined role+name filter promotes hidden-input label
         .temp_arena = temp_arena,
         .filter = .{ .accessible_name = "Enable feature", .role = "checkbox" },
     }, .{});
-    defer testing.allocator.free(json);
 
-    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
-    defer parsed.deinit();
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, json, .{});
 
-    const nodes = parsed.value.array.items;
+    const nodes = parsed.array.items;
     try testing.expect(nodes.len >= 1);
 
     // Every match has the right role and name.
@@ -2030,7 +2066,7 @@ test "AXNode: Writer query no match returns empty array" {
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
 
-    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+    const json = try std.json.Stringify.valueAlloc(testing.arena_allocator, Writer{
         .root = node,
         .registry = &registry,
         .frame = frame,
@@ -2038,12 +2074,10 @@ test "AXNode: Writer query no match returns empty array" {
         .temp_arena = temp_arena,
         .filter = .{ .role = "marquee" },
     }, .{});
-    defer testing.allocator.free(json);
 
-    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
-    defer parsed.deinit();
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, json, .{});
 
-    try testing.expectEqual(0, parsed.value.array.items.len);
+    try testing.expectEqual(0, parsed.array.items.len);
 }
 
 test "AXNode: nameFromContentRole" {
@@ -2106,14 +2140,13 @@ test "AXNode: writer prunes children when root is hidden" {
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
 
-    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+    const json = try std.json.Stringify.valueAlloc(testing.arena_allocator, Writer{
         .root = node,
         .registry = &registry,
         .frame = frame,
         .label_index = &label_index,
         .temp_arena = temp_arena,
     }, .{});
-    defer testing.allocator.free(json);
 
     try testing.expect(std.mem.find(u8, json, "under-display-none") == null);
     try testing.expect(std.mem.find(u8, json, "\"childIds\":[]") != null);
@@ -2134,7 +2167,7 @@ test "AXNode: writer depth cuts every branch at the same level" {
 
     // document(0) > html(1) > body(2) > div, ul, button(3) > p, li, text(4) > text(5)
     {
-        const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        const json = try std.json.Stringify.valueAlloc(testing.arena_allocator, Writer{
             .root = node,
             .registry = &registry,
             .frame = frame,
@@ -2142,11 +2175,10 @@ test "AXNode: writer depth cuts every branch at the same level" {
             .temp_arena = temp_arena,
             .depth = 3,
         }, .{});
-        defer testing.allocator.free(json);
 
-        const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
-        defer parsed.deinit();
-        const nodes = parsed.value.array.items;
+
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, json, .{});
+        const nodes = parsed.array.items;
 
         // Every branch reaches depth 3, not only the first one.
         try testing.expect(findNode(nodes, "list", "") != null);
@@ -2158,7 +2190,7 @@ test "AXNode: writer depth cuts every branch at the same level" {
     }
 
     {
-        const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        const json = try std.json.Stringify.valueAlloc(testing.arena_allocator, Writer{
             .root = node,
             .registry = &registry,
             .frame = frame,
@@ -2166,11 +2198,10 @@ test "AXNode: writer depth cuts every branch at the same level" {
             .temp_arena = temp_arena,
             .depth = 4,
         }, .{});
-        defer testing.allocator.free(json);
 
-        const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
-        defer parsed.deinit();
-        const nodes = parsed.value.array.items;
+
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, json, .{});
+        const nodes = parsed.array.items;
 
         try testing.expect(findNode(nodes, "paragraph", "") != null);
         try testing.expect(findNode(nodes, "listitem", "") != null);
@@ -2234,14 +2265,13 @@ test "AXNode: aria-hidden is case-insensitive" {
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
 
-    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+    const json = try std.json.Stringify.valueAlloc(testing.arena_allocator, Writer{
         .root = node,
         .registry = &registry,
         .frame = frame,
         .label_index = &label_index,
         .temp_arena = temp_arena,
     }, .{});
-    defer testing.allocator.free(json);
 
     try testing.expect(std.mem.find(u8, json, "hidden-upper") == null);
     try testing.expect(std.mem.find(u8, json, "hidden-mixed") == null);
