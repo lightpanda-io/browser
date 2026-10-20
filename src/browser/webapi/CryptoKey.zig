@@ -77,7 +77,7 @@ pub const Pair = struct {
 /// Key-creating functions expect this format.
 pub const KeyOrPair = union(enum) { key: *CryptoKey, pair: Pair };
 
-pub const Type = enum(u8) { hmac, rsa, x25519, aes, derive, ec };
+pub const Type = enum(u8) { hmac, rsa, x25519, aes, derive, ec, ed25519 };
 
 pub const Kind = enum {
     secret,

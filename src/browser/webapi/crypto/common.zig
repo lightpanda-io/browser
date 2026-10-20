@@ -85,6 +85,24 @@ pub fn usageMaskInner(allowed: []const []const u8, usages: []const []const u8, r
     return mask;
 }
 
+/// Whether `usage` is one of `set`.
+pub fn usageIn(set: []const []const u8, usage: []const u8) bool {
+    for (set) |s| {
+        if (std.mem.eql(u8, s, usage)) return true;
+    }
+    return false;
+}
+
+/// The usage intersection of `usages` and `set`, as a bitmask: how a key
+/// pair's usages are split between its halves.
+pub fn usageIntersection(set: []const []const u8, usages: []const []const u8) u8 {
+    var mask: u8 = 0;
+    for (usages) |usage| {
+        if (usageIn(set, usage)) mask |= usageBit(usage).?;
+    }
+    return mask;
+}
+
 /// The key bytes of a symmetric ("oct") JWK: its `kty` must be "oct" and its
 /// `k` present and decodable (JWA, section 6.4). Anything else is DataError.
 pub fn octKey(jwk: algorithm.KeyData.Jwk, allocator: Allocator) error{ OutOfMemory, DataError }![]u8 {
@@ -120,6 +138,14 @@ pub fn checkJwk(
     if (jwk.ext) |ext| {
         if (!ext and extractable) return error.DataError;
     }
+}
+
+/// A JWK key member (a coordinate, `x`, `d`, ...): base64url of exactly `n`
+/// bytes. A missing member or one of another size is DataError.
+pub fn jwkBytes(allocator: Allocator, member: ?[]const u8, n: usize) error{ OutOfMemory, DataError }![]u8 {
+    const bytes = try base64Decode(allocator, member orelse return error.DataError);
+    if (bytes.len != n) return error.DataError;
+    return bytes;
 }
 
 /// Decodes a base64url (or base64) string, tolerating either alphabet and

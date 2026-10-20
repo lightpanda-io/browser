@@ -2023,6 +2023,148 @@
   });
 </script>
 
+<script id=ed25519 type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+  const unhex = (h) => new Uint8Array(h.match(/../g).map((x) => parseInt(x, 16)));
+  const describe = (key) => `${key.type}:${key.algorithm.name}:${key.extractable}:${key.usages.join("+")}`;
+
+  // RFC 8032, section 7.1, test 1 (an empty message).
+  const seed = unhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60");
+  const pub = unhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
+  const sig = "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b";
+  const msg = new Uint8Array(0);
+  const x = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo";
+  const d = "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A";
+  const jwkPublic = { kty: "OKP", crv: "Ed25519", x };
+  const identity = new Uint8Array(32);
+  identity[0] = 1;
+  const jwkPrivate = { ...jwkPublic, d };
+
+  const privateKey = await subtle.importKey("jwk", jwkPrivate, "Ed25519", true, ["sign"]);
+  const publicKey = await subtle.importKey("raw", pub, { name: "ed25519" }, true, ["verify"]);
+  const spki = await subtle.exportKey("spki", publicKey);
+  const pkcs8 = await subtle.exportKey("pkcs8", privateKey);
+  const generated = await subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+  const generatedSig = await subtle.sign("Ed25519", generated.privateKey, msg);
+  const ecdsa = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+
+  const results = {
+    sign: hex(await subtle.sign("Ed25519", privateKey, msg)),
+    verify: await subtle.verify("Ed25519", publicKey, unhex(sig), msg),
+    // A signature that doesn't verify, or of the wrong size, is false.
+    verifyOther: await subtle.verify("Ed25519", publicKey, unhex(sig), new Uint8Array([1])),
+    verifyShort: await subtle.verify("Ed25519", publicKey, unhex(sig).slice(0, 63), msg),
+    // A small-order public key or R is false, as the spec asks: here the
+    // identity, with which R = identity and S = 0 satisfy [S]B = R + [k]A for
+    // any message.
+    smallOrder: await subtle.verify("Ed25519", await subtle.importKey("raw", identity, "Ed25519", false, ["verify"]), new Uint8Array([...identity, ...new Uint8Array(32)]), msg),
+    raw: hex(await subtle.exportKey("raw", publicKey)),
+    spki: hex(spki),
+    pkcs8: hex(pkcs8),
+    jwkPublic: JSON.stringify(await subtle.exportKey("jwk", publicKey)),
+    jwkPrivate: JSON.stringify(await subtle.exportKey("jwk", privateKey)),
+    algorithm: JSON.stringify(privateKey.algorithm),
+    // Each half exports only in its own formats.
+    rawPrivate: await errorName(() => subtle.exportKey("raw", privateKey)),
+    spkiPrivate: await errorName(() => subtle.exportKey("spki", privateKey)),
+    pkcs8Public: await errorName(() => subtle.exportKey("pkcs8", publicKey)),
+    importSpki: describe(await subtle.importKey("spki", spki, "Ed25519", false, ["verify"])),
+    importPkcs8: describe(await subtle.importKey("pkcs8", pkcs8, "Ed25519", false, ["sign"])),
+    importRawNoUsages: describe(await subtle.importKey("raw", pub, "Ed25519", true, [])),
+    // A JWK alg, if present, is "Ed25519" or "EdDSA".
+    algEdDSA: describe(await subtle.importKey("jwk", { ...jwkPublic, alg: "EdDSA" }, "Ed25519", true, ["verify"])),
+    algEd25519: describe(await subtle.importKey("jwk", { ...jwkPublic, alg: "Ed25519" }, "Ed25519", true, ["verify"])),
+    algOther: await errorName(() => subtle.importKey("jwk", { ...jwkPublic, alg: "ES256" }, "Ed25519", true, ["verify"])),
+    useEnc: await errorName(() => subtle.importKey("jwk", { ...jwkPublic, use: "enc" }, "Ed25519", true, ["verify"])),
+    ktyEc: await errorName(() => subtle.importKey("jwk", { ...jwkPublic, kty: "EC" }, "Ed25519", true, ["verify"])),
+    crvX25519: await errorName(() => subtle.importKey("jwk", { ...jwkPublic, crv: "X25519" }, "Ed25519", true, ["verify"])),
+    crvLower: await errorName(() => subtle.importKey("jwk", { ...jwkPublic, crv: "ed25519" }, "Ed25519", true, ["verify"])),
+    missingX: await errorName(() => subtle.importKey("jwk", { kty: "OKP", crv: "Ed25519", d }, "Ed25519", true, ["sign"])),
+    shortX: await errorName(() => subtle.importKey("jwk", { ...jwkPublic, x: x.slice(0, -1) }, "Ed25519", true, ["verify"])),
+    // A private JWK's x must be its d's public key.
+    otherX: await errorName(() => subtle.importKey("jwk", { ...jwkPrivate, x: "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo" }, "Ed25519", true, ["sign"])),
+    extFalse: await errorName(() => subtle.importKey("jwk", { ...jwkPublic, ext: false }, "Ed25519", true, ["verify"])),
+    privateVerify: await errorName(() => subtle.importKey("jwk", jwkPrivate, "Ed25519", true, ["verify"])),
+    rawShort: await errorName(() => subtle.importKey("raw", pub.slice(1), "Ed25519", true, ["verify"])),
+    rawSign: await errorName(() => subtle.importKey("raw", pub, "Ed25519", true, ["sign"])),
+    spkiTrailing: await errorName(() => subtle.importKey("spki", new Uint8Array([...new Uint8Array(spki), 0]), "Ed25519", true, ["verify"])),
+    spkiShort: await errorName(() => subtle.importKey("spki", new Uint8Array(spki).slice(0, -1), "Ed25519", true, ["verify"])),
+    spkiOfEcdsa: await errorName(async () => subtle.importKey("spki", await subtle.exportKey("spki", ecdsa.publicKey), "Ed25519", true, ["verify"])),
+    pkcs8NoUsages: await errorName(() => subtle.importKey("pkcs8", pkcs8, "Ed25519", true, [])),
+    // generateKey: sign goes to the private key, verify to the public one.
+    generatedPrivate: describe(generated.privateKey),
+    generatedPublic: describe(generated.publicKey),
+    generatedVerify: await subtle.verify("Ed25519", generated.publicKey, generatedSig, msg),
+    generatedSigLength: generatedSig.byteLength,
+    generateVerifyOnly: await errorName(() => subtle.generateKey("Ed25519", true, ["verify"])),
+    generateEncrypt: await errorName(() => subtle.generateKey("Ed25519", true, ["sign", "encrypt"])),
+    // The key checks of sign/verify.
+    signWithPublic: await errorName(() => subtle.sign("Ed25519", publicKey, msg)),
+    verifyWithPrivate: await errorName(() => subtle.verify("Ed25519", privateKey, unhex(sig), msg)),
+    signAsEcdsa: await errorName(() => subtle.sign({ name: "ECDSA", hash: "SHA-256" }, privateKey, msg)),
+    ecdsaAsEd25519: await errorName(() => subtle.sign("Ed25519", ecdsa.privateKey, msg)),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(sig, results.sign);
+    testing.expectEqual(true, results.verify);
+    testing.expectEqual(false, results.verifyOther);
+    testing.expectEqual(false, results.verifyShort);
+    testing.expectEqual(false, results.smallOrder);
+    testing.expectEqual(hex(pub), results.raw);
+    testing.expectEqual("302a300506032b6570032100" + hex(pub), results.spki);
+    testing.expectEqual("302e020100300506032b657004220420" + hex(seed), results.pkcs8);
+    testing.expectEqual(`{"alg":"Ed25519","crv":"Ed25519","ext":true,"key_ops":["verify"],"kty":"OKP","x":"${x}"}`, results.jwkPublic);
+    testing.expectEqual(`{"alg":"Ed25519","crv":"Ed25519","d":"${d}","ext":true,"key_ops":["sign"],"kty":"OKP","x":"${x}"}`, results.jwkPrivate);
+    testing.expectEqual('{"name":"Ed25519"}', results.algorithm);
+    testing.expectEqual("InvalidAccessError", results.rawPrivate);
+    testing.expectEqual("InvalidAccessError", results.spkiPrivate);
+    testing.expectEqual("InvalidAccessError", results.pkcs8Public);
+    testing.expectEqual("public:Ed25519:false:verify", results.importSpki);
+    testing.expectEqual("private:Ed25519:false:sign", results.importPkcs8);
+    testing.expectEqual("public:Ed25519:true:", results.importRawNoUsages);
+    testing.expectEqual("public:Ed25519:true:verify", results.algEdDSA);
+    testing.expectEqual("public:Ed25519:true:verify", results.algEd25519);
+    testing.expectEqual("DataError", results.algOther);
+    testing.expectEqual("DataError", results.useEnc);
+    testing.expectEqual("DataError", results.ktyEc);
+    testing.expectEqual("DataError", results.crvX25519);
+    testing.expectEqual("DataError", results.crvLower);
+    testing.expectEqual("DataError", results.missingX);
+    testing.expectEqual("DataError", results.shortX);
+    testing.expectEqual("DataError", results.otherX);
+    testing.expectEqual("DataError", results.extFalse);
+    testing.expectEqual("SyntaxError", results.privateVerify);
+    testing.expectEqual("DataError", results.rawShort);
+    testing.expectEqual("SyntaxError", results.rawSign);
+    testing.expectEqual("DataError", results.spkiTrailing);
+    testing.expectEqual("DataError", results.spkiShort);
+    testing.expectEqual("DataError", results.spkiOfEcdsa);
+    testing.expectEqual("SyntaxError", results.pkcs8NoUsages);
+    testing.expectEqual("private:Ed25519:true:sign", results.generatedPrivate);
+    testing.expectEqual("public:Ed25519:true:verify", results.generatedPublic);
+    testing.expectEqual(true, results.generatedVerify);
+    testing.expectEqual(64, results.generatedSigLength);
+    testing.expectEqual("SyntaxError", results.generateVerifyOnly);
+    testing.expectEqual("SyntaxError", results.generateEncrypt);
+    testing.expectEqual("InvalidAccessError", results.signWithPublic);
+    testing.expectEqual("InvalidAccessError", results.verifyWithPrivate);
+    testing.expectEqual("InvalidAccessError", results.signAsEcdsa);
+    testing.expectEqual("InvalidAccessError", results.ecdsaAsEd25519);
+  });
+</script>
+
 <script id="digest" type=module>
   const state = await testing.async();
   async function hash(algo, data) {

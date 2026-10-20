@@ -180,8 +180,8 @@ pub fn generate(
     if (requested_bits > max_modulus_length) return error.OperationError;
 
     const hash_name = canonicalHash(requested_hash).?;
-    const private_mask = maskOf(s.private_usages, key_usages);
-    const public_mask = maskOf(s.public_usages, key_usages);
+    const private_mask = common.usageIntersection(s.private_usages, key_usages);
+    const public_mask = common.usageIntersection(s.public_usages, key_usages);
     // The private key must end up with at least one usage.
     if (private_mask == 0) return error.SyntaxError;
 
@@ -562,20 +562,6 @@ fn digestContext(key: *const CryptoKey, verifying: bool, salt_length: ?u32) !*cr
     if (crypto.EVP_PKEY_CTX_set_rsa_mgf1_md(pctx, md) != 1) return error.OperationError;
     if (crypto.EVP_PKEY_CTX_set_rsa_pss_saltlen(pctx, salt) != 1) return error.OperationError;
     return ctx;
-}
-
-/// The usage bitmask of those `usages` that belong to `set`.
-fn maskOf(set: []const []const u8, usages: []const []const u8) u8 {
-    var mask: u8 = 0;
-    for (usages) |u| {
-        for (set) |s| {
-            if (std.mem.eql(u8, s, u)) {
-                mask |= common.usageBit(u).?;
-                break;
-            }
-        }
-    }
-    return mask;
 }
 
 fn eql(a: []const u8, b: []const u8) bool {

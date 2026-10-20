@@ -31,6 +31,7 @@ const HMAC = @import("crypto/HMAC.zig");
 const RSA = @import("crypto/RSA.zig");
 const X25519 = @import("crypto/X25519.zig");
 const KDF = @import("crypto/KDF.zig");
+const OKP = @import("crypto/OKP.zig");
 const common = @import("crypto/common.zig");
 
 const log = lp.log;
@@ -75,15 +76,18 @@ fn generateKeyFromName(
     if (name.eql(comptime .wrap("X25519"))) {
         return X25519.init(extractable, key_usages, exec);
     }
+    if (OKP.curveOf(name.str())) |curve| {
+        return OKP.generate(curve, extractable, key_usages, exec);
+    }
 
     {
-        // Algorithms whose `generateKey` parameters are just `{name}` — Ed25519,
-        // Ed448, X448. Validates usages so failure-path tests get the spec-mandated
+        // Algorithms whose `generateKey` parameters are just `{name}` — Ed448,
+        // X448. Validates usages so failure-path tests get the spec-mandated
         // error name; leaves real key generation to a future change.
 
         const allowed: []const []const u8 = blk: {
             const str = name.str();
-            if (eqlIgnoreCase(str, "Ed25519") or eqlIgnoreCase(str, "Ed448")) {
+            if (eqlIgnoreCase(str, "Ed448")) {
                 break :blk &.{ "sign", "verify" };
             }
             if (eqlIgnoreCase(str, "X448")) {
@@ -144,6 +148,19 @@ pub fn importKey(
                 .jwk => |jwk| {
                     if (!is_jwk) return local.typeError("this format expects a BufferSource");
                     return EC.importJwk(name, algo.namedCurve(), jwk, extractable, mask, exec);
+                },
+            }
+        }
+        if (OKP.curveOf(name)) |curve| {
+            const is_jwk = std.mem.eql(u8, format, "jwk");
+            switch (key_data) {
+                .bytes => |b| {
+                    if (is_jwk) return local.typeError("jwk format expects an object");
+                    return OKP.import(curve, format, b.values, is_private, extractable, mask, exec);
+                },
+                .jwk => |jwk| {
+                    if (!is_jwk) return local.typeError("this format expects a BufferSource");
+                    return OKP.importJwk(curve, jwk, extractable, mask, exec);
                 },
             }
         }
@@ -263,8 +280,8 @@ fn importKind(format: []const u8, key_data: algorithm.KeyData) bool {
 }
 
 /// The usages permitted for an EC/OKP/RSA key of the given privacy, or null if
-/// the algorithm isn't one of the asymmetric algorithms handled here. Only EC
-/// and RSA import their keys; for the others this only drives usage
+/// the algorithm isn't one of the asymmetric algorithms handled here. Only EC,
+/// RSA and Ed25519 import their keys; for the others this only drives usage
 /// validation.
 fn asymmetricAllowedUsages(name: []const u8, is_private: bool) ?[]const []const u8 {
     if (eqlIgnoreCase(name, "ECDSA") or eqlIgnoreCase(name, "Ed25519") or eqlIgnoreCase(name, "Ed448")) {
@@ -313,11 +330,12 @@ const Jwk = union(enum) {
     secret: JwkSecret,
     rsa: RSA.Jwk,
     ec: EC.Jwk,
+    okp: OKP.Jwk,
 
     fn toJs(self: Jwk, local: *const js.Local) !js.Value {
         return switch (self) {
             .secret => |jwk| local.zigValueToJs(jwk, .{}),
-            inline .rsa, .ec => |asymmetric| switch (asymmetric) {
+            inline .rsa, .ec, .okp => |asymmetric| switch (asymmetric) {
                 inline else => |jwk| local.zigValueToJs(jwk, .{}),
             },
         };
@@ -328,7 +346,7 @@ const Jwk = union(enum) {
     fn toJson(self: Jwk, allocator: std.mem.Allocator) ![]const u8 {
         return switch (self) {
             .secret => |jwk| std.json.Stringify.valueAlloc(allocator, jwk, .{}),
-            inline .rsa, .ec => |asymmetric| switch (asymmetric) {
+            inline .rsa, .ec, .okp => |asymmetric| switch (asymmetric) {
                 inline else => |jwk| std.json.Stringify.valueAlloc(allocator, jwk, .{}),
             },
         };
@@ -356,6 +374,9 @@ fn exportAs(format: []const u8, key: *CryptoKey, exec: *const Execution) !Export
         if (key._type == .ec) {
             return .{ .bytes = try EC.exportRaw(key, exec) };
         }
+        if (key._type == .ed25519) {
+            return .{ .bytes = try OKP.exportRaw(key, exec) };
+        }
         return .{ .bytes = key._key };
     }
 
@@ -365,7 +386,7 @@ fn exportAs(format: []const u8, key: *CryptoKey, exec: *const Execution) !Export
 
     const is_der = std.mem.eql(u8, format, "pkcs8") or std.mem.eql(u8, format, "spki");
     if (is_der) {
-        if (key._type == .rsa or key._type == .ec) {
+        if (key._type == .rsa or key._type == .ec or key._type == .ed25519) {
             return .{ .bytes = try common.exportDer(format, key, exec) };
         }
         log.debug(.not_implemented, "SubtleCrypto.exportKey", .{ .format = format });
@@ -391,6 +412,7 @@ fn exportJwk(key: *CryptoKey, exec: *const Execution) !Jwk {
         .hmac => try HMAC.jwkAlg(key._algorithm.hash orelse "SHA-", exec),
         .rsa => return .{ .rsa = try RSA.exportJwk(key, exec) },
         .ec => return .{ .ec = try EC.exportJwk(key, exec) },
+        .ed25519 => return .{ .okp = try OKP.exportJwk(key, exec) },
         else => {
             log.debug(.not_implemented, "SubtleCrypto.exportKey", .{ .format = "jwk", .type = key._type });
             return error.NotSupported;
@@ -710,7 +732,8 @@ pub fn sign(
         .hmac => try HMAC.sign(key, data, exec),
         .rsa => try RSA.sign(key, data, params.salt_length, exec),
         .ec => try EC.sign(key, data, params.hash orelse return error.OperationError, exec),
-        // A signing algorithm with no sign here yet (Ed25519, Ed448).
+        .ed25519 => try OKP.sign(key, data, exec),
+        // A signing algorithm with no sign here yet (Ed448).
         else => {
             log.debug(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
             return error.NotSupported;
@@ -736,7 +759,8 @@ pub fn verify(
         .hmac => try HMAC.verify(key, signature, data),
         .rsa => try RSA.verify(key, signature, data, params.salt_length),
         .ec => try EC.verify(key, signature, data, params.hash orelse return error.OperationError),
-        // A signing algorithm with no verify here yet (Ed25519, Ed448).
+        .ed25519 => try OKP.verify(key, signature, data),
+        // A signing algorithm with no verify here yet (Ed448).
         else => {
             log.debug(.not_implemented, "SubtleCrypto.verify", .{ .key_type = key._type });
             return error.NotSupported;
