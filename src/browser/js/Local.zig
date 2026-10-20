@@ -644,7 +644,7 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
                 }
 
                 if (!js_val.isArray()) {
-                    return error.InvalidArgument;
+                    return self.iterableToSlice(ptr.child, js_val);
                 }
                 const js_arr = js_val.toArray();
                 const arr = try self.call_arena.alloc(ptr.child, js_arr.len());
@@ -724,6 +724,39 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
     }
 
     @compileError("has an unsupported parameter type: " ++ @typeName(T));
+}
+
+// A WebIDL sequence<T> from a non-Array value: any object with an
+// @@iterator method, iterated to its end (a Set, a Map's entries, a
+// generator, a NodeList...). Anything else is InvalidArgument. An exception
+// the page's iterator throws stays pending, as JsException.
+fn iterableToSlice(self: *const Local, comptime T: type, js_val: js.Value) ![]T {
+    var it = (js_val.iterator() catch |err| return iterationError(err)) orelse return error.InvalidArgument;
+    var items: std.ArrayList(T) = .empty;
+    while (it.next() catch |err| return iterationError(err)) |item| {
+        try items.append(self.call_arena, try self.jsValueToZig(T, item));
+    }
+    return items.items;
+}
+
+// Value.iterator rethrows the page's exception (TryCatchRethrow): it's
+// pending, so report it as one; a malformed iterator is InvalidArgument.
+fn iterationError(err: anyerror) anyerror {
+    return switch (err) {
+        error.TryCatchRethrow, error.JsException => error.JsException,
+        error.OutOfMemory => err,
+        else => error.InvalidArgument,
+    };
+}
+
+// Whether `js_val` is an object with an @@iterator method, without calling
+// it (probing must not run the page's iterator).
+fn isIterable(js_val: js.Value) !bool {
+    if (!js_val.isObject()) {
+        return false;
+    }
+    const method = try js_val.toObject().getSymbol(v8.v8__Symbol__GetIterator(js_val.local.isolate.handle).?);
+    return method.isFunction();
 }
 
 // Extracted so that it can be used in both jsValueToZig and in
@@ -1149,7 +1182,12 @@ fn probeJsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !Pr
                 }
 
                 if (!js_val.isArray()) {
-                    return .{ .invalid = {} };
+                    // A WebIDL sequence also takes any iterable object, and
+                    // union conversion picks it over a record, which js.Object
+                    // stands for in unions like Headers' init (a URLSearchParams
+                    // or a FormData there is a sequence of pairs). An interface
+                    // variant is declared, and so probed, before the sequence.
+                    return if (try isIterable(js_val)) .{ .ok = {} } else .{ .invalid = {} };
                 }
 
                 // This can get tricky.
