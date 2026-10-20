@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+cd "${1:-"$(dirname "${BASH_SOURCE[0]}")/.."}"
 
 ACTION=.github/actions/install/action.yml
 OUT=nix/v8-deps.nix

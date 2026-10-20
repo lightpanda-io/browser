@@ -112,6 +112,27 @@
           inherit lightpanda;
           default = lightpanda;
         };
+
+        apps = {
+          generate-v8-deps = {
+            type = "app";
+            program = "${pkgs.writeShellScript "generate-v8-deps" ''
+              export PATH="${
+                pkgs.lib.makeBinPath [
+                  pkgs.curl
+                  pkgs.gnused
+                  pkgs.coreutils
+                  pkgs.gawk
+                  pkgs.nix
+                ]
+              }:$PATH"
+              export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+              exec bash ${./nix/update-v8-deps.sh} "$PWD"
+            ''}";
+          };
+
+        };
+
       }
     );
 }
