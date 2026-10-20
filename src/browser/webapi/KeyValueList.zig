@@ -34,7 +34,7 @@ pub fn registerTypes() []const type {
     };
 }
 
-const Normalizer = *const fn ([]const u8, []u8) []const u8;
+const Normalizer = *const fn (Allocator, []const u8) Allocator.Error![]const u8;
 
 pub const Entry = struct {
     name: String,
@@ -62,7 +62,7 @@ pub fn copy(arena: Allocator, original: KeyValueList) !KeyValueList {
     return list;
 }
 
-pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?Normalizer, buf: []u8) !KeyValueList {
+pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?Normalizer, local_arena: Allocator) !KeyValueList {
     var it = try js_obj.iterator();
 
     var list = KeyValueList.init();
@@ -70,7 +70,7 @@ pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?N
 
     while (try it.next()) |kv| {
         const name = kv.name;
-        const normalized = if (comptime normalizer) |n| n(name, buf) else name;
+        const normalized = if (comptime normalizer) |n| try n(local_arena, name) else name;
 
         // Two JS keys can mape to the same string, and in such cases, it's
         // an update, not an append.
@@ -99,12 +99,12 @@ fn getEntryPtr(self: *KeyValueList, name: []const u8) ?*Entry {
     return null;
 }
 
-pub fn fromArray(arena: Allocator, kvs: []const [2][]const u8, comptime normalizer: ?Normalizer, buf: []u8) !KeyValueList {
+pub fn fromArray(arena: Allocator, kvs: []const [2][]const u8, comptime normalizer: ?Normalizer, local_arena: Allocator) !KeyValueList {
     var list = KeyValueList.init();
     try list.ensureTotalCapacity(arena, kvs.len);
 
     for (kvs) |pair| {
-        const normalized = if (comptime normalizer) |n| n(pair[0], buf) else pair[0];
+        const normalized = if (comptime normalizer) |n| try n(local_arena, pair[0]) else pair[0];
 
         list._entries.appendAssumeCapacity(.{
             .name = try String.init(arena, normalized, .{}),

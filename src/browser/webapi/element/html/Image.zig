@@ -52,12 +52,12 @@ pub fn constructor(w_: ?u32, h_: ?u32, frame: *Frame) !*Image {
     const node = try Frame.node_factory.createElementNS(frame.document, .html, "img", null);
     const el = node.as(Element);
 
-    if (w_) |w| blk: {
-        const w_string = std.mem.print(&frame.buf, "{d}", .{w}) catch break :blk;
+    if (w_) |w| {
+        const w_string = try frame.local_arena.print("{d}", .{w});
         try el.setAttributeSafe(comptime .wrap("width"), .wrap(w_string), frame);
     }
-    if (h_) |h| blk: {
-        const h_string = std.mem.print(&frame.buf, "{d}", .{h}) catch break :blk;
+    if (h_) |h| {
+        const h_string = try frame.local_arena.print("{d}", .{h});
         try el.setAttributeSafe(comptime .wrap("height"), .wrap(h_string), frame);
     }
     return el.as(Image);

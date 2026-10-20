@@ -456,3 +456,14 @@
   }
 }
 </script>
+
+<script id=long_name>
+{
+  // longer than the 1024-byte buffer names used to be lowercased into
+  const name = 'x-' + 'a'.repeat(2000);
+  const headers = new Headers({ [name.toUpperCase()]: '1' });
+  testing.expectEqual('1', headers.get(name));
+  headers.append(name.toUpperCase(), '2');
+  testing.expectEqual('1, 2', headers.get(name));
+}
+</script>

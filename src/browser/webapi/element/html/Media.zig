@@ -123,14 +123,11 @@ pub fn as(self: *Media, comptime T: type) *T {
     return self.is(T).?;
 }
 
-fn canPlayType(_: *const Media, mime_type: []const u8, frame: *Frame) []const u8 {
+fn canPlayType(_: *const Media, mime_type: []const u8, frame: *Frame) ![]const u8 {
     const pos = std.mem.findScalar(u8, mime_type, ';') orelse mime_type.len;
     const base_type = std.mem.trim(u8, mime_type[0..pos], &std.ascii.whitespace);
 
-    if (base_type.len > frame.buf.len) {
-        return "";
-    }
-    const lower = std.ascii.lowerString(&frame.buf, base_type);
+    const lower = try std.ascii.allocLowerString(frame.local_arena, base_type);
 
     if (isProbablySupported(lower)) {
         return "probably";

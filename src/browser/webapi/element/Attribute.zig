@@ -430,8 +430,8 @@ pub const List = struct {
         return result.entry;
     }
 
-    // Dangerous, the returned normalized name is only valid until someone
-    // else uses pages.buf.
+    // Dangerous, the returned normalized name can live in frame.local_arena,
+    // so it's only valid until that's reset.
     const NormalizeAndEntry = struct {
         entry: ?*Entry,
         normalized: String,
@@ -578,11 +578,7 @@ fn normalizeNameForLookup(name: String, frame: *Frame) !String {
     if (!needsLowerCasing(name.str())) {
         return name;
     }
-    const normalized = if (name.len < frame.buf.len)
-        std.ascii.lowerString(&frame.buf, name.str())
-    else
-        try std.ascii.allocLowerString(frame.local_arena, name.str());
-
+    const normalized = try std.ascii.allocLowerString(frame.local_arena, name.str());
     return .wrap(normalized);
 }
 

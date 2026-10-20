@@ -148,8 +148,7 @@ fn localNameFn(arena: Allocator, args: []const result.Result, ctx: *Node) Error!
     // (lowercase, namespace-prefix stripped) — lifetime exceeds the
     // per-evaluation arena, so we borrow instead of duping.
     if (node.is(Element)) |el| return el.getLocalName();
-    var buf: [256]u8 = undefined;
-    return std.ascii.allocLowerString(arena, node.getNodeName(&buf));
+    return std.ascii.allocLowerString(arena, node.getNodeName(arena));
 }
 
 fn nameFn(arena: Allocator, args: []const result.Result, ctx: *Node) Error![]const u8 {
@@ -157,8 +156,7 @@ fn nameFn(arena: Allocator, args: []const result.Result, ctx: *Node) Error![]con
     // Diverges from `local-name` only on namespaced elements: `name`
     // keeps the prefix (`ns:foo`), `local-name` strips it (`foo`).
     if (node.is(Element)) |el| return el.getTagNameLower();
-    var buf: [256]u8 = undefined;
-    return std.ascii.allocLowerString(arena, node.getNodeName(&buf));
+    return std.ascii.allocLowerString(arena, node.getNodeName(arena));
 }
 
 fn firstNodeOrCtx(args: []const result.Result, ctx: *Node) ?*Node {

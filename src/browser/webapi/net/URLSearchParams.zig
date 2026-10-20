@@ -60,7 +60,7 @@ pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
     const params: KeyValueList = blk: {
         const opts = opts_ orelse break :blk .empty;
         switch (opts) {
-            .query_string => |qs| break :blk try paramsFromString(arena.allocator(), qs, exec.buf),
+            .query_string => |qs| break :blk try paramsFromString(arena.allocator(), qs, exec.local_arena),
             .form_data => |fd| break :blk try fd.toKeyValueList(arena.allocator()),
             .value => |js_val| {
                 if (js_val.isObject()) {
@@ -72,11 +72,11 @@ pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
                     if (try js_val.iterator()) |it| {
                         break :blk try paramsFromIterator(arena.allocator(), it);
                     }
-                    // normalizer is null, so frame won't be used
-                    break :blk try KeyValueList.fromJsObject(arena.allocator(), js_val.toObject(), null, exec.buf);
+                    // normalizer is null, so local_arena won't be used
+                    break :blk try KeyValueList.fromJsObject(arena.allocator(), js_val.toObject(), null, exec.local_arena);
                 }
                 if (js_val.isString()) |js_str| {
-                    break :blk try paramsFromString(arena.allocator(), try js_str.toSliceWithAlloc(arena.allocator()), exec.buf);
+                    break :blk try paramsFromString(arena.allocator(), try js_str.toSliceWithAlloc(arena.allocator()), exec.local_arena);
                 }
                 return error.InvalidArgument;
             },
@@ -104,7 +104,7 @@ pub fn acquireRef(self: *URLSearchParams) void {
 }
 
 pub fn updateFromString(self: *URLSearchParams, query_string: []const u8, exec: *const Execution) !void {
-    self._params = try paramsFromString(self._arena.allocator(), query_string, exec.buf);
+    self._params = try paramsFromString(self._arena.allocator(), query_string, exec.local_arena);
 }
 
 pub fn getSize(self: *const URLSearchParams) usize {
@@ -276,7 +276,7 @@ fn paramsFromIterator(allocator: Allocator, it: js.Value.Iterator) !KeyValueList
     return params;
 }
 
-fn paramsFromString(allocator: Allocator, input_: []const u8, buf: []u8) !KeyValueList {
+fn paramsFromString(allocator: Allocator, input_: []const u8, local_arena: Allocator) !KeyValueList {
     if (input_.len == 0) {
         return .empty;
     }
@@ -302,10 +302,10 @@ fn paramsFromString(allocator: Allocator, input_: []const u8, buf: []u8) !KeyVal
         var value: String = undefined;
 
         if (std.mem.findScalarPos(u8, entry, 0, '=')) |idx| {
-            name = try unescape(allocator, entry[0..idx], buf);
-            value = try unescape(allocator, entry[idx + 1 ..], buf);
+            name = try unescape(allocator, entry[0..idx], local_arena);
+            value = try unescape(allocator, entry[idx + 1 ..], local_arena);
         } else {
-            name = try unescape(allocator, entry, buf);
+            name = try unescape(allocator, entry, local_arena);
             value = comptime .wrap("");
         }
 
@@ -327,7 +327,7 @@ fn isEscapeTriplet(value: []const u8, i: usize) bool {
     return i + 2 < value.len and std.ascii.isHex(value[i + 1]) and std.ascii.isHex(value[i + 2]);
 }
 
-fn unescape(arena: Allocator, value: []const u8, buf: []u8) !String {
+fn unescape(arena: Allocator, value: []const u8, local_arena: Allocator) !String {
     if (value.len == 0) {
         return comptime .wrap("");
     }
@@ -352,12 +352,7 @@ fn unescape(arena: Allocator, value: []const u8, buf: []u8) !String {
         return String.init(arena, value, .{});
     }
 
-    var out = buf;
-    var duped = false;
-    if (buf.len < unescaped_len) {
-        out = try arena.alloc(u8, unescaped_len);
-        duped = true;
-    }
+    const out = try local_arena.alloc(u8, unescaped_len);
 
     in_i = 0;
     for (0..unescaped_len) |i| {
@@ -374,7 +369,7 @@ fn unescape(arena: Allocator, value: []const u8, buf: []u8) !String {
         }
     }
 
-    return String.init(arena, out[0..unescaped_len], .{ .dupe = !duped });
+    return String.init(arena, out, .{});
 }
 
 const HEX_DECODE_ARRAY = blk: {

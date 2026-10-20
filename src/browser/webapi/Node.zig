@@ -481,9 +481,9 @@ pub fn setTextContent(self: *Node, data: []const u8, frame: *Frame) !void {
     }
 }
 
-pub fn getNodeName(self: *const Node, buf: []u8) []const u8 {
+pub fn getNodeName(self: *const Node, allocator: Allocator) []const u8 {
     return switch (self._type) {
-        .element => self.subtype(Element).getTagNameSpec(buf),
+        .element => self.subtype(Element).getTagNameSpec(allocator),
         .cdata => {
             const cd = self.subtype(CData);
             return switch (cd._type) {
@@ -1422,7 +1422,7 @@ pub fn getElementsByTagName(self: *Node, tag_name: []const u8, frame: *Frame) !G
         };
     }
 
-    const lower = std.ascii.lowerString(&frame.buf, tag_name);
+    const lower = try std.ascii.allocLowerString(frame.local_arena, tag_name);
     if (Node.Element.Tag.parseForMatch(lower)) |known| {
         // optimized for known tag names, comparison
         return .{
@@ -1816,7 +1816,7 @@ pub const JsApi = struct {
 
     pub const nodeName = bridge.accessor(struct {
         fn wrap(self: *const Node, frame: *Frame) []const u8 {
-            return self.getNodeName(&frame.buf);
+            return self.getNodeName(frame.local_arena);
         }
     }.wrap, null, .{});
     pub const nodeType = bridge.accessor(Node.getNodeType, null, .{});

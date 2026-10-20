@@ -845,13 +845,13 @@ pub fn digest(_: *const SubtleCrypto, algo: DigestInput, data: js.TypedArray(u8)
         return error.NotSupported;
     }
 
-    const normalized = std.ascii.upperString(exec.buf, algo_name);
+    const normalized = try std.ascii.allocUpperString(exec.local_arena, algo_name);
     const digest_type = crypto.findDigest(normalized) catch return error.NotSupported;
 
     const bytes = data.values;
-    const out = exec.buf[0..crypto.EVP_MAX_MD_SIZE];
+    var out: [crypto.EVP_MAX_MD_SIZE]u8 = undefined;
     var out_size: c_uint = 0;
-    const result = crypto.EVP_Digest(bytes.ptr, bytes.len, out, &out_size, digest_type, null);
+    const result = crypto.EVP_Digest(bytes.ptr, bytes.len, &out, &out_size, digest_type, null);
     lp.assert(result == 1, "SubtleCrypto.digest", .{ .algo = algo });
 
     return local.resolvePromise(js.ArrayBuffer{ .values = out[0..out_size] });

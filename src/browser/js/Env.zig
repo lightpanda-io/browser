@@ -384,7 +384,6 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     context.execution = .{
         .js = context,
         .url = &global.url,
-        .buf = &global.buf,
         .charset = &global.charset,
         .page_arena = if (comptime is_frame) global.page_arena else global.arena,
         .page = context.page,

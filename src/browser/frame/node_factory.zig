@@ -946,11 +946,8 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                 else => {},
             }
 
-            // No known tag name is longer than frame.buf.
-            const tag: Element.Tag = if (name.len > frame.buf.len)
-                .unknown
-            else
-                std.meta.stringToEnum(Element.Tag, std.ascii.lowerString(&frame.buf, name)) orelse .unknown;
+            const lower = try std.ascii.allocLowerString(frame.local_arena, name);
+            const tag = std.meta.stringToEnum(Element.Tag, lower) orelse .unknown;
             return createSvgElementT(document, Element.Svg.Generic, name, attribute_iterator, .{ ._tag = tag });
         },
         else => {
@@ -1066,7 +1063,7 @@ fn createHtmlElementT(document: *const Node.Document, comptime E: type, namespac
             return node;
         }
         @call(.auto, @field(E.Build, "created"), .{ node, frame }) catch |err| {
-            log.debug(.frame, "build.created", .{ .tag = node.getNodeName(&frame.buf), .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.frame, "build.created", .{ .tag = node.getNodeName(frame.local_arena), .err = err, .type = frame._type, .url = frame.url });
             return err;
         };
     }
@@ -1149,7 +1146,7 @@ fn noteEventHandlerAttributes(element: *Element, frame: *Frame) !void {
 // attribute (`xlink:href` in foreign content, `xml:id` in XML) must keep its
 // prefix — that is what `getAttribute("xlink:href")` and `Attr.name` see in
 // browsers. The joined name only has to outlive putNew, which canonicalizes
-// it into the frame arena. (Not frame.buf: name normalization writes there.)
+// it into the frame arena.
 fn parserAttributeName(frame: *Frame, qname: Parser.QualName) ![]const u8 {
     const local = qname.local.slice();
     const prefix = (qname.prefix.unwrap() orelse return local).slice();

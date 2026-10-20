@@ -265,7 +265,7 @@ fn parseMethod(method: []const u8, exec: *const Execution) !http.Method {
         return error.TypeError;
     }
 
-    const lower = std.ascii.lowerString(exec.buf, method);
+    const lower = try std.ascii.allocLowerString(exec.local_arena, method);
 
     const method_lookup = std.StaticStringMap(http.Method).initComptime(.{
         .{ "get", .GET },
