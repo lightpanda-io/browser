@@ -39,6 +39,7 @@ _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 // old rules are dropped instead of accumulating in `document.styleSheets`.
 // Mirrors `Style._sheet`.
 _sheet: ?*@import("../../css/CSSStyleSheet.zig") = null,
+_stylesheet_generation: u32 = 0,
 
 pub fn asElement(self: *Link) *Element {
     return Factory.protoOf(self).asElement();
@@ -112,6 +113,7 @@ fn setRelList(self: *Link, value: String, frame: *Frame) !void {
 }
 
 pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
+    self._stylesheet_generation +%= 1;
     // if we're planning on navigating to another frame, don't trigger load event.
     if (frame.isGoingAway()) {
         return;
@@ -195,6 +197,20 @@ pub const JsApi = struct {
 // links in HTML go through `linkAddedCallback` at element-create time,
 // with attributes already populated by `populateElementAttributes`.
 pub const Build = struct {
+    pub fn attributeChange(element: *Element, name: String, _: String, _: *Frame) !void {
+        if (name.eql(comptime .wrap("href")) or name.eql(comptime .wrap("rel"))) {
+            element.as(Link)._stylesheet_generation +%= 1;
+        }
+    }
+
+    pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
+        try attributeChange(element, name, .wrap(""), frame);
+    }
+
+    pub fn disconnected(element: *Element, _: *Frame) !void {
+        element.as(Link)._stylesheet_generation +%= 1;
+    }
+
     pub fn created(node: *Node, frame: *Frame) !void {
         const self = node.as(Link);
         return self.linkAddedCallback(frame);

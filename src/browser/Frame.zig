@@ -2625,7 +2625,8 @@ pub fn trackFileList(self: *Frame, file_list: *FileList) !void {
 pub const QueuedEvent = struct {
     kind: Kind,
     element: *Element.Html,
-    generation: u32 = 0, // used by Image now, could be used by others though
+    generation: u32 = 0, // Image request generation
+    stylesheet_generation: ?u32 = null,
 
     pub const Kind = enum { load, @"error" };
 };
@@ -2640,6 +2641,10 @@ pub fn queueElementEvent(self: *Frame, element: *Element.Html, kind: QueuedEvent
 
 pub fn queueImageEvent(self: *Frame, image: *Element.Html.Image, kind: QueuedEvent.Kind) !void {
     try self.queueEvent(.{ .element = Factory.protoOf(image), .kind = kind, .generation = image._generation });
+}
+
+fn queueStylesheetEvent(self: *Frame, link: *Element.Html.Link, kind: QueuedEvent.Kind, generation: u32) !void {
+    try self.queueEvent(.{ .element = Factory.protoOf(link), .kind = kind, .stylesheet_generation = generation });
 }
 
 fn queueEvent(self: *Frame, event: QueuedEvent) !void {
@@ -2743,6 +2748,8 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     if (self._parse_mode == .fragment) {
         return;
     }
+    link._stylesheet_generation +%= 1;
+    const generation = link._stylesheet_generation;
     const element = link.asElement();
 
     // HttpClient will take out a larger arena for the body, if necessary
@@ -2751,7 +2758,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
 
     const resolved = URL.resolve(arena.allocator(), self.base(), href, .{ .encoding = self.charset }) catch |err| {
         log.debug(.http, "external stylesheet resolve", .{ .err = err, .href = href });
-        try self.queueElementEvent(Factory.protoOf(link), .@"error");
+        try self.queueStylesheetEvent(link, .@"error", generation);
         return;
     };
 
@@ -2772,7 +2779,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {
         log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
-        return self.queueElementEvent(Factory.protoOf(link), .@"error");
+        return self.queueStylesheetEvent(link, .@"error", generation);
     };
     {
         errdefer transfer.deinit();
@@ -2794,13 +2801,13 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
 
     var response = transfer.submitSync(.{}) catch |err| {
         log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
-        return self.queueElementEvent(Factory.protoOf(link), .@"error");
+        return self.queueStylesheetEvent(link, .@"error", generation);
     };
     defer response.deinit();
 
     if (response.status < 200 or response.status >= 300) {
         log.info(.http, "external stylesheet status", .{ .status = response.status, .url = resolved });
-        return self.queueElementEvent(Factory.protoOf(link), .@"error");
+        return self.queueStylesheetEvent(link, .@"error", generation);
     }
 
     if (response.body.items.len > MAX_STYLESHEET_BYTES) {
@@ -2809,7 +2816,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
             .max = MAX_STYLESHEET_BYTES,
             .url = resolved,
         });
-        return self.queueElementEvent(Factory.protoOf(link), .@"error");
+        return self.queueStylesheetEvent(link, .@"error", generation);
     }
 
     // Reuse the cached sheet on re-fetch (href mutation on a connected
@@ -2844,11 +2851,11 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     const text = try css_charset.decode(arena.allocator(), response.body.items, protocol_charset, self.charset);
     sheet.replaceSync(text, self) catch |err| {
         log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
-        return self.queueElementEvent(Factory.protoOf(link), .@"error");
+        return self.queueStylesheetEvent(link, .@"error", generation);
     };
     sheet._href = try self.page_arena.dupe(u8, resolved);
 
-    try self.queueLoad(Factory.protoOf(link));
+    try self.queueStylesheetEvent(link, .load, generation);
 }
 
 // https://html.spec.whatwg.org/multipage/iframe-embed-object.html#iframe-load-event-steps
@@ -2886,6 +2893,11 @@ fn dispatchQueuedEvents(self: *Frame) !void {
             if (image._generation != queued.generation) {
                 continue;
             }
+        }
+
+        if (queued.stylesheet_generation) |generation| {
+            const link = html_element.asElement().as(Element.Html.Link);
+            if (link._stylesheet_generation != generation) continue;
         }
 
         const element = html_element.asElement();

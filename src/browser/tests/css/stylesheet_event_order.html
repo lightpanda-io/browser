@@ -59,3 +59,46 @@
   });
 })();
 </script>
+
+<script id="superseded_stylesheet_completion_is_not_delivered">
+(async () => {
+  const state = await testing.async();
+  const observed = [];
+  for (const [first, second] of [
+    ['/styles/404.css', '/styles/visibility.css'],
+    ['/styles/visibility.css?first', '/styles/visibility.css?second'],
+    ['/styles/visibility.css', '/styles/404.css'],
+  ]) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = first;
+    document.head.appendChild(link);
+    link.href = second;
+    const events = [];
+    link.addEventListener('load', () => events.push('load'));
+    link.addEventListener('error', () => events.push('error'));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    observed.push(events);
+    link.remove();
+  }
+  state.resolve();
+  await state.done(() => testing.expectEqual([['load'], ['load'], ['error']], observed));
+})();
+</script>
+
+<script id="disconnected_stylesheet_does_not_deliver_completion">
+(async () => {
+  const state = await testing.async();
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/styles/visibility.css';
+  const events = [];
+  link.addEventListener('load', () => events.push('load'));
+  link.addEventListener('error', () => events.push('error'));
+  document.head.appendChild(link);
+  link.remove();
+  await new Promise(resolve => setTimeout(resolve, 200));
+  state.resolve();
+  await state.done(() => testing.expectEqual([], events));
+})();
+</script>
