@@ -40,6 +40,7 @@ _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 // Mirrors `Style._sheet`.
 _sheet: ?*@import("../../css/CSSStyleSheet.zig") = null,
 _stylesheet_generation: u32 = 0,
+_processed_rel: []const u8 = "",
 
 pub fn asElement(self: *Link) *Element {
     return Factory.protoOf(self).asElement();
@@ -63,10 +64,6 @@ pub fn getHref(self: *Link, frame: *Frame) ![]const u8 {
 pub fn setHref(self: *Link, value: []const u8, frame: *Frame) !void {
     const element = self.asElement();
     try element.setAttributeSafe(comptime .wrap("href"), .wrap(value), frame);
-
-    if (element.asNode().isConnected()) {
-        try self.linkAddedCallback(frame);
-    }
 }
 
 fn getRel(self: *Link) []const u8 {
@@ -120,6 +117,7 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     }
 
     const element = self.asElement();
+    self._processed_rel = element.getAttributeInterned("rel") orelse "";
 
     // A document without a browsing context (DOMParser et al.) loads nothing.
     if (element.getDocument(frame)._frame == null) {
@@ -197,9 +195,14 @@ pub const JsApi = struct {
 // links in HTML go through `linkAddedCallback` at element-create time,
 // with attributes already populated by `populateElementAttributes`.
 pub const Build = struct {
-    pub fn attributeChange(element: *Element, name: String, _: String, _: *Frame) !void {
-        if (name.eql(comptime .wrap("href")) or name.eql(comptime .wrap("rel"))) {
-            element.as(Link)._stylesheet_generation +%= 1;
+    pub fn attributeChange(element: *Element, name: String, value: String, frame: *Frame) !void {
+        const link = element.as(Link);
+        const is_rel = name.eql(comptime .wrap("rel"));
+        if (!is_rel and !name.eql(comptime .wrap("href"))) return;
+        if (is_rel and std.mem.eql(u8, value.str(), link._processed_rel)) return;
+        link._stylesheet_generation +%= 1;
+        if (element.asNode().isConnected()) {
+            try link.linkAddedCallback(element.ownerFrame(frame) orelse return);
         }
     }
 
