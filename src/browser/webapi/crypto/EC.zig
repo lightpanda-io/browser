@@ -144,9 +144,9 @@ pub fn generate(
 }
 
 /// Imports an EC key from `spki` (public) or `pkcs8` (private) DER, or from a
-/// `raw` public point (SEC 1: uncompressed or compressed). libcrypto parses
-/// the data, so a malformed structure, a point that isn't on the curve, or a
-/// key on another curve than `named_curve` is DataError. JWK goes through
+/// `raw` public point (SEC 1: uncompressed or compressed). A malformed
+/// structure (common.parseDer), a point that isn't on the curve, or a key on
+/// another curve than `named_curve` is DataError. JWK goes through
 /// `importJwk`.
 pub fn import(
     name: []const u8,
@@ -165,25 +165,10 @@ pub fn import(
         return error.NotSupported;
     };
 
-    var ptr: [*c]const u8 = data.ptr;
-    const pkey: *crypto.EVP_PKEY = blk: {
-        if (std.mem.eql(u8, format, "spki")) {
-            break :blk crypto.d2i_PUBKEY(null, &ptr, @intCast(data.len)) orelse {
-                crypto.ERR_clear_error();
-                return error.DataError;
-            };
-        }
-        if (std.mem.eql(u8, format, "pkcs8")) {
-            break :blk crypto.d2i_AutoPrivateKey(null, &ptr, @intCast(data.len)) orelse {
-                crypto.ERR_clear_error();
-                return error.DataError;
-            };
-        }
-        if (std.mem.eql(u8, format, "raw")) {
-            break :blk try keyFromPoint(curve, data, null);
-        }
-        return error.NotSupported;
-    };
+    const pkey = if (std.mem.eql(u8, format, "raw"))
+        try keyFromPoint(curve, data, null)
+    else
+        try common.parseDer(format, data);
     errdefer crypto.EVP_PKEY_free(pkey);
 
     if (crypto.EVP_PKEY_id(pkey) != crypto.EVP_PKEY_EC) {

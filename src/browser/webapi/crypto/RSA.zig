@@ -237,7 +237,7 @@ pub fn generate(
 }
 
 /// Imports an RSA key of scheme `s` from DER: `spki` (public) or `pkcs8`
-/// (private). libcrypto parses the DER, so a malformed structure is DataError.
+/// (private). A malformed structure is DataError (common.parseDer).
 /// `hash_name` is the digest of the OAEP padding or of the signature, kept on
 /// the key. JWK goes through `importJwk`.
 pub fn import(
@@ -256,17 +256,8 @@ pub fn import(
     // surface only on the first operation.
     const hash = canonicalHash(hash_name) orelse return error.NotSupported;
 
-    var ptr: [*c]const u8 = der.ptr;
-    const pkey: *crypto.EVP_PKEY = blk: {
-        if (std.mem.eql(u8, format, "spki")) {
-            break :blk crypto.d2i_PUBKEY(null, &ptr, @intCast(der.len)) orelse return error.DataError;
-        }
-        if (std.mem.eql(u8, format, "pkcs8")) {
-            break :blk crypto.d2i_AutoPrivateKey(null, &ptr, @intCast(der.len)) orelse return error.DataError;
-        }
-        // "raw" isn't a format RSA keys have.
-        return error.NotSupported;
-    };
+    // "raw" isn't a format RSA keys have: NotSupported from parseDer.
+    const pkey = try common.parseDer(format, der);
     errdefer crypto.EVP_PKEY_free(pkey);
 
     if (crypto.EVP_PKEY_id(pkey) != crypto.EVP_PKEY_RSA) return error.DataError;

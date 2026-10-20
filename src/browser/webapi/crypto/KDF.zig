@@ -113,12 +113,18 @@ pub fn hkdf(
     // Normalizing the params (the hash) comes before the key checks.
     const digest = crypto.findDigest(try params.hash.canonical(exec.js.local.?)) catch return error.NotSupported;
     try checkBaseKey(base_key, "HKDF", usage_ok);
-    const out = try exec.local_arena.alloc(u8, try outputLen(length));
+    const out_len = try outputLen(length);
     // A zero-length derivation is valid and yields an empty buffer; the C
     // routines reject a zero output length, so short-circuit here.
-    if (out.len == 0) {
-        return out;
+    if (out_len == 0) {
+        return &.{};
     }
+    // RFC 5869 caps the output at 255 blocks of the hash. libcrypto rejects
+    // more too, but only once the buffer (up to 512MB) has been allocated.
+    if (out_len > 255 * crypto.EVP_MD_size(digest)) {
+        return error.OperationError;
+    }
+    const out = try exec.local_arena.alloc(u8, out_len);
 
     const salt = params.salt.values;
     const info = params.info.values;

@@ -119,8 +119,8 @@ pub fn generate(curve: *const Curve, extractable: bool, key_usages: []const []co
 }
 
 /// Imports a key from `spki` or `pkcs8` DER, or a `raw` public key. A
-/// malformed structure, a key of another algorithm, or a raw key of the wrong
-/// size is DataError. JWK goes through `importJwk`. The usages were already
+/// malformed structure (common.parseDer), a key of another algorithm, or a
+/// raw key of the wrong size is DataError. JWK goes through `importJwk`. The usages were already
 /// checked against the key's kind (SubtleCrypto.importKey).
 pub fn import(
     curve: *const Curve,
@@ -133,20 +133,7 @@ pub fn import(
 ) !js.Promise {
     const local = exec.js.local.?;
 
-    var ptr: [*c]const u8 = data.ptr;
-    const pkey: *crypto.EVP_PKEY = blk: {
-        if (std.mem.eql(u8, format, "spki")) {
-            break :blk crypto.d2i_PUBKEY(null, &ptr, @intCast(data.len)) orelse {
-                crypto.ERR_clear_error();
-                return error.DataError;
-            };
-        }
-        if (std.mem.eql(u8, format, "pkcs8")) {
-            break :blk crypto.d2i_AutoPrivateKey(null, &ptr, @intCast(data.len)) orelse {
-                crypto.ERR_clear_error();
-                return error.DataError;
-            };
-        }
+    const pkey = blk: {
         if (std.mem.eql(u8, format, "raw")) {
             if (data.len != curve.size) return error.DataError;
             break :blk crypto.EVP_PKEY_new_raw_public_key(curve.pkey_type, null, data.ptr, data.len) orelse {
@@ -154,14 +141,12 @@ pub fn import(
                 return error.DataError;
             };
         }
-        return error.NotSupported;
+        break :blk try common.parseDer(format, data);
     };
     errdefer crypto.EVP_PKEY_free(pkey);
 
-    // The DER's own algorithm identifier must be this curve's, and nothing
-    // may follow its structure (`raw` doesn't move `ptr`).
+    // The DER's own algorithm identifier must be this curve's.
     if (crypto.EVP_PKEY_id(pkey) != curve.pkey_type) return error.DataError;
-    if (!std.mem.eql(u8, format, "raw") and ptr != data.ptr + data.len) return error.DataError;
 
     return local.resolvePromise(try newKey(curve, pkey, is_private, extractable, usages_mask, exec));
 }

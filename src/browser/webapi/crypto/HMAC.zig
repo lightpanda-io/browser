@@ -30,6 +30,12 @@ const CryptoKey = @import("../CryptoKey.zig");
 
 const Execution = js.Execution;
 
+/// The longest key generateKey makes, in bits. The length is an unsigned
+/// long, so a page could ask for 512MB of key material (allocated twice); HMAC
+/// hashes any key longer than the block size (1024 bits at most) down to it,
+/// so nothing legitimate asks for more than this.
+const max_generated_length = 1 << 16;
+
 pub fn init(
     params: algorithm.Init.HmacKeyGen,
     extractable: bool,
@@ -66,7 +72,7 @@ pub fn init(
 
     // In bits; by default, the block size of the hash function.
     const bits: u32 = length orelse @intCast(crypto.EVP_MD_block_size(digest) * 8);
-    if (bits == 0) {
+    if (bits == 0 or bits > max_generated_length) {
         return error.OperationError;
     }
 
