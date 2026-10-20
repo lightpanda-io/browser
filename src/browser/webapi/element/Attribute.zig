@@ -585,9 +585,11 @@ fn normalizeNameForLookup(name: String, frame: *Frame) !String {
 pub fn needsLowerCasing(name: []const u8) bool {
     var remaining = name;
     if (comptime std.simd.suggestVectorLength(u8)) |vector_len| {
+        const V = @Vector(vector_len, u8);
         while (remaining.len > vector_len) {
-            const chunk: @Vector(vector_len, u8) = remaining[0..vector_len].*;
-            if (@reduce(.Min, chunk) <= 'Z') {
+            const chunk: V = remaining[0..vector_len].*;
+            // 'A'...'Z' wrap to 0...25, every other byte to 26 or more
+            if (@reduce(.Min, chunk -% @as(V, @splat('A'))) < 26) {
                 return true;
             }
             remaining = remaining[vector_len..];
@@ -815,4 +817,18 @@ fn writeEscapedAttributeValue(value: []const u8, first_offset: usize, writer: *s
     if (remaining.len > 0) {
         try writer.writeAll(remaining);
     }
+}
+
+const testing = @import("../../../testing.zig");
+test "Attribute: needsLowerCasing" {
+    try testing.expectEqual(false, needsLowerCasing(""));
+    try testing.expectEqual(false, needsLowerCasing("data-x"));
+    try testing.expectEqual(true, needsLowerCasing("data-X"));
+
+    // longer than any vector: '@' and '[' sit just outside 'A'...'Z'
+    const long = "access-control-allow-origin-0123456789-@[`{-access-control-allow-origin";
+    try testing.expectEqual(false, needsLowerCasing(long));
+    try testing.expectEqual(true, needsLowerCasing("A" ++ long));
+    try testing.expectEqual(true, needsLowerCasing(long ++ "Z"));
+    try testing.expectEqual(true, needsLowerCasing(long[0..20] ++ "M" ++ long[20..]));
 }

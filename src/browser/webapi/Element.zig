@@ -372,8 +372,8 @@ pub fn getTagNameSpec(self: *const Element, allocator: Allocator) []const u8 {
                 .font => "FONT",
                 .frameset => "FRAMESET",
                 .form => "FORM",
-                .generic => upperTagName(&he.subtype(Html.Generic)._tag_name, allocator),
-                .heading => upperTagName(&he.subtype(Html.Heading)._tag_name, allocator),
+                .generic => upperTag(he.subtype(Html.Generic)._tag),
+                .heading => upperTag(he.subtype(Html.Heading)._tag),
                 .head => "HEAD",
                 .html => "HTML",
                 .hr => "HR",
@@ -393,7 +393,7 @@ pub fn getTagNameSpec(self: *const Element, allocator: Allocator) []const u8 {
                     .generic => "MEDIA",
                 },
                 .meter => "METER",
-                .mod => upperTagName(&he.subtype(Html.Mod)._tag_name, allocator),
+                .mod => upperTag(he.subtype(Html.Mod)._tag),
                 .object => "OBJECT",
                 .ol => "OL",
                 .optgroup => "OPTGROUP",
@@ -404,7 +404,7 @@ pub fn getTagNameSpec(self: *const Element, allocator: Allocator) []const u8 {
                 .param => "PARAM",
                 .pre => "PRE",
                 .progress => "PROGRESS",
-                .quote => upperTagName(&he.subtype(Html.Quote)._tag_name, allocator),
+                .quote => upperTag(he.subtype(Html.Quote)._tag),
                 .script => "SCRIPT",
                 .select => "SELECT",
                 .slot => "SLOT",
@@ -413,10 +413,10 @@ pub fn getTagNameSpec(self: *const Element, allocator: Allocator) []const u8 {
                 .style => "STYLE",
                 .table => "TABLE",
                 .table_caption => "CAPTION",
-                .table_cell => upperTagName(&he.subtype(Html.TableCell)._tag_name, allocator),
-                .table_col => upperTagName(&he.subtype(Html.TableCol)._tag_name, allocator),
+                .table_cell => upperTag(he.subtype(Html.TableCell)._tag),
+                .table_col => upperTag(he.subtype(Html.TableCol)._tag),
                 .table_row => "TR",
-                .table_section => upperTagName(&he.subtype(Html.TableSection)._tag_name, allocator),
+                .table_section => upperTag(he.subtype(Html.TableSection)._tag),
                 .template => "TEMPLATE",
                 .textarea => "TEXTAREA",
                 .time => "TIME",
@@ -2389,6 +2389,23 @@ fn upperTagName(tag_name: *String, allocator: Allocator) []const u8 {
         log.info(.dom, "tag.long.name", .{ .name = tag });
         return tag;
     };
+}
+
+// For the element types that store a Tag, whose name is always @tagName(tag).
+fn upperTag(tag: Tag) []const u8 {
+    @setEvalBranchQuota(10_000);
+    return switch (tag) {
+        inline else => |t| comptime upperLiteral(@tagName(t)),
+    };
+}
+
+fn upperLiteral(comptime lower: []const u8) *const [lower.len]u8 {
+    comptime {
+        var upper: [lower.len]u8 = undefined;
+        _ = std.ascii.upperString(&upper, lower);
+        const final = upper;
+        return &final;
+    }
 }
 
 pub fn getTag(self: *const Element) Tag {

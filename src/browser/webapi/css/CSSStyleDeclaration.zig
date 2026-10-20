@@ -536,10 +536,9 @@ fn normalizePropertyName(allocator: Allocator, name: []const u8) []const u8 {
 
     // Internal lookups (layout, CDP) pass lowercase names, often outside of a
     // JS call where nothing resets local_arena.
-    for (name) |c| {
-        if (std.ascii.isUpper(c)) break;
-    } else return name;
-
+    if (!Element.Attribute.needsLowerCasing(name)) {
+        return name;
+    }
     return std.ascii.allocLowerString(allocator, name) catch name;
 }
 

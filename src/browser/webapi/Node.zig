@@ -1422,7 +1422,10 @@ pub fn getElementsByTagName(self: *Node, tag_name: []const u8, frame: *Frame) !G
         };
     }
 
-    const lower = try std.ascii.allocLowerString(frame.local_arena, tag_name);
+    const lower = if (Element.Attribute.needsLowerCasing(tag_name))
+        try std.ascii.allocLowerString(frame.local_arena, tag_name)
+    else
+        tag_name;
     if (Node.Element.Tag.parseForMatch(lower)) |known| {
         // optimized for known tag names, comparison
         return .{

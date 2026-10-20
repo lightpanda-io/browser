@@ -28,3 +28,15 @@
   testing.expectEqual(name.toUpperCase(), el.nodeName);
 }
 </script>
+
+<script id=knownTagNames>
+{
+  // one per element type that stores its tag: generic, heading, mod, quote,
+  // table cell, table col, table section
+  for (const name of ['section', 'h1', 'del', 'blockquote', 'td', 'colgroup', 'tbody']) {
+    const el = document.createElement(name);
+    testing.expectEqual(name.toUpperCase(), el.tagName);
+    testing.expectEqual(name.toUpperCase(), el.nodeName);
+  }
+}
+</script>

@@ -330,20 +330,19 @@ fn camelCaseToDashCase(allocator: Allocator, name: []const u8) ![]const u8 {
     }
 
     // Special case: cssFloat -> float
-    const lower_name = try std.ascii.allocLowerString(allocator, name);
-    if (std.mem.eql(u8, lower_name, "cssfloat")) {
+    if (std.ascii.eqlIgnoreCase(name, "cssfloat")) {
         return "float";
     }
 
     // If already contains dashes, just return lowercased
     if (std.mem.findScalar(u8, name, '-')) |_| {
-        return lower_name;
+        return std.ascii.allocLowerString(allocator, name);
     }
 
     // Check if this looks like proper camelCase (starts with lowercase)
     // If not (e.g. "COLOR", "BackgroundColor"), just lowercase it
     if (name.len == 0 or !std.ascii.isLower(name[0])) {
-        return lower_name;
+        return std.ascii.allocLowerString(allocator, name);
     }
 
     // Check for vendor prefixes: webkitTransform -> -webkit-transform
@@ -356,9 +355,13 @@ fn camelCaseToDashCase(allocator: Allocator, name: []const u8) ![]const u8 {
         break :blk false;
     };
 
-    // name[0] is lowercase, so the vendor dash plus at most two bytes for
-    // every other character fits in twice the length.
-    const buf = try allocator.alloc(u8, name.len * 2);
+    // Every character, plus a dash before each uppercase one and the vendor
+    // prefix's leading dash.
+    var len = name.len + @intFromBool(has_vendor_prefix);
+    for (name) |c| {
+        len += @intFromBool(std.ascii.isUpper(c));
+    }
+    const buf = try allocator.alloc(u8, len);
     var write_pos: usize = 0;
 
     if (has_vendor_prefix) {

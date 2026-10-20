@@ -946,8 +946,13 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                 else => {},
             }
 
-            const lower = try std.ascii.allocLowerString(frame.local_arena, name);
-            const tag = std.meta.stringToEnum(Element.Tag, lower) orelse .unknown;
+            // No local_arena: the parser calls this outside of a JS call, where
+            // nothing resets it. A name longer than any Tag can't match one.
+            var lower_buf: [max_tag_len]u8 = undefined;
+            const tag: Element.Tag = if (name.len > lower_buf.len)
+                .unknown
+            else
+                std.meta.stringToEnum(Element.Tag, std.ascii.lowerString(&lower_buf, name)) orelse .unknown;
             return createSvgElementT(document, Element.Svg.Generic, name, attribute_iterator, .{ ._tag = tag });
         },
         else => {
@@ -1300,6 +1305,14 @@ fn isXmlNameChar(c: u21) bool {
         (c >= 0x300 and c <= 0x36F) or
         (c >= 0x203F and c <= 0x2040);
 }
+
+const max_tag_len = blk: {
+    var max: usize = 0;
+    for (std.meta.fieldNames(Element.Tag)) |tag_name| {
+        max = @max(max, tag_name.len);
+    }
+    break :blk max;
+};
 
 fn asUint(comptime string: anytype) @Int(
     .unsigned,

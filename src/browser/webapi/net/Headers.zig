@@ -5,6 +5,7 @@ const js = @import("../../js/js.zig");
 const Mime = @import("../../Mime.zig");
 
 const KeyValueList = @import("../KeyValueList.zig");
+const Attribute = @import("../element/Attribute.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
@@ -375,6 +376,9 @@ fn validateAndNormalizeName(name: []const u8, exec: *const Execution) ![]const u
 }
 
 fn normalizeHeaderName(allocator: Allocator, name: []const u8) Allocator.Error![]const u8 {
+    if (!Attribute.needsLowerCasing(name)) {
+        return name;
+    }
     return std.ascii.allocLowerString(allocator, name);
 }
 
