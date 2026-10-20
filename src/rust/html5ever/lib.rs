@@ -277,14 +277,15 @@ pub extern "C" fn encoding_decode(
 
 use encoding_rs::Decoder;
 
-/// Create a streaming decoder that maintains state across calls
+/// Create a streaming decoder that maintains state across calls.
+/// It does no BOM sniffing: a BOM decodes to U+FEFF, as TextDecoder needs.
 #[no_mangle]
 pub extern "C" fn encoding_decoder_new(handle: *const c_void) -> *mut c_void {
     if handle.is_null() {
         return std::ptr::null_mut();
     }
     let encoding: &'static Encoding = unsafe { &*(handle as *const Encoding) };
-    let decoder = Box::new(encoding.new_decoder());
+    let decoder = Box::new(encoding.new_decoder_without_bom_handling());
     Box::into_raw(decoder) as *mut c_void
 }
 
