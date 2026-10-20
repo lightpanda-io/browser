@@ -180,18 +180,33 @@ pub const Derive = union(enum) {
     };
 };
 
-/// The `derivedKeyType` argument to `deriveKey()` — the algorithm of the key to
-/// produce. HMAC carries a hash; AES carries a length. Probed in that order so
-/// the more specific shapes win.
+/// The `derivedKeyType` argument to `deriveKey()`, normalized by name as Init
+/// is, for both "importKey" and "get key length": AES with its required
+/// `length` (an [EnforceRange] unsigned short), HMAC with its hash and
+/// optional `length`, HKDF and PBKDF2 with just their name. Another algorithm
+/// has no key length, so it's NotSupportedError.
 pub const DerivedKey = union(enum) {
+    aes: struct { length: js.EnforceRange(u16), name: []const u8 },
     /// `length` as in Import.hmac.
     hmac: struct { hash: Hash, length: ?js.Value = null, name: []const u8 },
-    keyed: struct { length: u32, name: []const u8 },
-    object: struct { name: []const u8 },
-    /// An object without a `name`: a TypeError, as for every algorithm
-    /// identifier. Probed before the string, which would coerce it.
-    nameless: js.Object,
-    name: []const u8,
+    /// HKDF or PBKDF2, whose key length is null: the whole derivation.
+    named: []const u8,
+
+    pub fn fromJs(value: js.Value, local: *const js.Local) !DerivedKey {
+        const name = try identifierName(value, local);
+        if (isOneOf(name, &.{ "AES-CTR", "AES-CBC", "AES-GCM", "AES-KW" })) {
+            return .{ .aes = try convert(@FieldType(DerivedKey, "aes"), value, name, local) };
+        }
+        if (isOneOf(name, &.{"HMAC"})) {
+            const params = try convert(@FieldType(DerivedKey, "hmac"), value, name, local);
+            _ = try params.hash.canonical(local);
+            return .{ .hmac = params };
+        }
+        if (isOneOf(name, &.{ "HKDF", "PBKDF2" })) {
+            return .{ .named = name };
+        }
+        return error.NotSupported;
+    }
 };
 
 /// Algorithm for `importKey()` and unwrapKey's unwrapped key, normalized as
@@ -286,6 +301,14 @@ fn isOneOf(name: []const u8, comptime names: []const []const u8) bool {
     return false;
 }
 
+/// An optional [EnforceRange] member kept as a value (absent or undefined is
+/// null), converted to `T`: out of range is a TypeError. null converts to 0,
+/// as WebIDL does, where an optional `?T` member would read it as absent.
+fn rangeMember(comptime T: type, value: ?js.Value, local: *const js.Local) !?T {
+    const v = value orelse return null;
+    return js.enforceRange(T, try v.toF64()) catch local.typeError("algorithm member is out of range");
+}
+
 /// The error of a failed conversion of a page value: the page's own pending
 /// exception, or running out of memory, stays as is; anything else is a
 /// TypeError with `message`.
@@ -298,18 +321,23 @@ pub fn conversionError(err: anyerror, local: *const js.Local, message: []const u
 
 /// `value` as the params dictionary `T` of the algorithm called `name`. The
 /// name was read once already, to pick `T`, and isn't read again: a getter on
-/// it runs once, as in browsers, so it can't answer another algorithm's name
-/// for the params than the one that picked them. Each other member is read in
-/// order: absent or undefined takes its default, or null if optional, and is
-/// otherwise a TypeError, as is a value that doesn't convert (out of an
-/// [EnforceRange] range, say). A string identifier has no members, so it only
-/// converts to a dictionary with no required one (as `{name: value}` would).
-/// The page's own exception stays pending.
+/// it runs once, as in browsers (WPT's "transferred ... during call" tests
+/// transfer a buffer from it). Each other member is read in order: absent or
+/// undefined takes its default, or null if optional, and is otherwise a
+/// TypeError, as is a value that doesn't convert. A string identifier has no
+/// members, so it only converts to a dictionary with no required one (as
+/// `{name: value}` would). The page's own exception stays pending.
+///
+/// A BufferSource member (an iv, a salt, ...) is checked when it's read, but,
+/// as normalization asks, its bytes are copied once every member is read: a
+/// later member's getter can transfer it, and it then copies as empty rather
+/// than leaving a pointer into a moved backing store.
 fn convert(comptime T: type, value: js.Value, name: []const u8, local: *const js.Local) !T {
     const object: ?js.Object = if (value.isObject()) value.toObject() else null;
     var out: T = undefined;
     const info = @typeInfo(T).@"struct";
-    inline for (info.field_names, info.field_types, info.field_attrs) |field_name, FieldType, attrs| {
+    var buffers: [info.field_names.len]?js.Value = @splat(null);
+    inline for (info.field_names, info.field_types, info.field_attrs, 0..) |field_name, FieldType, attrs, i| {
         if (comptime std.mem.eql(u8, field_name, "name")) {
             out.name = name;
         } else {
@@ -320,9 +348,16 @@ fn convert(comptime T: type, value: js.Value, name: []const u8, local: *const js
                 break :blk if (m.isUndefined()) null else m;
             };
             if (member) |m| {
-                @field(out, field_name) = local.jsValueToZig(FieldType, m) catch |err| {
-                    return conversionError(err, local, "algorithm has a missing or invalid member");
-                };
+                if (comptime isBufferSource(FieldType)) {
+                    if (!m.isArrayBuffer() and !m.isArrayBufferView()) {
+                        return local.typeError("algorithm has a missing or invalid member");
+                    }
+                    buffers[i] = m;
+                } else {
+                    @field(out, field_name) = local.jsValueToZig(FieldType, m) catch |err| {
+                        return conversionError(err, local, "algorithm has a missing or invalid member");
+                    };
+                }
             } else if (comptime attrs.defaultValue(FieldType)) |default| {
                 @field(out, field_name) = default;
             } else if (comptime @typeInfo(FieldType) == .optional) {
@@ -332,7 +367,22 @@ fn convert(comptime T: type, value: js.Value, name: []const u8, local: *const js
             }
         }
     }
+    inline for (info.field_names, info.field_types, 0..) |field_name, FieldType, i| {
+        if (comptime isBufferSource(FieldType)) {
+            if (buffers[i]) |m| {
+                const view = local.jsValueToZig(js.TypedArray(u8), m) catch |err| {
+                    return conversionError(err, local, "algorithm has a missing or invalid member");
+                };
+                @field(out, field_name) = .{ .values = try local.call_arena.dupe(u8, view.values) };
+            }
+        }
+    }
     return out;
+}
+
+/// Whether a params member is a BufferSource, copied by `convert`.
+fn isBufferSource(comptime FieldType: type) bool {
+    return FieldType == js.TypedArray(u8) or FieldType == ?js.TypedArray(u8);
 }
 
 /// Key material handed to `importKey()`: either a BufferSource (raw/spki/pkcs8)
@@ -369,74 +419,115 @@ pub const KeyData = union(enum) {
     };
 };
 
-/// Algorithm for `encrypt()` / `decrypt()`. AES-CBC/CTR/GCM and RSA-OAEP share one struct
-/// (fields are mode-specific and optional) and dispatch on `name`; a bare string
-/// is the fallback form.
+/// Algorithm for `encrypt()` / `decrypt()` and wrapKey/unwrapKey, normalized
+/// by name as Init is: RSA-OAEP's optional label; AES-CBC's and AES-GCM's `iv`
+/// and AES-CTR's `counter` and `length` (an [EnforceRange] octet), required;
+/// AES-GCM's optional `additionalData` and `tagLength` (an [EnforceRange]
+/// octet). AES-KW only wraps, so it's NotSupportedError for encrypt/decrypt.
 pub const Encrypt = union(enum) {
-    params: struct {
+    rsa_oaep: struct { label: ?js.TypedArray(u8) = null, name: []const u8 },
+    /// AES-CBC, AES-CTR or AES-GCM, in the one shape AES.crypt reads.
+    aes: AesParams,
+    /// AES-KW, which takes no params.
+    aes_kw: []const u8,
+
+    pub const AesParams = struct {
         additionalData: ?js.TypedArray(u8) = null,
         counter: ?js.TypedArray(u8) = null,
         iv: ?js.TypedArray(u8) = null,
-        /// RSA-OAEP.
-        label: ?js.TypedArray(u8) = null,
         length: ?u32 = null,
         name: []const u8,
         tagLength: ?u32 = null,
-    },
-    /// An object without a `name`: a TypeError, as for every algorithm
-    /// identifier. Probed before the string, which would coerce it.
-    nameless: js.Object,
-    name: []const u8,
+    };
 
-    /// Null for an object without a name.
-    pub fn algoName(self: Encrypt) ?[]const u8 {
+    /// `wrapping` is for wrapKey/unwrapKey, whose algorithm can also be AES-KW.
+    pub fn fromJs(value: js.Value, local: *const js.Local, wrapping: bool) !Encrypt {
+        const name = try identifierName(value, local);
+        if (wrapping and isOneOf(name, &.{"AES-KW"})) {
+            return .{ .aes_kw = name };
+        }
+        if (isOneOf(name, &.{"RSA-OAEP"})) {
+            return .{ .rsa_oaep = try convert(@FieldType(Encrypt, "rsa_oaep"), value, name, local) };
+        }
+        if (isOneOf(name, &.{"AES-CBC"})) {
+            const params = try convert(struct { iv: js.TypedArray(u8), name: []const u8 }, value, name, local);
+            return .{ .aes = .{ .iv = params.iv, .name = params.name } };
+        }
+        if (isOneOf(name, &.{"AES-CTR"})) {
+            const params = try convert(struct { counter: js.TypedArray(u8), length: js.EnforceRange(u8), name: []const u8 }, value, name, local);
+            return .{ .aes = .{ .counter = params.counter, .length = params.length.value, .name = params.name } };
+        }
+        if (isOneOf(name, &.{"AES-GCM"})) {
+            const params = try convert(struct {
+                additionalData: ?js.TypedArray(u8) = null,
+                iv: js.TypedArray(u8),
+                name: []const u8,
+                tagLength: ?js.Value = null,
+            }, value, name, local);
+            return .{ .aes = .{
+                .additionalData = params.additionalData,
+                .iv = params.iv,
+                .name = params.name,
+                .tagLength = if (try rangeMember(u8, params.tagLength, local)) |t| t else null,
+            } };
+        }
+        return error.NotSupported;
+    }
+
+    pub fn algoName(self: Encrypt) []const u8 {
         return switch (self) {
-            .params => |p| p.name,
-            .nameless => null,
-            .name => |n| n,
+            .rsa_oaep => |p| p.name,
+            .aes => |p| p.name,
+            .aes_kw => |n| n,
         };
     }
 };
 
-/// For `sign()` functionality.
+/// Algorithm for `sign()` / `verify()`, normalized by name as Init is:
+/// RSA-PSS's `saltLength` (an [EnforceRange] unsigned long) and ECDSA's hash,
+/// required; HMAC, RSASSA-PKCS1-v1_5 and Ed25519 take just their name.
 pub const Sign = union(enum) {
-    string: []const u8,
-    object: struct {
-        /// ECDSA. Kept as a value, like `saltLength`: it's only converted
-        /// (a HashAlgorithmIdentifier) when the algorithm is ECDSA.
-        hash: ?js.Value = null,
-        name: []const u8,
-        /// RSA-PSS. Kept as a value: it's only converted (an [EnforceRange]
-        /// unsigned long) when the algorithm is RSA-PSS, so another algorithm
-        /// ignores the member, as normalization does.
-        saltLength: ?js.Value = null,
-    },
-    /// An object without a `name`: a TypeError, as for every algorithm
-    /// identifier. Probed after the object, which needs the name.
-    nameless: js.Object,
+    named: []const u8,
+    rsa_pss: struct { name: []const u8, saltLength: js.EnforceRange(u32) },
+    ecdsa: struct { hash: Hash, name: []const u8 },
 
-    /// Null for an object without a name.
-    pub fn algoName(self: Sign) ?[]const u8 {
+    pub fn fromJs(value: js.Value, local: *const js.Local) !Sign {
+        const name = try identifierName(value, local);
+        if (isOneOf(name, &.{"RSA-PSS"})) {
+            return .{ .rsa_pss = try convert(@FieldType(Sign, "rsa_pss"), value, name, local) };
+        }
+        if (isOneOf(name, &.{"ECDSA"})) {
+            const params = try convert(@FieldType(Sign, "ecdsa"), value, name, local);
+            _ = try params.hash.canonical(local);
+            return .{ .ecdsa = params };
+        }
+        if (isOneOf(name, &.{ "HMAC", "RSASSA-PKCS1-v1_5", "Ed25519" })) {
+            return .{ .named = name };
+        }
+        return error.NotSupported;
+    }
+
+    pub fn algoName(self: Sign) []const u8 {
         return switch (self) {
-            .string => |string| string,
-            .object => |object| object.name,
-            .nameless => null,
+            .named => |n| n,
+            .rsa_pss => |p| p.name,
+            .ecdsa => |p| p.name,
         };
     }
 
-    /// The `hash` member, if present.
-    pub fn hash(self: Sign) ?js.Value {
+    /// RSA-PSS's salt length.
+    pub fn saltLength(self: Sign) ?u32 {
         return switch (self) {
-            .string, .nameless => null,
-            .object => |object| object.hash,
+            .rsa_pss => |p| p.saltLength.value,
+            else => null,
         };
     }
 
-    /// The `saltLength` member, if present.
-    pub fn saltLength(self: Sign) ?js.Value {
+    /// ECDSA's hash, by its registered name (fromJs checked it).
+    pub fn hashName(self: Sign, local: *const js.Local) !?[]const u8 {
         return switch (self) {
-            .string, .nameless => null,
-            .object => |object| object.saltLength,
+            .ecdsa => |p| try p.hash.canonical(local),
+            else => null,
         };
     }
 };
