@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<head></head>
+<body></body>
+
+<script id="stylesheet_load_after_append">
+(async () => {
+  const state = await testing.async();
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/styles/visibility.css';
+  const events = [];
+  link.addEventListener('load', () => events.push('load'));
+
+  const completion = new Promise(resolve => {
+    document.head.appendChild(link);
+    events.push('appended');
+    queueMicrotask(() => events.push('microtask'));
+    link.addEventListener('load', () => resolve('load'));
+    link.addEventListener('error', () => resolve('error'));
+  });
+  const outcome = await Promise.race([
+    completion,
+    new Promise(resolve => setTimeout(() => resolve('timeout'), 500)),
+  ]);
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('load', outcome);
+    testing.expectEqual(['appended', 'microtask', 'load'], events);
+    testing.expectEqual('.ext-hide', document.styleSheets[0].cssRules[0].selectorText);
+  });
+})();
+</script>
+
+<script id="stylesheet_error_after_append">
+(async () => {
+  const state = await testing.async();
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/styles/404.css';
+  const events = [];
+  link.addEventListener('error', () => events.push('error'));
+
+  const completion = new Promise(resolve => {
+    document.head.appendChild(link);
+    events.push('appended');
+    queueMicrotask(() => events.push('microtask'));
+    link.addEventListener('load', () => resolve('load'));
+    link.addEventListener('error', () => resolve('error'));
+  });
+  const outcome = await Promise.race([
+    completion,
+    new Promise(resolve => setTimeout(() => resolve('timeout'), 500)),
+  ]);
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('error', outcome);
+    testing.expectEqual(['appended', 'microtask', 'error'], events);
+  });
+})();
+</script>

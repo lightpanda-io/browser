@@ -2722,6 +2722,7 @@ pub fn queueHashChange(self: *Frame, old_url: []const u8, new_url: []const u8) !
 pub const MAX_STYLESHEET_BYTES: usize = 4 * 1024 * 1024;
 
 // Synchronously fetch and parse an external `<link rel=stylesheet>`.
+// Completion events wait until the current script has installed its listeners.
 // href is passed in as an optimization since the [currently] only callsite has
 // it, so why look it up again?
 pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []const u8) !void {
@@ -2750,7 +2751,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
 
     const resolved = URL.resolve(arena.allocator(), self.base(), href, .{ .encoding = self.charset }) catch |err| {
         log.debug(.http, "external stylesheet resolve", .{ .err = err, .href = href });
-        try self.fireElementEvent(element, comptime .wrap("error"));
+        try self.queueElementEvent(Factory.protoOf(link), .@"error");
         return;
     };
 
@@ -2771,7 +2772,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {
         log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
-        return self.fireElementEvent(element, comptime .wrap("error"));
+        return self.queueElementEvent(Factory.protoOf(link), .@"error");
     };
     {
         errdefer transfer.deinit();
@@ -2793,13 +2794,13 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
 
     var response = transfer.submitSync(.{}) catch |err| {
         log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
-        return self.fireElementEvent(element, comptime .wrap("error"));
+        return self.queueElementEvent(Factory.protoOf(link), .@"error");
     };
     defer response.deinit();
 
     if (response.status < 200 or response.status >= 300) {
         log.info(.http, "external stylesheet status", .{ .status = response.status, .url = resolved });
-        return self.fireElementEvent(element, comptime .wrap("error"));
+        return self.queueElementEvent(Factory.protoOf(link), .@"error");
     }
 
     if (response.body.items.len > MAX_STYLESHEET_BYTES) {
@@ -2808,7 +2809,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
             .max = MAX_STYLESHEET_BYTES,
             .url = resolved,
         });
-        return self.fireElementEvent(element, comptime .wrap("error"));
+        return self.queueElementEvent(Factory.protoOf(link), .@"error");
     }
 
     // Reuse the cached sheet on re-fetch (href mutation on a connected
@@ -2843,11 +2844,11 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     const text = try css_charset.decode(arena.allocator(), response.body.items, protocol_charset, self.charset);
     sheet.replaceSync(text, self) catch |err| {
         log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
-        return self.fireElementEvent(element, comptime .wrap("error"));
+        return self.queueElementEvent(Factory.protoOf(link), .@"error");
     };
     sheet._href = try self.page_arena.dupe(u8, resolved);
 
-    try self.fireElementEvent(element, comptime .wrap("load"));
+    try self.queueLoad(Factory.protoOf(link));
 }
 
 // https://html.spec.whatwg.org/multipage/iframe-embed-object.html#iframe-load-event-steps
