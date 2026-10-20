@@ -3138,6 +3138,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
         _ = Element.Build.call(el, "disconnected", .{ el, self }) catch |err| {
             log.err(.bug, "build.disconnected", .{ .tag = el.getTag(), .err = err, .type = self._type, .url = self.url });
         };
+        self.disconnectShadowIFrames(el);
 
         // If a <style> element is being removed, remove its sheet from the list.
         // `self` is the calling frame — Node.removeChild passes its own — so
@@ -3176,6 +3177,19 @@ fn removeStyleSheet(owner: ?*Frame, sheet: *CSSStyleSheet) void {
     const frame = owner orelse return;
     const sheets = frame.document._style_sheets orelse return;
     sheets.remove(sheet);
+}
+
+fn disconnectShadowIFrames(self: *Frame, host: *Element) void {
+    const shadow = host.hostedShadowRoot(self) orelse return;
+    var tw = TreeWalker.Full.Elements.init(shadow.asNode(), .{});
+    while (tw.next()) |el| {
+        if (el.is(IFrame)) |_| {
+            IFrame.Build.disconnected(el, self) catch |err| {
+                log.err(.bug, "shadow.iframe.disconnected", .{ .err = err });
+            };
+        }
+        self.disconnectShadowIFrames(el);
+    }
 }
 
 // The TreeWalker isn't shadow DOM aware, so this is correctly scoped to direct
@@ -3636,20 +3650,26 @@ fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
     // Scripts can mutate the tree. Safe to do this since nodeIsReady re-checks
     // connectivity.
     var elements: std.ArrayList(*Node) = .empty;
-    var pending: std.ArrayList(*Node) = .empty;
-    try pending.append(self.call_arena, node);
-    while (pending.pop()) |current| {
+    const Pending = struct { node: *Node, shadow: bool };
+    var pending: std.ArrayList(Pending) = .empty;
+    try pending.append(self.call_arena, .{ .node = node, .shadow = false });
+    while (pending.pop()) |entry| {
+        const current = entry.node;
         if (current.is(Element)) |_| {
-            try elements.append(self.call_arena, current);
+            // Shadow CSS has separate tree-scoping requirements. Only iframe
+            // activation is added while crossing a hosted shadow root here.
+            if (!entry.shadow or current.is(IFrame) != null) {
+                try elements.append(self.call_arena, current);
+            }
         }
         var child = current.lastChild();
         while (child) |c| : (child = c.previousSibling()) {
-            try pending.append(self.call_arena, c);
+            try pending.append(self.call_arena, .{ .node = c, .shadow = entry.shadow });
         }
         // Shadow-including order also activates unslotted light children.
         if (current.is(Element)) |el| {
             if (el.hostedShadowRoot(self)) |shadow| {
-                try pending.append(self.call_arena, shadow.asNode());
+                try pending.append(self.call_arena, .{ .node = shadow.asNode(), .shadow = true });
             }
         }
     }
