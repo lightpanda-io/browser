@@ -57,7 +57,7 @@ let
     if stdenv.isDarwin then
       "${stdenv.hostPlatform.parsed.cpu.name}-macos-none"
     else
-      "${stdenv.hostPlatform.parsed.cpu.name}-${stdenv.hostPlatform.parsed.kernel.name}-${stdenv.hostPlatform.parsed.abi.name}";
+      "${stdenv.hostPlatform.parsed.cpu.name}-${stdenv.hostPlatform.parsed.kernel.name}-${stdenv.hostPlatform.parsed.abi.name}.${pkgs.glibc.version}";
 
   mkZigDerivation =
     extraArgs:
