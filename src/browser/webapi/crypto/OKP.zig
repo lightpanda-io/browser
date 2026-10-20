@@ -16,9 +16,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Ed25519 keys (RFC 8032): generate, import and export (raw, spki and pkcs8
-//! per RFC 8410, jwk per RFC 8037), and sign / verify. The key material lives
-//! as a libcrypto EVP_PKEY in `CryptoKey._vary.pkey`, as for EC and RSA.
+//! Octet Key Pair keys, Ed25519 (RFC 8032) and X25519 (RFC 7748): generate,
+//! import and export (raw, spki and pkcs8 per RFC 8410, jwk per RFC 8037), and
+//! Ed25519's sign / verify (X25519's deriveBits is in X25519.zig). The key
+//! material lives as a libcrypto EVP_PKEY in `CryptoKey._vary.pkey`, as for EC
+//! and RSA.
 
 const std = @import("std");
 const crypto = @import("../../../sys/libcrypto.zig");
@@ -30,18 +32,44 @@ const common = @import("common.zig");
 const CryptoKey = @import("../CryptoKey.zig");
 const Execution = js.Execution;
 
-/// An Octet Key Pair algorithm: its name, which is also its JWK `crv`, and
-/// how libcrypto knows it.
+/// An Octet Key Pair algorithm: its name, which is also its JWK `crv`, how
+/// libcrypto knows it, and the usages of each half.
 pub const Curve = struct {
     name: []const u8,
     key_type: CryptoKey.Type,
     pkey_type: c_int,
-    /// The size of the public key and of the private seed.
+    /// The size of the public key and of the private key.
     size: usize,
+    private_usages: []const []const u8,
+    public_usages: []const []const u8,
+    /// The JWK `use` its keys are for.
+    jwk_use: []const u8,
+    /// Whether its JWK carries an `alg`: the algorithm's name on export, that
+    /// or "EdDSA" on import. X25519's has none, and ignores one on import.
+    jwk_alg: bool,
 };
 
 const curves = [_]Curve{
-    .{ .name = "Ed25519", .key_type = .ed25519, .pkey_type = crypto.EVP_PKEY_ED25519, .size = 32 },
+    .{
+        .name = "Ed25519",
+        .key_type = .ed25519,
+        .pkey_type = crypto.EVP_PKEY_ED25519,
+        .size = 32,
+        .private_usages = &.{"sign"},
+        .public_usages = &.{"verify"},
+        .jwk_use = "sig",
+        .jwk_alg = true,
+    },
+    .{
+        .name = "X25519",
+        .key_type = .x25519,
+        .pkey_type = crypto.EVP_PKEY_X25519,
+        .size = 32,
+        .private_usages = &.{ "deriveKey", "deriveBits" },
+        .public_usages = &.{},
+        .jwk_use = "enc",
+        .jwk_alg = false,
+    },
 };
 
 /// The curve an algorithm name refers to, case-insensitively, or null.
@@ -52,30 +80,33 @@ pub fn curveOf(name: []const u8) ?*const Curve {
     return null;
 }
 
-const private_usages: []const []const u8 = &.{"sign"};
-const public_usages: []const []const u8 = &.{"verify"};
-
-/// Generates an Ed25519 key pair: the private key gets the "sign" usage, the
-/// public key "verify". Any other usage, or none for the private key, is
-/// SyntaxError.
+/// Generates a key pair, splitting the usages between its halves (Ed25519's
+/// "sign" and "verify"; X25519's "deriveKey" and "deriveBits" go to the
+/// private key). Any other usage, or none for the private key, is SyntaxError.
 pub fn generate(curve: *const Curve, extractable: bool, key_usages: []const []const u8, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
 
     for (key_usages) |usage| {
-        if (!common.usageIn(private_usages, usage) and !common.usageIn(public_usages, usage)) {
+        if (!common.usageIn(curve.private_usages, usage) and !common.usageIn(curve.public_usages, usage)) {
             return error.SyntaxError;
         }
     }
-    const private_mask = common.usageIntersection(private_usages, key_usages);
-    const public_mask = common.usageIntersection(public_usages, key_usages);
+    const private_mask = common.usageIntersection(curve.private_usages, key_usages);
+    const public_mask = common.usageIntersection(curve.public_usages, key_usages);
     if (private_mask == 0) return error.SyntaxError;
 
-    var public_key: [crypto.ED25519_PUBLIC_KEY_LEN]u8 = undefined;
+    // libcrypto takes an Ed25519 private key as its 32-byte seed, the first
+    // half of what ED25519_keypair returns.
+    var public_key: [32]u8 = undefined;
     var private_key: [crypto.ED25519_PRIVATE_KEY_LEN]u8 = undefined;
     defer std.crypto.secureZero(u8, &private_key);
-    crypto.ED25519_keypair(&public_key, &private_key);
+    switch (curve.key_type) {
+        .ed25519 => crypto.ED25519_keypair(&public_key, &private_key),
+        .x25519 => crypto.X25519_keypair(&public_key, private_key[0..32]),
+        // A curve added to the table without its key pair generation.
+        else => return error.NotSupported,
+    }
 
-    // libcrypto takes the private key as its 32-byte seed.
     const private_pkey = crypto.EVP_PKEY_new_raw_private_key(curve.pkey_type, null, &private_key, curve.size) orelse return error.OutOfMemory;
     errdefer crypto.EVP_PKEY_free(private_pkey);
     const public_pkey = crypto.EVP_PKEY_new_raw_public_key(curve.pkey_type, null, &public_key, public_key.len) orelse return error.OutOfMemory;
@@ -136,9 +167,10 @@ pub fn import(
 }
 
 /// Imports a key from a JSON Web Key (RFC 8037): kty "OKP", the common `use`
-/// ("sig") / key_ops / ext checks, `crv` naming the curve, an `alg`, if any,
-/// of the curve's name or "EdDSA", and `x` (plus `d` for a private key) of the
-/// curve's size, `x` being `d`'s public key. Anything else is DataError.
+/// ("sig" for Ed25519, "enc" for X25519) / key_ops / ext checks, `crv` naming
+/// the curve, for Ed25519 an `alg`, if any, of its name or "EdDSA", and `x`
+/// (plus `d` for a private key) of the curve's size, `x` being `d`'s public
+/// key. Anything else is DataError.
 pub fn importJwk(
     curve: *const Curve,
     jwk: algorithm.KeyData.Jwk,
@@ -149,10 +181,12 @@ pub fn importJwk(
     const local = exec.js.local.?;
 
     if (!std.mem.eql(u8, jwk.kty orelse "", "OKP")) return error.DataError;
-    try common.checkJwk(jwk, "sig", usages_mask, extractable);
+    try common.checkJwk(jwk, curve.jwk_use, usages_mask, extractable);
     if (!std.mem.eql(u8, jwk.crv orelse "", curve.name)) return error.DataError;
-    if (jwk.alg) |alg| {
-        if (!std.mem.eql(u8, alg, curve.name) and !std.mem.eql(u8, alg, "EdDSA")) return error.DataError;
+    if (curve.jwk_alg) {
+        if (jwk.alg) |alg| {
+            if (!std.mem.eql(u8, alg, curve.name) and !std.mem.eql(u8, alg, "EdDSA")) return error.DataError;
+        }
     }
 
     const x = try common.jwkBytes(exec.local_arena, jwk.x, curve.size);
@@ -216,9 +250,9 @@ pub fn exportRaw(key: *const CryptoKey, exec: *const Execution) ![]const u8 {
 }
 
 /// The JWK of an OKP key (RFC 8037). Members are listed in lexicographic
-/// order, the order browsers return a JsonWebKey in; `alg` is the algorithm's
-/// name.
-const JwkPublic = struct {
+/// order, the order browsers return a JsonWebKey in. Ed25519's carries an
+/// `alg`, its name; X25519's doesn't.
+const SigningPublic = struct {
     alg: []const u8,
     crv: []const u8,
     ext: bool,
@@ -227,7 +261,7 @@ const JwkPublic = struct {
     x: []const u8,
 };
 
-const JwkPrivate = struct {
+const SigningPrivate = struct {
     alg: []const u8,
     crv: []const u8,
     d: []const u8,
@@ -237,35 +271,55 @@ const JwkPrivate = struct {
     x: []const u8,
 };
 
-/// The JWK of either half of an OKP key.
+const AgreementPublic = struct {
+    crv: []const u8,
+    ext: bool,
+    key_ops: []const []const u8,
+    kty: []const u8 = "OKP",
+    x: []const u8,
+};
+
+const AgreementPrivate = struct {
+    crv: []const u8,
+    d: []const u8,
+    ext: bool,
+    key_ops: []const []const u8,
+    kty: []const u8 = "OKP",
+    x: []const u8,
+};
+
+/// The JWK of either half of an Ed25519 or X25519 key.
 pub const Jwk = union(enum) {
-    public: JwkPublic,
-    private: JwkPrivate,
+    signing_public: SigningPublic,
+    signing_private: SigningPrivate,
+    agreement_public: AgreementPublic,
+    agreement_private: AgreementPrivate,
 };
 
 /// Exports a key as a JWK: `x` for either half, plus `d` for the private key.
 pub fn exportJwk(key: *const CryptoKey, exec: *const Execution) !Jwk {
-    const name = key._algorithm.name;
+    const curve = curveOf(key._algorithm.name) orelse return error.OperationError;
     const pkey = key.getKeyObject();
     const x = try common.base64Encode(exec.local_arena, try rawPublic(pkey, exec));
     const key_ops = try key.getUsages(exec);
+    const ext = key._extractable;
 
     if (key._kind == .public) {
-        return .{ .public = .{ .alg = name, .crv = name, .ext = key._extractable, .key_ops = key_ops, .x = x } };
+        if (curve.jwk_alg) {
+            return .{ .signing_public = .{ .alg = curve.name, .crv = curve.name, .ext = ext, .key_ops = key_ops, .x = x } };
+        }
+        return .{ .agreement_public = .{ .crv = curve.name, .ext = ext, .key_ops = key_ops, .x = x } };
     }
     var len: usize = 0;
     if (crypto.EVP_PKEY_get_raw_private_key(pkey, null, &len) != 1) return error.OperationError;
-    const seed = try exec.local_arena.alloc(u8, len);
-    defer std.crypto.secureZero(u8, seed);
-    if (crypto.EVP_PKEY_get_raw_private_key(pkey, seed.ptr, &len) != 1) return error.OperationError;
-    return .{ .private = .{
-        .alg = name,
-        .crv = name,
-        .d = try common.base64Encode(exec.local_arena, seed[0..len]),
-        .ext = key._extractable,
-        .key_ops = key_ops,
-        .x = x,
-    } };
+    const private = try exec.local_arena.alloc(u8, len);
+    defer std.crypto.secureZero(u8, private);
+    if (crypto.EVP_PKEY_get_raw_private_key(pkey, private.ptr, &len) != 1) return error.OperationError;
+    const d = try common.base64Encode(exec.local_arena, private[0..len]);
+    if (curve.jwk_alg) {
+        return .{ .signing_private = .{ .alg = curve.name, .crv = curve.name, .d = d, .ext = ext, .key_ops = key_ops, .x = x } };
+    }
+    return .{ .agreement_private = .{ .crv = curve.name, .d = d, .ext = ext, .key_ops = key_ops, .x = x } };
 }
 
 /// Signs `data` with a private key (pure Ed25519, no prehash).

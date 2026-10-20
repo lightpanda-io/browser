@@ -2202,6 +2202,99 @@
   });
 </script>
 
+<script id=x25519-keys type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const errorName = async (fn) => {
+    try {
+      await fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+  const unhex = (h) => new Uint8Array(h.match(/../g).map((x) => parseInt(x, 16)));
+  const b64u = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const describe = (key) => `${key.type}:${key.algorithm.name}:${key.extractable}:${key.usages.join("+")}`;
+
+  // RFC 7748, section 6.1.
+  const alicePrivate = unhex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+  const alicePublic = unhex("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a");
+  const bobPublic = unhex("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f");
+  const shared = "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742";
+  const pkcs8 = unhex("302e020100300506032b656e04220420" + hex(alicePrivate));
+  const jwkPrivate = { kty: "OKP", crv: "X25519", x: b64u(alicePublic), d: b64u(alicePrivate) };
+
+  const alice = await subtle.importKey("pkcs8", pkcs8, "X25519", true, ["deriveBits", "deriveKey"]);
+  const bob = await subtle.importKey("raw", bobPublic, { name: "x25519" }, true, []);
+  const generated = await subtle.generateKey("X25519", true, ["deriveBits"]);
+  const ed25519 = await subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+  const aes = await subtle.generateKey({ name: "AES-GCM", length: 128 }, true, ["encrypt"]);
+  const derive = (publicKey, length) => subtle.deriveBits({ name: "X25519", public: publicKey }, alice, length);
+
+  const results = {
+    shared: hex(await derive(bob, 256)),
+    sharedNull: hex(await derive(bob, null)),
+    shared12: hex(await derive(bob, 12)),
+    tooLong: await errorName(() => derive(bob, 264)),
+    // The peer must be an X25519 public key: not a key of another algorithm
+    // (which used to crash here) nor a private key.
+    aesPeer: await errorName(() => derive(aes, 256)),
+    ed25519Peer: await errorName(() => derive(ed25519.publicKey, 256)),
+    privatePeer: await errorName(() => derive(alice, 256)),
+    // A peer of small order gives an all-zero secret.
+    smallOrderPeer: await errorName(async () => derive(await subtle.importKey("raw", new Uint8Array(32), "X25519", false, []), 256)),
+    raw: hex(await subtle.exportKey("raw", bob)),
+    spki: hex(await subtle.exportKey("spki", bob)),
+    pkcs8: hex(await subtle.exportKey("pkcs8", alice)),
+    // X25519's JWK has no alg.
+    jwkPublic: JSON.stringify(await subtle.exportKey("jwk", bob)),
+    jwkPrivate: JSON.stringify(await subtle.exportKey("jwk", alice)),
+    importJwk: describe(await subtle.importKey("jwk", jwkPrivate, "X25519", false, ["deriveBits"])),
+    importJwkAlg: describe(await subtle.importKey("jwk", { ...jwkPrivate, alg: "ignored" }, "X25519", false, ["deriveBits"])),
+    importSpki: describe(await subtle.importKey("spki", unhex("302a300506032b656e032100" + hex(bobPublic)), "X25519", true, [])),
+    useSig: await errorName(() => subtle.importKey("jwk", { ...jwkPrivate, use: "sig" }, "X25519", false, ["deriveBits"])),
+    crvEd25519: await errorName(() => subtle.importKey("jwk", { ...jwkPrivate, crv: "Ed25519" }, "X25519", false, ["deriveBits"])),
+    otherX: await errorName(() => subtle.importKey("jwk", { ...jwkPrivate, x: b64u(bobPublic) }, "X25519", false, ["deriveBits"])),
+    rawWithUsage: await errorName(() => subtle.importKey("raw", bobPublic, "X25519", true, ["deriveBits"])),
+    ed25519Spki: await errorName(async () => subtle.importKey("spki", await subtle.exportKey("spki", ed25519.publicKey), "X25519", true, [])),
+    generatedPrivate: describe(generated.privateKey),
+    generatedPublic: describe(generated.publicKey),
+    generatedSelf: (await subtle.deriveBits({ name: "X25519", public: generated.publicKey }, generated.privateKey, 256)).byteLength,
+    generateSign: await errorName(() => subtle.generateKey("X25519", true, ["sign"])),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(shared, results.shared);
+    testing.expectEqual(shared, results.sharedNull);
+    testing.expectEqual("4a50", results.shared12);
+    testing.expectEqual("OperationError", results.tooLong);
+    testing.expectEqual("InvalidAccessError", results.aesPeer);
+    testing.expectEqual("InvalidAccessError", results.ed25519Peer);
+    testing.expectEqual("InvalidAccessError", results.privatePeer);
+    testing.expectEqual("OperationError", results.smallOrderPeer);
+    testing.expectEqual(hex(bobPublic), results.raw);
+    testing.expectEqual("302a300506032b656e032100" + hex(bobPublic), results.spki);
+    testing.expectEqual(hex(pkcs8), results.pkcs8);
+    testing.expectEqual(`{"crv":"X25519","ext":true,"key_ops":[],"kty":"OKP","x":"${b64u(bobPublic)}"}`, results.jwkPublic);
+    testing.expectEqual(`{"crv":"X25519","d":"${b64u(alicePrivate)}","ext":true,"key_ops":["deriveKey","deriveBits"],"kty":"OKP","x":"${b64u(alicePublic)}"}`, results.jwkPrivate);
+    testing.expectEqual("private:X25519:false:deriveBits", results.importJwk);
+    testing.expectEqual("private:X25519:false:deriveBits", results.importJwkAlg);
+    testing.expectEqual("public:X25519:true:", results.importSpki);
+    testing.expectEqual("DataError", results.useSig);
+    testing.expectEqual("DataError", results.crvEd25519);
+    testing.expectEqual("DataError", results.otherX);
+    testing.expectEqual("SyntaxError", results.rawWithUsage);
+    testing.expectEqual("DataError", results.ed25519Spki);
+    testing.expectEqual("private:X25519:true:deriveBits", results.generatedPrivate);
+    testing.expectEqual("public:X25519:true:", results.generatedPublic);
+    testing.expectEqual(32, results.generatedSelf);
+    testing.expectEqual("SyntaxError", results.generateSign);
+  });
+</script>
+
 <script id="digest" type=module>
   const state = await testing.async();
   async function hash(algo, data) {
