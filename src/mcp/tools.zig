@@ -276,37 +276,37 @@ fn handleSave(arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult 
 }
 
 const default_run_timeout_ms = 60_000;
+const max_run_console_bytes = 64 * 1024;
 
 fn handleRun(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult {
     const Args = struct { script: []const u8, timeout: ?u32 = null };
     const args = browser_tools.parseArgs(Args, arena, arguments) catch
         return .{ .invalid_params = "expected { script: string, timeout?: integer }" };
     if (args.timeout == 0) return .{ .invalid_params = "timeout must be at least 1 ms" };
+    return runScript(server, arena, args.script, args.timeout orelse default_run_timeout_ms) catch .{ .fail = "out of memory" };
+}
 
+fn runScript(server: *Server, arena: std.mem.Allocator, script: []const u8, timeout_ms: u32) error{OutOfMemory}!ExtraResult {
     const active = server.active_session;
     const session = active.session;
 
     // A long-lived session would keep every page a script opens, so those are
     // closed after it, on success and on error. Cookies and storage stay.
     var before: std.ArrayList(u32) = .empty;
-    for (session.pages.items) |page| {
-        before.append(arena, page.frame._frame_id) catch return .{ .fail = "out of memory" };
-    }
+    for (session.pages.items) |page| try before.append(arena, page.frame._frame_id);
     defer closePagesOpenedSince(arena, session, &active.registry, before.items);
 
     const runtime = lp.Runtime.init(server.allocator, server.app, session, &active.registry) catch |err|
         return .{ .fail = @errorName(err) };
     defer runtime.deinit();
 
-    // Capped like the session's console capture. The extra byte tells a
-    // buffer that was cut off from one that is exactly full.
-    const console_buf = arena.alloc(u8, lp.Session.max_console_bytes + 1) catch return .{ .fail = "out of memory" };
-    var console: std.Io.Writer = .fixed(console_buf);
-    runtime.console_sink = &console;
+    var console: std.Io.Writer.Allocating = .init(arena);
+    var capped: lp.LimitedWriter = .init(&console.writer, max_run_console_bytes);
+    runtime.console_sink = &capped.writer;
+    // Separate from the console so the cap can't drop it.
     var returned: std.Io.Writer.Allocating = .init(arena);
     runtime.result_sink = &returned.writer;
 
-    const timeout_ms = args.timeout orelse default_run_timeout_ms;
     var timer: RunTimer = .{ .runtime = runtime, .browser_env = &session.browser.env, .timeout_ms = timeout_ms };
     // Interrupts stop JavaScript; the hook also ends navigations the script
     // is waiting on.
@@ -315,7 +315,7 @@ fn handleRun(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Val
     defer session.cancel_hook = previous_hook;
     const thread = std.Thread.spawn(.{}, RunTimer.run, .{&timer}) catch
         return .{ .fail = "could not start the script timer" };
-    const result = runtime.runSource(args.script, "<mcp>");
+    const result = runtime.runSource(script, "<mcp>");
     timer.finish();
     thread.join();
     const timed_out = timer.fired.load(.acquire);
@@ -323,31 +323,20 @@ fn handleRun(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Val
         runtime.cancelTerminate();
         session.browser.env.cancelTerminate();
     }
+    const message = try result;
 
-    const message = result catch return .{ .fail = "out of memory" };
-    var output: std.Io.Writer.Allocating = .init(arena);
-    writeRunConsole(&output.writer, console.buffered()) catch return .{ .fail = "out of memory" };
-    output.writer.writeAll(returned.written()) catch return .{ .fail = "out of memory" };
+    var output = console.toArrayList();
+    if (capped.truncated) {
+        if (!std.mem.endsWith(u8, output.items, "\n")) try output.append(arena, '\n');
+        try output.print(arena, "[console output truncated at {d} bytes]\n", .{max_run_console_bytes});
+    }
+    try output.appendSlice(arena, returned.written());
     if (timed_out) {
-        output.writer.print("script timed out after {d} ms\n", .{timeout_ms}) catch return .{ .fail = "out of memory" };
-        return .{ .fail = output.written() };
+        try output.print(arena, "script timed out after {d} ms\n", .{timeout_ms});
+    } else if (message) |m| {
+        try output.print(arena, "{s}\n", .{m});
     }
-    if (message) |m| {
-        output.writer.print("{s}\n", .{m}) catch return .{ .fail = "out of memory" };
-        return .{ .fail = output.written() };
-    }
-    return .{ .ok = output.written() };
-}
-
-fn writeRunConsole(w: *std.Io.Writer, console: []const u8) !void {
-    const max = lp.Session.max_console_bytes;
-    if (console.len <= max) return w.writeAll(console);
-    // Do not cut a UTF-8 sequence in half.
-    var end: usize = max;
-    while (end > 0 and console[end] & 0xC0 == 0x80) end -= 1;
-    try w.writeAll(console[0..end]);
-    if (end > 0 and console[end - 1] != '\n') try w.writeByte('\n');
-    try w.print("[console output truncated at {d} bytes]\n", .{max});
+    return if (timed_out or message != null) .{ .fail = output.items } else .{ .ok = output.items };
 }
 
 fn closePagesOpenedSince(arena: std.mem.Allocator, session: *lp.Session, registry: *lp.NodeRegistry, before: []const u32) void {
@@ -356,12 +345,7 @@ fn closePagesOpenedSince(arena: std.mem.Allocator, session: *lp.Session, registr
         const id = page.frame._frame_id;
         if (std.mem.findScalar(u32, before, id) == null) opened.append(arena, id) catch return;
     }
-    for (opened.items) |id| {
-        // Nodes the script registered point into the page; evict them before
-        // it is freed, as every other page close does.
-        if (session.livePage(id)) |page| registry.resetFrame(arena, &page.frame);
-        session.closePage(id);
-    }
+    for (opened.items) |id| browser_tools.closePage(arena, session, registry, id);
 }
 
 /// Stops a `run` script that outlives its timeout, the way Ctrl-C stops
@@ -1352,7 +1336,6 @@ test "MCP - run: a script drives the session and returns its output" {
         .content = &.{.{ .type = "text", .text = "btn: Click Me\n{\"btn\":\"Click Me\"}\n" }},
     } }, out.written());
 
-    // The page the script opened is closed with it.
     try testing.expectEqual(0, server.active_session.session.pages.items.len);
 }
 
@@ -1373,7 +1356,6 @@ test "MCP - run: closes the pages it opened, keeps cookies and earlier pages" {
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\npage.evaluate(\"document.cookie = 'login=1'\");\nthrow new Error('stop');"}}}
     );
     try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
-    // Closed on error too; the page that was there before stays.
     try testing.expectEqual(1, session.pages.items.len);
 
     out.clearRetainingCapacity();
@@ -1415,7 +1397,7 @@ test "MCP - run: console output is capped" {
     const text = try testToolText(aa, out.written());
     const note = "\n[console output truncated at 65536 bytes]\ndone\n";
     try testing.expect(std.mem.endsWith(u8, text, note));
-    try testing.expectEqual(lp.Session.max_console_bytes, text.len - note.len);
+    try testing.expectEqual(max_run_console_bytes, text.len - note.len);
 }
 
 test "MCP - run: a zero timeout is rejected" {
@@ -1436,14 +1418,12 @@ test "MCP - run: a script that outlives its timeout is stopped" {
     var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
     defer server.deinit();
 
-    // A loop in the script itself.
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"timeout":200,"script":"console.log('before');\nwhile (true) {}"}}}
     );
     try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
     try testing.expectEqual("before\nscript timed out after 200 ms\n", try testToolText(aa, out.written()));
 
-    // A loop in page JS.
     out.clearRetainingCapacity();
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"timeout":300,"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\npage.evaluate('while (true) {}');"}}}
@@ -1459,7 +1439,7 @@ test "MCP - run: a script that outlives its timeout is stopped" {
     );
     try testing.expectEqual("loaded\nscript timed out after 300 ms\n", try testToolText(aa, out.written()));
 
-    // A navigation that does not answer in time (the route replies after 2 s).
+    // /xhr/hang replies after 2 s.
     out.clearRetainingCapacity();
     const started = std.Io.Timestamp.now(lp.io, .boot);
     try router.handleMessage(server, aa,
@@ -1468,7 +1448,6 @@ test "MCP - run: a script that outlives its timeout is stopped" {
     try testing.expectEqual("script timed out after 300 ms\n", try testToolText(aa, out.written()));
     try testing.expect(started.untilNow(lp.io, .boot).toMilliseconds() < 1500);
 
-    // The session still works afterwards.
     out.clearRetainingCapacity();
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nreturn page.evaluate(\"document.getElementById('btn').textContent\");"}}}
@@ -1491,7 +1470,6 @@ test "MCP - run: an error ends the script and follows its output" {
     try testing.expect(std.mem.find(u8, text, "boom") != null);
     try testing.expect(std.mem.find(u8, text, "after") == null);
 
-    // A failed step throws like any other error.
     out.clearRetainingCapacity();
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"new Page().click('#btn');"}}}
@@ -1533,7 +1511,6 @@ test "MCP - run: acts on the caller's session only" {
     var b = try Server.init(testing.allocator, testing.test_app, &out_b.writer);
     defer b.deinit();
 
-    // A cookie set by a script in one session is not seen from the other.
     const set_cookie =
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\npage.evaluate(\"document.cookie = 'who=a'\");"}}}
     ;
