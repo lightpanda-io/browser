@@ -271,7 +271,7 @@ pub const List = struct {
             try owner.addElementId(parent, element, entry.value());
         }
         owner.domChanged();
-        owner.attributeChange(element, result.normalized, .wrap(entry.value()), old_value);
+        owner.attributeChange(element, .wrap(name), .wrap(entry.value()), old_value);
         return name;
     }
 
@@ -366,6 +366,7 @@ pub const List = struct {
         const owner = element.ownerFrame(frame) orelse frame;
         const is_id = shouldAddToIdMap(normalized, element);
         const old_value = entry.value();
+        const name = entry.name();
 
         if (is_id) {
             owner.removeElementId(element, old_value);
@@ -383,7 +384,7 @@ pub const List = struct {
         self._len -= 1;
 
         owner.domChanged();
-        owner.attributeRemove(element, normalized, .wrap(old_value));
+        owner.attributeRemove(element, .wrap(name), .wrap(old_value));
     }
 
     pub fn getNames(self: *const List, allocator: Allocator) ![][]const u8 {

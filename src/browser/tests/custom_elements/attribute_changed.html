@@ -199,3 +199,40 @@
     testing.expectEqual(el.getAttribute('style'), calls[4]);
 }
 </script>
+
+<script id="cross_frame_long_name" type=module>
+  // The element's frame has no reaction scope open, so its reactions run
+  // later, after the caller's temporary copies of the name are gone.
+  const state = await testing.async();
+
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+  const win = iframe.contentWindow;
+  win.seen = [];
+  win.eval(`
+    class CrossFrame extends HTMLElement {
+      static get observedAttributes() { return ['data-a-long-observed-name']; }
+      attributeChangedCallback(name) { window.seen.push(name); }
+    }
+    customElements.define('cross-frame', CrossFrame);
+  `);
+
+  const el = win.document.createElement('cross-frame');
+  const name = 'data-a-long-observed-name';
+  // this realm's methods, so the scope opened is this frame's, not el's
+  const setAttribute = Element.prototype.setAttribute;
+  const removeAttribute = Element.prototype.removeAttribute;
+  setAttribute.call(el, name.toUpperCase(), '1');
+  // more temporaries, to reuse the memory the name was lowercased into
+  document.createElement('X-' + 'B'.repeat(40));
+  setAttribute.call(el, name, '2');
+  removeAttribute.call(el, name.toUpperCase());
+  document.createElement('X-' + 'C'.repeat(40));
+
+  // the backup queue drains on the iframe's microtask queue
+  await new Promise(resolve => setTimeout(resolve, 0));
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([name, name, name], win.seen);
+  });
+</script>
