@@ -322,6 +322,85 @@ pub fn TextEntry(comptime T: type) type {
             return applySelectionRange(self, selectionOffsetFromJs(self, selection_start), selectionOffsetFromJs(self, selection_end), direction, frame);
         }
 
+        const SelectionMode = enum { select, start, end, preserve };
+
+        // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-textarea/input-setrangetext
+        pub fn setRangeText(
+            self: *T,
+            replacement: []const u8,
+            range_start: ?u32,
+            range_end: ?u32,
+            selection_mode: ?[]const u8,
+            frame: *Frame,
+        ) !void {
+            if (self.selectionAvailable() == false) {
+                return error.InvalidStateError;
+            }
+
+            const value = self.getValue();
+            const value_len: u32 = @intCast(value.len);
+            const sel_start = @min(self._selection_start, value_len);
+            const sel_end = @min(self._selection_end, value_len);
+
+            // setRangeText(replacement) replaces the selection; a start needs an end
+            var start = sel_start;
+            var end = sel_end;
+            if (range_start) |js_start| {
+                const js_end = range_end orelse return error.TypeError;
+                if (js_start > js_end) {
+                    return error.IndexSizeError;
+                }
+                start = selectionOffsetFromJs(self, js_start);
+                end = selectionOffsetFromJs(self, js_end);
+            }
+
+            const mode: SelectionMode = if (selection_mode) |m|
+                std.meta.stringToEnum(SelectionMode, m) orelse return error.TypeError
+            else
+                .preserve;
+
+            {
+                const scratch = try frame.getArena(value.len + replacement.len, "TextEntry.setRangeText");
+                defer scratch.release();
+                const new_value = try std.mem.concat(scratch.allocator(), u8, &.{ value[0..start], replacement, value[end..] });
+                try self.setValue(new_value, frame);
+            }
+
+            const new_end: u32 = @intCast(start + replacement.len);
+            var new_start = sel_start;
+            var new_sel_end = sel_end;
+            switch (mode) {
+                .select => {
+                    new_start = start;
+                    new_sel_end = new_end;
+                },
+                .start => {
+                    new_start = start;
+                    new_sel_end = start;
+                },
+                .end => {
+                    new_start = new_end;
+                    new_sel_end = new_end;
+                },
+                .preserve => {
+                    // keep the selection on the same text: shift it past the
+                    // replaced range, or snap it to the range's edges inside it
+                    const delta: i64 = @as(i64, @intCast(replacement.len)) - @as(i64, end - start);
+                    if (sel_start > end) {
+                        new_start = @intCast(@as(i64, sel_start) + delta);
+                    } else if (sel_start > start) {
+                        new_start = start;
+                    }
+                    if (sel_end > end) {
+                        new_sel_end = @intCast(@as(i64, sel_end) + delta);
+                    } else if (sel_end > start) {
+                        new_sel_end = new_end;
+                    }
+                },
+            }
+            return applySelectionRange(self, new_start, new_sel_end, .none, frame);
+        }
+
         fn applySelectionRange(
             self: *T,
             selection_start: u32,
