@@ -49,97 +49,110 @@
         "aarch64-darwin"
       ]
       (
-      system:
-      let
-        overlays = [
-          (final: prev: {
-            zig = zig-flake.packages.${prev.system}."zig_0_17_0";
-            zls = zls.packages.${prev.system}.zls;
-          })
-        ];
-
-        pkgs = import nixpkgs {
-          inherit system overlays;
-        };
-
-        minimalRustToolchain = fenix.packages.${system}.stable.minimalToolchain;
-        rustToolchain = fenix.packages.${system}.stable.toolchain;
-        craneLib = (crane.mkLib pkgs).overrideToolchain minimalRustToolchain;
-
-        # We need crtbeginS.o for building.
-        crtFiles = pkgs.runCommand "crt-files" { } ''
-          mkdir -p $out/lib
-          cp -r ${pkgs.gcc.cc}/lib/gcc $out/lib/gcc
-        '';
-
-        buildDeps =
-          pkgs: with pkgs; [
-            gcc
-            gcc.cc.lib
-            crtFiles
-            glibc.dev
+        system:
+        let
+          overlays = [
+            (final: prev: {
+              zig = zig-flake.packages.${prev.system}."zig_0_17_0";
+              zls = zls.packages.${prev.system}.zls;
+            })
           ];
 
-        v8BuildDeps =
-          pkgs: with pkgs; [
-            python3
-            pkg-config
-            expat.dev
-            glib.dev
-            zlib
-          ];
-
-        # This build pipeline (V8 mainly) is very unhappy without an FHS-compliant env.
-        fhs = pkgs.buildFHSEnv {
-          name = "fhs-shell";
-          multiArch = true;
-          targetPkgs =
-            pkgs:
-            (buildDeps pkgs)
-            ++ (v8BuildDeps pkgs)
-            ++ (with pkgs; [
-              zig
-              zls
-              rustToolchain
-            ]);
-        };
-
-        lightpanda = pkgs.callPackage ./nix/package.nix {
-          inherit craneLib;
-          buildInputs = (buildDeps pkgs) ++ (with pkgs; [ zig ]);
-          src = ./.;
-          inherit version;
-        };
-
-      in
-      {
-        devShells.default = fhs.env;
-
-        packages = {
-          inherit lightpanda;
-          default = lightpanda;
-        };
-
-        apps = {
-          generate-v8-deps = {
-            type = "app";
-            program = "${pkgs.writeShellScript "generate-v8-deps" ''
-              export PATH="${
-                pkgs.lib.makeBinPath [
-                  pkgs.curl
-                  pkgs.gnused
-                  pkgs.coreutils
-                  pkgs.gawk
-                  pkgs.nix
-                ]
-              }:$PATH"
-              export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-              exec bash ${./nix/update-v8-deps.sh} "$PWD"
-            ''}";
+          pkgs = import nixpkgs {
+            inherit system overlays;
           };
 
-        };
+          minimalRustToolchain = fenix.packages.${system}.stable.minimalToolchain;
+          rustToolchain = fenix.packages.${system}.stable.toolchain;
+          craneLib = (crane.mkLib pkgs).overrideToolchain minimalRustToolchain;
 
-      }
-    );
+          # We need crtbeginS.o for building.
+          crtFiles = pkgs.runCommand "crt-files" { } ''
+            mkdir -p $out/lib
+            cp -r ${pkgs.gcc.cc}/lib/gcc $out/lib/gcc
+          '';
+
+          buildDeps =
+            pkgs: with pkgs; [
+              gcc
+              gcc.cc.lib
+              crtFiles
+              glibc.dev
+            ];
+
+          v8BuildDeps =
+            pkgs: with pkgs; [
+              python3
+              pkg-config
+              expat.dev
+              glib.dev
+              zlib
+            ];
+
+          # This build pipeline (V8 mainly) is very unhappy without an FHS-compliant env.
+          fhs = pkgs.buildFHSEnv {
+            name = "fhs-shell";
+            multiArch = true;
+            targetPkgs =
+              pkgs:
+              (buildDeps pkgs)
+              ++ (v8BuildDeps pkgs)
+              ++ (with pkgs; [
+                zig
+                zls
+                rustToolchain
+              ]);
+          };
+
+          lightpanda = pkgs.callPackage ./nix/package.nix {
+            inherit craneLib;
+            buildInputs = (buildDeps pkgs) ++ (with pkgs; [ zig ]);
+            src = ./.;
+            inherit version;
+          };
+
+        in
+        {
+          devShells.default = fhs.env;
+
+          packages = {
+            inherit lightpanda;
+            default = lightpanda;
+          };
+
+          apps = {
+            generate-v8-deps = {
+              type = "app";
+              program = "${pkgs.writeShellScript "generate-v8-deps" ''
+                export PATH="${
+                  pkgs.lib.makeBinPath [
+                    pkgs.curl
+                    pkgs.gnused
+                    pkgs.coreutils
+                    pkgs.gawk
+                    pkgs.nix
+                  ]
+                }:$PATH"
+                export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                exec bash ${./nix/update-v8-deps.sh} "$PWD"
+              ''}";
+            };
+
+            generate-zig-deps = {
+              type = "app";
+              program = "${pkgs.writeShellScript "generate-zig-deps" ''
+                export PATH="${
+                  pkgs.lib.makeBinPath [
+                    pkgs.coreutils
+                    pkgs.nix
+                    pkgs.zig
+                  ]
+                }:$PATH"
+                exec bash ${./nix/update-zig-deps-hash.sh} "$PWD"
+              ''}";
+            };
+          };
+
+        }
+      );
 }
