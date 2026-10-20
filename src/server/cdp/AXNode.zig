@@ -2176,7 +2176,6 @@ test "AXNode: writer depth cuts every branch at the same level" {
             .depth = 3,
         }, .{});
 
-
         const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, json, .{});
         const nodes = parsed.array.items;
 
@@ -2198,7 +2197,6 @@ test "AXNode: writer depth cuts every branch at the same level" {
             .temp_arena = temp_arena,
             .depth = 4,
         }, .{});
-
 
         const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, json, .{});
         const nodes = parsed.array.items;
