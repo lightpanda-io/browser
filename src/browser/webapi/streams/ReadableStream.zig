@@ -217,15 +217,9 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
         // Note: In a complete implementation, we'd handle the promise returned by pull
         // and set _pulling = false when it resolves
         ls.toLocal(func).callRethrow(void, .{self._controller}) catch |err| {
-            if (err == error.JsException or err == error.TryCatchRethrow) {
-                if (try_catch.exceptionValue()) |exc| {
-                    try self._controller.errorWithValue(exc);
-                } else {
-                    return err;
-                }
-            } else {
-                return err;
-            }
+            if (err != error.TryCatchRethrow) return err;
+            const exc = try_catch.exceptionValue() orelse return err;
+            try self._controller.fail(&ls.local, exc);
         };
     }
 
