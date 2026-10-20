@@ -60,6 +60,8 @@ touch_action: Group(TouchAction) = .{},
 text: Group(Text) = .{},
 flow: Group(Flow) = .{},
 
+widths: WidthMemo = .{},
+
 // Keyed by property name, pruning to what is (hopefully) one or few rules
 custom_rules: std.StringHashMapUnmanaged(CustomProperty) = .empty,
 
@@ -597,6 +599,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     const custom_rules_count = self.custom_rules.count();
 
     self.arena.resetRetain();
+    self.widths = .{};
 
     self.next_doc_order = 1;
     self.rule_layers = .empty;
@@ -758,24 +761,156 @@ pub fn inlineSize(self: *StyleManager, el: *Element, comptime axis: Element.Axis
     return length.resolve(self.frame.page.getViewport());
 }
 
-/// A block-level flex or grid container in normal flow, with an auto width,
-/// that isn't a flex or grid item itself. Its width comes from its containing
-/// block: its items overflow it instead of widening it.
-pub fn widthFromContainingBlock(self: *StyleManager, el: *Element) bool {
+pub const WidthSizing = union(enum) {
+    fixed: f64, // A resolved length
+    percent: f64, // A fraction of the containing block
+    fill, // The containing block's width
+    grow, // A flex item that grows
+    shrink, // Shrink-to-fit its content
+    contents, // display: contents  generates no box
+};
+
+pub fn widthSizing(self: *StyleManager, el: *Element) WidthSizing {
     self.assertOwns(el);
-    self.rebuildIfDirty() catch return false;
-    if (!self.visibilityProps(el).block_flex_or_grid or self.geometryProps(el).width.unit != .auto) {
-        return false;
+    self.rebuildIfDirty() catch return .shrink;
+
+    const vis = self.visibilityProps(el);
+    if (vis.box == .contents) {
+        return .contents;
+    }
+
+    const width = self.geometryProps(el).width;
+    switch (width.unit) {
+        .px, .vw, .vh => return .{ .fixed = width.resolve(self.frame.page.getViewport()).? },
+        .percent => return .{ .percent = @as(f64, width.value) / 100.0 },
+        .content => return .shrink,
+        .auto => {},
+    }
+    if (vis.box != .block_level or el.getTag().isReplacedOrControl()) {
+        return .shrink;
     }
     const flow = self.flow.ownProps(self.arena.allocator(), el, self.frame);
     if (flow.absolutely_positioned or flow.floated) {
-        return false;
+        return .shrink;
     }
-    const parent = el.asNode().flatTreeParentElement(self.frame) orelse return true;
-    return switch (self.visibilityProps(parent).display) {
-        .flex, .grid => false,
-        else => true,
+    const parent = self.boxParent(el) orelse return .fill;
+    const parent_vis = self.visibilityProps(parent);
+    if (parent_vis.display != .flex or parent_vis.flex_column) {
+        // Block, grid and column-flex containers stretch their children
+        return .fill;
+    }
+    return if (self.geometryProps(el).flex_grow) .grow else .shrink;
+}
+
+/// The nearest ancestor that generates a box
+pub fn boxParent(self: *StyleManager, el: *Element) ?*Element {
+    var parent = el.asNode().flatTreeParentElement(self.frame);
+    while (parent) |p| : (parent = p.asNode().flatTreeParentElement(self.frame)) {
+        if (self.visibilityProps(p).box != .contents) {
+            return p;
+        }
+    }
+    return null;
+}
+
+/// The children lay out side by side: a flex row or a grid. Elsewhere block
+/// children stack and only inline-level ones share a line.
+pub fn laysOutInRow(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    const vis = self.visibilityProps(el);
+    return vis.display == .grid or (vis.display == .flex and vis.flex_column == false);
+}
+
+pub fn isBlockLevel(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    switch (self.visibilityProps(el).box) {
+        .block_level, .table => {},
+        .inline_level, .contents => return false,
+    }
+    const flow = self.flow.ownProps(self.arena.allocator(), el, self.frame);
+    return flow.absolutely_positioned == false and flow.floated == false;
+}
+
+/// Overflow along x is clipped or scrolled within the box, so it doesn't
+/// widen the ancestors' scrollable area.
+pub fn clipsOverflowX(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.geometryProps(el).overflow_x_clips;
+}
+
+pub const WidthLimit = union(enum) {
+    px: f64,
+    percent: f64, // A fraction of the containing block
+};
+
+/// min-width and max-width. Null where they don't limit: auto, none, the
+/// intrinsic keywords, and values that need layout (em, calc).
+pub fn widthLimits(self: *StyleManager, el: *Element) struct { min: ?WidthLimit, max: ?WidthLimit } {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{ .min = null, .max = null };
+    const geometry = self.geometryProps(el);
+    return .{ .min = self.widthLimit(geometry.min_width), .max = self.widthLimit(geometry.max_width) };
+}
+
+fn widthLimit(self: *StyleManager, length: Length) ?WidthLimit {
+    return switch (length.unit) {
+        .auto, .content => null,
+        .percent => .{ .percent = @as(f64, length.value) / 100.0 },
+        .px, .vw, .vh => .{ .px = length.resolve(self.frame.page.getViewport()).? },
     };
+}
+
+pub const WidthKind = enum { box, content };
+
+/// Element's computed widths (see Element.boxWidth), valid for one style
+/// version and viewport. Each read otherwise walks up to the root and down
+/// the subtree.
+const WidthMemo = struct {
+    version: usize = 0,
+    viewport_width: u32 = 0,
+    viewport_height: u32 = 0,
+    map: std.AutoHashMapUnmanaged(*Element, Entry) = .empty,
+
+    const Entry = struct {
+        box: ?f64 = null,
+        content: ?f64 = null,
+    };
+};
+
+pub fn cachedWidth(self: *StyleManager, el: *Element, comptime kind: WidthKind) ?f64 {
+    const memo = self.freshWidthMemo() orelse return null;
+    const entry = memo.map.get(el) orelse return null;
+    return @field(entry, @tagName(kind));
+}
+
+pub fn cacheWidth(self: *StyleManager, el: *Element, comptime kind: WidthKind, width: f64) void {
+    const memo = self.freshWidthMemo() orelse return;
+    const gop = memo.map.getOrPut(self.arena.allocator(), el) catch |err| {
+        log.warn(.browser, "StyleManager width memo", .{ .err = err });
+        return;
+    };
+    if (gop.found_existing == false) {
+        gop.value_ptr.* = .{};
+    }
+    @field(gop.value_ptr, @tagName(kind)) = width;
+}
+
+// Rebuilding resets the arena the memo lives in, so it runs first.
+fn freshWidthMemo(self: *StyleManager) ?*WidthMemo {
+    self.rebuildIfDirty() catch return null;
+    const memo = &self.widths;
+    const version = self.frame.page.style_version;
+    const viewport = self.frame.page.getViewport();
+    if (memo.version != version or memo.viewport_width != viewport.width or memo.viewport_height != viewport.height) {
+        memo.map.clearRetainingCapacity();
+        memo.version = version;
+        memo.viewport_width = viewport.width;
+        memo.viewport_height = viewport.height;
+    }
+    return memo;
 }
 
 /// Callers must have run rebuildIfDirty, which resets the memo.
@@ -1318,6 +1453,48 @@ pub const Display = enum(u2) {
     }
 };
 
+const Box = enum(u2) {
+    block_level,
+    inline_level,
+    contents,
+    table,
+
+    fn parse(value: []const u8) ?Box {
+        const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+        if (std.ascii.eqlIgnoreCase(trimmed, "contents")) {
+            return .contents;
+        }
+
+        if (std.ascii.eqlIgnoreCase(trimmed, "table")) {
+            return .table;
+        }
+
+        if (std.ascii.startsWithIgnoreCase(trimmed, "inline")) {
+            return .inline_level;
+        }
+
+        inline for (.{ "block", "flow-root", "list-item", "flex", "grid", "flow" }) |keyword| {
+            if (std.ascii.eqlIgnoreCase(trimmed, keyword)) {
+                return .block_level;
+            }
+        }
+
+        // Multi-keyword values start with the outer type
+        if (std.ascii.startsWithIgnoreCase(trimmed, "block ")) {
+            return .block_level;
+        }
+        return null;
+    }
+
+    fn uaDefault(tag: Tag) Box {
+        return switch (tag) {
+            .table => .table,
+            .form, .li, .dd, .dt, .details, .summary, .menu, .dir, .hgroup, .legend, .html, .body, .optgroup, .option => .block_level,
+            else => if (tag.isBlock()) .block_level else .inline_level,
+        };
+    }
+};
+
 /// The case-changing part of `text-transform`. innerText applies `uppercase`
 /// and `lowercase`; `capitalize` is a computed value only, and `full-width`,
 /// `full-size-kana` and `math-auto` are accepted but not applied. `.inherit` is both the
@@ -1375,14 +1552,15 @@ pub const TextTransform = enum(u3) {
     }
 };
 
-/// A declared width or height. Values that need layout (auto, %, em) are
+/// A declared width or height. Values that need layout (auto, em, calc) are
 /// `auto`: they win the cascade but give no size. The intrinsic sizes, which
-/// follow the content, are `content`.
+/// follow the content, are `content`. A `percent` resolves against the
+/// containing block, which only the width axis knows.
 pub const Length = packed struct(u35) {
     value: f32 = 0,
     unit: Unit = .auto,
 
-    const Unit = enum(u3) { auto, content, px, vw, vh };
+    const Unit = enum(u3) { auto, content, px, vw, vh, percent };
 
     fn parse(text: []const u8) Length {
         if (isIntrinsic(text)) {
@@ -1394,6 +1572,7 @@ pub const Length = packed struct(u35) {
         }
         return switch (parsed.unit) {
             inline .vw, .vh => |unit| .{ .value = @floatCast(parsed.value), .unit = @field(Unit, @tagName(unit)) },
+            .percentage => .{ .value = @floatCast(parsed.value), .unit = .percent },
             else => .{
                 .value = @floatCast(parsed.value * (units.absoluteLengthFactor(parsed.unit) orelse return .{})),
                 .unit = .px,
@@ -1413,7 +1592,7 @@ pub const Length = packed struct(u35) {
     fn resolve(self: Length, viewport: Viewport) ?f64 {
         const value: f64 = self.value;
         return switch (self.unit) {
-            .auto, .content => null,
+            .auto, .content, .percent => null,
             .px => value,
             .vw, .vh => value * @as(f64, @floatFromInt(if (self.unit == .vw) viewport.width else viewport.height)) / 100.0,
         };
@@ -1423,10 +1602,11 @@ pub const Length = packed struct(u35) {
 /// Whether an element is rendered and takes pointer input.
 const Visibility = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events" };
+        const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events", "flex-direction", "flex-flow" };
 
         display: ?Display = null,
-        block_flex_or_grid: ?bool = null,
+        box: ?Box = null,
+        flex_column: ?bool = null,
         // Inner null: an explicit inherit, which still wins the cascade
         visibility_hidden: ??bool = null,
         opacity_zero: ?bool = null,
@@ -1435,7 +1615,10 @@ const Visibility = struct {
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "display")) {
                 self.display = Display.parse(value);
-                self.block_flex_or_grid = std.ascii.eqlIgnoreCase(value, "flex") or std.ascii.eqlIgnoreCase(value, "grid");
+                self.box = Box.parse(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "flex-direction") or std.ascii.eqlIgnoreCase(name, "flex-flow")) {
+                // flex-flow's direction keyword comes first
+                self.flex_column = std.ascii.startsWithIgnoreCase(std.mem.trimStart(u8, value, &std.ascii.whitespace), "column");
             } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
                 self.visibility_hidden = parseInheritedFlag(value, &.{ "hidden", "collapse" }, &.{ "visible", "initial" });
             } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
@@ -1455,7 +1638,9 @@ const Visibility = struct {
         // Author value (inline or sheet). Without `author_display` it's the UA
         // fallback: .none when matchesUaDisplayNoneRule, else .other.
         display: Display = .other,
-        block_flex_or_grid: bool = false,
+        // Without an author `display` it's the tag's UA default, see finish
+        box: Box = .inline_level,
+        flex_column: bool = false,
         author_display: bool = false,
         // Null takes the parent's value
         visibility_hidden: ?bool = null,
@@ -1463,9 +1648,10 @@ const Visibility = struct {
         pointer_events_none: ?bool = null,
     };
 
-    const Computed = packed struct(u8) {
+    const Computed = packed struct(u10) {
         display: Display = .other,
-        block_flex_or_grid: bool = false,
+        box: Box = .inline_level,
+        flex_column: bool = false,
         author_display: bool = false,
         visibility_hidden: bool = false, // inherited
         pointer_events_none: bool = false, // inherited
@@ -1475,7 +1661,8 @@ const Visibility = struct {
         fn resolve(own: Cascaded, parent: Computed) Computed {
             return .{
                 .display = own.display,
-                .block_flex_or_grid = own.block_flex_or_grid,
+                .box = own.box,
+                .flex_column = own.flex_column,
                 .author_display = own.author_display,
                 .visibility_hidden = own.visibility_hidden orelse parent.visibility_hidden,
                 .pointer_events_none = own.pointer_events_none orelse parent.pointer_events_none,
@@ -1498,6 +1685,9 @@ const Visibility = struct {
     // `<div class="x" hidden>` must report visible.
     pub fn finish(p: *Cascaded, el: *Element, frame: *Frame, priorities: *const Priorities(Declared)) void {
         p.author_display = priorities.get(.display) != 0;
+        if (priorities.get(.box) == 0) {
+            p.box = Box.uaDefault(el.getTag());
+        }
         if (!p.author_display and matchesUaDisplayNoneRule(el, frame)) {
             p.display = .none;
         }
@@ -1507,18 +1697,27 @@ const Visibility = struct {
 /// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow" };
 
         overflow_x_scrolls: ?bool = null,
+        overflow_x_clips: ?bool = null,
+        flex_grow: ?bool = null,
         overflow_y_scrolls: ?bool = null,
         overscroll_x_contains: ?bool = null,
         overscroll_y_contains: ?bool = null,
         width: ?Length = null,
         height: ?Length = null,
+        min_width: ?Length = null,
+        max_width: ?Length = null,
 
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "overflow-x")) {
                 self.overflow_x_scrolls = overflowScrolls(value);
+                self.overflow_x_clips = overflowClips(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "flex-grow")) {
+                self.flex_grow = flexGrows(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "flex")) {
+                self.flex_grow = flexShorthandGrows(value);
             } else if (std.ascii.eqlIgnoreCase(name, "overflow-y")) {
                 self.overflow_y_scrolls = overflowScrolls(value);
             } else if (std.ascii.eqlIgnoreCase(name, "overscroll-behavior-x")) {
@@ -1529,6 +1728,10 @@ const Geometry = struct {
                 self.width = Length.parse(value);
             } else if (std.ascii.eqlIgnoreCase(name, "height")) {
                 self.height = Length.parse(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "min-width")) {
+                self.min_width = Length.parse(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "max-width")) {
+                self.max_width = Length.parse(value);
             }
         }
 
@@ -1539,6 +1742,27 @@ const Geometry = struct {
                 std.ascii.eqlIgnoreCase(value, "overlay");
         }
 
+        // Clipped or scrolled within the box: hidden, clip and the scrolling values.
+        fn overflowClips(value: []const u8) bool {
+            return overflowScrolls(value) or
+                std.ascii.eqlIgnoreCase(value, "hidden") or
+                std.ascii.eqlIgnoreCase(value, "clip");
+        }
+
+        fn flexGrows(value: []const u8) bool {
+            const number = std.fmt.parseFloat(f64, std.mem.trim(u8, value, &std.ascii.whitespace)) catch return false;
+            return number > 0;
+        }
+
+        // `flex: <grow> [<shrink>] [<basis>]`; `auto` grows, `none` and
+        // `initial` don't, and a lone width (`flex: 200px`) is a basis.
+        fn flexShorthandGrows(value: []const u8) bool {
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            const first = it.next() orelse return false;
+            if (std.ascii.eqlIgnoreCase(first, "auto")) return true;
+            return flexGrows(first);
+        }
+
         // `contain` keeps the scroll in the box, `none` also kills the bounce we
         // don't render anyway; only `auto` lets a scroll chain outward.
         fn overscrollContains(value: []const u8) bool {
@@ -1547,13 +1771,18 @@ const Geometry = struct {
         }
     };
 
-    const Computed = packed struct(u74) {
+    const Computed = packed struct(u146) {
         overflow_x_scrolls: bool = false,
+        overflow_x_clips: bool = false,
+        flex_grow: bool = false,
         overflow_y_scrolls: bool = false,
         overscroll_x_contains: bool = false,
         overscroll_y_contains: bool = false,
         width: Length = .{},
         height: Length = .{},
+        // auto, none and the intrinsic keywords don't limit
+        min_width: Length = .{},
+        max_width: Length = .{},
     };
 };
 
@@ -2325,29 +2554,29 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         \\<i style="width: fit-content(10px); position: relative; float: none"></i>
     );
     const expected = [_]Declarations{
-        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false } },
-        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false } },
-        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false } },
-        .{ .visibility = .{ .display = .other, .block_flex_or_grid = false } },
-        .{ .visibility = .{ .display = .none, .block_flex_or_grid = false, .visibility_hidden = true } },
+        .{ .visibility = .{ .display = .none } },
+        .{ .visibility = .{ .display = .none } },
+        .{ .visibility = .{ .display = .none } },
+        .{ .visibility = .{ .display = .other, .box = .block_level } },
+        .{ .visibility = .{ .display = .none, .visibility_hidden = true } },
         .{ .visibility = .{ .opacity_zero = true, .pointer_events_none = true } },
         .{ .visibility = .{ .opacity_zero = false, .pointer_events_none = true } },
         .{ .visibility = .{ .visibility_hidden = true } },
         .{},
         .{},
-        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_y_scrolls = false } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = false } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true } },
         .{},
         .{ .geometry = .{ .width = .{ .value = 100, .unit = .px }, .height = .{ .value = 96, .unit = .px } } },
         .{ .geometry = .{ .height = .{} } },
-        .{ .geometry = .{ .width = .{}, .height = .{} } },
+        .{ .geometry = .{ .width = .{ .value = 50, .unit = .percent }, .height = .{} } },
         .{ .geometry = .{ .width = .{} } },
-        .{ .visibility = .{ .display = .flex, .block_flex_or_grid = true } },
-        .{ .visibility = .{ .display = .grid, .block_flex_or_grid = false } },
+        .{ .visibility = .{ .display = .flex, .box = .block_level } },
+        .{ .visibility = .{ .display = .grid, .box = .inline_level } },
         .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = true, .floated = true } },
         .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = false, .floated = false } },
     };
@@ -2471,7 +2700,7 @@ test "StyleManager: memo: inherited values, any query order" {
     try testing.expectEqual(6, sm.visibility.memo.count());
     try testing.expectEqual(Visibility.Computed{ .visibility_hidden = true, .pointer_events_none = true, .in_opacity_zero = true }, sm.visibility.memo.get(u).?);
     try testing.expectEqual(Visibility.Computed{ .visibility_hidden = true, .pointer_events_none = true }, sm.visibility.memo.get(i).?);
-    try testing.expectEqual(Visibility.Computed{}, sm.visibility.memo.get(p).?);
+    try testing.expectEqual(Visibility.Computed{ .box = .block_level }, sm.visibility.memo.get(p).?);
 
     try testing.expectEqual(false, sm.isHidden(u, .{}));
     try testing.expectEqual(true, sm.isHidden(u, .{ .check_visibility = true }));

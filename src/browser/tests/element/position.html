@@ -43,9 +43,18 @@
   document.body.appendChild(empty);
   testing.expectEqual(empty.clientWidth, empty.scrollWidth);
 
-  // Each added child strictly increases scrollWidth, and enough of them push
-  // it past the element's own box.
+  // A block in normal flow is as wide as its container however little it
+  // holds; inline children share one line, so a few of them don't overflow.
+  const block = document.createElement('div');
+  document.body.appendChild(block);
+  block.appendChild(document.createElement('span'));
+  testing.expectEqual(document.body.clientWidth, block.clientWidth);
+  testing.expectEqual(block.clientWidth, block.scrollWidth);
+
+  // A shrink-to-fit box follows its content: each added child strictly
+  // increases scrollWidth, and clientWidth tracks the same sum.
   const box = document.createElement('div');
+  box.style.display = 'inline-block';
   document.body.appendChild(box);
   box.appendChild(document.createElement('span'));
   const oneChild = box.scrollWidth;
@@ -53,7 +62,6 @@
 
   box.appendChild(document.createElement('span'));
   testing.expectTrue(box.scrollWidth > oneChild);
-  // An unsized box shrink-wraps: clientWidth tracks the same content sum.
   testing.expectEqual(box.scrollWidth, box.clientWidth);
 
   // Text contributes nothing, however long. Estimating a run from its length
@@ -116,9 +124,12 @@
 {
   // Regression: the infinite-marquee idiom duplicates content until it is
   // twice the width of its container. scrollWidth has to respond to the
-  // insertion or the loop never terminates.
+  // insertion or the loop never terminates. The lane is a non-wrapping strip,
+  // as on the sites: a block lane would wrap its items and never outgrow the
+  // track in a real browser either.
   const track = document.createElement('div');
   const lane = document.createElement('div');
+  lane.style.cssText = 'display: inline-block; white-space: nowrap';
   lane.innerHTML = '<span>item</span>';
   track.appendChild(lane);
   document.body.appendChild(track);
@@ -140,12 +151,15 @@
 <script id="clientWidthMarqueeLoop">
 {
   // The clientWidth variant of the marquee idiom (amivoice.com): clone items
-  // into an unsized wrap until it is twice the width of its container.
+  // into a shrink-to-fit wrap until it is twice the width of its container.
   // clientWidth of the wrap has to respond to the insertion, while the
   // container — whose direct child is the wrap, not the items — must not
-  // grow in lockstep or the loop still never terminates.
+  // grow in lockstep or the loop still never terminates. The container is
+  // narrow so the guard stays small: an item without text measures 5px.
   const container = document.createElement('div');
+  container.style.width = '100px';
   const wrap = document.createElement('div');
+  wrap.style.display = 'inline-block';
   const item = document.createElement('span');
   wrap.appendChild(item);
   container.appendChild(wrap);
@@ -255,7 +269,9 @@
   // carry the same content fallback as clientWidth or the loop never
   // terminates.
   const container = document.createElement('div');
+  container.style.width = '100px';
   const wrap = document.createElement('div');
+  wrap.style.display = 'inline-block';
   const item = document.createElement('span');
   wrap.appendChild(item);
   container.appendChild(wrap);
@@ -288,10 +304,12 @@
 {
   // A marquee clones its item into a block-level flex container until there
   // are ceil(container / item) + 2 of them, re-reading both widths after each
-  // clone.
+  // clone. The container must not grow with its items. It is narrow so the
+  // guard stays small: an item without a declared width measures 5px.
   const width = (el) => el.getBoundingClientRect().width;
   const container = document.createElement('div');
   container.className = 'flex-row';
+  container.style.width = '100px';
   const item = document.createElement('div');
   item.textContent = 'item';
   container.appendChild(item);
@@ -304,6 +322,270 @@
   }
   testing.expectTrue(clones < 50);
   testing.expectTrue(container.scrollWidth > container.clientWidth);
+}
+</script>
+
+<script id="widthFlowsDown">
+{
+  // A block in normal flow is as wide as its containing block, whatever it
+  // holds; the width flows down from the root rather than up from the
+  // children. A carousel shell holding a flex track of fixed slides reports
+  // the page width, so slides-per-page is never 0 (and pages never Infinity).
+  const section = document.createElement('div');
+  const shell = document.createElement('div');
+  shell.style.overflow = 'hidden';
+  const track = document.createElement('div');
+  track.className = 'flex-row';
+  for (let i = 0; i < 24; i++) {
+    const slide = document.createElement('div');
+    slide.style.cssText = 'width: 300px; flex-shrink: 0';
+    track.appendChild(slide);
+  }
+  shell.appendChild(track);
+  section.appendChild(shell);
+  document.body.appendChild(section);
+
+  testing.expectEqual(document.body.offsetWidth, shell.offsetWidth);
+  testing.expectEqual(document.body.offsetWidth, track.offsetWidth);
+  testing.expectEqual(7200, track.scrollWidth);
+  // The track doesn't clip, so its overflow is the shell's scrollable area
+  testing.expectEqual(7200, shell.scrollWidth);
+  track.style.overflowX = 'auto';
+  testing.expectEqual(shell.offsetWidth, shell.scrollWidth);
+
+  const perPage = Math.floor(shell.offsetWidth / 320);
+  testing.expectTrue(perPage >= 1);
+  testing.expectEqual(Math.ceil(24 / perPage), 4);
+
+  // Percentages and intermediate auto blocks resolve against the ancestor
+  section.style.width = '700px';
+  testing.expectEqual(700, shell.offsetWidth);
+  shell.style.width = '50%';
+  testing.expectEqual(350, shell.offsetWidth);
+  testing.expectEqual(350, track.offsetWidth);
+  section.remove();
+}
+</script>
+
+<script id="shrinkToFitBoxes">
+{
+  // Inline-level, floated, absolutely positioned, intrinsically sized and
+  // replaced boxes follow their content instead of filling the container.
+  const section = document.createElement('div');
+  section.style.width = '700px';
+  document.body.appendChild(section);
+  for (const css of ['display: inline-block', 'display: inline-flex', 'display: inline-grid', 'display: table', 'position: absolute', 'position: fixed', 'float: left', 'width: max-content', 'width: min-content', 'width: fit-content']) {
+    const box = document.createElement('div');
+    box.style.cssText = css;
+    const child = document.createElement('div');
+    child.style.width = '40px';
+    box.appendChild(child);
+    section.appendChild(box);
+    testing.expectEqual(40, box.offsetWidth, css);
+    box.remove();
+  }
+  // Custom elements are inline by default; a declared display: block fills
+  const custom = document.createElement('my-widget');
+  section.appendChild(custom);
+  testing.expectEqual(5, custom.offsetWidth);
+  custom.style.display = 'block';
+  testing.expectEqual(700, custom.offsetWidth);
+  section.remove();
+}
+</script>
+
+<script id="flexAndGridItemWidths">
+{
+  // Row-flex items shrink to their content unless they grow, in which case
+  // they share the row's free space (#3921: a flex:1 pane beside a 40px menu
+  // in an 800px row is 760px, not 5). Column-flex and grid items stretch.
+  const row = document.createElement('div');
+  row.style.cssText = 'display: flex; width: 800px';
+  const menu = document.createElement('div');
+  menu.style.cssText = 'width: 40px; flex-shrink: 0';
+  const pane = document.createElement('div');
+  pane.style.cssText = 'flex: 1; min-width: 0';
+  row.append(menu, pane);
+  document.body.appendChild(row);
+  testing.expectEqual(760, pane.offsetWidth);
+  testing.expectEqual(760, pane.getBoundingClientRect().width);
+
+  const second = document.createElement('div');
+  second.style.flexGrow = '1';
+  row.appendChild(second);
+  testing.expectEqual(380, pane.offsetWidth);
+  testing.expectEqual(380, second.offsetWidth);
+
+  const fixedItem = document.createElement('div');
+  fixedItem.appendChild(document.createElement('span'));
+  row.appendChild(fixedItem);
+  testing.expectEqual(5, fixedItem.offsetWidth);
+  row.remove();
+
+  const column = document.createElement('div');
+  column.style.cssText = 'display: flex; flex-direction: column; width: 600px';
+  const item = document.createElement('div');
+  column.appendChild(item);
+  document.body.appendChild(column);
+  testing.expectEqual(600, item.offsetWidth);
+  column.style.flexFlow = 'column wrap';
+  testing.expectEqual(600, item.offsetWidth);
+  column.remove();
+
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display: grid; width: 600px';
+  const cell = document.createElement('div');
+  grid.appendChild(cell);
+  document.body.appendChild(grid);
+  testing.expectEqual(600, cell.offsetWidth);
+  grid.remove();
+}
+</script>
+
+<script id="displayContentsIsTransparent">
+{
+  // display: contents generates no box: it reports no size, and its children
+  // resolve against the nearest ancestor that does.
+  const section = document.createElement('div');
+  section.style.width = '700px';
+  const contents = document.createElement('div');
+  contents.style.display = 'contents';
+  const child = document.createElement('div');
+  contents.appendChild(child);
+  section.appendChild(contents);
+  document.body.appendChild(section);
+  testing.expectEqual(0, contents.offsetWidth);
+  testing.expectEqual(700, child.offsetWidth);
+  section.remove();
+}
+</script>
+
+<script id="growShareAfterPercentSiblings">
+{
+  // A percentage sibling takes its share of the row before the growers
+  // split what's left, and its percentage limits count too.
+  const row = document.createElement('div');
+  row.style.cssText = 'display: flex; width: 800px';
+  const sidebar = document.createElement('div');
+  sidebar.style.cssText = 'width: 25%; flex-shrink: 0';
+  const pane = document.createElement('div');
+  pane.style.flex = '1';
+  row.append(sidebar, pane);
+  document.body.appendChild(row);
+  testing.expectEqual(200, sidebar.offsetWidth);
+  testing.expectEqual(600, pane.offsetWidth);
+
+  sidebar.style.cssText = 'min-width: 50%; flex-shrink: 0';
+  testing.expectEqual(400, pane.offsetWidth);
+
+  // display: contents lends its children to the row
+  sidebar.style.cssText = 'display: contents';
+  const fixed = document.createElement('div');
+  fixed.style.cssText = 'width: 100px; flex-shrink: 0';
+  sidebar.appendChild(fixed);
+  testing.expectEqual(700, pane.offsetWidth);
+  row.remove();
+}
+</script>
+
+<script id="growingItemInShrinkToFitRow">
+{
+  // The row sizes from its items and a growing item from the row: the row
+  // takes the item's content, the item fills what's left of the row.
+  const row = document.createElement('span');
+  row.style.display = 'inline-flex';
+  const item = document.createElement('div');
+  item.style.flexGrow = '1';
+  const child = document.createElement('div');
+  child.style.width = '40px';
+  item.appendChild(child);
+  row.appendChild(item);
+  document.body.appendChild(row);
+  testing.expectEqual(40, row.offsetWidth);
+  testing.expectEqual(40, item.offsetWidth);
+  row.remove();
+}
+</script>
+
+<script id="minAndMaxWidth">
+{
+  const section = document.createElement('div');
+  section.style.width = '1000px';
+  const box = document.createElement('div');
+  section.appendChild(box);
+  document.body.appendChild(section);
+
+  // A filling block is capped, in px or against the containing block
+  box.style.maxWidth = '600px';
+  testing.expectEqual(600, box.offsetWidth);
+  testing.expectEqual(600, box.clientWidth);
+  testing.expectEqual(600, box.getBoundingClientRect().width);
+  box.style.maxWidth = '50%';
+  testing.expectEqual(500, box.offsetWidth);
+  box.style.maxWidth = 'none';
+  testing.expectEqual(1000, box.offsetWidth);
+
+  // An explicit width is clamped too; min-width wins over max-width
+  box.style.width = '2000px';
+  box.style.maxWidth = '100%';
+  testing.expectEqual(1000, box.offsetWidth);
+  box.style.minWidth = '1200px';
+  testing.expectEqual(1200, box.offsetWidth);
+
+  // A shrink-to-fit box grows to its min-width
+  box.style.cssText = 'display: inline-block; min-width: 300px';
+  testing.expectEqual(300, box.offsetWidth);
+
+  // A capped child caps what it adds to a shrink-to-fit parent
+  const parent = document.createElement('div');
+  parent.style.display = 'inline-block';
+  const wide = document.createElement('div');
+  wide.style.cssText = 'width: 800px; max-width: 200px';
+  parent.appendChild(wide);
+  section.appendChild(parent);
+  testing.expectEqual(200, parent.offsetWidth);
+
+  // A percentage limit inside a shrink-to-fit parent doesn't limit what
+  // the child adds: there is no width yet to take a percentage of
+  wide.style.maxWidth = '10%';
+  testing.expectEqual(800, parent.offsetWidth);
+  testing.expectEqual(80, wide.offsetWidth);
+
+  // The rule a carousel uses: slides capped by the viewport
+  const style = document.createElement('style');
+  style.textContent = '.capped { max-width: 320px }';
+  document.head.appendChild(style);
+  box.style.cssText = '';
+  box.className = 'capped';
+  testing.expectEqual(320, box.offsetWidth);
+  style.remove();
+  testing.expectEqual(1000, box.offsetWidth);
+  section.remove();
+}
+</script>
+
+<script id="widthsAcrossFrames">
+{
+  // Read from the parent, an iframe's elements size within their own document
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument;
+  const section = doc.createElement('div');
+  section.style.width = '300px';
+  const block = doc.createElement('div');
+  block.style.maxWidth = '50%';
+  const inline = doc.createElement('span');
+  inline.style.display = 'inline-block';
+  const child = doc.createElement('div');
+  child.style.width = '40px';
+  inline.appendChild(child);
+  section.append(block, inline);
+  doc.body.appendChild(section);
+  testing.expectEqual(300, section.offsetWidth);
+  testing.expectEqual(150, block.offsetWidth);
+  testing.expectEqual(40, inline.offsetWidth);
+  testing.expectEqual(300, section.scrollWidth);
+  iframe.remove();
 }
 </script>
 
@@ -628,13 +910,14 @@
   deep.id = 'deep';
   document.body.appendChild(deep);
 
-  // Room to scroll it to the top
-  const room = document.createElement('div');
-  room.style.height = '10000px';
-  document.body.appendChild(room);
-
   const targetY = deep.getBoundingClientRect().y;
   testing.expectTrue(targetY > 0);
+
+  // Room to scroll it to the top. The position counts every preceding node,
+  // the document height only body's children, so size the room to the target.
+  const room = document.createElement('div');
+  room.style.height = `${targetY + window.innerHeight}px`;
+  document.body.appendChild(room);
 
   // scrollIntoView() always brings the element's top to the scroll offset.
   window.scrollTo(0, 999999);

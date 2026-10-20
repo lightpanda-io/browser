@@ -23,6 +23,7 @@ const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
+const StyleManager = @import("../StyleManager.zig");
 const text_measure = @import("../text_measure.zig");
 
 const CSS = @import("CSS.zig");
@@ -1707,6 +1708,11 @@ fn viewportAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
 
 // Caller must have made sure self is visible.
 pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
+    if (axis == .width) {
+        const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, .width).value;
+        return self.boxWidth(owner);
+    }
+
     const own = self.getElementAxis(frame, axis);
     if (own.explicit) {
         // an explicitly set value always wins
@@ -1717,15 +1723,134 @@ pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
         // html/body return their set value regardless of children.
         return own.value;
     }
+    return @max(own.value, self.contentAxis(frame, axis));
+}
 
-    if (axis == .width) {
-        const owner = self.ownerFrame(frame) orelse return own.value;
-        if (owner._style_manager.widthFromContainingBlock(self)) {
-            return own.value;
-        }
+// Width flows down (height flows up): a block in normal flow is as wide as
+// its containing block.
+fn boxWidth(self: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    if (style_manager.cachedWidth(self, .box)) |width| {
+        return width;
     }
 
-    return @max(own.value, self.contentAxis(frame, axis));
+    const own = self.getElementAxis(owner, .width);
+    const width = blk: {
+        if (self.isRootContainer()) {
+            // html/body return their set value regardless of children.
+            break :blk own.value;
+        }
+        const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
+            .fixed => |width| width,
+            .percent => |fraction| fraction * self.containingBlockWidth(owner),
+            .fill => self.containingBlockWidth(owner),
+            .grow => @max(self.growShare(owner), self.contentWidth(owner)),
+            .shrink => @max(own.value, self.contentWidth(owner)),
+            .contents => break :blk 0,
+        };
+        break :blk self.clampWidth(width, .box, owner);
+    };
+    style_manager.cacheWidth(self, .box, width);
+    return width;
+}
+
+// What the box adds to its parent's content width.
+fn widthContribution(self: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    const own = self.getElementAxis(owner, .width);
+    const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
+        .fixed => |width| width,
+        .shrink, .grow => @max(own.value, self.contentWidth(owner)),
+        .percent, .fill => if (style_manager.clipsOverflowX(self)) 0 else self.contentWidth(owner),
+        .contents => return self.contentWidth(owner),
+    };
+    return self.clampWidth(width, .contribution, owner);
+}
+
+// max-width caps the width, min-width wins over both.
+fn clampWidth(self: *Element, width: f64, comptime of: enum { box, contribution }, owner: *Frame) f64 {
+    const limits = owner._style_manager.widthLimits(self);
+    var clamped = width;
+    if (limits.max) |max| {
+        clamped = @min(clamped, self.resolveWidthLimit(max, of == .box, owner) orelse clamped);
+    }
+    if (limits.min) |min| {
+        clamped = @max(clamped, self.resolveWidthLimit(min, of == .box, owner) orelse clamped);
+    }
+    return clamped;
+}
+
+fn resolveWidthLimit(self: *Element, limit: StyleManager.WidthLimit, resolve_percent: bool, owner: *Frame) ?f64 {
+    return switch (limit) {
+        .px => |px| px,
+        .percent => |fraction| if (resolve_percent) fraction * self.containingBlockWidth(owner) else null,
+    };
+}
+
+/// The width of the nearest ancestor with a box; the viewport above the root.
+fn containingBlockWidth(self: *Element, owner: *Frame) f64 {
+    const parent = owner._style_manager.boxParent(self) orelse {
+        return @floatFromInt(owner.page.getViewport().width);
+    };
+    return parent.boxWidth(owner);
+}
+
+/// A growing flex item's share: the row's free space, after the siblings
+/// that don't grow, split evenly among those that do.
+fn growShare(self: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    const parent = style_manager.boxParent(self) orelse return 0;
+    var taken: f64 = 0;
+    var growers: f64 = 0;
+    var children: TreeWalker.FlatChildren = .init(parent.asNode(), .{ .frame = owner });
+    while (children.next()) |node| {
+        const el = node.is(Element) orelse continue;
+        if (style_manager.hasDisplayNone(el)) {
+            continue;
+        }
+        switch (style_manager.widthSizing(el)) {
+            .grow => growers += 1,
+            // Its children are the row's items
+            .contents => taken += el.widthContribution(owner),
+            // Only walks up, and the row's width never reads a child's box
+            else => taken += el.boxWidth(owner),
+        }
+    }
+    return @max(0, parent.boxWidth(owner) - taken) / @max(1, growers);
+}
+
+// The width the children would take unconstrained: the sum of their
+// contributions. In a flex row or grid they sit side by side; elsewhere
+// block-level children stack, so the widest counts, and inline-level ones
+// share one line that never wraps (the dummy layout has no line breaking,
+// which keeps the "append until the lane outgrows its shell" idiom
+// terminating).
+fn contentWidth(self: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    if (style_manager.cachedWidth(self, .content)) |width| {
+        return width;
+    }
+
+    const in_row = style_manager.laysOutInRow(self);
+    var widest: f64 = 0;
+    var line: f64 = 0;
+    var children: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
+    while (children.next()) |node| {
+        const el = node.is(Element) orelse continue;
+        if (style_manager.hasDisplayNone(el)) {
+            continue;
+        }
+        const width = el.widthContribution(owner);
+        if (in_row or style_manager.isBlockLevel(el) == false) {
+            line += width;
+        } else {
+            widest = @max(widest, line, width);
+            line = 0;
+        }
+    }
+    const width = @max(widest, line);
+    style_manager.cacheWidth(self, .content, width);
+    return width;
 }
 
 pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
@@ -1843,15 +1968,14 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
         return 0.0;
     }
 
-    const width = self.getElementAxis(frame, .width).value;
-
     // Roots don't sum their children side by side. The root scroller
     // reports what the viewport scrolls over.
     if (self.isRootContainer()) {
-        return self.rootScrollSize(frame, .width) orelse width;
+        return self.rootScrollSize(frame, .width) orelse self.getElementAxis(frame, .width).value;
     }
 
-    return @max(width, self.contentAxis(frame, .width));
+    const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, .width).value;
+    return @max(self.boxWidth(owner), self.contentWidth(owner));
 }
 
 /// Null where we can't prove a limit, which leaves the offset unbounded:
@@ -2626,6 +2750,15 @@ pub const Tag = enum {
             else => false,
         };
         // zig fmt: on
+    }
+
+    // Replaced elements and form controls: sized by what they show, never
+    // stretched to their container.
+    pub fn isReplacedOrControl(self: Tag) bool {
+        return switch (self) {
+            .img, .iframe, .canvas, .video, .audio, .media, .object, .embed, .svg, .input, .select, .textarea, .button, .meter, .progress => true,
+            else => false,
+        };
     }
 
     pub fn isMetadata(self: Tag) bool {
