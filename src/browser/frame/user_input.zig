@@ -1560,6 +1560,10 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         return moveFocus(frame, keyboard_event.getShiftKey() == false);
     }
 
+    if (key == .Escape) {
+        return Element.Html.Dialog.requestCloseTopModal(frame);
+    }
+
     if (key == .Enter) {
         if (target.is(Element)) |element| {
             if (enterFollowsLink(element)) {
