@@ -741,11 +741,12 @@ fn iterableToSlice(self: *const Local, comptime T: type, js_val: js.Value) ![]T 
 
 // Value.iterator rethrows the page's exception (TryCatchRethrow): it's
 // pending, so report it as one; a malformed iterator is InvalidArgument.
+// Anything else (ExecutionTerminated, OutOfMemory) passes through.
 fn iterationError(err: anyerror) anyerror {
     return switch (err) {
-        error.TryCatchRethrow, error.JsException => error.JsException,
-        error.OutOfMemory => err,
-        else => error.InvalidArgument,
+        error.TryCatchRethrow => error.JsException,
+        error.TypeError => error.InvalidArgument,
+        else => err,
     };
 }
 
