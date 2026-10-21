@@ -415,9 +415,23 @@ fn construct(self: *Runtime, info: *const v8.FunctionCallbackInfo) void {
         self.installFunction(context, this, @tagName(data.tool), primitiveCallback, data) catch
             return self.throwError("failed to construct page");
     }
-    self.installFunction(context, this, "close", closeCallback, self) catch
-        return self.throwError("failed to construct page");
+    for (page_methods) |m| {
+        self.installFunction(context, this, m.name, m.callback, self) catch
+            return self.throwError("failed to construct page");
+    }
 }
+
+pub const PageMethod = struct {
+    name: []const u8,
+    callback: Callback,
+    /// Rendered by `zig build docs`.
+    summary: []const u8,
+};
+
+/// The page methods besides the recorded tools.
+pub const page_methods = [_]PageMethod{
+    .{ .name = "close", .callback = closeCallback, .summary = "Stales the handle, so later calls on it fail. The page itself is reclaimed on the next `goto` or at script end." },
+};
 
 /// Property carrying a page handle's claim on a live frame. Numeric while the
 /// page is navigated; absent/undefined once never-navigated or closed.

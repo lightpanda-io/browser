@@ -170,81 +170,36 @@ fn writeAgentCommands(w: *Writer) Writer.Error!void {
 }
 
 /// The methods `new Page()` carries in a PandaScript, i.e. the recorded tools
-/// plus `close`, and the `console` global.
+/// plus the runtime's own page methods, and the `console` global.
 fn writePandascriptBuiltins(w: *Writer) Writer.Error!void {
+    const table_head = "| Method | Call | Summary |\n|---|---|---|\n";
     try w.writeAll(banner);
     for (std.enums.values(Tool.Group)) |g| {
-        var heading = false;
+        if (!hasRecorded(g)) continue;
+        try writeGroupHeading(w, g, "methods", table_head);
         for (Schema.all()) |*s| {
             if (s.tool.group() != g or !s.tool.isRecorded()) continue;
-            if (!heading) {
-                try writeGroupHeading(w, g, "methods", "| Method | Call | Summary |\n|---|---|---|\n");
-                heading = true;
-            }
             try w.print("| [`{s}`]({f}) | `", .{ s.tool_name, Anchor{ .page = browser_tools_page, .name = s.tool_name } });
-            try writeSignature(w, s);
+            try lp.skill.writeSignature(w, s);
             try w.print("` | {f} |\n", .{Cell{ .s = s.summary }});
-            if (s.tool == .goto) {
-                try w.writeAll("| `close` | `page.close()` | Stales the handle, so later calls on it fail. The page itself is reclaimed on the next `goto` or at script end. |\n");
-            }
         }
-        if (heading) try w.writeAll("\n");
+        try w.writeAll("\n");
     }
 
-    try w.writeAll("## Console\n\n| Method | Writes to |\n|---|---|\n");
+    try w.writeAll("## Page lifecycle\n\n" ++ table_head);
+    for (lp.Runtime.page_methods) |m| {
+        try w.print("| `{s}` | `page.{s}()` | {f} |\n", .{ m.name, m.name, Cell{ .s = m.summary } });
+    }
+
+    try w.writeAll("\n## Console\n\n| Method | Writes to |\n|---|---|\n");
     for (std.enums.values(lp.Runtime.ConsoleMethod)) |m| {
         try w.print("| `console.{s}` | {s} |\n", .{ @tagName(m), if (m.writesStderr()) "stderr" else "stdout" });
     }
 }
 
-/// `page.tool(positional…[, { option?… }])`, the call the runtime marshals.
-/// `backendNodeId` is left out: it never survives replay, so scripts address
-/// elements by selector only.
-fn writeSignature(w: *Writer, s: *const Schema) Writer.Error!void {
-    try w.print("{s}page.{s}(", .{ if (s.tool.isAsync()) "await " else "", s.tool_name });
-    for (s.positional, 0..) |p, i| {
-        if (i > 0) try w.writeAll(", ");
-        try w.writeAll(p);
-    }
-
-    const props = (s.parameters.object.get("properties") orelse return w.writeAll(")")).object;
-    var options: usize = 0;
-    var any_required = false;
-    for (props.keys()) |name| {
-        if (isOption(s, name)) {
-            options += 1;
-            any_required = any_required or isRequiredField(s, name);
-        }
-    }
-    if (options == 0) return w.writeAll(")");
-
-    const optional_bag = s.positional.len > 0 and !any_required;
-    if (optional_bag) try w.writeAll("[");
-    if (s.positional.len > 0) try w.writeAll(", ");
-    try w.writeAll("{ ");
-    var first = true;
-    for (props.keys()) |name| {
-        if (!isOption(s, name)) continue;
-        if (!first) try w.writeAll(", ");
-        first = false;
-        try w.print("{s}{s}", .{ name, if (isRequiredField(s, name)) "" else "?" });
-    }
-    try w.writeAll(" }");
-    if (optional_bag) try w.writeAll("]");
-    try w.writeAll(")");
-}
-
-fn isOption(s: *const Schema, name: []const u8) bool {
-    if (std.mem.eql(u8, name, "backendNodeId")) return false;
-    for (s.positional) |p| {
-        if (std.mem.eql(u8, p, name)) return false;
-    }
-    return true;
-}
-
-fn isRequiredField(s: *const Schema, name: []const u8) bool {
-    for (s.required) |r| {
-        if (std.mem.eql(u8, r, name)) return true;
+fn hasRecorded(g: Tool.Group) bool {
+    for (std.enums.values(Tool)) |t| {
+        if (t.group() == g and t.isRecorded()) return true;
     }
     return false;
 }
@@ -472,9 +427,12 @@ test "docs: pandascript-builtins lists exactly the recorded tools" {
         const call = try std.mem.print(&buf, "page.{s}(", .{@tagName(t)});
         try testing.expectEqual(@intFromBool(t.isRecorded()), std.mem.count(u8, out, call));
     }
-    try testing.expect(std.mem.find(u8, out, "`await page.goto(url[, { timeout?, waitUntil? }])`") != null);
-    try testing.expect(std.mem.find(u8, out, "`page.scroll({ selector?, x?, y? })`") != null);
+    try testing.expect(std.mem.find(u8, out, "`page.extract(schema)`") != null);
     try testing.expect(std.mem.find(u8, out, "backendNodeId") == null);
+    for (lp.Runtime.page_methods) |m| {
+        var buf: [64]u8 = undefined;
+        try testing.expect(std.mem.find(u8, out, try std.mem.print(&buf, "`page.{s}()`", .{m.name})) != null);
+    }
     try testing.expect(std.mem.find(u8, out, "| `console.warn` | stderr |") != null);
 }
 
