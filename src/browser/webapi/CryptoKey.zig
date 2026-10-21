@@ -246,6 +246,8 @@ pub const JsApi = struct {
 
     pub const @"type" = bridge.accessor(CryptoKey.getType, null, .{});
     pub const extractable = bridge.accessor(CryptoKey.getExtractable, null, .{});
-    pub const algorithm = bridge.accessor(CryptoKey.getAlgorithm, null, .{});
-    pub const usages = bridge.accessor(CryptoKey.getUsages, null, .{});
+    // Each returns its cached object: the same one on every read, as the
+    // spec's [[algorithm_cached]] and [[usages_cached]] slots are.
+    pub const algorithm = bridge.accessor(CryptoKey.getAlgorithm, null, .{ .cache = .{ .private = "crypto_key_algorithm" } });
+    pub const usages = bridge.accessor(CryptoKey.getUsages, null, .{ .cache = .{ .private = "crypto_key_usages" } });
 };

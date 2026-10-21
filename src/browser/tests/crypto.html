@@ -2992,3 +2992,52 @@
     }, results);
   });
 </script>
+
+<script id=crypto-key-cached-slots type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const aes = await subtle.generateKey({ name: "AES-CTR", length: 256 }, true, ["encrypt", "decrypt"]);
+  const pair = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+
+  // algorithm and usages return the key's cached object every time (Chrome
+  // 152 still builds a new one per read). A change the page makes to it shows
+  // on the next read, but not in what the key does.
+  const algorithm = aes.algorithm;
+  const usages = aes.usages;
+  algorithm.name = "HMAC";
+  algorithm.length = 1;
+  usages.push("sign");
+  const counter = new Uint8Array(16);
+  const encrypted = await subtle.encrypt({ name: "AES-CTR", counter, length: 64 }, aes, new Uint8Array(4));
+  const results = {
+    algorithmSame: aes.algorithm === algorithm,
+    usagesSame: aes.usages === usages,
+    algorithmSeen: `${aes.algorithm.name}/${aes.algorithm.length}`,
+    usagesSeen: aes.usages.join(),
+    stillEncrypts: encrypted.byteLength,
+    stillNotSigning: await subtle.sign("HMAC", aes, new Uint8Array(1)).then(() => "signed", (e) => e.name),
+    exportedAlg: (await subtle.exportKey("jwk", aes)).alg,
+    // Each key has its own objects, even the two keys of a pair.
+    pairAlgorithmsDiffer: pair.publicKey.algorithm !== pair.privateKey.algorithm,
+    pairUsagesDiffer: pair.publicKey.usages !== pair.privateKey.usages,
+    publicAlgorithmSame: pair.publicKey.algorithm === pair.publicKey.algorithm,
+    privateUsagesSame: pair.privateKey.usages === pair.privateKey.usages,
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual({
+      algorithmSame: true,
+      usagesSame: true,
+      algorithmSeen: "HMAC/1",
+      usagesSeen: "encrypt,decrypt,sign",
+      stillEncrypts: 4,
+      stillNotSigning: "InvalidAccessError",
+      exportedAlg: "A256CTR",
+      pairAlgorithmsDiffer: true,
+      pairUsagesDiffer: true,
+      publicAlgorithmSame: true,
+      privateUsagesSame: true,
+    }, results);
+  });
+</script>

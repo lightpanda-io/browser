@@ -1022,15 +1022,21 @@ const PrivateSymbols = struct {
     const Private = @import("Private.zig");
 
     child_nodes: Private,
+    crypto_key_algorithm: Private,
+    crypto_key_usages: Private,
 
     fn init(isolate: *v8.Isolate) PrivateSymbols {
         return .{
             .child_nodes = Private.init(isolate, "child_nodes"),
+            .crypto_key_algorithm = Private.init(isolate, "crypto_key_algorithm"),
+            .crypto_key_usages = Private.init(isolate, "crypto_key_usages"),
         };
     }
 
     fn deinit(self: *PrivateSymbols) void {
         self.child_nodes.deinit();
+        self.crypto_key_algorithm.deinit();
+        self.crypto_key_usages.deinit();
     }
 };
 
