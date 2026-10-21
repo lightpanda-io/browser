@@ -374,7 +374,7 @@ fn resolveNode(cmd: *CDP.Command) !void {
         &ls.local,
         params.objectGroup orelse "",
         node.dom,
-    );
+    ) orelse return error.ContextNotFound;
     defer remote_object.deinit();
 
     const arena = cmd.arena;

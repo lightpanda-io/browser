@@ -138,15 +138,11 @@ pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    const context_id = bc.inspector().getContextId(&ls.local);
+    const local = inspectedContext(bc, event.local, &ls.local);
 
     var args: std.ArrayList(RemoteObject) = .empty;
     for (event.values) |value| {
-        const remote_object = try inspector_session.getRemoteObject(
-            &ls.local,
-            "",
-            value,
-        );
+        const remote_object = try inspector_session.getRemoteObject(local, "", value) orelse return error.ContextNotFound;
         defer remote_object.deinit();
 
         const arg = try args.addOne(arena);
@@ -163,7 +159,7 @@ pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     return bc.cdp.sendEvent("Runtime.consoleAPICalled", ConsoleMessage{
         .type = @tagName(event.type),
         .timestamp = event.timestamp,
-        .executionContextId = context_id,
+        .executionContextId = bc.inspector().getContextId(local),
         .args = args.items,
     }, .{ .session_id = session_id });
 }
@@ -178,6 +174,13 @@ const ExceptionDetails = struct {
     executionContextId: i32,
 };
 
+// The context `local` belongs to (an iframe's, an isolated world's), or the
+// page's when the inspector doesn't know it (a worker's): an unregistered
+// context has id 0.
+fn inspectedContext(bc: *CDP.BrowserContext, local: *const js.Local, page: *const js.Local) *const js.Local {
+    return if (bc.inspector().getContextId(local) == 0) page else local;
+}
+
 pub fn exceptionThrown(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.ExceptionThrown) !void {
     // Like consoleAPICalled: the primary session's inspector mints the handle.
     const session_id = bc.session_id orelse return;
@@ -188,14 +191,9 @@ pub fn exceptionThrown(arena: Allocator, bc: *CDP.BrowserContext, event: *const 
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    // The context the exception was thrown in (an iframe's, an isolated
-    // world's), or the page's when the inspector doesn't know that one.
     const value = event.value;
-    var local = value.local;
-    const remote_object = inspector_session.getRemoteObject(local, "", value) catch blk: {
-        local = &ls.local;
-        break :blk try inspector_session.getRemoteObject(local, "", value);
-    };
+    const local = inspectedContext(bc, value.local, &ls.local);
+    const remote_object = try inspector_session.getRemoteObject(local, "", value) orelse return error.ContextNotFound;
     defer remote_object.deinit();
 
     var exception = RemoteObject{
@@ -525,6 +523,36 @@ test "cdp.runtime: an exception carries the id of the context it was thrown in" 
     try ctx.expectSentEvent("Runtime.exceptionThrown", .{
         .exceptionDetails = .{ .executionContextId = child_context_id, .exception = .{ .className = "SyntaxError" } },
     }, .{});
+}
+
+test "cdp.runtime: consoleAPICalled carries the id of the context it was logged in" {
+    testing.silenceLog(&.{.js});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-CON2", .url = "cdp/input_iframe.html", .target_id = "FID-0000000CO2".* });
+    try ctx.processMessage(.{ .id = 64, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    const child = frame.child_frames.items[0];
+
+    var page_ls: js.Local.Scope = undefined;
+    frame.js.localScope(&page_ls);
+    defer page_ls.deinit();
+    const page_context_id = bc.inspector().getContextId(&page_ls.local);
+    _ = try page_ls.local.exec("console.log('page')", null);
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .executionContextId = page_context_id }, .{});
+
+    var child_ls: js.Local.Scope = undefined;
+    child.js.localScope(&child_ls);
+    defer child_ls.deinit();
+    const child_context_id = bc.inspector().getContextId(&child_ls.local);
+    try testing.expect(child_context_id != page_context_id);
+    // no arguments: the context comes from the caller, not the values
+    _ = try child_ls.local.exec("console.log('child'); console.log()", null);
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .executionContextId = child_context_id, .args = &.{.{ .value = "child" }} }, .{});
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .executionContextId = child_context_id, .args = &.{} }, .{});
 }
 
 test "cdp.runtime: consoleAPICalled type matches the console method" {

@@ -382,6 +382,8 @@ pub const ConsoleMessage = struct {
     },
     type: ConsoleMessageType,
     values: []js.Value,
+    // The caller's: the context the message was logged in.
+    local: *const js.Local,
     url: ?[]const u8 = null,
     line: ?u32 = null,
     columns: ?u32 = null,
