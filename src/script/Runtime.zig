@@ -85,14 +85,14 @@ const PendingGoto = struct {
     }
 };
 
-const ConsoleMethod = enum {
+pub const ConsoleMethod = enum {
     debug,
     @"error",
     info,
     log,
     warn,
 
-    fn writesStderr(self: ConsoleMethod) bool {
+    pub fn writesStderr(self: ConsoleMethod) bool {
         return switch (self) {
             .@"error", .warn => true,
             .debug, .info, .log => false,
