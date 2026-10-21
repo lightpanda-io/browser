@@ -1064,10 +1064,27 @@ pub const Function = struct {
 //
 // For constructors, setters and methods, we can further increase offset + 1
 // if the first parameter is an instance of Page/Frame/Execution.
-//
-// Finally, if the JS function is called with _more_ parameters and
-// the last parameter in Zig is an array, we'll try to slurp the additional
-// parameters into the array.
+
+// Only fold errors we don't recognize into InvalidArgument; let
+// domain-meaningful ones (e.g. InvalidCharacterError from a String.OneByte
+// param) propagate so handleError can map them to the right DOMException.
+// Compared by name because the per-type instantiation of jsValueToZig may not
+// include such errors in its inferred error set.
+fn argToZig(comptime T: type, local: *const Local, js_val: js.Value) !T {
+    return local.jsValueToZig(T, js_val) catch |err| {
+        if (err == error.JsException or err == error.ExecutionTerminated) {
+            // an exception thrown by user code (e.g. a toString getter), or
+            // the termination, is pending; propagate it untouched
+            return err;
+        }
+        const DOMException = @import("../webapi/DOMException.zig");
+        if (DOMException.fromError(err) != null) {
+            return err;
+        }
+        return error.InvalidArgument;
+    };
+}
+
 fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: FunctionCallbackInfo) !ParameterTypes(F) {
     var args: ParameterTypes(F) = undefined;
 
@@ -1098,78 +1115,44 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
     }
 
     const js_parameter_count = info.length();
-    const last_js_parameter = params_to_map.len - 1;
-    var is_variadic = false;
 
-    {
-        // This is going to get complicated. If the last Zig parameter
-        // is a slice AND the corresponding javascript parameter is
-        // NOT an an array, then we'll treat it as a variadic.
+    // A trailing js.Variadic(T) takes every argument after the fixed ones.
+    const LastJsParam = params_to_map[params_to_map.len - 1].?;
+    const fixed_params = comptime if (isVariadic(LastJsParam)) params_to_map[0 .. params_to_map.len - 1] else params_to_map;
 
-        const last_parameter_type = params_to_map[params_to_map.len - 1].?;
-        const last_parameter_type_info = @typeInfo(last_parameter_type);
-        if (last_parameter_type_info == .pointer and last_parameter_type_info.pointer.size == .slice) {
-            const slice_type = last_parameter_type_info.pointer.child;
-            const corresponding_js_value = info.getArg(@intCast(last_js_parameter), local);
-            if (slice_type == js.Value or (corresponding_js_value.isArray() == false and corresponding_js_value.isTypedArray() == false and slice_type != u8)) {
-                is_variadic = true;
-                if (js_parameter_count == 0) {
-                    @field(args, tupleFieldName(params_to_map.len + offset - 1)) = &.{};
-                } else if (js_parameter_count >= params_to_map.len) {
-                    const arr = try local.call_arena.alloc(last_parameter_type_info.pointer.child, js_parameter_count - params_to_map.len + 1);
-                    for (arr, last_js_parameter..) |*a, i| {
-                        a.* = try local.jsValueToZig(slice_type, info.getArg(@intCast(i), local));
-                    }
-                    @field(args, tupleFieldName(params_to_map.len + offset - 1)) = arr;
-                } else {
-                    @field(args, tupleFieldName(params_to_map.len + offset - 1)) = &.{};
-                }
-            }
-        }
-    }
-
-    inline for (params_to_map, 0..) |param_type, i| {
+    inline for (fixed_params, 0..) |param_type, i| {
         const field_index = comptime i + offset;
-        if (comptime i == params_to_map.len - 1) {
-            if (is_variadic) {
-                break;
-            }
-        }
-
         if (comptime isFrame(param_type.?)) {
             @compileError("Frame must be the last parameter: " ++ @typeName(F));
         } else if (comptime isPage(param_type.?)) {
             @compileError("Page must be the last parameter: " ++ @typeName(F));
         } else if (comptime isExecution(param_type.?)) {
             @compileError("Execution must be the last parameter: " ++ @typeName(F));
+        } else if (comptime isVariadic(param_type.?)) {
+            @compileError("Variadic must be the last JS parameter: " ++ @typeName(F));
         } else if (i >= js_parameter_count) {
             if (@typeInfo(param_type.?) != .optional) {
                 return error.InvalidArgument;
             }
             @field(args, tupleFieldName(field_index)) = null;
         } else {
-            const js_val = info.getArg(@intCast(i), local);
-            // Only fold errors we don't recognize into InvalidArgument; let
-            // domain-meaningful ones (e.g. InvalidCharacterError from a
-            // String.OneByte param) propagate so handleError can map them
-            // to the right DOMException. Compared by name because the per-
-            // type instantiation of jsValueToZig may not include such errors
-            // in its inferred error set.
-            @field(args, tupleFieldName(field_index)) = local.jsValueToZig(param_type.?, js_val) catch |err| {
-                if (err == error.JsException or err == error.ExecutionTerminated) {
-                    // an exception thrown by user code (e.g. a toString
-                    // getter), or the termination, is pending; propagate it
-                    // untouched
-                    return err;
-                }
-                const DOMException = @import("../webapi/DOMException.zig");
-                if (DOMException.fromError(err) != null) {
-                    return err;
-                }
-                return error.InvalidArgument;
-            };
+            @field(args, tupleFieldName(field_index)) = try argToZig(param_type.?, local, info.getArg(@intCast(i), local));
         }
     }
 
+    if (comptime isVariadic(LastJsParam)) {
+        const T = LastJsParam.js_variadic;
+        const first = fixed_params.len;
+        const values = try local.call_arena.alloc(T, js_parameter_count -| first);
+        for (values, first..) |*value, i| {
+            value.* = try argToZig(T, local, info.getArg(@intCast(i), local));
+        }
+        @field(args, tupleFieldName(first + offset)) = .{ .values = values };
+    }
+
     return args;
+}
+
+fn isVariadic(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct" and @hasDecl(T, "js_variadic");
 }

@@ -22,6 +22,7 @@ const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const EventTarget = @import("EventTarget.zig");
 const Frame = @import("../Frame.zig");
+const IdMap = @import("../IdMap.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
@@ -60,8 +61,7 @@ _clonable: bool,
 _serializable: bool,
 _declarative: bool,
 _available_to_internals: bool = false,
-_elements_by_id: std.StringHashMapUnmanaged(*Element) = .{},
-_removed_ids: std.StringHashMapUnmanaged(void) = .{},
+_ids: IdMap = .{},
 _adopted_style_sheets: ?js.Object.Global = null,
 
 pub fn init(host: *Element, opts: AttachOptions, frame: *Frame) !*ShadowRoot {
@@ -142,34 +142,11 @@ pub fn getActiveElement(self: *ShadowRoot, frame: *Frame) ?*Element {
     return candidate;
 }
 
-pub fn getElementById(self: *ShadowRoot, id: []const u8, frame: *Frame) ?*Element {
+pub fn getElementById(self: *ShadowRoot, id: []const u8) ?*Element {
     if (id.len == 0) {
         return null;
     }
-
-    // Fast path: ID is in the map
-    if (self._elements_by_id.get(id)) |element| {
-        return element;
-    }
-
-    // Slow path: ID was removed but might have duplicates
-    if (self._removed_ids.remove(id)) {
-        // Do a tree walk to find another element with this ID
-        var tw = @import("TreeWalker.zig").Full.Elements.init(self.asNode(), .{});
-        while (tw.next()) |el| {
-            const element_id = el.getId() orelse continue;
-            if (std.mem.eql(u8, element_id, id)) {
-                // we ignore this error to keep getElementById easy to call
-                // if it really failed, then we're out of memory and nothing's
-                // going to work like it should anyways.
-                const owned_id = frame.dupeString(id) catch return null;
-                self._elements_by_id.put(frame.page_arena, owned_id, el) catch return null;
-                return el;
-            }
-        }
-    }
-
-    return null;
+    return self._ids.get(self.asNode(), id);
 }
 
 fn getAdoptedStyleSheets(self: *ShadowRoot, frame: *Frame) !js.Object.Global {
@@ -202,15 +179,15 @@ pub const JsApi = struct {
     pub const clonable = bridge.accessor(ShadowRoot.getClonable, null, .{});
     pub const serializable = bridge.accessor(ShadowRoot.getSerializable, null, .{});
     pub const getElementById = bridge.function(_getElementById, .{});
-    fn _getElementById(self: *ShadowRoot, value_: ?js.Value, frame: *Frame) !?*Element {
+    fn _getElementById(self: *ShadowRoot, value_: ?js.Value) !?*Element {
         const value = value_ orelse return null;
         if (value.isNull()) {
-            return self.getElementById("null", frame);
+            return self.getElementById("null");
         }
         if (value.isUndefined()) {
-            return self.getElementById("undefined", frame);
+            return self.getElementById("undefined");
         }
-        return self.getElementById(try value.toZig([]const u8), frame);
+        return self.getElementById(try value.toZig([]const u8));
     }
     pub const adoptedStyleSheets = bridge.accessor(ShadowRoot.getAdoptedStyleSheets, ShadowRoot.setAdoptedStyleSheets, .{});
     pub const setHTML = bridge.function(ShadowRoot.setHTML, .{ .ce_reactions = true });

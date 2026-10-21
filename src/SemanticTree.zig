@@ -687,7 +687,7 @@ fn extractSelectOptions(node: *Node, frame: *Frame, arena: std.mem.Allocator) ![
 }
 
 fn extractDataListOptions(list_id: []const u8, frame: *Frame, arena: std.mem.Allocator) !?[]OptionData {
-    if (frame.document.getElementById(list_id, frame)) |referenced_el| {
+    if (frame.document.getElementById(list_id)) |referenced_el| {
         if (referenced_el.getTag() == .datalist) {
             return try extractSelectOptions(referenced_el.asNode(), frame, arena);
         }

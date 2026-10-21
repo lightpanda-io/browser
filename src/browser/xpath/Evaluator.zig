@@ -128,19 +128,12 @@ fn evalPath(self: *Evaluator, path: ast.Path, ctx: *Node) Error!result.Result {
 
 // Recognize the very common `//tag[@id='x']` and `.//tag[@id='x']`
 // shapes (and their wildcard `//*[@id='x']` variants) and serve them
-// directly from `frame.getElementByIdFromNode`. Accepts the literal on
-// either side of `=`.
+// directly from the id map when the id is unique in its tree scope.
+// Accepts the literal on either side of `=`.
 //
-// Mirrors the same tradeoff `webapi/selector/List.zig:optimizeSelector`
-// already makes for `querySelector(All)`: the id-map only stores the
-// first element per ID in document order, so duplicate IDs (invalid
-// HTML, but possible) yield one match here where a strict tree walk
-// would find all. Acceptable because Capybara/Selenium hot paths
-// assume unique IDs and CSS has shipped this compromise for years.
-//
-// Falls through to the general path for any deviation: extra steps,
-// extra predicates, non-eq predicate, non-literal RHS, or the
-// inability to resolve a search root.
+// Falls through to the general path for duplicate ids (invalid HTML, but
+// common) and for any deviation: extra steps, extra predicates, non-eq
+// predicate, non-literal RHS, or the inability to resolve a search root.
 fn tryIdLookupFastPath(self: *Evaluator, path: ast.Path, ctx: *Node) Error!?result.Result {
     // Two acceptable AST shapes:
     //   //tag[@id='x']   parses to:  ds::node() / child::tag[pred]
@@ -167,13 +160,15 @@ fn tryIdLookupFastPath(self: *Evaluator, path: ast.Path, ctx: *Node) Error!?resu
         break :blk owner.asNode();
     } else ctx;
 
-    const id_element = self.frame.getElementByIdFromNode(search_root, id_value) orelse {
-        return .{ .node_set = &.{} };
+    const id_element = switch (Frame.getUniqueElementByIdFromNode(search_root, id_value)) {
+        .none => return .{ .node_set = &.{} },
+        .one => |el| el,
+        .many => return null,
     };
     const id_node = id_element.asNode();
 
-    // Relative paths must filter to descendants of the context.
-    // getElementByIdFromNode is doc-wide.
+    // Relative paths must filter to descendants of the context. The id map
+    // covers the whole tree scope.
     if (search_root != id_node and !search_root.contains(id_node)) {
         return .{ .node_set = &.{} };
     }

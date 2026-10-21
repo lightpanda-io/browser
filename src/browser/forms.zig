@@ -161,9 +161,8 @@ pub fn collectForms(
 ) ![]FormInfo {
     var forms: std.ArrayList(FormInfo) = .empty;
 
-    var tw = TreeWalker.Full.init(root, .{});
-    while (tw.next()) |node| {
-        const form = node.is(Element.Html.Form) orelse continue;
+    var tw = TreeWalker.Full.ElementsOf(Element.Html.Form).init(root, .{});
+    while (tw.next()) |form| {
         const el = form.asElement();
 
         const fields = try collectFormFields(arena, form, frame);
@@ -173,7 +172,7 @@ pub fn collectForms(
         const method_str = form.getMethod();
 
         try forms.append(arena, .{
-            .node = node,
+            .node = el.asNode(),
             .action = if (action_attr) |a| if (a.len > 0) a else null else null,
             .method = method_str,
             .fields = fields,
@@ -259,13 +258,8 @@ fn collectSelectOptions(
     frame: *Frame,
 ) ![]SelectOption {
     var options: std.ArrayList(SelectOption) = .empty;
-    const Option = Element.Html.Option;
-
-    var tw = TreeWalker.Full.init(select_node, .{});
-    while (tw.next()) |node| {
-        const el = node.is(Element) orelse continue;
-        const option = el.is(Option) orelse continue;
-
+    var tw = TreeWalker.Full.ElementsOf(Element.Html.Option).init(select_node, .{});
+    while (tw.next()) |option| {
         try options.append(arena, .{
             .value = option.getValue(frame),
             .text = option.getText(frame),

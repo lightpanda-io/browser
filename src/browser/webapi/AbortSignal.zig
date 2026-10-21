@@ -191,12 +191,7 @@ fn createAborted(reason_: ?js.Value, exec: *const Execution) !*AbortSignal {
     return signal;
 }
 
-fn createAny(signals_value: js.Value, exec: *const Execution) !*AbortSignal {
-    // The parameter isn't optional. If we declared it as a slice directy, the
-    // bridge would treat it as a variadic and map it to empty rather than throwing
-    // a TypeError as it should.
-    const signals = try signals_value.toZig([]const *AbortSignal);
-
+fn createAny(signals: []const *AbortSignal, exec: *const Execution) !*AbortSignal {
     const result = try init(exec);
     for (signals) |source| {
         if (source._aborted) {

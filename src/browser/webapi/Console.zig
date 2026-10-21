@@ -31,7 +31,7 @@ _counts: std.StringHashMapUnmanaged(u64) = .{},
 
 pub const init: Console = .{};
 
-fn dispatchConsoleMessage(values: []js.Value, console_type: Notification.ConsoleMessageType, exec: *js.Execution) void {
+fn dispatchConsoleMessage(values: []const js.Value, console_type: Notification.ConsoleMessageType, exec: *js.Execution) void {
     const notification = exec.session.notification;
     const ts = lp.datetime.timestamp(.boot);
     const local = exec.js.local.?;
@@ -53,49 +53,49 @@ fn dispatchConsoleMessage(values: []js.Value, console_type: Notification.Console
     });
 }
 
-pub fn trace(values: []js.Value, exec: *js.Execution) !void {
+pub fn trace(args: js.Variadic(js.Value), exec: *js.Execution) !void {
     logger.debug(.js, "console.trace", .{
         .stack = exec.js.local.?.stackTrace() catch "???",
-        .args = ValueWriter{ .values = values },
+        .args = ValueWriter{ .values = args.values },
     });
-    dispatchConsoleMessage(values, .trace, exec);
+    dispatchConsoleMessage(args.values, .trace, exec);
 }
 
-pub fn debug(values: []js.Value, exec: *js.Execution) void {
-    logger.debug(.js, "console.debug", .{ValueWriter{ .values = values }});
-    dispatchConsoleMessage(values, .debug, exec);
+pub fn debug(args: js.Variadic(js.Value), exec: *js.Execution) void {
+    logger.debug(.js, "console.debug", .{ValueWriter{ .values = args.values }});
+    dispatchConsoleMessage(args.values, .debug, exec);
 }
 
-pub fn info(values: []js.Value, exec: *js.Execution) void {
-    logger.info(.js, "console.info", .{ValueWriter{ .values = values }});
-    dispatchConsoleMessage(values, .info, exec);
+pub fn info(args: js.Variadic(js.Value), exec: *js.Execution) void {
+    logger.info(.js, "console.info", .{ValueWriter{ .values = args.values }});
+    dispatchConsoleMessage(args.values, .info, exec);
 }
 
-pub fn log(values: []js.Value, exec: *js.Execution) void {
-    logger.info(.js, "console.log", .{ValueWriter{ .values = values }});
-    dispatchConsoleMessage(values, .log, exec);
+pub fn log(args: js.Variadic(js.Value), exec: *js.Execution) void {
+    logger.info(.js, "console.log", .{ValueWriter{ .values = args.values }});
+    dispatchConsoleMessage(args.values, .log, exec);
 }
 
-pub fn warn(values: []js.Value, exec: *js.Execution) void {
-    logger.warn(.js, "console.warn", .{ValueWriter{ .values = values }});
-    dispatchConsoleMessage(values, .warning, exec);
+pub fn warn(args: js.Variadic(js.Value), exec: *js.Execution) void {
+    logger.warn(.js, "console.warn", .{ValueWriter{ .values = args.values }});
+    dispatchConsoleMessage(args.values, .warning, exec);
 }
 
 pub fn clear() void {}
 
-pub fn assert(assertion_: ?js.Value, values: []js.Value, exec: *js.Execution) void {
+pub fn assert(assertion_: ?js.Value, args: js.Variadic(js.Value), exec: *js.Execution) void {
     if (assertion_) |assertion| {
         if (assertion.toBool()) {
             return;
         }
     }
-    logger.warn(.js, "console.assert", .{ValueWriter{ .values = values }});
-    dispatchConsoleMessage(values, .warning, exec);
+    logger.warn(.js, "console.assert", .{ValueWriter{ .values = args.values }});
+    dispatchConsoleMessage(args.values, .warning, exec);
 }
 
-pub fn @"error"(values: []js.Value, exec: *js.Execution) void {
-    logger.warn(.js, "console.error", .{ValueWriter{ .values = values, .stack = exec.js.local.?.stackTrace() catch |err| @errorName(err) orelse "???" }});
-    dispatchConsoleMessage(values, .@"error", exec);
+pub fn @"error"(args: js.Variadic(js.Value), exec: *js.Execution) void {
+    logger.warn(.js, "console.error", .{ValueWriter{ .values = args.values, .stack = exec.js.local.?.stackTrace() catch |err| @errorName(err) orelse "???" }});
+    dispatchConsoleMessage(args.values, .@"error", exec);
 }
 
 pub fn table(data: ?js.Value, columns: ?js.Value) void {
@@ -104,7 +104,7 @@ pub fn table(data: ?js.Value, columns: ?js.Value) void {
 
 pub fn dir(item_: ?js.Value, _: ?js.Value, exec: *js.Execution) void {
     var buf: [1]js.Value = undefined;
-    const values: []js.Value = if (item_) |item| blk: {
+    const values: []const js.Value = if (item_) |item| blk: {
         buf[0] = item;
         break :blk buf[0..1];
     } else buf[0..0];
@@ -112,9 +112,9 @@ pub fn dir(item_: ?js.Value, _: ?js.Value, exec: *js.Execution) void {
     dispatchConsoleMessage(values, .dir, exec);
 }
 
-pub fn dirxml(values: []js.Value, exec: *js.Execution) void {
-    logger.info(.js, "console.dirxml", .{ValueWriter{ .values = values }});
-    dispatchConsoleMessage(values, .dirxml, exec);
+pub fn dirxml(args: js.Variadic(js.Value), exec: *js.Execution) void {
+    logger.info(.js, "console.dirxml", .{ValueWriter{ .values = args.values }});
+    dispatchConsoleMessage(args.values, .dirxml, exec);
 }
 
 pub fn count(label_: ?[]const u8, exec: *js.Execution) !void {
@@ -181,17 +181,17 @@ pub fn timeEnd(label_: ?[]const u8, exec: *js.Execution) void {
     logger.info(.js, "console.timeEnd", .{ .label = label, .elapsed = elapsed - kv.value });
 }
 
-pub fn group(values: []js.Value) void {
-    logger.info(.js, "console.group", .{ValueWriter{ .values = values }});
+pub fn group(args: js.Variadic(js.Value)) void {
+    logger.info(.js, "console.group", .{ValueWriter{ .values = args.values }});
 }
 
-pub fn groupCollapsed(values: []js.Value) void {
-    logger.info(.js, "console.groupCollapsed", .{ValueWriter{ .values = values }});
+pub fn groupCollapsed(args: js.Variadic(js.Value)) void {
+    logger.info(.js, "console.groupCollapsed", .{ValueWriter{ .values = args.values }});
 }
 
 fn groupEnd() void {}
 const ValueWriter = struct {
-    values: []js.Value,
+    values: []const js.Value,
     stack: ?[]const u8 = null,
 
     pub fn format(self: ValueWriter, writer: *std.Io.Writer) !void {
@@ -219,7 +219,7 @@ const ValueWriter = struct {
         return writer.endArray();
     }
 
-    fn valuesToLog(self: ValueWriter) []js.Value {
+    fn valuesToLog(self: ValueWriter) []const js.Value {
         if (lp.build_config.wpt_extensions) {
             // A few WPT tests print HUGE arrays, it's at best, annoying when
             // running it locally

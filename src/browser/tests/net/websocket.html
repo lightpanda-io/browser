@@ -875,3 +875,13 @@
   });
 }
 </script>
+
+<script id=protocols>
+{
+  // `optional (DOMString or sequence<DOMString>) protocols`
+  testing.expectError('SyntaxError', () => new WebSocket('ws://127.0.0.1:9584/', 'a b'));
+  testing.expectError('SyntaxError', () => new WebSocket('ws://127.0.0.1:9584/', ['ok', 'a b']));
+  testing.expectError('SyntaxError', () => new WebSocket('ws://127.0.0.1:9584/', new Set(['a b'])));
+  testing.expectEqual(1, WebSocket.length);
+}
+</script>

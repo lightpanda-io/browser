@@ -94,7 +94,7 @@ pub fn formStateChanged(self: *Custom, frame: *Frame) void {
     }
     const element = self.asElement();
 
-    const owner = Form.ownerOf(element, frame);
+    const owner = Form.ownerOf(element);
     if (owner != self._form_owner) {
         // new owner
         self._form_owner = owner;
@@ -176,11 +176,9 @@ pub fn formAttributeChanged(element: *Element, name: String, frame: *Frame) void
 }
 
 fn formStateChangedInSubtree(root: *Node, frame: *Frame) void {
-    var tw = TreeWalker.FullExcludeSelf.Elements.init(root, .{});
-    while (tw.next()) |el| {
-        if (el.is(Custom)) |custom| {
-            custom.formStateChanged(frame);
-        }
+    var tw = TreeWalker.FullExcludeSelf.ElementsOf(Custom).init(root, .{});
+    while (tw.next()) |custom| {
+        custom.formStateChanged(frame);
     }
 }
 

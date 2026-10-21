@@ -44,8 +44,8 @@ pub fn getAtIndex(self: *HTMLAllCollection, index: usize, frame: *const Frame) ?
     return self._nodes.getAtIndex(index, frame);
 }
 
-pub fn getByName(self: *HTMLAllCollection, name: []const u8, frame: *Frame) ?*Element {
-    if (frame.getElementByIdFromNode(self._nodes._tw._root, name)) |el| {
+pub fn getByName(self: *HTMLAllCollection, name: []const u8) ?*Element {
+    if (Frame.getElementByIdFromNode(self._nodes._tw._root, name)) |el| {
         return el;
     }
 
@@ -88,7 +88,7 @@ const CAllAsFunctionArg = union(enum) {
 pub fn callable(self: *HTMLAllCollection, arg: CAllAsFunctionArg, frame: *Frame) ?*Element {
     return switch (arg) {
         .index => |i| self.getAtIndex(i, frame),
-        .id => |id| self.getByName(id, frame),
+        .id => |id| self.getByName(id),
     };
 }
 
@@ -125,8 +125,8 @@ pub const JsApi = struct {
     pub const length = bridge.accessor(HTMLAllCollection.length, null, .{});
     pub const @"[int]" = bridge.indexed(HTMLAllCollection.getAtIndex, null, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(HTMLAllCollection.getByName, null, null, null, struct {
-        fn wrap(self: *HTMLAllCollection, name: []const u8, frame: *Frame) !u32 {
-            if (self.getByName(name, frame) != null) {
+        fn wrap(self: *HTMLAllCollection, name: []const u8) !u32 {
+            if (self.getByName(name) != null) {
                 // Named properties are [LegacyUnenumerableNamedProperties]
                 return js.v8.DontEnum;
             }

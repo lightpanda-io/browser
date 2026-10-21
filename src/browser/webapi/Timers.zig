@@ -82,7 +82,7 @@ pub const Mode = enum {
 
 const ScheduleOpts = struct {
     repeat: bool,
-    params: []js.Value.Global,
+    params: []const js.Value.Global,
     name: []const u8,
     blocks_done: bool = true,
     mode: Mode = .normal,

@@ -712,6 +712,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     try self.applyResponseHeaders(transfer.responseHeaders());
 
     self._response_status = transfer.responseStatus().?;
+    self._exec.page.status.noteResponse(.xhr, transfer);
     if (transfer.statusText()) |st| {
         self._response_status_text = try self._arena.dupe(u8, st);
     }
@@ -777,6 +778,9 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
+    if (self._response_status == 0) {
+        self._exec.page.status.noteError(.xhr, err);
+    }
     // handleError can execute JS, which could .send() again: clear this now.
     self._http_transfer = null;
     self.handleError(err);

@@ -42,7 +42,7 @@ pub fn asNode(self: *Label) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getControl(self: *Label, frame: *Frame) ?*Element {
+pub fn getControl(self: *Label) ?*Element {
     if (self.asElement().getAttributeInterned("for")) |id| {
         // Like Chrome: `for` only resolves in a document or shadow tree, so a
         // detached label has no control by id.
@@ -50,7 +50,7 @@ pub fn getControl(self: *Label, frame: *Frame) ?*Element {
         if (!node.isConnected() and !node.isInShadowTree()) {
             return null;
         }
-        const el = frame.getElementByIdFromNode(node, id) orelse return null;
+        const el = Frame.getElementByIdFromNode(node, id) orelse return null;
         if (!isLabelable(el)) {
             return null;
         }
@@ -128,18 +128,17 @@ pub fn getControlLabels(control: *Element, frame: *Frame) !js.Array {
     // Only an id can pull in a `for` label from elsewhere in the tree, and only
     // if this control is the first element with it. Then walk the whole tree.
     const by_id = if (control.getId()) |id|
-        id.len > 0 and frame.getElementByIdFromNode(root, id) == control
+        id.len > 0 and Frame.getElementByIdFromNode(root, id) == control
     else
         false;
 
     if (by_id) {
-        var it = TreeWalker.Full.Elements.init(root, .{});
-        while (it.next()) |el| {
-            const label = el.is(Label) orelse continue;
-            if (label.getControl(frame) != control) {
+        var it = TreeWalker.Full.ElementsOf(Label).init(root, .{});
+        while (it.next()) |label| {
+            if (label.getControl() != control) {
                 continue;
             }
-            _ = try arr.set(idx, el, .{});
+            _ = try arr.set(idx, label.asElement(), .{});
             idx += 1;
         }
         return arr;
@@ -151,7 +150,7 @@ pub fn getControlLabels(control: *Element, frame: *Frame) !js.Array {
     var current: ?*Node = node._parent;
     while (current) |n| : (current = n._parent) {
         const label = n.is(Label) orelse continue;
-        if (label.getControl(frame) == control) {
+        if (label.getControl() == control) {
             count += 1;
         }
     }
@@ -160,7 +159,7 @@ pub fn getControlLabels(control: *Element, frame: *Frame) !js.Array {
     current = node._parent;
     while (current) |n| : (current = n._parent) {
         const label = n.is(Label) orelse continue;
-        if (label.getControl(frame) != control) {
+        if (label.getControl() != control) {
             continue;
         }
         idx -= 1;

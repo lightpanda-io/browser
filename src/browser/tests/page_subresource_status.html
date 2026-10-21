@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<body>
+    <!-- Fixture for PageStatus.failed/blocked/resource_challenge. -->
+    <script src="/404.js"></script>
+    <script>
+        fetch('/status/403');
+        fetch('/challenge/vercel');
+        fetch('/status/204');
+        fetch('http://127.0.0.1:1/unreachable').catch(() => {});
+
+        const aborted = new AbortController();
+        fetch('/xhr/slow', { signal: aborted.signal }).catch(() => {});
+        aborted.abort();
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('GET', '/xhr/500');
+        xhr.send();
+    </script>
+</body>
+</html>

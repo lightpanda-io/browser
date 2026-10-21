@@ -758,7 +758,7 @@ const ActivationState = struct {
 
         // For radio buttons, find the currently checked radio in the group
         if (input._input_type == .radio and !old_checked) {
-            previously_checked_radio = try findCheckedRadioInGroup(input, frame);
+            previously_checked_radio = try findCheckedRadioInGroup(input);
         }
 
         // Toggle checkbox or check radio (which unchecks others in group)
@@ -802,7 +802,7 @@ const ActivationState = struct {
         }
     }
 
-    fn findCheckedRadioInGroup(input: *Input, frame: *Frame) !?*Input {
+    fn findCheckedRadioInGroup(input: *Input) !?*Input {
         const elem = input.asElement();
 
         const name = elem.getName() orelse return null;
@@ -810,19 +810,16 @@ const ActivationState = struct {
             return null;
         }
 
-        const form = input.getForm(frame);
+        const form = input.getForm();
 
         // Walk from the root of the tree containing this element
         // This handles both document-attached and orphaned elements
         const root = elem.asNode().getRootNode(.{});
 
         const TreeWalker = @import("webapi/TreeWalker.zig");
-        var walker = TreeWalker.Full.init(root, .{});
+        var walker = TreeWalker.Full.ElementsOf(Input).init(root, .{});
 
-        while (walker.next()) |node| {
-            const other_element = node.is(Element) orelse continue;
-            const other_input = other_element.is(Input) orelse continue;
-
+        while (walker.next()) |other_input| {
             if (other_input._input_type != .radio) {
                 continue;
             }
@@ -832,13 +829,13 @@ const ActivationState = struct {
                 continue;
             }
 
-            const other_name = other_element.getName() orelse continue;
+            const other_name = other_input.asElement().getName() orelse continue;
             if (!std.mem.eql(u8, name, other_name)) {
                 continue;
             }
 
             // Check if same form context
-            const other_form = other_input.getForm(frame);
+            const other_form = other_input.getForm();
             if (form) |f| {
                 const of = other_form orelse continue;
                 if (f != of) {

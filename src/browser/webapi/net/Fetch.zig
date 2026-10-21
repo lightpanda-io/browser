@@ -214,6 +214,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     const is_opaque = self._no_cors and transfer.client.obey_cors and transfer._cors_cross_origin;
 
     const status = transfer.responseStatus().?;
+    self._exec.page.status.noteResponse(.fetch, transfer);
     if (is_opaque or Response.isNullBodyStatus(status) or (self._manual_redirect and HttpClient.isRedirectStatus(status))) {
         self._null_body = true;
     }
@@ -348,6 +349,10 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
         .status = self._response._status,
         .err = err,
     });
+
+    if (self._headers_done == false) {
+        self._exec.page.status.noteError(.fetch, err);
+    }
 
     var response = self._response;
     response._http_transfer = null;

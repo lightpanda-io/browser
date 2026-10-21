@@ -1186,12 +1186,12 @@ pub fn getDataset(self: *Element, frame: *Frame) !*DOMStringMap {
     return gop.value_ptr.*;
 }
 
-pub fn replaceChildren(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    return self.asNode().replaceChildren(nodes, frame);
+pub fn replaceChildren(self: *Element, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
+    return self.asNode().replaceChildren(nodes.values, frame);
 }
 
-pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    return self.asNode().replaceWithNodes(nodes, frame);
+pub fn replaceWith(self: *Element, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
+    return self.asNode().replaceWithNodes(nodes.values, frame);
 }
 
 pub fn remove(self: *Element, frame: *Frame) void {
@@ -1395,34 +1395,34 @@ pub fn getChildren(self: *Element, frame: *Frame) !collections.NodeLive(.child_e
     return collections.NodeLive(.child_elements).init(self.asNode(), {}, frame);
 }
 
-pub fn append(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    return self.asNode().appendNodes(nodes, frame);
+pub fn append(self: *Element, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
+    return self.asNode().appendNodes(nodes.values, frame);
 }
 
-pub fn prepend(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    return self.asNode().prependNodes(nodes, frame);
+pub fn prepend(self: *Element, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
+    return self.asNode().prependNodes(nodes.values, frame);
 }
 
 pub fn moveBefore(self: *Element, node: js.Value, child: js.Value, frame: *Frame) !void {
     return self.asNode().moveBefore(node, child, frame);
 }
 
-pub fn before(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
+pub fn before(self: *Element, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
 
-    for (nodes) |node_or_text| {
+    for (nodes.values) |node_or_text| {
         const child = try node_or_text.toNode(self.getDocument(frame));
         _ = try parent.insertBefore(child, node, frame);
     }
 }
 
-pub fn after(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
+pub fn after(self: *Element, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
-    const viable_next = Node.NodeOrText.viableNextSibling(node, nodes);
+    const viable_next = Node.NodeOrText.viableNextSibling(node, nodes.values);
 
-    for (nodes) |node_or_text| {
+    for (nodes.values) |node_or_text| {
         const child = try node_or_text.toNode(self.getDocument(frame));
         _ = try parent.insertBefore(child, viable_next, frame);
     }

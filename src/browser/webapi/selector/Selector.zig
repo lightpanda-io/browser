@@ -451,17 +451,22 @@ pub fn query(selectors: []const Selector, root: *Node, frame: *Frame) !?*Node.El
     defer nth.deinit();
 
     for (selectors) |selector| {
-        // Fast path: single compound with only an ID selector
+        // Fast path: single compound with only an ID selector. With
+        // duplicate ids, the general walk below finds the first one under root.
         if (selector.segments.len == 0 and selector.first.parts.len == 1) {
             const first = selector.first.parts[0];
             if (first == .id) {
-                const el = frame.getElementByIdFromNode(root, first.id) orelse continue;
-                // Check if the element is within the root subtree
-                const node = el.asNode();
-                if (node != root and root.contains(node)) {
-                    return el;
+                switch (Frame.getUniqueElementByIdFromNode(root, first.id)) {
+                    .none => continue,
+                    .one => |el| {
+                        const node = el.asNode();
+                        if (node != root and root.contains(node)) {
+                            return el;
+                        }
+                        continue;
+                    },
+                    .many => {},
                 }
-                continue;
             }
         }
 

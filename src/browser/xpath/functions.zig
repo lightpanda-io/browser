@@ -135,7 +135,7 @@ fn idFn(arena: Allocator, args: []const result.Result, ctx: *Node, frame: *Frame
     var seen: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
     var it = std.mem.tokenizeAny(u8, id_str, &std.ascii.whitespace);
     while (it.next()) |tok| {
-        if (doc.getElementById(tok, frame)) |el| {
+        if (doc.getElementById(tok)) |el| {
             try seen.put(arena, el.asNode(), {});
         }
     }

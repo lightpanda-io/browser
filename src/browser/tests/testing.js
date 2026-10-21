@@ -19,6 +19,13 @@
     reported_errors.push({event: e, script_id: _currentScriptId()});
   });
 
+  // Same for a rejection nothing handled: a test that expects one cancels its
+  // unhandledrejection event.
+  let unhandled_rejections = [];
+  window.addEventListener('unhandledrejection', (e) => {
+    unhandled_rejections.push({event: e, script_id: _currentScriptId()});
+  });
+
   // Runs fn, cancelling the errors it reports to window, and returns them.
   function withReportedErrors(fn) {
     const errors = [];
@@ -140,6 +147,12 @@
     for (let {event, script_id} of reported_errors) {
       if (event.defaultPrevented === false) {
         throw new Error(`script id: '${script_id}' uncaught error: ${event.message}`);
+      }
+    }
+
+    for (let {event, script_id} of unhandled_rejections) {
+      if (event.defaultPrevented === false) {
+        throw new Error(`script id: '${script_id}' unhandled rejection: ${event.reason}`);
       }
     }
 
