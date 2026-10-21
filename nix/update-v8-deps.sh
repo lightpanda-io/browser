@@ -10,7 +10,6 @@ V8_VERSION=$(awk -F\' '/^  v8:/{f=1} f&&/default:/{print $2; exit}' "$ACTION")
 ZIG_V8_TAG=$(awk -F\' '/^  zig-v8:/{f=1} f&&/default:/{print $2; exit}' "$ACTION")
 
 declare -A PLATFORMS=(
-  [aarch64-darwin]=macos_aarch64
   [aarch64-linux]=linux_aarch64
   [x86_64-linux]=linux_x86_64
 )

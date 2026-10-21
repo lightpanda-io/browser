@@ -1,8 +1,8 @@
 name: nix-build
 
 # Builds .#lightpanda natively on every supported platform, every night or
-# on demand from the Actions tab. Not run on PRs: the macOS runners are
-# slow/costly, and most changes don't touch anything platform-specific.
+# on demand from the Actions tab. Not run on PRs: most changes don't touch
+# anything platform-specific.
 
 on:
   schedule:
@@ -27,8 +27,6 @@ jobs:
             system: x86_64-linux
           - os: ubuntu-24.04-arm
             system: aarch64-linux
-          - os: macos-latest
-            system: aarch64-darwin
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
