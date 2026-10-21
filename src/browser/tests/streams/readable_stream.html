@@ -451,6 +451,43 @@
   });
 </script>
 
+<script id=readable_stream_start_throws>
+  {
+    const e = new Error('boom');
+    let caught;
+    try {
+      new ReadableStream({ start() { throw e; } });
+    } catch (x) {
+      caught = x;
+    }
+    testing.expectEqual(e, caught);
+  }
+</script>
+
+<script id=response_text_rejects_with_stream_error type=module>
+  const state = await testing.async();
+
+  const errored = new Error('errored');
+  const pulled = new Error('pulled');
+  let r1, r2;
+  try {
+    await new Response(new ReadableStream({ start(c) { c.error(errored); } })).text();
+  } catch (x) {
+    r1 = x;
+  }
+  try {
+    await new Response(new ReadableStream({ pull() { throw pulled; } })).text();
+  } catch (x) {
+    r2 = x;
+  }
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(errored, r1);
+    testing.expectEqual(pulled, r2);
+  });
+</script>
+
 <script id=stored_error type=module>
   const state = await testing.async();
 
