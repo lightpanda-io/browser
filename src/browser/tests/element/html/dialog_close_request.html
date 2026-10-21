@@ -2,11 +2,13 @@
 <body>
 <dialog id="a">a</dialog>
 <dialog id="b">b</dialog>
+<iframe id="f" srcdoc="<!DOCTYPE html><dialog id=c>c</dialog>"></iframe>
 <script>
   // Driven by the "HTML.Dialog close request" test in Dialog.zig, which
   // presses a trusted Escape between steps.
   window.A = document.getElementById('a');
   window.B = document.getElementById('b');
+  window.C = () => document.getElementById('f').contentDocument.getElementById('c');
   window.log = [];
   window.preventCancel = false;
   window.preventKeydown = false;

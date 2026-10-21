@@ -62,9 +62,11 @@ pub fn show(self: *Dialog, frame: *Frame) !void {
 fn showModal(self: *Dialog, frame: *Frame) !void {
     if (self.getOpen()) return error.InvalidStateError;
     try self.asElement().setAttributeSafe(comptime .wrap("open"), .wrap(""), frame);
-    // Only a connected dialog joins its document's top layer.
-    if (self.asNode().isConnected()) {
-        try frame.document._modal_dialogs.append(frame.page_arena, self.asElement());
+    // Only a connected dialog joins its document's top layer. That's the
+    // dialog's own document, which isn't the caller's for a cross-frame call.
+    const node = self.asNode();
+    if (node.isConnected()) {
+        try node.getDocument(frame)._modal_dialogs.append(frame.page_arena, self);
     }
 }
 
@@ -76,21 +78,21 @@ fn showModal(self: *Dialog, frame: *Frame) !void {
 pub fn requestCloseTopModal(frame: *Frame) !void {
     const stack = frame.document._modal_dialogs.items;
     if (stack.len == 0) return;
-    const el = stack[stack.len - 1];
-    const dialog = el.is(Dialog) orelse return;
+    const dialog = stack[stack.len - 1];
 
     const event = try Event.init("cancel", .{ .bubbles = false, .cancelable = true }, frame.page);
-    if (try frame._event_manager.dispatchCancelable(el.asEventTarget(), event)) {
+    if (try frame._event_manager.dispatchCancelable(dialog.asElement().asEventTarget(), event)) {
         return;
     }
     // A cancel listener may already have closed it; close() is then a no-op.
     try dialog.close(null, frame);
 }
 
-fn removeModal(el: *Element, frame: *Frame) void {
-    const list = &frame.document._modal_dialogs;
+fn removeModal(element: *Element, frame: *Frame) void {
+    const dialog = element.is(Dialog) orelse return;
+    const list = &element.asNode().getDocument(frame)._modal_dialogs;
     for (list.items, 0..) |item, i| {
-        if (item == el) {
+        if (item == dialog) {
             _ = list.orderedRemove(i);
             return;
         }
@@ -152,8 +154,6 @@ test "WebApi: HTML.Dialog" {
 }
 
 test "WebApi: HTML.Dialog close request" {
-    const keyboard = @import("../../../frame/keyboard.zig");
-
     const page = try testing.pageTest("element/html/dialog_close_request.html", .{});
     defer page.close();
     const frame = page.frame().?;
@@ -183,15 +183,29 @@ test "WebApi: HTML.Dialog close request" {
         // With no modal dialog, Escape does nothing.
         .{ "reset()", true, "a:false b:false rv:| log:" },
     };
-    const escape = keyboard.named("Escape");
     for (steps) |step| {
         const script, const press, const expected = step;
         _ = try ls.local.compileAndRun(script, null);
         if (press) {
-            try keyboard.dispatch(frame, null, .down, &escape, &.{});
-            try keyboard.dispatch(frame, null, .up, &escape, &.{});
+            try pressEscape(frame);
         }
         const actual = try (try ls.local.compileAndRun("state()", null)).toStringSliceWithAlloc(testing.arena_allocator);
         try testing.expectString(expected, actual);
     }
+
+    // A dialog shown from another frame is modal in its own document, so only
+    // an Escape pressed in that document closes it.
+    const child = frame.child_frames.items[0];
+    _ = try ls.local.compileAndRun("C().showModal()", null);
+    try pressEscape(frame);
+    try testing.expectEqual(true, (try ls.local.compileAndRun("C().open", null)).toBool());
+    try pressEscape(child);
+    try testing.expectEqual(false, (try ls.local.compileAndRun("C().open", null)).toBool());
+}
+
+fn pressEscape(frame: *Frame) !void {
+    const keyboard = @import("../../../frame/keyboard.zig");
+    const escape = keyboard.named("Escape");
+    try keyboard.dispatch(frame, null, .down, &escape, &.{});
+    try keyboard.dispatch(frame, null, .up, &escape, &.{});
 }

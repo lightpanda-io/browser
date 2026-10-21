@@ -102,7 +102,7 @@ _extent: ?struct {
 _open_popovers: std.ArrayList(*Element) = .empty,
 // Ordered stack of dialogs opened with showModal(), topmost last. Stands in
 // for the top layer and the close watchers those dialogs establish.
-_modal_dialogs: std.ArrayList(*Element) = .empty,
+_modal_dialogs: std.ArrayList(*Element.Html.Dialog) = .empty,
 
 // https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#throw-on-dynamic-markup-insertion-counter
 // Incremented during custom element reactions when parsing. When > 0,
