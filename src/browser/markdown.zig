@@ -52,6 +52,7 @@ const State = struct {
     list_depth: usize = 0,
     list_stack: [32]ListState = undefined,
     pre_node: ?*Node = null,
+    in_code: bool = false,
     in_table: bool = false,
     table_row_index: usize = 0,
     table_col_count: usize = 0,
@@ -92,6 +93,16 @@ fn classLanguage(el: *Element) ?[]const u8 {
     return null;
 }
 
+fn longestBacktickRun(text: []const u8) usize {
+    var longest: usize = 0;
+    var run: usize = 0;
+    for (text) |c| {
+        run = if (c == '`') run + 1 else 0;
+        longest = @max(longest, run);
+    }
+    return longest;
+}
+
 // Iterative else large trees will stackoverflow
 const Context = struct {
     state: State,
@@ -114,6 +125,8 @@ const Context = struct {
         element: Element.Tag,
         block_anchor: struct { href: []const u8, label: ?[]const u8 },
         inline_anchor: struct { href: []const u8, standalone: bool },
+        // The length of the backtick fence around an inline code span.
+        inline_code: usize,
     };
 
     fn deinit(self: *Context) void {
@@ -242,10 +255,21 @@ const Context = struct {
                 self.state.last_char_was_newline = true;
             },
             .code => {
-                if (self.state.pre_node == null) {
-                    try self.writer.writeByte('`');
-                    self.state.last_char_was_newline = false;
+                if (self.state.pre_node != null or self.state.in_code) {
+                    return self.open(.init(self.tree.content(el, boxed)), .none);
                 }
+                // Backslash escapes are literal inside a code span, so its
+                // text is written as-is. The fence has to be longer than any
+                // run of backticks in the text, and is padded with a space
+                // (stripped by the reader) so a leading or trailing backtick
+                // doesn't merge with it.
+                const text = try el.asNode().getTextContentAlloc(self.frame.call_arena);
+                const ticks = longestBacktickRun(text) + 1;
+                try self.writer.splatByteAll('`', ticks);
+                if (ticks > 1) try self.writer.writeByte(' ');
+                self.state.in_code = true;
+                self.state.last_char_was_newline = false;
+                return self.open(.init(self.tree.content(el, boxed)), .{ .inline_code = ticks });
             },
             .b, .strong => {
                 try self.writer.writeAll("**");
@@ -369,6 +393,13 @@ const Context = struct {
                 }
                 return;
             },
+            .inline_code => |ticks| {
+                if (ticks > 1) try self.writer.writeByte(' ');
+                try self.writer.splatByteAll('`', ticks);
+                self.state.in_code = false;
+                self.state.last_char_was_newline = false;
+                return;
+            },
         };
 
         switch (tag) {
@@ -376,12 +407,6 @@ const Context = struct {
                 try self.ensureNewline();
                 try self.writer.writeAll("```\n");
                 self.state.pre_node = null;
-            },
-            .code => {
-                if (self.state.pre_node == null) {
-                    try self.writer.writeByte('`');
-                    self.state.last_char_was_newline = false;
-                }
             },
             .b, .strong => {
                 try self.writer.writeAll("**");
@@ -452,7 +477,11 @@ const Context = struct {
                 try self.writer.writeByte(' ');
             }
 
-            try self.escape(word);
+            if (self.state.in_code) {
+                try self.writer.writeAll(word);
+            } else {
+                try self.escape(word);
+            }
             self.state.last_char_was_newline = false;
             first = false;
         }
@@ -723,6 +752,19 @@ test "browser.markdown: code" {
         \\line 1
         \\line 2
         \\```
+        \\
+    );
+}
+
+test "browser.markdown: inline code" {
+    try testMarkdownHTML("<p>Set <code>max_retries</code> to <code>2*n</code></p>",
+        \\
+        \\Set `max_retries` to `2*n`
+        \\
+    );
+    try testMarkdownHTML("<p><code>a`b</code> and <code>``x``</code></p>",
+        \\
+        \\`` a`b `` and ``` ``x`` ```
         \\
     );
 }
