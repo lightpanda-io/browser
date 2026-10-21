@@ -91,8 +91,8 @@ pub fn saveToFile(jar: *Cookie.Jar, path: []const u8) void {
 fn _saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
     jar.removeExpired(null);
 
-    // temp+rename: `serve` saves once per CDP connection, so several
-    // connections may write the same jar; a reader never sees a torn file.
+    // Concurrent serve connections may save the same path: the last rename
+    // wins, but no reader sees a torn file.
     var af = try std.Io.Dir.cwd().createFileAtomic(lp.io, path, .{ .replace = true });
     defer af.deinit(lp.io);
 

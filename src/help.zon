@@ -47,10 +47,8 @@
     \\          detected from the file's contents.
     \\          Defaults to no cookie loading.
     \\  --cookie-jar <PATH>
-    \\          Path to a JSON file to save cookies to (write-only). Written when
-    \\          a CDP browser context is disposed: on disconnect, on
-    \\          Target.disposeBrowserContext and on shutdown. Pass the same path
-    \\          to --cookie to keep logins across restarts.
+    \\          Path to a JSON file to save cookies to when a CDP browser context
+    \\          closes (write-only). With several clients, the last to close wins.
     \\          Defaults to no cookie saving.
     \\  --disable-metrics
     \\          Disables the /metrics endpoint (Prometheus text format).

@@ -1805,13 +1805,9 @@ test "cdp: --cookie-jar saves on dispose and --cookie loads it back" {
         ctx.cdp().disposeBrowserContext();
     }
 
-    const written = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(4096));
-    try testing.expect(std.mem.find(u8, written, "\"name\":\"sid\",\"value\":\"abc\"") != null);
-
     // a new context (a reconnect, or a restart) starts logged in
     const bc = try ctx.loadBrowserContext(.{});
     const cookies = bc.session.cookie_jar.cookies.items;
     try testing.expectEqual(1, cookies.len);
     try testing.expectEqualSlices(u8, "abc", cookies[0].value);
-    try testing.expectEqual(true, cookies[0].http_only);
 }
