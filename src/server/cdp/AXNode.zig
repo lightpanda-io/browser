@@ -319,7 +319,7 @@ pub const Writer = struct {
         value: AXValue,
     };
 
-    const AriaState = enum { true, false, mixed };
+    pub const AriaState = enum { true, false, mixed };
 
     fn parseAriaState(value: []const u8) ?AriaState {
         inline for (comptime std.meta.tags(AriaState)) |state| {
@@ -358,6 +358,33 @@ pub const Writer = struct {
             .{ "treeitem", RoleStates{ .expanded = true } },
         });
         return roles.get(std.ascii.lowerString(&buf, role)) orelse .{};
+    }
+
+    // Share Chrome-matched role and token rules with the MCP semantic tree.
+    // Native input checked state remains owned by the input serializer.
+    pub const AriaProperties = struct {
+        expanded: ?bool = null,
+        checked: ?AriaState = null,
+    };
+
+    pub fn ariaProperties(el: *DOMNode.Element, role: []const u8) AriaProperties {
+        const states = roleStates(role);
+        var props: AriaProperties = .{};
+        if (states.expanded and el.getTag() != .select) {
+            if (parseAriaState(el.getAttributeInterned("aria-expanded") orelse "")) |state| {
+                switch (state) {
+                    .true => props.expanded = true,
+                    .false => props.expanded = false,
+                    .mixed => {},
+                }
+            }
+        }
+        if (states.checked != null and el.getTag() != .input) {
+            if (parseAriaState(el.getAttributeSafe(.wrap("aria-checked")) orelse "false")) |state| {
+                props.checked = if (state == .mixed and states.checked == .binary) .false else state;
+            }
+        }
+        return props;
     }
 
     fn writeAXProperties(self: *const Writer, axnode: AXNode, w: anytype) !void {
@@ -524,20 +551,13 @@ pub const Writer = struct {
                     else => {},
                 }
 
-                // The resolved role, not the attribute, so generic nodes get no states.
-                const states = roleStates(try axnode.getRole());
-                if (states.expanded and el.getTag() != .select) {
-                    if (parseAriaState(el.getAttributeInterned("aria-expanded") orelse "")) |state| switch (state) {
-                        .true, .false => try self.writeAXProperty(.{ .name = .expanded, .value = .{ .booleanOrUndefined = state == .true } }, w),
-                        .mixed => {},
-                    };
+                // Resolved roles gate states. Native select/input states are handled above.
+                const aria = ariaProperties(el, try axnode.getRole());
+                if (aria.expanded) |expanded| {
+                    try self.writeAXProperty(.{ .name = .expanded, .value = .{ .booleanOrUndefined = expanded } }, w);
                 }
-                // Inputs already emitted their native checked property above.
-                if (states.checked != null and el.getTag() != .input) {
-                    if (parseAriaState(el.getAttributeSafe(.wrap("aria-checked")) orelse "false")) |parsed| {
-                        const state: AriaState = if (parsed == .mixed and states.checked == .binary) .false else parsed;
-                        try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = @tagName(state) } }, w);
-                    }
+                if (aria.checked) |checked| {
+                    try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = @tagName(checked) } }, w);
                 }
 
                 // Hidden and inert nodes never reach here, so tabindex alone decides.
