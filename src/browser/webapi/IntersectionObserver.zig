@@ -22,6 +22,7 @@ const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
+const Tokenizer = @import("../css/Tokenizer.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
@@ -139,21 +140,37 @@ pub fn init(callback: js.Function.Global, options: ?ObserverInit, frame: *Frame)
 
 /// One side of a rootMargin or scrollMargin: a length in px, or a percentage.
 const Margin = struct {
-    value: f64,
+    value: f32,
     percent: bool,
 };
 
-/// "Parse a margin": one to four whitespace-separated px lengths or
-/// percentages, expanded like CSS margins to top, right, bottom, left. An
-/// empty string is all zero. Any other token (a unitless number, another
-/// unit, calc(), a comma) is a SyntaxError.
+/// "Parse a margin": one to four px lengths or percentages, expanded like CSS
+/// margins to top, right, bottom, left. An empty string is all zero. Any other
+/// token (a unitless number, another unit, calc(), a comma) is a SyntaxError.
 fn parseMargin(text: []const u8) error{SyntaxError}![4]Margin {
     var margins: [4]Margin = undefined;
     var count: usize = 0;
-    var it = std.mem.tokenizeAny(u8, text, " \t\n\r\x0c");
-    while (it.next()) |token| {
-        if (count == 4) return error.SyntaxError;
-        margins[count] = try parseMarginToken(token);
+    var tokenizer: Tokenizer = .{ .input = text };
+    while (tokenizer.next()) |token| {
+        const margin: Margin = switch (token) {
+            .white_space, .comment => continue,
+            .dimension => |d| blk: {
+                if (std.ascii.eqlIgnoreCase(d.unit, "px") == false) {
+                    return error.SyntaxError;
+                }
+                break :blk .{ .value = d.value, .percent = false };
+            },
+            // unit_value is divided by 100; prefer the exact integer.
+            .percentage => |p| .{
+                .value = if (p.int_value) |int| @floatFromInt(int) else p.unit_value * 100,
+                .percent = true,
+            },
+            else => return error.SyntaxError,
+        };
+        if (count == 4) {
+            return error.SyntaxError;
+        }
+        margins[count] = margin;
         count += 1;
     }
     const zero: Margin = .{ .value = 0, .percent = false };
@@ -164,35 +181,6 @@ fn parseMargin(text: []const u8) error{SyntaxError}![4]Margin {
         3 => .{ margins[0], margins[1], margins[2], margins[1] },
         else => margins,
     };
-}
-
-/// A CSS <number> followed by "px" (ASCII case-insensitive) or "%".
-fn parseMarginToken(token: []const u8) error{SyntaxError}!Margin {
-    var i: usize = 0;
-    if (i < token.len and (token[i] == '+' or token[i] == '-')) i += 1;
-    var digits: usize = 0;
-    while (i < token.len and std.ascii.isDigit(token[i])) : (i += 1) digits += 1;
-    if (i < token.len and token[i] == '.') {
-        i += 1;
-        var fraction: usize = 0;
-        while (i < token.len and std.ascii.isDigit(token[i])) : (i += 1) fraction += 1;
-        if (fraction == 0) return error.SyntaxError;
-        digits += fraction;
-    }
-    if (digits == 0) return error.SyntaxError;
-    if (i < token.len and (token[i] == 'e' or token[i] == 'E')) {
-        var j = i + 1;
-        if (j < token.len and (token[j] == '+' or token[j] == '-')) j += 1;
-        const exponent_start = j;
-        while (j < token.len and std.ascii.isDigit(token[j])) j += 1;
-        // An "e" without digits starts the unit instead (as "1em" would).
-        if (j > exponent_start) i = j;
-    }
-    const value = std.fmt.parseFloat(f64, token[0..i]) catch return error.SyntaxError;
-    const unit = token[i..];
-    if (std.ascii.eqlIgnoreCase(unit, "px")) return .{ .value = value, .percent = false };
-    if (std.mem.eql(u8, unit, "%")) return .{ .value = value, .percent = true };
-    return error.SyntaxError;
 }
 
 /// The four margins as the rootMargin/scrollMargin attributes give them.

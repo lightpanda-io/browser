@@ -41,6 +41,8 @@
   // Serialized as given (Chrome truncates px values to integers, "1px").
   testing.expectEqual("1.5px 1.5px 1.5px 1.5px", margin("1.50px"));
   testing.expectEqual("0px 0px 0px 0px", margin(""));
+  testing.expectEqual("5.5% 5.5% 5.5% 5.5%", margin("5.5%"));
+  testing.expectEqual("10px 20px 10px 20px", margin("10px/**/20px"));
   for (const bad of ["0", "10em", "calc(10px)", "10px,20px", "10 px", "1px 2px 3px 4px 5px", "px", "1.px"]) {
     testing.expectEqual(`${bad}: SyntaxError`, `${bad}: ${margin(bad)}`);
   }
