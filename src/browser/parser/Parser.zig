@@ -690,6 +690,9 @@ fn _addAttrsIfMissingCallback(self: *Parser, node: *Node, attributes: h5e.Attrib
         const value = attr.value.slice();
         if (try attr_list.putNew(name, value, frame)) {
             // attribute didn't previously exist
+            if (std.mem.eql(u8, name, "id") and node.isConnected()) {
+                try frame.addElementId(node._parent.?, element, element.getId().?);
+            }
             if (element.is(Element.Html)) |html| {
                 try html.eventHandlerAttributeChanged(name, element.getAttributeSafe(.wrap(name)), frame);
             }

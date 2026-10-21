@@ -454,8 +454,8 @@ pub fn getSelectedOptions(self: *Select, frame: *Frame) !collections.NodeLive(.s
     return collections.NodeLive(.selected_options).init(self.asNode(), {}, frame);
 }
 
-pub fn getForm(self: *Select, frame: *Frame) ?*Form {
-    return Form.ownerOf(self.asElement(), frame);
+pub fn getForm(self: *Select) ?*Form {
+    return Form.ownerOf(self.asElement());
 }
 
 fn getLabels(self: *Select, frame: *Frame) !js.Array {

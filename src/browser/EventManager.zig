@@ -758,7 +758,7 @@ const ActivationState = struct {
 
         // For radio buttons, find the currently checked radio in the group
         if (input._input_type == .radio and !old_checked) {
-            previously_checked_radio = try findCheckedRadioInGroup(input, frame);
+            previously_checked_radio = try findCheckedRadioInGroup(input);
         }
 
         // Toggle checkbox or check radio (which unchecks others in group)
@@ -802,7 +802,7 @@ const ActivationState = struct {
         }
     }
 
-    fn findCheckedRadioInGroup(input: *Input, frame: *Frame) !?*Input {
+    fn findCheckedRadioInGroup(input: *Input) !?*Input {
         const elem = input.asElement();
 
         const name = elem.getName() orelse return null;
@@ -810,7 +810,7 @@ const ActivationState = struct {
             return null;
         }
 
-        const form = input.getForm(frame);
+        const form = input.getForm();
 
         // Walk from the root of the tree containing this element
         // This handles both document-attached and orphaned elements
@@ -838,7 +838,7 @@ const ActivationState = struct {
             }
 
             // Check if same form context
-            const other_form = other_input.getForm(frame);
+            const other_form = other_input.getForm();
             if (form) |f| {
                 const of = other_form orelse continue;
                 if (f != of) {

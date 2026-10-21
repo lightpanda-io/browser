@@ -208,7 +208,7 @@ pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
         }
 
         // The submitter's form owner must be this form element.
-        const submitter_form = ownerOf(s, frame);
+        const submitter_form = ownerOf(s);
         if (submitter_form == null or submitter_form.? != self) return error.NotFound;
 
         break :blk s;
@@ -266,14 +266,14 @@ pub fn isSubmitButton(element: *Element) bool {
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-owner
-pub fn ownerOf(element: *Element, frame: *Frame) ?*Form {
+pub fn ownerOf(element: *Element) ?*Form {
     // A form attribute is authoritative, even when it names nothing. It
     // resolves in the control's own tree (shadow root or document), not the
     // calling realm's.
     const element_node = element.asNode();
     if (element_node.isConnected()) {
         if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-            const form_element = frame.getElementByIdFromNode(element_node, form_id) orelse return null;
+            const form_element = Frame.getElementByIdFromNode(element_node, form_id) orelse return null;
             return form_element.is(Form);
         }
     }

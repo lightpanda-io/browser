@@ -1249,7 +1249,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     const frame = server.active_session.session.currentFrame().?;
 
     {
-        const btn = frame.document.getElementById("btn", frame).?.asNode();
+        const btn = frame.document.getElementById("btn").?.asNode();
         const btn_id = (try server.active_session.registry.register(btn)).id;
         var btn_id_buf: [12]u8 = undefined;
         const btn_id_str = std.mem.print(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
@@ -1268,7 +1268,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        const inp = frame.document.getElementById("inp", frame).?.asNode();
+        const inp = frame.document.getElementById("inp").?.asNode();
         const inp_id = (try server.active_session.registry.register(inp)).id;
         var inp_id_buf: [12]u8 = undefined;
         const inp_id_str = std.mem.print(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
@@ -1280,7 +1280,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        const sel = frame.document.getElementById("sel", frame).?.asNode();
+        const sel = frame.document.getElementById("sel").?.asNode();
         const sel_id = (try server.active_session.registry.register(sel)).id;
         var sel_id_buf: [12]u8 = undefined;
         const sel_id_str = std.mem.print(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
@@ -1293,9 +1293,9 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     // A scroll container, and a node with no scroll-container ancestor, are
     // scrolled themselves.
-    const scrollbox = frame.document.getElementById("scrollbox", frame).?.asNode();
+    const scrollbox = frame.document.getElementById("scrollbox").?.asNode();
     const scrollbox_id = (try server.active_session.registry.register(scrollbox)).id;
-    const plain = frame.document.getElementById("plain", frame).?.asNode();
+    const plain = frame.document.getElementById("plain").?.asNode();
     const plain_id = (try server.active_session.registry.register(plain)).id;
     for ([_]struct { id: lp.NodeRegistry.Id, y: i32 }{ .{ .id = scrollbox_id, .y = 50 }, .{ .id = plain_id, .y = 7 } }) |c| {
         const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":{d}}}}}}}", .{ c.id, c.y });
@@ -1307,9 +1307,9 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     // A leaf inside a scroll container scrolls the container, not the leaf.
     {
-        const leaf = frame.document.getElementById("innerleaf", frame).?.asNode();
+        const leaf = frame.document.getElementById("innerleaf").?.asNode();
         const leaf_id = (try server.active_session.registry.register(leaf)).id;
-        const outer = frame.document.getElementById("outerscroll", frame).?.asNode();
+        const outer = frame.document.getElementById("outerscroll").?.asNode();
         const outer_id = (try server.active_session.registry.register(outer)).id;
         const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
         try router.handleMessage(server, aa, msg);
@@ -1320,7 +1320,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     // A selector targets the element as a backendNodeId does.
     {
-        const outer = frame.document.getElementById("outerscroll", frame).?.asNode();
+        const outer = frame.document.getElementById("outerscroll").?.asNode();
         const outer_id = (try server.active_session.registry.register(outer)).id;
         try router.handleMessage(server, aa,
             \\{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"scroll","arguments":{"selector":"#innerleaf","y":30}}}
@@ -1332,9 +1332,9 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     // The container may be declared in a stylesheet rather than inline.
     {
-        const leaf = frame.document.getElementById("sheetleaf", frame).?.asNode();
+        const leaf = frame.document.getElementById("sheetleaf").?.asNode();
         const leaf_id = (try server.active_session.registry.register(leaf)).id;
-        const outer = frame.document.getElementById("sheetscroll", frame).?.asNode();
+        const outer = frame.document.getElementById("sheetscroll").?.asNode();
         const outer_id = (try server.active_session.registry.register(outer)).id;
         const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
         try router.handleMessage(server, aa, msg);
@@ -1358,7 +1358,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        const el = frame.document.getElementById("hoverTarget", frame).?.asNode();
+        const el = frame.document.getElementById("hoverTarget").?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -1369,7 +1369,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        const el = frame.document.getElementById("keyTarget", frame).?.asNode();
+        const el = frame.document.getElementById("keyTarget").?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -1380,7 +1380,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        const el = frame.document.getElementById("sel2", frame).?.asNode();
+        const el = frame.document.getElementById("sel2").?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -1391,7 +1391,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        const el = frame.document.getElementById("chk", frame).?.asNode();
+        const el = frame.document.getElementById("chk").?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -1402,7 +1402,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        const el = frame.document.getElementById("rad", frame).?.asNode();
+        const el = frame.document.getElementById("rad").?.asNode();
         const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -1465,7 +1465,7 @@ test "MCP - click that navigates clears node registry" {
     defer server.active_session.exitIsolate();
 
     const before_frame = server.active_session.session.currentFrame().?;
-    const link = before_frame.document.getElementById("navlink", before_frame).?.asNode();
+    const link = before_frame.document.getElementById("navlink").?.asNode();
     const link_id = (try server.active_session.registry.register(link)).id;
     try testing.expect(server.active_session.registry.lookup_by_id.contains(link_id));
 
