@@ -2445,6 +2445,98 @@
   });
 </script>
 
+<script id=generate-import-by-name type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const outcome = async (fn) => {
+    try {
+      const r = await fn();
+      return r instanceof CryptoKey ? `${r.type}:${r.algorithm.name}` : `pair:${r.privateKey.algorithm.name}`;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const e = new Uint8Array([1, 0, 1]);
+  const raw = new Uint8Array(16);
+  const ec = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const spki = await subtle.exportKey("spki", ec.publicKey);
+  const aes = await subtle.generateKey({ name: "AES-GCM", length: 128 }, true, ["encrypt"]);
+  const kw = await subtle.generateKey({ name: "AES-KW", length: 128 }, true, ["wrapKey", "unwrapKey"]);
+  const wrapped = await subtle.wrapKey("raw", aes, kw, "AES-KW");
+  const gen = (algo, usages) => outcome(() => subtle.generateKey(algo, true, usages));
+
+  // The name picks the algorithm, then its params are read: another
+  // algorithm's member is ignored, a missing one of its own is a TypeError,
+  // and an [EnforceRange] one out of range is a TypeError too.
+  const results = {
+    genAesStrayHash: await gen({ name: "AES-GCM", length: 128, hash: "SHA-256" }, ["encrypt"]),
+    genEd25519StrayHash: await gen({ name: "Ed25519", hash: "SHA-256" }, ["sign"]),
+    genEd25519StrayCurve: await gen({ name: "Ed25519", namedCurve: "P-256" }, ["sign"]),
+    genX25519StrayCurve: await gen({ name: "X25519", namedCurve: "P-256" }, ["deriveBits"]),
+    genHmacStrayCurve: await gen({ name: "HMAC", hash: "SHA-256", namedCurve: "P-256" }, ["sign"]),
+    genAesLengthWrapped: await gen({ name: "AES-GCM", length: 2 ** 32 + 128 }, ["encrypt"]),
+    genAesLengthOverShort: await gen({ name: "AES-GCM", length: 2 ** 16 + 128 }, ["encrypt"]),
+    genAesLengthNegative: await gen({ name: "AES-GCM", length: -1 }, ["encrypt"]),
+    genAesLengthFraction: await gen({ name: "AES-GCM", length: 128.9 }, ["encrypt"]),
+    genAesNoLength: await gen({ name: "AES-GCM" }, ["encrypt"]),
+    genHmacNoHash: await gen({ name: "HMAC" }, ["sign"]),
+    genEcdsaNoCurve: await gen({ name: "ECDSA" }, ["sign"]),
+    genRsaNoModulus: await gen({ name: "RSA-OAEP", hash: "SHA-256", publicExponent: e }, ["encrypt"]),
+    // The hash is normalized with the algorithm, before the usages.
+    genRsaBadHashBadUsage: await gen({ name: "RSA-OAEP", hash: "SHA-999", modulusLength: 2048, publicExponent: e }, ["sign"]),
+    genHmacBadHashBadUsage: await gen({ name: "HMAC", hash: "SHA-999" }, ["encrypt"]),
+    // Anything but an object converts to a name: an unknown one.
+    genNumber: await gen(5, ["sign"]),
+    genNull: await gen(null, ["sign"]),
+    genHkdf: await gen("HKDF", ["deriveBits"]),
+    importEcdsaStrayHash: await outcome(() => subtle.importKey("spki", spki, { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" }, true, ["verify"])),
+    importAesStrayCurve: await outcome(() => subtle.importKey("raw", raw, { name: "AES-GCM", namedCurve: "P-256" }, true, ["encrypt"])),
+    importEcdsaNoCurve: await outcome(() => subtle.importKey("spki", spki, { name: "ECDSA" }, true, ["verify"])),
+    importHmacNoHash: await outcome(() => subtle.importKey("raw", raw, "HMAC", true, ["sign"])),
+    importRsaBadHashBadUsage: await outcome(() => subtle.importKey("spki", spki, { name: "RSA-OAEP", hash: "SHA-999" }, true, ["sign"])),
+    importUnknown: await outcome(() => subtle.importKey("raw", raw, "foo", true, ["encrypt"])),
+    // unwrapKey normalizes the unwrapped key's algorithm before the key checks.
+    unwrapUnknownWrongKey: await outcome(() => subtle.unwrapKey("raw", wrapped, aes, "AES-KW", "foo", true, ["encrypt"])),
+    unwrapAesStrayHash: await outcome(() => subtle.unwrapKey("raw", wrapped, kw, "AES-KW", { name: "AES-GCM", hash: "SHA-256" }, true, ["encrypt"])),
+  };
+  const expected = {
+    genAesStrayHash: "secret:AES-GCM",
+    genEd25519StrayHash: "pair:Ed25519",
+    genEd25519StrayCurve: "pair:Ed25519",
+    genX25519StrayCurve: "pair:X25519",
+    genHmacStrayCurve: "secret:HMAC",
+    genAesLengthWrapped: "TypeError",
+    genAesLengthOverShort: "TypeError",
+    genAesLengthNegative: "TypeError",
+    genAesLengthFraction: "secret:AES-GCM",
+    genAesNoLength: "TypeError",
+    genHmacNoHash: "TypeError",
+    genEcdsaNoCurve: "TypeError",
+    genRsaNoModulus: "TypeError",
+    genRsaBadHashBadUsage: "NotSupportedError",
+    genHmacBadHashBadUsage: "NotSupportedError",
+    genNumber: "NotSupportedError",
+    genNull: "NotSupportedError",
+    genHkdf: "NotSupportedError",
+    importEcdsaStrayHash: "public:ECDSA",
+    importAesStrayCurve: "secret:AES-GCM",
+    importEcdsaNoCurve: "TypeError",
+    importHmacNoHash: "TypeError",
+    importRsaBadHashBadUsage: "NotSupportedError",
+    importUnknown: "NotSupportedError",
+    unwrapUnknownWrongKey: "NotSupportedError",
+    unwrapAesStrayHash: "secret:AES-GCM",
+  };
+
+  state.resolve();
+  await state.done(() => {
+    // Compared with the case name, so a failure says which one.
+    for (const [name, want] of Object.entries(expected)) {
+      testing.expectEqual(`${name}: ${want}`, `${name}: ${results[name]}`);
+    }
+  });
+</script>
+
 <script id="digest" type=module>
   const state = await testing.async();
   async function hash(algo, data) {
@@ -2556,4 +2648,57 @@
       testing.expectEqual('SyntaxError', data.err_name);
     });
   }
+</script>
+
+<script id=algorithm-name-read-once type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const outcome = async (fn) => {
+    try {
+      const r = await fn();
+      return r instanceof CryptoKey ? `${r.type}:${r.algorithm.name}` : `pair:${r.privateKey.algorithm.name}`;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  // A name getter that answers one algorithm, then another.
+  const flip = (first, second, members) => {
+    const counter = { calls: 0 };
+    const algo = { get name() { return counter.calls++ === 0 ? first : second; }, ...members };
+    return [counter, algo];
+  };
+
+  // The name is read once: its first answer picks the algorithm and is the
+  // name of its params, so a getter can't make the two disagree.
+  const [ecdsa, ecdsaAlgo] = flip("ECDSA", "RSA-OAEP", { namedCurve: "P-256" });
+  const [aes, aesAlgo] = flip("AES-GCM", "HMAC", { length: 128, hash: "SHA-256" });
+  const [hmac, hmacAlgo] = flip("HMAC", "AES-GCM", { length: 128, hash: "SHA-256" });
+  const [hkdf, hkdfAlgo] = flip("HKDF", "PBKDF2", {
+    hash: "SHA-256", salt: new Uint8Array(8), info: new Uint8Array(0), iterations: 1,
+  });
+  const hkdfKey = await subtle.importKey("raw", new Uint8Array(16), "HKDF", false, ["deriveBits"]);
+  const results = {
+    importEcdsa: await outcome(() => subtle.importKey("raw", new Uint8Array(16), ecdsaAlgo, true, ["encrypt"])),
+    importEcdsaCalls: ecdsa.calls,
+    generateAes: await outcome(() => subtle.generateKey(aesAlgo, true, ["encrypt"])),
+    generateAesCalls: aes.calls,
+    importHmac: await outcome(() => subtle.importKey("raw", new Uint8Array(16), hmacAlgo, true, ["sign"])),
+    importHmacCalls: hmac.calls,
+    deriveHkdf: (await subtle.deriveBits(hkdfAlgo, hkdfKey, 128)).byteLength,
+    deriveHkdfCalls: hkdf.calls,
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual({
+      importEcdsa: "SyntaxError",
+      importEcdsaCalls: 1,
+      generateAes: "secret:AES-GCM",
+      generateAesCalls: 1,
+      importHmac: "secret:HMAC",
+      importHmacCalls: 1,
+      deriveHkdf: 16,
+      deriveHkdfCalls: 1,
+    }, results);
+  });
 </script>

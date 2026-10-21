@@ -67,7 +67,8 @@ pub fn validate(params: algorithm.Init.AesKeyGen, key_usages: []const []const u8
         }
     }
 
-    if (params.length != 128 and params.length != 192 and params.length != 256) {
+    const length = params.length.value;
+    if (length != 128 and length != 192 and length != 256) {
         return error.OperationError;
     }
 
@@ -90,7 +91,7 @@ pub fn generate(
     const allowed = allowedUsages(params.name).?;
     const mask = common.usageMask(allowed, key_usages) catch unreachable;
 
-    const key = try exec.local_arena.alloc(u8, params.length / 8);
+    const key = try exec.local_arena.alloc(u8, params.length.value / 8);
 
     const res = crypto.RAND_bytes(key.ptr, key.len);
     lp.assert(res == 1, "AES.generate", .{ .res = res });

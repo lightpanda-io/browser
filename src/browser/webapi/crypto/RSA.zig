@@ -149,12 +149,6 @@ fn hashOfJwkAlg(s: *const Scheme, alg: []const u8) ?[]const u8 {
 
 const max_modulus_length = 4096;
 
-/// RsaKeyGenParams' `modulusLength`, an [EnforceRange] unsigned long: a value
-/// outside u32 (NaN, undefined, the infinities) is a TypeError.
-fn modulusLength(params: algorithm.Init.RsaHashedKeyGen, local: *const js.Local) !u32 {
-    return js.enforceRange(u32, try params.modulusLength.toF64()) catch local.typeError("modulusLength is out of range");
-}
-
 /// Generates an RSA key pair of `modulusLength` bits with the given public
 /// exponent. Mirrors EC.generate: each key keeps the EVP_PKEY of its half, and
 /// the requested usages are split across the pair (validate() rejected illegal
@@ -169,7 +163,7 @@ pub fn generate(
     // Normalization: the algorithm name, then the dictionary's members, then
     // the hash (validate). The usages come after.
     const s = scheme(params.name) orelse return error.NotSupported;
-    const requested_bits = try modulusLength(params, local);
+    const requested_bits = params.modulusLength.value;
     const requested_hash = try params.hash.name(local);
     try validate(params, requested_hash, key_usages);
 

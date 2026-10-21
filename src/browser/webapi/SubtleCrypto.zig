@@ -35,7 +35,6 @@ const OKP = @import("crypto/OKP.zig");
 const common = @import("crypto/common.zig");
 
 const log = lp.log;
-const String = lp.String;
 const Execution = js.Execution;
 const missing_name = algorithm.missing_name;
 
@@ -50,30 +49,27 @@ _pad: bool = false,
 /// Generate a new key (for symmetric algorithms) or key pair (for public-key algorithms).
 pub fn generateKey(
     _: *const SubtleCrypto,
-    algo: algorithm.Init,
+    algo_value: js.Value,
     extractable: bool,
     key_usages: []const []const u8,
     exec: *const Execution,
 ) !js.Promise {
-    const local = exec.js.local.?;
-    switch (algo) {
+    switch (try algorithm.Init.fromJs(algo_value, exec.js.local.?)) {
         .hmac_key_gen => |params| return HMAC.init(params, extractable, key_usages, exec),
         .aes_key_gen => |params| return AES.generate(params, extractable, key_usages, exec),
         .ec_key_gen => |params| return EC.generate(params, extractable, key_usages, exec),
         .rsa_hashed_key_gen => |params| return RSA.generate(params, extractable, key_usages, exec),
-        .name => |js_name| return generateKeyFromName(try js_name.toSSO(false), extractable, key_usages, exec),
-        .object => |object| return generateKeyFromName(try object.name.toSSO(false), extractable, key_usages, exec),
-        .invalid => return local.typeError("invalid algorithm"),
+        .named => |name| return generateKeyFromName(name, extractable, key_usages, exec),
     }
 }
 
 fn generateKeyFromName(
-    name: String,
+    name: []const u8,
     extractable: bool,
     key_usages: []const []const u8,
     exec: *const Execution,
 ) !js.Promise {
-    if (OKP.curveOf(name.str())) |curve| {
+    if (OKP.curveOf(name)) |curve| {
         return OKP.generate(curve, extractable, key_usages, exec);
     }
 
@@ -83,11 +79,10 @@ fn generateKeyFromName(
         // error name; leaves real key generation to a future change.
 
         const allowed: []const []const u8 = blk: {
-            const str = name.str();
-            if (eqlIgnoreCase(str, "Ed448")) {
+            if (eqlIgnoreCase(name, "Ed448")) {
                 break :blk &.{ "sign", "verify" };
             }
-            if (eqlIgnoreCase(str, "X448")) {
+            if (eqlIgnoreCase(name, "X448")) {
                 break :blk &.{ "deriveKey", "deriveBits" };
             }
             return error.NotSupported;
@@ -120,13 +115,27 @@ pub fn importKey(
     _: *const SubtleCrypto,
     format: []const u8,
     key_data: algorithm.KeyData,
+    algo_value: js.Value,
+    extractable: bool,
+    key_usages: []const []const u8,
+    exec: *const Execution,
+) !js.Promise {
+    const algo = try algorithm.Import.fromJs(algo_value, exec.js.local.?);
+    return importNormalized(format, key_data, algo, extractable, key_usages, exec);
+}
+
+/// importKey, once its algorithm is normalized: unwrapKey normalizes the
+/// unwrapped key's algorithm itself, before unwrapping.
+fn importNormalized(
+    format: []const u8,
+    key_data: algorithm.KeyData,
     algo: algorithm.Import,
     extractable: bool,
     key_usages: []const []const u8,
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    const name = algo.algoName() orelse return local.typeError(missing_name);
+    const name = algo.algoName();
 
     // Asymmetric algorithms (EC, OKP). Usage validation runs first (bad/empty
     // usages → SyntaxError) so the failure-path tests pass regardless of whether
@@ -162,7 +171,7 @@ pub fn importKey(
             }
         }
         if (RSA.scheme(name)) |scheme| {
-            const hash_name = try importHash(algo, local) orelse return local.typeError("RSA import requires a hash");
+            const hash_name = (try algo.hash(local)).?;
             const is_jwk = std.mem.eql(u8, format, "jwk");
             switch (key_data) {
                 .bytes => |b| {
@@ -190,8 +199,8 @@ pub fn importKey(
             return AES.importJwk(name, jwk, extractable, key_usages, exec);
         }
         if (eqlIgnoreCase(name, "HMAC")) {
-            const length = try HMAC.lengthParam(importLength(algo), local);
-            const hash_name = try importHash(algo, local) orelse return local.typeError("HMAC import requires a hash");
+            const length = try HMAC.lengthParam(algo.length(), local);
+            const hash_name = (try algo.hash(local)).?;
             return HMAC.importJwk(hash_name, jwk, length, extractable, key_usages, exec);
         }
         // HKDF and PBKDF2 keys only come in "raw".
@@ -233,32 +242,13 @@ pub fn importKey(
         }
     }
     if (eqlIgnoreCase(name, "HMAC")) {
-        const length = try HMAC.lengthParam(importLength(algo), local);
-        const hash_name = try importHash(algo, local) orelse return local.typeError("HMAC import requires a hash");
+        const length = try HMAC.lengthParam(algo.length(), local);
+        const hash_name = (try algo.hash(local)).?;
         return HMAC.import(hash_name, raw, length, extractable, key_usages, exec);
     }
 
     log.debug(.not_implemented, "SubtleCrypto.importKey", .{ .name = name });
     return error.NotSupported;
-}
-
-/// The hash of an importKey algorithm that carries one (HMAC, RSA): those
-/// params {name, hash} match the `.hmac` variant of the Import union (same
-/// shape), so the hash is read there. Null for the other variants.
-fn importHash(algo: algorithm.Import, local: *const js.Local) !?[]const u8 {
-    return switch (algo) {
-        .hmac => |h| try h.hash.name(local),
-        else => null,
-    };
-}
-
-/// The `length` member of an HMAC importKey algorithm, unconverted (see
-/// HMAC.lengthParam). Null when absent, or for the other variants.
-fn importLength(algo: algorithm.Import) ?js.Value {
-    return switch (algo) {
-        .hmac => |h| h.length,
-        else => null,
-    };
 }
 
 /// Whether the requested format/key-data describe a private key. The format
@@ -576,28 +566,20 @@ pub fn wrapKey(
 /// Unwraps a key: decrypts `wrapped_key` with `unwrapping_key` (or unwraps it
 /// with AES-KW) and imports the result in `format`, a JWK being its JSON text.
 pub fn unwrapKey(
-    self: *const SubtleCrypto,
+    _: *const SubtleCrypto,
     format: []const u8,
     wrapped_key: js.TypedArray(u8),
     unwrapping_key: *CryptoKey,
     algo: algorithm.Encrypt,
-    unwrapped_key_algo: algorithm.Import,
+    unwrapped_key_value: js.Value,
     extractable: bool,
     key_usages: []const []const u8,
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
     const name = try wrapAlgorithmName(algo, local);
-    // The unwrapped key's algorithm is normalized next, before the key checks:
-    // its name and, for HMAC and RSA, which take one, a known hash. Another
-    // algorithm's stray `hash` is ignored, as importKey does.
-    const unwrapped_name = unwrapped_key_algo.algoName() orelse return local.typeError(missing_name);
-    if (eqlIgnoreCase(unwrapped_name, "HMAC") or RSA.scheme(unwrapped_name) != null) {
-        const hash_name = try importHash(unwrapped_key_algo, local) orelse return local.typeError("the unwrapped key's algorithm requires a hash");
-        if (common.canonicalHash(hash_name) == null) {
-            return error.NotSupported;
-        }
-    }
+    // The unwrapped key's algorithm is normalized next, before the key checks.
+    const unwrapped_key_algo = try algorithm.Import.fromJs(unwrapped_key_value, local);
     try checkWrappingKey(name, unwrapping_key, .unwrap);
 
     const bytes = try cryptBytes(algo, unwrapping_key, wrapped_key.values, .unwrap, exec);
@@ -607,7 +589,7 @@ pub fn unwrapKey(
         .{ .bytes = .{ .values = bytes } };
     // importKey rejects a secret or private key with no usages (SyntaxError),
     // the last check unwrapKey asks for.
-    return self.importKey(format, key_data, unwrapped_key_algo, extractable, key_usages, exec);
+    return importNormalized(format, key_data, unwrapped_key_algo, extractable, key_usages, exec);
 }
 
 /// What `cryptBytes` is for, which decides the direction and the usage the key
