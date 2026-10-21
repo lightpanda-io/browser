@@ -221,6 +221,11 @@ fn resolveWaitUntil(opts: FetchOpts) ?Config.WaitUntil {
     if (opts.wait_selector == null and opts.wait_script == null) return .load;
     return null;
 }
+
+fn remainingMs(timer: std.Io.Timestamp, budget_ms: u32) u32 {
+    return budget_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
+}
+
 /// Loads each url in `urls` in a fresh session and waits per `opts`.
 ///
 /// A page's navigation, wait or dump failure is recorded for that page and
@@ -230,10 +235,6 @@ fn resolveWaitUntil(opts: FetchOpts) ?Config.WaitUntil {
 /// `wait_script` is still unmet (the `wait_until` phase never raises it: when
 /// the budget runs out the page is dumped as-is), or `error.Cancelled` if the
 /// embedder's opt-in `Session.cancel_hook` returned true.
-fn remainingMs(timer: std.Io.Timestamp, budget_ms: u32) u32 {
-    return budget_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
-}
-
 pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: FetchOpts) !void {
     const notification = try Notification.init(app.allocator);
     defer notification.deinit();
