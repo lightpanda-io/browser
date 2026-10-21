@@ -333,40 +333,50 @@ pub fn TextEntry(comptime T: type) type {
             selection_mode: ?[]const u8,
             frame: *Frame,
         ) !void {
-            if (self.selectionAvailable() == false) {
-                return error.InvalidStateError;
-            }
-
-            const value = self.getValue();
-            const value_len: u32 = @intCast(value.len);
-            const sel_start = @min(self._selection_start, value_len);
-            const sel_end = @min(self._selection_end, value_len);
-
-            // setRangeText(replacement) replaces the selection; a start needs an end
-            var start = sel_start;
-            var end = sel_end;
-            if (range_start) |js_start| {
-                const js_end = range_end orelse return error.TypeError;
-                if (js_start > js_end) {
-                    return error.IndexSizeError;
-                }
-                start = selectionOffsetFromJs(self, js_start);
-                end = selectionOffsetFromJs(self, js_end);
-            }
-
+            // Argument errors come first: Chrome throws them while converting
+            // the arguments. A start needs an end.
             const mode: SelectionMode = if (selection_mode) |m|
                 std.meta.stringToEnum(SelectionMode, m) orelse return error.TypeError
             else
                 .preserve;
+            if (range_start != null and range_end == null) {
+                return error.TypeError;
+            }
+
+            if (self.selectionAvailable() == false) {
+                return error.InvalidStateError;
+            }
+
+            // Offsets are in UTF-16 code units, like the spec, and only become
+            // byte offsets against a given value: setValue can sanitize the new
+            // one (newlines, CRLF), so its byte offsets differ from the concat's.
+            const value = self.getValue();
+            const value_len: u32 = @intCast(CData.utf16Len(value));
+            const sel_start = selectionOffsetToJs(self, self._selection_start);
+            const sel_end = selectionOffsetToJs(self, self._selection_end);
+
+            // setRangeText(replacement) replaces the selection
+            var start = sel_start;
+            var end = sel_end;
+            if (range_start) |js_start| {
+                const js_end = range_end.?;
+                if (js_start > js_end) {
+                    return error.IndexSizeError;
+                }
+                start = @min(js_start, value_len);
+                end = @min(js_end, value_len);
+            }
 
             {
+                const byte_start = selectionOffsetFromJs(self, start);
+                const byte_end = selectionOffsetFromJs(self, end);
                 const scratch = try frame.getArena(value.len + replacement.len, "TextEntry.setRangeText");
                 defer scratch.release();
-                const new_value = try std.mem.concat(scratch.allocator(), u8, &.{ value[0..start], replacement, value[end..] });
+                const new_value = try std.mem.concat(scratch.allocator(), u8, &.{ value[0..byte_start], replacement, value[byte_end..] });
                 try self.setValue(new_value, frame);
             }
 
-            const new_end: u32 = @intCast(start + replacement.len);
+            const new_end: u32 = start + @as(u32, @intCast(CData.utf16Len(replacement)));
             var new_start = sel_start;
             var new_sel_end = sel_end;
             switch (mode) {
@@ -398,7 +408,7 @@ pub fn TextEntry(comptime T: type) type {
                     }
                 },
             }
-            return applySelectionRange(self, new_start, new_sel_end, .none, frame);
+            return applySelectionRange(self, selectionOffsetFromJs(self, new_start), selectionOffsetFromJs(self, new_sel_end), .none, frame);
         }
 
         fn applySelectionRange(
