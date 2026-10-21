@@ -210,7 +210,10 @@ pub fn exceptionThrown(arena: Allocator, bc: *CDP.BrowserContext, event: *const 
         .timestamp = event.timestamp,
         .exceptionDetails = ExceptionDetails{
             .exceptionId = exception_id,
-            .text = "Uncaught",
+            .text = switch (event.kind) {
+                .exception => "Uncaught",
+                .rejection => "Uncaught (in promise)",
+            },
             .lineNumber = location.line -| 1,
             .columnNumber = location.column -| 1,
             .url = if (location.url.len == 0) null else location.url,
@@ -384,6 +387,104 @@ test "cdp.runtime: an exception whose error event is cancelled is not reported" 
 
     try ctx.expectSentEvent("Runtime.exceptionThrown", .{
         .exceptionDetails = .{ .exception = .{ .type = "string", .value = "loud" } },
+    }, .{});
+    try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
+}
+
+test "cdp.runtime: an unhandled rejection emits Runtime.exceptionThrown once" {
+    testing.expectLog(&.{.page_error});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-REJ1", .url = "hi.html", .target_id = "FID-000000REJ1".* });
+    try ctx.processMessage(.{ .id = 70, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec(
+        \\window.unhandled = 0;
+        \\window.addEventListener('unhandledrejection', () => window.unhandled += 1);
+        \\Promise.reject(new TypeError('nope'));
+    , null);
+    // Reported at the end of the microtask checkpoint, not when rejected.
+    try testing.expectEqual(0, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
+    ls.local.runMicrotasks();
+
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{
+            .text = "Uncaught (in promise)",
+            .exception = .{ .type = "object", .subtype = "error", .className = "TypeError" },
+            .executionContextId = bc.inspector().getContextId(&ls.local),
+        },
+    }, .{});
+
+    // A later checkpoint doesn't report it again.
+    ls.local.runMicrotasks();
+    try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
+    try testing.expectEqual(1, try (try ls.local.exec("window.unhandled", null)).toI32());
+}
+
+test "cdp.runtime: a rejection handled before the checkpoint ends is not reported" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-REJ2", .url = "hi.html", .target_id = "FID-000000REJ2".* });
+    try ctx.processMessage(.{ .id = 71, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    // V8 sees each promise rejected with no handler, then gets one: in the
+    // same script, from a microtask, and on an async function's promise.
+    _ = try ls.local.exec(
+        \\window.events = [];
+        \\window.addEventListener('unhandledrejection', (e) => window.events.push(e.type));
+        \\window.addEventListener('rejectionhandled', (e) => window.events.push(e.type));
+        \\Promise.reject(new Error('now')).catch(() => {});
+        \\const later = Promise.reject(new Error('later'));
+        \\Promise.resolve().then(() => later.catch(() => {}));
+        \\async function f() { throw new Error('async'); }
+        \\f().catch(() => {});
+    , null);
+    ls.local.runMicrotasks();
+
+    try testing.expectEqual(0, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
+    try testing.expectEqual(0, try (try ls.local.exec("window.events.length", null)).toI32());
+}
+
+test "cdp.runtime: a rejection whose unhandledrejection event is cancelled is not reported" {
+    testing.expectLog(&.{.page_error});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-REJ3", .url = "hi.html", .target_id = "FID-000000REJ3".* });
+    try ctx.processMessage(.{ .id = 72, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    // preventDefault() on unhandledrejection marks the rejection handled, as
+    // in Chrome; only the second one is uncaught.
+    _ = try ls.local.exec(
+        \\const quiet = (e) => e.preventDefault();
+        \\window.addEventListener('unhandledrejection', quiet);
+        \\Promise.reject('quiet');
+    , null);
+    ls.local.runMicrotasks();
+    _ = try ls.local.exec(
+        \\window.removeEventListener('unhandledrejection', quiet);
+        \\Promise.reject('loud');
+    , null);
+    ls.local.runMicrotasks();
+
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{ .text = "Uncaught (in promise)", .exception = .{ .type = "string", .value = "loud" } },
     }, .{});
     try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
 }

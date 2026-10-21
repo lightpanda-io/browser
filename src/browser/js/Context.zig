@@ -125,11 +125,26 @@ script_manager: *ScriptManagerBase,
 // Our macrotasks
 scheduler: Scheduler,
 
+// Promises rejected without a handler since the last microtask checkpoint. A
+// handler attached before the checkpoint ends withdraws the promise: it was
+// never unhandled. What is left is reported by Env.runMicrotasks.
+rejected_promises: std.ArrayList(RejectedPromise) = .empty,
+
 // Execution context for worker-compatible APIs. This provides a common
 // interface that works in both Page and Worker contexts.
 execution: Execution,
 
 unknown_properties: (if (lp.IS_DEBUG) std.StringHashMapUnmanaged(UnknownPropertyStat) else void) = if (lp.IS_DEBUG) .{} else {},
+
+pub const RejectedPromise = struct {
+    promise: js.Promise.Global,
+    reason: js.Value.Global,
+
+    pub fn release(self: RejectedPromise) void {
+        self.promise.release();
+        self.reason.release();
+    }
+};
 
 const ModuleEntry = struct {
     // Can be null if we're asynchronously loading the module, in
@@ -201,6 +216,11 @@ pub fn deinit(self: *Context) void {
 
     // this can release objects
     self.scheduler.deinit();
+
+    for (self.rejected_promises.items) |rejected| {
+        rejected.release();
+    }
+    self.rejected_promises.deinit(env.allocator);
 
     for (self.global_modules.items) |*global| {
         v8.v8__Global__Reset(global);
@@ -408,6 +428,19 @@ fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, ur
         // Some module-loading errors aren't handled by TryCatch. We need to
         // get the error from the module itself.
         const exception = mod.getException();
+
+        // A module script that throws while it evaluates rejects its
+        // evaluation promise rather than throwing. That promise is ours, not
+        // the page's: like a classic script's, the exception is reported as
+        // uncaught, not as an unhandled rejection.
+        if (comptime want_result == false) {
+            if (self.withdrawRejectedReason(exception)) {
+                self.global.reportError(exception) catch |report_err| {
+                    log.debug(.js, "report module error", .{ .specifier = url, .err = report_err });
+                };
+            }
+        }
+
         const message = blk: {
             const e = exception.toString() catch break :blk "???";
             break :blk e.toSlice() catch "???";
@@ -1194,6 +1227,51 @@ fn enqueueMicrotask(self: *Context, callback: anytype) void {
             callback(ctx);
         }
     }.run, self);
+}
+
+// A promise rejected with no handler. It is reported at the end of the
+// microtask checkpoint if it still has none.
+pub fn addRejectedPromise(self: *Context, promise: js.Promise, reason: js.Value) !void {
+    const promise_global = try promise.persist();
+    errdefer promise_global.release();
+    const reason_global = try reason.persist();
+    errdefer reason_global.release();
+
+    try self.rejected_promises.append(self.env.allocator, .{
+        .promise = promise_global,
+        .reason = reason_global,
+    });
+}
+
+// A handler was attached to `promise`. False when it wasn't waiting to be
+// reported (it was already reported, or rejected in another context).
+pub fn withdrawRejectedPromise(self: *Context, promise: js.Promise) bool {
+    for (self.rejected_promises.items, 0..) |rejected, i| {
+        if (rejected.promise.isEqual(promise)) {
+            rejected.release();
+            _ = self.rejected_promises.orderedRemove(i);
+            return true;
+        }
+    }
+    return false;
+}
+
+// Drops the rejections waiting with `reason`, for a caller that reports it
+// itself. True when there was one.
+fn withdrawRejectedReason(self: *Context, reason: js.Value) bool {
+    var found = false;
+    var i: usize = 0;
+    while (i < self.rejected_promises.items.len) {
+        const rejected = self.rejected_promises.items[i];
+        if (rejected.reason.isEqual(reason)) {
+            rejected.release();
+            _ = self.rejected_promises.orderedRemove(i);
+            found = true;
+        } else {
+            i += 1;
+        }
+    }
+    return found;
 }
 
 // There's an assumption here: the js.Function will be alive when microtasks are

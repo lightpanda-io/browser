@@ -388,12 +388,15 @@ pub const ConsoleMessage = struct {
 };
 
 // An uncaught exception reported to a window and not cancelled by an "error"
-// listener: what Chrome logs as "Uncaught …" and sends as
+// listener, or a promise rejection still unhandled at the end of a microtask
+// checkpoint and not cancelled by an "unhandledrejection" listener: what
+// Chrome logs as "Uncaught …" or "Uncaught (in promise) …" and sends as
 // Runtime.exceptionThrown.
 pub const ExceptionThrown = struct {
     timestamp: u64,
     value: js.Value,
     location: js.Value.ErrorLocation,
+    kind: enum { exception, rejection } = .exception,
 };
 
 pub fn init(allocator: Allocator) !*Notification {
