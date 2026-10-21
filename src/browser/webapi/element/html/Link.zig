@@ -39,7 +39,9 @@ _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 // old rules are dropped instead of accumulating in `document.styleSheets`.
 // Mirrors `Style._sheet`.
 _sheet: ?*@import("../../css/CSSStyleSheet.zig") = null,
-_stylesheet_generation: u32 = 0,
+// Bumped each time the link is (re)processed or disconnected. A queued
+// load/error from an earlier pass no longer matches and is dropped.
+_generation: u32 = 0,
 _processed_rel: []const u8 = "",
 
 pub fn asElement(self: *Link) *Element {
@@ -110,7 +112,7 @@ fn setRelList(self: *Link, value: String, frame: *Frame) !void {
 }
 
 pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
-    self._stylesheet_generation +%= 1;
+    self._generation +%= 1;
     // if we're planning on navigating to another frame, don't trigger load event.
     if (frame.isGoingAway()) {
         return;
@@ -200,7 +202,6 @@ pub const Build = struct {
         const is_rel = name.eql(comptime .wrap("rel"));
         if (!is_rel and !name.eql(comptime .wrap("href"))) return;
         if (is_rel and std.mem.eql(u8, value.str(), link._processed_rel)) return;
-        link._stylesheet_generation +%= 1;
         if (element.asNode().isConnected()) {
             try link.linkAddedCallback(element.ownerFrame(frame) orelse return);
         }
@@ -211,7 +212,7 @@ pub const Build = struct {
     }
 
     pub fn disconnected(element: *Element, _: *Frame) !void {
-        element.as(Link)._stylesheet_generation +%= 1;
+        element.as(Link)._generation +%= 1;
     }
 
     pub fn created(node: *Node, frame: *Frame) !void {
