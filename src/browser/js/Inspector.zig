@@ -309,7 +309,7 @@ pub const Session = struct {
             grpname.ptr,
             grpname.len,
             generatepreview,
-        ).?;
+        ) orelse return error.ContextNotFound; // not a context the inspector knows
         return .{ .handle = remote_object };
     }
 

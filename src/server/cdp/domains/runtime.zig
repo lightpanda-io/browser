@@ -188,8 +188,14 @@ pub fn exceptionThrown(arena: Allocator, bc: *CDP.BrowserContext, event: *const 
     frame.js.localScope(&ls);
     defer ls.deinit();
 
+    // The context the exception was thrown in (an iframe's, an isolated
+    // world's), or the page's when the inspector doesn't know that one.
     const value = event.value;
-    const remote_object = try inspector_session.getRemoteObject(&ls.local, "", value);
+    var local = value.local;
+    const remote_object = inspector_session.getRemoteObject(local, "", value) catch blk: {
+        local = &ls.local;
+        break :blk try inspector_session.getRemoteObject(local, "", value);
+    };
     defer remote_object.deinit();
 
     var exception = RemoteObject{
@@ -218,7 +224,7 @@ pub fn exceptionThrown(arena: Allocator, bc: *CDP.BrowserContext, event: *const 
             .columnNumber = location.column -| 1,
             .url = if (location.url.len == 0) null else location.url,
             .exception = exception,
-            .executionContextId = bc.inspector().getContextId(&ls.local),
+            .executionContextId = bc.inspector().getContextId(local),
         },
     }, .{ .session_id = session_id });
 }
@@ -487,6 +493,38 @@ test "cdp.runtime: a rejection whose unhandledrejection event is cancelled is no
         .exceptionDetails = .{ .text = "Uncaught (in promise)", .exception = .{ .type = "string", .value = "loud" } },
     }, .{});
     try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
+}
+
+test "cdp.runtime: an exception carries the id of the context it was thrown in" {
+    testing.expectLog(&.{ .page_error, .page_error });
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC4", .url = "cdp/input_iframe.html", .target_id = "FID-000000EXC4".* });
+    try ctx.processMessage(.{ .id = 63, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    const child = frame.child_frames.items[0];
+
+    var page_ls: js.Local.Scope = undefined;
+    frame.js.localScope(&page_ls);
+    defer page_ls.deinit();
+    const page_context_id = bc.inspector().getContextId(&page_ls.local);
+    _ = try page_ls.local.exec("reportError(new RangeError('page'))", null);
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{ .executionContextId = page_context_id, .exception = .{ .className = "RangeError" } },
+    }, .{});
+
+    var child_ls: js.Local.Scope = undefined;
+    child.js.localScope(&child_ls);
+    defer child_ls.deinit();
+    const child_context_id = bc.inspector().getContextId(&child_ls.local);
+    try testing.expect(child_context_id != page_context_id);
+    _ = try child_ls.local.exec("reportError(new SyntaxError('child'))", null);
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{ .executionContextId = child_context_id, .exception = .{ .className = "SyntaxError" } },
+    }, .{});
 }
 
 test "cdp.runtime: consoleAPICalled type matches the console method" {
