@@ -270,7 +270,7 @@ test "cdp.log: sub-resources with an error status or a network error" {
         try requestIdFor(&ctx, reason),
     );
 
-    const refused = "http://127.0.0.1:59999/refused.js";
+    const refused = "http://127.0.0.1:2/refused.js";
     try expectEntry(
         entries,
         "Failed to load resource: net::ERR_CONNECTION_REFUSED",
@@ -310,7 +310,7 @@ test "cdp.log: a document with an error status, not a failed navigation" {
         try ctx.processMessage(.{ .id = 2, .method = "Log.enable" });
 
         const page = try bc.session.createPage();
-        try page.navigate("http://127.0.0.1:59999/", .{});
+        try page.navigate("http://127.0.0.1:2/", .{});
         try testing.waitForPage(bc);
 
         // The navigation did fail, and Chrome shows its error page without
