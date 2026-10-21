@@ -706,8 +706,7 @@ pub const Jar = struct {
                 // Dispatch while c still points at the live old cookie,
                 // then free its arena, then remove from the array. After
                 // orderedRemove, items[i] holds a different (still-live)
-                // entry, so deinit must happen before that. orderedRemove
-                // keeps the jar in creation order for forRequest.
+                // entry, so deinit must happen before that.
                 self.dispatchChange(.deleted, c);
                 c.deinit();
                 _ = self.cookies.orderedRemove(i);
@@ -726,9 +725,14 @@ pub const Jar = struct {
         }
 
         if (!is_expired) {
-            try self.cookies.append(self.allocator, cookie);
+            // keep it in send order: longest path then creation time.
+            var pos = self.cookies.items.len;
+            while (pos > 0 and sendsBefore(&cookie, &self.cookies.items[pos - 1])) {
+                pos -= 1;
+            }
+            try self.cookies.insert(self.allocator, pos, cookie);
             stored = true;
-            self.dispatchChange(.changed, &self.cookies.items[self.cookies.items.len - 1]);
+            self.dispatchChange(.changed, &self.cookies.items[pos]);
         }
     }
 
@@ -779,8 +783,7 @@ pub const Jar = struct {
 
         removeExpired(self, now);
 
-        var matches: std.ArrayList(*const Cookie) = .empty;
-        defer matches.deinit(self.allocator);
+        var first = true;
         for (self.cookies.items) |*cookie| {
             const applies = cookie.appliesTo(&target, .{
                 .same_site = same_site,
@@ -788,21 +791,16 @@ pub const Jar = struct {
                 .kind = opts.kind,
                 .now = now,
             });
-            if (applies) {
-                try matches.append(self.allocator, cookie);
+            if (!applies) {
+                continue;
             }
-        }
 
-        // RFC 6265bis 5.8.3: longer paths first, then earlier creation times.
-        // The sort is stable, so cookies created in the same second keep the
-        // order they were added in.
-        std.sort.insertion(*const Cookie, matches.items, {}, sendsBefore);
-
-        for (matches.items, 0..) |cookie, i| {
-            if (i == 0) {
+            // we have a match!
+            if (first) {
                 if (opts.prefix) |prefix| {
                     try writer.writeAll(prefix);
                 }
+                first = false;
             } else {
                 try writer.writeAll("; ");
             }
@@ -810,7 +808,7 @@ pub const Jar = struct {
         }
     }
 
-    fn sendsBefore(_: void, a: *const Cookie, b: *const Cookie) bool {
+    fn sendsBefore(a: *const Cookie, b: *const Cookie) bool {
         if (a.path.len != b.path.len) {
             return a.path.len > b.path.len;
         }

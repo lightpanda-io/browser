@@ -88,7 +88,7 @@ pub fn remove(jar: *Cookie.Jar, context: anytype, comptime matches: fn (@TypeOf(
     while (i > 0) {
         i -= 1;
         if (matches(context, &cookies.items[i])) {
-            cookies.swapRemove(i).deinit();
+            cookies.orderedRemove(i).deinit();
         }
     }
 }
