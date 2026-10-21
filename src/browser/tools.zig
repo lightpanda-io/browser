@@ -2691,6 +2691,7 @@ pub const StartedGoto = struct {
 /// right after createPage but navigate can change/null it, so callers re-fetch.
 fn openPage(session: *lp.Session, url: [:0]const u8) ToolError!lp.Session.PageHandle {
     const page = session.createPage() catch return ToolError.NavigationFailed;
+    errdefer page.close();
     _ = page.frame().?.navigate(url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
@@ -3621,6 +3622,21 @@ test "markdown: alternate reads the page's text/markdown link" {
     , .{}), .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, failed.text, "Rendered page") != null);
     try std.testing.expect(std.mem.find(u8, failed.text, "markdown alternate") == null);
+}
+
+test "startGoto: a navigation that fails to start leaves no page behind" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    const pages = session.pages.items.len;
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"blob:http://localhost:9582/missing"}
+    , .{});
+    try std.testing.expectError(ToolError.NavigationFailed, startGoto(aa, session, &registry, args, null));
+    try std.testing.expectEqual(pages, session.pages.items.len);
 }
 
 test "markdown: a same-url page whose navigation failed is navigated again" {

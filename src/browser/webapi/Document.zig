@@ -100,6 +100,9 @@ _extent: ?struct {
 } = null,
 // Ordered stack of currently-showing popovers
 _open_popovers: std.ArrayList(*Element) = .empty,
+// Ordered stack of dialogs opened with showModal(), topmost last. Stands in
+// for the top layer and the close watchers those dialogs establish.
+_modal_dialogs: std.ArrayList(*Element.Html.Dialog) = .empty,
 
 // https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#throw-on-dynamic-markup-insertion-counter
 // Incremented during custom element reactions when parsing. When > 0,
@@ -359,7 +362,11 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     try validateElementName(name);
     const ns: Element.Namespace, const normalized_name = blk: {
         if (self._type == .html) {
-            break :blk .{ .html, std.ascii.lowerString(&frame.buf, name) };
+            const lower = if (Element.Attribute.needsLowerCasing(name))
+                try std.ascii.allocLowerString(frame.local_arena, name)
+            else
+                name;
+            break :blk .{ .html, lower };
         }
         // Generic and XML documents create elements with null namespace
         break :blk .{ .null, name };
@@ -635,7 +642,7 @@ fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@imp
     if (event_type.len > 100) {
         return error.NotSupported;
     }
-    const normalized = std.ascii.lowerString(&frame.buf, event_type);
+    const normalized = try std.ascii.allocLowerString(frame.local_arena, event_type);
 
     const event: *Event = blk: {
         if (std.mem.eql(u8, normalized, "event") or std.mem.eql(u8, normalized, "events") or std.mem.eql(u8, normalized, "htmlevents") or std.mem.eql(u8, normalized, "svgevents")) {
@@ -1281,6 +1288,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     self._elements_by_id.clearAndFree(frame.page_arena);
     self.setActiveElement(null, frame);
     self._open_popovers = .empty;
+    self._modal_dialogs = .empty;
     self._style_sheets = null;
     self._implementation = null;
     self._ready_state = .loading;

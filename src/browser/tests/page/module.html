@@ -111,3 +111,8 @@ let a top-level-await module finish before its still-evaluating parent -->
   import "./modules/tla.js?reject";
   import "./modules/checkpoint-reject.js";
 </script>
+
+<script type=module>
+  import "./modules/tla.js?bad-specifier";
+  import "./modules/checkpoint-bad-specifier.js";
+</script>

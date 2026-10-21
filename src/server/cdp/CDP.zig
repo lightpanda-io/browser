@@ -679,6 +679,7 @@ pub const BrowserContext = struct {
             browser.http_client.clearUserAgentOverride();
         }
         browser.http_client.clearAcceptLanguageOverride();
+        browser.clearPermissions();
         self.intercept_state.deinit();
     }
 
@@ -944,6 +945,35 @@ pub const BrowserContext = struct {
 
     pub fn consoleDisable(self: *BrowserContext) void {
         self.notification.unregister(.console_message, self);
+    }
+
+    // The Log domain is enabled per session, so the session is the receiver:
+    // the context itself already listens to these events for Network.
+    pub fn logEnable(self: *BrowserContext, attached: *AttachedSession) !void {
+        try self.notification.register(.http_response_header_done, attached, onLogResponseHeaderDone);
+        errdefer self.notification.unregister(.http_response_header_done, attached);
+        try self.notification.register(.http_request_fail, attached, onLogRequestFail);
+    }
+
+    pub fn logDisable(self: *BrowserContext, attached: *AttachedSession) void {
+        self.notification.unregister(.http_response_header_done, attached);
+        self.notification.unregister(.http_request_fail, attached);
+    }
+
+    fn onLogResponseHeaderDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
+        const attached: *AttachedSession = @ptrCast(@alignCast(ctx));
+        const self = attached.bc;
+        const arena = self.acquireNotificationArena();
+        defer self.releaseNotificationArena();
+        return @import("domains/log.zig").httpResponseHeaderDone(arena, self, attached.id, msg);
+    }
+
+    fn onLogRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
+        const attached: *AttachedSession = @ptrCast(@alignCast(ctx));
+        const self = attached.bc;
+        const arena = self.acquireNotificationArena();
+        defer self.releaseNotificationArena();
+        return @import("domains/log.zig").httpRequestFail(arena, self, attached.id, msg);
     }
 
     pub fn runtimeEnable(self: *BrowserContext) !void {
@@ -1282,6 +1312,7 @@ pub const BrowserContext = struct {
     }
 
     fn destroySession(self: *BrowserContext, attached: *AttachedSession) void {
+        self.notification.unregisterAll(attached);
         attached.inspector_session.deinit();
         self.cdp.allocator.destroy(attached);
     }

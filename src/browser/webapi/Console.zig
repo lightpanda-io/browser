@@ -34,11 +34,13 @@ pub const init: Console = .{};
 fn dispatchConsoleMessage(values: []js.Value, console_type: Notification.ConsoleMessageType, exec: *js.Execution) void {
     const notification = exec.session.notification;
     const ts = lp.datetime.timestamp(.boot);
+    const local = exec.js.local.?;
 
     notification.dispatch(.console_message, &.{
         .source = .javascript,
         .type = console_type,
         .values = values,
+        .local = local,
         .timestamp = ts,
     });
 
@@ -46,6 +48,7 @@ fn dispatchConsoleMessage(values: []js.Value, console_type: Notification.Console
         .source = .javascript,
         .type = console_type,
         .values = values,
+        .local = local,
         .timestamp = ts,
     });
 }

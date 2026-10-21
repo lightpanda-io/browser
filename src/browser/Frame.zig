@@ -85,8 +85,6 @@ const String = lp.String;
 const IFrame = Element.Html.IFrame;
 const Allocator = std.mem.Allocator;
 
-pub const BUF_SIZE = 1024;
-
 const Frame = @This();
 
 // This is the "id" of the frame. It can be re-used from frame-to-frame, e.g.
@@ -257,10 +255,6 @@ inherited_base_url: ?[:0]const u8 = null,
 
 // Document charset (canonical name from encoding_rs, static lifetime)
 charset: []const u8 = "UTF-8",
-
-// Arbitrary buffer. Need to temporarily lowercase a value? Use this. No lifetime
-// guarantee - it's valid until someone else uses it.
-buf: [BUF_SIZE]u8 = undefined,
 
 // access to the JavaScript engine
 js: *JS.Context,
@@ -2970,7 +2964,7 @@ pub fn appendNew(self: *Frame, parent: *Node, child: *Node, parent_root: ?*Node)
 // called from the parser when the node and all its children have been added
 pub fn nodeComplete(self: *Frame, node: *Node) !void {
     Node.Build.call(node, "complete", .{ node, self }) catch |err| {
-        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type, .url = self.url });
+        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(self.local_arena), .err = err, .type = self._type, .url = self.url });
         return err;
     };
     return self.nodeIsReady(true, node);
@@ -3128,10 +3122,17 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     // The child was connected and now it no longer is. We need to "disconnect"
     // it and all of its descendants. For now "disconnect" just means updating
     // the ID map and invoking disconnectedCallback for custom elements
+    var shadow_roots: std.ArrayList(*ShadowRoot) = .empty;
+
     var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getId()) |id| {
             self.removeElementIdWithMaps(old_id_maps.?, id);
+        }
+        if (el.hostedShadowRoot(self)) |shadow| {
+            shadow_roots.append(self.call_arena, shadow) catch |err| {
+                log.err(.bug, "shadow.disconnect", .{ .err = err, .type = self._type, .url = self.url });
+            };
         }
 
         Element.Html.Custom.enqueueDisconnectedCallbackOnElement(el, self);
@@ -3176,12 +3177,44 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
             }
         }
     }
+    self.disconnectShadowIFrames(&shadow_roots);
 }
 
 fn removeStyleSheet(owner: ?*Frame, sheet: *CSSStyleSheet) void {
     const frame = owner orelse return;
     const sheets = frame.document._style_sheets orelse return;
     sheets.remove(sheet);
+}
+
+fn disconnectShadowIFrames(self: *Frame, shadow_roots: *std.ArrayList(*ShadowRoot)) void {
+    var iframes: std.ArrayList(*Node) = .empty;
+    self.collectShadowIFrames(shadow_roots, &iframes) catch |err| {
+        log.err(.bug, "shadow.disconnect", .{ .err = err, .type = self._type, .url = self.url });
+    };
+    for (iframes.items) |node| {
+        const el = node.as(Element);
+        IFrame.Build.disconnected(el, self) catch |err| {
+            log.err(.bug, "build.disconnected", .{ .tag = el.getTag(), .err = err, .type = self._type, .url = self.url });
+        };
+    }
+}
+
+// TreeWalker doesn't enter a shadow trees. So when we connect/disconnect a
+// subtree, this function lets us reach through it. `shadow_roots` is a list
+// to visit (and we might discover new ones while visiting those).
+fn collectShadowIFrames(self: *Frame, shadow_roots: *std.ArrayList(*ShadowRoot), out: *std.ArrayList(*Node)) !void {
+    var i: usize = 0;
+    while (i < shadow_roots.items.len) : (i += 1) {
+        var tw = TreeWalker.FullExcludeSelf.Elements.init(shadow_roots.items[i].asNode(), .{});
+        while (tw.next()) |el| {
+            if (el.is(IFrame) != null) {
+                try out.append(self.call_arena, el.asNode());
+            }
+            if (el.hostedShadowRoot(self)) |shadow| {
+                try shadow_roots.append(self.call_arena, shadow);
+            }
+        }
+    }
 }
 
 // The TreeWalker isn't shadow DOM aware, so this is correctly scoped to direct
@@ -3632,17 +3665,25 @@ fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, child_i
 // children, for its descendants in tree order: appending a subtree
 // containing scripts must execute them all, after the whole insertion.
 fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
-    if (node._type != .element or node.firstChild() == null) {
+    if (node._type != .element) {
+        return self.nodeIsReady(false, node);
+    }
+    if (node.firstChild() == null and node.as(Element).hostedShadowRoot(self) == null) {
         return self.nodeIsReady(false, node);
     }
 
     // Scripts can mutate the tree. Safe to do this since nodeIsReady re-checks
     // connectivity.
     var elements: std.ArrayList(*Node) = .empty;
+    var shadow_roots: std.ArrayList(*ShadowRoot) = .empty;
     var tw = TreeWalker.Full.Elements.init(node, .{});
     while (tw.next()) |el| {
         try elements.append(self.call_arena, el.asNode());
+        if (el.hostedShadowRoot(self)) |shadow| {
+            try shadow_roots.append(self.call_arena, shadow);
+        }
     }
+    try self.collectShadowIFrames(&shadow_roots, &elements);
     for (elements.items) |el| {
         try self.nodeIsReady(false, el);
     }

@@ -1163,6 +1163,18 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    // Latin-1 bytes in the reason phrase, a header name and a header value.
+    if (std.mem.eql(u8, path, "/latin1_response")) {
+        return req.respond("latin1", .{
+            .reason = "Caf\xE9",
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "X-Latin1", .value = "La\xA0Paz" },
+                .{ .name = "X-Caf\xE9", .value = "1" },
+            },
+        });
+    }
+
     // Latin-1 sheets for css/stylesheet_charset.html: undecoded, the 0xE9
     // swallows the bytes after it and the rule that follows is lost.
     if (std.mem.eql(u8, path, "/styles/latin1-header.css")) {

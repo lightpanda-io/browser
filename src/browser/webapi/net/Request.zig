@@ -133,7 +133,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
     }
 
     const method = if (opts.method) |m|
-        try parseMethod(m, exec)
+        try parseMethod(m)
     else switch (input) {
         .url => .GET,
         .request => |r| r._method,
@@ -260,14 +260,8 @@ pub fn acquireRef(self: *Request) void {
     self._rc.acquire();
 }
 
-fn parseMethod(method: []const u8, exec: *const Execution) !http.Method {
-    if (method.len > "propfind".len) {
-        return error.TypeError;
-    }
-
-    const lower = std.ascii.lowerString(exec.buf, method);
-
-    const method_lookup = std.StaticStringMap(http.Method).initComptime(.{
+fn parseMethod(method: []const u8) !http.Method {
+    const method_lookup = std.StaticStringMapWithEql(http.Method, std.static_string_map.eqlAsciiIgnoreCase).initComptime(.{
         .{ "get", .GET },
         .{ "post", .POST },
         .{ "delete", .DELETE },
@@ -277,7 +271,7 @@ fn parseMethod(method: []const u8, exec: *const Execution) !http.Method {
         .{ "options", .OPTIONS },
         .{ "propfind", .PROPFIND },
     });
-    return method_lookup.get(lower) orelse return error.TypeError;
+    return method_lookup.get(method) orelse return error.TypeError;
 }
 
 pub fn getUrl(self: *const Request) []const u8 {

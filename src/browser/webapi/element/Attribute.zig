@@ -271,7 +271,7 @@ pub const List = struct {
             try owner.addElementId(parent, element, entry.value());
         }
         owner.domChanged();
-        owner.attributeChange(element, result.normalized, .wrap(entry.value()), old_value);
+        owner.attributeChange(element, .wrap(name), .wrap(entry.value()), old_value);
         return name;
     }
 
@@ -366,6 +366,7 @@ pub const List = struct {
         const owner = element.ownerFrame(frame) orelse frame;
         const is_id = shouldAddToIdMap(normalized, element);
         const old_value = entry.value();
+        const name = entry.name();
 
         if (is_id) {
             owner.removeElementId(element, old_value);
@@ -383,7 +384,7 @@ pub const List = struct {
         self._len -= 1;
 
         owner.domChanged();
-        owner.attributeRemove(element, normalized, .wrap(old_value));
+        owner.attributeRemove(element, .wrap(name), .wrap(old_value));
     }
 
     pub fn getNames(self: *const List, allocator: Allocator) ![][]const u8 {
@@ -430,8 +431,8 @@ pub const List = struct {
         return result.entry;
     }
 
-    // Dangerous, the returned normalized name is only valid until someone
-    // else uses pages.buf.
+    // Dangerous, the returned normalized name can live in frame.local_arena,
+    // so it's only valid until that's reset.
     const NormalizeAndEntry = struct {
         entry: ?*Entry,
         normalized: String,
@@ -578,20 +579,18 @@ fn normalizeNameForLookup(name: String, frame: *Frame) !String {
     if (!needsLowerCasing(name.str())) {
         return name;
     }
-    const normalized = if (name.len < frame.buf.len)
-        std.ascii.lowerString(&frame.buf, name.str())
-    else
-        try std.ascii.allocLowerString(frame.local_arena, name.str());
-
+    const normalized = try std.ascii.allocLowerString(frame.local_arena, name.str());
     return .wrap(normalized);
 }
 
 pub fn needsLowerCasing(name: []const u8) bool {
     var remaining = name;
     if (comptime std.simd.suggestVectorLength(u8)) |vector_len| {
+        const V = @Vector(vector_len, u8);
         while (remaining.len > vector_len) {
-            const chunk: @Vector(vector_len, u8) = remaining[0..vector_len].*;
-            if (@reduce(.Min, chunk) <= 'Z') {
+            const chunk: V = remaining[0..vector_len].*;
+            // 'A'...'Z' wrap to 0...25, every other byte to 26 or more
+            if (@reduce(.Min, chunk -% @as(V, @splat('A'))) < 26) {
                 return true;
             }
             remaining = remaining[vector_len..];
@@ -819,4 +818,18 @@ fn writeEscapedAttributeValue(value: []const u8, first_offset: usize, writer: *s
     if (remaining.len > 0) {
         try writer.writeAll(remaining);
     }
+}
+
+const testing = @import("../../../testing.zig");
+test "Attribute: needsLowerCasing" {
+    try testing.expectEqual(false, needsLowerCasing(""));
+    try testing.expectEqual(false, needsLowerCasing("data-x"));
+    try testing.expectEqual(true, needsLowerCasing("data-X"));
+
+    // longer than any vector: '@' and '[' sit just outside 'A'...'Z'
+    const long = "access-control-allow-origin-0123456789-@[`{-access-control-allow-origin";
+    try testing.expectEqual(false, needsLowerCasing(long));
+    try testing.expectEqual(true, needsLowerCasing("A" ++ long));
+    try testing.expectEqual(true, needsLowerCasing(long ++ "Z"));
+    try testing.expectEqual(true, needsLowerCasing(long[0..20] ++ "M" ++ long[20..]));
 }

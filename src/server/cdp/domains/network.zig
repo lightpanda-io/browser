@@ -323,7 +323,7 @@ fn deleteCookies(cmd: *CDP.Command) !void {
         // We do not want to use Cookie.appliesTo here. As a Cookie with a shorter path would match.
         // Similar to deduplicating with areCookiesEqual, except domain and path are optional.
         if (cookieMatches(cookie, params.name, domain, path)) {
-            cookies.swapRemove(index).deinit();
+            cookies.orderedRemove(index).deinit();
         }
     }
     return cmd.sendResult(null, .{});
@@ -697,7 +697,7 @@ const ResponseWriter = struct {
             try jws.objectField("statusText");
             // The server's own phrase, not a canonical one: Chrome reports the
             // wire, empty included.
-            try jws.write(transfer.statusText() orelse "");
+            try jws.write(SafeString.wrap(transfer.statusText() orelse ""));
         }
 
         {
@@ -1580,6 +1580,34 @@ test "cdp.Network: getResponseBody base64-encodes a non-UTF-8 body" {
         .params = .{ .requestId = &request_id },
     });
     try ctx.expectSentResult(.{ .body = "/2Fi/g==", .base64Encoded = true }, .{ .id = 2 });
+}
+
+test "cdp.Network: responseReceived reports a non-UTF-8 status text and headers as strings" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-L1", .session_id = "SID-L1" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const url = "http://127.0.0.1:9582/latin1_response";
+    const page = try bc.session.createPage();
+    try page.navigate(url, .{});
+    try testing.waitForPage(bc);
+
+    // Latin-1 is transcoded to UTF-8, not written as an array of numbers.
+    try ctx.expectSentEvent("Network.responseReceived", .{
+        .response = .{
+            .url = url,
+            .status = 200,
+            .statusText = "Caf\xC3\xA9",
+            .headers = .{
+                .@"x-latin1" = "La\xC2\xA0Paz",
+                .@"x-caf\xC3\xA9" = "1",
+            },
+        },
+    }, .{ .session_id = "SID-L1" });
 }
 
 test "cdp.Network: enable maxTotalBufferSize evicts oldest bodies first" {

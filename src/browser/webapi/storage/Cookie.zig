@@ -705,11 +705,11 @@ pub const Jar = struct {
             if (is_expired) {
                 // Dispatch while c still points at the live old cookie,
                 // then free its arena, then remove from the array. After
-                // swapRemove, items[i] holds a different (still-live)
+                // orderedRemove, items[i] holds a different (still-live)
                 // entry, so deinit must happen before that.
                 self.dispatchChange(.deleted, c);
                 c.deinit();
-                _ = self.cookies.swapRemove(i);
+                _ = self.cookies.orderedRemove(i);
             } else {
                 // RFC 6265bis 5.7 step 23: the replacement keeps the
                 // creation time of the cookie it replaces.
@@ -725,9 +725,14 @@ pub const Jar = struct {
         }
 
         if (!is_expired) {
-            try self.cookies.append(self.allocator, cookie);
+            // keep it in send order: longest path then creation time.
+            var pos = self.cookies.items.len;
+            while (pos > 0 and sendsBefore(&cookie, &self.cookies.items[pos - 1])) {
+                pos -= 1;
+            }
+            try self.cookies.insert(self.allocator, pos, cookie);
             stored = true;
-            self.dispatchChange(.changed, &self.cookies.items[self.cookies.items.len - 1]);
+            self.dispatchChange(.changed, &self.cookies.items[pos]);
         }
     }
 
@@ -757,7 +762,7 @@ pub const Jar = struct {
             i -= 1;
             const cookie = &self.cookies.items[i];
             if (isCookieExpired(cookie, time)) {
-                self.cookies.swapRemove(i).deinit();
+                self.cookies.orderedRemove(i).deinit();
             }
         }
     }
@@ -801,6 +806,13 @@ pub const Jar = struct {
             }
             try writeCookie(cookie, writer);
         }
+    }
+
+    fn sendsBefore(a: *const Cookie, b: *const Cookie) bool {
+        if (a.path.len != b.path.len) {
+            return a.path.len > b.path.len;
+        }
+        return a.creation_time < b.creation_time;
     }
 
     pub fn populateFromResponse(self: *Jar, url: [:0]const u8, set_cookie: []const u8) !void {
@@ -1134,7 +1146,7 @@ test "Jar: forRequest" {
     });
 
     // matching path without trailing /
-    try expectCookies("global1=1; global2=2; path1=3", &jar, "http://lightpanda.io/about", .{
+    try expectCookies("path1=3; global1=1; global2=2", &jar, "http://lightpanda.io/about", .{
         .origin_url = .{ .url = test_url },
         .is_http = true,
     });
@@ -1158,13 +1170,13 @@ test "Jar: forRequest" {
     });
 
     // exact directory match
-    try expectCookies("global1=1; global2=2; path2=4", &jar, "http://lightpanda.io/docs/", .{
+    try expectCookies("path2=4; global1=1; global2=2", &jar, "http://lightpanda.io/docs/", .{
         .origin_url = .{ .url = test_url },
         .is_http = true,
     });
 
     // sub directory match
-    try expectCookies("global1=1; global2=2; path2=4", &jar, "http://lightpanda.io/docs/more", .{
+    try expectCookies("path2=4; global1=1; global2=2", &jar, "http://lightpanda.io/docs/more", .{
         .origin_url = .{ .url = test_url },
         .is_http = true,
     });
@@ -1176,14 +1188,14 @@ test "Jar: forRequest" {
     });
 
     // navigational cross domain, secure
-    try expectCookies("global1=1; global2=2; secure=5; sitenone=6; sitelax=7", &jar, "https://lightpanda.io/x/", .{
+    try expectCookies("sitenone=6; sitelax=7; global1=1; global2=2; secure=5", &jar, "https://lightpanda.io/x/", .{
         .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
         .kind = .navigation,
     });
 
     // navigational cross domain, insecure
-    try expectCookies("global1=1; global2=2; sitelax=7", &jar, "http://lightpanda.io/x/", .{
+    try expectCookies("sitelax=7; global1=1; global2=2", &jar, "http://lightpanda.io/x/", .{
         .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
         .kind = .navigation,
@@ -1204,7 +1216,7 @@ test "Jar: forRequest" {
     });
 
     // non-navigational same origin
-    try expectCookies("global1=1; global2=2; sitelax=7; sitestrict=8", &jar, "http://lightpanda.io/x/", .{
+    try expectCookies("sitelax=7; sitestrict=8; global1=1; global2=2", &jar, "http://lightpanda.io/x/", .{
         .origin_url = .{ .url = "https://lightpanda.io/" },
         .is_http = true,
         .kind = .subresource,
@@ -1238,6 +1250,29 @@ test "Jar: forRequest" {
 
     // If you add more cases after this point, note that the above test removes
     // the 'global2' cookie
+}
+
+test "Jar: forRequest orders cookies by path length, then creation time" {
+    const now = lp.datetime.timestamp(.real);
+
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "session=root"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "old=1;Max-Age=10"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "session=app;Path=/app"), now + 1, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "a=2"), now + 2, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "b=3"), now + 2, true);
+
+    // `old` expires before the request; removing it must not reorder `a` and `b`.
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try jar.forRequest("http://lightpanda.io/app/x", &aw.writer, .{
+        .origin_url = .{ .url = test_url },
+        .is_http = true,
+        .request_time = now + 20,
+    });
+    try testing.expectEqual("session=app; session=root; a=2; b=3", aw.written());
 }
 
 test "Jar: forRequest Secure cookies on loopback origins" {

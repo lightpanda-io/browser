@@ -723,3 +723,17 @@
   testing.expectEqual('2', usp.get('xx'));
 }
 </script>
+
+<script id=longEscapedValue>
+{
+  // longer than the 1024-byte buffer values used to be decoded into
+  const usp = new URLSearchParams('a=' + '%41'.repeat(2000) + '&b=' + 'x+'.repeat(1000));
+  testing.expectEqual('A'.repeat(2000), usp.get('a'));
+  testing.expectEqual('x '.repeat(1000), usp.get('b'));
+
+  const url = new URL('https://example.com/?a=1');
+  testing.expectEqual('1', url.searchParams.get('a'));
+  url.search = 'a=' + '%42'.repeat(2000);
+  testing.expectEqual('B'.repeat(2000), url.searchParams.get('a'));
+}
+</script>

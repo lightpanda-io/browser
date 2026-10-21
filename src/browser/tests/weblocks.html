@@ -195,6 +195,8 @@
     order.push('holder-start');
     releaseStolen = resolve;
   }));
+  // stolen below: its request rejects with AbortError
+  holder.catch(() => {});
 
   await new Promise((r) => setTimeout(r, 0));
 

@@ -28,6 +28,7 @@ const Element = @import("../../Element.zig");
 
 const HtmlElement = @import("../Html.zig");
 
+const String = lp.String;
 const Dialog = @This();
 
 pub const Proto = HtmlElement;
@@ -61,6 +62,41 @@ pub fn show(self: *Dialog, frame: *Frame) !void {
 fn showModal(self: *Dialog, frame: *Frame) !void {
     if (self.getOpen()) return error.InvalidStateError;
     try self.asElement().setAttributeSafe(comptime .wrap("open"), .wrap(""), frame);
+    // Only a connected dialog joins its document's top layer. That's the
+    // dialog's own document, which isn't the caller's for a cross-frame call.
+    const node = self.asNode();
+    if (node.isConnected()) {
+        try node.getDocument(frame)._modal_dialogs.append(frame.page_arena, self);
+    }
+}
+
+/// https://html.spec.whatwg.org/multipage/interactive-elements.html#close-requests
+/// Escape's close request, handled by the topmost modal dialog's close
+/// watcher: fire `cancel` and, unless a listener cancels it, close the dialog
+/// without changing returnValue. Chrome makes `cancel` cancelable only with
+/// history-action user activation; that isn't tracked, so it always is.
+pub fn requestCloseTopModal(frame: *Frame) !void {
+    const stack = frame.document._modal_dialogs.items;
+    if (stack.len == 0) return;
+    const dialog = stack[stack.len - 1];
+
+    const event = try Event.init("cancel", .{ .bubbles = false, .cancelable = true }, frame.page);
+    if (try frame._event_manager.dispatchCancelable(dialog.asElement().asEventTarget(), event)) {
+        return;
+    }
+    // A cancel listener may already have closed it; close() is then a no-op.
+    try dialog.close(null, frame);
+}
+
+fn removeModal(element: *Element, frame: *Frame) void {
+    const dialog = element.is(Dialog) orelse return;
+    const list = &element.asNode().getDocument(frame)._modal_dialogs;
+    for (list.items, 0..) |item, i| {
+        if (item == dialog) {
+            _ = list.orderedRemove(i);
+            return;
+        }
+    }
 }
 
 /// https://html.spec.whatwg.org/multipage/interactive-elements.html#dom-dialog-close
@@ -79,6 +115,20 @@ pub fn close(self: *Dialog, return_value: ?[]const u8, frame: *Frame) !void {
 pub fn getOpen(self: *const Dialog) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("open")) != null;
 }
+
+// The dialog cleanup steps: a dialog that loses [open] (close() included) or
+// leaves the document stops being modal.
+pub const Build = struct {
+    pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
+        if (name.eql(comptime .wrap("open"))) {
+            removeModal(element, frame);
+        }
+    }
+
+    pub fn disconnected(element: *Element, frame: *Frame) !void {
+        removeModal(element, frame);
+    }
+};
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Dialog);
@@ -101,4 +151,61 @@ pub const JsApi = struct {
 const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Dialog" {
     try testing.htmlRunner("element/html/dialog.html", .{});
+}
+
+test "WebApi: HTML.Dialog close request" {
+    const page = try testing.pageTest("element/html/dialog_close_request.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Each step runs its script, presses a trusted Escape when `press` is set,
+    // then compares the page's state() summary.
+    const steps = [_]struct { []const u8, bool, []const u8 }{
+        // The modal dialog closes; returnValue is left unchanged.
+        .{ "reset(); A.returnValue = 'keep'; A.showModal()", true, "a:false b:false rv:keep| log:cancel@a,close@a!" },
+        // Only the topmost modal closes, then the one below it.
+        .{ "reset(); A.showModal(); B.showModal()", true, "a:true b:false rv:| log:cancel@b,close@b!" },
+        .{ "", true, "a:false b:false rv:| log:cancel@b,close@b!,cancel@a,close@a!" },
+        // Cancelling `cancel` keeps the dialog open.
+        .{ "reset(); A.showModal(); preventCancel = true", true, "a:true b:false rv:| log:cancel@a" },
+        // Cancelling the keydown stops the close request entirely.
+        .{ "reset(); A.showModal(); preventKeydown = true", true, "a:true b:false rv:| log:" },
+        // A dialog opened with show() has no close watcher.
+        .{ "reset(); A.show()", true, "a:true b:false rv:| log:" },
+        // An untrusted keydown has no default action.
+        .{ "reset(); A.showModal(); document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))", false, "a:true b:false rv:| log:" },
+        // Removing [open] or the dialog itself takes it out of the stack.
+        .{ "reset(); A.showModal(); B.showModal(); B.removeAttribute('open')", true, "a:false b:false rv:| log:cancel@a,close@a!" },
+        .{ "reset(); A.showModal(); B.showModal(); B.remove()", true, "a:false b:true rv:| log:cancel@a,close@a!" },
+        // With no modal dialog, Escape does nothing.
+        .{ "reset()", true, "a:false b:false rv:| log:" },
+    };
+    for (steps) |step| {
+        const script, const press, const expected = step;
+        _ = try ls.local.compileAndRun(script, null);
+        if (press) {
+            try pressEscape(frame);
+        }
+        const actual = try (try ls.local.compileAndRun("state()", null)).toStringSliceWithAlloc(testing.arena_allocator);
+        try testing.expectString(expected, actual);
+    }
+
+    // A dialog shown from another frame is modal in its own document, so only
+    // an Escape pressed in that document closes it.
+    const child = frame.child_frames.items[0];
+    _ = try ls.local.compileAndRun("C().showModal()", null);
+    try pressEscape(frame);
+    try testing.expectEqual(true, (try ls.local.compileAndRun("C().open", null)).toBool());
+    try pressEscape(child);
+    try testing.expectEqual(false, (try ls.local.compileAndRun("C().open", null)).toBool());
+}
+
+fn pressEscape(frame: *Frame) !void {
+    const keyboard = @import("../../../frame/keyboard.zig");
+    const escape = keyboard.named("Escape");
+    try keyboard.dispatch(frame, null, .down, &escape, &.{});
+    try keyboard.dispatch(frame, null, .up, &escape, &.{});
 }

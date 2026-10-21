@@ -481,9 +481,9 @@ pub fn setTextContent(self: *Node, data: []const u8, frame: *Frame) !void {
     }
 }
 
-pub fn getNodeName(self: *const Node, buf: []u8) []const u8 {
+pub fn getNodeName(self: *const Node, allocator: Allocator) []const u8 {
     return switch (self._type) {
-        .element => self.subtype(Element).getTagNameSpec(buf),
+        .element => self.subtype(Element).getTagNameSpec(allocator),
         .cdata => {
             const cd = self.subtype(CData);
             return switch (cd._type) {
@@ -1422,7 +1422,10 @@ pub fn getElementsByTagName(self: *Node, tag_name: []const u8, frame: *Frame) !G
         };
     }
 
-    const lower = std.ascii.lowerString(&frame.buf, tag_name);
+    const lower = if (Element.Attribute.needsLowerCasing(tag_name))
+        try std.ascii.allocLowerString(frame.local_arena, tag_name)
+    else
+        tag_name;
     if (Node.Element.Tag.parseForMatch(lower)) |known| {
         // optimized for known tag names, comparison
         return .{
@@ -1510,6 +1513,35 @@ pub fn prependNodes(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void
     // The reference child is evaluated after converting nodes into the
     // fragment: one of the arguments may be the current first child.
     _ = try self.insertBefore(fragment_node, self.firstChild(), frame);
+}
+
+/// Element and CharacterData replaceWith.
+pub fn replaceWithNodes(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void {
+    const parent = self._parent orelse return;
+    const viable_next = NodeOrText.viableNextSibling(self, nodes);
+
+    if (nodes.len == 1) {
+        const node = try nodes[0].toNode(self.getDocument(frame));
+        _ = try parent.replaceChild(node, self, frame);
+        return;
+    }
+
+    const fragment = try DocumentFragment.init(self.getDocument(frame), frame);
+    const fragment_node = fragment.asNode();
+    defer if (fragment_node.firstChild() == null) {
+        frame._factory.destroy(fragment);
+    };
+    for (nodes) |node_or_text| {
+        const child = try node_or_text.toNode(self.getDocument(frame));
+        _ = try fragment_node.appendChild(child, frame);
+    }
+
+    // self may itself be one of the nodes, now moved into the fragment.
+    if (self._parent == parent) {
+        _ = try parent.replaceChild(fragment_node, self, frame);
+    } else {
+        _ = try parent.insertBefore(fragment_node, viable_next, frame);
+    }
 }
 
 /// Shared implementation of replaceChildren for Element, Document, and DocumentFragment.
@@ -1816,7 +1848,7 @@ pub const JsApi = struct {
 
     pub const nodeName = bridge.accessor(struct {
         fn wrap(self: *const Node, frame: *Frame) []const u8 {
-            return self.getNodeName(&frame.buf);
+            return self.getNodeName(frame.local_arena);
         }
     }.wrap, null, .{});
     pub const nodeType = bridge.accessor(Node.getNodeType, null, .{});
