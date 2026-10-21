@@ -478,7 +478,7 @@ const Context = struct {
             }
 
             if (self.state.in_code) {
-                try self.writer.writeAll(word);
+                try self.writeCode(word);
             } else {
                 try self.escape(word);
             }
@@ -490,6 +490,20 @@ const Context = struct {
         if (!first and !self.state.last_char_was_newline and std.ascii.isWhitespace(text[text.len - 1])) {
             try self.writer.writeByte(' ');
         }
+    }
+
+    // A GFM table splits a row into cells before it parses code spans, so
+    // a `|` inside a code span in a table still has to be escaped.
+    fn writeCode(self: *Context, text: []const u8) !void {
+        if (!self.state.in_table) return self.writer.writeAll(text);
+        var start: usize = 0;
+        for (text, 0..) |c, i| {
+            if (c != '|') continue;
+            if (i > start) try self.writer.writeAll(text[start..i]);
+            try self.writer.writeAll("\\|");
+            start = i + 1;
+        }
+        if (start < text.len) try self.writer.writeAll(text[start..]);
     }
 
     fn escape(self: *Context, text: []const u8) !void {
@@ -765,6 +779,16 @@ test "browser.markdown: inline code" {
     try testMarkdownHTML("<p><code>a`b</code> and <code>``x``</code></p>",
         \\
         \\`` a`b `` and ``` ``x`` ```
+        \\
+    );
+    try testMarkdownHTML(
+        \\<table><thead><tr><th>Type</th></tr></thead>
+        \\<tbody><tr><td><code>string | null</code></td></tr></tbody></table>
+    ,
+        \\
+        \\| Type |
+        \\|---|
+        \\| `string \| null` |
         \\
     );
 }
