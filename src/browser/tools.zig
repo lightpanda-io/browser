@@ -3075,7 +3075,10 @@ test "tools: tree exposes Chrome-matched custom ARIA states" {
         "checkbox 'Checked terms' [checked]",
     };
     for (expected) |fragment| {
-        if (std.mem.find(u8, result.text, fragment) == null) return error.MissingExpectedAriaState;
+        if (std.mem.find(u8, result.text, fragment) == null) {
+            std.debug.print("missing {s} in:\n{s}\n", .{ fragment, result.text });
+            return error.MissingExpectedAriaState;
+        }
     }
 
     // Unsupported roles and invalid tokens must not manufacture state.

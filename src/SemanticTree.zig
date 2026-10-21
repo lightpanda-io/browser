@@ -634,7 +634,7 @@ fn visitNode(
         .value = value,
         .options = options,
         .checked = checked,
-        .aria = if (!invisible and node.is(Element) != null) AXNode.Writer.ariaProperties(node.is(Element).?, role) else .{},
+        .aria = if (invisible) .{} else if (node.is(Element)) |el| AXNode.Writer.ariaProperties(el, role) else .{},
         .xpath = xpath,
         .interactive = is_interactive,
         .disabled = is_disabled,
@@ -1196,9 +1196,9 @@ test "SemanticTree: JSON exposes custom ARIA states without changing native chec
     const generic = find(parsed.value, "Generic expanded") orelse return error.NodeNotFound;
     try testing.expect(generic.object.get("ariaExpanded") == null);
     const mixed = find(parsed.value, "Uppercase mixed") orelse return error.NodeNotFound;
-    try std.testing.expectEqualStrings("mixed", mixed.object.get("ariaChecked").?.string);
+    try testing.expectString("mixed", mixed.object.get("ariaChecked").?.string);
     const switch_mixed = find(parsed.value, "Switch mixed") orelse return error.NodeNotFound;
-    try std.testing.expectEqualStrings("false", switch_mixed.object.get("ariaChecked").?.string);
+    try testing.expectString("false", switch_mixed.object.get("ariaChecked").?.string);
     const invalid = find(parsed.value, "Invalid details") orelse return error.NodeNotFound;
     try testing.expect(invalid.object.get("ariaExpanded") == null);
     const native = find(parsed.value, "Native terms") orelse return error.NodeNotFound;

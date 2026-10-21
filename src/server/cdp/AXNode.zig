@@ -360,7 +360,6 @@ pub const Writer = struct {
         return roles.get(std.ascii.lowerString(&buf, role)) orelse .{};
     }
 
-    // Share Chrome-matched role and token rules with the MCP semantic tree.
     // Native input checked state remains owned by the input serializer.
     pub const AriaProperties = struct {
         expanded: ?bool = null,
