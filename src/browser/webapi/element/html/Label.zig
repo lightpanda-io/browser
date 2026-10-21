@@ -133,13 +133,12 @@ pub fn getControlLabels(control: *Element, frame: *Frame) !js.Array {
         false;
 
     if (by_id) {
-        var it = TreeWalker.Full.Elements.init(root, .{});
-        while (it.next()) |el| {
-            const label = el.is(Label) orelse continue;
+        var it = TreeWalker.Full.ElementsOf(Label).init(root, .{});
+        while (it.next()) |label| {
             if (label.getControl() != control) {
                 continue;
             }
-            _ = try arr.set(idx, el, .{});
+            _ = try arr.set(idx, label.asElement(), .{});
             idx += 1;
         }
         return arr;

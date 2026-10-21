@@ -176,11 +176,9 @@ pub fn formAttributeChanged(element: *Element, name: String, frame: *Frame) void
 }
 
 fn formStateChangedInSubtree(root: *Node, frame: *Frame) void {
-    var tw = TreeWalker.FullExcludeSelf.Elements.init(root, .{});
-    while (tw.next()) |el| {
-        if (el.is(Custom)) |custom| {
-            custom.formStateChanged(frame);
-        }
+    var tw = TreeWalker.FullExcludeSelf.ElementsOf(Custom).init(root, .{});
+    while (tw.next()) |custom| {
+        custom.formStateChanged(frame);
     }
 }
 

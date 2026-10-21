@@ -1601,9 +1601,8 @@ fn notifyParentLoadComplete(self: *Frame) void {
 
 fn metaRefreshOnLoad(self: *Frame) void {
     const root = self.document.getDocumentElement() orelse return;
-    var tw = TreeWalker.Full.init(root.asNode(), .{});
-    while (tw.next()) |node| {
-        const meta = node.is(Element.Html.Meta) orelse continue;
+    var tw = TreeWalker.Full.ElementsOf(Element.Html.Meta).init(root.asNode(), .{});
+    while (tw.next()) |meta| {
         const target = meta.refreshTarget() orelse continue;
         return self.metaRefresh(target) catch |err| {
             log.debug(.frame, "meta refresh", .{ .err = err, .type = self._type, .url = self.url });
