@@ -11,9 +11,5 @@
       platform = "linux_x86_64";
       hash = "sha256-7tD6GpfYFeL1AA56KRU9YuBu+S0tgKAkWYcBOU6TIss=";
     };
-    aarch64-darwin = {
-      platform = "macos_aarch64";
-      hash = "sha256-3BQCflPfiROZUi9giSlqz983IHr6yh5J3QXERtP8R18=";
-    };
   };
 }

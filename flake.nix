@@ -45,7 +45,6 @@
       [
         "x86_64-linux"
         "aarch64-linux"
-        "aarch64-darwin"
       ]
       (
         system:
@@ -73,15 +72,13 @@
 
           buildDeps =
             pkgs:
-            if pkgs.stdenv.isDarwin then
-              [ pkgs.apple-sdk ]
-            else
-              (with pkgs; [
-                gcc
-                gcc.cc.lib
-                crtFiles
-                glibc.dev
-              ]);
+            with pkgs;
+            [
+              gcc
+              gcc.cc.lib
+              crtFiles
+              glibc.dev
+            ];
 
           v8BuildDeps =
             pkgs: with pkgs; [
