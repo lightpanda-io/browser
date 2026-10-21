@@ -67,6 +67,23 @@
   }
 </script>
 
+<script id=fetch_no_cors_method type=module>
+  {
+    const state = await testing.async();
+    let error;
+    try {
+      await fetch('http://127.0.0.1:9582/xhr', { mode: 'no-cors', method: 'PUT' });
+    } catch (e) {
+      error = e.toString();
+    }
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual("TypeError: 'PUT' is unsupported in no-cors mode", error);
+    });
+  }
+</script>
+
 <script id=fetch_redirect type=module>
   {
     const state = await testing.async();

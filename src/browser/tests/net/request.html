@@ -261,6 +261,20 @@
   testing.expectError('TypeError', () => new Request('https://example.com/api', { mode: 'navigate' }));
 </script>
 
+<script id=no_cors_method>
+  {
+    const url = 'https://example.com/api';
+    testing.expectError("TypeError: 'PUT' is unsupported in no-cors mode", () => new Request(url, { mode: 'no-cors', method: 'put' }));
+    testing.expectEqual('POST', new Request(url, { mode: 'no-cors', method: 'post' }).method);
+
+    // mode and method may come from the input Request.
+    const put = new Request(url, { method: 'PUT' });
+    testing.expectError('TypeError', () => new Request(put, { mode: 'no-cors' }));
+    const no_cors = new Request(url, { mode: 'no-cors' });
+    testing.expectError('TypeError', () => new Request(no_cors, { method: 'DELETE' }));
+  }
+</script>
+
 <script id=body_used type=module>
   const state = await testing.async();
 

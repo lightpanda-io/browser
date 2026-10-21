@@ -78,7 +78,10 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     // A bad RequestInit (e.g. an invalid priority) must reject the promise,
     // not throw synchronously.
     const request = Request.init(input, options, exec) catch {
-        resolver.rejectError("fetch init error", .{ .type_error = "Failed to construct Request" });
+        // Request.init may have set a specific message (see Local.typeError).
+        const env = exec.js.env;
+        defer env.error_message = null;
+        resolver.rejectError("fetch init error", .{ .type_error = env.error_message orelse "Failed to construct Request" });
         return resolver.promise();
     };
 
