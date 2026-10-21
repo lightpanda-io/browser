@@ -420,6 +420,30 @@ pub fn analyzeContent(root: *Node, frame: *Frame) ContentInfo {
     return result;
 }
 
+/// The href of the one `<a href>` holding all of root's visible content.
+pub fn soleHref(root: *Node, frame: *Frame) ?[]const u8 {
+    var found: ?[]const u8 = null;
+    var tw = TreeWalker.FullExcludeSelf.init(root, .{});
+    while (tw.next()) |node| {
+        if (isSignificantText(node)) return null;
+        const el = node.is(Element) orelse continue;
+        if (!isVisibleElement(el, frame)) {
+            tw.skipChildren();
+            continue;
+        }
+        switch (el.getTag()) {
+            .img => return null,
+            .a => if (el.getAttributeInterned("href")) |href| {
+                if (found != null) return null;
+                found = href;
+                tw.skipChildren();
+            },
+            else => {},
+        }
+    }
+    return found;
+}
+
 const testing = @import("../testing.zig");
 
 test "RenderTree: resolveStrip keeps shell when the content holds the text" {
