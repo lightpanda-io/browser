@@ -340,6 +340,7 @@ const CloneError = error{
     MethodNotFound,
     DeadFunctionHandle,
     InvalidArgument,
+    InvalidStringLength,
 };
 
 fn cloneErrorMessage(err: anyerror) []const u8 {

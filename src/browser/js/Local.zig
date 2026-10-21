@@ -150,7 +150,7 @@ pub fn compileFunction(
 ) !js.Function {
     // TODO: Make configurable.
     const script_name = self.isolate.initStringHandle("anonymous");
-    const script_source = if (@TypeOf(src) == js.String) src.handle else self.isolate.initStringHandle(src);
+    const script_source = if (@TypeOf(src) == js.String) src.handle else try self.isolate.newString(src);
 
     var parameter_list: [parameter_names.len]*const v8.String = undefined;
     inline for (0..parameter_names.len) |i| {
@@ -205,7 +205,7 @@ const CompileResult = struct {
 // compiled and serialized script (see Script.Unbound.createCodeCache)
 pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, cached_data: ?[]const u8) !CompileResult {
     const script_name = self.isolate.initStringHandle(name orelse "anonymous");
-    const script_source = self.isolate.initStringHandle(src);
+    const script_source = try self.isolate.newString(src);
 
     // Create ScriptOrigin
     var origin: v8.ScriptOrigin = undefined;
@@ -355,7 +355,7 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
     // Check if it's a "simple" type. This is extracted so that it can be
     // reused by other parts of the code. "simple" types only require an
     // isolate to create (specifically, they don't our templates array)
-    if (js.simpleZigValueToJs(isolate, value, false, opts.null_as_undefined)) |js_value_handle| {
+    if (try js.simpleZigValueToJs(isolate, value, false, opts.null_as_undefined)) |js_value_handle| {
         return .{ .local = self, .handle = js_value_handle };
     }
 
@@ -1573,7 +1573,7 @@ pub fn createPromiseResolver(self: *const Local) js.PromiseResolver {
 
 // == Misc ==
 pub fn parseJSON(self: *const Local, json: []const u8) !js.Value {
-    const string_handle = self.isolate.initStringHandle(json);
+    const string_handle = try self.isolate.newString(json);
     const value_handle = v8.v8__JSON__Parse(self.handle, string_handle) orelse return error.JsException;
     return .{
         .local = self,

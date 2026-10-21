@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("js.zig");
 const v8 = js.v8;
 
@@ -71,12 +72,23 @@ pub fn throwException(self: Isolate, value: *const v8.Value) *const v8.Value {
     return v8.v8__Isolate__ThrowException(self.handle, value).?;
 }
 
+// For short strings (names, keys, messages). Page or network data goes
+// through newString.
 pub fn initStringHandle(self: Isolate, str: []const u8) *const v8.String {
-    return v8.v8__String__NewFromUtf8(self.handle, str.ptr, v8.kNormal, @as(c_int, @intCast(str.len))).?;
+    return self.newString(str) catch unreachable;
 }
 
-pub fn initOneByteStringHandle(self: Isolate, bytes: []const u8) *const v8.String {
-    return v8.v8__String__NewFromOneByte(self.handle, bytes.ptr, v8.kNormal, @as(c_int, @intCast(bytes.len))).?;
+// Past v8::String::kMaxLength (just under 512 MiB on 64-bit) V8 returns an
+// empty handle; callers turn the error into "RangeError: Invalid string
+// length", as V8 throws for its own over-long strings.
+pub fn newString(self: Isolate, str: []const u8) error{InvalidStringLength}!*const v8.String {
+    const len = std.math.cast(c_int, str.len) orelse return error.InvalidStringLength;
+    return v8.v8__String__NewFromUtf8(self.handle, str.ptr, v8.kNormal, len) orelse error.InvalidStringLength;
+}
+
+pub fn newOneByteString(self: Isolate, bytes: []const u8) error{InvalidStringLength}!*const v8.String {
+    const len = std.math.cast(c_int, bytes.len) orelse return error.InvalidStringLength;
+    return v8.v8__String__NewFromOneByte(self.handle, bytes.ptr, v8.kNormal, len) orelse error.InvalidStringLength;
 }
 
 pub fn createError(self: Isolate, msg: []const u8) *const v8.Value {

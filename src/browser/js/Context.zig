@@ -501,7 +501,7 @@ fn compileModule(local: *const js.Local, src: []const u8, name: []const u8) !js.
 
     var source_handle: v8.ScriptCompilerSource = undefined;
     v8.v8__ScriptCompiler__Source__CONSTRUCT2(
-        local.isolate.initStringHandle(src),
+        try local.isolate.newString(src),
         &origin_handle,
         null, // cached data
         &source_handle,
