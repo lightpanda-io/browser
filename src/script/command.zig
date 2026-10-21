@@ -17,9 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! A parsed slash command: a tool call, a prompt-form tool command, a
-//! `#`-comment, or an `LlmCommand` trigger (`/login`, `/logout`,
-//! `/acceptCookies`). Multi-line `'''…'''` blocks are assembled by the REPL
-//! before parse.
+//! `#`-comment, or an `LlmCommand` trigger (`/logout`). Multi-line `'''…'''`
+//! blocks are assembled by the REPL before parse.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -30,36 +29,12 @@ pub const ParseError = Schema.ParseError || error{
     NotASlashCommand,
 };
 
-const login_prompt =
-    \\Find the login form on the current page. Fill in the credentials using
-    \\$LP_* placeholders — the substitution happens inside the Lightpanda
-    \\subprocess so the secret never enters your context. Do NOT call getEnv
-    \\with a credential name (it would return the value).
-    \\
-    \\Call getEnv with NO `name` argument first to see which LP_* variables
-    \\are set (names only, values never included). Then pick:
-    \\- Site-prefixed form (LP_<SITE>_<FIELD>) when the list shows one for
-    \\  the current site — e.g. $LP_HN_USERNAME for news.ycombinator.com,
-    \\  $LP_GH_TOKEN for github.com.
-    \\- Otherwise fall back to the unprefixed $LP_USERNAME / $LP_PASSWORD
-    \\  (or $LP_EMAIL) form.
-    \\
-    \\Handle any cookie banners or popups first, then submit the form by
-    \\clicking its submit button or pressing Enter in a filled field — there
-    \\is no dedicated submit tool.
-;
-
 const logout_prompt =
     \\Log out of the current site. Find the logout control — often a link or
     \\button labeled "Log out", "Logout", or "Sign out", possibly inside an
     \\account or user menu you must open first — and click it. Handle any
     \\confirmation prompt, then verify the logged-out state (e.g. a login link
     \\reappears).
-;
-
-const accept_cookies_prompt =
-    \\Find and dismiss the cookie consent banner on the current page.
-    \\Look for "Accept", "Accept All", "I agree", or similar buttons and click them.
 ;
 
 pub const Command = union(enum) {
@@ -80,23 +55,17 @@ pub const Command = union(enum) {
     /// each value owns its `prompt()` (sent to the model) and `description()`
     /// (shown in `/help`) — mirroring how `tool_call` wraps `BrowserTool`.
     pub const LlmCommand = enum {
-        login,
         logout,
-        acceptCookies,
 
         pub fn prompt(self: LlmCommand) []const u8 {
             return switch (self) {
-                .login => login_prompt,
                 .logout => logout_prompt,
-                .acceptCookies => accept_cookies_prompt,
             };
         }
 
         pub fn description(self: LlmCommand) []const u8 {
             return switch (self) {
-                .login => "Log in using $LP_* credentials",
                 .logout => "Log out of the current site",
-                .acceptCookies => "Dismiss the cookie consent banner",
             };
         }
     };
@@ -380,11 +349,17 @@ test "parse: bare prose errors" {
     try testing.expectError(error.NotASlashCommand, Command.parse(arena.allocator(), "goto https://x"));
 }
 
-test "parse: /login and /acceptCookies" {
+test "parse: /logout is an LLM command, /login and /acceptCookies are tools" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    try testing.expectEqual(Command.LlmCommand.login, (try Command.parse(arena.allocator(), "/login")).llm);
-    try testing.expectEqual(Command.LlmCommand.acceptCookies, (try Command.parse(arena.allocator(), "/acceptCookies")).llm);
+    const aa = arena.allocator();
+    try testing.expectEqual(Command.LlmCommand.logout, (try Command.parse(aa, "/logout")).llm);
+
+    const cookies = try Command.parse(aa, "/acceptCookies");
+    try testing.expectEqual(BrowserTool.acceptCookies, cookies.tool_call.tool);
+    const login = try Command.parse(aa, "/login password=$LP_PASSWORD");
+    try testing.expectEqual(BrowserTool.login, login.tool_call.tool);
+    try std.testing.expectEqualStrings("$LP_PASSWORD", login.tool_call.args.?.object.get("password").?.string);
 }
 
 test "parse: /goto positional" {
@@ -568,8 +543,8 @@ test "isRecorded / producesData via tool flags" {
     try testing.expect(!tree.isRecorded());
     try testing.expect(tree.producesData());
 
-    const login: Command = .{ .llm = .login };
-    try testing.expect(!login.isRecorded());
+    const logout: Command = .{ .llm = .logout };
+    try testing.expect(!logout.isRecorded());
 
     const prompt = try Command.parse(arena.allocator(), "/click the sign in button");
     try testing.expect(!prompt.isRecorded());
