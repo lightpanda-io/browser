@@ -74,7 +74,7 @@ fn matchEntry(e: Entry, hostname: []const u8, ent: []const u8) bool {
 }
 
 /// Whether `hostname` is `suffix` or one of its subdomains.
-fn isSubdomainOf(hostname: []const u8, suffix: []const u8) bool {
+pub fn isSubdomainOf(hostname: []const u8, suffix: []const u8) bool {
     if (hostname.len == suffix.len) return std.mem.eql(u8, hostname, suffix);
     if (hostname.len < suffix.len + 1) return false;
     const at = hostname.len - suffix.len;
