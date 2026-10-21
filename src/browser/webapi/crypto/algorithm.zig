@@ -101,7 +101,7 @@ pub const Init = union(enum) {
         /// Some organizations are now recommending that it should be 4096.
         modulusLength: js.EnforceRange(u32),
         name: []const u8,
-        publicExponent: js.TypedArray(u8),
+        publicExponent: BigInteger,
     };
 
     /// https://developer.mozilla.org/en-US/docs/Web/API/AesKeyGenParams
@@ -359,7 +359,7 @@ fn convert(comptime T: type, value: js.Value, name: []const u8, local: *const js
             };
             if (member) |m| {
                 if (comptime isBufferSource(FieldType)) {
-                    if (!m.isArrayBuffer() and !m.isArrayBufferView()) {
+                    if (!m.isBufferSource() or (FieldType == BigInteger and !m.isUint8Array())) {
                         return local.typeError("algorithm has a missing or invalid member");
                     }
                     buffers[i] = m;
@@ -380,10 +380,10 @@ fn convert(comptime T: type, value: js.Value, name: []const u8, local: *const js
     inline for (info.field_names, info.field_types, 0..) |field_name, FieldType, i| {
         if (comptime isBufferSource(FieldType)) {
             if (buffers[i]) |m| {
-                const view = local.jsValueToZig(js.TypedArray(u8), m) catch |err| {
+                const buffer = local.jsValueToZig(js.BufferSource, m) catch |err| {
                     return conversionError(err, local, "algorithm has a missing or invalid member");
                 };
-                @field(out, field_name) = .{ .values = try local.call_arena.dupe(u8, view.values) };
+                @field(out, field_name) = .{ .values = try local.call_arena.dupe(u8, buffer.bytes) };
             }
         }
     }
@@ -392,8 +392,14 @@ fn convert(comptime T: type, value: js.Value, name: []const u8, local: *const js
 
 /// Whether a params member is a BufferSource, copied by `convert`.
 fn isBufferSource(comptime FieldType: type) bool {
-    return FieldType == js.TypedArray(u8) or FieldType == ?js.TypedArray(u8);
+    return FieldType == js.TypedArray(u8) or FieldType == ?js.TypedArray(u8) or FieldType == BigInteger;
 }
+
+/// A WebIDL BigInteger (RsaHashedKeyGenParams.publicExponent): a Uint8Array,
+/// not another view or a buffer. Read as a BufferSource member is.
+pub const BigInteger = struct {
+    values: []const u8,
+};
 
 /// Key material handed to `importKey()`: either a BufferSource (raw/spki/pkcs8)
 /// or a JSON Web Key object (jwk). `bytes` is probed first — a JWK is a plain

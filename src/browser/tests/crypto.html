@@ -2992,3 +2992,95 @@
     }, results);
   });
 </script>
+
+<script id=shared-buffers type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const outcome = async (fn) => {
+    try {
+      const r = await fn();
+      return r instanceof ArrayBuffer ? `bytes:${r.byteLength}` : r instanceof CryptoKey ? "key" : typeof r;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  // None of SubtleCrypto's BufferSource arguments or members is
+  // [AllowShared]: a SharedArrayBuffer, or a view onto one, is a TypeError.
+  const sab = new SharedArrayBuffer(16);
+  const view = new Uint8Array(sab);
+  const data = new Uint8Array(16);
+  const gcm = await subtle.generateKey({ name: "AES-GCM", length: 128 }, false, ["encrypt", "decrypt"]);
+  const kw = await subtle.generateKey({ name: "AES-KW", length: 128 }, false, ["wrapKey", "unwrapKey"]);
+  const hmac = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  const hkdf = await subtle.importKey("raw", data, "HKDF", false, ["deriveBits"]);
+  const pbkdf2 = await subtle.importKey("raw", data, "PBKDF2", false, ["deriveBits"]);
+  const iv = new Uint8Array(12);
+  const results = {};
+  for (const [kind, buffer] of [["sab", sab], ["view", view], ["dataView", new DataView(sab)]]) {
+    results[`digest ${kind}`] = await outcome(() => subtle.digest("SHA-256", buffer));
+    results[`encrypt data ${kind}`] = await outcome(() => subtle.encrypt({ name: "AES-GCM", iv }, gcm, buffer));
+    results[`encrypt iv ${kind}`] = await outcome(() => subtle.encrypt({ name: "AES-GCM", iv: buffer }, gcm, data));
+    results[`encrypt aad ${kind}`] = await outcome(() => subtle.encrypt({ name: "AES-GCM", iv, additionalData: buffer }, gcm, data));
+    results[`decrypt data ${kind}`] = await outcome(() => subtle.decrypt({ name: "AES-GCM", iv }, gcm, buffer));
+    results[`sign data ${kind}`] = await outcome(() => subtle.sign("HMAC", hmac, buffer));
+    results[`verify signature ${kind}`] = await outcome(() => subtle.verify("HMAC", hmac, buffer, data));
+    results[`import ${kind}`] = await outcome(() => subtle.importKey("raw", buffer, "AES-GCM", false, ["encrypt"]));
+    results[`unwrap ${kind}`] = await outcome(() => subtle.unwrapKey("raw", buffer, kw, "AES-KW", "AES-GCM", false, ["encrypt"]));
+    results[`hkdf salt ${kind}`] = await outcome(() => subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt: buffer, info: data }, hkdf, 128));
+    results[`pbkdf2 salt ${kind}`] = await outcome(() => subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: buffer, iterations: 1 }, pbkdf2, 128));
+  }
+  // The same calls with a non-shared buffer.
+  results["digest plain"] = await outcome(() => subtle.digest("SHA-256", data.buffer));
+  results["encrypt plain"] = await outcome(() => subtle.encrypt({ name: "AES-GCM", iv, additionalData: data }, gcm, data));
+  results["import plain"] = await outcome(() => subtle.importKey("raw", data, "AES-GCM", false, ["encrypt"]));
+  // Any view of a non-shared buffer is a BufferSource, whatever its element type.
+  results["digest Uint32Array"] = await outcome(() => subtle.digest("SHA-256", new Uint32Array([1, 2])));
+  results["digest Float64Array"] = await outcome(() => subtle.digest("SHA-256", new Float64Array([1])));
+  results["encrypt Uint16Array"] = await outcome(() => subtle.encrypt({ name: "AES-GCM", iv: new Uint16Array(6) }, gcm, new Uint16Array(8)));
+  results["import Uint16Array"] = await outcome(() => subtle.importKey("raw", new Uint16Array(8), "AES-GCM", false, ["encrypt"]));
+  results["import DataView"] = await outcome(() => subtle.importKey("raw", new DataView(new ArrayBuffer(16)), "AES-GCM", false, ["encrypt"]));
+  results["sign Int32Array"] = await outcome(() => subtle.sign("HMAC", hmac, new Int32Array(3)));
+  // RSA's publicExponent is a BigInteger: a Uint8Array, no other view or buffer.
+  const rsa = (publicExponent) => outcome(() => subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", hash: "SHA-256", modulusLength: 1024, publicExponent }, false, ["sign"]));
+  results["publicExponent Uint8Array"] = await rsa(new Uint8Array([1, 0, 1]));
+  results["publicExponent Uint16Array"] = await rsa(new Uint16Array([1, 1]));
+  results["publicExponent DataView"] = await rsa(new DataView(new Uint8Array([1, 0, 1]).buffer));
+  results["publicExponent ArrayBuffer"] = await rsa(new Uint8Array([1, 0, 1]).buffer);
+  results["publicExponent shared"] = await rsa(new Uint8Array(new SharedArrayBuffer(3)));
+  // A shared keyData is a TypeError of its conversion, before the algorithm.
+  results["import view, unknown algorithm"] = await outcome(() => subtle.importKey("raw", view, "NOPE", false, ["encrypt"]));
+  // getRandomValues' ArrayBufferView isn't [AllowShared] either.
+  const random = (array) => { try { return crypto.getRandomValues(array) === array; } catch (err) { return err.name; } };
+  results["getRandomValues view"] = random(view);
+  results["getRandomValues plain"] = random(new Uint8Array(4));
+
+  const expected = {};
+  for (const kind of ["sab", "view", "dataView"]) {
+    for (const name of ["digest", "encrypt data", "encrypt iv", "encrypt aad", "decrypt data", "sign data",
+                        "verify signature", "import", "unwrap", "hkdf salt", "pbkdf2 salt"]) {
+      expected[`${name} ${kind}`] = "TypeError";
+    }
+  }
+  expected["digest plain"] = "bytes:32";
+  expected["encrypt plain"] = "bytes:32";
+  expected["import plain"] = "key";
+  expected["digest Uint32Array"] = "bytes:32";
+  expected["digest Float64Array"] = "bytes:32";
+  expected["encrypt Uint16Array"] = "bytes:32";
+  expected["import Uint16Array"] = "key";
+  expected["import DataView"] = "key";
+  expected["sign Int32Array"] = "bytes:32";
+  expected["publicExponent Uint8Array"] = "object";
+  expected["publicExponent Uint16Array"] = "TypeError";
+  expected["publicExponent DataView"] = "TypeError";
+  expected["publicExponent ArrayBuffer"] = "TypeError";
+  expected["publicExponent shared"] = "TypeError";
+  expected["import view, unknown algorithm"] = "TypeError";
+  expected["getRandomValues view"] = "TypeError";
+  expected["getRandomValues plain"] = true;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(expected, results);
+  });
+</script>

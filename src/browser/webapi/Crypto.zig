@@ -31,8 +31,10 @@ pub const init: Crypto = .{};
 // TypedArray
 fn getRandomValues(_: *const Crypto, js_obj: js.Object, exec: *const js.Execution) !js.Object {
     const value = js_obj.toValue();
-    if (value.isArrayBufferView() == false) {
-        // AllowSharedBufferSource would also take an ArrayBuffer
+    // An ArrayBufferView, not [AllowShared]: a view onto a SharedArrayBuffer
+    // is a TypeError too. (AllowSharedBufferSource below would also take an
+    // ArrayBuffer, or a shared buffer.)
+    if (value.isArrayBufferView() == false or value.isBufferSource() == false) {
         return error.InvalidArgument;
     }
     if (value.isFloat16Array() or value.isFloat32Array() or value.isFloat64Array() or value.isTypedArray() == false) {

@@ -153,6 +153,20 @@ pub fn isArrayBuffer(self: Value) bool {
     return v8.v8__Value__IsArrayBuffer(self.handle);
 }
 
+/// Whether this converts to a WebIDL BufferSource: an ArrayBuffer, or a view
+/// onto one. Without [AllowShared], a SharedArrayBuffer, or a view onto one,
+/// doesn't.
+pub fn isBufferSource(self: Value) bool {
+    if (self.isArrayBuffer()) {
+        return true;
+    }
+    if (!self.isArrayBufferView()) {
+        return false;
+    }
+    const view: *const v8.ArrayBufferView = @ptrCast(self.handle);
+    return !js.arrayBufferIsShared(v8.v8__ArrayBufferView__Buffer(view).?);
+}
+
 pub fn taggedOpaque(self: Value) ?TaggedOpaque {
     // caller must ensure self.isObject()
     return TaggedOpaque.fromObject(@ptrCast(self.handle));
