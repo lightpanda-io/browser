@@ -623,17 +623,21 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
     };
 
     if (comptime returnsPromise(F) and @TypeOf(info) == FunctionCallbackInfo) {
-        // An operation that returns a promise must not throw. It rejects.
-        const resolver = js.PromiseResolver.init(&err_local);
-        resolver.rejectValue(.{ .local = &err_local, .handle = js_err }) catch |reject_err| {
-            log.err(.bug, "handleError reject", .{ .err = reject_err });
-        };
-        info.getReturnValue().set(resolver.promise().toValue());
+        rejectOperation(&err_local, .{ .local = &err_local, .handle = js_err }, info);
         return;
     }
 
     const js_exception = isolate.throwException(js_err);
     info.getReturnValue().setValueHandle(js_exception);
+}
+
+// An operation that returns a promise must not throw. It rejects.
+fn rejectOperation(err_local: *const Local, value: js.Value, info: FunctionCallbackInfo) void {
+    const resolver = js.PromiseResolver.init(err_local);
+    resolver.rejectValue(value) catch |err| {
+        log.err(.bug, "rejectOperation", .{ .err = err });
+    };
+    info.getReturnValue().set(resolver.promise().toValue());
 }
 
 fn returnsPromise(comptime F: type) bool {
@@ -919,16 +923,10 @@ pub const Function = struct {
 
         const js_value = _call(T, local, info, func, opts) catch |err| {
             if (try_catch.hasCaught()) {
-                const terminating = local.ctx.env.terminatePending() or
-                    v8.v8__Isolate__IsExecutionTerminating(local.isolate.handle);
-                if (!terminating) {
+                if (local.ctx.env.terminatePending() == false) {
                     if (try_catch.exceptionValue()) |exception| {
                         const err_local = errorLocal(T, local, info);
-                        const resolver = js.PromiseResolver.init(&err_local);
-                        resolver.rejectValue(exception) catch |reject_err| {
-                            log.err(.bug, "callRejecting reject", .{ .err = reject_err });
-                        };
-                        info.getReturnValue().set(resolver.promise().toValue());
+                        rejectOperation(&err_local, exception, info);
                         return null;
                     }
                 }
