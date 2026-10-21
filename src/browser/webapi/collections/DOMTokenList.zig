@@ -117,29 +117,29 @@ pub fn contains(self: *const DOMTokenList, search: []const u8) !bool {
     return false;
 }
 
-pub fn add(self: *DOMTokenList, tokens: []const []const u8, frame: *Frame) !void {
-    for (tokens) |token| {
+pub fn add(self: *DOMTokenList, tokens: js.Variadic([]const u8), frame: *Frame) !void {
+    for (tokens.values) |token| {
         try validateToken(token);
     }
 
     const allocator = frame.local_arena;
     var lookup = try self.getTokens(allocator);
-    try lookup.ensureUnusedCapacity(allocator, tokens.len);
+    try lookup.ensureUnusedCapacity(allocator, tokens.values.len);
 
-    for (tokens) |token| {
+    for (tokens.values) |token| {
         try lookup.put(allocator, token, {});
     }
 
     try self.updateAttribute(lookup, frame);
 }
 
-pub fn remove(self: *DOMTokenList, tokens: []const []const u8, frame: *Frame) !void {
-    for (tokens) |token| {
+pub fn remove(self: *DOMTokenList, tokens: js.Variadic([]const u8), frame: *Frame) !void {
+    for (tokens.values) |token| {
         try validateToken(token);
     }
 
     var lookup = try self.getTokens(frame.local_arena);
-    for (tokens) |token| {
+    for (tokens.values) |token| {
         _ = lookup.orderedRemove(token);
     }
     try self.updateAttribute(lookup, frame);
@@ -154,24 +154,24 @@ pub fn toggle(self: *DOMTokenList, token: []const u8, force: ?bool, frame: *Fram
         if (f) {
             if (!has_token) {
                 const tokens_to_add = [_][]const u8{token};
-                try self.add(&tokens_to_add, frame);
+                try self.add(.init(&tokens_to_add), frame);
             }
             return true;
         } else {
             if (has_token) {
                 const tokens_to_remove = [_][]const u8{token};
-                try self.remove(&tokens_to_remove, frame);
+                try self.remove(.init(&tokens_to_remove), frame);
             }
             return false;
         }
     } else {
         if (has_token) {
             const tokens_to_remove = [_][]const u8{token};
-            try self.remove(tokens_to_remove[0..], frame);
+            try self.remove(.init(&tokens_to_remove), frame);
             return false;
         } else {
             const tokens_to_add = [_][]const u8{token};
-            try self.add(tokens_to_add[0..], frame);
+            try self.add(.init(&tokens_to_add), frame);
             return true;
         }
     }

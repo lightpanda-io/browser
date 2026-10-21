@@ -459,9 +459,9 @@ pub fn setTextContent(self: *Node, data: []const u8, frame: *Frame) !void {
         .element => {
             const el = self.subtype(Element);
             if (data.len == 0) {
-                return el.replaceChildren(&.{}, frame);
+                return el.replaceChildren(.init(&.{}), frame);
             }
-            return el.replaceChildren(&.{.{ .text = data }}, frame);
+            return el.replaceChildren(.init(&.{.{ .text = data }}), frame);
         },
         // Per spec, setting textContent on CharacterData runs replaceData(0, length, value)
         .cdata => {
@@ -473,9 +473,9 @@ pub fn setTextContent(self: *Node, data: []const u8, frame: *Frame) !void {
         .document_fragment => {
             const frag = self.subtype(DocumentFragment);
             if (data.len == 0) {
-                return frag.replaceChildren(&.{}, frame);
+                return frag.replaceChildren(.init(&.{}), frame);
             }
-            return frag.replaceChildren(&.{.{ .text = data }}, frame);
+            return frag.replaceChildren(.init(&.{.{ .text = data }}), frame);
         },
         .attribute => return self.subtype(Element.Attribute).setValue(.wrap(data), frame),
     }

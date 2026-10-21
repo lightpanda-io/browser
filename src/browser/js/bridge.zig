@@ -208,9 +208,8 @@ pub const Function = struct {
                 break;
             }
 
-            // A slice of js.Value is always bound as variadic (see
-            // Caller.getArgs) and variadics contribute 0 to length.
-            if (@typeInfo(PT) == .pointer and @typeInfo(PT).pointer.size == .slice and @typeInfo(PT).pointer.child == js.Value) {
+            // a rest parameter contributes 0 to length
+            if (@typeInfo(PT) == .@"struct" and @hasDecl(PT, "js_variadic")) {
                 break;
             }
             count += 1;

@@ -331,6 +331,18 @@ pub fn Nullable(comptime T: type) type {
     };
 }
 
+pub fn Variadic(comptime T: type) type {
+    return struct {
+        values: []const T,
+
+        pub const js_variadic = T;
+
+        pub fn init(values: []const T) @This() {
+            return .{ .values = values };
+        }
+    };
+}
+
 // A WebIDL [EnforceRange] integer. NaN, +/i infinity and values outside of T's
 // range are a TypeError.
 pub fn EnforceRange(comptime T: type) type {

@@ -132,7 +132,22 @@ const BinaryType = enum {
     arraybuffer,
 };
 
-pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*WebSocket {
+// WebIDL: `optional (DOMString or sequence<DOMString>) protocols = []`
+const Protocols = union(enum) {
+    list: []const []const u8,
+    one: []const u8,
+};
+
+pub fn init(url: []const u8, protocols_: ?Protocols, exec: *const Execution) !*WebSocket {
+    var one: [1][]const u8 = undefined;
+    const protocols: []const []const u8 = if (protocols_) |p| switch (p) {
+        .list => |list| list,
+        .one => |protocol| blk: {
+            one[0] = protocol;
+            break :blk &one;
+        },
+    } else &.{};
+
     {
         if (std.mem.findScalar(u8, url, '#') != null) {
             // Fragments are not allowed in WebSocket URLs.
@@ -209,7 +224,7 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
     return self;
 }
 
-fn connect(self: *WebSocket, protocols: [][]const u8) !void {
+fn connect(self: *WebSocket, protocols: []const []const u8) !void {
     const exec = self._exec;
     const arena = self._arena;
     const resolved_url = self._url;
@@ -980,8 +995,7 @@ test "WebApi: WebSocket send owns its message arena once when the unpause fails"
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    var protocols: [0][]const u8 = .{};
-    const ws = try WebSocket.init("ws://127.0.0.1:9582/ws", &protocols, &frame.js.execution);
+    const ws = try WebSocket.init("ws://127.0.0.1:9582/ws", null, &frame.js.execution);
     try testing.expect(ws._conn != null);
 
     // connect() tracked the easy handle but no tick has performed it, so

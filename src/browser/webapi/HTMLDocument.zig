@@ -147,9 +147,9 @@ fn setTitle(self: *HTMLDocument, title: []const u8, frame: *Frame) !void {
         if (node.is(Element.Html.Title)) |title_element| {
             // Replace children, but don't create text node for empty string
             if (title.len == 0) {
-                return title_element.asElement().replaceChildren(&.{}, frame);
+                return title_element.asElement().replaceChildren(.init(&.{}), frame);
             } else {
-                return title_element.asElement().replaceChildren(&.{.{ .text = title }}, frame);
+                return title_element.asElement().replaceChildren(.init(&.{.{ .text = title }}), frame);
             }
         }
     }
@@ -160,7 +160,7 @@ fn setTitle(self: *HTMLDocument, title: []const u8, frame: *Frame) !void {
 
     // Only add text if non-empty
     if (title.len > 0) {
-        try title_element.replaceChildren(&.{.{ .text = title }}, frame);
+        try title_element.replaceChildren(.init(&.{.{ .text = title }}), frame);
     }
 
     _ = try head.asNode().appendChild(title_node, frame);

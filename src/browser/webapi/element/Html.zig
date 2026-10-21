@@ -360,7 +360,7 @@ pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !
 
 pub fn setInnerText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
     const items = try renderedTextFragment(self.asNode().getDocument(frame), text, frame);
-    try self.asElement().replaceChildren(items, frame);
+    try self.asElement().replaceChildren(.init(items), frame);
 }
 
 pub fn setOuterText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
@@ -382,7 +382,7 @@ pub fn setOuterText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
         // node so surrounding text can merge with it.
         items = &.{.{ .text = "" }};
     }
-    try el.replaceWith(items, frame);
+    try el.replaceWith(.init(items), frame);
 
     // Merge with the immediately neighbouring Text nodes (only those two; the
     // tree is not fully normalised, per spec).

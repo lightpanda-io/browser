@@ -862,13 +862,13 @@ fn importNode(self: *const Document, node: *Node, deep_: ?bool, frame: *Frame) !
     return node.cloneNodeInto(deep_ orelse false, self, frame);
 }
 
-pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    try validateDocumentNodes(self, nodes);
+pub fn append(self: *Document, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
+    try validateDocumentNodes(self, nodes.values);
 
     const parent = self.asNode();
     frame.domChanged();
 
-    for (nodes) |node_or_text| {
+    for (nodes.values) |node_or_text| {
         const child = try node_or_text.toNode(self);
 
         // DocumentFragments are special - append all their children
@@ -886,16 +886,16 @@ pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !v
     }
 }
 
-pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    try validateDocumentNodes(self, nodes);
+pub fn prepend(self: *Document, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
+    try validateDocumentNodes(self, nodes.values);
 
     const parent = self.asNode();
     frame.domChanged();
 
-    var i = nodes.len;
+    var i = nodes.values.len;
     while (i > 0) {
         i -= 1;
-        const child = try nodes[i].toNode(self);
+        const child = try nodes.values[i].toNode(self);
 
         // DocumentFragments are special - need to insert all their children
         if (child.is(Node.DocumentFragment)) |frag| {
@@ -929,8 +929,8 @@ pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !
     }
 }
 
-pub fn replaceChildren(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    return self.asNode().replaceChildren(nodes, frame);
+pub fn replaceChildren(self: *Document, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
+    return self.asNode().replaceChildren(nodes.values, frame);
 }
 
 pub fn moveBefore(self: *Document, node: js.Value, child: js.Value, frame: *Frame) !void {
@@ -1077,15 +1077,15 @@ fn looksLikeNewDocument(html: []const u8) bool {
         std.ascii.startsWithIgnoreCase(trimmed, "<html");
 }
 
-pub fn write(self: *Document, text: []const []const u8, frame: *Frame) !void {
-    return self.writeInternal(text, false, frame);
+pub fn write(self: *Document, text: js.Variadic([]const u8), frame: *Frame) !void {
+    return self.writeInternal(text.values, false, frame);
 }
 
 // https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#dom-document-writeln
 // `writeln(...text)` runs the document write steps with `text` followed by a
 // U+000A LINE FEED character.
-fn writeln(self: *Document, text: []const []const u8, frame: *Frame) !void {
-    return self.writeInternal(text, true, frame);
+fn writeln(self: *Document, text: js.Variadic([]const u8), frame: *Frame) !void {
+    return self.writeInternal(text.values, true, frame);
 }
 
 fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool, call_frame: *Frame) !void {
