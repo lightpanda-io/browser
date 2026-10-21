@@ -87,6 +87,11 @@ pub fn evaluate(self: Module) !js.Value {
     const res = v8.v8__Module__Evaluate(self.handle, self.local.handle) orelse return error.JsException;
 
     if (self.getStatus() == .kErrored) {
+        // `res` is the evaluation promise, already rejected. It never reaches
+        // the page, so it isn't an unhandled rejection: the caller reports
+        // the exception itself.
+        const promise: js.Promise = .{ .local = self.local, .handle = @ptrCast(res) };
+        promise.markAsHandled();
         return error.JsException;
     }
 

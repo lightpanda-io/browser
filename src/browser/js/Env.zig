@@ -548,9 +548,9 @@ fn reportRejectedPromises(self: *Env, ctx: *Context) bool {
     var batch = ctx.rejected_promises;
     ctx.rejected_promises = .empty;
     defer batch.deinit(self.allocator);
-    defer for (batch.items) |rejected| rejected.release();
+    defer for (batch.items) |promise| promise.release();
 
-    for (batch.items) |rejected| {
+    for (batch.items) |global| {
         if (self.terminatePending()) {
             break;
         }
@@ -563,7 +563,8 @@ fn reportRejectedPromises(self: *Env, ctx: *Context) bool {
         ctx.localScope(&ls);
         defer ls.deinit();
 
-        reportRejectedPromise(ctx, rejected.promise.local(&ls.local), rejected.reason.local(&ls.local));
+        const promise = global.local(&ls.local);
+        reportRejectedPromise(ctx, promise, promise.result());
     }
     return true;
 }
@@ -923,8 +924,7 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
     if (promise_event == v8.kPromiseRejectWithNoHandler) {
         // Not unhandled yet: a handler can still come before the end of the
         // microtask checkpoint (see reportRejectedPromises).
-        const reason = rejection.reason() orelse return;
-        ctx.addRejectedPromise(promise, reason) catch |err| {
+        ctx.addRejectedPromise(promise) catch |err| {
             log.debug(.browser, "queue rejected promise", .{ .err = err });
         };
         return;
