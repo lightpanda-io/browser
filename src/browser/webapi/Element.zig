@@ -49,6 +49,7 @@ pub const Reflect = @import("element/reflection.zig").Reflect;
 
 const log = lp.log;
 const String = lp.String;
+const Allocator = std.mem.Allocator;
 
 const Element = @This();
 
@@ -347,7 +348,7 @@ pub fn getTagNameLower(self: *const Element) []const u8 {
     }
 }
 
-pub fn getTagNameSpec(self: *const Element, buf: []u8) []const u8 {
+pub fn getTagNameSpec(self: *const Element, allocator: Allocator) []const u8 {
     return switch (self._type) {
         .html => blk: {
             const he = self.subtype(Html);
@@ -359,7 +360,7 @@ pub fn getTagNameSpec(self: *const Element, buf: []u8) []const u8 {
                 .br => "BR",
                 .button => "BUTTON",
                 .canvas => "CANVAS",
-                .custom => upperTagName(&he.subtype(Html.Custom)._tag_name, buf),
+                .custom => upperTagName(&he.subtype(Html.Custom)._tag_name, allocator),
                 .data => "DATA",
                 .datalist => "DATALIST",
                 .details => "DETAILS",
@@ -372,8 +373,8 @@ pub fn getTagNameSpec(self: *const Element, buf: []u8) []const u8 {
                 .font => "FONT",
                 .frameset => "FRAMESET",
                 .form => "FORM",
-                .generic => upperTagName(&he.subtype(Html.Generic)._tag_name, buf),
-                .heading => upperTagName(&he.subtype(Html.Heading)._tag_name, buf),
+                .generic => upperTag(he.subtype(Html.Generic)._tag),
+                .heading => upperTag(he.subtype(Html.Heading)._tag),
                 .head => "HEAD",
                 .html => "HTML",
                 .hr => "HR",
@@ -393,7 +394,7 @@ pub fn getTagNameSpec(self: *const Element, buf: []u8) []const u8 {
                     .generic => "MEDIA",
                 },
                 .meter => "METER",
-                .mod => upperTagName(&he.subtype(Html.Mod)._tag_name, buf),
+                .mod => upperTag(he.subtype(Html.Mod)._tag),
                 .object => "OBJECT",
                 .ol => "OL",
                 .optgroup => "OPTGROUP",
@@ -404,7 +405,7 @@ pub fn getTagNameSpec(self: *const Element, buf: []u8) []const u8 {
                 .param => "PARAM",
                 .pre => "PRE",
                 .progress => "PROGRESS",
-                .quote => upperTagName(&he.subtype(Html.Quote)._tag_name, buf),
+                .quote => upperTag(he.subtype(Html.Quote)._tag),
                 .script => "SCRIPT",
                 .select => "SELECT",
                 .slot => "SLOT",
@@ -413,10 +414,10 @@ pub fn getTagNameSpec(self: *const Element, buf: []u8) []const u8 {
                 .style => "STYLE",
                 .table => "TABLE",
                 .table_caption => "CAPTION",
-                .table_cell => upperTagName(&he.subtype(Html.TableCell)._tag_name, buf),
-                .table_col => upperTagName(&he.subtype(Html.TableCol)._tag_name, buf),
+                .table_cell => upperTag(he.subtype(Html.TableCell)._tag),
+                .table_col => upperTag(he.subtype(Html.TableCol)._tag),
                 .table_row => "TR",
-                .table_section => upperTagName(&he.subtype(Html.TableSection)._tag_name, buf),
+                .table_section => upperTag(he.subtype(Html.TableSection)._tag),
                 .template => "TEMPLATE",
                 .textarea => "TEXTAREA",
                 .time => "TIME",
@@ -424,7 +425,7 @@ pub fn getTagNameSpec(self: *const Element, buf: []u8) []const u8 {
                 .track => "TRACK",
                 .ul => "UL",
                 .unknown => switch (self._namespace) {
-                    .html => upperTagName(&he.subtype(Html.Unknown)._tag_name, buf),
+                    .html => upperTagName(&he.subtype(Html.Unknown)._tag_name, allocator),
                     .svg, .xml, .mathml, .unknown, .null => he.subtype(Html.Unknown)._tag_name.str(),
                 },
             };
@@ -2454,13 +2455,31 @@ pub fn format(self: *Element, writer: *std.Io.Writer) !void {
     try writer.writeByte('>');
 }
 
-fn upperTagName(tag_name: *String, buf: []u8) []const u8 {
-    if (tag_name.len > buf.len) {
-        log.info(.dom, "tag.long.name", .{ .name = tag_name.str() });
-        return tag_name.str();
-    }
+// Falls back to the stored name when the copy can't be allocated, e.g. a long
+// name and a caller's fixed buffer.
+fn upperTagName(tag_name: *String, allocator: Allocator) []const u8 {
     const tag = tag_name.str();
-    return std.ascii.upperString(buf, tag);
+    return std.ascii.allocUpperString(allocator, tag) catch {
+        log.info(.dom, "tag.long.name", .{ .name = tag });
+        return tag;
+    };
+}
+
+// For the element types that store a Tag, whose name is always @tagName(tag).
+fn upperTag(tag: Tag) []const u8 {
+    @setEvalBranchQuota(10_000);
+    return switch (tag) {
+        inline else => |t| comptime upperLiteral(@tagName(t)),
+    };
+}
+
+fn upperLiteral(comptime lower: []const u8) *const [lower.len]u8 {
+    comptime {
+        var upper: [lower.len]u8 = undefined;
+        _ = std.ascii.upperString(&upper, lower);
+        const final = upper;
+        return &final;
+    }
 }
 
 pub fn getTag(self: *const Element) Tag {
@@ -2755,7 +2774,7 @@ pub const JsApi = struct {
 
     pub const tagName = bridge.accessor(_tagName, null, .{});
     fn _tagName(self: *Element, frame: *Frame) []const u8 {
-        return self.getTagNameSpec(&frame.buf);
+        return self.getTagNameSpec(frame.local_arena);
     }
     // the frame-aware variant returns the original URI for namespaces
     // outside the built-in set instead of the placeholder

@@ -53,7 +53,6 @@ const Execution = @This();
 js: *Context,
 
 // Fields named to match Page for generic code (executor._factory works for both)
-buf: []u8,
 // For a Frame, the Page's arena. For a worker, the worker's own arena (a worker
 // has its own identity map, so nothing it allocates is shared with another realm).
 page_arena: Allocator,

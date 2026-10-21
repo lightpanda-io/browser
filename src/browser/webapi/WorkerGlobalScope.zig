@@ -84,7 +84,6 @@ origin: ?[]const u8 = null,
 // can outlive it. Always true for a service worker: only a secure context can
 // register one.
 _secure_context: bool,
-buf: [1024]u8 = undefined, // same size as frame.buf
 // Document charset (matches Page.charset). Workers default to UTF-8.
 charset: []const u8 = "UTF-8",
 js: *JS.Context,

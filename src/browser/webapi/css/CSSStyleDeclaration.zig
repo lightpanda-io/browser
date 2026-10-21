@@ -26,7 +26,6 @@ const Frame = @import("../../Frame.zig");
 const Element = @import("../Element.zig");
 const DOMMatrixReadOnly = @import("../DOMMatrixReadOnly.zig");
 
-const log = lp.log;
 const String = lp.String;
 const Allocator = std.mem.Allocator;
 
@@ -75,7 +74,7 @@ pub fn item(self: *const CSSStyleDeclaration, index: u32) []const u8 {
 }
 
 pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {
-    const normalized = normalizePropertyName(property_name, &frame.buf);
+    const normalized = normalizePropertyName(frame.local_arena, property_name);
     const wrapped = String.wrap(normalized);
     const value = self.propertyValue(normalized, wrapped, frame);
 
@@ -277,7 +276,7 @@ fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame
 }
 
 pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {
-    const normalized = normalizePropertyName(property_name, &frame.buf);
+    const normalized = normalizePropertyName(frame.local_arena, property_name);
     return if (self.declaredImportant(.wrap(normalized))) "important" else "";
 }
 
@@ -315,7 +314,7 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
 /// setProperty path, within a single declaration block a normal declaration must
 /// not override an earlier !important one (CSS cascade precedence).
 fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Declaration, frame: *Frame) !void {
-    const normalized = normalizePropertyName(declaration.name, &frame.buf);
+    const normalized = normalizePropertyName(frame.local_arena, declaration.name);
     if (CssParser.axisShorthand(normalized)) |shorthand| {
         const values = CssParser.splitAxisPair(declaration.value) orelse return;
         try self.applyParsedDeclaration(.{ .name = shorthand.x, .value = values.x, .important = declaration.important }, frame);
@@ -341,7 +340,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
         return (try self.removePropertyImpl(property_name, frame)) != null;
     }
 
-    const normalized = normalizePropertyName(property_name, &frame.buf);
+    const normalized = normalizePropertyName(frame.local_arena, property_name);
     if (CssParser.axisShorthand(normalized)) |shorthand| {
         const values = CssParser.splitAxisPair(value) orelse return false;
         const x = try self.setPropertyImpl(shorthand.x, values.x, important, frame);
@@ -384,7 +383,7 @@ pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, fra
 }
 
 fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) !?[]const u8 {
-    const normalized = normalizePropertyName(property_name, &frame.buf);
+    const normalized = normalizePropertyName(frame.local_arena, property_name);
     if (CssParser.axisShorthand(normalized)) |shorthand| {
         const old_value = self.declaredValue(.wrap(shorthand.name), frame) orelse "";
         const x = try self.removePropertyImpl(shorthand.x, frame);
@@ -529,17 +528,18 @@ pub fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
     return null;
 }
 
-fn normalizePropertyName(name: []const u8, buf: []u8) []const u8 {
+fn normalizePropertyName(allocator: Allocator, name: []const u8) []const u8 {
     if (isCustomProperty(name)) {
         // Custom properties are case-sensitive
         return name;
     }
 
-    if (name.len > buf.len) {
-        log.info(.dom, "css.long.name", .{ .name = name });
+    // Internal lookups (layout, CDP) pass lowercase names, often outside of a
+    // JS call where nothing resets local_arena.
+    if (!Element.Attribute.needsLowerCasing(name)) {
         return name;
     }
-    return std.ascii.lowerString(buf, name);
+    return std.ascii.allocLowerString(allocator, name) catch name;
 }
 
 fn isCustomProperty(name: []const u8) bool {

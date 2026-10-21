@@ -163,7 +163,7 @@ pub fn toString(self: *const DOMException, exec: *js.Execution) ![]const u8 {
             else => break :blk self.getMessage(),
         }
     };
-    return std.mem.print(exec.buf, "{s}: {s}", .{ self.getName(), msg }) catch return msg;
+    return exec.local_arena.print("{s}: {s}", .{ self.getName(), msg });
 }
 
 pub fn structuredSerialize(self: *const DOMException, writer: *js.StructuredWriter) !void {

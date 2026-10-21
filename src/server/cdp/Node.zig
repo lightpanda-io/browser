@@ -23,7 +23,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const id = @import("id.zig");
-const Frame = @import("../../browser/Frame.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
 const IFrame = @import("../../browser/webapi/element/html/IFrame.zig");
 const NodeRegistry = @import("../../NodeRegistry.zig");
@@ -247,8 +246,9 @@ pub const Writer = struct {
         try w.write(dom_node.getNodeType());
 
         try w.objectField("nodeName");
-        var name_buf: [Frame.BUF_SIZE]u8 = undefined;
-        try w.write(dom_node.getNodeName(&name_buf));
+        var name_buf: [1024]u8 = undefined;
+        var name_fba = std.heap.FixedBufferAllocator.init(&name_buf);
+        try w.write(dom_node.getNodeName(name_fba.allocator()));
 
         try w.objectField("nodeValue");
         if (dom_node.getNodeValue()) |nv| {

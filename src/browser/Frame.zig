@@ -85,8 +85,6 @@ const String = lp.String;
 const IFrame = Element.Html.IFrame;
 const Allocator = std.mem.Allocator;
 
-pub const BUF_SIZE = 1024;
-
 const Frame = @This();
 
 // This is the "id" of the frame. It can be re-used from frame-to-frame, e.g.
@@ -257,10 +255,6 @@ inherited_base_url: ?[:0]const u8 = null,
 
 // Document charset (canonical name from encoding_rs, static lifetime)
 charset: []const u8 = "UTF-8",
-
-// Arbitrary buffer. Need to temporarily lowercase a value? Use this. No lifetime
-// guarantee - it's valid until someone else uses it.
-buf: [BUF_SIZE]u8 = undefined,
 
 // access to the JavaScript engine
 js: *JS.Context,
@@ -2970,7 +2964,7 @@ pub fn appendNew(self: *Frame, parent: *Node, child: *Node, parent_root: ?*Node)
 // called from the parser when the node and all its children have been added
 pub fn nodeComplete(self: *Frame, node: *Node) !void {
     Node.Build.call(node, "complete", .{ node, self }) catch |err| {
-        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type, .url = self.url });
+        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(self.local_arena), .err = err, .type = self._type, .url = self.url });
         return err;
     };
     return self.nodeIsReady(true, node);

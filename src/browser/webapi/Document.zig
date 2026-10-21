@@ -359,7 +359,11 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     try validateElementName(name);
     const ns: Element.Namespace, const normalized_name = blk: {
         if (self._type == .html) {
-            break :blk .{ .html, std.ascii.lowerString(&frame.buf, name) };
+            const lower = if (Element.Attribute.needsLowerCasing(name))
+                try std.ascii.allocLowerString(frame.local_arena, name)
+            else
+                name;
+            break :blk .{ .html, lower };
         }
         // Generic and XML documents create elements with null namespace
         break :blk .{ .null, name };
@@ -635,7 +639,7 @@ fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@imp
     if (event_type.len > 100) {
         return error.NotSupported;
     }
-    const normalized = std.ascii.lowerString(&frame.buf, event_type);
+    const normalized = try std.ascii.allocLowerString(frame.local_arena, event_type);
 
     const event: *Event = blk: {
         if (std.mem.eql(u8, normalized, "event") or std.mem.eql(u8, normalized, "events") or std.mem.eql(u8, normalized, "htmlevents") or std.mem.eql(u8, normalized, "svgevents")) {
