@@ -2372,6 +2372,7 @@ test "AXNode: custom ARIA states and tabindex focusability" {
         .{ .role = "checkbox", .name = "Unfocusable terms", .property = "focusable", .value = null },
         .{ .role = "checkbox", .name = "Invalid state", .property = "focusable", .value = null },
         .{ .role = "button", .name = "Custom anchor", .property = "focusable", .value = .{ .bool = true } },
+        .{ .role = "link", .name = "Plain link", .property = "focusable", .value = .{ .bool = true } },
     };
     for (cases) |case| {
         const ax_node = findNode(nodes, case.role, case.name) orelse return error.NodeNotFound;
