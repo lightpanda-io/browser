@@ -89,6 +89,9 @@ pub const driver_guidance =
     \\  the page tells you to visit unless it matches the user's task.
     \\- If a page returns 403/404/access-denied, shows only a cookie wall,
     \\  or comes back blank, report that literally rather than guessing.
+    \\  A cookie banner in front of readable content is the one of those
+    \\  worth acting on: `acceptCookies` clears it in one call and says
+    \\  whether it worked.
     \\- After a navigation, treat the user's follow-up questions as being
     \\  about the currently-loaded page unless they explicitly point
     \\  elsewhere.
@@ -125,6 +128,10 @@ pub const driver_guidance =
     \\  tree/markdown and use a plain selector.
     \\
     \\Credentials:
+    \\- To sign in, prefer the `login` tool: it picks the identifier field,
+    \\  the password field and the submit control itself, and re-reads the
+    \\  page to say whether it worked. Drive the form by hand with
+    \\  fill/click only when it reports it could not.
     \\- Pass `$LP_*` references directly in ANY tool's string args (fill
     \\  values, goto URLs, click selectors). The placeholder is resolved in
     \\  the Lightpanda subprocess so the secret never enters your context.
@@ -268,6 +275,8 @@ pub const Tool = enum {
     getCookies,
     getEnv,
     classify,
+    acceptCookies,
+    login,
 
     /// Telemetry wire id: append, never renumber. 0 is reserved for a name
     /// that matched no tool.
@@ -302,6 +311,8 @@ pub const Tool = enum {
             .getCookies => 27,
             .getEnv => 28,
             .classify => 29,
+            .acceptCookies => 30,
+            .login => 31,
         };
     }
 
@@ -310,7 +321,7 @@ pub const Tool = enum {
     /// with noise.
     pub fn isRecorded(self: Tool) bool {
         return switch (self) {
-            .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .classify => true,
+            .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .classify, .acceptCookies, .login => true,
             .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
@@ -322,7 +333,7 @@ pub const Tool = enum {
     pub fn isAsync(self: Tool) bool {
         return switch (self) {
             .goto => true,
-            .evaluate, .extract, .classify, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .evaluate, .extract, .classify, .acceptCookies, .login, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -332,7 +343,7 @@ pub const Tool = enum {
     pub fn waitsForReadiness(self: Tool) bool {
         return switch (self) {
             .waitForSelector, .waitForScript, .waitForState => true,
-            .goto, .evaluate, .extract, .classify, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .evaluate, .extract, .classify, .acceptCookies, .login, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -343,7 +354,7 @@ pub const Tool = enum {
     pub fn navigatesToUrl(self: Tool) bool {
         return switch (self) {
             .markdown, .html, .screenshot, .links, .tree, .interactiveElements, .structuredData, .detectForms => true,
-            .goto, .search, .evaluate, .extract, .classify, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .search, .evaluate, .extract, .classify, .acceptCookies, .login, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -353,7 +364,7 @@ pub const Tool = enum {
         return switch (self) {
             .click, .fill, .hover, .selectOption, .setChecked => &.{"selector"},
             .screenshot => &.{"path"},
-            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .classify, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => &.{},
+            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .classify, .acceptCookies, .login, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => &.{},
         };
     }
 
@@ -361,7 +372,7 @@ pub const Tool = enum {
     /// markdown, evaluate return value) rather than a status line on stderr.
     pub fn producesData(self: Tool) bool {
         return switch (self) {
-            .search, .markdown, .html, .links, .evaluate, .extract, .classify, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
+            .search, .markdown, .html, .links, .evaluate, .extract, .classify, .acceptCookies, .login, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
             .goto, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => false,
         };
     }
@@ -369,7 +380,7 @@ pub const Tool = enum {
     /// Result text is JSON, so a script gets the parsed value, not the string.
     pub fn returnsJson(self: Tool) bool {
         return switch (self) {
-            .extract, .classify => true,
+            .extract, .classify, .acceptCookies, .login => true,
             .goto, .search, .markdown, .html, .links, .evaluate, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => false,
         };
     }
@@ -382,7 +393,7 @@ pub const Tool = enum {
     pub fn reportsPageState(self: Tool) bool {
         return switch (self) {
             .goto, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => true,
-            .search, .markdown, .html, .links, .evaluate, .extract, .classify, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .waitForSelector, .waitForScript, .waitForState => false,
+            .search, .markdown, .html, .links, .evaluate, .extract, .classify, .acceptCookies, .login, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .waitForSelector, .waitForScript, .waitForState => false,
         };
     }
 
@@ -393,7 +404,7 @@ pub const Tool = enum {
             .goto, .search => .navigation,
             .markdown, .html, .screenshot, .tree, .links, .nodeDetails, .findElement, .interactiveElements, .structuredData, .detectForms => .reading,
             .extract, .classify, .evaluate => .extraction,
-            .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => .interaction,
+            .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .acceptCookies, .login => .interaction,
             .waitForSelector, .waitForScript, .waitForState => .waiting,
             .getUrl, .getCookies, .getEnv, .consoleLogs => .state,
         };
@@ -584,6 +595,38 @@ pub const Tool = enum {
                     \\    "presets": { "type": "boolean", "description": "Also ask every preset in the same call, each answered under its own name beside the questions. Needs the object form." }
                     \\  },
                     \\  "required": ["questions"]
+                    \\}
+                ),
+            },
+            .acceptCookies => .{
+                .description = "Dismiss the cookie consent banner on the current page: the browser offers the banner's own controls to TypeSafe System One (Jev), clicks the one it picks, and re-reads the page to check the banner went. Returns JSON — `dismissed` is what was clicked, `verified` whether the page agreed afterwards, `selector` the control, and `reason` why nothing happened when nothing did. A page with no control named like a consent banner's costs no model call; passing a `selector` clicks it and asks nothing, which is how a recorded call replays. Otherwise needs " ++ zenai.typesafe.env_var_name ++ ".",
+                .summary = "Dismiss a cookie consent banner",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "prefer": { "type": "string", "enum":
+                ++ lp.Config.tagJsonArray(lp.consent.Prefer) ++
+                    \\, "description": "Whether to accept the cookies or refuse all non-essential ones. Defaults to 'accept'." },
+                    \\    "selector": { "type": "string", "description": "Optional CSS selector of the control to click, from an earlier call's result. Clicked without asking the model; ignored when it no longer resolves." }
+                    \\  }
+                    \\}
+                ),
+            },
+            .login => .{
+                .description = "Sign in on the current page. The browser collects the candidate fields and sign-in controls, asks TypeSafe System One (Jev) only what the markup leaves ambiguous, fills the credentials, submits, and re-reads the page to say whether it worked. A password is only ever typed into an `input[type=password]`. Pass `$LP_*` placeholders rather than literal secrets: they resolve inside the browser and never appear in the result. Returns JSON with the selectors it used, so a recorded call replays them with no model call. Otherwise needs " ++ zenai.typesafe.env_var_name ++ ".",
+                .summary = "Sign in, picking the fields with Jev",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "password": { "type": "string", "description": "The password, as a $LP_* placeholder." },
+                    \\    "username": { "type": "string", "description": "The username, email or other identifier, as a $LP_* placeholder. Omit on a page that asks only for the password." },
+                    \\    "usernameSelector": { "type": "string", "description": "Optional CSS selector of the identifier field, from an earlier call's result. Given with passwordSelector, the fields are filled with no model call." },
+                    \\    "passwordSelector": { "type": "string", "description": "Optional CSS selector of the password field, from an earlier call's result. Must name an input[type=password]." },
+                    \\    "submitSelector": { "type": "string", "description": "Optional CSS selector of the control that submits the form. Without it, Enter is pressed in the filled field." }
+                    \\  },
+                    \\  "required": ["password"]
                     \\}
                 ),
             },
@@ -1132,6 +1175,12 @@ fn selectorForArgs(
     const node = registry.lookup_by_id.get(std.math.cast(NodeRegistry.Id, id.integer) orelse return null) orelse return null;
     const el = node.dom.is(Element) orelse return null;
     const frame = session.currentFrame() orelse return null;
+    return selectorFor(arena, frame, el);
+}
+
+/// The simplest selector that resolves to `el` again under the first-match
+/// semantics the action tools use, or null when none could be built.
+fn selectorFor(arena: std.mem.Allocator, frame: *lp.Frame, el: *Element) ?[]const u8 {
     return SelectorPath.init(arena, frame).build(el) catch null;
 }
 
@@ -1169,6 +1218,8 @@ fn dispatch(
         .evaluate => execEvaluate(arena, session, registry, substituted),
         .extract => execExtract(arena, session, registry, substituted),
         .classify => execClassify(arena, session, registry, substituted),
+        .acceptCookies => execAcceptCookies(arena, session, registry, substituted),
+        .login => execLogin(arena, session, registry, substituted),
         .getEnv => .{ .text = try execGetEnv(arena, substituted) },
         .consoleLogs => .{ .text = try execConsoleLogs(arena, session) },
         .getUrl => .{ .text = try execGetUrl(session) },
@@ -2021,16 +2072,13 @@ fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
         else => return .{ .text = try std.fmt.allocPrint(arena, "classify: invalid questions: {s}", .{@errorName(err)}), .is_error = true },
     };
 
-    const state = lp.classify.buildState(arena, page, node, registry) catch |err| switch (err) {
-        error.OutOfMemory => return ToolError.OutOfMemory,
-        else => return ToolError.InternalError,
-    };
-
-    var detail: Failure = .{};
-    var response = session.browser.app.askTypesafe(arena, state, prepared.questions, .{}, &detail) catch |err| switch (err) {
-        error.MissingApiKey => return .{ .text = "classify: " ++ zenai.typesafe.env_var_name ++ " environment variable is not set", .is_error = true },
-        error.OutOfMemory => return ToolError.OutOfMemory,
-        else => return apiFailed(arena, "classify", err, detail),
+    var response = switch (try askPage(arena, session, registry, .{
+        .tool = .classify,
+        .questions = prepared.questions,
+        .node = node,
+    })) {
+        .failed => |result| return result,
+        .ok => |ok| ok,
     };
     defer response.deinit();
 
@@ -2040,6 +2088,442 @@ fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     };
 
     return .{ .text = formatted };
+}
+
+const AskedResponse = zenai.typesafe.Client.Response(zenai.typesafe.types.AskResponse);
+
+/// One Jev request about the current page: `.failed` carries what to tell the
+/// caller, so a key that is not set or an API that is down reads the same
+/// whichever tool asked.
+const Asked = union(enum) {
+    ok: AskedResponse,
+    failed: ToolResult,
+};
+
+const Ask = struct {
+    /// Names the request in an error message, and nothing else.
+    tool: Tool,
+    questions: zenai.typesafe.Questions,
+    /// The subtree the model is shown.
+    node: *DOMNode,
+    /// Where each link goes. Worth the room it takes in the state only for a
+    /// question that can turn on it; `acceptCookies` and `login` cannot, and
+    /// a page of tracking URLs would crowd out the text that decides them.
+    link_urls: bool = true,
+};
+
+fn askPage(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    ask: Ask,
+) ToolError!Asked {
+    const page = try requireFrame(session);
+    const state = lp.classify.buildState(arena, page, ask.node, registry, .{ .link_urls = ask.link_urls }) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => return ToolError.InternalError,
+    };
+
+    var detail: Failure = .{};
+    const response = session.browser.app.askTypesafe(arena, state, ask.questions, .{}, &detail) catch |err| switch (err) {
+        error.MissingApiKey => return .{ .failed = .{
+            .text = arena.print("{s}: " ++ zenai.typesafe.env_var_name ++ " environment variable is not set", .{@tagName(ask.tool)}) catch return ToolError.OutOfMemory,
+            .is_error = true,
+        } },
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => return .{ .failed = try apiFailed(arena, @tagName(ask.tool), err, detail) },
+    };
+    return .{ .ok = response };
+}
+
+/// An answer we cannot read back — not one of the options we offered, or not
+/// the argmax of its own probabilities.
+fn unusableAnswer(arena: std.mem.Allocator, tool: Tool, err: anyerror) ToolError!ToolResult {
+    return .{
+        .text = arena.print("{s}: the model's answer was unusable: {s}", .{ @tagName(tool), @errorName(err) }) catch return ToolError.OutOfMemory,
+        .is_error = true,
+    };
+}
+
+/// A tool's own JSON verdict, with `reason` filled in when there is one to
+/// give. Unset fields are dropped, as the other JSON payloads drop theirs, so
+/// the verdict reads as what happened rather than as every question that
+/// could have been answered.
+fn verdict(arena: std.mem.Allocator, outcome: anytype, reason: ?[]const u8) ToolError!ToolResult {
+    if (reason) |r| outcome.reason = r;
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    std.json.Stringify.value(outcome.*, .{ .emit_null_optional_fields = false }, &aw.writer) catch
+        return ToolError.InternalError;
+    return .{ .text = aw.written() };
+}
+
+/// How long to let the page react to a click before reading it again.
+const settle_timeout_ms: u32 = 2000;
+
+/// Let the page act on a click: a consent banner removes itself from a
+/// handler or after a request of its own, and a sign-in form navigates. A page
+/// that never goes idle is not a failure here, only one we stop waiting for.
+fn settle(session: *lp.Session) ToolError!void {
+    const frame = session.currentFrame() orelse return;
+    lp.actions.waitForState(.networkidle, settle_timeout_ms, frame._frame_id, session) catch |err| {
+        if (err == error.Cancelled) return ToolError.Cancelled;
+    };
+}
+
+fn clickAndSettle(
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    node: *DOMNode,
+    page: *lp.Frame,
+) ToolError!void {
+    const scope = beginAction(session);
+    lp.actions.click(node, page) catch |err| return mapActionError(err);
+    _ = try settleAction(session, registry, scope);
+    try settle(session);
+}
+
+/// Controls to try before giving up: the model's pick, then its runner-up.
+const max_consent_clicks = 2;
+
+fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
+    const Params = struct {
+        prefer: lp.consent.Prefer = .accept,
+        selector: ?[]const u8 = null,
+    };
+    const args = try parseArgsOrDefault(Params, arena, arguments);
+    var outcome: lp.consent.Outcome = .{};
+
+    // The control a previous run recorded, when it is still there: a replay
+    // clicks it and asks nothing, so a saved script needs no API key.
+    if (args.selector) |selector| {
+        if (resolveBySelector(session, selector) catch null) |target| {
+            try clickAndSettle(session, registry, target.node, target.page);
+            outcome.dismissed = true;
+            outcome.attempts = 1;
+            outcome.selector = selector;
+            return verdict(arena, &outcome, "clicked the control given, without asking the model");
+        }
+    }
+
+    const page = try requireFrame(session);
+    const set = lp.choose.collect(arena, page.document.asNode(), page, lp.consent.filter) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => return ToolError.InternalError,
+    };
+    if (set.keyword_matches == 0) {
+        return verdict(arena, &outcome, "no control on this page is named like a consent banner's");
+    }
+
+    const questions = try lp.consent.questions(arena, set.candidates, args.prefer);
+    var response = switch (try askPage(arena, session, registry, .{
+        .tool = .acceptCookies,
+        .questions = questions,
+        .node = page.document.asNode(),
+        .link_urls = false,
+    })) {
+        .failed => |result| return result,
+        .ok => |ok| ok,
+    };
+    defer response.deinit();
+
+    outcome.consentWall = response.value.noul(lp.consent.wall_key);
+    if ((outcome.consentWall orelse 0) < lp.classify.gate) {
+        return verdict(arena, &outcome, "those controls are not a consent banner");
+    }
+
+    const order = lp.choose.ranked(arena, set.candidates, response.value, questions, lp.consent.control_key) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => return unusableAnswer(arena, .acceptCookies, err),
+    };
+    if (order.len == 0) {
+        return verdict(arena, &outcome, "no control here would dismiss the banner");
+    }
+
+    // Selectors for every control we might click, before clicking any of them:
+    // the first click can navigate, which frees the nodes the rest point at.
+    var tries: std.ArrayList(lp.choose.Scored) = try .initCapacity(arena, max_consent_clicks);
+    var selectors: std.ArrayList([]const u8) = try .initCapacity(arena, max_consent_clicks);
+    for (order[0..@min(order.len, max_consent_clicks)]) |scored| {
+        const selector = selectorFor(arena, page, scored.candidate.element) orelse continue;
+        tries.appendAssumeCapacity(scored);
+        selectors.appendAssumeCapacity(selector);
+    }
+
+    for (tries.items, selectors.items) |scored, selector| {
+        // Gone already, taken away by the click before this one.
+        const target = resolveBySelector(session, selector) catch continue;
+
+        outcome.attempts += 1;
+        outcome.selector = selector;
+        outcome.control = scored.candidate.name;
+        outcome.confidence = scored.probability;
+        try clickAndSettle(session, registry, target.node, target.page);
+        outcome.dismissed = true;
+
+        var verify = switch (try askPage(arena, session, registry, .{
+            .tool = .acceptCookies,
+            .questions = try lp.consent.verifyQuestions(arena),
+            .node = (try requireFrame(session)).document.asNode(),
+            .link_urls = false,
+        })) {
+            .failed => |result| return result,
+            .ok => |ok| ok,
+        };
+        defer verify.deinit();
+
+        outcome.consentWallAfter = verify.value.noul(lp.consent.wall_key);
+        if ((outcome.consentWallAfter orelse 1) < lp.classify.gate) {
+            outcome.verified = true;
+            break;
+        }
+    }
+    if (outcome.attempts == 0) {
+        return verdict(arena, &outcome, "no selector could be built for the control the model picked");
+    }
+    return verdict(arena, &outcome, if (outcome.verified) null else "clicked, but the banner is still there");
+}
+
+const LoginParams = struct {
+    password: []const u8,
+    username: ?[]const u8 = null,
+    usernameSelector: ?[]const u8 = null,
+    passwordSelector: ?[]const u8 = null,
+    submitSelector: ?[]const u8 = null,
+};
+
+/// Which element plays which part on the page as it stands, and where it is.
+const Decided = union(enum) {
+    ok: struct {
+        page: *lp.Frame,
+        picks: lp.login.Picks,
+        /// The identifier field, the password field and the control that
+        /// submits them, as selectors resolved before anything is typed: a
+        /// submit can navigate and free every node the picks point at.
+        user: ?[]const u8 = null,
+        password: ?[]const u8 = null,
+        submit: ?[]const u8 = null,
+    },
+    failed: ToolResult,
+};
+
+/// The rules' answer where they had one, the model's where they did not — one
+/// request, or none when the markup left nothing open. Run again on the page an
+/// identifier-first submit returns, where the password finally appears.
+fn decideLogin(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    wanted: lp.login.Wanted,
+    outcome: *lp.login.Outcome,
+) ToolError!Decided {
+    const page = try requireFrame(session);
+    const plan = lp.login.Plan.collect(arena, page.document.asNode(), page) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => return ToolError.InternalError,
+    };
+
+    const questions = try lp.login.questions(arena, plan, wanted);
+    var picks = lp.login.rulePicks(plan);
+    if (questions.count() > 0) {
+        var response = switch (try askPage(arena, session, registry, .{
+            .tool = .login,
+            .questions = questions,
+            .node = page.document.asNode(),
+            .link_urls = false,
+        })) {
+            .failed => |result| return .{ .failed = result },
+            .ok => |ok| ok,
+        };
+        defer response.deinit();
+        outcome.calls += 1;
+
+        picks = lp.login.picks(arena, plan, questions, response.value) catch |err| switch (err) {
+            error.OutOfMemory => return ToolError.OutOfMemory,
+            else => return .{ .failed = try unusableAnswer(arena, .login, err) },
+        };
+    }
+
+    return .{ .ok = .{
+        .page = page,
+        .picks = picks,
+        .user = if (picks.user) |field| selectorFor(arena, page, field.element) else null,
+        .password = if (picks.password) |field| selectorFor(arena, page, field.element) else null,
+        .submit = submitSelector(arena, page, picks),
+    } };
+}
+
+/// The control that submits the sign-in form — null when Enter in the field is
+/// the better act, because none was picked or the one picked sits outside the
+/// field's own form and so submits something else, whatever it is labelled.
+fn submitSelector(arena: std.mem.Allocator, page: *lp.Frame, picks: lp.login.Picks) ?[]const u8 {
+    const control = picks.submit orelse return null;
+    const field = picks.password orelse picks.user orelse return null;
+    if (!lp.login.sameForm(field.element, control.element)) return null;
+    return selectorFor(arena, page, control.element);
+}
+
+fn execLogin(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
+    const args = try parseArgs(LoginParams, arena, arguments);
+    var outcome: lp.login.Outcome = .{};
+
+    // The fields a previous run recorded: fill them and submit, with no model
+    // call, so a saved script needs no API key.
+    if (args.passwordSelector != null or args.usernameSelector != null) {
+        return replayLogin(arena, session, registry, args, &outcome);
+    }
+
+    // Which field takes the identifier cannot matter when there is none to type.
+    var decided = switch (try decideLogin(arena, session, registry, .{ .user = args.username != null }, &outcome)) {
+        .failed => |result| return result,
+        .ok => |ok| ok,
+    };
+
+    if (decided.picks.user == null and decided.picks.password == null) {
+        return verdict(arena, &outcome, "no sign-in field on this page");
+    }
+    if (args.username != null and decided.picks.user == null) {
+        return verdict(arena, &outcome, "could not tell which field takes the username");
+    }
+    if (decided.picks.password orelse decided.picks.user) |field| {
+        if (lp.login.insecureAction(decided.page, field.element)) {
+            return verdict(arena, &outcome, "this form posts to a plaintext http:// URL; refusing to send credentials");
+        }
+    }
+    if (decided.picks.password == null and !decided.picks.multi_step) {
+        return verdict(arena, &outcome, "no password field, and the page does not ask for one on a later step");
+    }
+
+    if (args.username) |username| {
+        const selector = decided.user.?;
+        try fillBySelector(session, registry, selector, username);
+        outcome.usernameSelector = selector;
+    }
+
+    if (decided.picks.password == null) {
+        // Identifier first: submit what we have, then look for the password on
+        // the page that comes back. Where it lives is the only thing still
+        // open there, so nothing else is asked about again.
+        try submitLogin(session, registry, decided.submit, decided.user, &outcome);
+        decided = switch (try decideLogin(arena, session, registry, .{ .user = false, .multi_step = false }, &outcome)) {
+            .failed => |result| return result,
+            .ok => |ok| ok,
+        };
+        if (decided.picks.password == null) {
+            return verdict(arena, &outcome, "submitted the username, but the next page shows no password field");
+        }
+    }
+
+    const password_selector = decided.password orelse {
+        return verdict(arena, &outcome, "no selector could be built for the password field");
+    };
+    try fillBySelector(session, registry, password_selector, args.password);
+    outcome.passwordSelector = password_selector;
+
+    try submitLogin(session, registry, decided.submit, password_selector, &outcome);
+    return verifyLogin(arena, session, registry, &outcome);
+}
+
+/// Fill one field, resolved by selector, so what we did is what a replay
+/// repeats.
+fn fillBySelector(
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    selector: []const u8,
+    value: []const u8,
+) ToolError!void {
+    const target = try resolveBySelector(session, selector);
+    const scope = beginAction(session);
+    lp.actions.fill(target.node, value, target.page) catch |err| return mapActionError(err);
+    _ = try settleAction(session, registry, scope);
+}
+
+/// Click the sign-in control, or press Enter in the field when the form has
+/// none of its own.
+fn submitLogin(
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    submit: ?[]const u8,
+    field: ?[]const u8,
+    outcome: *lp.login.Outcome,
+) ToolError!void {
+    if (submit) |selector| {
+        if (resolveBySelector(session, selector) catch null) |target| {
+            try clickAndSettle(session, registry, target.node, target.page);
+            outcome.submitSelector = selector;
+            outcome.submitted = true;
+            return;
+        }
+    }
+
+    const target = try resolveBySelector(session, field orelse return);
+    const scope = beginAction(session);
+    lp.actions.press(target.node, "Enter", target.page) catch |err| return mapActionError(err);
+    _ = try settleAction(session, registry, scope);
+    try settle(session);
+    outcome.pressedEnter = true;
+    outcome.submitted = true;
+}
+
+/// The page's own verdict on whether the sign-in worked. A failure is reported
+/// and never retried: a second attempt on a wrong password is how accounts get
+/// locked, and that call belongs to whoever owns the account.
+fn verifyLogin(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    outcome: *lp.login.Outcome,
+) ToolError!ToolResult {
+    var response = switch (try askPage(arena, session, registry, .{
+        .tool = .login,
+        .questions = try lp.login.verifyQuestions(arena),
+        .node = (try requireFrame(session)).document.asNode(),
+        .link_urls = false,
+    })) {
+        .failed => |result| return result,
+        .ok => |ok| ok,
+    };
+    defer response.deinit();
+    outcome.calls += 1;
+
+    outcome.loginWall = response.value.noul(lp.login.wall_key);
+    outcome.errorPage = response.value.noul(lp.login.error_key);
+    outcome.loggedIn = (outcome.loginWall orelse 1) < lp.classify.gate and (outcome.errorPage orelse 1) < lp.classify.gate;
+    return verdict(arena, outcome, if (outcome.loggedIn) null else "submitted, but the page still shows a sign-in form or an error");
+}
+
+/// The recorded form: fill the fields a previous run named and submit, with no
+/// model call and no verification — a replay repeats a decision, it does not
+/// make one.
+fn replayLogin(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    args: LoginParams,
+    outcome: *lp.login.Outcome,
+) ToolError!ToolResult {
+    const page = try requireFrame(session);
+    if (args.usernameSelector) |selector| {
+        const username = args.username orelse {
+            return verdict(arena, outcome, "usernameSelector was given without a username");
+        };
+        try fillBySelector(session, registry, selector, username);
+        outcome.usernameSelector = selector;
+    }
+    if (args.passwordSelector) |selector| {
+        const target = try resolveBySelector(session, selector);
+        const element = target.node.is(Element) orelse return ToolError.InvalidParams;
+        if (!lp.login.isPasswordField(element)) {
+            return verdict(arena, outcome, "passwordSelector does not name an input[type=password]");
+        }
+        if (lp.login.insecureAction(page, element)) {
+            return verdict(arena, outcome, "this form posts to a plaintext http:// URL; refusing to send credentials");
+        }
+        try fillBySelector(session, registry, selector, args.password);
+        outcome.passwordSelector = selector;
+    }
+
+    try submitLogin(session, registry, args.submitSelector, args.passwordSelector orelse args.usernameSelector, outcome);
+    return verdict(arena, outcome, "filled the fields given, without asking the model");
 }
 
 const eval_promise_timeout_ms: u32 = 30_000;
@@ -2259,10 +2743,19 @@ fn beginAction(session: *lp.Session) ActionScope {
     return .{ .frame = frame, .popups = if (frame) |f| f.page.popups.items.len else 0 };
 }
 
-/// Finish a state-changing action: drain any queued navigation triggered by
-/// the action, then tag `body` with the resulting page URL and title so the
-/// caller (LLM, MCP client) can see whether the action triggered navigation.
-fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, scope: ActionScope, body: []const u8) ToolError![]const u8 {
+/// Where a settled action left the page.
+const Settled = struct {
+    frame: *lp.Frame,
+    /// What the settle itself did that the caller's own result would not
+    /// otherwise mention.
+    note: []const u8 = "",
+};
+
+/// Finish a state-changing action: drain any queued navigation it triggered,
+/// drop node ids a frame swap invalidated, and follow a window it opened.
+/// `finalizeAction` adds the prose a single-action tool reports; a tool that
+/// writes its own result calls this directly.
+fn settleAction(session: *lp.Session, registry: *NodeRegistry, scope: ActionScope) ToolError!Settled {
     const before = scope.frame;
     if (before) |b| {
         try awaitQueuedNavigation(session, b);
@@ -2291,9 +2784,16 @@ fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
         }
     }
 
-    const page_title = page.getTitle() catch null;
+    return .{ .frame = page, .note = note };
+}
+
+/// `settleAction`, plus the resulting page URL and title tagged onto `body` so
+/// the caller (LLM, MCP client) can see whether the action navigated.
+fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, scope: ActionScope, body: []const u8) ToolError![]const u8 {
+    const settled = try settleAction(session, registry, scope);
+    const page_title = settled.frame.getTitle() catch null;
     return arena.print("{s}.{s} Page url: {s}, HTTP {s}, title: {s}", .{
-        body, note, page.url, navStatus(arena, page), page_title orelse "(none)",
+        body, settled.note, settled.frame.url, navStatus(arena, settled.frame), page_title orelse "(none)",
     }) catch ToolError.InternalError;
 }
 
@@ -3829,4 +4329,91 @@ test "markdown: a same-url page whose navigation failed is navigated again" {
     , .{});
     try std.testing.expect((try call(aa, session, &registry, "goto", args, .{ .source = .user })).is_error);
     try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{ .source = .user })).is_error);
+}
+
+test "acceptCookies: a page with nothing like a banner costs no model call" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_form.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    // No TYPESAFE_API_KEY is set in the test environment, so reaching the
+    // model at all would have said so here.
+    try std.testing.expect(std.mem.find(u8, result.text, "named like a consent banner") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"dismissed\":false") != null);
+}
+
+test "acceptCookies: the recorded control is clicked without the model" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("consent_banner.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#accept"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "acceptCookies", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"dismissed\":true") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "without asking the model") != null);
+    // A replay repeats a decision, it does not check it.
+    try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":false") != null);
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "Accept all cookies") == null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "Headline") != null);
+}
+
+test "login: the recorded selectors are filled and submitted without the model" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_form.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2","usernameSelector":"#user","passwordSelector":"#pass","submitSelector":"#submit"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "without asking the model") != null);
+
+    const status = try call(aa, page.session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#status"}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, status.text, "submitted") != null);
+
+    // The identifier is on the page, the password is masked everywhere the
+    // state is built — including the request a verification would send.
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "ada") != null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "hunter2") == null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "*****") != null);
+}
+
+test "login: a passwordSelector that is not a password field is refused" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_form.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"password":"hunter2","passwordSelector":"#user"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, result.text, "input[type=password]") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":false") != null);
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "hunter2") == null);
 }

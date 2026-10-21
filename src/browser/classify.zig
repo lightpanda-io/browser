@@ -84,6 +84,30 @@ fn snakeCase(comptime camel: []const u8) []const u8 {
     }
 }
 
+/// How sure the model has to be before a caller acts on a preset answer. The
+/// midpoint and nothing finer: on our own data a calibrated-looking confidence
+/// does not order correctness across question types (two consent walls we got
+/// wrong came back at 0.99), so what settles a decision is re-reading the page
+/// after acting, not a finer threshold here.
+pub const gate = 0.5;
+
+/// One preset as a question, keyed by its own name so the answer comes back
+/// under `@tagName(preset)` and no caller has to spell the key itself.
+pub fn presetQuestion(preset: Preset) zenai.typesafe.QuestionEntry {
+    return .{ .key = @tagName(preset), .value = .noulText(preset.description()) };
+}
+
+/// Just these presets and nothing else — the shape a caller wants when it is
+/// checking one specific thing rather than classifying a page.
+pub fn presetQuestions(
+    arena: std.mem.Allocator,
+    presets: []const Preset,
+) error{OutOfMemory}!zenai.typesafe.Questions {
+    const entries = try arena.alloc(zenai.typesafe.QuestionEntry, presets.len);
+    for (presets, entries) |preset, *entry| entry.* = presetQuestion(preset);
+    return .init(entries);
+}
+
 pub const ResponseKind = enum {
     single_choice,
     questions_object,
@@ -226,12 +250,18 @@ pub fn addPresets(arena: std.mem.Allocator, prepared: PreparedQuestions) Prepare
 /// Most of the page `buildState` sends, in bytes.
 const max_state_bytes = 8192;
 
+pub const StateOpts = struct {
+    /// Where each link goes. Worth the room it takes within
+    /// `max_state_bytes` only for a question that can turn on it.
+    link_urls: bool = true,
+};
+
 /// The page as Jev sees it: url, title, status, and the semantic tree of
 /// `node` as text. The tree keeps what markdown drops and the questions turn
 /// on (form fields, dialogs, the title of an iframe holding a CAPTCHA) and,
-/// without node ids, is about as long; links carry where they go.
-pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode, registry: *NodeRegistry) !Content {
-    const tree = lp.SemanticTree.init(arena, node, registry, page, .{ .ids = false, .link_urls = true }) catch return error.InternalError;
+/// without node ids, is about as long.
+pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode, registry: *NodeRegistry, opts: StateOpts) !Content {
+    const tree = lp.SemanticTree.init(arena, node, registry, page, .{ .ids = false, .link_urls = opts.link_urls }) catch return error.InternalError;
     var aw: std.Io.Writer.Allocating = .init(arena);
     tree.textStringify(&aw.writer) catch return error.InternalError;
 

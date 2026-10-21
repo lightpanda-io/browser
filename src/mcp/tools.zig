@@ -43,6 +43,8 @@ fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
         .screenshot => .{ .idempotentHint = true },
         .waitForSelector, .waitForScript, .waitForState => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
         .evaluate, .click, .press => .{},
+        // Clicks a control it chooses, and `login` sends credentials.
+        .acceptCookies, .login => .{},
         .fill, .selectOption, .setChecked, .hover => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
         .scroll => .{ .destructiveHint = false, .openWorldHint = false },
     };

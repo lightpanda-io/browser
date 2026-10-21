@@ -61,6 +61,8 @@ pub const Frame = @import("browser/Frame.zig");
 pub const forms = @import("browser/forms.zig");
 pub const links = @import("browser/links.zig");
 pub const tools = @import("browser/tools.zig");
+pub const choose = @import("browser/choose.zig");
+pub const consent = @import("browser/consent.zig");
 pub const actions = @import("browser/actions.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
@@ -70,6 +72,7 @@ pub const RenderTree = @import("browser/RenderTree.zig");
 pub const interactive = @import("browser/interactive.zig");
 pub const structured_data = @import("browser/structured_data.zig");
 pub const classify = @import("browser/classify.zig");
+pub const login = @import("browser/login.zig");
 pub const GlobalScope = @import("browser/global_scope.zig").GlobalScope;
 
 pub const js = @import("browser/js/js.zig");
