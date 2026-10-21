@@ -356,7 +356,7 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, pro
     return event._prevent_default;
 }
 
-fn importScripts(self: *WorkerGlobalScope, urls: []const [:0]const u8) !void {
+fn importScripts(self: *WorkerGlobalScope, urls: JS.Variadic([:0]const u8)) !void {
     if (self._is_module) {
         // not allowed to be called when the worker type is module (scripts should
         // use actual imports).
@@ -368,7 +368,7 @@ fn importScripts(self: *WorkerGlobalScope, urls: []const [:0]const u8) !void {
     const arena = try session.getArena(.small, "importScript");
     defer arena.release();
 
-    for (urls) |url| {
+    for (urls.values) |url| {
         defer arena.resetRetain();
         try self.importScript(arena.allocator(), url);
     }
@@ -482,11 +482,11 @@ fn queueMicrotask(self: *WorkerGlobalScope, cb: JS.Function) void {
     self.js.queueMicrotaskFunc(cb);
 }
 
-pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?i32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
+pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?i32, params: JS.Variadic(JS.Value.Global), exec: *JS.Execution) !u32 {
     const cb = try handler.resolve(exec);
     return self._timers.schedule(exec, cb, Timers.delayFromJs(delay_ms), .{
         .repeat = false,
-        .params = params,
+        .params = params.values,
         .name = "worker.setTimeout",
     });
 }
@@ -495,11 +495,11 @@ fn clearTimeout(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
 }
 
-pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?i32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
+pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?i32, params: JS.Variadic(JS.Value.Global), exec: *JS.Execution) !u32 {
     const cb = try handler.resolve(exec);
     return self._timers.schedule(exec, cb, Timers.delayFromJs(delay_ms), .{
         .repeat = true,
-        .params = params,
+        .params = params.values,
         .name = "worker.setInterval",
     });
 }

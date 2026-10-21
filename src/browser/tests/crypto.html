@@ -2909,6 +2909,7 @@
   });
 </script>
 
+<<<<<<< HEAD
 <script id=export-and-format-order type=module>
   const state = await testing.async();
   const subtle = crypto.subtle;
@@ -3048,5 +3049,24 @@
       rsaHashSame: true,
       rsaExponentSame: true,
     }, results);
+  });
+</script>
+
+<script id=key-usages-sequence type=module>
+  // keyUsages is a sequence<KeyUsage>: any iterable, and required
+  const state = await testing.async();
+  const algo = { name: "HMAC", hash: "SHA-256" };
+  const key = await crypto.subtle.generateKey(algo, true, new Set(["sign", "verify"]));
+  let missing;
+  try {
+    await crypto.subtle.generateKey(algo, true);
+  } catch (e) {
+    missing = e.name;
+  }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(["sign", "verify"], key.usages);
+    testing.expectEqual("TypeError", missing);
   });
 </script>
