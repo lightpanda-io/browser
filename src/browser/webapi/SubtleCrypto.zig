@@ -456,8 +456,15 @@ pub fn deriveKey(
     // The algorithm is normalized before derivedKeyType.
     const algo = try algorithm.Derive.fromJs(algo_value, local);
     const derived = try algorithm.DerivedKey.fromJs(derived_value, local);
-    // The base key's deriveKey usage (not deriveBits) gates this operation.
+    // The base key checks come before "get key length": its algorithm must be
+    // the one given, and it must have the deriveKey usage (not deriveBits).
+    if (!eqlIgnoreCase(base_key._algorithm.name, algo.algoName())) {
+        return error.InvalidAccessError;
+    }
     const usage_ok = base_key.canDeriveKey();
+    if (!usage_ok) {
+        return error.InvalidAccessError;
+    }
 
     switch (derived) {
         .aes => |a| {
@@ -470,15 +477,14 @@ pub fn deriveKey(
             return AES.import(a.name, bits, extractable, key_usages, exec);
         },
         .hmac => |h| {
-            const requested = try HMAC.lengthParam(h.length, local);
             // "Get key length": a present length must be non-zero.
-            if (requested == 0) {
+            if (h.length == 0) {
                 return local.typeError("HMAC length must not be zero");
             }
             const hash_name = try h.hash.canonical(local);
             const hash_md = crypto.findDigest(hash_name) catch return error.NotSupported;
             // Default length, per spec, is the hash's block size (in bits).
-            const length: u32 = requested orelse @intCast(crypto.EVP_MD_block_size(hash_md) * 8);
+            const length: u32 = h.length orelse @intCast(crypto.EVP_MD_block_size(hash_md) * 8);
             const bits = try deriveRaw(algo, base_key, length, usage_ok, exec);
             return HMAC.import(hash_name, bits, length, extractable, key_usages, exec);
         },

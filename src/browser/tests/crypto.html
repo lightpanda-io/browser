@@ -2590,6 +2590,7 @@
   const pb = await s.importKey("raw", data, "PBKDF2", false, ["deriveKey"]);
   const pbp = { name: "PBKDF2", hash: "SHA-256", salt: data, iterations: 1 };
   const ecdh = await s.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveKey"]);
+  const ecdhBits = await s.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
   const x = await s.generateKey("X25519", false, ["deriveKey"]);
   const dk = (type, ext, usages, algo = pbp, key = pb) => s.deriveKey(algo, key, type, ext, usages);
   await run("dk AES len 2^32+128", () => dk({ name: "AES-GCM", length: 2 ** 32 + 128 }, true, ["encrypt"]));
@@ -2598,6 +2599,11 @@
   await run("dk AES string", () => dk("AES-GCM", true, ["encrypt"]));
   await run("dk AES stray hash", () => dk({ name: "AES-GCM", length: 128, hash: "SHA-999" }, true, ["encrypt"]));
   await run("dk HMAC length 0", () => dk({ name: "HMAC", hash: "SHA-256", length: 0 }, true, ["sign"]));
+  // The base key checks come before "get key length".
+  await run("dk AES len 100 wrong key", () => dk({ name: "AES-GCM", length: 100 }, true, ["encrypt"], { name: "ECDH", public: ecdh.publicKey }, pb));
+  await run("dk HMAC length 0 no usage", () => dk({ name: "HMAC", hash: "SHA-256", length: 0 }, true, ["sign"], { name: "ECDH", public: ecdh.publicKey }, ecdhBits.privateKey));
+  // But the dictionary's conversion comes before them.
+  await run("dk HMAC length -1 wrong key", () => dk({ name: "HMAC", hash: "SHA-256", length: -1 }, true, ["sign"], { name: "ECDH", public: ecdh.publicKey }, pb));
   await run("dk HMAC ok", () => dk({ name: "HMAC", hash: "SHA-256" }, true, ["sign"]));
   await run("dk HKDF from PBKDF2", () => dk("HKDF", false, ["deriveBits"]));
   await run("dk HKDF from ECDH", () => dk("HKDF", false, ["deriveBits"], { name: "ECDH", public: ecdh.publicKey }, ecdh.privateKey));
@@ -2647,6 +2653,9 @@
     "dk AES string=TypeError",
     "dk AES stray hash=key:secret:AES-GCM:128",
     "dk HMAC length 0=TypeError",
+    "dk AES len 100 wrong key=InvalidAccessError",
+    "dk HMAC length 0 no usage=InvalidAccessError",
+    "dk HMAC length -1 wrong key=TypeError",
     "dk HMAC ok=key:secret:HMAC:512",
     "dk HKDF from PBKDF2=OperationError",
     "dk HKDF from ECDH=key:secret:HKDF:",

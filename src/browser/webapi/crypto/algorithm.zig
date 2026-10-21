@@ -163,6 +163,14 @@ pub const Derive = union(enum) {
         return error.NotSupported;
     }
 
+    pub fn algoName(self: Derive) []const u8 {
+        return switch (self) {
+            .pbkdf2 => |p| p.name,
+            .hkdf => |p| p.name,
+            .ecdh_or_x25519 => |p| p.name,
+        };
+    }
+
     pub const Pbkdf2Params = struct {
         hash: Hash,
         /// An [EnforceRange] unsigned long: converted once the name is known
@@ -187,8 +195,9 @@ pub const Derive = union(enum) {
 /// has no key length, so it's NotSupportedError.
 pub const DerivedKey = union(enum) {
     aes: struct { length: js.EnforceRange(u16), name: []const u8 },
-    /// `length` as in Import.hmac.
-    hmac: struct { hash: Hash, length: ?js.Value = null, name: []const u8 },
+    /// `length` converted as Import.hmac's is (HMAC.lengthParam): null when
+    /// absent, 0 for null.
+    hmac: struct { hash: Hash, length: ?u32, name: []const u8 },
     /// HKDF or PBKDF2, whose key length is null: the whole derivation.
     named: []const u8,
 
@@ -198,9 +207,10 @@ pub const DerivedKey = union(enum) {
             return .{ .aes = try convert(@FieldType(DerivedKey, "aes"), value, name, local) };
         }
         if (isOneOf(name, &.{"HMAC"})) {
-            const params = try convert(@FieldType(DerivedKey, "hmac"), value, name, local);
+            const params = try convert(struct { hash: Hash, length: ?js.Value = null, name: []const u8 }, value, name, local);
+            const length = try rangeMember(u32, params.length, local);
             _ = try params.hash.canonical(local);
-            return .{ .hmac = params };
+            return .{ .hmac = .{ .hash = params.hash, .length = length, .name = params.name } };
         }
         if (isOneOf(name, &.{ "HKDF", "PBKDF2" })) {
             return .{ .named = name };
