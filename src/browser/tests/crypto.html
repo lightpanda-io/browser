@@ -3049,6 +3049,11 @@
   results["publicExponent shared"] = await rsa(new Uint8Array(new SharedArrayBuffer(3)));
   // A shared keyData is a TypeError of its conversion, before the algorithm.
   results["import view, unknown algorithm"] = await outcome(() => subtle.importKey("raw", view, "NOPE", false, ["encrypt"]));
+  // A SharedArrayBuffer is a BufferSource that fails its conversion, not a
+  // JsonWebKey, in any format.
+  results["import jwk sab"] = await outcome(() => subtle.importKey("jwk", sab, "AES-GCM", false, ["encrypt"]));
+  results["import jwk sab, unknown algorithm"] = await outcome(() => subtle.importKey("jwk", sab, "NOPE", false, ["encrypt"]));
+  results["import jwk {}"] = await outcome(() => subtle.importKey("jwk", {}, "AES-GCM", false, ["encrypt"]));
   // getRandomValues' ArrayBufferView isn't [AllowShared] either.
   const random = (array) => { try { return crypto.getRandomValues(array) === array; } catch (err) { return err.name; } };
   results["getRandomValues view"] = random(view);
@@ -3076,6 +3081,9 @@
   expected["publicExponent ArrayBuffer"] = "TypeError";
   expected["publicExponent shared"] = "TypeError";
   expected["import view, unknown algorithm"] = "TypeError";
+  expected["import jwk sab"] = "TypeError";
+  expected["import jwk sab, unknown algorithm"] = "TypeError";
+  expected["import jwk {}"] = "DataError";
   expected["getRandomValues view"] = "TypeError";
   expected["getRandomValues plain"] = true;
 

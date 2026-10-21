@@ -125,8 +125,10 @@ pub fn importKey(
     // keyData converts first (a JWK's members are read then), but a buffer's
     // bytes are only read after the algorithm is normalized (bufferBytes).
     // Any ArrayBuffer or view is the BufferSource (a Uint16Array too, which
-    // KeyData's Uint8Array wouldn't take); any other object a JsonWebKey.
-    var key_data: algorithm.KeyData = if (key_data_value.isArrayBuffer() or key_data_value.isArrayBufferView()) blk: {
+    // KeyData's Uint8Array wouldn't take); a shared one is one that fails its
+    // conversion (TypeError), not a JsonWebKey. Any other object is a JWK.
+    const is_buffer = key_data_value.isArrayBuffer() or key_data_value.isArrayBufferView() or key_data_value.isSharedArrayBuffer();
+    var key_data: algorithm.KeyData = if (is_buffer) blk: {
         try checkBufferSource(key_data_value, local);
         break :blk .{ .bytes = .{ .values = &.{} } };
     } else local.jsValueToZig(algorithm.KeyData, key_data_value) catch |err| {

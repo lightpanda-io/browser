@@ -153,6 +153,10 @@ pub fn isArrayBuffer(self: Value) bool {
     return v8.v8__Value__IsArrayBuffer(self.handle);
 }
 
+pub fn isSharedArrayBuffer(self: Value) bool {
+    return v8.v8__Value__IsSharedArrayBuffer(self.handle);
+}
+
 /// Whether this converts to a WebIDL BufferSource: an ArrayBuffer, or a view
 /// onto one. Without [AllowShared], a SharedArrayBuffer, or a view onto one,
 /// doesn't.

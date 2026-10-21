@@ -798,7 +798,7 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             return .{ .values = arr };
         },
         js.BufferSource => {
-            if (v8.v8__Value__IsSharedArrayBuffer(js_val.handle)) {
+            if (js_val.isSharedArrayBuffer()) {
                 return error.TypeError;
             }
             if (js_val.isArrayBufferView() and !js_val.isBufferSource()) {
