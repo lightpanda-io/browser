@@ -121,6 +121,7 @@ pub fn importKey(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
+    try checkFormat(format, local);
     // keyData converts first (a JWK's members are read then), but a buffer's
     // bytes are only read after the algorithm is normalized (bufferBytes).
     var key_data = local.jsValueToZig(algorithm.KeyData, key_data_value) catch |err| {
@@ -263,10 +264,10 @@ fn importNormalized(
 /// Whether the requested format/key-data describe a private key. The format
 /// alone decides for DER/raw variants; for JWK the presence of `d` marks it.
 fn importKind(format: []const u8, key_data: algorithm.KeyData) bool {
-    if (eqlIgnoreCase(format, "pkcs8") or eqlIgnoreCase(format, "raw-private") or eqlIgnoreCase(format, "raw-seed")) {
+    if (std.mem.eql(u8, format, "pkcs8") or std.mem.eql(u8, format, "raw-private") or std.mem.eql(u8, format, "raw-seed")) {
         return true;
     }
-    if (eqlIgnoreCase(format, "jwk")) {
+    if (std.mem.eql(u8, format, "jwk")) {
         return switch (key_data) {
             .jwk => |j| j.d != null,
             .bytes => false,
@@ -306,6 +307,7 @@ pub fn exportKey(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
+    try checkFormat(format, local);
     return switch (try exportAs(format, key, exec)) {
         .bytes => |bytes| local.resolvePromise(js.ArrayBuffer{ .values = bytes }),
         .jwk => |jwk| local.resolvePromise(try jwk.toJs(local)),
@@ -352,7 +354,11 @@ const Jwk = union(enum) {
 
 /// The "export key" steps shared by exportKey and wrapKey.
 fn exportAs(format: []const u8, key: *CryptoKey, exec: *const Execution) !Exported {
-    const local = exec.js.local.?;
+    // HKDF and PBKDF2 have no export operation: that's a NotSupportedError,
+    // checked before the extractable flag (their keys never are).
+    if (key._type == .derive) {
+        return error.NotSupported;
+    }
     if (!key.canExportKey()) {
         return error.InvalidAccessError;
     }
@@ -390,7 +396,8 @@ fn exportAs(format: []const u8, key: *CryptoKey, exec: *const Execution) !Export
         return error.NotSupported;
     }
 
-    return local.typeError("invalid format");
+    // A raw-* format of the Modern Algorithms draft.
+    return error.NotSupported;
 }
 
 /// The JSON Web Key returned for symmetric ("oct") keys. Members are listed
@@ -571,6 +578,7 @@ pub fn wrapKey(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
+    try checkFormat(format, local);
     const algo = try algorithm.Encrypt.fromJs(algo_value, local, true);
     try checkWrappingKey(algo.algoName(), wrapping_key, .wrap);
 
@@ -596,6 +604,7 @@ pub fn unwrapKey(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
+    try checkFormat(format, local);
     try checkBufferSource(wrapped_key_value, local);
     const algo = try algorithm.Encrypt.fromJs(algo_value, local, true);
     // The unwrapped key's algorithm is normalized next, before the key checks.
@@ -611,6 +620,20 @@ pub fn unwrapKey(
     // importKey rejects a secret or private key with no usages (SyntaxError),
     // the last check unwrapKey asks for.
     return importNormalized(format, key_data, unwrapped_key_algo, extractable, key_usages, exec);
+}
+
+/// A KeyFormat, including the raw-* ones of the Modern Algorithms draft. None
+/// is supported here, so they're NotSupportedError later (Chrome takes
+/// raw-public for EC/OKP keys and raw-secret for symmetric ones). Any other string fails the WebIDL enum conversion of the format
+/// argument, a TypeError before any other step.
+fn checkFormat(format: []const u8, local: *const js.Local) !void {
+    const formats = [_][]const u8{ "raw", "spki", "pkcs8", "jwk", "raw-public", "raw-private", "raw-seed", "raw-secret" };
+    for (formats) |known| {
+        if (std.mem.eql(u8, format, known)) {
+            return;
+        }
+    }
+    return local.typeError("invalid key format");
 }
 
 /// A BufferSource argument taken as a value. Its type is checked when the

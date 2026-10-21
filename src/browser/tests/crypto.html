@@ -2908,3 +2908,87 @@
     }, results);
   });
 </script>
+
+<script id=export-and-format-order type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const outcome = async (fn) => {
+    try {
+      const r = await fn();
+      return r instanceof ArrayBuffer ? `bytes:${r.byteLength}` : typeof r;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const hkdf = await subtle.importKey("raw", new Uint8Array(16), "HKDF", false, ["deriveBits"]);
+  const pbkdf2 = await subtle.importKey("raw", new Uint8Array(16), "PBKDF2", false, ["deriveBits"]);
+  const aesLocked = await subtle.importKey("raw", new Uint8Array(16), "AES-CBC", false, ["encrypt"]);
+  const aes = await subtle.importKey("raw", new Uint8Array(16), "AES-CBC", true, ["encrypt"]);
+  const kw = await subtle.importKey("raw", new Uint8Array(16), "AES-KW", false, ["wrapKey", "unwrapKey"]);
+  const unwrapOnly = await subtle.importKey("raw", new Uint8Array(16), "AES-KW", false, ["unwrapKey"]);
+
+  const results = {};
+  // HKDF and PBKDF2 have no export operation: NotSupportedError comes before
+  // the extractable check (Chrome 152 still gives InvalidAccessError).
+  for (const format of ["raw", "jwk", "spki", "pkcs8"]) {
+    results[`hkdf ${format}`] = await outcome(() => subtle.exportKey(format, hkdf));
+    results[`pbkdf2 ${format}`] = await outcome(() => subtle.exportKey(format, pbkdf2));
+  }
+  results["wrap hkdf"] = await outcome(() => subtle.wrapKey("raw", hkdf, kw, "AES-KW"));
+  results["wrap pbkdf2"] = await outcome(() => subtle.wrapKey("raw", pbkdf2, kw, "AES-KW"));
+  // The wrapping key's checks come first.
+  results["wrap hkdf, unwrap-only key"] = await outcome(() => subtle.wrapKey("raw", hkdf, unwrapOnly, "AES-KW"));
+  // An exportable algorithm still checks extractable before the format.
+  results["aes locked raw"] = await outcome(() => subtle.exportKey("raw", aesLocked));
+  results["aes locked spki"] = await outcome(() => subtle.exportKey("spki", aesLocked));
+  results["aes spki"] = await outcome(() => subtle.exportKey("spki", aes));
+  results["wrap aes locked"] = await outcome(() => subtle.wrapKey("raw", aesLocked, kw, "AES-KW"));
+  // An unknown format is a TypeError before anything else; a raw-* one of the
+  // Modern Algorithms draft is a known format, but not supported here.
+  results["export bogus"] = await outcome(() => subtle.exportKey("bogus", aesLocked));
+  results["export Raw"] = await outcome(() => subtle.exportKey("Raw", aes));
+  results["export bogus hkdf"] = await outcome(() => subtle.exportKey("bogus", hkdf));
+  results["import bogus"] = await outcome(() => subtle.importKey("bogus", new Uint8Array(16), "NOPE", true, ["encrypt"]));
+  results["import raw-public aes"] = await outcome(() => subtle.importKey("raw-public", new Uint8Array(16), "AES-GCM", true, ["encrypt"]));
+  results["export raw-secret aes"] = await outcome(() => subtle.exportKey("raw-secret", aes));
+  const ec = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const ecRaw = await subtle.exportKey("raw", ec.publicKey);
+  results["export raw-public ec"] = await outcome(() => subtle.exportKey("raw-public", ec.publicKey));
+  results["import raw-public ec"] = await outcome(() => subtle.importKey("raw-public", ecRaw, { name: "ECDSA", namedCurve: "P-256" }, true, ["verify"]));
+  results["import raw-private ec"] = await outcome(() => subtle.importKey("raw-private", new Uint8Array(32), { name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]));
+  results["wrap bogus"] = await outcome(() => subtle.wrapKey("bogus", aes, kw, "NOPE"));
+  results["unwrap bogus"] = await outcome(() => subtle.unwrapKey("bogus", new Uint8Array(24), kw, "NOPE", "AES-GCM", true, ["encrypt"]));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual({
+      "hkdf raw": "NotSupportedError",
+      "pbkdf2 raw": "NotSupportedError",
+      "hkdf jwk": "NotSupportedError",
+      "pbkdf2 jwk": "NotSupportedError",
+      "hkdf spki": "NotSupportedError",
+      "pbkdf2 spki": "NotSupportedError",
+      "hkdf pkcs8": "NotSupportedError",
+      "pbkdf2 pkcs8": "NotSupportedError",
+      "wrap hkdf": "NotSupportedError",
+      "wrap pbkdf2": "NotSupportedError",
+      "wrap hkdf, unwrap-only key": "InvalidAccessError",
+      "aes locked raw": "InvalidAccessError",
+      "aes locked spki": "InvalidAccessError",
+      "aes spki": "NotSupportedError",
+      "wrap aes locked": "InvalidAccessError",
+      "export bogus": "TypeError",
+      "export Raw": "TypeError",
+      "export bogus hkdf": "TypeError",
+      "import bogus": "TypeError",
+      "import raw-public aes": "NotSupportedError",
+      // Chrome supports raw-secret for AES, and raw-public for EC keys.
+      "export raw-secret aes": "NotSupportedError",
+      "export raw-public ec": "NotSupportedError",
+      "import raw-public ec": "NotSupportedError",
+      "import raw-private ec": "NotSupportedError",
+      "wrap bogus": "TypeError",
+      "unwrap bogus": "TypeError",
+    }, results);
+  });
+</script>
