@@ -25,6 +25,7 @@ const HttpClient = @import("../../../network/HttpClient.zig");
 
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
+const SafeString = @import("../SafeString.zig");
 
 const network = @import("network.zig");
 
@@ -186,8 +187,8 @@ pub fn responseIntercept(arena: Allocator, bc: *CDP.BrowserContext, intercept: *
                 .request = network.RequestWriter.init(arena, transfer, bc.network_limits.post_data),
                 .resourceType = fetchResourceType(transfer.req.resource_type),
                 .responseStatusCode = head.status,
-                .responseStatusText = transfer.statusText() orelse "",
-                .responseHeaders = transfer.responseHeaders(),
+                .responseStatusText = SafeString.wrap(transfer.statusText() orelse ""),
+                .responseHeaders = HeaderEntriesWriter{ .headers = transfer.responseHeaders() },
                 .networkId = &id.toRequestId(transfer), // matches the Network REQ-ID
             }, .{ .session_id = session_id });
         },
@@ -203,6 +204,25 @@ pub fn responseIntercept(arena: Allocator, bc: *CDP.BrowserContext, intercept: *
 
     intercept.wait_for_interception.* = true;
 }
+
+// A Fetch.HeaderEntry array. Names and values are the server's octets, which
+// need not be UTF-8: SafeString keeps them strings.
+const HeaderEntriesWriter = struct {
+    headers: []const http.Header,
+
+    pub fn jsonStringify(self: *const HeaderEntriesWriter, jws: anytype) !void {
+        try jws.beginArray();
+        for (self.headers) |hdr| {
+            try jws.beginObject();
+            try jws.objectField("name");
+            try jws.write(SafeString.wrap(hdr.name));
+            try jws.objectField("value");
+            try jws.write(SafeString.wrap(hdr.value));
+            try jws.endObject();
+        }
+        try jws.endArray();
+    }
+};
 
 // The transfer a response-stage intercept id holds, left in the intercept
 // state. Null when the id is unknown, the transfer is gone, or the pause is
@@ -1032,6 +1052,42 @@ test "cdp.Fetch: response stage pauses a final response and continueResponse del
     try testing.expect(probe.done);
     try testing.expectEqualSlices(u8, repeat("1234567890", 10), probe.body.items);
     try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: response stage reports a non-UTF-8 status text and headers as strings" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RS", .session_id = "SID-RS" });
+    try enableResponseStage(&ctx);
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, "http://127.0.0.1:9582/latin1_response");
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    // Latin-1 is transcoded to UTF-8, not written as an array of numbers.
+    try ctx.expectSentEvent("Fetch.requestPaused", .{
+        .requestId = "INT-0000000001",
+        .responseStatusCode = 200,
+        .responseStatusText = "Caf\xC3\xA9",
+    }, .{ .session_id = "SID-RS" });
+    var latin1_value: ?[]const u8 = null;
+    var latin1_name = false;
+    for ((try sentPausedParams(&ctx, "INT-0000000001")).get("responseHeaders").?.array.items) |header| {
+        const name = header.object.get("name").?;
+        const value = header.object.get("value").?;
+        try testing.expect(name == .string and value == .string);
+        if (std.mem.eql(u8, name.string, "x-latin1")) latin1_value = value.string;
+        if (std.mem.eql(u8, name.string, "x-caf\xC3\xA9")) latin1_name = true;
+    }
+    try testing.expectEqualSlices(u8, "La\xC2\xA0Paz", latin1_value.?);
+    try testing.expect(latin1_name);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueResponse", .params = .{ .requestId = "INT-0000000001" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqualSlices(u8, "latin1", probe.body.items);
 }
 
 test "cdp.Fetch: response stage failRequest fails the request without delivering it" {
