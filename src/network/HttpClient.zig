@@ -2107,6 +2107,9 @@ pub const Request = struct {
         worker,
         // navigator.sendBeacon
         beacon,
+        // An <a download> fetch. The owner is the frame that started it, and
+        // that frame keeps its document.
+        download,
 
         // Allowed Values: Document, Stylesheet, Image, Media, Font, Script,
         // TextTrack, XHR, Fetch, Prefetch, EventSource, WebSocket, Manifest,
@@ -2124,6 +2127,7 @@ pub const Request = struct {
                 .text_track => "TextTrack",
                 .worker => "Script",
                 .beacon => "Ping",
+                .download => "Other",
             };
         }
     };
@@ -3421,6 +3425,8 @@ pub const Transfer = struct {
     };
 
     fn timingTarget(self: *const Transfer) ?TimingTarget {
+        // A download isn't a resource of the document that started it.
+        if (self.req.resource_type == .download) return null;
         const owner = self.owner orelse return null;
         const target: *const Owner = if (self.req.resource_type == .document)
             owner.parent orelse return null
@@ -3504,6 +3510,7 @@ pub const Transfer = struct {
                 .image => "img",
                 .text_track => "track",
                 .beacon => "beacon",
+                .download => unreachable, // timingTarget skips downloads
             },
             .protocol = t.protocol,
             .start = t.start_time,

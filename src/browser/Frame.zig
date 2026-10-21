@@ -1882,6 +1882,113 @@ fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
     return true;
 }
 
+/// Downloads from a link asynchronously. In order to download to finish,
+/// contrary to Chrome, `Frame` must live throughout the download process.
+/// The function may or may not use `file_name_hint`, hence it's a _hint_.
+pub fn downloadLink(self: *Frame, href: []const u8, file_name_hint: []const u8) !void {
+    // Return an error?
+    if (self._session.download_behavior == .deny) {
+        return;
+    }
+
+    const url = try URL.resolve(self.page_arena, self.navigationBase(), href, .{ .encoding = self.charset });
+    // Wraps everything `Transfer` of this function needs.
+    const Ctx = struct {
+        frame: *Frame,
+        /// Owned by `page_arena`, not used after `headerCallback`.
+        hint: []const u8,
+        /// Set by `headerCallback`; null until then, and if it aborts.
+        download: ?Download = null,
+
+        fn headerCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.HeaderResult {
+            const ctx: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
+            const frame = ctx.frame;
+            // The final URL, after any redirects.
+            const final_url = transfer.req.url;
+
+            const disposition_name: ?[]const u8 = blk: {
+                for (transfer.responseHeaders()) |header| {
+                    if (std.mem.eql(u8, header.name, "content-disposition")) {
+                        break :blk dispositionFilename(header);
+                    }
+                }
+                break :blk null;
+            };
+
+            const maybe_suggestion = disposition_name orelse
+                sanitizeFilename(ctx.hint) orelse (try urlBasename(frame.page_arena, final_url));
+            const maybe_download_size: ?u64 = if (transfer.getContentLength()) |cl| cl else null;
+
+            ctx.download = Download.init(frame, final_url, maybe_suggestion, maybe_download_size) catch |err| {
+                log.err(.frame, "download init", .{ .err = err });
+                return .abort;
+            };
+            return .proceed;
+        }
+
+        fn dataCallback(transfer: *HttpClient.Transfer, bytes: []const u8) !void {
+            const ctx: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
+            return ctx.download.?.feed(bytes);
+        }
+
+        // This must not fail! A `done_callback` error is routed to
+        // `error_callback`, which would destroy `ctx` a second time.
+        fn doneCallback(raw_ctx: *anyopaque) !void {
+            const ctx: *@This() = @ptrCast(@alignCast(raw_ctx));
+            defer ctx.frame._factory.destroy(ctx);
+            ctx.download.?.finish(ctx.frame);
+        }
+
+        fn errorCallback(raw_ctx: *anyopaque, err: anyerror) void {
+            const ctx: *@This() = @ptrCast(@alignCast(raw_ctx));
+            defer ctx.frame._factory.destroy(ctx);
+            log.warn(.frame, "link download", .{ .err = err });
+            // This is null when it failed at or before the headers.
+            // No downloadWillBegin was sent, so there's nothing to cancel.
+            if (ctx.download) |*download| download.cancel(ctx.frame);
+        }
+
+        // Frame teardown or a superseding navigation. Unlike Chrome, downloads
+        // don't outlive their `Frame`, so report it canceled. Must not run JS.
+        fn shutdownCallback(raw_ctx: *anyopaque) void {
+            const ctx: *@This() = @ptrCast(@alignCast(raw_ctx));
+            defer ctx.frame._factory.destroy(ctx);
+            if (ctx.download) |*download| download.cancel(ctx.frame);
+        }
+    };
+
+    const ctx = try self._factory.create(Ctx{
+        .frame = self,
+        .hint = try self.page_arena.dupe(u8, file_name_hint),
+    });
+    // `transfer.deinit()` fires no callbacks, so this is still ours on error.
+    errdefer self._factory.destroy(ctx);
+
+    const transfer = try self.newRequest(.{
+        .ctx = ctx,
+        .url = url,
+        .method = .GET,
+        .origin = self.origin,
+        .initiator_origin = self.origin,
+        .request_mode = .navigate,
+        .credentials_mode = .include,
+        .resource_type = .download,
+        .header_callback = Ctx.headerCallback,
+        .data_callback = Ctx.dataCallback,
+        .done_callback = Ctx.doneCallback,
+        .error_callback = Ctx.errorCallback,
+        .shutdown_callback = Ctx.shutdownCallback,
+    });
+    errdefer transfer.deinit();
+    try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
+    // Set common headers.
+    try self.headersForRequest(transfer, .{});
+
+    transfer.submit() catch |err| {
+        log.debug(.frame, "link download", .{ .err = err, .url = url });
+    };
+}
+
 // Extracts the filename from a Content-Disposition header, handling the quoted,
 // unquoted, and RFC 5987 (filename*=charset''value) forms. Path components are
 // stripped so the result is always a bare basename.
@@ -3892,6 +3999,111 @@ const Download = struct {
     received: u64,
     // from Content-Length, when the response advertised one.
     total: ?u64,
+
+    /// Initializes a `Download` for a given `url`. `maybe_suggestion` is the
+    /// caller's sanitized pick; `null` falls back to the `guid`.
+    fn init(frame: *Frame, url: []const u8, maybe_suggestion: ?[]const u8, maybe_total: ?u64) !Download {
+        const uuidv4 = @import("../id.zig").uuidv4;
+        const latin1ToUtf8 = @import("../string.zig").latin1ToUtf8;
+
+        const session = frame._session;
+        // setDownloadBehavior can change while an `<a download>` fetch is
+        // in-flight.
+        if (session.download_behavior == .deny) {
+            log.warn(.frame, "downloads are denied", .{ .url = url });
+            return error.DownloadDenied;
+        }
+        const download_path = session.download_path orelse {
+            log.warn(.frame, "download without downloadPath", .{ .url = url });
+            return error.WithoutDownloadPath;
+        };
+
+        // `guid` is the CDP "Global Unique Identifier" which helps us find
+        // where to dispatch events on.
+        var guid_buf: [36]u8 = undefined;
+        uuidv4(&guid_buf);
+        const guid = try frame.page_arena.dupe(u8, &guid_buf);
+
+        // The suggestion may point into the response headers, which don't
+        // outlive the transfer. Content-Disposition filenames can be in a
+        // legacy encoding (e.g. Shift_JIS) but must yield valid UTF-8.
+        const name = maybe_suggestion orelse guid;
+        const filename = if (std.unicode.utf8ValidateSlice(name))
+            try frame.page_arena.dupe(u8, name)
+        else
+            try latin1ToUtf8(frame.page_arena, name);
+
+        const on_disk_name = switch (session.download_behavior) {
+            // Stores the file under its guid.
+            .allow_and_name => guid,
+            else => filename,
+        };
+
+        const cwd = std.Io.Dir.cwd();
+        try cwd.createDirPath(lp.io, download_path);
+        var dir = try cwd.openDir(lp.io, download_path, .{});
+        defer dir.close(lp.io);
+
+        const file = try dir.createFile(lp.io, on_disk_name, .{ .truncate = true });
+
+        if (session.download_events_enabled) {
+            session.notification.dispatch(.download_will_begin, &.{
+                .frame_id = frame._frame_id,
+                .guid = guid,
+                .url = url,
+                .suggested_filename = filename,
+            });
+            session.notification.dispatch(.download_progress, &.{
+                .guid = guid,
+                .total_bytes = maybe_total orelse 0,
+                .received_bytes = 0,
+                .state = .in_progress,
+            });
+        }
+
+        return .{
+            .guid = guid,
+            .file = file,
+            .filename = filename,
+            .received = 0,
+            .total = maybe_total,
+        };
+    }
+
+    /// Feeds the download via bytes.
+    fn feed(self: *Download, bytes: []const u8) !void {
+        self.file.writeStreamingAll(lp.io, bytes) catch |err| {
+            log.err(.frame, "download write", .{ .err = err, .guid = self.guid });
+            return err;
+        };
+        self.received += bytes.len;
+    }
+
+    // The body was fully received.
+    fn finish(self: *Download, frame: *Frame) void {
+        self.file.close(lp.io);
+        self.report(frame, .completed);
+    }
+
+    // The transfer failed partway. The partial file stays on disk for now.
+    fn cancel(self: *Download, frame: *Frame) void {
+        self.file.close(lp.io);
+        self.report(frame, .canceled);
+    }
+
+    // Playwright only settles a download on a `completed` or `canceled`
+    // downloadProgress; without one, download.path() and friends never return.
+    fn report(self: *const Download, frame: *Frame, state: lp.Notification.DownloadProgress.State) void {
+        const session = frame._session;
+        if (session.download_events_enabled) {
+            session.notification.dispatch(.download_progress, &.{
+                .guid = self.guid,
+                .total_bytes = self.total orelse self.received,
+                .received_bytes = self.received,
+                .state = state,
+            });
+        }
+    }
 };
 
 const LoadState = enum {

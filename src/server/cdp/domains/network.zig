@@ -790,7 +790,7 @@ const ResponseWriter = struct {
 
 fn initialPriority(resource_type: HttpClient.Request.ResourceType) []const u8 {
     return switch (resource_type) {
-        .document, .stylesheet => "VeryHigh",
+        .document, .stylesheet, .download => "VeryHigh",
         .script, .worker, .xhr, .fetch, .eventsource => "High",
         .image, .text_track => "Low",
         .beacon => "VeryLow",
