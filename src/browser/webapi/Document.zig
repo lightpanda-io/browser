@@ -315,7 +315,7 @@ pub fn setCookie(self: *Document, cookie_str: []const u8, frame: *Frame) ![]cons
         c.deinit();
         return ""; // SameSite cookies cannot be set from a cross-site context.
     }
-    try frame._session.cookie_jar.add(c, lp.datetime.timestamp(.real), false);
+    try frame._session.cookie_jar.addFromUrl(frame.url, c, lp.datetime.timestamp(.real), false);
     return cookie_str;
 }
 
@@ -1921,6 +1921,22 @@ test "Document: cookie access from a cross-site frame" {
     // same visibility rules.
     top_url = "https://attacker.example/";
     try testing.expectEqual("none=4; set_none=8", try doc.getCookie(frame));
+}
+
+test "Document: a non-secure document can't set or overwrite a Secure cookie" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    const doc = frame.document;
+    const jar = &frame._session.cookie_jar;
+    defer jar.clearRetainingCapacity();
+
+    frame.url = "http://victim.example/";
+    _ = try doc.setCookie("s=1; Secure", frame);
+    try testing.expectEqual(0, jar.cookies.items.len);
+
+    try jar.populateFromResponse("https://victim.example/", "s=1; Secure");
+    _ = try doc.setCookie("s=2", frame);
+    try testing.expectEqual("1", jar.cookies.items[0].value);
 }
 
 test "Document: isRelaxableTo" {
