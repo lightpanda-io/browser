@@ -221,6 +221,11 @@ fn resolveWaitUntil(opts: FetchOpts) ?Config.WaitUntil {
     if (opts.wait_selector == null and opts.wait_script == null) return .load;
     return null;
 }
+
+fn remainingMs(timer: std.Io.Timestamp, budget_ms: u32) u32 {
+    return budget_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
+}
+
 /// Loads each url in `urls` in a fresh session and waits per `opts`.
 ///
 /// A page's navigation, wait or dump failure is recorded for that page and
@@ -311,7 +316,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
 
     var runner = session.runner(.{});
 
-    var timer: std.Io.Timestamp = .now(io, .boot);
+    const timer: std.Io.Timestamp = .now(io, .boot);
 
     if (resolveWaitUntil(opts)) |wu| {
         try runner.waitForAll(opts.wait_ms, .{ .until = wu });
@@ -328,7 +333,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
                 err.* = error.FrameClosed;
                 continue;
             };
-            const remaining = opts.wait_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
+            const remaining = remainingMs(timer, opts.wait_ms);
             _ = runner.waitForSelector(frame._frame_id, selector, remaining) catch |e| {
                 err.* = e;
             };
@@ -342,7 +347,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
                 err.* = error.FrameClosed;
                 continue;
             };
-            const remaining = opts.wait_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
+            const remaining = remainingMs(timer, opts.wait_ms);
             runner.waitForScript(frame._frame_id, wait_script, remaining) catch |e| {
                 err.* = e;
             };
@@ -381,7 +386,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
     const alternates = try session.arena.allocator().alloc(bool, pages.items.len);
     @memset(alternates, false);
     if (opts.markdown_alternate) {
-        const remaining = opts.wait_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
+        const remaining = remainingMs(timer, opts.wait_ms);
         try followMarkdownAlternates(session, pages.items, errors, remaining, alternates);
     }
 
