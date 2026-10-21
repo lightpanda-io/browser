@@ -2998,6 +2998,8 @@
   const subtle = crypto.subtle;
   const aes = await subtle.generateKey({ name: "AES-CTR", length: 256 }, true, ["encrypt", "decrypt"]);
   const pair = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const hmac = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign"]);
+  const rsa = await subtle.generateKey({ name: "RSA-PSS", hash: "SHA-256", modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) }, true, ["sign", "verify"]);
 
   // algorithm and usages return the key's cached object every time (Chrome
   // 152 still builds a new one per read). A change the page makes to it shows
@@ -3022,6 +3024,10 @@
     pairUsagesDiffer: pair.publicKey.usages !== pair.privateKey.usages,
     publicAlgorithmSame: pair.publicKey.algorithm === pair.publicKey.algorithm,
     privateUsagesSame: pair.privateKey.usages === pair.privateKey.usages,
+    // So are its nested members.
+    hmacHashSame: hmac.algorithm.hash === hmac.algorithm.hash,
+    rsaHashSame: rsa.publicKey.algorithm.hash === rsa.publicKey.algorithm.hash,
+    rsaExponentSame: rsa.publicKey.algorithm.publicExponent === rsa.publicKey.algorithm.publicExponent,
   };
 
   state.resolve();
@@ -3038,6 +3044,9 @@
       pairUsagesDiffer: true,
       publicAlgorithmSame: true,
       privateUsagesSame: true,
+      hmacHashSame: true,
+      rsaHashSame: true,
+      rsaExponentSame: true,
     }, results);
   });
 </script>
