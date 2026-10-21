@@ -329,6 +329,9 @@ fn getPageStatus(cmd: anytype) !void {
         .unsupported = status.unsupported,
         .skipped = status.skipped,
         .missingGlobals = status.missing_globals,
+        .failed = status.failed,
+        .blocked = status.blocked,
+        .resourceChallenge = status.resource_challenge,
     }, .{});
 }
 
@@ -794,6 +797,10 @@ test "cdp.lp: getPageStatus" {
     try testing.expectEqual(1, skipped.get("worker").?.integer);
     try testing.expectEqual(1, skipped.get("image").?.integer);
     try testing.expectEqual(1, skipped.get("stylesheet").?.integer);
+
+    try testing.expectEqual(0, result.get("failed").?.object.get("fetch").?.integer);
+    try testing.expectEqual(0, result.get("blocked").?.object.get("fetch").?.integer);
+    try testing.expectEqual(null, result.get("resourceChallenge"));
 
     // A new top-level navigation starts over.
     try bc.session.initiateRootNavigation(page.frame_id, "http://localhost:9582/src/browser/tests/cdp/dialog.html", .{ .reason = .address_bar, .kind = .{ .push = null } });

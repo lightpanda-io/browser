@@ -729,6 +729,7 @@ pub const Script = struct {
         const self: *Script = @ptrCast(@alignCast(transfer.req.ctx));
 
         self.status = transfer.responseStatus().?;
+        self.manager.owner.pageStatus().noteResponse(.script, transfer);
         if (transfer.responseStatus() != 200) {
             log.info(.http, "script header", .{
                 .req = transfer,
@@ -841,6 +842,9 @@ pub const Script = struct {
 
     pub fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const self: *Script = @ptrCast(@alignCast(ctx));
+        if (self.status == 0) {
+            self.manager.owner.pageStatus().noteError(.script, err);
+        }
         if (self.status == 404) {
             log.info(.http, "script 404", .{
                 .req = self.url,

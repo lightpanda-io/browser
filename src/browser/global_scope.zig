@@ -33,6 +33,7 @@ const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
 const JS = @import("js/js.zig");
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
+const PageStatus = @import("PageStatus.zig");
 const referrer = @import("referrer.zig");
 const EventManagerBase = @import("EventManagerBase.zig");
 
@@ -172,6 +173,12 @@ pub const GlobalScope = union(enum) {
     pub fn blobUrls(self: GlobalScope) *const Blob.UrlMap {
         return switch (self) {
             inline else => |g| &g.page.blob_urls,
+        };
+    }
+
+    pub fn pageStatus(self: GlobalScope) *PageStatus {
+        return switch (self) {
+            inline else => |g| &g.page.status,
         };
     }
 

@@ -1270,6 +1270,14 @@ fn weaknessNote(arena: std.mem.Allocator, frame: *const lp.Frame) !?[]const u8 {
     if (iframes > 0) {
         try notes.append(arena, try arena.print("{d} iframe(s) were not loaded: subframe loading is off.", .{iframes}));
     }
+    if (status.resource_challenge) |challenge| {
+        try notes.append(arena, try arena.print("A {s} bot challenge blocked some of the page's own requests: content they load is missing.", .{@tagName(challenge)}));
+    } else {
+        const blocked = status.blocked.total();
+        if (blocked > 0) {
+            try notes.append(arena, try arena.print("{d} of the page's own request(s) were refused with HTTP 403/429, likely bot detection or rate limiting: content they load is missing.", .{blocked}));
+        }
+    }
     if (notes.items.len == 0) {
         return null;
     }
