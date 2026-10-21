@@ -176,10 +176,14 @@
     testing.expectEqual('4', texts('#nth_of_list li:nth-child(2 of.y)'));
     testing.expectEqual('3', texts('#nth_of_list li:nth-child(2 of:not(.y))'));
     testing.expectEqual('4', texts('#nth_of_list li:nth-last-child(2 of .y)'));
+    testing.expectEqual('4', texts('#nth_of_list li:nth-child(2 OF .y)'));
     testing.expectEqual('3', texts('#nth_of_list li:nth-child(2 of :not(.y))'));
     testing.expectEqual('2,4', texts('#nth_of_list li:nth-child(-n+2 of .y, :last-child)'));
     testing.expectEqual('1,2,3,4,5', texts('#nth_of_list li:nth-child(n of li)'));
     testing.expectEqual('', texts('#nth_of_list li:nth-child(1 of .z)'));
+    testing.expectEqual('', texts('#nth_of_list li:nth-child(0 of .y)'));
+    testing.expectEqual('2,5', texts('#nth_of_list li:nth-child(-2n+3 of .y)'));
+    testing.expectEqual('5', texts('#nth_of_list li:nth-last-child(-n+1 of .y)'));
     testing.expectEqual('3', texts('#nth_of_list > :nth-child(1 of .y) + li'));
     testing.expectEqual(true, $('#nth_of_list').children[3].matches(':nth-child(2 of .y)'));
     testing.expectEqual(false, $('#nth_of_list').children[2].matches(':nth-child(2 of .y)'));
@@ -188,6 +192,8 @@
     testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2 of .y,)'));
     testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2of .y)'));
     testing.expectError("SyntaxError", () => document.querySelector(':nth-of-type(2 of .y)'));
+    testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2 of ::before)'));
+    testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2 of .y, ::before)'));
 }
 </script>
 

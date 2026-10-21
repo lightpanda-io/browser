@@ -854,6 +854,13 @@ fn matchesNthLastChild(el: *Node.Element, pattern: Selector.NthPattern, nth: ?*N
 }
 
 fn matchesNthChildOf(el: *Node.Element, nth_of: Selector.NthOf, from_end: bool, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
+    // With a <= 0 (":nth-child(2 of .y)", "-n+3 of .y") only indexes up to b
+    // can match, so stop counting once past it.
+    const max_index: usize = if (nth_of.pattern.a > 0) std.math.maxInt(usize) else blk: {
+        if (nth_of.pattern.b < 1) return false;
+        break :blk @intCast(nth_of.pattern.b);
+    };
+
     const node = el.asNode();
     if (!matchesAny(node, nth_of.selectors, scope, nth, frame)) {
         return false;
@@ -864,6 +871,7 @@ fn matchesNthChildOf(el: *Node.Element, nth_of: Selector.NthOf, from_end: bool, 
     while (sibling) |s| {
         if (s.is(Node.Element) != null and matchesAny(s, nth_of.selectors, scope, nth, frame)) {
             index += 1;
+            if (index > max_index) return false;
         }
         sibling = if (from_end) s.nextSibling() else s.previousSibling();
     }

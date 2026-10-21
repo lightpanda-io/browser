@@ -789,7 +789,7 @@ fn parseNthOf(self: *Parser, arena: Allocator) !?[]const Selector.Selector {
         return null;
     }
     const input = self.input;
-    if (input.len < 3 or !std.mem.eql(u8, input[0..2], "of")) {
+    if (input.len < 3 or !std.ascii.eqlIgnoreCase(input[0..2], "of")) {
         return null;
     }
     // "of" followed by a name character is a longer identifier, not the keyword
@@ -804,7 +804,9 @@ fn parseNthOf(self: *Parser, arena: Allocator) !?[]const Selector.Selector {
     while (true) {
         if (self.peek() == ')' or self.peek() == 0) return error.InvalidPseudoClass;
 
-        try selectors.append(arena, try parse(arena, self.consumeUntilCommaOrParen()));
+        const selector = try parse(arena, self.consumeUntilCommaOrParen());
+        if (selector.hasPseudoElement()) return error.InvalidPseudoClass;
+        try selectors.append(arena, selector);
 
         _ = self.skipSpaces();
         if (self.peek() != ',') break;
