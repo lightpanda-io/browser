@@ -623,17 +623,21 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
     };
 
     if (comptime returnsPromise(F) and @TypeOf(info) == FunctionCallbackInfo) {
-        // An operation that returns a promise must not throw. It rejects.
-        const resolver = js.PromiseResolver.init(&err_local);
-        resolver.rejectValue(.{ .local = &err_local, .handle = js_err }) catch |reject_err| {
-            log.err(.bug, "handleError reject", .{ .err = reject_err });
-        };
-        info.getReturnValue().set(resolver.promise().toValue());
+        rejectOperation(&err_local, .{ .local = &err_local, .handle = js_err }, info);
         return;
     }
 
     const js_exception = isolate.throwException(js_err);
     info.getReturnValue().setValueHandle(js_exception);
+}
+
+// An operation that returns a promise must not throw. It rejects.
+fn rejectOperation(err_local: *const Local, value: js.Value, info: FunctionCallbackInfo) void {
+    const resolver = js.PromiseResolver.init(err_local);
+    resolver.rejectValue(value) catch |err| {
+        log.err(.bug, "rejectOperation", .{ .err = err });
+    };
+    info.getReturnValue().set(resolver.promise().toValue());
 }
 
 fn returnsPromise(comptime F: type) bool {
@@ -892,14 +896,49 @@ pub const Function = struct {
             }
         };
 
-        const js_value = _call(T, &caller.local, info, func, opts) catch |err| {
-            handleError(T, @TypeOf(func), &caller.local, err, info);
-            return;
-        };
+        const js_value = if (comptime returnsPromise(@TypeOf(func)))
+            callRejecting(T, &caller.local, info, func, opts) orelse return
+        else
+            _call(T, &caller.local, info, func, opts) catch |err| {
+                handleError(T, @TypeOf(func), &caller.local, err, info);
+                return;
+            };
 
         if (comptime opts.cache) |cache| {
             cache_state.save(cache, js_value);
         }
+    }
+
+    /// `_call` for an operation that returns a promise, which WebIDL says must
+    /// never throw: an exception the page's own code throws while it runs (a
+    /// getter or toString during argument conversion, say) rejects the promise
+    /// it returns instead. A terminating execution still propagates, and so
+    /// does an exception left behind by a call that otherwise succeeded, as
+    /// before. The returned value on success; null once the call has set its
+    /// rejection (or thrown).
+    fn callRejecting(comptime T: type, local: *const Local, info: FunctionCallbackInfo, func: anytype, comptime opts: Opts) ?js.Value {
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(local);
+        defer try_catch.deinit();
+
+        const js_value = _call(T, local, info, func, opts) catch |err| {
+            if (try_catch.hasCaught()) {
+                if (local.ctx.env.terminatePending() == false) {
+                    if (try_catch.exceptionValue()) |exception| {
+                        const err_local = errorLocal(T, local, info);
+                        rejectOperation(&err_local, exception, info);
+                        return null;
+                    }
+                }
+                try_catch.rethrow();
+            }
+            handleError(T, @TypeOf(func), local, err, info);
+            return null;
+        };
+        if (try_catch.hasCaught()) {
+            try_catch.rethrow();
+        }
+        return js_value;
     }
 
     fn _call(comptime T: type, local: *const Local, info: FunctionCallbackInfo, func: anytype, comptime opts: Opts) !js.Value {
