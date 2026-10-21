@@ -323,7 +323,7 @@ fn deleteCookies(cmd: *CDP.Command) !void {
         // We do not want to use Cookie.appliesTo here. As a Cookie with a shorter path would match.
         // Similar to deduplicating with areCookiesEqual, except domain and path are optional.
         if (cookieMatches(cookie, params.name, domain, path)) {
-            cookies.swapRemove(index).deinit();
+            cookies.orderedRemove(index).deinit();
         }
     }
     return cmd.sendResult(null, .{});
