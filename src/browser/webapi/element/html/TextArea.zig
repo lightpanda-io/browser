@@ -187,8 +187,8 @@ fn getSelectionEnd(self: *const TextArea) u32 {
     return entry.selectionOffsetToJs(self, self._selection_end);
 }
 
-pub fn getForm(self: *TextArea, frame: *Frame) ?*Form {
-    return Form.ownerOf(self.asElement(), frame);
+pub fn getForm(self: *TextArea) ?*Form {
+    return Form.ownerOf(self.asElement());
 }
 
 fn getLabels(self: *TextArea, frame: *Frame) !js.Array {

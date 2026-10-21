@@ -220,7 +220,7 @@ pub fn getChecked(self: *const Input) bool {
 pub fn setChecked(self: *Input, checked: bool, frame: *Frame) !void {
     // If checking a radio button, uncheck others in the group first
     if (checked and self._input_type == .radio) {
-        self.uncheckRadioGroup(frame);
+        self.uncheckRadioGroup();
     }
     // This should _not_ call setAttribute. It updates the current state only
     self._checked = checked;
@@ -366,7 +366,7 @@ fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
 fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {
     if (!self.getWillValidate()) return "";
     if (self._custom_validity) |msg| return msg;
-    if (self.suffersValueMissing(frame)) return "Please fill out this field.";
+    if (self.suffersValueMissing()) return "Please fill out this field.";
     if (self.suffersTypeMismatch()) return switch (self._input_type) {
         .email => "Please enter an email address.",
         .url => "Please enter a URL.",
@@ -401,12 +401,12 @@ pub fn hasCustomValidity(self: *const Input) bool {
     return self._custom_validity != null;
 }
 
-pub fn suffersValueMissing(self: *Input, frame: *Frame) bool {
+pub fn suffersValueMissing(self: *Input) bool {
     if (!self.getWillValidate()) return false;
     if (!self.getRequired()) return false;
     return switch (self._input_type) {
         .checkbox => !self._checked,
-        .radio => !self.radioGroupHasChecked(frame),
+        .radio => !self.radioGroupHasChecked(),
         .file => if (self._files) |fl| fl._files.len == 0 else true,
         .text, .password, .email, .url, .tel, .search, .number, .date, .time, .@"datetime-local", .month, .week, .color => blk: {
             const v = self._value orelse self._default_value orelse "";
@@ -497,14 +497,14 @@ fn numericRangeBreach(self: *const Input, comptime kind: enum { underflow, overf
     };
 }
 
-fn radioGroupHasChecked(self: *Input, frame: *Frame) bool {
+fn radioGroupHasChecked(self: *Input) bool {
     if (self._checked) return true;
     var iter = self.radioGroupIterator() orelse return false;
-    const my_form = self.getForm(frame);
+    const my_form = self.getForm();
     while (iter.next()) |other| {
         if (other == self) continue;
         if (!other._checked) continue;
-        if (sameFormOwner(my_form, other, frame)) return true;
+        if (sameFormOwner(my_form, other)) return true;
     }
     return false;
 }
@@ -543,8 +543,8 @@ fn radioGroupIterator(self: *const Input) ?RadioGroupIterator {
     };
 }
 
-fn sameFormOwner(self_form: ?*Form, other: *Input, frame: *Frame) bool {
-    const other_form = other.getForm(frame);
+fn sameFormOwner(self_form: ?*Form, other: *Input) bool {
+    const other_form = other.getForm();
 
     // Check if same form context
     if (self_form == null and other_form == null) {
@@ -688,7 +688,7 @@ fn getLabels(self: *Input, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
-fn getList(self: *Input, frame: *Frame) ?*HtmlElement.DataList {
+fn getList(self: *Input) ?*HtmlElement.DataList {
     switch (self._input_type) {
         .hidden, .password, .checkbox, .radio, .file, .submit, .image, .reset, .button => return null,
         else => {},
@@ -698,12 +698,12 @@ fn getList(self: *Input, frame: *Frame) ?*HtmlElement.DataList {
     const list_id = element.getAttributeSafe(comptime .wrap("list")) orelse return null;
 
     // list= resolves in the input's own tree (shadow root or document).
-    const target = frame.getElementByIdFromNode(element.asNode(), list_id) orelse return null;
+    const target = Frame.getElementByIdFromNode(element.asNode(), list_id) orelse return null;
     return target.is(HtmlElement.DataList);
 }
 
-pub fn getForm(self: *Input, frame: *Frame) ?*Form {
-    return Form.ownerOf(self.asElement(), frame);
+pub fn getForm(self: *Input) ?*Form {
+    return Form.ownerOf(self.asElement());
 }
 
 // Form submission attribute overrides
@@ -1469,18 +1469,18 @@ fn maxWeeksInYear(year: u32) u32 {
     return 52;
 }
 
-fn uncheckRadioGroup(self: *Input, frame: *Frame) void {
+fn uncheckRadioGroup(self: *Input) void {
     var iter = self.radioGroupIterator() orelse return;
-    const my_form = self.getForm(frame);
+    const my_form = self.getForm();
     while (iter.next()) |other| {
         if (other == self) continue;
-        if (!sameFormOwner(my_form, other, frame)) continue;
+        if (!sameFormOwner(my_form, other)) continue;
         other._checked = false;
     }
 }
 
-fn getPopoverTargetElement(self: *Input, frame: *Frame) ?*Element {
-    return popover.invokerTarget(self.asNode(), self._popover_target, frame);
+fn getPopoverTargetElement(self: *Input) ?*Element {
+    return popover.invokerTarget(self.asNode(), self._popover_target);
 }
 
 fn setPopoverTargetElement(self: *Input, value: ?*Element, frame: *Frame) !void {
@@ -1615,7 +1615,7 @@ pub const Build = struct {
 
         // If this is a checked radio button, uncheck others in its group
         if (self._checked and self._input_type == .radio) {
-            self.uncheckRadioGroup(frame);
+            self.uncheckRadioGroup();
         }
     }
 
@@ -1638,7 +1638,7 @@ pub const Build = struct {
                     self._checked = true;
                     // If setting a radio button to checked, uncheck others in the group
                     if (self._input_type == .radio) {
-                        self.uncheckRadioGroup(frame);
+                        self.uncheckRadioGroup();
                     }
                 }
             },

@@ -733,7 +733,7 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
     switch (local.ctx.global) {
         .frame => |frame| {
             const document = frame.document;
-            if (document.getElementById(property, frame)) |el| {
+            if (document.getElementById(property)) |el| {
                 const js_val = local.zigValueToJs(el, .{}) catch return js.Intercepted.no;
                 var pc = Caller.PropertyCallbackInfo{ .handle = handle.? };
                 pc.getReturnValue().set(js_val);

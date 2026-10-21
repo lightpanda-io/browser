@@ -35,6 +35,7 @@ const h5e = @import("parser/html5ever.zig");
 const CustomElementReactions = @import("CustomElementReactions.zig");
 
 const URL = @import("URL.zig");
+const IdMap = @import("IdMap.zig");
 const css_charset = @import("css/charset.zig");
 const referrer = @import("referrer.zig");
 const Blob = @import("webapi/Blob.zig");
@@ -2511,36 +2512,24 @@ pub fn styleChanged(self: *Frame) void {
     self.page.style_version += 1;
 }
 
-const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
-
-fn getElementIdMap(frame: *Frame, node: *Node) ElementIdMaps {
-    return idMapsForRoot(node.getRootNode(.{})) orelse {
+fn getIdMap(frame: *Frame, node: *Node) *IdMap {
+    return idMapForRoot(node.getRootNode(.{})) orelse {
         // Detached nodes should not have IDs registered
         if (lp.IS_DEBUG) {
             std.debug.assert(false);
         }
-        return .{
-            .lookup = &frame.document._elements_by_id,
-            .removed_ids = &frame.document._removed_ids,
-        };
+        return &frame.document._ids;
     };
 }
 
 // Ids are registered per tree scope: a ShadowRoot or a Document each own a
 // map. A root that is neither (a detached tree) has none.
-fn idMapsForRoot(root: *Node) ?ElementIdMaps {
+fn idMapForRoot(root: *Node) ?*IdMap {
     if (root.is(ShadowRoot)) |shadow_root| {
-        return .{
-            .lookup = &shadow_root._elements_by_id,
-            .removed_ids = &shadow_root._removed_ids,
-        };
+        return &shadow_root._ids;
     }
     if (root._type == .document) {
-        const doc = root.subtype(Document);
-        return .{
-            .lookup = &doc._elements_by_id,
-            .removed_ids = &doc._removed_ids,
-        };
+        return &root.subtype(Document)._ids;
     }
     return null;
 }
@@ -2556,50 +2545,31 @@ fn rootIsConnected(root: *Node) bool {
 }
 
 pub fn addElementId(self: *Frame, parent: *Node, element: *Element, id: []const u8) !void {
-    return self.addElementIdWithMaps(self.getElementIdMap(parent), element, id);
-}
-
-fn addElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, element: *Element, id: []const u8) !void {
-    const gop = try id_maps.lookup.getOrPut(self.page_arena, id);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = element;
-        return;
-    }
-
-    const existing = gop.value_ptr.*.asNode();
-    switch (element.asNode().compareDocumentPosition(existing)) {
-        0x04 => gop.value_ptr.* = element,
-        else => {},
-    }
+    return self.getIdMap(parent).add(self.page_arena, element, id);
 }
 
 pub fn removeElementId(self: *Frame, element: *Element, id: []const u8) void {
-    const node = element.asNode();
-    self.removeElementIdWithMaps(self.getElementIdMap(node), id);
+    self.getIdMap(element.asNode()).remove(element, id);
 }
 
-pub fn removeElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, id: []const u8) void {
-    if (id_maps.lookup.remove(id)) {
-        const gop = id_maps.removed_ids.getOrPut(self.page_arena, id) catch |err| {
-            log.warn(.frame, "removeElementIdWithMaps", .{ .err = err });
-            return;
-        };
-        if (gop.found_existing == false) {
-            gop.key_ptr.* = self.dupeString(id) catch return;
-            gop.value_ptr.* = {};
-        }
-    }
+// The element with `id` in `node`'s tree scope, when only one element there
+// has it. That element is then the only possible match below any search root,
+// which is what the selector and XPath id fast paths need.
+pub fn getUniqueElementByIdFromNode(node: *Node, id: []const u8) IdMap.Unique {
+    const root = node.getRootNode(.{});
+    const map = idMapForRoot(root) orelse return .many;
+    return map.getUnique(root, id);
 }
 
-pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Element {
+pub fn getElementByIdFromNode(node: *Node, id: []const u8) ?*Element {
     // The id map lives on the node's root: a Document, or a ShadowRoot for
     // shadow DOM. Walk to the root once and consult the matching map.
     const root = node.getRootNode(.{});
     if (root._type == .document) {
-        return root.subtype(Document).getElementById(id, self);
+        return root.subtype(Document).getElementById(id);
     }
     if (root.is(ShadowRoot)) |shadow_root| {
-        return shadow_root.getElementById(id, self);
+        return shadow_root.getElementById(id);
     }
     // Detached subtree (root is neither a Document nor a ShadowRoot): no id map
     // exists, so scan it.
@@ -3056,7 +3026,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
 
     const old_root = child.getRootNode(.{});
     const was_connected = rootIsConnected(old_root);
-    const old_id_maps = idMapsForRoot(old_root);
+    const old_id_map = idMapForRoot(old_root);
 
     child._parent = null;
 
@@ -3083,15 +3053,18 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     if (opts.reconnect_to) |dest| {
         const dest_root = dest.getRootNode(.{});
         if (dest_root == old_root) {
-            // reconnected under the same root, nothing to do (e.g. if it WAS in the
-            // idmap, it'll stay there)
+            // Reconnected under the same root: its ids stay registered, but
+            // the move can reorder duplicates.
+            if (old_id_map) |id_map| {
+                id_map.moved(child);
+            }
             return;
         }
         if (rootIsConnected(dest_root)) {
             // The node is going to be reconnected to a different root which IS
             // connected, we need to remove it from the old root's idmap.
-            if (old_id_maps) |id_maps| {
-                self.unregisterSubtreeIds(child, id_maps);
+            if (old_id_map) |id_map| {
+                unregisterSubtreeIds(child, id_map);
             }
             // but it isn't a REAL disconnect (more like a move), so there's
             // nothing else to do, e.g. no disconnectedCallback
@@ -3103,8 +3076,8 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     if (was_connected == false) {
         // the node wasn't connected, but it could still have lived in a shadow
         // root's id map
-        if (old_id_maps) |id_maps| {
-            self.unregisterSubtreeIds(child, id_maps);
+        if (old_id_map) |id_map| {
+            unregisterSubtreeIds(child, id_map);
         }
         // and because it wasn't disconnected, there's nothing else to do.
         return;
@@ -3127,7 +3100,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getId()) |id| {
-            self.removeElementIdWithMaps(old_id_maps.?, id);
+            old_id_map.?.remove(el, id);
         }
         if (el.hostedShadowRoot(self)) |shadow| {
             shadow_roots.append(self.call_arena, shadow) catch |err| {
@@ -3219,11 +3192,11 @@ fn collectShadowIFrames(self: *Frame, shadow_roots: *std.ArrayList(*ShadowRoot),
 
 // The TreeWalker isn't shadow DOM aware, so this is correctly scoped to direct
 // descendants (ids nested under a shadow DOM are owned by that shadow DOM).
-fn unregisterSubtreeIds(self: *Frame, node: *Node, id_maps: ElementIdMaps) void {
+fn unregisterSubtreeIds(node: *Node, id_map: *IdMap) void {
     var tw = TreeWalker.Full.Elements.init(node, .{});
     while (tw.next()) |el| {
         if (el.getId()) |id| {
-            self.removeElementIdWithMaps(id_maps, id);
+            id_map.remove(el, id);
         }
     }
 }
@@ -3410,9 +3383,20 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
 
         if (child.is(Element)) |el| {
             const root = opts.parser_root orelse parent.getRootNode(.{});
-            if (idMapsForRoot(root)) |id_maps| {
-                if (el.getId()) |id| {
-                    try self.addElementIdWithMaps(id_maps, el, id);
+            if (idMapForRoot(root)) |id_map| {
+                if (child.firstChild() == null) {
+                    if (el.getId()) |id| {
+                        try id_map.add(self.page_arena, el, id);
+                    }
+                } else {
+                    // The adoption agency inserts a fresh element holding
+                    // children it took out of the tree: their ids come back.
+                    var tw = TreeWalker.Full.Elements.init(child, .{});
+                    while (tw.next()) |sub| {
+                        if (sub.getId()) |id| {
+                            try id_map.add(self.page_arena, sub, id);
+                        }
+                    }
                 }
                 if (rootIsConnected(root)) {
                     // Build.connected, parser side (JS side is in nodeIsReady).
@@ -3455,7 +3439,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
     }
 
     // nothing to register, and nothing can become connected.
-    const new_id_maps = idMapsForRoot(parent_root) orelse {
+    const new_id_map = idMapForRoot(parent_root) orelse {
         // The destination has no id scope, it's detached and outside of a
         // shadow root. There's nothing left to do.
         return;
@@ -3474,7 +3458,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
                 var tw = TreeWalker.Full.Elements.init(child, .{});
                 while (tw.next()) |el| {
                     if (el.getId()) |id| {
-                        try self.addElementIdWithMaps(new_id_maps, el, id);
+                        try new_id_map.add(self.page_arena, el, id);
                     }
                 }
                 // but beause it was and stays connected, we don't trigger
@@ -3494,7 +3478,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
     var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getId()) |id| {
-            try self.addElementIdWithMaps(new_id_maps, el, id);
+            try new_id_map.add(self.page_arena, el, id);
         }
 
         if (should_invoke_connected) {
@@ -4587,7 +4571,7 @@ test "Frame: an onload handler does not dispatch load to other elements" {
     try testing.expectString("attr;prop;", (try frame.getTitle()).?);
     try testing.expectEqual(false, frame._event_manager.has_dom_load_listener);
 
-    const none = frame.document.getElementById("none", frame).?;
+    const none = frame.document.getElementById("none").?;
     try testing.expectEqual(false, frame._event_manager.hasHandler(none.asEventTarget(), "load"));
 }
 

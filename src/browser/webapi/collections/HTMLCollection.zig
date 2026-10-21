@@ -111,14 +111,14 @@ pub fn getAtIndex(self: *HTMLCollection, index: usize, frame: *const Frame) ?*El
     };
 }
 
-pub fn getByName(self: *HTMLCollection, name: []const u8, frame: *Frame) ?*Element {
+pub fn getByName(self: *HTMLCollection, name: []const u8) ?*Element {
     if (name.len == 0) {
         return null;
     }
 
     return switch (self._data) {
         .empty => null,
-        inline else => |*impl| impl.getByName(name, frame),
+        inline else => |*impl| impl.getByName(name),
     };
 }
 
@@ -209,20 +209,20 @@ pub const JsApi = struct {
     pub const length = bridge.accessor(HTMLCollection.length, null, .{});
     pub const @"[int]" = bridge.indexedFull(HTMLCollection.getAtIndex, setAtIndex, deleteAtIndex, queryAtIndex, defineAtIndex, getIndexes, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexedFull(struct {
-        pub fn wrap(self: *HTMLCollection, name: []const u8, frame: *Frame) !?*Element {
+        pub fn wrap(self: *HTMLCollection, name: []const u8) !?*Element {
             if (name.len == 0) {
                 return error.NotHandled;
             }
 
-            return self.getByName(name, frame) orelse error.NotHandled;
+            return self.getByName(name) orelse error.NotHandled;
         }
     }.wrap, null, deleteByName, getNames, queryByName, defineByName, describeByName, .{ .null_as_undefined = true });
 
     // Named properties are [LegacyUnenumerableNamedProperties]: the query
     // reports them non-enumerable, so for-in skips them while
     // Object.getOwnPropertyNames still lists them via the enumerator.
-    fn queryByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !u32 {
-        if (name.len > 0 and self.getByName(name, frame) != null) {
+    fn queryByName(self: *HTMLCollection, name: []const u8) !u32 {
+        if (name.len > 0 and self.getByName(name) != null) {
             return js.v8.DontEnum;
         }
         return error.NotHandled;
@@ -252,8 +252,8 @@ pub const JsApi = struct {
     // ordinary [[Set]] which ends up in defineByName, while an assignment
     // through a derived object (the collection as prototype) must ignore the
     // named property entirely and create an expando on the receiver.
-    fn defineByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !bool {
-        if (name.len > 0 and self.getByName(name, frame) != null) {
+    fn defineByName(self: *HTMLCollection, name: []const u8) !bool {
+        if (name.len > 0 and self.getByName(name) != null) {
             return false;
         }
         return error.NotHandled;
@@ -261,9 +261,9 @@ pub const JsApi = struct {
 
     // Named properties are [LegacyUnenumerableNamedProperties]: not
     // enumerable, configurable, read-only.
-    fn describeByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !Descriptor {
+    fn describeByName(self: *HTMLCollection, name: []const u8) !Descriptor {
         if (name.len > 0) {
-            if (self.getByName(name, frame)) |element| {
+            if (self.getByName(name)) |element| {
                 return .{
                     .value = element,
                     .writable = false,
@@ -339,8 +339,8 @@ pub const JsApi = struct {
         return error.NotHandled;
     }
 
-    fn deleteByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !bool {
-        if (self.getByName(name, frame) != null) {
+    fn deleteByName(self: *HTMLCollection, name: []const u8) !bool {
+        if (self.getByName(name) != null) {
             return false;
         }
         return error.NotHandled;

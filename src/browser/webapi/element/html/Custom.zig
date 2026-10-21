@@ -94,7 +94,7 @@ pub fn formStateChanged(self: *Custom, frame: *Frame) void {
     }
     const element = self.asElement();
 
-    const owner = Form.ownerOf(element, frame);
+    const owner = Form.ownerOf(element);
     if (owner != self._form_owner) {
         // new owner
         self._form_owner = owner;

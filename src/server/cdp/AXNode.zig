@@ -1058,7 +1058,7 @@ fn writeName(
                     const trimmed_id = std.mem.trim(u8, id, &std.ascii.whitespace);
                     if (trimmed_id.len == 0) continue;
 
-                    if (doc.getElementById(trimmed_id, frame)) |referenced_el| {
+                    if (doc.getElementById(trimmed_id)) |referenced_el| {
                         // Get the text content of the referenced element
                         try referenced_el.getInnerText(&buf.writer, frame);
                         try buf.writer.writeByte(' ');
@@ -1309,7 +1309,7 @@ fn labelPromotionTarget(
     if (el.getTag() != .label) return null;
 
     const label = el.as(DOMNode.Element.Html.Label);
-    const control = label.getControl(frame) orelse return null;
+    const control = label.getControl() orelse return null;
     if (control.getTag() != .input) return null;
     const input = control.as(DOMNode.Element.Html.Input);
     switch (input._input_type) {
@@ -2056,7 +2056,7 @@ test "AXNode: Writer query and subtree root see a hiding ancestor" {
 
     const button = (try frame.window._document.querySelector(.wrap("#under-inert"), frame)).?;
     const host = (try frame.window._document.querySelector(.wrap("#inert-host"), frame)).?;
-    const shadow_button = host.getShadowRoot(frame).?.getElementById("in-inert-shadow", frame).?;
+    const shadow_button = host.getShadowRoot(frame).?.getElementById("in-inert-shadow").?;
 
     writer.filter = null;
     for ([_]*DOMNode.Element{ button, shadow_button }) |root| {

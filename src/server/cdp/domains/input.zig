@@ -3222,7 +3222,7 @@ test "cdp.input: re-navigating an iframe drops the pointer state on its elements
     const main = bc.mainFrame().?;
     const page = main.page;
     const child = main.child_frames.items[0];
-    const text = child.document.getElementById("text", child) orelse unreachable;
+    const text = child.document.getElementById("text") orelse unreachable;
 
     try lp.actions.click(text.asNode(), child);
     try page.input_pointer.press(child, text, .{});
@@ -3288,7 +3288,7 @@ test "cdp.input: navigating an iframe clears a touch contact on its child docume
     const bc = try ctx.loadBrowserContext(.{ .url = "cdp/input_iframe.html" });
     const main = bc.mainFrame().?;
     const child = main.child_frames.items[0];
-    const target = child.document.getElementById("text", child) orelse unreachable;
+    const target = child.document.getElementById("text") orelse unreachable;
     // CDP currently hit-tests only the main frame; seed the child contact
     // directly to exercise frame teardown independently of iframe routing.
     // Chrome keeps such a contact alive across the navigation (a later

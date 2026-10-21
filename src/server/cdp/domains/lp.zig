@@ -822,7 +822,7 @@ test "cdp.lp: action tools" {
     try testing.waitForPage(bc);
 
     // Test Click
-    const btn = frame.document.getElementById("btn", frame).?.asNode();
+    const btn = frame.document.getElementById("btn").?.asNode();
     const btn_id = (try bc.node_registry.register(btn)).id;
     try ctx.processMessage(.{
         .id = 1,
@@ -831,7 +831,7 @@ test "cdp.lp: action tools" {
     });
 
     // Test Fill Input
-    const inp = frame.document.getElementById("inp", frame).?.asNode();
+    const inp = frame.document.getElementById("inp").?.asNode();
     const inp_id = (try bc.node_registry.register(inp)).id;
     try ctx.processMessage(.{
         .id = 2,
@@ -840,7 +840,7 @@ test "cdp.lp: action tools" {
     });
 
     // Test Fill Select
-    const sel = frame.document.getElementById("sel", frame).?.asNode();
+    const sel = frame.document.getElementById("sel").?.asNode();
     const sel_id = (try bc.node_registry.register(sel)).id;
     try ctx.processMessage(.{
         .id = 3,
@@ -849,7 +849,7 @@ test "cdp.lp: action tools" {
     });
 
     // Test Scroll
-    const scrollbox = frame.document.getElementById("scrollbox", frame).?.asNode();
+    const scrollbox = frame.document.getElementById("scrollbox").?.asNode();
     const scrollbox_id = (try bc.node_registry.register(scrollbox)).id;
     try ctx.processMessage(.{
         .id = 4,
@@ -859,9 +859,9 @@ test "cdp.lp: action tools" {
     try ctx.expectSentResult(.{ .backendNodeId = scrollbox_id, .x = 0, .y = 50 }, .{ .id = 4 });
 
     // A leaf inside a scroll container scrolls the container, not the leaf.
-    const leaf = frame.document.getElementById("innerleaf", frame).?.asNode();
+    const leaf = frame.document.getElementById("innerleaf").?.asNode();
     const leaf_id = (try bc.node_registry.register(leaf)).id;
-    const outer = frame.document.getElementById("outerscroll", frame).?.asNode();
+    const outer = frame.document.getElementById("outerscroll").?.asNode();
     const outer_id = (try bc.node_registry.register(outer)).id;
     try ctx.processMessage(.{
         .id = 5,
