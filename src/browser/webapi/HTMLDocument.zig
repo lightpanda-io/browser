@@ -102,15 +102,8 @@ fn findBodyForDoc(document_element: *Element) ?*Element.Html.Body {
 pub fn getTitle(self: *HTMLDocument, frame: *Frame) ![]const u8 {
     // Search the entire document for the first <title> element
     const root = self._proto.getDocumentElement() orelse return "";
-    const title_element = blk: {
-        var walker = TreeWalker.Full.init(root.asNode(), .{});
-        while (walker.next()) |node| {
-            if (node.is(Element.Html.Title)) |title| {
-                break :blk title;
-            }
-        }
-        return "";
-    };
+    var walker = TreeWalker.Full.ElementsOf(Element.Html.Title).init(root.asNode(), .{});
+    const title_element = walker.next() orelse return "";
 
     var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     try title_element.asNode().getTextContent(&buf.writer);

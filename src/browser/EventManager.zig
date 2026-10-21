@@ -817,12 +817,9 @@ const ActivationState = struct {
         const root = elem.asNode().getRootNode(.{});
 
         const TreeWalker = @import("webapi/TreeWalker.zig");
-        var walker = TreeWalker.Full.init(root, .{});
+        var walker = TreeWalker.Full.ElementsOf(Input).init(root, .{});
 
-        while (walker.next()) |node| {
-            const other_element = node.is(Element) orelse continue;
-            const other_input = other_element.is(Input) orelse continue;
-
+        while (walker.next()) |other_input| {
             if (other_input._input_type != .radio) {
                 continue;
             }
@@ -832,7 +829,7 @@ const ActivationState = struct {
                 continue;
             }
 
-            const other_name = other_element.getName() orelse continue;
+            const other_name = other_input.asElement().getName() orelse continue;
             if (!std.mem.eql(u8, name, other_name)) {
                 continue;
             }
