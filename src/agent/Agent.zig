@@ -776,7 +776,10 @@ fn runRepl(self: *Agent) void {
                 self.terminal.endTool();
                 self.printCommandResult(tc, result);
                 if (!result.is_error) {
-                    const replayable = Command.fromToolCall(tc.tool, withSelector(aa, tc.args, result.selector));
+                    const replayable = Command.fromToolCall(tc.tool, replayArgs(aa, tc.args, .{
+                        .selector = result.selector,
+                        .replay_args = result.replay_args,
+                    }));
                     self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args, result.navigated) orelse replayable);
                 }
                 self.recordSlashToolCall(command_text, tc.name(), tc.args, result) catch |err| {
@@ -1170,6 +1173,8 @@ const PathAndMode = struct { path: []const u8, mode: save.Mode };
 
 const SavedCall = struct {
     selector: ?[]const u8 = null,
+    /// `ToolResult.replay_args`, kept for the recorder.
+    replay_args: ?[]const u8 = null,
     navigated: bool = false,
 };
 
@@ -1450,6 +1455,36 @@ fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, path: []con
 
 fn logSaveBufferError(self: *Agent, err: anyerror) void {
     self.terminal.printError("save buffer disabled: {s}", .{@errorName(err)});
+}
+
+/// The args a replay should use: the call's own, with any locators the tool
+/// resolved for itself merged over them, and an ephemeral `backendNodeId`
+/// swapped for the selector the tool layer resolved. A decision the tool made
+/// by asking a model — which control dismisses a banner, which field takes the
+/// password — is written into the script this way, so the script repeats the
+/// act instead of paying to decide it again.
+fn replayArgs(arena: std.mem.Allocator, args: ?std.json.Value, saved: SavedCall) ?std.json.Value {
+    return withSelector(arena, withResolved(arena, args, saved.replay_args), saved.selector);
+}
+
+/// `resolved` (a JSON object) put over `args`. Merged, not substituted: the
+/// call's own arguments include the `$LP_*` placeholders, which must stay
+/// placeholders in a recording.
+fn withResolved(arena: std.mem.Allocator, args: ?std.json.Value, resolved: ?[]const u8) ?std.json.Value {
+    const json = resolved orelse return args;
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, json, .{}) catch return args;
+    if (parsed != .object) return args;
+
+    var merged: std.json.ObjectMap = blk: {
+        const original = args orelse break :blk .empty;
+        if (original != .object) return args;
+        break :blk original.object.clone(arena) catch return args;
+    };
+    var it = parsed.object.iterator();
+    while (it.next()) |entry| {
+        merged.put(arena, entry.key_ptr.*, entry.value_ptr.*) catch return args;
+    }
+    return .{ .object = merged };
 }
 
 /// Swap a call's ephemeral `backendNodeId` for the selector the tool layer
@@ -1878,7 +1913,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             // Fall back to the navigation a read tool performed, so a
             // markdown/tree-driven turn isn't lost from `/save`.
             const saved: SavedCall = if (i < self.save_calls.items.len) self.save_calls.items[i] else .{};
-            const replayable = withSelector(ca, args, saved.selector);
+            const replayable = replayArgs(ca, args, saved);
             const cmd = Command.fromToolCall(tool, replayable);
             const to_record = if (cmd.isRecorded())
                 cmd
@@ -2056,7 +2091,12 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
         // turn that reads them; `allocator` here is zenai's per-call arena.
         const ca = self.conversation.arena.allocator();
         const kept = if (saved.selector) |sel| ca.dupe(u8, sel) catch null else null;
-        self.save_calls.append(self.allocator, .{ .selector = kept, .navigated = saved.navigated }) catch {};
+        const kept_replay = if (saved.replay_args) |json| ca.dupe(u8, json) catch null else null;
+        self.save_calls.append(self.allocator, .{
+            .selector = kept,
+            .replay_args = kept_replay,
+            .navigated = saved.navigated,
+        }) catch {};
     }
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
@@ -2072,7 +2112,7 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
         .nav_note = true,
         .source = .llm,
     });
-    saved.* = .{ .selector = result.selector, .navigated = result.navigated };
+    saved.* = .{ .selector = result.selector, .replay_args = result.replay_args, .navigated = result.navigated };
     const content = capToolOutput(allocator, tool_name, result.text);
     return .{
         .content = content,
@@ -2265,4 +2305,35 @@ test "capToolOutput: extract is exempt from the default cap" {
 
     try std.testing.expectEqual(extract_output_max_bytes, toolOutputCap("extract"));
     try std.testing.expectEqual(tool_output_max_bytes, toolOutputCap("html"));
+}
+
+test "replayArgs: the tool's own locators go over the call's args" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"password":"$LP_PASSWORD","username":"$LP_USERNAME"}
+    , .{});
+    const merged = replayArgs(aa, args, .{
+        .replay_args = "{\"passwordSelector\":\"#pass\",\"submitSelector\":\"#submit\"}",
+    }).?;
+
+    // The placeholders stay placeholders: the tool was handed the resolved
+    // secret, and a recording must not be.
+    try std.testing.expectEqualStrings("$LP_PASSWORD", merged.object.get("password").?.string);
+    try std.testing.expectEqualStrings("$LP_USERNAME", merged.object.get("username").?.string);
+    try std.testing.expectEqualStrings("#pass", merged.object.get("passwordSelector").?.string);
+    try std.testing.expectEqualStrings("#submit", merged.object.get("submitSelector").?.string);
+}
+
+test "replayArgs: a backendNodeId still becomes the resolved selector" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"backendNodeId\":7}", .{});
+    const rewritten = replayArgs(aa, args, .{ .selector = "#main" }).?;
+    try std.testing.expect(rewritten.object.get("backendNodeId") == null);
+    try std.testing.expectEqualStrings("#main", rewritten.object.get("selector").?.string);
 }

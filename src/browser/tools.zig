@@ -975,6 +975,11 @@ pub const ToolResult = struct {
     /// Resolved before the action runs, because a navigation takes the node
     /// with it.
     selector: ?[]const u8 = null,
+    /// Locators the tool resolved for itself, as a JSON object merged over the
+    /// call's own args when `--save` records it. A tool that asks a model
+    /// which element to act on writes the answer into the script this way, so
+    /// the question is asked once instead of on every replay.
+    replay_args: ?[]const u8 = null,
     /// Set for the tools `Tool.reportsPageState` names.
     page_state: ?PageState = null,
     /// Implies `is_error`; telemetry counts it as `invalid_params`.
@@ -1205,7 +1210,7 @@ fn dispatch(
         .structuredData => .{ .text = try execStructuredData(arena, session, registry, substituted) },
         .detectForms => .{ .text = try execDetectForms(arena, session, registry, substituted) },
         .click => .{ .text = try execClick(arena, session, registry, substituted) },
-        .fill => .{ .text = try execFill(arena, session, registry, substituted) },
+        .fill => execFill(arena, session, registry, substituted),
         .scroll => .{ .text = try execScroll(arena, session, registry, substituted) },
         .waitForSelector => .{ .text = try execWaitForSelector(arena, session, registry, substituted) },
         .waitForScript => .{ .text = try execWaitForScript(arena, session, substituted) },
@@ -2151,10 +2156,16 @@ fn unusableAnswer(arena: std.mem.Allocator, tool: Tool, err: anyerror) ToolError
 /// could have been answered.
 fn verdict(arena: std.mem.Allocator, outcome: anytype, reason: ?[]const u8) ToolError!ToolResult {
     if (reason) |r| outcome.reason = r;
+    return .{ .text = try renderCompact(arena, outcome.*) };
+}
+
+/// JSON with the unset fields left out, the way the other payloads leave
+/// theirs out.
+fn renderCompact(arena: std.mem.Allocator, value: anytype) ToolError![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
-    std.json.Stringify.value(outcome.*, .{ .emit_null_optional_fields = false }, &aw.writer) catch
+    std.json.Stringify.value(value, .{ .emit_null_optional_fields = false }, &aw.writer) catch
         return ToolError.InternalError;
-    return .{ .text = aw.written() };
+    return aw.written();
 }
 
 /// How long to let the page react to a click before reading it again.
@@ -2201,7 +2212,7 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
             outcome.dismissed = true;
             outcome.attempts = 1;
             outcome.selector = selector;
-            return verdict(arena, &outcome, "clicked the control given, without asking the model");
+            return consentVerdict(arena, &outcome, "clicked the control given, without asking the model");
         }
     }
 
@@ -2280,7 +2291,16 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
     if (outcome.attempts == 0) {
         return verdict(arena, &outcome, "no selector could be built for the control the model picked");
     }
-    return verdict(arena, &outcome, if (outcome.verified) null else "clicked, but the banner is still there");
+    return consentVerdict(arena, &outcome, if (outcome.verified) null else "clicked, but the banner is still there");
+}
+
+/// The verdict, plus the control a replay should click straight away.
+fn consentVerdict(arena: std.mem.Allocator, outcome: *lp.consent.Outcome, reason: ?[]const u8) ToolError!ToolResult {
+    var result = try verdict(arena, outcome, reason);
+    if (outcome.selector) |selector| {
+        result.replay_args = try renderCompact(arena, .{ .selector = selector });
+    }
+    return result;
 }
 
 const LoginParams = struct {
@@ -2488,7 +2508,20 @@ fn verifyLogin(
     outcome.loginWall = response.value.noul(lp.login.wall_key);
     outcome.errorPage = response.value.noul(lp.login.error_key);
     outcome.loggedIn = (outcome.loginWall orelse 1) < lp.classify.gate and (outcome.errorPage orelse 1) < lp.classify.gate;
-    return verdict(arena, outcome, if (outcome.loggedIn) null else "submitted, but the page still shows a sign-in form or an error");
+    return loginVerdict(arena, outcome, if (outcome.loggedIn) null else "submitted, but the page still shows a sign-in form or an error");
+}
+
+/// The verdict, plus the fields and control a replay should use straight away.
+fn loginVerdict(arena: std.mem.Allocator, outcome: *lp.login.Outcome, reason: ?[]const u8) ToolError!ToolResult {
+    var result = try verdict(arena, outcome, reason);
+    if (outcome.passwordSelector != null or outcome.usernameSelector != null) {
+        result.replay_args = try renderCompact(arena, .{
+            .usernameSelector = outcome.usernameSelector,
+            .passwordSelector = outcome.passwordSelector,
+            .submitSelector = outcome.submitSelector,
+        });
+    }
+    return result;
 }
 
 /// The recorded form: fill the fields a previous run named and submit, with no
@@ -2523,7 +2556,7 @@ fn replayLogin(
     }
 
     try submitLogin(session, registry, args.submitSelector, args.passwordSelector orelse args.usernameSelector, outcome);
-    return verdict(arena, outcome, "filled the fields given, without asking the model");
+    return loginVerdict(arena, outcome, "filled the fields given, without asking the model");
 }
 
 const eval_promise_timeout_ms: u32 = 30_000;
@@ -2813,7 +2846,7 @@ fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
     return finalizeAction(arena, session, registry, scope, body);
 }
 
-fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
     const Params = struct {
         backendNodeId: ?NodeRegistry.Id = null,
         selector: ?[]const u8 = null,
@@ -2824,6 +2857,18 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     const text = try substituteEnvVars(arena, raw_text);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
+    // The same refusal `login` makes, on the path the driver guidance sends a
+    // model down when `login` declines: a password typed into a form an https
+    // page posts in the clear goes out in the clear.
+    if (resolved.node.is(Element)) |element| {
+        if (lp.login.isPasswordField(element) and lp.login.insecureAction(resolved.page, element)) {
+            return .{
+                .text = "this form posts to a plaintext http:// URL; refusing to fill a password into it",
+                .is_error = true,
+            };
+        }
+    }
+
     const scope = beginAction(session);
 
     lp.actions.fill(resolved.node, text, resolved.page) catch |err| return mapActionError(err);
@@ -2831,7 +2876,7 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     // Show the original reference (e.g. $LP_PASSWORD) in the result, not the resolved value
     const suffix = arena.print(" with \"{s}\"", .{raw_text}) catch return ToolError.InternalError;
     const body = try formatActionResult(arena, "Filled element", resolved.target, suffix);
-    return finalizeAction(arena, session, registry, scope, body);
+    return .{ .text = try finalizeAction(arena, session, registry, scope, body) };
 }
 
 fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -4364,6 +4409,8 @@ test "acceptCookies: the recorded control is clicked without the model" {
     try std.testing.expect(std.mem.find(u8, result.text, "without asking the model") != null);
     // A replay repeats a decision, it does not check it.
     try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":false") != null);
+    // What `--save` writes into the script, so the next run clicks it directly.
+    try std.testing.expectEqualStrings("{\"selector\":\"#accept\"}", result.replay_args.?);
 
     const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, tree.text, "Accept all cookies") == null);
@@ -4385,6 +4432,10 @@ test "login: the recorded selectors are filled and submitted without the model" 
     try std.testing.expect(!result.is_error);
     try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "without asking the model") != null);
+    try std.testing.expectEqualStrings(
+        "{\"usernameSelector\":\"#user\",\"passwordSelector\":\"#pass\",\"submitSelector\":\"#submit\"}",
+        result.replay_args.?,
+    );
 
     const status = try call(aa, page.session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"selector":"#status"}
@@ -4416,4 +4467,33 @@ test "login: a passwordSelector that is not a password field is refused" {
 
     const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, tree.text, "hunter2") == null);
+}
+
+test "fill: a password is not typed into a form an https page posts in the clear" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_plaintext.html", .{});
+    defer page.close();
+    // Served over http here, so the downgrade only exists once the page claims
+    // to be secure.
+    page.frame().?.url = "https://example.com/account";
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#pass","value":"hunter2"}
+    , .{});
+    const refused = try call(aa, page.session, &registry, "fill", args, .{ .source = .user });
+    try std.testing.expect(refused.is_error);
+    try std.testing.expect(std.mem.find(u8, refused.text, "plaintext http://") != null);
+
+    // The identifier is not a credential the scheme can leak, so it still fills.
+    const allowed = try call(aa, page.session, &registry, "fill", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#user","value":"ada"}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(!allowed.is_error);
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "hunter2") == null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "ada") != null);
 }
