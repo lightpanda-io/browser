@@ -321,8 +321,10 @@ pub const Writer = struct {
 
     fn supportsExpanded(role: []const u8) bool {
         inline for (.{
-            "button",           "combobox",      "gridcell", "link",      "listbox", "menuitem",
-            "menuitemcheckbox", "menuitemradio", "row",      "rowheader", "tab",     "treeitem",
+            "application",   "button", "checkbox",  "columnheader", "combobox",
+            "gridcell",      "link",   "listbox",   "menuitem",     "menuitemcheckbox",
+            "menuitemradio", "row",    "rowheader", "switch",       "tab",
+            "treeitem",
         }) |supported| {
             if (std.ascii.eqlIgnoreCase(role, supported)) return true;
         }
@@ -515,25 +517,25 @@ pub const Writer = struct {
                 }
 
                 // Inputs already emitted their native checked property above.
+                // Only checkbox and menuitemcheckbox are tri-state; mixed on the
+                // other checkable roles reads as false.
+                const tri_state = std.ascii.eqlIgnoreCase(role, "checkbox") or
+                    std.ascii.eqlIgnoreCase(role, "menuitemcheckbox");
                 if (el.getTag() != .input and
-                    (std.ascii.eqlIgnoreCase(role, "checkbox") or
+                    (tri_state or
                         std.ascii.eqlIgnoreCase(role, "switch") or
-                        std.ascii.eqlIgnoreCase(role, "menuitemcheckbox") or
                         std.ascii.eqlIgnoreCase(role, "radio") or
                         std.ascii.eqlIgnoreCase(role, "menuitemradio")))
                 {
-                    var checked_value: ?[]const u8 = null;
-                    if (el.getAttributeSafe(.wrap("aria-checked"))) |checked| {
-                        if (std.ascii.eqlIgnoreCase(checked, "true")) {
-                            checked_value = "true";
-                        } else if (std.ascii.eqlIgnoreCase(checked, "false")) {
-                            checked_value = "false";
-                        } else if (std.ascii.eqlIgnoreCase(checked, "mixed")) {
-                            checked_value = "mixed";
-                        }
-                    } else if (std.ascii.eqlIgnoreCase(role, "checkbox")) {
-                        checked_value = "false";
-                    }
+                    const checked = el.getAttributeSafe(.wrap("aria-checked")) orelse "false";
+                    const checked_value: ?[]const u8 = if (std.ascii.eqlIgnoreCase(checked, "true"))
+                        "true"
+                    else if (std.ascii.eqlIgnoreCase(checked, "false"))
+                        "false"
+                    else if (std.ascii.eqlIgnoreCase(checked, "mixed"))
+                        (if (tri_state) "mixed" else "false")
+                    else
+                        null;
                     if (checked_value) |value| {
                         try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = value } }, w);
                     }
@@ -2396,6 +2398,9 @@ test "AXNode: custom ARIA states and tabindex focusability" {
         .{ "menuitemcheckbox", "Menu checkbox checked", "true" },
         .{ "radio", "Radio unchecked", "false" },
         .{ "menuitemradio", "Menu radio checked", "true" },
+        .{ "radio", "Radio absent", "false" },
+        .{ "switch", "Switch mixed", "false" },
+        .{ "menuitemcheckbox", "Menu checkbox mixed", "mixed" },
     };
     inline for (checked_cases) |case| {
         const role_node = findNode(nodes, case[0], case[1]) orelse return error.CheckedRoleNotFound;
@@ -2409,6 +2414,8 @@ test "AXNode: custom ARIA states and tabindex focusability" {
     try testing.expectEqual(true, (nodeProperty(custom_anchor, "focusable") orelse return error.CustomAnchorFocusMissing).get("value").?.bool);
     const custom_image = findNode(nodes, "button", "Custom image") orelse return error.CustomImageNotFound;
     try testing.expectEqual(true, (nodeProperty(custom_image, "expanded") orelse return error.CustomImageExpandedMissing).get("value").?.bool);
+    const expanded_switch = findNode(nodes, "switch", "Expanded switch") orelse return error.ExpandedSwitchNotFound;
+    try testing.expectEqual(true, (nodeProperty(expanded_switch, "expanded") orelse return error.ExpandedSwitchMissing).get("value").?.bool);
 
     try testing.expect(findNode(nodes, "checkbox", "Inert terms") == null);
     try testing.expect(findNode(nodes, "checkbox", "Hidden terms") == null);
