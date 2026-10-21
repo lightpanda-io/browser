@@ -73,20 +73,20 @@ pub const Init = union(enum) {
     pub fn fromJs(value: js.Value, local: *const js.Local) !Init {
         const name = try identifierName(value, local);
         if (isOneOf(name, &.{ "RSASSA-PKCS1-v1_5", "RSA-PSS", "RSA-OAEP" })) {
-            const params = try convert(RsaHashedKeyGen, value, local);
+            const params = try convert(RsaHashedKeyGen, value, name, local);
             _ = try params.hash.canonical(local);
             return .{ .rsa_hashed_key_gen = params };
         }
         if (isOneOf(name, &.{ "ECDSA", "ECDH" })) {
-            return .{ .ec_key_gen = try convert(EcKeyGen, value, local) };
+            return .{ .ec_key_gen = try convert(EcKeyGen, value, name, local) };
         }
         if (isOneOf(name, &.{"HMAC"})) {
-            const params = try convert(HmacKeyGen, value, local);
+            const params = try convert(HmacKeyGen, value, name, local);
             _ = try params.hash.canonical(local);
             return .{ .hmac_key_gen = params };
         }
         if (isOneOf(name, &.{ "AES-CTR", "AES-CBC", "AES-GCM", "AES-KW" })) {
-            return .{ .aes_key_gen = try convert(AesKeyGen, value, local) };
+            return .{ .aes_key_gen = try convert(AesKeyGen, value, name, local) };
         }
         if (isOneOf(name, &.{ "Ed25519", "X25519", "Ed448", "X448" })) {
             return .{ .named = name };
@@ -148,17 +148,17 @@ pub const Derive = union(enum) {
     pub fn fromJs(value: js.Value, local: *const js.Local) !Derive {
         const name = try identifierName(value, local);
         if (std.ascii.eqlIgnoreCase(name, "PBKDF2")) {
-            const params = try convert(Pbkdf2Params, value, local);
+            const params = try convert(Pbkdf2Params, value, name, local);
             _ = try params.hash.canonical(local);
             return .{ .pbkdf2 = params };
         }
         if (std.ascii.eqlIgnoreCase(name, "HKDF")) {
-            const params = try convert(HkdfParams, value, local);
+            const params = try convert(HkdfParams, value, name, local);
             _ = try params.hash.canonical(local);
             return .{ .hkdf = params };
         }
         if (std.ascii.eqlIgnoreCase(name, "ECDH") or std.ascii.eqlIgnoreCase(name, "X25519")) {
-            return .{ .ecdh_or_x25519 = try convert(Init.EcdhKeyDeriveParams, value, local) };
+            return .{ .ecdh_or_x25519 = try convert(Init.EcdhKeyDeriveParams, value, name, local) };
         }
         return error.NotSupported;
     }
@@ -213,17 +213,17 @@ pub const Import = union(enum) {
     pub fn fromJs(value: js.Value, local: *const js.Local) !Import {
         const name = try identifierName(value, local);
         if (isOneOf(name, &.{ "RSASSA-PKCS1-v1_5", "RSA-PSS", "RSA-OAEP" })) {
-            const params = try convert(@FieldType(Import, "rsa"), value, local);
+            const params = try convert(@FieldType(Import, "rsa"), value, name, local);
             _ = try params.hash.canonical(local);
             return .{ .rsa = params };
         }
         if (isOneOf(name, &.{"HMAC"})) {
-            const params = try convert(@FieldType(Import, "hmac"), value, local);
+            const params = try convert(@FieldType(Import, "hmac"), value, name, local);
             _ = try params.hash.canonical(local);
             return .{ .hmac = params };
         }
         if (isOneOf(name, &.{ "ECDSA", "ECDH" })) {
-            return .{ .ec = try convert(@FieldType(Import, "ec"), value, local) };
+            return .{ .ec = try convert(@FieldType(Import, "ec"), value, name, local) };
         }
         if (isOneOf(name, &.{ "AES-CTR", "AES-CBC", "AES-GCM", "AES-KW", "HKDF", "PBKDF2", "Ed25519", "X25519", "Ed448", "X448" })) {
             return .{ .named = name };
@@ -270,7 +270,10 @@ pub const Import = union(enum) {
 /// `name`, required (a TypeError without one), or the value as a string.
 /// HashAlgorithmIdentifier has the same conversion.
 fn identifierName(value: js.Value, local: *const js.Local) ![]const u8 {
-    const identifier = try convert(Hash, value, local);
+    const identifier = local.jsValueToZig(Hash, value) catch |err| switch (err) {
+        error.JsException, error.OutOfMemory => return err,
+        else => return local.typeError("algorithm is not an algorithm identifier"),
+    };
     return identifier.name(local);
 }
 
@@ -283,14 +286,53 @@ fn isOneOf(name: []const u8, comptime names: []const []const u8) bool {
     return false;
 }
 
-/// `value` as `T`. A value that isn't one (a string for a dictionary, a
-/// missing member, one out of an [EnforceRange] range) is a TypeError; the
-/// page's own exception stays pending.
-fn convert(comptime T: type, value: js.Value, local: *const js.Local) !T {
-    return local.jsValueToZig(T, value) catch |err| switch (err) {
+/// The error of a failed conversion of a page value: the page's own pending
+/// exception, or running out of memory, stays as is; anything else is a
+/// TypeError with `message`.
+pub fn conversionError(err: anyerror, local: *const js.Local, message: []const u8) anyerror {
+    return switch (err) {
         error.JsException, error.OutOfMemory => err,
-        else => local.typeError("algorithm has a missing or invalid member"),
+        else => local.typeError(message),
     };
+}
+
+/// `value` as the params dictionary `T` of the algorithm called `name`. The
+/// name was read once already, to pick `T`, and isn't read again: a getter on
+/// it runs once, as in browsers, so it can't answer another algorithm's name
+/// for the params than the one that picked them. Each other member is read in
+/// order: absent or undefined takes its default, or null if optional, and is
+/// otherwise a TypeError, as is a value that doesn't convert (out of an
+/// [EnforceRange] range, say). A string identifier has no members, so it only
+/// converts to a dictionary with no required one (as `{name: value}` would).
+/// The page's own exception stays pending.
+fn convert(comptime T: type, value: js.Value, name: []const u8, local: *const js.Local) !T {
+    const object: ?js.Object = if (value.isObject()) value.toObject() else null;
+    var out: T = undefined;
+    const info = @typeInfo(T).@"struct";
+    inline for (info.field_names, info.field_types, info.field_attrs) |field_name, FieldType, attrs| {
+        if (comptime std.mem.eql(u8, field_name, "name")) {
+            out.name = name;
+        } else {
+            const member: ?js.Value = blk: {
+                const o = object orelse break :blk null;
+                if (!o.has(field_name)) break :blk null;
+                const m = try o.get(field_name);
+                break :blk if (m.isUndefined()) null else m;
+            };
+            if (member) |m| {
+                @field(out, field_name) = local.jsValueToZig(FieldType, m) catch |err| {
+                    return conversionError(err, local, "algorithm has a missing or invalid member");
+                };
+            } else if (comptime attrs.defaultValue(FieldType)) |default| {
+                @field(out, field_name) = default;
+            } else if (comptime @typeInfo(FieldType) == .optional) {
+                @field(out, field_name) = null;
+            } else {
+                return local.typeError("algorithm has a missing or invalid member");
+            }
+        }
+    }
+    return out;
 }
 
 /// Key material handed to `importKey()`: either a BufferSource (raw/spki/pkcs8)

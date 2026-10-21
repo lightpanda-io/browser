@@ -2642,3 +2642,56 @@
     });
   }
 </script>
+
+<script id=algorithm-name-read-once type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const outcome = async (fn) => {
+    try {
+      const r = await fn();
+      return r instanceof CryptoKey ? `${r.type}:${r.algorithm.name}` : `pair:${r.privateKey.algorithm.name}`;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  // A name getter that answers one algorithm, then another.
+  const flip = (first, second, members) => {
+    const counter = { calls: 0 };
+    const algo = { get name() { return counter.calls++ === 0 ? first : second; }, ...members };
+    return [counter, algo];
+  };
+
+  // The name is read once: its first answer picks the algorithm and is the
+  // name of its params, so a getter can't make the two disagree.
+  const [ecdsa, ecdsaAlgo] = flip("ECDSA", "RSA-OAEP", { namedCurve: "P-256" });
+  const [aes, aesAlgo] = flip("AES-GCM", "HMAC", { length: 128, hash: "SHA-256" });
+  const [hmac, hmacAlgo] = flip("HMAC", "AES-GCM", { length: 128, hash: "SHA-256" });
+  const [hkdf, hkdfAlgo] = flip("HKDF", "PBKDF2", {
+    hash: "SHA-256", salt: new Uint8Array(8), info: new Uint8Array(0), iterations: 1,
+  });
+  const hkdfKey = await subtle.importKey("raw", new Uint8Array(16), "HKDF", false, ["deriveBits"]);
+  const results = {
+    importEcdsa: await outcome(() => subtle.importKey("raw", new Uint8Array(16), ecdsaAlgo, true, ["encrypt"])),
+    importEcdsaCalls: ecdsa.calls,
+    generateAes: await outcome(() => subtle.generateKey(aesAlgo, true, ["encrypt"])),
+    generateAesCalls: aes.calls,
+    importHmac: await outcome(() => subtle.importKey("raw", new Uint8Array(16), hmacAlgo, true, ["sign"])),
+    importHmacCalls: hmac.calls,
+    deriveHkdf: (await subtle.deriveBits(hkdfAlgo, hkdfKey, 128)).byteLength,
+    deriveHkdfCalls: hkdf.calls,
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual({
+      importEcdsa: "SyntaxError",
+      importEcdsaCalls: 1,
+      generateAes: "secret:AES-GCM",
+      generateAesCalls: 1,
+      importHmac: "secret:HMAC",
+      importHmacCalls: 1,
+      deriveHkdf: 16,
+      deriveHkdfCalls: 1,
+    }, results);
+  });
+</script>
