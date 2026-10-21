@@ -17,5 +17,46 @@
     <!-- No name-from-content: a bare div, and a role that isn't name-from-content. -->
     <div id="plain">ignored text</div>
     <div id="pres" role="presentation">ignored</div>
+
+    <!-- Precedence, hidden content, references and embedded controls. -->
+    <button id="hidden-child">Click <span aria-hidden="true">x</span> <span style="display:none">y</span> <span hidden>z</span> me</button>
+    <button id="empty-label" aria-label="  ">Fallback</button>
+    <button id="child-label"><span aria-label="Inner label">Inner text</span></button>
+    <button id="labelledby-hidden" aria-labelledby="hidden-ref"></button>
+    <span id="hidden-ref" hidden>Hidden <span hidden>deep</span> ref</span>
+    <button id="labelledby-nested" aria-labelledby="ref-a"></button>
+    <span id="ref-a" aria-labelledby="ref-b">A</span><span id="ref-b">B</span>
+    <button id="labelledby-self" aria-labelledby="labelledby-self ref-b">Me</button>
+    <button id="labelledby-control" aria-labelledby="ctl"></button><input id="ctl" type="text" value="typed">
+    <button id="embedded"><input type="text" value="typed"> <select><option>One</option><option selected>Two</option></select></button>
+    <button id="child-title">Go <span title="Tip"></span></button>
+    <a id="nested-title" href="#"><span title="Outer"><span title="Inner"></span></span></a>
+    <button id="svg-title"><svg><title>Close</title><desc>Not this</desc></svg></button>
+    <button id="invisible-child">Shown <span style="visibility:hidden">gone</span></button>
+
+    <!-- Native labels. -->
+    <fieldset id="fieldset"><legend>Legend text</legend><input type="radio" id="r1"><label for="r1">Choice</label></fieldset>
+    <table id="table"><caption>Caption text</caption><tr><td id="cell">Cell text</td></tr></table>
+    <input id="two-labels" type="text"><label for="two-labels">First</label><label for="two-labels">Second</label>
+    <label for="wrapped-for">Outer <input type="checkbox" id="wrapped-for"> label</label>
+    <label id="plain-label" for="sel-labelled">Pick one</label>
+    <select id="sel-labelled"><option>One</option></select>
+    <select id="sel"><option>One</option><option>Two</option></select>
+    <input id="submit-default" type="submit"><input id="reset-default" type="reset">
+
+    <!-- Title, description and properties. -->
+    <a id="title-link" href="#" title="Link title"></a>
+    <span id="title-span" title="Span title">T</span>
+    <em id="title-em" title="Em title">emphasis</em>
+    <input id="both" type="text" aria-label="Both" placeholder="Ph" title="Ti">
+    <div id="described" role="button" aria-describedby="desc-1 desc-2">Do it</div>
+    <p id="desc-1">First desc</p><p id="desc-2" hidden>Second desc</p>
+    <div id="aria-description" role="button" aria-description="Described inline">Go</div>
+    <div id="lvl" role="heading" aria-level="4">Level four</div>
+    <div id="lvl-default" role="heading">Level default</div>
+    <h3 id="h3-override" aria-level="5">Override</h3>
+    <input id="invalid" type="email" aria-invalid="true" aria-label="Req">
+    <button id="rd" aria-roledescription="Fancy">Btn</button>
+    <img id="no-alt" src="x.png"><img id="empty-alt" src="y.png" alt="">
 </body>
 </html>

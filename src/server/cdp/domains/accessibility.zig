@@ -141,6 +141,27 @@ fn getPartialAXTree(cmd: *CDP.Command) !void {
 
 const testing = @import("../testing.zig");
 
+// Puppeteer's and Playwright's accessibility snapshots send no params at all.
+test "cdp.accessibility: getFullAXTree without params returns the whole tree" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_tree.html" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "Accessibility.getFullAXTree" });
+
+    var index: usize = 0;
+    while (try ctx.getSentMessage(index)) |msg| : (index += 1) {
+        const id_value = msg.object.get("id") orelse continue;
+        if (id_value != .integer or id_value.integer != 1) continue;
+        const nodes = msg.object.get("result").?.object.get("nodes").?.array.items;
+        try testing.expect(nodes.len > 1);
+        try testing.expectEqual("RootWebArea", nodes[0].object.get("role").?.object.get("value").?.string);
+        return;
+    }
+    return error.ResponseNotFound;
+}
+
 test "cdp.accessibility: queryAXTree requires nodeId, backendNodeId or objectId" {
     var ctx = try testing.context();
     defer ctx.deinit();

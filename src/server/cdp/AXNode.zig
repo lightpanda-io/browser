@@ -278,6 +278,16 @@ pub const Writer = struct {
                 break :blk "relatedElement";
             },
             .label_wrap => "relatedElement",
+            .caption => blk: {
+                try w.objectField("nativeSource");
+                try w.write("tablecaption");
+                break :blk "relatedElement";
+            },
+            .legend => blk: {
+                try w.objectField("nativeSource");
+                try w.write("legend");
+                break :blk "relatedElement";
+            },
         };
         try w.objectField("type");
         try w.write(source_type);
@@ -334,13 +344,8 @@ pub const Writer = struct {
             .cdata => return,
             .element => {
                 const el = dom_node.subtype(DOMNode.Element);
+                try self.writeAriaProperties(axnode, el, w);
                 switch (el.getTag()) {
-                    .h1 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 1 } }, w),
-                    .h2 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 2 } }, w),
-                    .h3 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 3 } }, w),
-                    .h4 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 4 } }, w),
-                    .h5 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 5 } }, w),
-                    .h6 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 6 } }, w),
                     .img => {
                         const img = el.as(DOMNode.Element.Html.Image);
                         const uri = try img.getSrc(self.frame);
@@ -362,7 +367,7 @@ pub const Writer = struct {
                         if (is_disabled) {
                             try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
                         }
-                        try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                        try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = invalidToken(el) } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
                         }
@@ -413,7 +418,7 @@ pub const Writer = struct {
                         if (is_disabled) {
                             try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
                         }
-                        try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                        try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = invalidToken(el) } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
                         }
@@ -431,7 +436,7 @@ pub const Writer = struct {
                         if (is_disabled) {
                             try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
                         }
-                        try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                        try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = invalidToken(el) } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
                         }
@@ -441,17 +446,14 @@ pub const Writer = struct {
                     .option => {
                         const option = el.as(DOMNode.Element.Html.Option);
                         try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-
-                        if (option.getSelected()) {
-                            try self.writeAXProperty(.{ .name = .selected, .value = .{ .booleanOrUndefined = true } }, w);
-                        }
+                        try self.writeAXProperty(.{ .name = .selected, .value = .{ .booleanOrUndefined = option.getSelected() } }, w);
                     },
                     .button => {
                         const is_disabled = el.isDisabled();
                         if (is_disabled) {
                             try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
                         }
-                        try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                        try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = invalidToken(el) } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
                         }
@@ -487,6 +489,57 @@ pub const Writer = struct {
                 return error.InvalidTag;
             },
         }
+    }
+
+    // Properties every element can carry through ARIA attributes.
+    fn writeAriaProperties(self: *const Writer, axnode: AXNode, el: *DOMNode.Element, w: anytype) !void {
+        if (el.getAttributeSafe(.wrap("aria-labelledby"))) |ids| {
+            try self.writeIdrefListProperty(.labelledby, ids, axnode.dom, w);
+        }
+        if (el.getAttributeSafe(.wrap("aria-describedby"))) |ids| {
+            try self.writeIdrefListProperty(.describedby, ids, axnode.dom, w);
+        }
+        if (el.getAttributeSafe(.wrap("aria-roledescription"))) |roledescription| {
+            if (!isAllWhitespace(roledescription)) {
+                try self.writeAXProperty(.{ .name = .roledescription, .value = .{ .string = roledescription } }, w);
+            }
+        }
+        if (headingLevel(axnode, el)) |level| {
+            try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = level } }, w);
+        }
+    }
+
+    // {"name": <name>, "value": {"type": "idrefList", "value": <ids>,
+    // "relatedNodes": [{"idref", "backendDOMNodeId"}...]}}, for the elements
+    // of an idref-list attribute that exist in the document.
+    fn writeIdrefListProperty(self: *const Writer, name: @FieldType(AXProperty, "name"), ids: []const u8, node: *DOMNode, w: anytype) !void {
+        try w.beginObject();
+        try w.objectField("name");
+        try w.write(@tagName(name));
+        try w.objectField("value");
+        try w.beginObject();
+        try w.objectField("type");
+        try w.write("idrefList");
+        try w.objectField("value");
+        try w.write(ids);
+        try w.objectField("relatedNodes");
+        try w.beginArray();
+        if (node.ownerDocument(self.frame)) |doc| {
+            var it = std.mem.tokenizeAny(u8, ids, &std.ascii.whitespace);
+            while (it.next()) |id| {
+                const referenced = doc.getElementById(id, self.frame) orelse continue;
+                const registered = try self.registry.register(referenced.asNode());
+                try w.beginObject();
+                try w.objectField("idref");
+                try w.write(id);
+                try w.objectField("backendDOMNodeId");
+                try w.write(registered.id);
+                try w.endObject();
+            }
+        }
+        try w.endArray();
+        try w.endObject();
+        try w.endObject();
     }
 
     fn writeAXProperty(self: *const Writer, value: AXProperty, w: anytype) !void {
@@ -542,6 +595,20 @@ pub const Writer = struct {
             }
             try w.endObject();
 
+            // Description
+            {
+                var buf: std.Io.Writer.Allocating = .init(self.temp_arena.allocator());
+                if (try axn.writeDescription(&buf, self.frame, source)) {
+                    try w.objectField("description");
+                    try w.beginObject();
+                    try w.objectField("type");
+                    try w.write(@tagName(.computedString));
+                    try w.objectField("value");
+                    try writeString(buf.written(), w);
+                    try w.endObject();
+                }
+            }
+
             // Value (for form controls)
             try self.writeNodeValue(axn, w);
 
@@ -555,7 +622,7 @@ pub const Writer = struct {
                 if (is_disabled) {
                     try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
                 }
-                try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = invalidToken(input_el) } }, w);
                 if (!is_disabled) {
                     try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
                 }
@@ -624,6 +691,12 @@ pub const Writer = struct {
         const value: ?[]const u8 = switch (el.getTag()) {
             .input => blk: {
                 const input = el.as(DOMNode.Element.Html.Input);
+                switch (input._input_type) {
+                    // No value of their own in the AX tree: a button's value
+                    // is its name, checked is a property.
+                    .checkbox, .radio, .button, .submit, .reset, .image, .hidden => break :blk null,
+                    else => {},
+                }
                 const val = input.getRedactedValue();
                 if (val.len == 0) break :blk null;
                 break :blk val;
@@ -906,6 +979,8 @@ const AXSource = enum(u8) {
     placeholder, // input placeholder
     contents, // text content
     value, // input value
+    caption, // <table><caption>
+    legend, // <fieldset><legend>
 };
 
 /// `labels` fills on its first `<label for>` lookup; share one across a walk.
@@ -947,6 +1022,12 @@ pub fn getName(self: AXNode, frame: *Frame, allocator: std.mem.Allocator, labels
     return null;
 }
 
+// The accessible name of `axnode`, written to `w` as a JSON string, and where
+// it came from (null when the node has no name). Follows the Accessible Name
+// and Description Computation (AccName 1.2) in precedence order:
+//   2B aria-labelledby, 2C aria-label, 2D native labels (<label>, alt, a
+//   button's value, <caption>, <legend>), 2F name from content for the roles
+//   that allow it, 2I the title tooltip, then HTML-AAM's placeholder.
 fn writeName(
     axnode: AXNode,
     temp_arena: ?*lp.Arena,
@@ -978,42 +1059,26 @@ fn writeName(
         },
         .element => {
             const el = node.subtype(DOMNode.Element);
-            // Handle aria-labelledby attribute (highest priority)
+
+            // 2B: the referenced elements are named whatever their role, hidden
+            // or not. Their own aria-labelledby is not followed.
             if (el.getAttributeSafe(.wrap("aria-labelledby"))) |labelledby| {
-                // Get the document to look up elements by ID
-                const doc = node.ownerDocument(frame) orelse return null;
-
-                // Parse space-separated list of IDs and concatenate their text content
-                var it = std.mem.splitScalar(u8, labelledby, ' ');
-                var has_content = false;
-
-                var buf = std.Io.Writer.Allocating.init(scratchAllocator(temp_arena, frame));
-                while (it.next()) |id| {
-                    const trimmed_id = std.mem.trim(u8, id, &std.ascii.whitespace);
-                    if (trimmed_id.len == 0) continue;
-
-                    if (doc.getElementById(trimmed_id, frame)) |referenced_el| {
-                        // Get the text content of the referenced element
-                        try referenced_el.getInnerText(&buf.writer, frame);
-                        try buf.writer.writeByte(' ');
-                        has_content = true;
-                    }
-                }
-
-                if (has_content) {
+                var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, frame));
+                if (try writeIdrefText(labelledby, node, frame, &buf)) {
                     try writeString(buf.written(), w);
                     return .aria_labelledby;
                 }
             }
 
-            // A blank aria-label is ignored (accname 2D), so the name comes
-            // from content instead.
-            const aria_label = el.getAttributeInterned("aria-label") orelse "";
-            if (!isAllWhitespace(aria_label)) {
-                try w.write(aria_label);
-                return .aria_label;
+            // 2C: an empty (or whitespace-only) aria-label is no label at all.
+            if (el.getAttributeInterned("aria-label")) |aria_label| {
+                if (!isAllWhitespace(aria_label)) {
+                    try writeString(aria_label, w);
+                    return .aria_label;
+                }
             }
 
+            // 2D: native host language labels.
             if (isLabellableTag(el.getTag())) {
                 if (try writeLabelName(temp_arena, node, el, frame, label_index, w)) |source| {
                     return source;
@@ -1021,57 +1086,62 @@ fn writeName(
             }
 
             if (el.getAttributeInterned("alt")) |alt| {
-                try w.write(alt);
-                return .alt;
+                if (alt.len > 0) {
+                    try writeString(alt, w);
+                    return .alt;
+                }
             }
 
-            const use_name_for_content: bool = switch (el.getTag()) {
+            switch (el.getTag()) {
                 .br => {
                     try writeString("\n", w);
                     return .contents;
                 },
-                .input => blk: {
+                .input => {
                     const input = el.as(DOMNode.Element.Html.Input);
                     switch (input._input_type) {
                         .reset, .button, .submit => |t| {
                             const v = input.getValue();
                             if (v.len > 0) {
-                                try w.write(input.getValue());
-                            } else {
-                                try w.write(@tagName(t));
+                                try writeString(v, w);
+                                return .value;
                             }
-
-                            return .value;
+                            // HTML-AAM: the implementation-defined default
+                            // label; a value-less type=button has none.
+                            if (defaultButtonLabel(t)) |label| {
+                                try w.write(label);
+                                return .value;
+                            }
                         },
                         else => {},
                     }
-                    // TODO Check for <label> with matching "for" attribute
-                    // TODO Check if input is wrapped in a <label>
-                    break :blk false;
                 },
-                // zig fmt: off
-                .textarea, .select, .img, .audio, .video, .iframe, .embed,
-                .object, .progress, .meter, .main, .nav, .aside, .header,
-                .footer, .form, .section, .article, .ul, .ol, .dl, .menu,
-                .thead, .tbody, .tfoot, .tr, .td, .div, .span, .p, .details, .li,
-                .style, .script, .html, .body,
-                // zig fmt: on
-                => nameFromContentRole(axnode.role_attr),
-                else => true,
-            };
-
-            if (use_name_for_content) {
-                var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, frame));
-                try writeAccessibleNameFallback(node, &buf.writer);
-                if (buf.written().len > 0) {
-                    try writeString(buf.written(), w);
-                    return .contents;
-                }
+                .table => if (firstChildWithTag(node, .caption)) |caption| {
+                    if (try writeElementContent(temp_arena, caption, frame, w)) return .caption;
+                },
+                .fieldset => if (firstChildWithTag(node, .legend)) |legend| {
+                    if (try writeElementContent(temp_arena, legend, frame, w)) return .legend;
+                },
+                else => {},
             }
 
-            if (el.getAttributeInterned("title")) |title| {
-                try w.write(title);
-                return .title;
+            // 2F: name from content, for the roles that allow it. Hidden
+            // descendants don't contribute.
+            const role = axnode.effectiveRole(frame);
+            if (nameFromContentRole(role)) {
+                if (try writeElementContent(temp_arena, el, frame, w)) return .contents;
+            }
+
+            // 2I: the title tooltip. Roles that prohibit naming (generic,
+            // paragraph, emphasis...) only get it as their description, as in
+            // Chromium.
+            if (!nameProhibitedRole(role)) {
+                if (el.getAttributeInterned("title")) |title| {
+                    if (!isAllWhitespace(title)) {
+                        try writeString(title, w);
+                        return .title;
+                    }
+                }
             }
 
             if (el.getAttributeInterned("placeholder")) |placeholder| {
@@ -1089,49 +1159,285 @@ fn writeName(
     };
 }
 
-fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer) !void {
-    var tw = TreeWalker.FullExcludeSelf.init(node, .{});
-    while (tw.next()) |child| {
-        const parent = child._parent.?;
-        const in_svg = if (parent.is(DOMNode.Element)) |p| p.getTag() == .svg else false;
-        if (in_svg and parent != node) {
-            // Inside an SVG, only a <title> names it
-            const is_title = if (child.is(DOMNode.Element)) |el| std.mem.eql(u8, el.getTagNameLower(), "title") else false;
-            if (is_title) {
-                try writer.writeByte(' ');
-            } else {
-                tw.skipChildren();
+/// The accessible description of `axnode` (AccName 1.2 §4.3.2): the
+/// aria-describedby references, else aria-description, else the title when it
+/// wasn't already spent as the name. Returns false when there is none.
+pub fn writeDescription(self: AXNode, buf: *std.Io.Writer.Allocating, frame: *Frame, name_source: ?AXSource) !bool {
+    const node = self.dom;
+    const el = node.is(DOMNode.Element) orelse return false;
+
+    if (el.getAttributeSafe(.wrap("aria-describedby"))) |describedby| {
+        if (try writeIdrefText(describedby, node, frame, buf)) return true;
+    }
+
+    if (el.getAttributeSafe(.wrap("aria-description"))) |description| {
+        if (!isAllWhitespace(description)) {
+            try appendWord(buf, description);
+            return true;
+        }
+    }
+
+    if (name_source == null or name_source.? != .title) {
+        if (el.getAttributeInterned("title")) |title| {
+            if (!isAllWhitespace(title)) {
+                try appendWord(buf, title);
+                return true;
             }
-            continue;
+        }
+    }
+
+    return false;
+}
+
+/// Text alternative of the elements an idref list (aria-labelledby,
+/// aria-describedby) points at, space-joined into `buf`. Returns false when
+/// none of them contributed text. A hidden element that is referenced
+/// directly contributes, hidden descendants included (2A).
+fn writeIdrefText(ids: []const u8, node: *DOMNode, frame: *Frame, buf: *std.Io.Writer.Allocating) !bool {
+    const doc = node.ownerDocument(frame) orelse return false;
+
+    var wrote = false;
+    var it = std.mem.tokenizeAny(u8, ids, &std.ascii.whitespace);
+    while (it.next()) |id| {
+        const referenced = (doc.getElementById(id, frame) orelse continue).asNode();
+        const hidden = hidingAncestor(referenced, frame) != null or hiddenState(referenced, frame) != .visible;
+        var walk: ContentWalk = .{ .root = referenced, .buf = buf, .frame = frame, .include_hidden = hidden };
+        defer walk.deinit();
+
+        const before = buf.written().len;
+        try walk.run(.with_root);
+        if (buf.written().len > before) wrote = true;
+    }
+    return wrote;
+}
+
+/// Name-from-content of `el` written to `w`. Returns false when the content
+/// has no text.
+fn writeElementContent(temp_arena: ?*lp.Arena, el: *DOMNode.Element, frame: *Frame, w: anytype) !bool {
+    var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, frame));
+    var walk: ContentWalk = .{ .root = el.asNode(), .buf = &buf, .frame = frame };
+    defer walk.deinit();
+
+    try walk.run(.content_only);
+    if (isAllWhitespace(buf.written())) return false;
+    try writeString(buf.written(), w);
+    return true;
+}
+
+/// AccName 2F, the text alternative of every node under `root` in tree order,
+/// space-separated into `buf`. An element contributes its aria-label (2C), an
+/// embedded control's value (2E), an image's alt, else its own content, and as
+/// a last resort its title (2I). Hidden elements (aria-hidden, inert,
+/// display:none, visibility:hidden) are skipped unless `include_hidden`.
+///
+/// Iterative: a title only stands in once the element's content turned out to
+/// add nothing, so `titles` holds the open ones until `leave` closes them.
+const ContentWalk = struct {
+    root: *DOMNode,
+    buf: *std.Io.Writer.Allocating,
+    frame: *Frame,
+    /// Set for an aria-labelledby/describedby traversal rooted at a hidden
+    /// element: its hidden descendants contribute too (AccName 2A).
+    include_hidden: bool = false,
+    titles: std.ArrayList(TitleFallback) = .empty,
+
+    const TitleFallback = struct {
+        node: *DOMNode,
+        title: []const u8,
+        // The text length when `node` was entered.
+        len: usize,
+    };
+
+    fn deinit(self: *ContentWalk) void {
+        self.titles.deinit(self.buf.allocator);
+    }
+
+    /// `with_root` adds the root's own text alternative (an aria-labelledby
+    /// target), `content_only` just its content (the node being named).
+    fn run(self: *ContentWalk, mode: enum { with_root, content_only }) !void {
+        const root = self.root;
+        if (mode == .with_root and !try self.enter(root)) {
+            return;
         }
 
-        switch (child._type) {
+        var node = root.firstChild() orelse return self.leave(root);
+        while (true) {
+            if (try self.enter(node)) {
+                if (node.firstChild()) |child| {
+                    node = child;
+                    continue;
+                }
+                try self.leave(node);
+            }
+            while (node.nextSibling() == null) {
+                node = node._parent.?;
+                try self.leave(node);
+                if (node == root) return;
+            }
+            node = node.nextSibling().?;
+        }
+    }
+
+    /// Adds what `node` itself contributes. Returns true when its children
+    /// are walked too, `leave` closing it once they are.
+    fn enter(self: *ContentWalk, node: *DOMNode) !bool {
+        const el = switch (node._type) {
+            .element => node.subtype(DOMNode.Element),
             .cdata => {
-                const cd = child.subtype(DOMNode.CData);
+                const cd = node.subtype(DOMNode.CData);
                 if (cd._type == .text) {
-                    const content = std.mem.trim(u8, cd._data.str(), &std.ascii.whitespace);
-                    if (content.len > 0) {
-                        try writer.writeAll(content);
-                        try writer.writeByte(' ');
-                    }
+                    try appendWord(self.buf, cd._data.str());
                 }
+                return false;
             },
-            .element => {
-                const el = child.subtype(DOMNode.Element);
-                const tag = el.getTag();
-                if (tag == .img) {
-                    if (el.getAttributeSafe(.wrap("alt"))) |alt| {
-                        try writer.writeAll(alt);
-                        try writer.writeByte(' ');
-                    }
-                    tw.skipChildren();
-                } else if (tag != .svg and tag.isMetadata()) {
-                    tw.skipChildren();
+            else => return false,
+        };
+
+        if (node != self.root) {
+            // Inside an SVG, only a <title> names it.
+            if (node._parent.?.is(DOMNode.Element)) |parent| {
+                if (parent.getTag() == .svg) {
+                    return std.mem.eql(u8, el.getTagNameLower(), "title");
                 }
+            }
+            if (el.getTag().isMetadata()) {
+                return false;
+            }
+            if (!self.include_hidden and hidesFromContent(el, self.frame)) {
+                return false;
+            }
+        }
+
+        if (el.getAttributeInterned("aria-label")) |aria_label| {
+            if (!isAllWhitespace(aria_label)) {
+                try appendWord(self.buf, aria_label);
+                return false;
+            }
+        }
+
+        if (try writeEmbeddedControlValue(el, self.buf, self.frame)) {
+            return false;
+        }
+
+        switch (el.getTag()) {
+            // alt="" is a decorative image: it contributes nothing, not even
+            // its title.
+            .img, .area => if (el.getAttributeInterned("alt")) |alt| {
+                try appendWord(self.buf, alt);
+                return false;
+            },
+            .br => {
+                try self.buf.writer.writeByte(' ');
+                return false;
             },
             else => {},
         }
+
+        if (el.getAttributeInterned("title")) |title| {
+            if (!isAllWhitespace(title)) {
+                try self.titles.append(self.buf.allocator, .{ .node = node, .title = title, .len = self.buf.written().len });
+            }
+        }
+        return true;
     }
+
+    fn leave(self: *ContentWalk, node: *DOMNode) !void {
+        const open = self.titles.getLastOrNull() orelse return;
+        if (open.node != node) {
+            return;
+        }
+        _ = self.titles.pop();
+        if (self.buf.written().len == open.len) {
+            try appendWord(self.buf, open.title);
+        }
+    }
+};
+
+/// Whether `el` keeps its subtree out of the content it sits in: its own
+/// aria-hidden, inert or display:none, or a visibility:hidden. Its ancestors
+/// up to the named node don't matter, the walk already left those out.
+fn hidesFromContent(el: *DOMNode.Element, frame: *Frame) bool {
+    if (hidesSubtree(el.asNode())) {
+        return true;
+    }
+    const owner = el.ownerFrame(frame) orelse return false;
+    const style_manager = &owner._style_manager;
+    return style_manager.hasDisplayNone(el) or style_manager.hasVisibilityHiddenInherited(el);
+}
+
+/// AccName 2E: a form control embedded in the traversal contributes its value
+/// (textbox, combobox, range). Returns true when `el` is such a control, even
+/// if it contributed nothing (a checkbox has no text alternative of its own).
+fn writeEmbeddedControlValue(el: *DOMNode.Element, buf: *std.Io.Writer.Allocating, frame: *Frame) !bool {
+    switch (el.getTag()) {
+        .input => {
+            const input = el.as(DOMNode.Element.Html.Input);
+            switch (input._input_type) {
+                .checkbox, .radio, .hidden, .file, .image => {},
+                .reset, .button, .submit => |t| {
+                    const v = input.getValue();
+                    try appendWord(buf, if (v.len > 0) v else defaultButtonLabel(t) orelse "");
+                },
+                else => try appendWord(buf, input.getRedactedValue()),
+            }
+            return true;
+        },
+        .textarea => {
+            try appendWord(buf, el.as(DOMNode.Element.Html.TextArea).getValue());
+            return true;
+        },
+        .select => {
+            var it = el.asNode().childrenIterator();
+            while (it.next()) |child| {
+                const child_el = child.is(DOMNode.Element) orelse continue;
+                switch (child_el.getTag()) {
+                    .option => if (try appendSelectedOption(child_el, buf, frame)) return true,
+                    .optgroup => {
+                        var group_it = child.childrenIterator();
+                        while (group_it.next()) |grand_child| {
+                            const option_el = grand_child.is(DOMNode.Element) orelse continue;
+                            if (option_el.getTag() != .option) continue;
+                            if (try appendSelectedOption(option_el, buf, frame)) return true;
+                        }
+                    },
+                    else => {},
+                }
+            }
+            return true;
+        },
+        else => return false,
+    }
+}
+
+fn appendSelectedOption(option_el: *DOMNode.Element, buf: *std.Io.Writer.Allocating, frame: *Frame) !bool {
+    const option = option_el.as(DOMNode.Element.Html.Option);
+    if (!option.getSelected()) return false;
+    try appendWord(buf, option.getText(frame));
+    return true;
+}
+
+fn defaultButtonLabel(input_type: @FieldType(DOMNode.Element.Html.Input, "_input_type")) ?[]const u8 {
+    return switch (input_type) {
+        .submit => "Submit",
+        .reset => "Reset",
+        else => null,
+    };
+}
+
+fn appendWord(buf: *std.Io.Writer.Allocating, text: []const u8) !void {
+    const trimmed = std.mem.trim(u8, text, &std.ascii.whitespace);
+    if (trimmed.len == 0) return;
+    try buf.writer.writeAll(trimmed);
+    try buf.writer.writeByte(' ');
+}
+
+fn firstChildWithTag(node: *DOMNode, tag: DOMNode.Element.Tag) ?*DOMNode.Element {
+    var it = node.childrenIterator();
+    while (it.next()) |child| {
+        const el = child.is(DOMNode.Element) orelse continue;
+        if (el.getTag() == tag) return el;
+    }
+    return null;
 }
 
 /// Pre-order walk tracking the outermost aria-hidden or inert ancestor, since
@@ -1192,9 +1498,10 @@ fn isLabellableTag(tag: DOMNode.Element.Tag) bool {
 }
 
 // ARIA roles whose accessible name may be computed from descendant content
-// (AccName "name from content"). Used so an explicit role can opt a host
-// element back into name-from-content when its tag wouldn't otherwise — e.g.
-// <div role="heading"> or <span role="button">.
+// (AccName "name from content"). Decides name-from-content for every element,
+// implicit role included: a <div role="heading"> opts in, a <label> or <em>
+// (roles that name from author only) stays out. `row` is left out on
+// purpose, as Chromium only names rows from content inside a treegrid.
 fn nameFromContentRole(role_: ?[]const u8) bool {
     const role = role_ orelse return false;
     const name_for_content_roles = std.StaticStringMap(void).initComptime(.{
@@ -1210,8 +1517,8 @@ fn nameFromContentRole(role_: ?[]const u8) bool {
         .{ "menuitemradio", {} },
         .{ "option", {} },
         .{ "radio", {} },
-        .{ "row", {} },
         .{ "rowheader", {} },
+        .{ "sectionhead", {} },
         .{ "switch", {} },
         .{ "tab", {} },
         .{ "tooltip", {} },
@@ -1219,6 +1526,26 @@ fn nameFromContentRole(role_: ?[]const u8) bool {
         .{ "term", {} },
     });
     return name_for_content_roles.has(role);
+}
+
+// ARIA 1.2 roles for which naming is prohibited. A title on one of these is
+// exposed as its description only.
+fn nameProhibitedRole(role: []const u8) bool {
+    const prohibited = std.StaticStringMap(void).initComptime(.{
+        .{ "caption", {} },
+        .{ "code", {} },
+        .{ "deletion", {} },
+        .{ "emphasis", {} },
+        .{ "generic", {} },
+        .{ "insertion", {} },
+        .{ "none", {} },
+        .{ "paragraph", {} },
+        .{ "presentation", {} },
+        .{ "strong", {} },
+        .{ "subscript", {} },
+        .{ "superscript", {} },
+    });
+    return prohibited.has(role);
 }
 
 /// CSS-only toggle switches and custom radios commonly visually-style a
@@ -1258,6 +1585,8 @@ fn labelPromotionTarget(
     return input;
 }
 
+// HTML-AAM: every <label for> pointing at the control, then a wrapping
+// <label> (unless it is one of the former), space-joined.
 fn writeLabelName(
     temp_arena: ?*lp.Arena,
     node: *DOMNode,
@@ -1266,35 +1595,74 @@ fn writeLabelName(
     label_index: *Label.LabelByForIndex,
     w: anytype,
 ) !?AXSource {
-    if (el.getId()) |id_value| {
-        if (id_value.len > 0) {
-            if (node.ownerDocument(frame)) |doc| {
-                if (try label_index.lookup(doc.asNode(), id_value, frame.call_arena)) |label_el| {
-                    if (try writeLabelInnerText(temp_arena, label_el, frame, w)) return .label_element;
-                }
+    var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, frame));
+    var source: ?AXSource = null;
+
+    const id_value = el.getId() orelse "";
+    if (id_value.len > 0) {
+        if (node.ownerDocument(frame)) |doc| {
+            for (try label_index.lookupAll(doc.asNode(), id_value, frame.call_arena)) |label_el| {
+                if (try appendLabelInnerText(&buf, label_el, frame)) source = .label_element;
             }
         }
     }
 
     if (Label.findWrappingLabel(el)) |wrap_label| {
-        if (try writeLabelInnerText(temp_arena, wrap_label, frame, w)) return .label_wrap;
+        const targets_control = if (wrap_label.getAttributeInterned("for")) |for_attr| std.mem.eql(u8, for_attr, id_value) else false;
+        if (!targets_control) {
+            if (try appendLabelInnerText(&buf, wrap_label, frame)) {
+                if (source == null) source = .label_wrap;
+            }
+        }
     }
 
-    return null;
+    if (source != null) {
+        try writeString(buf.written(), w);
+    }
+    return source;
 }
 
-fn writeLabelInnerText(
-    temp_arena: ?*lp.Arena,
-    label_el: *DOMNode.Element,
-    frame: *Frame,
-    w: anytype,
-) !bool {
-    var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, frame));
+fn appendLabelInnerText(buf: *std.Io.Writer.Allocating, label_el: *DOMNode.Element, frame: *Frame) !bool {
+    const before = buf.written().len;
     try label_el.getInnerText(&buf.writer, frame);
-    const text = std.mem.trim(u8, buf.written(), &std.ascii.whitespace);
-    if (text.len == 0) return false;
-    try writeString(text, w);
+    if (isAllWhitespace(buf.written()[before..])) {
+        buf.shrinkRetainingCapacity(before);
+        return false;
+    }
+    try buf.writer.writeByte(' ');
     return true;
+}
+
+// The `invalid` AX property: aria-invalid's token, "false" when unset or
+// unknown.
+fn invalidToken(el: *DOMNode.Element) []const u8 {
+    const value = el.getAttributeSafe(.wrap("aria-invalid")) orelse return "false";
+    const tokens = [_][]const u8{ "true", "grammar", "spelling" };
+    for (tokens) |token| {
+        if (std.ascii.eqlIgnoreCase(value, token)) return token;
+    }
+    return "false";
+}
+
+// The `level` of a heading: aria-level when valid, else the h1-h6 tag's, else
+// 2 for an explicit heading role (the ARIA default).
+fn headingLevel(axnode: AXNode, el: *DOMNode.Element) ?usize {
+    const role = axnode.getRole() catch return null;
+    if (!std.mem.eql(u8, role, "heading")) return null;
+
+    if (el.getAttributeSafe(.wrap("aria-level"))) |aria_level| {
+        const level = std.fmt.parseInt(usize, std.mem.trim(u8, aria_level, &std.ascii.whitespace), 10) catch 0;
+        if (level >= 1) return level;
+    }
+    return switch (el.getTag()) {
+        .h1 => 1,
+        .h2 => 2,
+        .h3 => 3,
+        .h4 => 4,
+        .h5 => 5,
+        .h6 => 6,
+        else => 2,
+    };
 }
 
 /// Allocator for throwaway name-resolution buffers: prefers the writer's
@@ -1452,10 +1820,10 @@ fn ignoreSelf(self: AXNode) enum { ignored, exposed, generic } {
         => return .ignored,
         // zig fmt: on
         .img => {
-            // Check for empty decorative images
-            const alt_ = elt.getAttributeInterned("alt");
-            if (alt_ == null or alt_.?.len == 0) {
-                return .ignored;
+            // alt="" marks a decorative image. An image with no alt at all
+            // is exposed, unnamed, as Chromium does.
+            if (elt.getAttributeInterned("alt")) |alt| {
+                if (alt.len == 0) return .ignored;
             }
         },
         .input => {
@@ -1486,6 +1854,20 @@ fn ignoreSelf(self: AXNode) enum { ignored, exposed, generic } {
     }
 
     return .exposed;
+}
+
+// The role the node is exposed with: a <label> promoted to stand in for its
+// hidden checkbox/radio (see labelPromotionTarget) takes the control's role,
+// and is named from its content like one.
+fn effectiveRole(self: AXNode, frame: *Frame) []const u8 {
+    if (labelPromotionTarget(self, frame)) |input| {
+        return switch (input._input_type) {
+            .checkbox => "checkbox",
+            .radio => "radio",
+            else => unreachable,
+        };
+    }
+    return self.getRole() catch "none";
 }
 
 pub fn getRole(self: AXNode) ![]const u8 {
@@ -2126,6 +2508,182 @@ test "AXNode: getName name-from-content honors explicit role" {
     }
 }
 
+test "AXNode: getName follows AccName precedence and hidden rules" {
+    var page = try testing.pageTest("cdp/accname.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    var doc = frame.window._document;
+
+    const Case = struct { selector: []const u8, expected: ?[]const u8 };
+    const cases = [_]Case{
+        // 2F: aria-hidden, display:none and hidden descendants don't contribute.
+        .{ .selector = "#hidden-child", .expected = "Click me" },
+        // 2C: a whitespace-only aria-label is no label; contents win.
+        .{ .selector = "#empty-label", .expected = "Fallback" },
+        // 2C on a child: its aria-label replaces its contents.
+        .{ .selector = "#child-label", .expected = "Inner label" },
+        // 2B/2A: a hidden reference contributes, hidden descendants included.
+        .{ .selector = "#labelledby-hidden", .expected = "Hidden deep ref" },
+        // 2B: the reference's own aria-labelledby is not followed.
+        .{ .selector = "#labelledby-nested", .expected = "A" },
+        // 2B: self-reference and ordering.
+        .{ .selector = "#labelledby-self", .expected = "Me B" },
+        // 2E: a referenced text control contributes its value.
+        .{ .selector = "#labelledby-control", .expected = "typed" },
+        // 2E: embedded controls in the contents contribute their value.
+        .{ .selector = "#embedded", .expected = "typed Two" },
+        // 2I in the contents: a child's title stands in when it adds no
+        // text, the innermost one first.
+        .{ .selector = "#child-title", .expected = "Go Tip" },
+        .{ .selector = "#nested-title", .expected = "Inner" },
+        // Only an SVG's <title> names it; visibility:hidden content is hidden.
+        .{ .selector = "#svg-title", .expected = "Close" },
+        .{ .selector = "#invisible-child", .expected = "Shown" },
+        // HTML-AAM: <legend>, <caption>, every <label for>, a wrapping label
+        // that is also the `for` label counts once.
+        .{ .selector = "#fieldset", .expected = "Legend text" },
+        .{ .selector = "#table", .expected = "Caption text" },
+        .{ .selector = "#cell", .expected = "Cell text" },
+        .{ .selector = "#two-labels", .expected = "First Second" },
+        .{ .selector = "#wrapped-for", .expected = "Outer label" },
+        // 2I: the title names roles that can be named, not the prohibited ones.
+        .{ .selector = "#title-link", .expected = "Link title" },
+        .{ .selector = "#title-span", .expected = null },
+        .{ .selector = "#title-em", .expected = null },
+        .{ .selector = "#both", .expected = "Both" },
+        // Default button labels.
+        .{ .selector = "#submit-default", .expected = "Submit" },
+        .{ .selector = "#reset-default", .expected = "Reset" },
+        // Author-only roles take no name from their contents.
+        .{ .selector = "#sel", .expected = null },
+        .{ .selector = "#plain-label", .expected = null },
+    };
+
+    for (cases) |c| {
+        const el = (try doc.querySelector(.wrap(c.selector), frame)).?;
+        const axn = AXNode.fromNode(el.asNode());
+        var labels: Label.LabelByForIndex = .{};
+        const name = try axn.getName(frame, testing.allocator, &labels);
+        defer if (name) |n| testing.allocator.free(n);
+
+        if (c.expected) |exp| {
+            if (name == null) {
+                std.debug.print("{s}: expected \"{s}\", got null\n", .{ c.selector, exp });
+                return error.TestUnexpectedResult;
+            }
+            testing.expectEqual(exp, name.?) catch |err| {
+                std.debug.print("{s}: expected \"{s}\", got \"{s}\"\n", .{ c.selector, exp, name.? });
+                return err;
+            };
+        } else if (name != null) {
+            std.debug.print("{s}: expected null, got \"{s}\"\n", .{ c.selector, name.? });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "AXNode: writer emits descriptions and ARIA properties" {
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/accname.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    var doc = frame.window._document;
+
+    const root = try registry.register(doc.asNode());
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer temp_arena.release();
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = root,
+        .registry = &registry,
+        .frame = frame,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+    }, .{});
+    defer testing.allocator.free(json);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+    const nodes = parsed.value.array.items;
+
+    const Case = struct {
+        selector: []const u8,
+        description: ?[]const u8 = null,
+        // AX property name -> expected `value.value`, as its JSON text.
+        property: ?[]const u8 = null,
+        value: ?[]const u8 = null,
+        ignored: bool = false,
+    };
+    const cases = [_]Case{
+        .{ .selector = "#described", .description = "First desc Second desc", .property = "describedby", .value = "\"desc-1 desc-2\"" },
+        .{ .selector = "#aria-description", .description = "Described inline" },
+        // The title is the description when it isn't the name.
+        .{ .selector = "#title-span", .description = "Span title" },
+        .{ .selector = "#both", .description = "Ti" },
+        .{ .selector = "#title-link", .description = null },
+        .{ .selector = "#labelledby-self", .property = "labelledby", .value = "\"labelledby-self ref-b\"" },
+        .{ .selector = "#lvl", .property = "level", .value = "4" },
+        .{ .selector = "#lvl-default", .property = "level", .value = "2" },
+        .{ .selector = "#h3-override", .property = "level", .value = "5" },
+        .{ .selector = "#invalid", .property = "invalid", .value = "\"true\"" },
+        .{ .selector = "#rd", .property = "roledescription", .value = "\"Fancy\"" },
+        // A value-less checkbox has no value; only alt="" images are decorative.
+        .{ .selector = "#wrapped-for", .property = "checked", .value = "\"false\"" },
+        .{ .selector = "#no-alt", .ignored = false },
+        .{ .selector = "#empty-alt", .ignored = true },
+    };
+
+    for (cases) |c| {
+        const el = (try doc.querySelector(.wrap(c.selector), frame)).?;
+        const backend_id = (try registry.register(el.asNode())).id;
+
+        var found: ?std.json.ObjectMap = null;
+        for (nodes) |node_val| {
+            const obj = node_val.object;
+            if (obj.get("backendDOMNodeId").?.integer == backend_id) {
+                found = obj;
+                break;
+            }
+        }
+        const obj = found orelse {
+            std.debug.print("{s}: not in the AX tree\n", .{c.selector});
+            return error.TestUnexpectedResult;
+        };
+
+        try testing.expectEqual(c.ignored, obj.get("ignored").?.bool);
+        if (c.ignored) continue;
+
+        const description: ?[]const u8 = if (obj.get("description")) |d| d.object.get("value").?.string else null;
+        if (c.description) |expected| {
+            testing.expectEqual(expected, description orelse "<none>") catch |err| {
+                std.debug.print("{s}: description\n", .{c.selector});
+                return err;
+            };
+        } else if (description != null) {
+            std.debug.print("{s}: unexpected description \"{s}\"\n", .{ c.selector, description.? });
+            return error.TestUnexpectedResult;
+        }
+
+        if (c.property) |property| {
+            var value: ?[]const u8 = null;
+            for (obj.get("properties").?.array.items) |prop| {
+                if (!std.mem.eql(u8, prop.object.get("name").?.string, property)) continue;
+                value = try std.json.Stringify.valueAlloc(testing.allocator, prop.object.get("value").?.object.get("value").?, .{});
+                break;
+            }
+            defer if (value) |v| testing.allocator.free(v);
+            testing.expectEqual(c.value.?, value orelse "<missing>") catch |err| {
+                std.debug.print("{s}: property {s}\n", .{ c.selector, property });
+                return err;
+            };
+        }
+    }
+}
+
 test "AXNode: writer prunes children when root is hidden" {
     var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
@@ -2217,7 +2775,7 @@ test "AXNode: generic containers share memoized ignore answers" {
     const root = try frame.window._document.createElement("div", null, frame);
     // #b holds only a decorative image; the text under #d exposes #c and #d.
     try root.setInnerHTML(
-        \\<div id="a"><div id="b"><img></div><div id="c"><span id="d">text</span></div></div>
+        \\<div id="a"><div id="b"><img alt=""></div><div id="c"><span id="d">text</span></div></div>
     , frame);
 
     var cache: IgnoreCache = .{ .allocator = testing.arena_allocator };

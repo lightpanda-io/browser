@@ -91,10 +91,18 @@ pub fn findWrappingLabel(control: *Element) ?*Element {
 /// multiple times (e.g. one AX tree walk resolves names for every labellable
 /// control).
 pub const LabelByForIndex = struct {
-    map: std.StringHashMapUnmanaged(*Element) = .empty,
+    map: std.StringHashMapUnmanaged(std.ArrayList(*Element)) = .empty,
     populated: bool = false,
 
+    /// The first `<label for=id>` in tree order.
     pub fn lookup(self: *LabelByForIndex, root: *Node, id: []const u8, allocator: std.mem.Allocator) !?*Element {
+        const labels = try self.lookupAll(root, id, allocator);
+        return if (labels.len == 0) null else labels[0];
+    }
+
+    /// Every `<label for=id>`, in tree order. A control's accessible name
+    /// concatenates them all.
+    pub fn lookupAll(self: *LabelByForIndex, root: *Node, id: []const u8, allocator: std.mem.Allocator) ![]const *Element {
         if (!self.populated) {
             var it = TreeWalker.Full.Elements.init(root, .{});
             while (it.next()) |el| {
@@ -102,11 +110,13 @@ pub const LabelByForIndex = struct {
                 const for_attr = el.getAttributeInterned("for") orelse continue;
                 if (for_attr.len == 0) continue;
                 const gop = try self.map.getOrPut(allocator, for_attr);
-                if (!gop.found_existing) gop.value_ptr.* = el;
+                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                try gop.value_ptr.append(allocator, el);
             }
             self.populated = true;
         }
-        return self.map.get(id);
+        const labels = self.map.get(id) orelse return &.{};
+        return labels.items;
     }
 };
 
