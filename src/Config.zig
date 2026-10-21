@@ -842,7 +842,7 @@ pub fn cookieFile(self: *const Config) ?[]const u8 {
 
 pub fn cookieJarFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .fetch, .mcp, .agent => |opts| opts.cookie_jar,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.cookie_jar,
         else => null,
     };
 }

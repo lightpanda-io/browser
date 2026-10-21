@@ -91,13 +91,16 @@ pub fn saveToFile(jar: *Cookie.Jar, path: []const u8) void {
 fn _saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
     jar.removeExpired(null);
 
-    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{});
-    defer file.close(lp.io);
+    // Concurrent serve connections may save the same path: the last rename
+    // wins, but no reader sees a torn file.
+    var af = try std.Io.Dir.cwd().createFileAtomic(lp.io, path, .{ .replace = true });
+    defer af.deinit(lp.io);
 
     var buf: [8192]u8 = undefined;
-    var writer = file.writer(lp.io, &buf);
+    var writer = af.file.writer(lp.io, &buf);
     try writeJson(jar, &writer.interface);
     try writer.end();
+    try af.replace(lp.io);
 
     log.info(.app, "Cookie.saveToFile", .{ .path = path, .count = jar.cookies.items.len });
 }

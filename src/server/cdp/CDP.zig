@@ -654,6 +654,10 @@ pub const BrowserContext = struct {
         self.notification.unregisterAll(self);
         self.clearCapturedResponses();
 
+        if (self.cdp.app.config.cookieJarFile()) |cookie_jar_path| {
+            lp.cookies.saveToFile(&self.session.cookie_jar, cookie_jar_path);
+        }
+
         // If the session has a frame, we need to clear it first. The page
         // context is always nested inside of the isolated world context,
         // so we need to shutdown the page one first.
@@ -1805,4 +1809,35 @@ test "cdp: syncRequest short-circuits after disconnect" {
         .shutdown_callback = HttpClient.noopShutdown,
     }, null);
     try testing.expectError(error.ClientDisconnected, transfer.submitSync(.{}));
+}
+
+test "cdp: --cookie-jar saves on dispose and --cookie loads it back" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "cookies.json");
+
+    const opts = &testing.base.test_config.mode.serve;
+    defer {
+        opts.cookie = null;
+        opts.cookie_jar = null;
+    }
+    opts.cookie = path;
+    opts.cookie_jar = path;
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    {
+        // no file yet: the context starts with an empty jar
+        const bc = try ctx.loadBrowserContext(.{});
+        try testing.expectEqual(0, bc.session.cookie_jar.cookies.items.len);
+        try bc.session.cookie_jar.populateFromResponse("https://example.com/", "sid=abc; Path=/; Max-Age=3600; HttpOnly");
+        ctx.cdp().disposeBrowserContext();
+    }
+
+    // a new context (a reconnect, or a restart) starts logged in
+    const bc = try ctx.loadBrowserContext(.{});
+    const cookies = bc.session.cookie_jar.cookies.items;
+    try testing.expectEqual(1, cookies.len);
+    try testing.expectEqualSlices(u8, "abc", cookies[0].value);
 }
