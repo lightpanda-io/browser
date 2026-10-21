@@ -589,7 +589,7 @@ fn writeErased(format: Format, value: Value, writer: *std.Io.Writer) !void {
 
 fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void {
     if (format == .pretty) {
-        return writer.writeAll(value);
+        return writePrettyString(value, writer);
     }
 
     var space_count: usize = 0;
@@ -599,8 +599,9 @@ fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void 
     for (value) |b| {
         switch (b) {
             '\r', '\n', '"' => escape_count += 1,
-            ' ' => space_count += 1,
-            '\t', '!', '#'...'~' => {}, // printable characters
+            // unquoted, '=' would start another key
+            ' ', '\t', '=' => space_count += 1,
+            '!', '#'...'<', '>'...'~' => {}, // printable characters
             else => binary_count += 1,
         }
     }
@@ -610,21 +611,16 @@ fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void 
         return std.base64.standard_no_pad.Encoder.encodeWriter(writer, value);
     }
 
-    if (escape_count == 0) {
-        if (space_count == 0) {
-            return writer.writeAll(value);
-        }
-        try writer.writeByte('"');
-        try writer.writeAll(value);
-        try writer.writeByte('"');
-        return;
+    if (escape_count == 0 and space_count == 0) {
+        return writer.writeAll(value);
     }
 
     try writer.writeByte('"');
 
     var rest = value;
     while (rest.len > 0) {
-        const pos = std.mem.findAny(u8, rest, "\r\n\"") orelse {
+        // an unescaped '\' would let `\"` end the value early
+        const pos = std.mem.findAny(u8, rest, "\r\n\"\\") orelse {
             try writer.writeAll(rest);
             break;
         };
@@ -632,6 +628,7 @@ fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void 
         try writer.writeByte('\\');
         switch (rest[pos]) {
             '"' => try writer.writeByte('"'),
+            '\\' => try writer.writeByte('\\'),
             '\r' => try writer.writeByte('r'),
             '\n' => try writer.writeByte('n'),
             else => unreachable,
@@ -639,6 +636,21 @@ fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void 
         rest = rest[pos + 1 ..];
     }
     return writer.writeByte('"');
+}
+
+// Control characters other than \n and \t are written as \xNN, so a logged
+// value can't emit terminal escape sequences.
+fn writePrettyString(value: []const u8, writer: *std.Io.Writer) !void {
+    var start: usize = 0;
+    for (value, 0..) |b, i| {
+        if (!std.ascii.isControl(b) or b == '\n' or b == '\t') {
+            continue;
+        }
+        try writer.writeAll(value[start..i]);
+        try writer.print("\\x{x:0>2}", .{b});
+        start = i + 1;
+    }
+    return writer.writeAll(value[start..]);
 }
 
 const LogFormatWriter = struct {
@@ -809,6 +821,18 @@ test "log: string escape" {
         aw.clearRetainingCapacity();
         try logTo(.app, .err, "test", .{ .string = "\n \thi  \" \" " }, &aw.writer);
         try testing.expectEqual(prefix ++ "string=\"\\n \thi  \\\" \\\" \"\n", aw.written());
+    }
+
+    {
+        aw.clearRetainingCapacity();
+        try logTo(.app, .err, "test", .{ .eq = "a=b", .tab = "a\tb", .bs_quote = "x\\\" level=fatal" }, &aw.writer);
+        try testing.expectEqual(prefix ++ "eq=\"a=b\" tab=\"a\tb\" bs_quote=\"x\\\\\\\" level=fatal\"\n", aw.written());
+    }
+
+    {
+        aw.clearRetainingCapacity();
+        try writeValue(.pretty, "a\x1b[31mb\x07\r\n\tc\x7f", &aw.writer);
+        try testing.expectEqual("a\\x1b[31mb\\x07\\x0d\n\tc\\x7f", aw.written());
     }
 }
 
