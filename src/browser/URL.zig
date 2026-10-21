@@ -429,211 +429,81 @@ pub fn eqlDocument(first: [:0]const u8, second: [:0]const u8) bool {
     return std.mem.eql(u8, first[0..first_hash_index], second[0..second_hash_index]);
 }
 
-// Helper function to build a URL from components
-fn buildUrl(
-    allocator: Allocator,
-    protocol: []const u8,
-    host: []const u8,
-    pathname: []const u8,
-    search: []const u8,
-    hash: []const u8,
-) ![:0]const u8 {
-    return allocator.printSentinel("{s}//{s}{s}{s}{s}", .{
-        protocol,
-        host,
-        pathname,
-        search,
-        hash,
-    }, 0);
+// The URL component setters (HTMLHyperlinkElementUtils) go through rust-url,
+// like the URL object, so a value it rejects leaves `current` unchanged.
+fn applySetter(current: [:0]const u8, allocator: Allocator, setter: anytype, args: anytype) ![:0]const u8 {
+    var err: i32 = 0;
+    const url = U.url_parse(current.ptr, current.len, &err) orelse return current;
+    defer U.url_free(url);
+
+    _ = @call(.auto, setter, .{url} ++ args);
+
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    U.url_to_string(url, &out, &len);
+    return allocator.dupeSentinel(u8, out[0..len], 0);
 }
 
 pub fn setProtocol(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const host = getHost(current);
-    const pathname = getPathname(current);
-    const search = getSearch(current);
-    const hash = getHash(current);
-
-    // Add : suffix if not present
-    const protocol = if (value.len > 0 and value[value.len - 1] != ':')
-        try allocator.print("{s}:", .{value})
-    else
-        value;
-
-    return buildUrl(allocator, protocol, host, pathname, search, hash);
+    // The scheme ends at the first ':'
+    const scheme = value[0 .. std.mem.findScalar(u8, value, ':') orelse value.len];
+    return applySetter(current, allocator, U.url_set_scheme, .{ scheme.ptr, scheme.len });
 }
 
 pub fn setHost(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const protocol = getProtocol(current);
-    const pathname = getPathname(current);
-    const search = getSearch(current);
-    const hash = getHash(current);
-
-    // Check if the new value includes a port
-    const colon_pos = std.mem.findScalarLast(u8, value, ':');
-    const clean_host = if (colon_pos) |pos| blk: {
-        const port_str = value[pos + 1 ..];
-        // Remove default ports
-        if (std.mem.eql(u8, protocol, "https:") and std.mem.eql(u8, port_str, "443")) {
-            break :blk value[0..pos];
-        }
-        if (std.mem.eql(u8, protocol, "http:") and std.mem.eql(u8, port_str, "80")) {
-            break :blk value[0..pos];
-        }
-        break :blk value;
-    } else blk: {
-        // No port in new value - preserve existing port
-        const current_port = getPort(current);
-        if (current_port.len > 0) {
-            break :blk try allocator.print("{s}:{s}", .{ value, current_port });
-        }
-        break :blk value;
-    };
-
-    return buildUrl(allocator, protocol, clean_host, pathname, search, hash);
+    return applySetter(current, allocator, U.url_set_host, .{ value.ptr, value.len });
 }
 
 pub fn setHostname(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const current_port = getPort(current);
-    const new_host = if (current_port.len > 0)
-        try allocator.print("{s}:{s}", .{ value, current_port })
-    else
-        value;
-
-    return setHost(current, new_host, allocator);
+    return applySetter(current, allocator, U.url_set_hostname, .{ value.ptr, value.len });
 }
 
 pub fn setPort(current: [:0]const u8, value: ?[]const u8, allocator: Allocator) ![:0]const u8 {
-    const hostname = getHostname(current);
-    const protocol = getProtocol(current);
-    const pathname = getPathname(current);
-    const search = getSearch(current);
-    const hash = getHash(current);
-
-    // Handle null or default ports
-    const new_host = if (value) |port_str| blk: {
-        if (port_str.len == 0) {
-            break :blk hostname;
-        }
-        // Check if this is a default port for the protocol
-        if (std.mem.eql(u8, protocol, "https:") and std.mem.eql(u8, port_str, "443")) {
-            break :blk hostname;
-        }
-        if (std.mem.eql(u8, protocol, "http:") and std.mem.eql(u8, port_str, "80")) {
-            break :blk hostname;
-        }
-        break :blk try allocator.print("{s}:{s}", .{ hostname, port_str });
-    } else hostname;
-
-    return buildUrl(allocator, protocol, new_host, pathname, search, hash);
+    const port_str = value orelse "";
+    if (port_str.len == 0) {
+        return applySetter(current, allocator, U.url_set_port_to_null, .{});
+    }
+    // Leading digits only ("8080abc" is 8080), after the URL parser's tab and
+    // newline removal; no digits or > 65535 is ignored.
+    var port: u32 = 0;
+    var digits: usize = 0;
+    for (port_str) |c| {
+        if (c == '\t' or c == '\n' or c == '\r') continue;
+        if (!std.ascii.isDigit(c)) break;
+        port = port * 10 + (c - '0');
+        if (port > std.math.maxInt(u16)) return current;
+        digits += 1;
+    }
+    if (digits == 0) return current;
+    return applySetter(current, allocator, U.url_set_port, .{@as(u16, @intCast(port))});
 }
 
 pub fn setPathname(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const protocol = getProtocol(current);
-    const host = getHost(current);
-    const search = getSearch(current);
-    const hash = getHash(current);
-
-    const encoded = try percentEncodeSegment(allocator, value, .path);
-
-    // Add / prefix if not present and value is not empty
-    const pathname = if (encoded.len > 0 and encoded[0] != '/')
-        try allocator.print("/{s}", .{encoded})
-    else
-        encoded;
-
-    return buildUrl(allocator, protocol, host, pathname, search, hash);
+    return applySetter(current, allocator, U.url_set_path, .{ value.ptr, value.len });
 }
 
 pub fn setSearch(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const protocol = getProtocol(current);
-    const host = getHost(current);
-    const pathname = getPathname(current);
-    const hash = getHash(current);
-
-    const encoded = try percentEncodeSegment(allocator, value, .query);
-
-    // Add ? prefix if not present and value is not empty
-    const search = if (encoded.len > 0 and value[0] != '?')
-        try allocator.print("?{s}", .{encoded})
-    else
-        encoded;
-
-    return buildUrl(allocator, protocol, host, pathname, search, hash);
+    if (value.len == 0) {
+        return applySetter(current, allocator, U.url_set_query_to_null, .{});
+    }
+    const query = if (value[0] == '?') value[1..] else value;
+    return applySetter(current, allocator, U.url_set_query, .{ query.ptr, query.len });
 }
 
 pub fn setHash(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const protocol = getProtocol(current);
-    const host = getHost(current);
-    const pathname = getPathname(current);
-    const search = getSearch(current);
-
-    const encoded = try percentEncodeSegment(allocator, value, .fragment);
-
-    // Add # prefix if not present and value is not empty
-    const hash = if (encoded.len > 0 and encoded[0] != '#')
-        try allocator.print("#{s}", .{encoded})
-    else
-        encoded;
-
-    return buildUrl(allocator, protocol, host, pathname, search, hash);
+    if (value.len == 0) {
+        return applySetter(current, allocator, U.url_set_fragment_to_null, .{});
+    }
+    const fragment = if (value[0] == '#') value[1..] else value;
+    return applySetter(current, allocator, U.url_set_fragment, .{ fragment.ptr, fragment.len });
 }
 
 pub fn setUsername(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const protocol = getProtocol(current);
-    const host = getHost(current);
-    const pathname = getPathname(current);
-    const search = getSearch(current);
-    const hash = getHash(current);
-    const password = getPassword(current);
-
-    const encoded_username = try percentEncodeSegment(allocator, value, .userinfo);
-    return buildUrlWithUserInfo(allocator, protocol, encoded_username, password, host, pathname, search, hash);
+    return applySetter(current, allocator, U.url_set_username, .{ value.ptr, value.len });
 }
 
 pub fn setPassword(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const protocol = getProtocol(current);
-    const host = getHost(current);
-    const pathname = getPathname(current);
-    const search = getSearch(current);
-    const hash = getHash(current);
-    const username = getUsername(current);
-
-    const encoded_password = try percentEncodeSegment(allocator, value, .userinfo);
-    return buildUrlWithUserInfo(allocator, protocol, username, encoded_password, host, pathname, search, hash);
-}
-
-fn buildUrlWithUserInfo(
-    allocator: Allocator,
-    protocol: []const u8,
-    username: []const u8,
-    password: []const u8,
-    host: []const u8,
-    pathname: []const u8,
-    search: []const u8,
-    hash: []const u8,
-) ![:0]const u8 {
-    if (username.len == 0 and password.len == 0) {
-        return buildUrl(allocator, protocol, host, pathname, search, hash);
-    } else if (password.len == 0) {
-        return allocator.printSentinel("{s}//{s}@{s}{s}{s}{s}", .{
-            protocol,
-            username,
-            host,
-            pathname,
-            search,
-            hash,
-        }, 0);
-    } else {
-        return allocator.printSentinel("{s}//{s}:{s}@{s}{s}{s}{s}", .{
-            protocol,
-            username,
-            password,
-            host,
-            pathname,
-            search,
-            hash,
-        }, 0);
-    }
+    return applySetter(current, allocator, U.url_set_password, .{ value.ptr, value.len });
 }
 
 /// Replaces the query of `url` with `query` and keeps its fragment.

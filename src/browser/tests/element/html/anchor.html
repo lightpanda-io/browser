@@ -305,3 +305,57 @@
     document.head.removeChild(base);
   }
 </script>
+
+<script id=anchor_setters_keep_userinfo>
+{
+  const a = document.createElement('a');
+  const reset = () => a.href = 'https://u:p@h.com:81/p?q#f';
+
+  reset(); a.port = '99';
+  testing.expectEqual('https://u:p@h.com:99/p?q#f', a.href);
+  reset(); a.hostname = 'z.org';
+  testing.expectEqual('https://u:p@z.org:81/p?q#f', a.href);
+  reset(); a.host = 'z.org:5';
+  testing.expectEqual('https://u:p@z.org:5/p?q#f', a.href);
+  reset(); a.protocol = 'http';
+  testing.expectEqual('http://u:p@h.com:81/p?q#f', a.href);
+  reset(); a.pathname = '/z';
+  testing.expectEqual('https://u:p@h.com:81/z?q#f', a.href);
+  reset(); a.search = '?k';
+  testing.expectEqual('https://u:p@h.com:81/p?k#f', a.href);
+  reset(); a.hash = 'g';
+  testing.expectEqual('https://u:p@h.com:81/p?q#g', a.href);
+  reset(); a.username = 'w';
+  testing.expectEqual('https://w:p@h.com:81/p?q#f', a.href);
+}
+</script>
+
+<script id=anchor_setters_invalid_values>
+{
+  const a = document.createElement('a');
+
+  a.href = 'https://h.com/p';
+  a.port = '8080abc';
+  testing.expectEqual('https://h.com:8080/p', a.href);
+  a.port = 'abc';
+  testing.expectEqual('https://h.com:8080/p', a.href);
+  a.port = '99999';
+  testing.expectEqual('https://h.com:8080/p', a.href);
+  a.port = '\t81\n';
+  testing.expectEqual('https://h.com:81/p', a.href);
+  a.port = '000082';
+  testing.expectEqual('https://h.com:82/p', a.href);
+  a.port = '0443';
+  testing.expectEqual('https://h.com/p', a.href);
+
+  a.href = 'https://h.com/p';
+  a.hostname = '';
+  testing.expectEqual('https://h.com/p', a.href);
+
+  // a special scheme can't become a non-special one
+  a.protocol = 'mailto';
+  testing.expectEqual('https://h.com/p', a.href);
+  a.protocol = 'ftp:';
+  testing.expectEqual('ftp://h.com/p', a.href);
+}
+</script>
