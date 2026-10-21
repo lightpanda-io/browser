@@ -1156,9 +1156,10 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             // type instantiation of jsValueToZig may not include such errors
             // in its inferred error set.
             @field(args, tupleFieldName(field_index)) = local.jsValueToZig(param_type.?, js_val) catch |err| {
-                if (err == error.JsException) {
+                if (err == error.JsException or err == error.ExecutionTerminated) {
                     // an exception thrown by user code (e.g. a toString
-                    // getter) is pending; propagate it untouched
+                    // getter), or the termination, is pending; propagate it
+                    // untouched
                     return err;
                 }
                 const DOMException = @import("../webapi/DOMException.zig");

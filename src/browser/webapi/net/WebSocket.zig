@@ -539,31 +539,6 @@ const SendData = union(enum) {
     js_val: js.Value,
 };
 
-/// Union for extracting bytes from ArrayBuffer/TypedArray
-const BinaryData = union(enum) {
-    int8: []i8,
-    uint8: []u8,
-    int16: []i16,
-    uint16: []u16,
-    int32: []i32,
-    uint32: []u32,
-    int64: []i64,
-    uint64: []u64,
-    float16: []f16,
-    float32: []f32,
-    float64: []f64,
-
-    fn asBuffer(self: BinaryData) []u8 {
-        return switch (self) {
-            .int8 => |b| @as([*]u8, @ptrCast(b.ptr))[0..b.len],
-            .uint8 => |b| b,
-            inline .int16, .uint16, .float16 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 2],
-            inline .int32, .uint32, .float32 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 4],
-            inline .int64, .uint64, .float64 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 8],
-        };
-    }
-};
-
 pub fn send(self: *WebSocket, data: SendData) !void {
     if (self._ready_state != .open) {
         return error.InvalidStateError;
@@ -579,7 +554,9 @@ pub fn send(self: *WebSocket, data: SendData) !void {
             } });
         },
         .js_val => |js_val| {
-            if (js_val.isString()) |str| {
+            if (js_val.isArrayBuffer() == false and js_val.isArrayBufferView() == false) {
+                // Anything that isn't a buffer is sent as its string, as in Chrome
+                const str = try js_val.toString();
                 const arena = try self._exec.getArena(str.len(), "WebSocket.message");
                 errdefer arena.release();
                 try self.queueMessage(.{ .text = .{
@@ -587,8 +564,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
                     .data = try str.toSliceWithAlloc(arena.allocator()),
                 } });
             } else {
-                const binary = try js_val.toZig(BinaryData);
-                const buffer = binary.asBuffer();
+                const buffer = (try js_val.toZig(js.BufferSource)).bytes;
 
                 const arena = try self._exec.getArena(buffer.len, "WebSocket.message");
                 errdefer arena.release();

@@ -49,6 +49,13 @@
     testing.expectEqual(ti64a, crypto.getRandomValues(ti64a))
     isRandom(ti64a)
   }
+
+  {
+    // Only an ArrayBufferView, not an Array or another iterable
+    testing.expectError('TypeError', () => crypto.getRandomValues([1, 2]));
+    testing.expectError('TypeError', () => crypto.getRandomValues(new Set([1, 2])));
+    testing.expectError('TypeError', () => crypto.getRandomValues((function* () { yield 1; })()));
+  }
 </script>
 
 <script id="randomUUID">
