@@ -559,7 +559,7 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     try bc.cdp.sendEvent("Network.loadingFinished", .{
         .requestId = &id.toRequestId(msg.transfer),
         .timestamp = lp.datetime.timestamp(.boot),
-        .encodedDataLength = msg.content_length,
+        .encodedDataLength = msg.encoded_data_length,
     }, .{ .session_id = session_id });
 }
 
@@ -1384,6 +1384,37 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .blockedReason = "inspector",
     }, .{ .session_id = "SID-BLOCK" });
     try testing.expectEqual(error.UrlBlocked, error_context.err.?);
+}
+
+test "cdp.Network: loadingFinished reports the bytes received, not the decoded body" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-ED", .session_id = "SID-ED" });
+    const page = try bc.session.createPage();
+    const client = &bc.cdp.browser.http_client;
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try client.request(.{
+        .frame_id = page.frame_id,
+        .loader_id = 1,
+        .method = .GET,
+        .url = "http://127.0.0.1:9582/raw/gzip",
+        .origin = bc.security_origin,
+        .credentials_mode = .omit,
+        .request_mode = .no_cors,
+        .resource_type = .fetch,
+        .notification = bc.session.notification,
+        .shutdown_callback = HttpClient.noopShutdown,
+    }, null);
+
+    // The header block and the 29 gzipped bytes, not the 1000 decoded ones.
+    const r = testing.base.raw_responses.gzip;
+    try ctx.expectSentEvent("Network.loadingFinished", .{
+        .encodedDataLength = r.head.len + r.body.len,
+    }, .{ .session_id = "SID-ED" });
 }
 
 test "cdp.Network: POST body exposed as postData" {

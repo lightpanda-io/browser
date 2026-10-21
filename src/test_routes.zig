@@ -43,6 +43,56 @@ var serve_counts = [_]struct { name: []const u8, count: u32 = 0 }{
     .{ .name = "prescan_module" },
 };
 
+// Written byte for byte by /raw/<name>, so the encodedDataLength tests know
+// how many header and body bytes crossed the wire. A request carrying
+// If-None-Match gets `not_modified`.
+const RawResponse = struct { head: []const u8, body: []const u8 };
+
+pub const raw_responses = struct {
+    // 1000 'a's, gzipped.
+    pub const gzip: RawResponse = .{
+        .head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: 29\r\n\r\n",
+        .body = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x4b\x4c\x1c\x05\xa3\x60\x14\x0c\x77\x00\x00\x03\xda\x38\x9a\xe8\x03\x00\x00",
+    };
+    pub const cacheable: RawResponse = .{
+        .head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nCache-Control: max-age=600\r\nContent-Length: 11\r\n\r\n",
+        .body = "hello world",
+    };
+    pub const revalidated: RawResponse = .{
+        .head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nCache-Control: no-cache\r\nETag: \"v1\"\r\nContent-Length: 11\r\n\r\n",
+        .body = "hello world",
+    };
+    pub const not_modified: RawResponse = .{
+        .head = "HTTP/1.1 304 Not Modified\r\nCache-Control: no-cache\r\nETag: \"v1\"\r\n\r\n",
+        .body = "",
+    };
+    // Far more than a partial fetch reads before it stops.
+    pub const large: RawResponse = .{
+        .head = "HTTP/1.1 200 OK\r\nContent-Length: 262144\r\n\r\n",
+        .body = &@as([256 * 1024]u8, @splat('a')),
+    };
+};
+
+fn serveRaw(req: *std.http.Server.Request, name: []const u8) !void {
+    // Before writing: the server's read and write buffers are the same memory.
+    const conditional = std.mem.indexOf(u8, req.head_buffer, "If-None-Match:") != null;
+    const r: RawResponse = if (conditional)
+        raw_responses.not_modified
+    else if (std.mem.eql(u8, name, "gzip"))
+        raw_responses.gzip
+    else if (std.mem.eql(u8, name, "cacheable"))
+        raw_responses.cacheable
+    else if (std.mem.eql(u8, name, "revalidated"))
+        raw_responses.revalidated
+    else if (std.mem.eql(u8, name, "large"))
+        raw_responses.large
+    else
+        return req.respond("unknown raw response", .{ .status = .not_found });
+    try req.server.out.writeAll(r.head);
+    try req.server.out.writeAll(r.body);
+    return req.server.out.flush();
+}
+
 // /beacon/store/<id> records the request it gets, /beacon/read/<id> answers
 // "METHOD|content-type|body" for it, or "(missing)". The test HTTP server runs
 // a thread per connection, so access goes through beacon_mutex.
@@ -981,6 +1031,10 @@ pub fn handle(req: *std.http.Server.Request) !void {
         }
         // strip off leading / so that it's relative to CWD
         return TestHTTPServer.sendFile(req, path[1..]);
+    }
+
+    if (std.mem.startsWith(u8, path, "/raw/")) {
+        return serveRaw(req, path["/raw/".len..]);
     }
 
     if (std.mem.eql(u8, path, "/favicon.ico")) {

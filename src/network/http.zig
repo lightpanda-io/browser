@@ -639,6 +639,13 @@ pub const Connection = struct {
         return @intCast(@max(0, size));
     }
 
+    // Bytes of every response header received, status lines included.
+    pub fn getHeaderSize(self: *const Connection) !u64 {
+        var size: c_long = undefined;
+        try libcurl.curl_easy_getinfo(self._easy, .header_size, &size);
+        return @intCast(@max(0, size));
+    }
+
     pub fn getHttpVersion(self: *const Connection) !libcurl.CurlHttpVersion {
         var version: c_long = undefined;
         try libcurl.curl_easy_getinfo(self._easy, .http_version, &version);
