@@ -2951,6 +2951,11 @@
   results["import bogus"] = await outcome(() => subtle.importKey("bogus", new Uint8Array(16), "NOPE", true, ["encrypt"]));
   results["import raw-public aes"] = await outcome(() => subtle.importKey("raw-public", new Uint8Array(16), "AES-GCM", true, ["encrypt"]));
   results["export raw-secret aes"] = await outcome(() => subtle.exportKey("raw-secret", aes));
+  const ec = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const ecRaw = await subtle.exportKey("raw", ec.publicKey);
+  results["export raw-public ec"] = await outcome(() => subtle.exportKey("raw-public", ec.publicKey));
+  results["import raw-public ec"] = await outcome(() => subtle.importKey("raw-public", ecRaw, { name: "ECDSA", namedCurve: "P-256" }, true, ["verify"]));
+  results["import raw-private ec"] = await outcome(() => subtle.importKey("raw-private", new Uint8Array(32), { name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]));
   results["wrap bogus"] = await outcome(() => subtle.wrapKey("bogus", aes, kw, "NOPE"));
   results["unwrap bogus"] = await outcome(() => subtle.unwrapKey("bogus", new Uint8Array(24), kw, "NOPE", "AES-GCM", true, ["encrypt"]));
 
@@ -2977,8 +2982,11 @@
       "export bogus hkdf": "TypeError",
       "import bogus": "TypeError",
       "import raw-public aes": "NotSupportedError",
-      // Chrome supports raw-secret for AES.
+      // Chrome supports raw-secret for AES, and raw-public for EC keys.
       "export raw-secret aes": "NotSupportedError",
+      "export raw-public ec": "NotSupportedError",
+      "import raw-public ec": "NotSupportedError",
+      "import raw-private ec": "NotSupportedError",
       "wrap bogus": "TypeError",
       "unwrap bogus": "TypeError",
     }, results);

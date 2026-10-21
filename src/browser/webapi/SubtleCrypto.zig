@@ -264,10 +264,10 @@ fn importNormalized(
 /// Whether the requested format/key-data describe a private key. The format
 /// alone decides for DER/raw variants; for JWK the presence of `d` marks it.
 fn importKind(format: []const u8, key_data: algorithm.KeyData) bool {
-    if (eqlIgnoreCase(format, "pkcs8") or eqlIgnoreCase(format, "raw-private") or eqlIgnoreCase(format, "raw-seed")) {
+    if (std.mem.eql(u8, format, "pkcs8") or std.mem.eql(u8, format, "raw-private") or std.mem.eql(u8, format, "raw-seed")) {
         return true;
     }
-    if (eqlIgnoreCase(format, "jwk")) {
+    if (std.mem.eql(u8, format, "jwk")) {
         return switch (key_data) {
             .jwk => |j| j.d != null,
             .bytes => false,
@@ -622,9 +622,9 @@ pub fn unwrapKey(
     return importNormalized(format, key_data, unwrapped_key_algo, extractable, key_usages, exec);
 }
 
-/// A KeyFormat, including the raw-* ones of the Modern Algorithms draft (which
-/// Chrome recognizes; none is supported here, so they're NotSupportedError
-/// later). Any other string fails the WebIDL enum conversion of the format
+/// A KeyFormat, including the raw-* ones of the Modern Algorithms draft. None
+/// is supported here, so they're NotSupportedError later (Chrome takes
+/// raw-public for EC/OKP keys and raw-secret for symmetric ones). Any other string fails the WebIDL enum conversion of the format
 /// argument, a TypeError before any other step.
 fn checkFormat(format: []const u8, local: *const js.Local) !void {
     const formats = [_][]const u8{ "raw", "spki", "pkcs8", "jwk", "raw-public", "raw-private", "raw-seed", "raw-secret" };
