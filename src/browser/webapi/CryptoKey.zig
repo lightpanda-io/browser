@@ -16,11 +16,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 const crypto = @import("../../sys/libcrypto.zig");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const common = @import("crypto/common.zig");
 
 const Execution = js.Execution;
 
@@ -129,6 +131,108 @@ pub fn deinit(self: *CryptoKey, _: *Page) void {
         .none, .digest => {},
     }
     self._arena.release();
+}
+
+/// A CryptoKey is serializable (structuredClone, postMessage, IndexedDB):
+/// its internal slots are written out, and its material as bytes: a secret
+/// key's, or an EVP_PKEY's SPKI (public) or PKCS#8 (private) DER. An HMAC
+/// key's digest is found again from its hash.
+pub fn structuredSerialize(self: *const CryptoKey, writer: *js.StructuredWriter) !void {
+    writer.writeUint32(@backingInt(self._type));
+    writer.writeUint32(@backingInt(self._kind));
+    writer.writeUint32(@intFromBool(self._extractable));
+    writer.writeUint32(self._usages);
+    writer.writeBytes(self._key);
+
+    const algorithm = self._algorithm;
+    writer.writeBytes(algorithm.name);
+    writeOptional(writer, algorithm.hash);
+    writeOptional(writer, algorithm.named_curve);
+    writeOptional(writer, algorithm.modulus_length);
+    writeOptional(writer, algorithm.length);
+    writeOptional(writer, algorithm.public_exponent);
+
+    switch (self._vary) {
+        .pkey => |pkey| {
+            const der = common.pkeyDer(pkey, self._kind == .public, writer.local.call_arena) catch return error.DataClone;
+            writer.writeBytes(der);
+        },
+        .none, .digest => writer.writeBytes(""),
+    }
+}
+
+pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*CryptoKey {
+    const key_type = std.enums.fromInt(Type, try reader.readUint32()) orelse return error.DataClone;
+    const kind = std.enums.fromInt(Kind, try reader.readUint32()) orelse return error.DataClone;
+    const extractable = try reader.readUint32() != 0;
+    const usages: u8 = std.math.cast(u8, try reader.readUint32()) orelse return error.DataClone;
+
+    const arena = try page.getArena(.tiny, "CryptoKey");
+    errdefer arena.release();
+
+    const key = try arena.dupe(u8, try reader.readBytes());
+    var algorithm: Algorithm = .{ .name = try arena.dupe(u8, try reader.readBytes()) };
+    algorithm.hash = try readOptionalBytes(reader, arena);
+    algorithm.named_curve = try readOptionalBytes(reader, arena);
+    algorithm.modulus_length = try readOptionalUint32(reader);
+    algorithm.length = try readOptionalUint32(reader);
+    algorithm.public_exponent = try readOptionalBytes(reader, arena);
+
+    const der = try reader.readBytes();
+    const vary: @FieldType(CryptoKey, "_vary") = switch (key_type) {
+        .rsa, .ec, .ed25519, .x25519 => .{
+            .pkey = common.parseDer(if (kind == .public) "spki" else "pkcs8", der) catch return error.DataClone,
+        },
+        .hmac => .{
+            .digest = crypto.findDigest(algorithm.hash orelse return error.DataClone) catch return error.DataClone,
+        },
+        .aes, .derive => .none,
+    };
+    errdefer switch (vary) {
+        .pkey => |pkey| crypto.EVP_PKEY_free(pkey),
+        .none, .digest => {},
+    };
+
+    const self = try arena.create(CryptoKey);
+    self.* = .{
+        ._arena = arena,
+        ._type = key_type,
+        ._kind = kind,
+        ._extractable = extractable,
+        ._usages = usages,
+        ._key = key,
+        ._algorithm = algorithm,
+        ._vary = vary,
+    };
+    return self;
+}
+
+/// An optional member: a flag, then the value if there's one.
+fn writeOptional(writer: *js.StructuredWriter, value: anytype) void {
+    const v = value orelse {
+        writer.writeUint32(0);
+        return;
+    };
+    writer.writeUint32(1);
+    if (@TypeOf(v) == u32) {
+        writer.writeUint32(v);
+    } else {
+        writer.writeBytes(v);
+    }
+}
+
+fn readOptionalBytes(reader: *js.StructuredReader, arena: *lp.Arena) !?[]const u8 {
+    if (try reader.readUint32() == 0) {
+        return null;
+    }
+    return try arena.dupe(u8, try reader.readBytes());
+}
+
+fn readOptionalUint32(reader: *js.StructuredReader) !?u32 {
+    if (try reader.readUint32() == 0) {
+        return null;
+    }
+    return try reader.readUint32();
 }
 
 pub fn releaseRef(self: *CryptoKey, page: *Page) void {

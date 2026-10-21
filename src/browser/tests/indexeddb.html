@@ -1542,4 +1542,42 @@
     });
 }
 </script>
+
+<!-- A CryptoKey is serializable: a DPoP client keeps its non-extractable key
+     pair in IndexedDB and signs with it after reading it back. -->
+<script id="crypto_key_pair" type=module>
+{
+    const state = await testing.async();
+    const subtle = crypto.subtle;
+    const es256 = { name: "ECDSA", hash: "SHA-256" };
+    const data = new Uint8Array([4, 5, 6]);
+    const pair = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+    const req = indexedDB.open("keys-db", 1);
+    req.onupgradeneeded = (e) => e.target.result.createObjectStore("keys");
+    req.onsuccess = (e) => {
+        const store = e.target.result.transaction("keys", "readwrite").objectStore("keys");
+        store.put(pair, "dpop");
+        const getReq = store.get("dpop");
+        getReq.onsuccess = async () => {
+            const stored = getReq.result;
+            state.resolve({
+                privateType: stored.privateKey.type,
+                privateExtractable: stored.privateKey.extractable,
+                curve: stored.publicKey.algorithm.namedCurve,
+                signedByCopy: await subtle.verify(es256, pair.publicKey, await subtle.sign(es256, stored.privateKey, data), data),
+                verifiedByCopy: await subtle.verify(es256, stored.publicKey, await subtle.sign(es256, pair.privateKey, data), data),
+            });
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual({
+            privateType: "private",
+            privateExtractable: false,
+            curve: "P-256",
+            signedByCopy: true,
+            verifiedByCopy: true,
+        }, got);
+    });
+}
+</script>
 </body>

@@ -2767,11 +2767,11 @@
   // Helper for worker-based crypto tests. Spawns a worker, waits for it to
   // signal readiness, then sends `kind` and forwards the worker's reply to
   // `state.resolve`. Avoids racing worker startup, which matters on slow CI.
-  window.runCryptoInWorker = function(kind, state) {
+  window.runCryptoInWorker = function(kind, state, extra = {}) {
     const worker = new Worker('./crypto-worker.js');
     worker.onmessage = (e) => {
       if (e.data && e.data.ready) {
-        worker.postMessage({ kind });
+        worker.postMessage({ kind, ...extra });
         return;
       }
       state.resolve(e.data);
@@ -3168,4 +3168,111 @@
   await state.done(() => {
     testing.expectEqual(expected, results);
   });
+</script>
+
+<script id=crypto-key-serialization type=module>
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const hex = (buffer) => Array.from(new Uint8Array(buffer), (b) => b.toString(16).padStart(2, "0")).join("");
+  const exported = async (key, format) => format === "jwk"
+    ? JSON.stringify(await subtle.exportKey("jwk", key))
+    : hex(await subtle.exportKey(format, key));
+  const data = new Uint8Array([1, 2, 3]);
+  const results = {};
+
+  // A clone keeps every slot of the key and its material.
+  const same = async (label, key, format) => {
+    const clone = structuredClone(key);
+    results[label] = clone !== key && clone instanceof CryptoKey
+      && clone.type === key.type && clone.extractable === key.extractable
+      && JSON.stringify(clone.algorithm) === JSON.stringify(key.algorithm)
+      && clone.usages.join() === key.usages.join()
+      && (await exported(clone, format)) === (await exported(key, format));
+  };
+  await same("aes-gcm", await subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]), "raw");
+  await same("aes-kw", await subtle.generateKey({ name: "AES-KW", length: 128 }, true, ["wrapKey"]), "raw");
+  // A length that doesn't fill the last byte is kept (Chrome 152 clones this
+  // key as null).
+  await same("hmac", await subtle.generateKey({ name: "HMAC", hash: "SHA-384", length: 100 }, true, ["sign"]), "jwk");
+  const ec = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-384" }, true, ["sign", "verify"]);
+  await same("ecdsa public", ec.publicKey, "spki");
+  await same("ecdsa private", ec.privateKey, "pkcs8");
+  const ecdh = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  await same("ecdh public", ecdh.publicKey, "raw");
+  await same("ecdh private", ecdh.privateKey, "jwk");
+  const rsa = await subtle.generateKey({ name: "RSA-PSS", hash: "SHA-256", modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) }, true, ["sign", "verify"]);
+  await same("rsa public", rsa.publicKey, "jwk");
+  await same("rsa private", rsa.privateKey, "pkcs8");
+  const ed = await subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+  await same("ed25519 public", ed.publicKey, "raw");
+  await same("ed25519 private", ed.privateKey, "pkcs8");
+  const x = await subtle.generateKey("X25519", true, ["deriveBits"]);
+  await same("x25519 public", x.publicKey, "raw");
+  await same("x25519 private", x.privateKey, "pkcs8");
+
+  // A non-extractable key clones too, and the clone works like it.
+  const hmac = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  const hmacClone = structuredClone(hmac);
+  results["locked hmac"] = hmacClone.extractable === false
+    && hex(await subtle.sign("HMAC", hmacClone, data)) === hex(await subtle.sign("HMAC", hmac, data));
+  const signer = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+  const { privateKey, publicKey } = structuredClone({ privateKey: signer.privateKey, publicKey: signer.publicKey });
+  const es256 = { name: "ECDSA", hash: "SHA-256" };
+  results["locked ecdsa"] = await subtle.verify(es256, signer.publicKey, await subtle.sign(es256, privateKey, data), data)
+    && await subtle.verify(es256, publicKey, await subtle.sign(es256, signer.privateKey, data), data);
+  results["locked export"] = await subtle.exportKey("pkcs8", privateKey).then(() => "exported", (e) => e.name);
+  const hkdf = await subtle.importKey("raw", new Uint8Array(16), "HKDF", false, ["deriveBits"]);
+  const derive = (key) => subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt: data, info: data }, key, 128);
+  results["hkdf"] = hex(await derive(structuredClone(hkdf))) === hex(await derive(hkdf));
+  // One key reached twice clones to one object.
+  const twice = structuredClone([hmac, hmac]);
+  results["one clone"] = twice[0] === twice[1];
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual({
+      "aes-gcm": true,
+      "aes-kw": true,
+      "hmac": true,
+      "ecdsa public": true,
+      "ecdsa private": true,
+      "ecdh public": true,
+      "ecdh private": true,
+      "rsa public": true,
+      "rsa private": true,
+      "ed25519 public": true,
+      "ed25519 private": true,
+      "x25519 public": true,
+      "x25519 private": true,
+      "locked hmac": true,
+      "locked ecdsa": true,
+      "locked export": "InvalidAccessError",
+      "hkdf": true,
+      "one clone": true,
+    }, results);
+  });
+</script>
+
+<script id=worker-posted-keys type=module>
+  {
+    // A non-extractable key posted to a worker signs there, and the worker
+    // posts back a key of its own.
+    const state = await testing.async();
+    const subtle = crypto.subtle;
+    const es256 = { name: 'ECDSA', hash: 'SHA-256' };
+    const data = new Uint8Array([7, 8, 9]);
+    const pair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
+    runCryptoInWorker('posted-keys', state, { privateKey: pair.privateKey, data });
+    const got = await state.promise;
+    const signedThere = got.ok && await subtle.verify(es256, pair.publicKey, got.signature, data);
+    const keyFromThere = got.ok && got.publicKey instanceof CryptoKey
+      && await subtle.verify(es256, got.publicKey, got.theirs, data);
+    await state.done((got) => {
+      testing.expectTrue(got.ok);
+      testing.expectEqual('private', got.type);
+      testing.expectEqual(false, got.extractable);
+      testing.expectEqual(true, signedThere);
+      testing.expectEqual(true, keyFromThere);
+    });
+  }
 </script>
