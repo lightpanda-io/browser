@@ -514,7 +514,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
             .line = location.line,
             .column = location.column,
         });
-        notifyExceptionThrown(err, location, frame);
+        notifyExceptionThrown(err, location, .exception, frame);
         return;
     }
 
@@ -548,17 +548,19 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
             .line = error_event._line_number,
             .column = error_event._column_number,
         });
-        notifyExceptionThrown(err, location, frame);
+        notifyExceptionThrown(err, location, .exception, frame);
     }
 }
 
-// An error event left uncancelled leaves the exception "uncaught": CDP
-// clients learn about it through Runtime.exceptionThrown.
-fn notifyExceptionThrown(err: js.Value, location: js.Value.ErrorLocation, frame: *Frame) void {
+// An error event (or unhandledrejection event) left uncancelled leaves the
+// exception "uncaught": CDP clients learn about it through
+// Runtime.exceptionThrown.
+pub fn notifyExceptionThrown(err: js.Value, location: js.Value.ErrorLocation, kind: @FieldType(Notification.ExceptionThrown, "kind"), frame: *Frame) void {
     frame._session.notification.dispatch(.exception_thrown, &.{
         .timestamp = lp.datetime.timestamp(.boot),
         .value = err,
         .location = location,
+        .kind = kind,
     });
 }
 
@@ -904,24 +906,29 @@ fn getWebDriver(_: *const Window) @import("WebDriver.zig") {
     return .{};
 }
 
-pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.PromiseRejection, frame: *Frame) !void {
+// "unhandledrejection" for a promise still rejected without a handler at the
+// end of a microtask checkpoint, "rejectionhandled" for one that got a handler
+// after that. Env.reportRejectedPromises reports an "unhandledrejection" the
+// page doesn't cancel. Returns whether the event was cancelled.
+pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, promise: js.Promise, reason: ?js.Value, frame: *Frame) !bool {
     const event_name = if (no_handler) "unhandledrejection" else "rejectionhandled";
 
-    if (no_handler) {
-        frame.page.recordJsError(error.JsException);
-        if (rejection.reason()) |reason| {
-            frame.page.status.noteException(reason.toStringSlice() catch "");
-        }
+    const target = self.asEventTarget();
+    if (!frame._event_manager.hasDirectListeners(target, event_name)) {
+        return false;
     }
 
-    const target = self.asEventTarget();
-    if (frame._event_manager.hasDirectListeners(target, event_name)) {
-        const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
-            .reason = if (rejection.reason()) |r| try r.persist() else null,
-            .promise = try rejection.promise().persist(),
-        }, frame.page)).asEvent();
-        try frame._event_manager.dispatchDirect(target, event, .{ .context = "window.unhandledrejection" });
-    }
+    const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
+        .reason = if (reason) |r| try r.persist() else null,
+        .promise = try promise.persist(),
+        .cancelable = no_handler,
+    }, frame.page)).asEvent();
+    // Keep the event alive past dispatch so we can read _prevent_default.
+    event.acquireRef();
+    defer event.releaseRef(frame.page);
+
+    try frame._event_manager.dispatchDirect(target, event, .{ .context = "window.unhandledrejection" });
+    return event._prevent_default;
 }
 
 // Some properties are readonly but [Replaceable]. They get assigned as own

@@ -125,6 +125,11 @@ script_manager: *ScriptManagerBase,
 // Our macrotasks
 scheduler: Scheduler,
 
+// Promises rejected without a handler since the last microtask checkpoint. A
+// handler attached before the checkpoint ends withdraws the promise: it was
+// never unhandled. What is left is reported by Env.runMicrotasks.
+rejected_promises: std.ArrayList(js.Promise.Global) = .empty,
+
 // Execution context for worker-compatible APIs. This provides a common
 // interface that works in both Page and Worker contexts.
 execution: Execution,
@@ -201,6 +206,11 @@ pub fn deinit(self: *Context) void {
 
     // this can release objects
     self.scheduler.deinit();
+
+    for (self.rejected_promises.items) |promise| {
+        promise.release();
+    }
+    self.rejected_promises.deinit(env.allocator);
 
     for (self.global_modules.items) |*global| {
         v8.v8__Global__Reset(global);
@@ -408,6 +418,17 @@ fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, ur
         // Some module-loading errors aren't handled by TryCatch. We need to
         // get the error from the module itself.
         const exception = mod.getException();
+
+        // Like a classic script's, the exception is reported as uncaught.
+        // (Module.evaluate marked the rejected evaluation promise handled.)
+        if (comptime want_result == false) {
+            if (self.env.terminatePending() == false) {
+                self.global.reportError(exception) catch |report_err| {
+                    log.debug(.js, "report module error", .{ .specifier = url, .err = report_err });
+                };
+            }
+        }
+
         const message = blk: {
             const e = exception.toString() catch break :blk "???";
             break :blk e.toSlice() catch "???";
@@ -1194,6 +1215,27 @@ fn enqueueMicrotask(self: *Context, callback: anytype) void {
             callback(ctx);
         }
     }.run, self);
+}
+
+// A promise rejected with no handler. It is reported at the end of the
+// microtask checkpoint if it still has none.
+pub fn addRejectedPromise(self: *Context, promise: js.Promise) !void {
+    const global = try promise.persist();
+    errdefer global.release();
+    try self.rejected_promises.append(self.env.allocator, global);
+}
+
+// A handler was attached to `promise`. False when it wasn't waiting to be
+// reported (it was already reported, or rejected in another context).
+pub fn withdrawRejectedPromise(self: *Context, promise: js.Promise) bool {
+    for (self.rejected_promises.items, 0..) |rejected, i| {
+        if (rejected.isEqual(promise)) {
+            rejected.release();
+            _ = self.rejected_promises.orderedRemove(i);
+            return true;
+        }
+    }
+    return false;
 }
 
 // There's an assumption here: the js.Function will be alive when microtasks are

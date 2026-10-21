@@ -429,6 +429,8 @@
       testing.expectEqual(window, e.srcElement);
       testing.expectEqual(window, e.currentTarget);
       unhandledCalled += 1;
+      // expected: not reported as uncaught
+      e.preventDefault();
     });
     Promise.reject({x: 'Fail'});
     testing.onload(() => testing.expectEqual(2, unhandledCalled));

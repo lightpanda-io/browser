@@ -334,24 +334,26 @@ pub fn structuredClone(_: *const WorkerGlobalScope, value: JS.Value) !JS.Value {
     return value.structuredClone();
 }
 
-pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rejection: JS.PromiseRejection) !void {
+// See Window.unhandledPromiseRejection.
+pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, promise: JS.Promise, reason: ?JS.Value) !bool {
     const event_name = if (no_handler) "unhandledrejection" else "rejectionhandled";
 
-    if (no_handler) {
-        self.page.recordJsError(error.JsException);
-        if (rejection.reason()) |reason| {
-            self.page.status.noteException(reason.toStringSlice() catch "");
-        }
+    const target = self.asEventTarget();
+    if (!self._event_manager.hasDirectListeners(target, event_name)) {
+        return false;
     }
 
-    const target = self.asEventTarget();
-    if (self._event_manager.hasDirectListeners(target, event_name)) {
-        const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
-            .reason = if (rejection.reason()) |r| try r.persist() else null,
-            .promise = try rejection.promise().persist(),
-        }, self.page)).asEvent();
-        try self.dispatch(target, event, .{});
-    }
+    const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
+        .reason = if (reason) |r| try r.persist() else null,
+        .promise = try promise.persist(),
+        .cancelable = no_handler,
+    }, self.page)).asEvent();
+    // Keep the event alive past dispatch so we can read _prevent_default.
+    event.acquireRef();
+    defer event.releaseRef(self.page);
+
+    try self.dispatch(target, event, .{});
+    return event._prevent_default;
 }
 
 fn importScripts(self: *WorkerGlobalScope, urls: []const [:0]const u8) !void {
