@@ -319,16 +319,45 @@ pub const Writer = struct {
         value: AXValue,
     };
 
-    fn supportsExpanded(role: []const u8) bool {
-        inline for (.{
-            "application",   "button", "checkbox",  "columnheader", "combobox",
-            "gridcell",      "link",   "listbox",   "menuitem",     "menuitemcheckbox",
-            "menuitemradio", "row",    "rowheader", "switch",       "tab",
-            "treeitem",
-        }) |supported| {
-            if (std.ascii.eqlIgnoreCase(role, supported)) return true;
+    const AriaState = enum { true, false, mixed };
+
+    fn parseAriaState(value: []const u8) ?AriaState {
+        inline for (comptime std.meta.tags(AriaState)) |state| {
+            if (std.ascii.eqlIgnoreCase(value, @tagName(state))) return state;
         }
-        return false;
+        return null;
+    }
+
+    const RoleStates = struct {
+        expanded: bool = false,
+        // Only tri-state roles keep aria-checked="mixed"; the rest read it as false.
+        checked: ?enum { binary, tri_state } = null,
+    };
+
+    fn roleStates(role: []const u8) RoleStates {
+        const max_len = "menuitemcheckbox".len;
+        if (role.len > max_len) return .{};
+        var buf: [max_len]u8 = undefined;
+        const roles = std.StaticStringMap(RoleStates).initComptime(.{
+            .{ "application", RoleStates{ .expanded = true } },
+            .{ "button", RoleStates{ .expanded = true } },
+            .{ "checkbox", RoleStates{ .expanded = true, .checked = .tri_state } },
+            .{ "columnheader", RoleStates{ .expanded = true } },
+            .{ "combobox", RoleStates{ .expanded = true } },
+            .{ "gridcell", RoleStates{ .expanded = true } },
+            .{ "link", RoleStates{ .expanded = true } },
+            .{ "listbox", RoleStates{ .expanded = true } },
+            .{ "menuitem", RoleStates{ .expanded = true } },
+            .{ "menuitemcheckbox", RoleStates{ .expanded = true, .checked = .tri_state } },
+            .{ "menuitemradio", RoleStates{ .expanded = true, .checked = .binary } },
+            .{ "radio", RoleStates{ .checked = .binary } },
+            .{ "row", RoleStates{ .expanded = true } },
+            .{ "rowheader", RoleStates{ .expanded = true } },
+            .{ "switch", RoleStates{ .expanded = true, .checked = .binary } },
+            .{ "tab", RoleStates{ .expanded = true } },
+            .{ "treeitem", RoleStates{ .expanded = true } },
+        });
+        return roles.get(std.ascii.lowerString(&buf, role)) orelse .{};
     }
 
     fn writeAXProperties(self: *const Writer, axnode: AXNode, w: anytype) !void {
@@ -346,7 +375,6 @@ pub const Writer = struct {
             .cdata => return,
             .element => {
                 const el = dom_node.subtype(DOMNode.Element);
-                var focusability_written = false;
                 switch (el.getTag()) {
                     .h1 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 1 } }, w),
                     .h2 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 2 } }, w),
@@ -366,8 +394,6 @@ pub const Writer = struct {
                         const uri = try a.getHref(self.frame);
                         if (uri.len != 0) {
                             try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
-                            try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                            focusability_written = true;
                         }
                     },
                     .input => {
@@ -381,7 +407,6 @@ pub const Writer = struct {
                         try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                            focusability_written = true;
                         }
 
                         switch (input._input_type) {
@@ -434,7 +459,6 @@ pub const Writer = struct {
                         try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                            focusability_written = true;
                         }
                         try self.writeAXProperty(.{ .name = .editable, .value = .{ .token = "plaintext" } }, w);
                         if (!is_disabled and !is_readonly) {
@@ -453,7 +477,6 @@ pub const Writer = struct {
                         try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                            focusability_written = true;
                         }
                         try self.writeAXProperty(.{ .name = .hasPopup, .value = .{ .token = "menu" } }, w);
                         try self.writeAXProperty(.{ .name = .expanded, .value = .{ .booleanOrUndefined = false } }, w);
@@ -461,7 +484,6 @@ pub const Writer = struct {
                     .option => {
                         const option = el.as(DOMNode.Element.Html.Option);
                         try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                        focusability_written = true;
 
                         if (option.getSelected()) {
                             try self.writeAXProperty(.{ .name = .selected, .value = .{ .booleanOrUndefined = true } }, w);
@@ -475,7 +497,6 @@ pub const Writer = struct {
                         try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                         if (!is_disabled) {
                             try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                            focusability_written = true;
                         }
                     },
                     .hr => {
@@ -504,46 +525,28 @@ pub const Writer = struct {
                     else => {},
                 }
 
-                // Use the resolved role to prevent exposing ARIA states on generic nodes.
-                const role = try axnode.getRole();
-                if (el.getTag() != .select and supportsExpanded(role)) {
-                    if (el.getAttributeInterned("aria-expanded")) |expanded| {
-                        if (std.ascii.eqlIgnoreCase(expanded, "true")) {
-                            try self.writeAXProperty(.{ .name = .expanded, .value = .{ .booleanOrUndefined = true } }, w);
-                        } else if (std.ascii.eqlIgnoreCase(expanded, "false")) {
-                            try self.writeAXProperty(.{ .name = .expanded, .value = .{ .booleanOrUndefined = false } }, w);
-                        }
-                    }
+                // The resolved role, not the attribute, so generic nodes get no states.
+                const states = roleStates(try axnode.getRole());
+                if (states.expanded and el.getTag() != .select) {
+                    if (parseAriaState(el.getAttributeInterned("aria-expanded") orelse "")) |state| switch (state) {
+                        .true, .false => try self.writeAXProperty(.{ .name = .expanded, .value = .{ .booleanOrUndefined = state == .true } }, w),
+                        .mixed => {},
+                    };
                 }
-
                 // Inputs already emitted their native checked property above.
-                // Only checkbox and menuitemcheckbox are tri-state; mixed on the
-                // other checkable roles reads as false.
-                const tri_state = std.ascii.eqlIgnoreCase(role, "checkbox") or
-                    std.ascii.eqlIgnoreCase(role, "menuitemcheckbox");
-                if (el.getTag() != .input and
-                    (tri_state or
-                        std.ascii.eqlIgnoreCase(role, "switch") or
-                        std.ascii.eqlIgnoreCase(role, "radio") or
-                        std.ascii.eqlIgnoreCase(role, "menuitemradio")))
-                {
-                    const checked = el.getAttributeSafe(.wrap("aria-checked")) orelse "false";
-                    const checked_value: ?[]const u8 = if (std.ascii.eqlIgnoreCase(checked, "true"))
-                        "true"
-                    else if (std.ascii.eqlIgnoreCase(checked, "false"))
-                        "false"
-                    else if (std.ascii.eqlIgnoreCase(checked, "mixed"))
-                        (if (tri_state) "mixed" else "false")
-                    else
-                        null;
-                    if (checked_value) |value| {
-                        try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = value } }, w);
+                if (states.checked != null and el.getTag() != .input) {
+                    if (parseAriaState(el.getAttributeSafe(.wrap("aria-checked")) orelse "false")) |parsed| {
+                        const state: AriaState = if (parsed == .mixed and states.checked == .binary) .false else parsed;
+                        try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = @tagName(state) } }, w);
                     }
                 }
 
-                // A custom anchor without href still needs its explicit ARIA/focus properties.
-                if (!focusability_written and el.isFocusable(frame)) {
-                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                // Hidden and inert nodes never reach here, so tabindex alone decides.
+                switch (el.getTag()) {
+                    .input, .textarea, .select, .button, .option => {},
+                    else => if (el.focusTabIndex() != null) {
+                        try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                    },
                 }
             },
             else => |tag| {
@@ -2337,33 +2340,53 @@ test "AXNode: custom ARIA states and tabindex focusability" {
     defer parsed.deinit();
     const nodes = parsed.value.array.items;
 
-    const expanded = findNode(nodes, "button", "Expanded details") orelse return error.ExpandedButtonNotFound;
-    const expanded_state = nodeProperty(expanded, "expanded") orelse return error.ExpandedPropertyNotFound;
-    try testing.expectEqual(true, expanded_state.get("value").?.bool);
+    const Case = struct { role: ?[]const u8, name: []const u8, property: []const u8, value: ?std.json.Value };
+    const cases = [_]Case{
+        .{ .role = "button", .name = "Expanded details", .property = "expanded", .value = .{ .bool = true } },
+        .{ .role = "button", .name = "Collapsed details", .property = "expanded", .value = .{ .bool = false } },
+        .{ .role = "button", .name = "Invalid details", .property = "expanded", .value = null },
+        .{ .role = "button", .name = "Uppercase expanded", .property = "expanded", .value = .{ .bool = true } },
+        .{ .role = "button", .name = "Uppercase collapsed", .property = "expanded", .value = .{ .bool = false } },
+        .{ .role = null, .name = "Generic expanded", .property = "expanded", .value = null },
+        .{ .role = "button", .name = "Custom anchor", .property = "expanded", .value = .{ .bool = true } },
+        .{ .role = "button", .name = "Custom image", .property = "expanded", .value = .{ .bool = true } },
+        .{ .role = "switch", .name = "Expanded switch", .property = "expanded", .value = .{ .bool = true } },
 
-    const collapsed = findNode(nodes, "button", "Collapsed details") orelse return error.CollapsedButtonNotFound;
-    const collapsed_state = nodeProperty(collapsed, "expanded") orelse return error.CollapsedPropertyNotFound;
-    try testing.expectEqual(false, collapsed_state.get("value").?.bool);
+        .{ .role = "checkbox", .name = "Mixed terms", .property = "checked", .value = .{ .string = "mixed" } },
+        .{ .role = "checkbox", .name = "Checked terms", .property = "checked", .value = .{ .string = "true" } },
+        .{ .role = "checkbox", .name = "Unfocusable terms", .property = "checked", .value = .{ .string = "false" } },
+        .{ .role = "checkbox", .name = "Invalid state", .property = "checked", .value = null },
+        .{ .role = "checkbox", .name = "Uppercase mixed", .property = "checked", .value = .{ .string = "mixed" } },
+        .{ .role = "checkbox", .name = "Absent checked", .property = "checked", .value = .{ .string = "false" } },
+        .{ .role = "switch", .name = "Switch checked", .property = "checked", .value = .{ .string = "true" } },
+        .{ .role = "switch", .name = "Switch mixed", .property = "checked", .value = .{ .string = "false" } },
+        .{ .role = "menuitemcheckbox", .name = "Menu checkbox checked", .property = "checked", .value = .{ .string = "true" } },
+        .{ .role = "menuitemcheckbox", .name = "Menu checkbox mixed", .property = "checked", .value = .{ .string = "mixed" } },
+        .{ .role = "radio", .name = "Radio unchecked", .property = "checked", .value = .{ .string = "false" } },
+        .{ .role = "radio", .name = "Radio absent", .property = "checked", .value = .{ .string = "false" } },
+        .{ .role = "menuitemradio", .name = "Menu radio checked", .property = "checked", .value = .{ .string = "true" } },
 
-    const invalid_expanded = findNode(nodes, "button", "Invalid details") orelse return error.InvalidButtonNotFound;
-    try testing.expect(nodeProperty(invalid_expanded, "expanded") == null);
-
-    const mixed = findNode(nodes, "checkbox", "Mixed terms") orelse return error.MixedCheckboxNotFound;
-    const mixed_state = nodeProperty(mixed, "checked") orelse return error.MixedStateNotFound;
-    try testing.expectEqual("mixed", mixed_state.get("value").?.string);
-    const mixed_focus = nodeProperty(mixed, "focusable") orelse return error.MixedFocusNotFound;
-    try testing.expectEqual(true, mixed_focus.get("value").?.bool);
-
-    // A negative tabindex is focusable through script, but not Tab navigation.
-    const checked = findNode(nodes, "checkbox", "Checked terms") orelse return error.CheckedCheckboxNotFound;
-    const checked_state = nodeProperty(checked, "checked") orelse return error.CheckedStateNotFound;
-    try testing.expectEqual("true", checked_state.get("value").?.string);
-    try testing.expect(nodeProperty(checked, "focusable") != null);
-
-    const unfocusable = findNode(nodes, "checkbox", "Unfocusable terms") orelse return error.UnfocusableCheckboxNotFound;
-    const unchecked_state = nodeProperty(unfocusable, "checked") orelse return error.UncheckedStateNotFound;
-    try testing.expectEqual("false", unchecked_state.get("value").?.string);
-    try testing.expect(nodeProperty(unfocusable, "focusable") == null);
+        .{ .role = "checkbox", .name = "Mixed terms", .property = "focusable", .value = .{ .bool = true } },
+        // A negative tabindex is focusable through script, but not Tab navigation.
+        .{ .role = "checkbox", .name = "Checked terms", .property = "focusable", .value = .{ .bool = true } },
+        .{ .role = "checkbox", .name = "Unfocusable terms", .property = "focusable", .value = null },
+        .{ .role = "checkbox", .name = "Invalid state", .property = "focusable", .value = null },
+        .{ .role = "button", .name = "Custom anchor", .property = "focusable", .value = .{ .bool = true } },
+    };
+    for (cases) |case| {
+        const ax_node = findNode(nodes, case.role, case.name) orelse return error.NodeNotFound;
+        const actual = if (nodeProperty(ax_node, case.property)) |property| property.get("value").? else null;
+        const expected = case.value orelse {
+            try testing.expect(actual == null);
+            continue;
+        };
+        const value = actual orelse return error.PropertyNotFound;
+        switch (expected) {
+            .bool => |b| try testing.expectEqual(b, value.bool),
+            .string => |s| try testing.expectEqual(s, value.string),
+            else => unreachable,
+        }
+    }
 
     // Native input serialization already includes checked; do not emit it twice.
     const native = findNode(nodes, "checkbox", "Native terms") orelse return error.NativeCheckboxNotFound;
@@ -2374,48 +2397,6 @@ test "AXNode: custom ARIA states and tabindex focusability" {
         }
     }
     try testing.expectEqual(1, checked_count);
-
-    const invalid = findNode(nodes, "checkbox", "Invalid state") orelse return error.InvalidCheckboxNotFound;
-    try testing.expect(nodeProperty(invalid, "checked") == null);
-    try testing.expect(nodeProperty(invalid, "focusable") == null);
-
-    // Chrome accepts ASCII-case-insensitive ARIA tokens and normalizes checked values.
-    const upper_expanded = findNode(nodes, "button", "Uppercase expanded") orelse return error.UpperExpandedNotFound;
-    try testing.expectEqual(true, (nodeProperty(upper_expanded, "expanded") orelse return error.UpperExpandedMissing).get("value").?.bool);
-    const upper_collapsed = findNode(nodes, "button", "Uppercase collapsed") orelse return error.UpperCollapsedNotFound;
-    try testing.expectEqual(false, (nodeProperty(upper_collapsed, "expanded") orelse return error.UpperCollapsedMissing).get("value").?.bool);
-
-    const generic = findNode(nodes, null, "Generic expanded") orelse return error.GenericExpandedNotFound;
-    try testing.expect(nodeProperty(generic, "expanded") == null);
-
-    const upper_mixed = findNode(nodes, "checkbox", "Uppercase mixed") orelse return error.UpperMixedNotFound;
-    try std.testing.expectEqualStrings("mixed", (nodeProperty(upper_mixed, "checked") orelse return error.UpperMixedMissing).get("value").?.string);
-    const absent_checked = findNode(nodes, "checkbox", "Absent checked") orelse return error.AbsentCheckedNotFound;
-    try std.testing.expectEqualStrings("false", (nodeProperty(absent_checked, "checked") orelse return error.AbsentCheckedMissing).get("value").?.string);
-
-    const checked_cases = .{
-        .{ "switch", "Switch checked", "true" },
-        .{ "menuitemcheckbox", "Menu checkbox checked", "true" },
-        .{ "radio", "Radio unchecked", "false" },
-        .{ "menuitemradio", "Menu radio checked", "true" },
-        .{ "radio", "Radio absent", "false" },
-        .{ "switch", "Switch mixed", "false" },
-        .{ "menuitemcheckbox", "Menu checkbox mixed", "mixed" },
-    };
-    inline for (checked_cases) |case| {
-        const role_node = findNode(nodes, case[0], case[1]) orelse return error.CheckedRoleNotFound;
-        const checked_property = nodeProperty(role_node, "checked") orelse return error.CheckedRoleMissing;
-        try std.testing.expectEqualStrings(case[2], checked_property.get("value").?.string);
-    }
-
-    // Custom role-bearing elements without href/src must reach ARIA and tabindex handling.
-    const custom_anchor = findNode(nodes, "button", "Custom anchor") orelse return error.CustomAnchorNotFound;
-    try testing.expectEqual(true, (nodeProperty(custom_anchor, "expanded") orelse return error.CustomAnchorExpandedMissing).get("value").?.bool);
-    try testing.expectEqual(true, (nodeProperty(custom_anchor, "focusable") orelse return error.CustomAnchorFocusMissing).get("value").?.bool);
-    const custom_image = findNode(nodes, "button", "Custom image") orelse return error.CustomImageNotFound;
-    try testing.expectEqual(true, (nodeProperty(custom_image, "expanded") orelse return error.CustomImageExpandedMissing).get("value").?.bool);
-    const expanded_switch = findNode(nodes, "switch", "Expanded switch") orelse return error.ExpandedSwitchNotFound;
-    try testing.expectEqual(true, (nodeProperty(expanded_switch, "expanded") orelse return error.ExpandedSwitchMissing).get("value").?.bool);
 
     try testing.expect(findNode(nodes, "checkbox", "Inert terms") == null);
     try testing.expect(findNode(nodes, "checkbox", "Hidden terms") == null);
