@@ -153,7 +153,7 @@ pub fn isCancelled(self: *const Session) bool {
     return hook.check(hook.context);
 }
 
-const max_console_bytes = 64 * 1024;
+pub const max_console_bytes = 64 * 1024;
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;

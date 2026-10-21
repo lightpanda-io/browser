@@ -20,7 +20,9 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
+const Session = @import("../Session.zig");
 const Notification = @import("../../Notification.zig");
+const LimitedWriter = @import("../../LimitedWriter.zig");
 
 const logger = lp.log;
 
@@ -96,7 +98,7 @@ pub fn @"error"(values: []js.Value, exec: *js.Execution) void {
 }
 
 pub fn table(data: ?js.Value, columns: ?js.Value) void {
-    logger.info(.js, "console.table", .{ .data = data, .columns = columns });
+    logger.info(.js, "console.table", .{ .data = LogValue{ .value = data }, .columns = LogValue{ .value = columns } });
 }
 
 pub fn dir(item_: ?js.Value, _: ?js.Value, exec: *js.Execution) void {
@@ -187,24 +189,75 @@ pub fn groupCollapsed(values: []js.Value) void {
 }
 
 fn groupEnd() void {}
+
+// Page values are logged as strings, so the logger escapes them. One console
+// call writes at most max_console_bytes of them, like the session's capture.
+const truncated_marker = "...[truncated]";
+
+const LogBuffer = struct {
+    buf: [Session.max_console_bytes + truncated_marker.len]u8 = undefined,
+    used: usize = 0,
+    full: bool = false,
+
+    // Null once an earlier value has used up the budget.
+    fn render(self: *LogBuffer, value: js.Value) !?[]const u8 {
+        if (self.full) {
+            return null;
+        }
+        var fixed: std.Io.Writer = .fixed(self.buf[self.used..]);
+        var limited: LimitedWriter = .init(&fixed, @intCast(Session.max_console_bytes - self.used));
+        value.format(&limited.writer) catch |err| {
+            if (!limited.truncated) {
+                return err;
+            }
+            self.full = true;
+            try fixed.writeAll(truncated_marker);
+        };
+        self.used += fixed.end;
+        return fixed.buffered();
+    }
+};
+
+const LogValue = struct {
+    value: ?js.Value,
+
+    pub fn format(self: LogValue, writer: *std.Io.Writer) !void {
+        const value = self.value orelse return writer.writeAll("null");
+        var buf: LogBuffer = .{};
+        return logger.writePrettyString((try buf.render(value)).?, writer);
+    }
+
+    pub fn logFmt(self: LogValue, key: []const u8, writer: anytype) !void {
+        const value = self.value orelse return writer.write(key, "null");
+        var buf: LogBuffer = .{};
+        return writer.write(key, (try buf.render(value)).?);
+    }
+};
+
 const ValueWriter = struct {
     values: []js.Value,
     stack: ?[]const u8 = null,
 
     pub fn format(self: ValueWriter, writer: *std.Io.Writer) !void {
+        var buf: LogBuffer = .{};
         for (self.valuesToLog(), 1..) |value, i| {
-            try writer.print("\n  arg({d}): {f}", .{ i, value });
+            const text = try buf.render(value) orelse break;
+            try writer.print("\n  arg({d}): ", .{i});
+            try logger.writePrettyString(text, writer);
         }
         if (self.stack) |s| {
-            try writer.print("\n stack: {s}", .{s});
+            try writer.writeAll("\n stack: ");
+            try logger.writePrettyString(s, writer);
         }
     }
 
     pub fn logFmt(self: ValueWriter, _: []const u8, writer: anytype) !void {
-        var buf: [32]u8 = undefined;
+        var buf: LogBuffer = .{};
+        var name_buf: [32]u8 = undefined;
         for (self.valuesToLog(), 0..) |value, i| {
-            const name = try std.mem.print(&buf, "param.{d}", .{i});
-            try writer.write(name, value);
+            const text = try buf.render(value) orelse break;
+            const name = try std.mem.print(&name_buf, "param.{d}", .{i});
+            try writer.write(name, text);
         }
     }
 
@@ -270,4 +323,42 @@ const testing = @import("../../testing.zig");
 test "WebApi: Console" {
     testing.expectLog(&.{ .js, .js, .js });
     try testing.htmlRunner("console", .{});
+}
+
+test "WebApi: Console escapes and caps page values in the log" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const format = logger.opts.format;
+    defer logger.opts.format = format;
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+
+    var values = [_]js.Value{
+        try ls.local.exec("'one\\nx level=fatal'", null),
+        try ls.local.exec("'\\x1b[31m'", null),
+    };
+    logger.opts.format = .logfmt;
+    try logger.logTo(.js, .info, "console.log", .{ValueWriter{ .values = &values }}, &aw.writer);
+    try testing.expect(std.mem.endsWith(u8, aw.written(), " param.0=\"one\\nx level=fatal\" param.1=G1szMW0\n"));
+
+    aw.clearRetainingCapacity();
+    logger.opts.format = .pretty;
+    try logger.logTo(.js, .info, "console.log", .{ValueWriter{ .values = &values }}, &aw.writer);
+    try testing.expect(std.mem.endsWith(u8, aw.written(), "\n  arg(1): one\nx level=fatal\n  arg(2): \\x1b[31m\n\n"));
+
+    // The cut keeps whole code points ('a' + 32767 two-byte ones) and drops
+    // later arguments.
+    aw.clearRetainingCapacity();
+    values[0] = try ls.local.exec("'a' + '\\u00e9'.repeat(100000)", null);
+    try logger.logTo(.js, .info, "console.log", .{ValueWriter{ .values = &values }}, &aw.writer);
+    const es: [(Session.max_console_bytes - 1) / 2][2]u8 = @splat("\u{e9}".*);
+    const expected = try std.mem.concat(testing.allocator, u8, &.{ "\n  arg(1): a", std.mem.sliceAsBytes(&es), truncated_marker ++ "\n\n" });
+    defer testing.allocator.free(expected);
+    try testing.expect(std.mem.endsWith(u8, aw.written(), expected));
 }

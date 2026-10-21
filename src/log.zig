@@ -280,7 +280,7 @@ pub fn logKVs(scope: Scope, level: Level, msg: []const u8, kvs: []const KV) void
 
 // Like `log`, but to an explicit writer and without the enabled/sink
 // gating. Only used by tests.
-fn logTo(scope: Scope, level: Level, msg: []const u8, data: anytype, out: *std.Io.Writer) !void {
+pub fn logTo(scope: Scope, level: Level, msg: []const u8, data: anytype, out: *std.Io.Writer) !void {
     var kvs: [@typeInfo(@TypeOf(data)).@"struct".field_names.len]KV = undefined;
     initKVs(data, &kvs);
     return logToErased(scope, level, msg, &kvs, out);
@@ -640,7 +640,7 @@ fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void 
 
 // Control characters other than \n and \t are written as \xNN, so a logged
 // value can't emit terminal escape sequences.
-fn writePrettyString(value: []const u8, writer: *std.Io.Writer) !void {
+pub fn writePrettyString(value: []const u8, writer: *std.Io.Writer) !void {
     var start: usize = 0;
     for (value, 0..) |b, i| {
         if (!std.ascii.isControl(b) or b == '\n' or b == '\t') {
