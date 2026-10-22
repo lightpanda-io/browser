@@ -535,7 +535,6 @@ test "MCP - missing required argument is named in the error" {
     try testing.expectJson(.{ .id = 5, .result = .{ .isError = false } }, out.written());
     out.clearRetainingCapacity();
 
-    // Zero-filling models send `null` for "unset"; it is as missing as absent.
     try router.handleMessage(server, testing.arena_allocator,
         \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":null}}}
     );
