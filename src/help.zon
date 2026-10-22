@@ -624,6 +624,9 @@
     \\          Defaults to [a very generous] 30000, disable by setting to 0.
     \\  --web-bot-auth-domain <DOMAIN>
     \\          Your domain, e.g. yourdomain.com.
+    \\          Sends Signature-Agent: "https://<DOMAIN>". The key directory
+    \\          is served at /.well-known/http-message-signatures-directory
+    \\          on that origin.
     \\  --web-bot-auth-key-file <PATH>
     \\          Path to the Ed25519 private key PEM file.
     \\  --web-bot-auth-keyid <STRING>
