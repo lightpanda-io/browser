@@ -93,15 +93,7 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, fra
     if (it.next() != null) return error.SyntaxError;
 
     const inserted: *CSSRule = switch (parsed_rule) {
-        .style => |s| blk: {
-            const style_rule = try CSSStyleRule.init(frame);
-            try style_rule.setSelectorText(s.selector, frame);
-
-            const style_props = try style_rule.getStyle(frame);
-            const style = style_props.asCSSStyleDeclaration();
-            try style.replaceStyleBlock(s.block, frame);
-            break :blk style_rule._proto;
-        },
+        .style => |s| try initStyleRule(s.selector, s.block, 0, frame),
         // Opaque placeholder for at-rules. The CSS engine doesn't apply
         // these (`@keyframes`, `@media`, ...) but JS-side reads must see
         // them via `cssRules` so CSS-in-JS libraries don't fall back to
@@ -126,6 +118,34 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, fra
     }
 
     return index;
+}
+
+/// A style rule from source: its declarations, and the rules nested in its
+/// block (CSS Nesting) as child rules. `depth` caps the nesting like
+/// StyleManager's cap on the cascade side.
+fn initStyleRule(selector: []const u8, block: []const u8, depth: u8, frame: *Frame) CSSError!*CSSRule {
+    const style_rule = try CSSStyleRule.init(frame);
+    try style_rule.setSelectorText(selector, frame);
+
+    const style_props = try style_rule.getStyle(frame);
+    const style = style_props.asCSSStyleDeclaration();
+    try style.replaceStyleBlock(block, frame);
+
+    if (depth >= StyleManager.MAX_AT_RULE_NESTING or std.mem.findScalar(u8, block, '{') == null) {
+        return style_rule._proto;
+    }
+    var it = Parser.parseStyleBlock(block);
+    while (it.nextItem()) |item| {
+        const nested: *CSSRule = switch (item) {
+            .declaration => continue,
+            .rule => |r| try initStyleRule(r.selector, r.block, depth + 1, frame),
+            .at_rule => |a| try CSSRule.initAtRule(atRuleTypeFor(a.keyword), a.text, frame),
+        };
+        // Created on the first nested rule: `_rules` stays null without one.
+        const rules = try style_rule.getCssRules(frame);
+        try rules.insert(rules.length(), nested, frame);
+    }
+    return style_rule._proto;
 }
 
 /// Map an at-rule keyword (without `@`) to the matching `CSSRule.Type`
@@ -188,15 +208,7 @@ fn parseInto(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!voi
     var index: u32 = 0;
     while (it.next()) |parsed_rule| {
         const inserted: *CSSRule = switch (parsed_rule) {
-            .style => |s| blk: {
-                const style_rule = try CSSStyleRule.init(frame);
-                try style_rule.setSelectorText(s.selector, frame);
-
-                const style_props = try style_rule.getStyle(frame);
-                const style = style_props.asCSSStyleDeclaration();
-                try style.replaceStyleBlock(s.block, frame);
-                break :blk style_rule._proto;
-            },
+            .style => |s| try initStyleRule(s.selector, s.block, 0, frame),
             .at_rule => |a| try CSSRule.initAtRule(atRuleTypeFor(a.keyword), a.text, frame),
         };
 
@@ -238,4 +250,8 @@ test "WebApi: layer @-rule cascade" {
 
 test "WebApi: layer order cascade" {
     try testing.htmlRunner("css/layer_order_cascade.html", .{});
+}
+
+test "WebApi: CSS nesting" {
+    try testing.htmlRunner("css/nesting.html", .{});
 }
