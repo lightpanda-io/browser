@@ -1039,6 +1039,9 @@ fn callInner(
         error.OutOfMemory => return error.OutOfMemory,
         error.DuplicateField => return error.InvalidParams,
     };
+    // After normalizeArgKeys so a PascalCase `Script` isn't reported missing.
+    if (diagnoseMissingRequired(arena, tool, normalized)) |msg|
+        return .{ .text = msg, .is_error = true };
     const substituted = try substituteStringArgs(arena, tool, normalized);
 
     // Before dispatch, because a navigation takes the node with it. Gated on
@@ -2775,6 +2778,33 @@ fn resolveBySelector(session: *lp.Session, selector: []const u8) ToolError!NodeA
 }
 
 const ParseArgsError = error{ OutOfMemory, InvalidParams };
+
+/// Names the first required argument absent from the call, so a bare
+/// `InvalidParams` from `parseValue` doesn't hide which field to add — a
+/// caller sending `{"expression": ...}` to evaluate learns about `script`.
+/// Default-true booleans (setChecked.checked) parse fine when omitted, so
+/// they don't count as missing. Runs on key-normalized arguments.
+fn diagnoseMissingRequired(arena: std.mem.Allocator, tool: Tool, arguments: ?std.json.Value) ?[]const u8 {
+    const schemas = lp.Schema.all();
+    const tool_idx = @backingInt(tool);
+    if (tool_idx >= schemas.len) return null;
+    const schema = schemas[tool_idx];
+
+    const obj = if (arguments) |v| switch (v) {
+        .object => |o| o,
+        // A non-object shape fails in parseValue with the whole payload as
+        // context; there is no key to name here.
+        else => return null,
+    } else std.json.ObjectMap.empty;
+    for (schema.required) |name| {
+        if (obj.get(name) != null) continue;
+        if (schema.findField(name)) |f| {
+            if (f.default_true) continue;
+        }
+        return arena.print("missing required argument '{s}'", .{name}) catch null;
+    }
+    return null;
+}
 
 /// Surface field/value context for known typed args — `std.json`'s parse
 /// errors only carry the tag (`InvalidEnumTag`, …), not which field failed.

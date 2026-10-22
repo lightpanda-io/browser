@@ -485,6 +485,58 @@ test "MCP - evaluate error reporting" {
     } }, out.written());
 }
 
+test "MCP - missing required argument is named in the error" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    // A caller guessing the wrong argument name used to get a bare
+    // InvalidParams; the diagnosis names the field to add.
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"evaluate","arguments":{"expression":"1+1"}}}
+    );
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "missing required argument 'script'" }},
+    } }, out.written());
+    out.clearRetainingCapacity();
+
+    // No arguments at all: same diagnosis.
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"evaluate"}}
+    );
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "missing required argument 'script'" }},
+    } }, out.written());
+    out.clearRetainingCapacity();
+
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"press","arguments":{"selector":"#chk"}}}
+    );
+    try testing.expectJson(.{ .id = 3, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "missing required argument 'key'" }},
+    } }, out.written());
+    out.clearRetainingCapacity();
+
+    // setChecked.checked is default-true: omitted is not "missing" — the call
+    // runs and checks the box.
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"setChecked","arguments":{"selector":"#chk"}}}
+    );
+    try testing.expect(std.mem.indexOf(u8, out.written(), "missing required argument") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"error\"") == null);
+    out.clearRetainingCapacity();
+
+    // PascalCase keys normalize before the check, so `Url` is not "missing".
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"goto","arguments":{"Url":"about:blank"}}}
+    );
+    try testing.expect(std.mem.indexOf(u8, out.written(), "missing required argument") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"error\"") == null);
+}
+
 test "MCP - evaluate: top-level return runs in an async wrapper" {
     var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
