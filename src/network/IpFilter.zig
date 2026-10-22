@@ -174,11 +174,10 @@ fn isIpv4Mapped(addr: Ipv6Addr) ?Ipv4Addr {
 }
 
 /// Return the IPv4 address embedded in a NAT64 well-known-prefix address
-/// (64:ff9b::/96, RFC 6052) or a 6to4 address (2002::/16, RFC 3056).
-fn embeddedIpv4(addr: Ipv6Addr) ?Ipv4Addr {
+/// (64:ff9b::/96, RFC 6052).
+fn nat64Ipv4(addr: Ipv6Addr) ?Ipv4Addr {
     const nat64_prefix = [12]u8{ 0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0 };
     if (std.mem.eql(u8, addr[0..12], &nat64_prefix)) return addr[12..16].*;
-    if (addr[0] == 0x20 and addr[1] == 0x02) return addr[2..6].*;
     return null;
 }
 
@@ -321,8 +320,8 @@ fn isBlockedV4(self: *const IpFilter, addr: Ipv4Addr) bool {
 }
 
 fn isBlockedV6(self: *const IpFilter, addr: Ipv6Addr) bool {
-    // NAT64 and 6to4 traffic is delivered to the embedded IPv4 address.
-    if (embeddedIpv4(addr)) |v4| {
+    // NAT64 traffic is delivered to the embedded IPv4 address.
+    if (nat64Ipv4(addr)) |v4| {
         if (self.isBlockedV4(v4)) return true;
     }
 
@@ -454,14 +453,12 @@ test "IpFilter: IPv4-mapped IPv6 bypass prevention" {
     try testing.expect(!filter.testBlocked("::ffff:8.8.8.8"));
 }
 
-test "IpFilter: NAT64 and 6to4 addresses are checked by their embedded IPv4 address" {
+test "IpFilter: NAT64 addresses are checked by their embedded IPv4 address" {
     const filter = IpFilter.init(true, null);
     defer filter.deinit(testing.allocator);
 
     try testing.expect(filter.testBlocked("64:ff9b::a00:1")); // 10.0.0.1
     try testing.expect(!filter.testBlocked("64:ff9b::808:808")); // 8.8.8.8
-    try testing.expect(filter.testBlocked("2002:c0a8:101::1")); // 192.168.1.1
-    try testing.expect(!filter.testBlocked("2002:808:808::1")); // 8.8.8.8
 }
 
 test "IpFilter: fail-closed: unknown address family blocked by isBlockedSockaddr" {
@@ -489,7 +486,6 @@ test "IpFilter: custom CIDR ranges" {
     try testing.expect(!filter.testBlocked("203.0.114.0")); // outside custom range
     try testing.expect(!filter.testBlocked("8.8.8.8")); // not in range
     try testing.expect(filter.testBlocked("64:ff9b::cb00:7101")); // NAT64 203.0.113.1
-    try testing.expect(filter.testBlocked("2002:cb00:7101::1")); // 6to4 203.0.113.1
 }
 
 test "IpFilter: private group blocks cloud metadata IP via link-local" {
