@@ -1200,7 +1200,13 @@ test "SemanticTree: JSON exposes custom ARIA states without changing native chec
     const switch_mixed = find(parsed.value, "Switch mixed") orelse return error.NodeNotFound;
     try testing.expectString("false", switch_mixed.object.get("ariaChecked").?.string);
     const invalid = find(parsed.value, "Invalid details") orelse return error.NodeNotFound;
-    try testing.expect(invalid.object.get("ariaExpanded") == null);
+    try testing.expect(invalid.object.get("ariaExpanded").?.bool);
+    const empty_expanded = find(parsed.value, "Empty expanded") orelse return error.NodeNotFound;
+    try testing.expect(empty_expanded.object.get("ariaExpanded") == null);
+    const spaced_checked = find(parsed.value, "Spaced checked") orelse return error.NodeNotFound;
+    try testing.expectString("true", spaced_checked.object.get("ariaChecked").?.string);
+    const option_mixed = find(parsed.value, "Option mixed") orelse return error.NodeNotFound;
+    try testing.expectString("mixed", option_mixed.object.get("ariaChecked").?.string);
     const native = find(parsed.value, "Native terms") orelse return error.NodeNotFound;
     try testing.expect(native.object.get("checked").?.bool);
     try testing.expect(native.object.get("ariaChecked") == null);

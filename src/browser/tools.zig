@@ -3067,6 +3067,15 @@ test "tools: tree exposes Chrome-matched custom ARIA states" {
         "button 'Expanded details' [expanded]",
         "button 'Collapsed details' [collapsed]",
         "button 'Uppercase expanded' [expanded]",
+        "button 'Invalid details' [expanded]",
+        "button 'Spaced expanded' [expanded]",
+        "listitem 'Listitem expanded' [expanded]",
+        "checkbox 'Invalid state' [checked]",
+        "checkbox 'Empty checked' [unchecked]",
+        "checkbox 'Spaced checked' [checked]",
+        "option 'Option checked' [checked]",
+        "option 'Option mixed' [mixed]",
+        "treeitem 'Treeitem checked' [collapsed] [checked]",
         "checkbox 'Uppercase mixed' [mixed]",
         "checkbox 'Absent checked' [unchecked]",
         "switch 'Switch mixed' [unchecked]",
@@ -3081,8 +3090,8 @@ test "tools: tree exposes Chrome-matched custom ARIA states" {
         }
     }
 
-    // Unsupported roles and invalid tokens must not manufacture state.
-    const ignored = [_][]const u8{ "'Generic expanded'", "'Invalid details'", "'Invalid state'" };
+    // Unsupported roles and empty expanded values must not manufacture state.
+    const ignored = [_][]const u8{ "'Generic expanded'", "'Empty expanded'" };
     for (ignored) |name| {
         var lines = std.mem.splitScalar(u8, result.text, '\n');
         var found = false;
