@@ -630,7 +630,7 @@ pub const BrowserContext = struct {
         // abort all intercepted requests before closing the session/page
         // since some of these might callback into the page/scriptmanager.
         // intercept_state stores ids.
-        const http_client = &browser.http_client;
+        const http_client = self.session.http_client;
         for (self.intercept_state.pendingIntercepts()) |transfer_id| {
             if (http_client.findTransfer(transfer_id)) |transfer| {
                 transfer.abortParked(error.ClientDisconnect);
@@ -675,14 +675,14 @@ pub const BrowserContext = struct {
         if (self.http_proxy_changed) {
             // has to be called after browser.closeSession, since it won't
             // work if there are active connections.
-            browser.http_client.changeProxy(null) catch |err| {
+            http_client.changeProxy(null) catch |err| {
                 log.warn(.http, "changeProxy", .{ .err = err });
             };
         }
         if (self.user_agent_changed) {
-            browser.http_client.clearUserAgentOverride();
+            http_client.clearUserAgentOverride();
         }
-        browser.http_client.clearAcceptLanguageOverride();
+        http_client.clearAcceptLanguageOverride();
         self.intercept_state.deinit();
     }
 
@@ -1552,6 +1552,10 @@ pub const Command = struct {
             );
         }
         return null;
+    }
+
+    pub fn httpClient(self: *const Command) *HttpClient {
+        return if (self.browser_context) |bc| bc.session.http_client else &self.cdp.browser.http_client;
     }
 
     pub fn createBrowserContext(self: *Command) !*BrowserContext {

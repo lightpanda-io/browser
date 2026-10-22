@@ -422,7 +422,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     errdefer self._style_manager.deinit();
 
     const browser = session.browser;
-    self._script_manager = ScriptManager.init(browser.allocator, &browser.http_client, self);
+    self._script_manager = ScriptManager.init(browser.allocator, session.http_client, self);
     errdefer self._script_manager.deinit();
 
     self.js = try browser.env.createContext(self, .{
@@ -537,7 +537,7 @@ pub fn deinit(self: *Frame) void {
 
     const browser = page.session.browser;
 
-    browser.http_client.abortOwner(&self._http_owner);
+    page.session.http_client.abortOwner(&self._http_owner);
 
     // fired the last moment the js context is still alive
     page.session.notification.dispatch(.frame_destroyed, self);
@@ -722,7 +722,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         log.info(.frame, "navigate", log_data);
     }
 
-    const http_client = &session.browser.http_client;
+    const http_client = session.http_client;
 
     // Handle synthetic navigations: about:blank, about:srcdoc and blob: URLs
     const is_about_blank = URL.isAboutBlank(request_url);
@@ -1124,7 +1124,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     // Navigation: kill in-flight HTTP transfers, but leave WebSockets
     // alive — they're cross-document by spec.
     target.abortDocumentLoad();
-    session.browser.http_client.abortRequests(&target._http_owner);
+    session.http_client.abortRequests(&target._http_owner);
 
     // Capture the originating frame's URL as the Referer for this
     // navigation. The originator's frame may be torn down before navigate()
@@ -1203,7 +1203,7 @@ fn canScheduleNavigation(self: *Frame, new_target_type: NavigationType) bool {
 }
 
 pub fn makeRequest(self: *Frame, req: HttpClient.Request) !void {
-    const transfer = try self._session.browser.http_client.newRequest(req, &self._http_owner);
+    const transfer = try self._session.http_client.newRequest(req, &self._http_owner);
     {
         errdefer transfer.deinit();
         try self.headersForRequest(transfer, .{});
@@ -1213,7 +1213,7 @@ pub fn makeRequest(self: *Frame, req: HttpClient.Request) !void {
 
 // Two-phase variant; see HttpClient.newRequest for the ownership contract.
 pub fn newRequest(self: *Frame, req: HttpClient.Request) !*HttpClient.Transfer {
-    return self._session.browser.http_client.newRequest(req, &self._http_owner);
+    return self._session.http_client.newRequest(req, &self._http_owner);
 }
 
 // Synchronously abort every transfer and WebSocket owned by this frame
@@ -1222,7 +1222,7 @@ pub fn abortTransfers(self: *Frame) void {
     for (self.child_frames.items) |child| {
         child.abortTransfers();
     }
-    const http_client = &self._session.browser.http_client;
+    const http_client = self._session.http_client;
     http_client.abortOwner(&self._http_owner);
 }
 
@@ -1310,7 +1310,7 @@ pub fn stopLoading(self: *Frame) void {
         if (parser.handle != null) self.document._active_parser_aborted = true;
     }
 
-    const http_client = &self._session.browser.http_client;
+    const http_client = self._session.http_client;
     if (http_client.findTransfer(self._req_id)) |transfer| {
         // the main navigation is still transfering, force it to finish now,
         // with whatever it has
@@ -2734,7 +2734,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         return;
     };
 
-    const http_client = &session.browser.http_client;
+    const http_client = session.http_client;
 
     // `syncRequest` below registers a blocking request for this frame; the
     // client's dispatcher holds back every OTHER transfer's callbacks for

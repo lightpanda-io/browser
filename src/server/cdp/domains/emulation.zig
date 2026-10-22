@@ -157,7 +157,7 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     };
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const http_client = &cmd.cdp.browser.http_client;
+    const http_client = cmd.httpClient();
 
     // Applied even when the user agent is refused below: Playwright always
     // sends a Mozilla user agent alongside the locale it was asked for.
@@ -433,7 +433,7 @@ test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.langua
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
     try expectJs(frame, "navigator.language === 'de-DE' && navigator.languages.join() === 'de-DE,de,en'");
-    try std.testing.expectEqualStrings("de-DE,de;q=0.9, en;q=0.8", ctx.cdp().browser.http_client.getAcceptLanguage());
+    try std.testing.expectEqualStrings("de-DE,de;q=0.9, en;q=0.8", ctx.cdp().browser_context.?.session.http_client.getAcceptLanguage());
 
     // A Mozilla user agent is refused, the language still applies.
     try ctx.processMessage(.{
@@ -443,7 +443,7 @@ test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.langua
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
     try expectJs(frame, "navigator.language === 'fr-FR' && navigator.languages.length === 1");
-    try std.testing.expectEqualStrings("CustomBot/2.0", ctx.cdp().browser.http_client.getUserAgent());
+    try std.testing.expectEqualStrings("CustomBot/2.0", ctx.cdp().browser_context.?.session.http_client.getUserAgent());
 
     try ctx.processMessage(.{
         .id = 3,

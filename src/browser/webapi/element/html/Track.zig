@@ -194,7 +194,7 @@ const TrackLoad = struct {
             break :blk if (std.ascii.eqlIgnoreCase(value, "use-credentials")) .include else .same_origin;
         };
 
-        const transfer = try frame._session.browser.http_client.newRequest(.{
+        const transfer = try frame._session.http_client.newRequest(.{
             .ctx = self,
             .url = url,
             .method = .GET,

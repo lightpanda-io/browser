@@ -76,7 +76,7 @@ pub fn image(frame: *Frame, img: *Element.Html.Image, src: []const u8) !void {
         return;
     };
 
-    const transfer = try session.browser.http_client.newRequest(.{
+    const transfer = try session.http_client.newRequest(.{
         .ctx = load,
         .url = resolved,
         .method = .GET,
