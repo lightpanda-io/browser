@@ -917,13 +917,14 @@ const Inert = struct {
 
         fn ownDataProperty(self: *State, object: *const v8.Object, key: []const u8) ?*const v8.Value {
             const local = self.local;
-            const descriptor = v8.v8__Object__GetOwnPropertyDescriptor(object, local.handle, local.isolate.initStringHandle(key)) orelse return null;
+            const key_handle = local.isolate.initStringHandle(key) catch return null;
+            const descriptor = v8.v8__Object__GetOwnPropertyDescriptor(object, local.handle, key_handle) orelse return null;
             if (v8.v8__Value__IsObject(descriptor) == false) {
                 return null;
             }
 
             // An accessor descriptor has no own `value`, and a Get would then reach Object.prototype.
-            const value_key = local.isolate.initStringHandle("value");
+            const value_key = local.isolate.initStringHandle("value") catch return null;
             var has: v8.MaybeBool = undefined;
             v8.v8__Object__HasOwnProperty(@ptrCast(descriptor), local.handle, value_key, &has);
             if (has.has_value == false or has.value == false) {

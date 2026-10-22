@@ -487,7 +487,7 @@ fn compileModule(local: *const js.Local, src: []const u8, name: []const u8) !js.
     var origin_handle: v8.ScriptOrigin = undefined;
     v8.v8__ScriptOrigin__CONSTRUCT2(
         &origin_handle,
-        local.isolate.initStringHandle(name),
+        try local.isolate.initStringHandle(name),
         0, // resource_line_offset
         0, // resource_column_offset
         false, // resource_is_shared_cross_origin
@@ -501,7 +501,7 @@ fn compileModule(local: *const js.Local, src: []const u8, name: []const u8) !js.
 
     var source_handle: v8.ScriptCompilerSource = undefined;
     v8.v8__ScriptCompiler__Source__CONSTRUCT2(
-        local.isolate.initStringHandle(src),
+        try local.isolate.initStringHandle(src),
         &origin_handle,
         null, // cached data
         &source_handle,
@@ -861,8 +861,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
 
         // Next, we need to actually load it.
         self.script_manager.getAsyncImport(specifier, dynamicModuleSourceCallback, state, referrer) catch |err| {
-            const error_msg = local.newString(@errorName(err));
-            _ = resolver.reject("dynamic module get async", error_msg);
+            _ = resolver.reject("dynamic module get async", @errorName(err));
         };
 
         // For now, we're done. but this will be continued in
@@ -899,7 +898,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
             // the module was loaded, but not evaluated, we _have_ to evaluate it now
             if (status == .kUninstantiated) {
                 if (try mod.instantiate(resolveModuleCallback) == false) {
-                    _ = resolver.reject("module instantiation", local.newString("Module instantiation failed"));
+                    _ = resolver.reject("module instantiation", "Module instantiation failed");
                     return promise;
                 }
             }
@@ -914,7 +913,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
                 } else if (comptime lp.IS_DEBUG) {
                     std.debug.assert(mod.getStatus() == .kErrored);
                 }
-                _ = resolver.reject("module evaluation", local.newString("Module evaluation failed"));
+                _ = resolver.reject("module evaluation", "Module evaluation failed");
                 return promise;
             };
             lp.assert(evaluated.isPromise(), "Context._dynamicModuleCallback non-promise", .{});
@@ -955,7 +954,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
         const resolver = local.toLocal(state.resolver);
         switch (err) {
             error.UrlMalformat, error.Abort, error.TransferCanceled => resolver.rejectError("dynamic module source", .{ .type_error = @errorName(err) }),
-            else => _ = resolver.reject("dynamic module source", local.newString(@errorName(err))),
+            else => _ = resolver.reject("dynamic module source", @errorName(err)),
         }
         return;
     };
@@ -973,7 +972,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
                 .caught = caught,
                 .specifier = state.specifier,
             });
-            _ = local.toLocal(state.resolver).reject("dynamic compilation failure", local.newString(caught.exception orelse ""));
+            _ = local.toLocal(state.resolver).reject("dynamic compilation failure", caught.exception orelse "");
             return;
         };
     };
@@ -1053,7 +1052,7 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
             .err = err,
             .specifier = state.specifier,
         });
-        _ = local.toLocal(state.resolver).reject("module promise", local.newString("Failed to evaluate promise"));
+        _ = local.toLocal(state.resolver).reject("module promise", "Failed to evaluate promise");
     };
 }
 
@@ -1251,7 +1250,7 @@ pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
 }
 
 // == Profiler ==
-fn startCpuProfiler(self: *Context) void {
+fn startCpuProfiler(self: *Context) !void {
     if (comptime !lp.IS_DEBUG) {
         // Still testing this out, don't have it properly exposed, so add this
         // guard for the time being to prevent any accidental/weird prod issues.
@@ -1266,7 +1265,7 @@ fn startCpuProfiler(self: *Context) void {
     v8.v8__CpuProfiler__UseDetailedSourcePositionsForProfiling(self.isolate.handle);
 
     const cpu_profiler = v8.v8__CpuProfiler__Get(self.isolate.handle).?;
-    const title = self.isolate.initStringHandle("v8_cpu_profile");
+    const title = try self.isolate.initStringHandle("v8_cpu_profile");
     v8.v8__CpuProfiler__StartProfiling(cpu_profiler, title);
     self.cpu_profiler = cpu_profiler;
 }
@@ -1276,7 +1275,7 @@ fn stopCpuProfiler(self: *Context) ![]const u8 {
     self.localScope(&ls);
     defer ls.deinit();
 
-    const title = self.isolate.initStringHandle("v8_cpu_profile");
+    const title = try self.isolate.initStringHandle("v8_cpu_profile");
     const handle = v8.v8__CpuProfiler__StopProfiling(self.cpu_profiler.?, title) orelse return error.NoProfiles;
     const string_handle = v8.v8__CpuProfile__Serialize(handle, self.isolate.handle) orelse return error.NoProfile;
     return (js.String{ .local = &ls.local, .handle = string_handle }).toSlice();

@@ -261,7 +261,7 @@ fn setObjectProperty(
     v8.v8__Object__Set(
         object,
         context,
-        @ptrCast(self.env.isolate.initStringHandle(name)),
+        @ptrCast(self.env.isolate.initStringHandle(name) catch return error.RuntimeInitFailed),
         value,
         &out,
     );
@@ -288,7 +288,8 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     v8.v8__TryCatch__CONSTRUCT(&try_catch, self.env.isolate.handle);
     defer v8.v8__TryCatch__DESTRUCT(&try_catch);
 
-    const script_name = self.env.isolate.initStringHandle(name);
+    const script_name = self.env.isolate.initStringHandle(name) catch
+        return try self.dupeError("RangeError: Invalid string length");
     // Wrap in an async IIFE so the source can use top-level `await` (e.g.
     // `await page.goto(...)`). The wrapper evaluates to a Promise; a top-level
     // `return <expr>` becomes that Promise's value, which we echo. (A bare
@@ -296,7 +297,8 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     // completion value are mutually exclusive in JS.)
     const wrapped = self.call_arena.allocator().print("(async () => {{\n{s}\n}})()", .{source}) catch
         return try self.dupeError("out of memory");
-    const script_source = self.env.isolate.initStringHandle(wrapped);
+    const script_source = self.env.isolate.initStringHandle(wrapped) catch
+        return try self.dupeError("RangeError: Invalid string length");
 
     var origin: v8.ScriptOrigin = undefined;
     v8.v8__ScriptOrigin__CONSTRUCT(&origin, script_name);
@@ -353,7 +355,7 @@ fn formatRejection(self: *Runtime, context: *const v8.Context, reason: *const v8
 /// Error-like object — in which case the caller stringifies the value itself.
 fn errorMessage(self: *Runtime, context: *const v8.Context, reason: *const v8.Value) ?*const v8.Value {
     if (!v8.v8__Value__IsObject(reason)) return null;
-    const key: *const v8.Value = @ptrCast(self.env.isolate.initStringHandle("message"));
+    const key: *const v8.Value = @ptrCast(self.env.isolate.initStringHandle("message") catch return null);
     const message = v8.v8__Object__Get(@ptrCast(reason), context, key) orelse return null;
     return if (v8.v8__Value__IsString(message)) message else null;
 }
@@ -697,7 +699,7 @@ fn bindFrameId(self: *Runtime, context: *const v8.Context, this: *const v8.Objec
 /// the page was never navigated or has been closed.
 fn receiverFrameId(self: *Runtime, context: *const v8.Context, info: *const v8.FunctionCallbackInfo) ?u32 {
     const this = v8.v8__FunctionCallbackInfo__This(info) orelse return null;
-    const key: *const v8.Value = @ptrCast(self.env.isolate.initStringHandle(frame_id_key));
+    const key: *const v8.Value = @ptrCast(self.env.isolate.initStringHandle(frame_id_key) catch return null);
     const prop = v8.v8__Object__Get(this, context, key) orelse return null;
     if (!v8.v8__Value__IsNumber(prop)) return null;
     var out: v8.MaybeU32 = undefined;
@@ -911,7 +913,11 @@ fn normalizeExtractReturnJson(_: *Runtime, arena: std.mem.Allocator, value: []co
 }
 
 fn setReturnString(self: *Runtime, info: *const v8.FunctionCallbackInfo, value: []const u8) void {
-    self.setReturnValue(info, @ptrCast(self.env.isolate.initStringHandle(value)));
+    const str = self.env.isolate.initStringHandle(value) catch {
+        self.throwRangeError("Invalid string length");
+        return;
+    };
+    self.setReturnValue(info, @ptrCast(str));
 }
 
 fn setReturnJson(self: *Runtime, context: *const v8.Context, info: *const v8.FunctionCallbackInfo, value: []const u8) void {
@@ -919,7 +925,10 @@ fn setReturnJson(self: *Runtime, context: *const v8.Context, info: *const v8.Fun
         self.setReturnValue(info, self.env.isolate.initUndefined());
         return;
     }
-    const json = self.env.isolate.initStringHandle(value);
+    const json = self.env.isolate.initStringHandle(value) catch {
+        self.throwRangeError("Invalid string length");
+        return;
+    };
     const parsed = v8.v8__JSON__Parse(context, json) orelse {
         self.throwError("extract returned invalid JSON");
         return;
@@ -935,6 +944,10 @@ fn setReturnValue(_: *Runtime, info: *const v8.FunctionCallbackInfo, value: *con
 
 fn throwError(self: *Runtime, message: []const u8) void {
     _ = v8.v8__Isolate__ThrowException(self.env.isolate.handle, self.env.isolate.createError(message));
+}
+
+fn throwRangeError(self: *Runtime, message: []const u8) void {
+    _ = v8.v8__Isolate__ThrowException(self.env.isolate.handle, self.env.isolate.createRangeError(message));
 }
 
 fn throwTypeError(self: *Runtime, message: []const u8) void {

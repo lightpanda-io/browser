@@ -45,7 +45,7 @@ pub const InitOpts = struct {
 };
 
 pub fn init(local: *const js.Local, pattern: []const u8, opts: InitOpts) !RegExp {
-    const pattern_handle = local.isolate.initStringHandle(pattern);
+    const pattern_handle = try local.isolate.initStringHandle(pattern);
     const handle = if (opts.backtrack_limit) |limit|
         v8.v8__RegExp__NewWithBacktrackLimit(local.handle, pattern_handle, opts.flags, limit)
     else
@@ -58,7 +58,7 @@ pub fn init(local: *const js.Local, pattern: []const u8, opts: InitOpts) !RegExp
 // throws — typically when the pattern is malformed for the current flags.
 pub fn exec(self: RegExp, subject: []const u8) !?js.Object {
     const local = self.local;
-    const subject_handle = local.isolate.initStringHandle(subject);
+    const subject_handle = try local.isolate.initStringHandle(subject);
     const handle = v8.v8__RegExp__Exec(self.handle, local.handle, subject_handle) orelse return error.JsException;
     if (v8.v8__Value__IsNullOrUndefined(@ptrCast(handle))) return null;
     return .{ .local = local, .handle = handle };

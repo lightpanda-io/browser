@@ -46,6 +46,11 @@ pub fn promise(self: PromiseResolver) js.Promise {
 
 pub fn resolve(self: PromiseResolver, comptime source: []const u8, value: anytype) void {
     self._resolve(value) catch |err| {
+        // A string too long for V8 (e.g. text() on a huge body): reject the
+        // way a synchronous call throws, rather than leaving it pending.
+        if (@as(anyerror, err) == error.InvalidStringLength) {
+            return self.rejectError(source, .{ .range_error = "Invalid string length" });
+        }
         log.err(.bug, "resolve", .{ .source = source, .err = err, .persistent = false });
     };
 }

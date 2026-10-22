@@ -163,7 +163,7 @@ const ActionSequence = struct {
         defer ls.deinit();
 
         performSources(self, &ls) catch |err| {
-            ls.toLocal(self.resolver).reject("WebDriver.actionSequence", ls.local.newString(@errorName(err)));
+            ls.toLocal(self.resolver).reject("WebDriver.actionSequence", @errorName(err));
             return err;
         };
 
