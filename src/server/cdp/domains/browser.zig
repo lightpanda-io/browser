@@ -125,9 +125,11 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
     // session arena since Frame reads it on later navigations.
     session.download_path = if (params.downloadPath) |p| try session.arena.dupe(u8, p) else null;
     session.download_events_enabled = events_enabled;
-    // resolveSessionId returns the CDP-owned copy; the command's string
-    // doesn't outlive the message.
-    bc.download_session_id = if (cmd.input.session_id) |sid| cmd.cdp.resolveSessionId(sid) else null;
+    bc.download_session_id = blk: {
+        if (behavior != .@"lp-stream-over-cdp") break :blk null;
+        const sid = cmd.input.session_id orelse break :blk null;
+        break :blk cmd.cdp.resolveSessionId(sid);
+    };
 
     if (session.download_events_enabled) {
         try bc.downloadEventsEnable();
@@ -478,4 +480,122 @@ test "cdp.browser: setDownloadBehavior writes an attachment to disk and emits ev
     const written = try tmp.dir.readFileAlloc(testing.io, "report.csv", testing.allocator, .limited(1024));
     defer testing.allocator.free(written);
     try testing.expectEqualSlices(u8, "col1,col2\nhello,world\n42,1337\n", written);
+}
+
+// Clicks a link of cdp/download_link.html, then waits for the network to go
+// idle, which includes the download.
+fn clickDownloadLink(ctx: *testing.TestContext, bc: *CDP.BrowserContext, message_id: usize, comptime link: []const u8) !void {
+    try ctx.processMessage(.{ .id = message_id, .method = "Runtime.evaluate", .params = .{
+        .expression = "document.getElementById('" ++ link ++ "').click()",
+    } });
+    try testing.waitForPage(bc);
+}
+
+test "cdp.browser: setDownloadBehavior lp-stream-over-cdp requires eventsEnabled" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-LPS" });
+
+    // Events are the only way the bytes reach the client.
+    try ctx.processMessage(.{
+        .id = 42,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "lp-stream-over-cdp" },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 42 });
+    try testing.expectEqual(.deny, bc.session.download_behavior);
+
+    try ctx.processMessage(.{
+        .id = 43,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "lp-stream-over-cdp", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 43 });
+    try testing.expectEqual(.@"lp-stream-over-cdp", bc.session.download_behavior);
+    try testing.expect(bc.session.download_path == null);
+}
+
+test "cdp.browser: setDownloadBehavior writes an <a download> to disk and emits events" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const download_path = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(download_path);
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL", .url = "cdp/download_link.html" });
+
+    // Sent on the page session, like lightpanda-io/demo puppeteer/download.js,
+    // which listens on the root connection: the events must stay sessionless.
+    try ctx.processMessage(.{
+        .id = 44,
+        .method = "Browser.setDownloadBehavior",
+        .sessionId = "SID-DL",
+        .params = .{
+            .behavior = "allow",
+            .downloadPath = download_path,
+            .eventsEnabled = true,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 44 });
+    try testing.expect(bc.download_session_id == null);
+
+    try clickDownloadLink(&ctx, bc, 45, "csv");
+    // The guid is random, so it's omitted from these subset matches.
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
+        .url = "data:text/csv,name%2Cvalue%0Aexample%2C42",
+        .suggestedFilename = "report.csv",
+    }, .{});
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "completed",
+        .totalBytes = 21,
+        .receivedBytes = 21,
+    }, .{});
+
+    // download="../../evil.txt" is reduced to its basename, so the file
+    // still lands in downloadPath.
+    try clickDownloadLink(&ctx, bc, 46, "traversal");
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{ .suggestedFilename = "evil.txt" }, .{});
+
+    const csv = try tmp.dir.readFileAlloc(testing.io, "report.csv", testing.allocator, .limited(1024));
+    defer testing.allocator.free(csv);
+    try testing.expectEqualSlices(u8, "name,value\nexample,42", csv);
+
+    const evil = try tmp.dir.readFileAlloc(testing.io, "evil.txt", testing.allocator, .limited(1024));
+    defer testing.allocator.free(evil);
+    try testing.expectEqualSlices(u8, "x", evil);
+}
+
+test "cdp.browser: lp-stream-over-cdp streams an <a download> as LP.downloadData" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL", .url = "cdp/download_link.html" });
+
+    // Sent on SID-DL, so every download event must come back on it.
+    try ctx.processMessage(.{
+        .id = 47,
+        .method = "Browser.setDownloadBehavior",
+        .sessionId = "SID-DL",
+        .params = .{ .behavior = "lp-stream-over-cdp", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 47 });
+
+    // Over HTTP, so the body takes the streaming transfer path.
+    try clickDownloadLink(&ctx, bc, 48, "attachment");
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
+        .url = "http://127.0.0.1:9582/download/report.csv",
+        .suggestedFilename = "report.csv",
+    }, .{ .session_id = "SID-DL" });
+    try ctx.expectSentEvent("LP.downloadData", .{
+        // "col1,col2\nhello,world\n42,1337\n"
+        .data = "Y29sMSxjb2wyCmhlbGxvLHdvcmxkCjQyLDEzMzcK",
+    }, .{ .session_id = "SID-DL" });
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "completed",
+        .totalBytes = 30,
+        .receivedBytes = 30,
+    }, .{ .session_id = "SID-DL" });
 }
