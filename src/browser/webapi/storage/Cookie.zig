@@ -24,7 +24,6 @@ const DateTime = @import("../../../datetime.zig").DateTime;
 const Notification = @import("../../../Notification.zig");
 const public_suffix_list = @import("../../../data/public_suffix_list.zig").lookup;
 const repeat = @import("../../../string.zig").repeat;
-const isSubdomainOf = @import("../../../network/adblock/domain.zig").isSubdomainOf;
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -739,7 +738,7 @@ pub const Jar = struct {
         request_time: u64,
         comptime is_http: bool,
     ) !void {
-        if (!URL.isPotentiallyTrustworthy(url) and (cookie.secure or self.shadowsSecureCookie(&cookie))) {
+        if (!URL.isPotentiallyTrustworthy(url) and (cookie.secure or self.shadowsSecureCookie(&cookie, request_time))) {
             cookie.deinit();
             return;
         }
@@ -748,14 +747,18 @@ pub const Jar = struct {
 
     // A Secure cookie with the same name, a domain that domain-matches
     // cookie's or the other way around (a leading `.` isn't compared), and
-    // a path that cookie's path path-matches.
-    fn shadowsSecureCookie(self: *const Jar, cookie: *const Cookie) bool {
+    // a path that cookie's path path-matches. An expired cookie is already
+    // gone as far as the RFC is concerned, even if the jar still holds it.
+    fn shadowsSecureCookie(self: *const Jar, cookie: *const Cookie, now: u64) bool {
         const domain = std.mem.trimStart(u8, cookie.domain, ".");
         for (self.cookies.items) |*c| {
+            if (isCookieExpired(c, now)) {
+                continue;
+            }
             const c_domain = std.mem.trimStart(u8, c.domain, ".");
             if (c.secure and
                 std.mem.eql(u8, c.name, cookie.name) and
-                (isSubdomainOf(domain, c_domain) or isSubdomainOf(c_domain, domain)) and
+                (URL.isSubdomainOf(domain, c_domain) or URL.isSubdomainOf(c_domain, domain)) and
                 pathMatches(cookie.path, c.path))
             {
                 return true;
@@ -1157,6 +1160,21 @@ test "Jar: a non-secure origin can't set or overwrite a Secure cookie" {
     // Like Chrome, loopback origins are secure ones.
     try jar.populateFromResponse("http://localhost:3000/", "s=7; Secure");
     try testing.expectEqual(6, jar.cookies.items.len);
+}
+
+test "Jar: an expired Secure cookie doesn't block a non-secure origin" {
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    const now = lp.datetime.timestamp(.real);
+    try jar.add(try Cookie.parse(testing.allocator, "https://lightpanda.io/", "s=1; Secure; Max-Age=10"), now, true);
+
+    // Still in the jar (nothing purged it), but expired by `later`.
+    const later = now + 20;
+    try jar.addFromUrl("http://lightpanda.io/", try Cookie.parse(testing.allocator, "http://lightpanda.io/", "s=2"), later, true);
+    try testing.expectEqual(1, jar.cookies.items.len);
+    try testing.expectEqual("2", jar.cookies.items[0].value);
+    try testing.expectEqual(false, jar.cookies.items[0].secure);
 }
 
 test "Jar: forRequest" {
