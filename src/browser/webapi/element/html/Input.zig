@@ -485,6 +485,15 @@ pub fn suffersRangeOverflow(self: *const Input) bool {
     return numericRangeBreach(self, .overflow);
 }
 
+pub fn suffersStepMismatch(self: *const Input) bool {
+    const typ = self._input_type;
+    if (!hasNumericValue(typ)) return false;
+    const step = self.allowedValueStep() orelse return false;
+    const value = valueToNumber(typ, self.getValue()) orelse return false;
+    const rungs = (value - self.stepBase()) / step;
+    return @abs(rungs - @round(rungs)) > 1e-9;
+}
+
 fn numericRangeBreach(self: *const Input, comptime kind: enum { underflow, overflow }) bool {
     const typ = self._input_type;
     if (!hasNumericValue(typ)) return false;
