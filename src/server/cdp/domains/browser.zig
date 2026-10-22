@@ -505,11 +505,11 @@ test "cdp.browser: resetting absent permissions leaves context creation availabl
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    try ctx.processMessage(.{ .id = 1, .method = "Browser.resetPermissions", .params = .{} });
+    try ctx.processMessage(.{ .id = 1, .method = "Browser.resetPermissions" });
     try ctx.expectSentResult(null, .{ .id = 1 });
     try testing.expectEqual(null, ctx.cdp().browser_context);
 
-    try ctx.processMessage(.{ .id = 2, .method = "Target.createBrowserContext", .params = .{} });
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createBrowserContext" });
     const bc = ctx.cdp().browser_context orelse return error.MissingBrowserContext;
     try ctx.expectSentResult(.{ .browserContextId = bc.id }, .{ .id = 2 });
     try testing.expectEqual(@as(usize, 0), bc.session.permissions.count());
