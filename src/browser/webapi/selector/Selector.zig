@@ -340,6 +340,8 @@ pub const PseudoClass = union(enum) {
     only_of_type,
     nth_child: NthPattern,
     nth_last_child: NthPattern,
+    nth_child_of: NthOf, // :nth-child(An+B of S)
+    nth_last_child_of: NthOf, // :nth-last-child(An+B of S)
     nth_of_type: NthPattern,
     nth_last_of_type: NthPattern,
 
@@ -363,6 +365,12 @@ pub const NthPattern = struct {
     // even: a=2, b=0
     // 3n+1: a=3, b=1
     // 5: a=0, b=5
+};
+
+// :nth-child(An+B of S) counts only the siblings matching S
+pub const NthOf = struct {
+    pattern: NthPattern,
+    selectors: []const Selector,
 };
 
 // Combinator represents the relationship between two compound selectors
