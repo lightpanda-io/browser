@@ -93,12 +93,12 @@ pub const Command = union(enum) {
 
 // A command's path parameters are its leading fields (see `parse`); the rest
 // come from the body.
-pub const SwitchToWindow = struct {
-    handle: []const u8,
-};
-
 pub const ElementId = struct {
     id: []const u8,
+};
+
+pub const SwitchToWindow = struct {
+    handle: []const u8,
 };
 
 pub const ElementName = struct {
