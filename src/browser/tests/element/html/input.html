@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta charset="utf-8">
 <script src="../../testing.js"></script>
 
 <input id="text1" type="text" value="initial">
@@ -650,5 +651,66 @@
     input.value = 'a'.repeat(40) + 'b';
     testing.expectEqual(true, input.validity.patternMismatch);
     testing.expectEqual(false, input.checkValidity());
+  }
+</script>
+
+<script id="setRangeText">
+  {
+    const input = document.createElement('input');
+    const state = () => [input.value, input.selectionStart, input.selectionEnd].join('|');
+    const reset = () => { input.value = 'hello world'; input.setSelectionRange(2, 7); };
+
+    reset();
+    input.setRangeText('XY');
+    testing.expectEqual('heXYorld|2|4', state());
+
+    reset();
+    input.setRangeText('ABC', 0, 5, 'select');
+    testing.expectEqual('ABC world|0|3', state());
+
+    reset();
+    input.setRangeText('ABC', 0, 5, 'start');
+    testing.expectEqual('ABC world|0|0', state());
+
+    reset();
+    input.setRangeText('ABC', 0, 5, 'end');
+    testing.expectEqual('ABC world|3|3', state());
+
+    // 'preserve' keeps the selection on the same text
+    reset();
+    input.setRangeText('ZZZZ', 8, 9);
+    testing.expectEqual('hello woZZZZld|2|7', state());
+
+    reset();
+    input.setRangeText('Q', 4, 9, 'preserve');
+    testing.expectEqual('hellQld|2|5', state());
+
+    reset();
+    input.setRangeText('!', 50, 60);
+    testing.expectEqual('hello world!|2|7', state());
+
+    reset();
+    testing.expectError('IndexSizeError', () => input.setRangeText('!', 5, 2));
+    testing.expectError('TypeError', () => input.setRangeText('!', 1, 2, 'bogus'));
+    testing.expectError('TypeError', () => input.setRangeText('!', 1));
+    // argument errors win over the range and type checks
+    testing.expectError('TypeError', () => input.setRangeText('!', 5, 2, 'bogus'));
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    testing.expectError('InvalidStateError', () => checkbox.setRangeText('x'));
+    testing.expectError('TypeError', () => checkbox.setRangeText('x', 1));
+
+    // offsets count UTF-16 code units
+    input.value = '😀a';
+    input.setRangeText('b', 2, 3, 'select');
+    testing.expectEqual('😀b|2|3', state());
+
+    // the stripped newline doesn't push the caret into the 'é'
+    input.value = 'é';
+    input.setRangeText('\n', 0, 0, 'end');
+    testing.expectEqual('é|1|1', state());
+    input.setRangeText('X');
+    testing.expectEqual('éX|1|1', state());
   }
 </script>

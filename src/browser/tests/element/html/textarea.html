@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta charset="utf-8">
 <script src="../../testing.js"></script>
 
 <!-- TextArea elements -->
@@ -432,5 +433,31 @@
     el.setSelectionRange(10, 20);
     testing.expectEqual(4, el.selectionStart);
     testing.expectEqual(4, el.selectionEnd);
+  }
+</script>
+
+<script id="setRangeText">
+  {
+    const el = document.createElement('textarea');
+    el.value = 'line1\nline2';
+    el.setSelectionRange(0, 0);
+    el.setRangeText('X\r\nY', 0, 0, 'end');
+    testing.expectEqual('X\nYline1\nline2', el.value);
+    testing.expectEqual(4, el.selectionStart);
+    testing.expectEqual(4, el.selectionEnd);
+
+    el.setSelectionRange(2, 7);
+    el.setRangeText('');
+    testing.expectEqual('X\n1\nline2', el.value);
+    testing.expectEqual(2, el.selectionStart);
+    testing.expectEqual(2, el.selectionEnd);
+
+    // CRLF → LF shortens the value; the caret stays on a character boundary
+    el.value = 'éa';
+    el.setRangeText('\r\n', 0, 0, 'end');
+    testing.expectEqual(2, el.selectionStart);
+    el.setRangeText('X');
+    testing.expectEqual('\néXa', el.value);
+    testing.expectEqual(2, el.selectionStart);
   }
 </script>

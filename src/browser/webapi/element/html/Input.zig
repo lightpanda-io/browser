@@ -653,6 +653,7 @@ pub const getSelectionDirection = entry.getSelectionDirection;
 pub const setSelectionStart = entry.setSelectionStart;
 pub const setSelectionEnd = entry.setSelectionEnd;
 pub const setSelectionRange = entry.setSelectionRange;
+pub const setRangeText = entry.setRangeText;
 
 /// https://html.spec.whatwg.org/multipage/input.html#attr-input-readonly
 pub fn readonlyApplies(self: *const Input) bool {
@@ -1587,6 +1588,7 @@ pub const JsApi = struct {
     pub const selectionEnd = bridge.accessor(Input.getSelectionEnd, Input.setSelectionEnd, .{});
     pub const selectionDirection = bridge.accessor(Input.getSelectionDirection, null, .{});
     pub const setSelectionRange = bridge.function(Input.setSelectionRange, .{});
+    pub const setRangeText = bridge.function(Input.setRangeText, .{});
 };
 
 pub const Build = struct {

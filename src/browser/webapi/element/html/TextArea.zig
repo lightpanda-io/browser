@@ -172,6 +172,7 @@ pub const getSelectionDirection = entry.getSelectionDirection;
 pub const setSelectionStart = entry.setSelectionStart;
 pub const setSelectionEnd = entry.setSelectionEnd;
 pub const setSelectionRange = entry.setSelectionRange;
+pub const setRangeText = entry.setRangeText;
 
 // <textarea> always supports selection; <input> only does for some types.
 pub fn selectionAvailable(_: *const TextArea) bool {
@@ -319,6 +320,7 @@ pub const JsApi = struct {
     pub const selectionEnd = bridge.accessor(TextArea.getSelectionEnd, TextArea.setSelectionEnd, .{});
     pub const selectionDirection = bridge.accessor(TextArea.getSelectionDirection, null, .{});
     pub const setSelectionRange = bridge.function(TextArea.setSelectionRange, .{});
+    pub const setRangeText = bridge.function(TextArea.setRangeText, .{});
 };
 
 pub const Build = struct {
