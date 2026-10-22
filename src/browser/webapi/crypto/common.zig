@@ -222,15 +222,20 @@ pub fn parseDer(format: []const u8, der: []const u8) error{ DataError, NotSuppor
 /// `pkcs8` for a private one. Asking for the other half's format is
 /// InvalidAccessError.
 pub fn exportDer(format: []const u8, key: *const CryptoKey, exec: *const Execution) ![]const u8 {
-    const pkey = key.getKeyObject();
+    const public = std.mem.eql(u8, format, "spki");
+    if (key._kind != (if (public) CryptoKey.Kind.public else CryptoKey.Kind.private)) {
+        return error.InvalidAccessError;
+    }
+    return pkeyDer(key.getKeyObject(), public, exec.local_arena);
+}
 
+/// `pkey` as DER, in `allocator`: its SPKI if `public`, otherwise its PKCS#8.
+pub fn pkeyDer(pkey: *crypto.EVP_PKEY, public: bool, allocator: std.mem.Allocator) ![]const u8 {
     var out: [*c]u8 = null;
     const len = blk: {
-        if (std.mem.eql(u8, format, "spki")) {
-            if (key._kind != .public) return error.InvalidAccessError;
+        if (public) {
             break :blk crypto.i2d_PUBKEY(pkey, &out);
         }
-        if (key._kind != .private) return error.InvalidAccessError;
         const info = crypto.EVP_PKEY2PKCS8(pkey) orelse return error.OperationError;
         defer crypto.PKCS8_PRIV_KEY_INFO_free(info);
         break :blk crypto.i2d_PKCS8_PRIV_KEY_INFO(info, &out);
@@ -238,5 +243,5 @@ pub fn exportDer(format: []const u8, key: *const CryptoKey, exec: *const Executi
     defer crypto.OPENSSL_free(out);
     if (len <= 0) return error.OperationError;
 
-    return exec.local_arena.dupe(u8, out[0..@intCast(len)]);
+    return allocator.dupe(u8, out[0..@intCast(len)]);
 }

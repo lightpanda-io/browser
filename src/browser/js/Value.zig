@@ -529,6 +529,7 @@ const cloneable_types = .{
     @import("../webapi/webcodecs/encoded_chunk.zig").EncodedVideoChunk,
     @import("../webapi/webcodecs/AudioData.zig"),
     @import("../webapi/webcodecs/VideoFrame.zig"),
+    @import("../webapi/CryptoKey.zig"),
 };
 
 comptime {
