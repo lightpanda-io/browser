@@ -281,7 +281,8 @@ const Context = struct {
             },
             .code => {
                 // An empty span would read as a literal pair of backticks.
-                if (!RenderTree.analyzeContent(el.asNode(), self.frame).has_visible) {
+                const text = try RenderTree.codeText(self.frame.call_arena, el.asNode(), self.frame);
+                if (isAllWhitespace(text)) {
                     return self.open(.init(self.tree.content(el, boxed)), .none);
                 }
                 // A code span can't hold a link, so a link holding the whole
@@ -293,7 +294,6 @@ const Context = struct {
                 // run of backticks in the text, and is padded with a space
                 // (stripped by the reader) so a leading or trailing backtick
                 // doesn't merge with it.
-                const text = try el.asNode().getTextContentAlloc(self.frame.call_arena);
                 const ticks = longestBacktickRun(text) + 1;
                 try self.writer.splatByteAll('`', ticks);
                 if (ticks > 1) try self.writer.writeByte(' ');
@@ -798,9 +798,9 @@ test "browser.markdown: inline code" {
 }
 
 test "browser.markdown: empty inline code" {
-    try testMarkdownHTML("<p>a<code></code>b<code> </code>c</p>",
+    try testMarkdownHTML("<p>a<code></code>b<code> </code>c<code><img src=\"/x.png\"></code>d</p>",
         \\
-        \\ab c
+        \\ab c![](http://localhost/x.png)d
         \\
     );
 }
@@ -814,9 +814,9 @@ test "browser.markdown: links inside inline code" {
 }
 
 test "browser.markdown: inline markup inside code is literal" {
-    try testMarkdownHTML("<p><code><b>x</b> <i>y</i> <img src=\"/e.png\" alt=\"z\"></code></p><pre><a href=\"/f\">f</a>(<em>a</em>)</pre>",
+    try testMarkdownHTML("<p><code><b>x</b> <i>y</i> <img src=\"/e.png\" alt=\"z\"></code> <code>a<img alt=\"``\"></code></p><pre><a href=\"/f\">f</a>(<em>a</em>)</pre>",
         \\
-        \\`x y z`
+        \\`x y z` ``` a`` ```
         \\
         \\```
         \\f(a)
