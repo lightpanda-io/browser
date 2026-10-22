@@ -22,6 +22,7 @@
 const std = @import("std");
 const lp = @import("../lightpanda.zig");
 const zenai = @import("zenai");
+const truncateUtf8 = @import("../string.zig").truncateUtf8;
 
 const Frame = lp.Frame;
 const DOMNode = @import("webapi/Node.zig");
@@ -254,6 +255,9 @@ pub const StateOpts = struct {
     /// Where each link goes. Worth the room it takes within
     /// `max_state_bytes` only for a question that can turn on it.
     link_urls: bool = true,
+    /// Number every node, so a question can offer one of them as an option
+    /// and the model can place it in the page it is reading.
+    ids: bool = false,
 };
 
 /// The page as Jev sees it: url, title, status, and the semantic tree of
@@ -261,7 +265,7 @@ pub const StateOpts = struct {
 /// on (form fields, dialogs, the title of an iframe holding a CAPTCHA) and,
 /// without node ids, is about as long.
 pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode, registry: *NodeRegistry, opts: StateOpts) !Content {
-    const tree = lp.SemanticTree.init(arena, node, registry, page, .{ .ids = false, .link_urls = opts.link_urls }) catch return error.InternalError;
+    const tree = lp.SemanticTree.init(arena, node, registry, page, .{ .ids = opts.ids, .link_urls = opts.link_urls }) catch return error.InternalError;
     var aw: std.Io.Writer.Allocating = .init(arena);
     tree.textStringify(&aw.writer) catch return error.InternalError;
 
@@ -273,14 +277,6 @@ pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode, regist
     }
     try state.put(arena, "content", .{ .string = truncateUtf8(aw.written(), max_state_bytes) });
     return .{ .json = .{ .object = state } };
-}
-
-/// At most `max` bytes of `text`, cut on a UTF-8 boundary.
-fn truncateUtf8(text: []const u8, max: usize) []const u8 {
-    if (text.len <= max) return text;
-    var end = max;
-    while (end > 0 and text[end] & 0xC0 == 0x80) end -= 1;
-    return text[0..end];
 }
 
 pub const FormatError = error{

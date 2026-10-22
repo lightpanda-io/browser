@@ -18,11 +18,10 @@
 
 //! Clearing a cookie consent banner instead of reporting it.
 //!
-//! A keyword rule decides whether the page has a banner at all, so a page
-//! without one costs nothing; the model only picks which of the banner's
-//! controls to click. Clicking it and re-reading the page is the answer key,
-//! which is why this needs no labelled data: the page says whether the pick
-//! was right, and the runners-up are a free second guess.
+//! Whether this page is a consent wall and which control dismisses it are
+//! both the model's call, asked in one request. Clicking the control and
+//! re-reading the page is the answer key, which is why this needs no
+//! labelled data, and the runners-up are a free second guess.
 
 const std = @import("std");
 const lp = @import("../lightpanda.zig");
@@ -49,51 +48,6 @@ pub const Prefer = enum {
             .reject => "Which control refuses all non-essential cookies and dismisses this banner?" ++ not_it,
         };
     }
-};
-
-/// What a banner's controls are named, in the languages the first page of
-/// Tranco actually serves. Recall first: a name here only makes an element
-/// worth offering the model, which then picks among them. The list doubles as
-/// the trigger, so a page whose controls mention none of this is reported as
-/// having no banner without a model call — which is also where a rule beats
-/// the model, since the walls we have measured it missing were in Spanish.
-/// Substring matches, so a word here covers its inflections ("consent" covers
-/// "consentir" and "consentement"). Nothing redundant: "accept" already
-/// carries "accepter", "acceptera" and "acceptar".
-pub const keywords = [_][]const u8{
-    // en
-    "cookie",   "consent",    "accept",     "agree",       "allow",
-    "reject",   "decline",    "refuse",     "essential",   "necessary",
-    "got it",   "understand",
-    // es, fr, it, pt
-    "aceptar",    "acepto",      "rechazar",
-    "rejeter",  "accetta",    "acconsento", "rifiuta",     "aceitar",
-    "recusar",  "concordo",
-    // de, nl
-      "zustimmen",  "akzeptieren", "einverstanden",
-    "ablehnen", "einwillig",  "akkoord",    "weigeren",
-    // da, no, sv, fi
-       "godta",
-    "aksepter", "tillad",     "godkend",
-    "godkänn",
-    "hyväksy",
-    "avvis",
-    // pl, cs, hu, ro, tr
-       "zgadzam",    "akceptuj",
-    "odrzuć",
-    "souhlas",
-    "přijmout",
-    "odmítnout",
-    "elfogad",  "de acord",   "kabul",
-    "çerez",
-};
-
-/// Only clickables, and only what a banner's controls look like: a checkbox
-/// toggles a purpose rather than dismissing the banner.
-pub const filter: choose.Filter = .{
-    .roles = &.{ "button", "link" },
-    .keywords = &keywords,
-    .max = 24,
 };
 
 /// The banner question and the pick, in one request: the gate costs no extra
@@ -131,6 +85,8 @@ pub const Outcome = struct {
     consentWallAfter: ?f64 = null,
     /// Controls clicked, at most 2.
     attempts: u8 = 0,
+    /// How many controls the question offered.
+    candidates: ?usize = null,
     /// Why nothing happened, when nothing did.
     reason: ?[]const u8 = null,
 };
@@ -154,32 +110,4 @@ test "browser.consent: questions asks the banner and the pick in one request" {
     // The candidate, plus a way to say the banner has no such control.
     try testing.expectEqual(2, pick.choice.criteria.count());
     try testing.expect(pick.choice.criteria.has(choose.none_key));
-}
-
-test "browser.consent: the keyword rule is what triggers a call" {
-    defer testing.test_session.closeAllPages();
-
-    const frame = try testing.createFrame();
-    const doc = frame.window._document;
-    const root = try doc.createElement("div", null, frame);
-    _ = try doc.asNode().appendChild(root.asNode(), frame);
-
-    const page = try doc.createElement("div", null, frame);
-    _ = try root.asNode().appendChild(page.asNode(), frame);
-    try Frame.parse.htmlAsChildren(frame, page.asNode(),
-        \\<nav><a href="/about">About</a><a href="/jobs">Jobs</a></nav>
-        \\<button>Añadir al carrito</button>
-    );
-
-    const quiet = try choose.collect(frame.call_arena, root.asNode(), frame, filter);
-    try testing.expectEqual(0, quiet.keyword_matches);
-
-    // The Spanish wall the model scored at 0.99 the wrong way.
-    const banner = try doc.createElement("div", null, frame);
-    _ = try root.asNode().appendChild(banner.asNode(), frame);
-    try Frame.parse.htmlAsChildren(frame, banner.asNode(),
-        \\<button>Aceptar todo</button><button>Configurar cookies</button>
-    );
-    const loud = try choose.collect(frame.call_arena, root.asNode(), frame, filter);
-    try testing.expectEqual(2, loud.keyword_matches);
 }

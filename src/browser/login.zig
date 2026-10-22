@@ -16,16 +16,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Signing in to a site: rules decide what rules can decide, the model
-//! decides the rest.
+//! Signing in to a site. The model picks the identifier field, the password
+//! field and the control that submits them, out of every interactive element
+//! on the page.
 //!
-//! A password field is `input[type=password]` and nothing else, and that is
-//! also the only kind of field a password is ever typed into — so a page
-//! cannot talk the credential somewhere else, whatever its text says. What
-//! the model is for is the ambiguity rules cannot reach: which of several
-//! text fields takes the identifier when there is no label to go by, and
-//! which control signs in rather than registering, resetting the password or
-//! handing the session to a third party.
+//! Where a password may go is not its decision: `input[type=password]` and
+//! nothing else, checked after the pick, so a page cannot talk the credential
+//! somewhere else whatever its text says.
 //!
 //! Every decision is asked before anything is filled. The semantic tree masks
 //! `type=password` values (`Input.getRedactedValue`) but not a username typed
@@ -60,75 +57,8 @@ pub const multi_step_key = "isMultiStep";
 pub const enter_key = "enter";
 const enter_description = "Press Enter in the filled field instead; this form has no sign-in control of its own";
 
-/// Identifier fields. A `search` input is a `searchbox`, not a `textbox`, so
-/// the role filter already keeps a site's search box out.
-pub const user_filter: choose.Filter = .{
-    .roles = &.{"textbox"},
-    .input_types = &.{ "text", "email", "tel" },
-    .max = 12,
-};
-
-pub const password_filter: choose.Filter = .{
-    .roles = &.{"textbox"},
-    .input_types = &.{"password"},
-    .max = 8,
-};
-
-/// Sign-in controls, and the ones next to them that must not be mistaken for
-/// one. The keywords only decide what is worth offering; "create account" and
-/// "forgot password" are offered precisely so the model can pass them over.
-pub const submit_filter: choose.Filter = .{
-    .roles = &.{ "button", "link" },
-    .keywords = &.{
-        "sign in",  "signin",  "log in",   "login",  "log on",
-        "continue", "next",    "submit",   "enter",  "register",
-        "sign up",  "create",  "forgot",   "reset",  "entrar",
-        "iniciar",  "acceder", "conectar", "connex", "connecter",
-        "anmelden", "einlogg", "accedi",   "inicia", "logga in",
-        "kirjaudu", "zaloguj",
-        "giriş",
-    },
-    .max = 16,
-};
-
-/// What the rules settled on their own. A question is only asked when more
-/// than one candidate survives: a plain sign-in page therefore costs no model
-/// call at all before the submit, and one after it to check the result.
-pub const Plan = struct {
-    user: choose.Set,
-    password: choose.Set,
-    submit: choose.Set,
-
-    /// Every kind of candidate, off the page as it stands. Collected again
-    /// after a step that changed the DOM: the old candidates point at nodes
-    /// the navigation freed.
-    pub fn collect(arena: std.mem.Allocator, root: *DOMNode, frame: *Frame) !Plan {
-        const elements = try interactive.collectInteractiveElements(root, arena, frame);
-        return .{
-            .user = try choose.select(arena, elements, user_filter),
-            .password = try choose.select(arena, elements, password_filter),
-            .submit = try choose.select(arena, elements, submit_filter),
-        };
-    }
-
-    /// The only candidate of its kind, which needs no question.
-    pub fn only(set: choose.Set) ?choose.Candidate {
-        return if (set.candidates.len == 1) set.candidates[0] else null;
-    }
-};
-
-/// Everything ambiguous about the page, in one request — and nothing else, so
-/// an unambiguous sign-in page asks no question at all and the model is paid
-/// for once, after the submit, to say whether it worked.
-///
-/// Whether the page *is* a sign-in page is left to the rules: `isLoginWall`
-/// asks whether a sign-in form stands in place of the content, which is false
-/// on a home page whose corner holds a login box — a page we should still be
-/// able to sign in to.
-/// Which of the open questions are still worth their place in the request.
-/// An answer that cannot change what we do is `false` here: the vendor
-/// documents that detail unrelated to the decision distracts the model, so
-/// dropping a question is a quality saving as much as a cost one.
+/// A question whose answer cannot change what we do is dropped: unrelated
+/// detail in a request distracts the model.
 pub const Wanted = struct {
     /// False when there is no username to type, or it was typed on an earlier
     /// step: which field takes it can no longer change anything.
@@ -138,44 +68,48 @@ pub const Wanted = struct {
     multi_step: bool = true,
 };
 
-pub fn questions(arena: std.mem.Allocator, plan: Plan, wanted: Wanted) error{OutOfMemory}!Questions {
+pub fn questions(
+    arena: std.mem.Allocator,
+    candidates: []const choose.Candidate,
+    wanted: Wanted,
+) error{OutOfMemory}!Questions {
     var entries: std.ArrayList(QuestionEntry) = try .initCapacity(arena, 4);
 
-    if (wanted.user and plan.user.candidates.len > 1) {
+    if (wanted.user) {
         entries.appendAssumeCapacity(.{
             .key = user_key,
             .value = try choose.question(
                 arena,
                 "Which field takes the username, email address or other identifier to sign in with?",
-                plan.user.candidates,
+                candidates,
                 &.{},
             ),
         });
     }
-    if (plan.password.candidates.len > 1) {
+    {
         entries.appendAssumeCapacity(.{
             .key = password_key,
             .value = try choose.question(
                 arena,
                 "Which field takes the password to sign in with? A field for choosing a new password, or for confirming one, is not it.",
-                plan.password.candidates,
+                candidates,
                 &.{},
             ),
         });
     }
-    if (plan.submit.candidates.len > 1) {
+    {
         const extra = [_]ChoiceEntry{.{ .key = enter_key, .value = .{ .text = enter_description } }};
         entries.appendAssumeCapacity(.{
             .key = submit_key,
             .value = try choose.question(
                 arena,
                 "Which control submits the sign-in form? Creating an account, recovering a password and signing in through another service are not it.",
-                plan.submit.candidates,
+                candidates,
                 &extra,
             ),
         });
     }
-    if (wanted.multi_step and plan.password.candidates.len == 0) {
+    if (wanted.multi_step) {
         entries.appendAssumeCapacity(.{
             .key = multi_step_key,
             .value = .noulText("Does this page ask for the username or email first and the password on a later step?"),
@@ -194,37 +128,22 @@ pub const Picks = struct {
     multi_step: bool = false,
 };
 
-/// What the rules alone settle: the only candidate of each kind, if there is
-/// exactly one.
-pub fn rulePicks(plan: Plan) Picks {
-    return .{
-        .user = Plan.only(plan.user),
-        .password = Plan.only(plan.password),
-        .submit = Plan.only(plan.submit),
-    };
-}
-
-/// `rulePicks` with the model's answer filled in wherever a question was
-/// asked. A question whose answer reads back as "none of these" leaves its
-/// pick null, so the caller reports that instead of acting on a guess.
+/// An answer that reads back as "none of these" leaves its pick null, so the
+/// caller reports that instead of acting on a guess.
 pub fn picks(
     arena: std.mem.Allocator,
-    plan: Plan,
+    candidates: []const choose.Candidate,
     asked: Questions,
     response: zenai.typesafe.types.AskResponse,
 ) choose.Error!Picks {
-    var out = rulePicks(plan);
+    var out: Picks = .{};
     if (asked.has(user_key)) {
-        out.user = first(try choose.ranked(arena, plan.user.candidates, response, asked, user_key));
+        out.user = first(try choose.ranked(arena, candidates, response, asked, user_key));
     }
-    if (asked.has(password_key)) {
-        out.password = first(try choose.ranked(arena, plan.password.candidates, response, asked, password_key));
-    }
-    if (asked.has(submit_key)) {
-        // No candidate above "none of these" means the model chose `enter_key`
-        // or nothing at all, and both come to the same act: Enter in the field.
-        out.submit = first(try choose.ranked(arena, plan.submit.candidates, response, asked, submit_key));
-    }
+    out.password = first(try choose.ranked(arena, candidates, response, asked, password_key));
+    // No candidate above "none of these" means the model chose `enter_key`
+    // or nothing at all, and both come to the same act: Enter in the field.
+    out.submit = first(try choose.ranked(arena, candidates, response, asked, submit_key));
     if (asked.has(multi_step_key)) {
         out.multi_step = (response.noul(multi_step_key) orelse 0) >= lp.classify.gate;
     }
@@ -241,9 +160,9 @@ pub fn verifyQuestions(arena: std.mem.Allocator) error{OutOfMemory}!Questions {
     return lp.classify.presetQuestions(arena, &.{ .isLoginWall, .isErrorPage });
 }
 
-/// `input[type=password]` and nothing else. The one place a password is
-/// allowed to go, checked again on a selector a caller handed us rather than
-/// trusted because `password_filter` produced it.
+/// `input[type=password]` and nothing else: the one place a password is
+/// allowed to go, checked on the field the model picked and on a selector a
+/// caller handed us alike.
 pub fn isPasswordField(element: *Element) bool {
     const input = element.is(Element.Html.Input) orelse return false;
     return input._input_type == .password;
@@ -281,6 +200,8 @@ pub const Outcome = struct {
     submitSelector: ?[]const u8 = null,
     /// Set when the form had no control of its own and Enter submitted it.
     pressedEnter: bool = false,
+    /// How many elements each question offered.
+    candidates: ?usize = null,
     /// The page as the verification found it, after the submit: still a
     /// sign-in wall, or an error page.
     loginWall: ?f64 = null,
@@ -306,29 +227,7 @@ fn testFrame(html: []const u8) !*Frame {
     return frame;
 }
 
-test "browser.login: an unambiguous page asks nothing at all" {
-    defer testing.test_session.closeAllPages();
-    const frame = try testFrame(
-        \\<form action="/login" method="post">
-        \\  <label for="u">Username</label><input id="u" name="u">
-        \\  <label for="p">Password</label><input id="p" name="p" type="password">
-        \\  <button type="submit">Sign in</button>
-        \\</form>
-    );
-
-    const arena = frame.call_arena;
-    const plan = try Plan.collect(arena, frame.document.asNode(), frame);
-
-    try testing.expectEqual(1, plan.user.candidates.len);
-    try testing.expectEqual(1, plan.password.candidates.len);
-    try testing.expectEqual(1, plan.submit.candidates.len);
-
-    // Nothing to ask: the model is paid for once, after the submit.
-    const asked = try questions(arena, plan, .{});
-    try testing.expectEqual(0, asked.count());
-}
-
-test "browser.login: a page with a newsletter box asks which field is which" {
+test "browser.login: every part is asked over every element on the page" {
     defer testing.test_session.closeAllPages();
     const frame = try testFrame(
         \\<form action="/subscribe"><input name="email" placeholder="Your email">
@@ -343,37 +242,39 @@ test "browser.login: a page with a newsletter box asks which field is which" {
     );
 
     const arena = frame.call_arena;
-    const plan = try Plan.collect(arena, frame.document.asNode(), frame);
+    var registry: lp.NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+    const candidates = try choose.collect(arena, frame.document.asNode(), frame, &registry);
 
-    try testing.expectEqual(2, plan.user.candidates.len);
-    // The password field is still a rule: one input[type=password].
-    try testing.expectEqual(1, plan.password.candidates.len);
-    // Subscribe, Log in, Forgot, Create — the traps are offered so the model
-    // can pass them over.
-    try testing.expectEqual(4, plan.submit.candidates.len);
+    // Newsletter box, Subscribe, the two sign-in fields, Log in, and the two
+    // links that must not be mistaken for it.
+    try testing.expectEqual(7, candidates.len);
 
-    const asked = try questions(arena, plan, .{});
+    const asked = try questions(arena, candidates, .{});
     try testing.expect(asked.has(user_key));
+    try testing.expect(asked.has(password_key));
     try testing.expect(asked.has(submit_key));
-    try testing.expect(!asked.has(password_key));
-    // A password field is on the page, so there is nothing multi-step about it.
-    try testing.expect(!asked.has(multi_step_key));
     try testing.expect(asked.get(submit_key).?.choice.criteria.has(enter_key));
+    // Nothing says a password field is on the page but the model's own answer.
+    try testing.expect(asked.has(multi_step_key));
+    try testing.expectEqual(candidates.len + 2, asked.get(submit_key).?.choice.criteria.count());
 }
 
-test "browser.login: an identifier-first page asks whether it is multi-step" {
+test "browser.login: nothing is asked about a username there is none to type" {
     defer testing.test_session.closeAllPages();
     const frame = try testFrame(
         \\<form action="/signin"><input name="id" placeholder="Email"><button>Next</button></form>
     );
 
     const arena = frame.call_arena;
-    const plan = try Plan.collect(arena, frame.document.asNode(), frame);
-    try testing.expectEqual(0, plan.password.candidates.len);
+    var registry: lp.NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+    const candidates = try choose.collect(arena, frame.document.asNode(), frame, &registry);
 
-    const asked = try questions(arena, plan, .{});
-    try testing.expect(asked.has(multi_step_key));
-    try testing.expect(asked.get(multi_step_key).? == .noul);
+    const asked = try questions(arena, candidates, .{ .user = false, .multi_step = false });
+    try testing.expect(!asked.has(user_key));
+    try testing.expect(!asked.has(multi_step_key));
+    try testing.expect(asked.has(password_key));
 }
 
 test "browser.login: a control outside the field's form submits something else" {
