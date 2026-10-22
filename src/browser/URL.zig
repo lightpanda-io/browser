@@ -271,6 +271,14 @@ pub fn isLoopbackHost(hostname: []const u8) bool {
     };
 }
 
+/// Whether `hostname` is `suffix` or one of its subdomains.
+pub fn isSubdomainOf(hostname: []const u8, suffix: []const u8) bool {
+    if (hostname.len == suffix.len) return std.mem.eql(u8, hostname, suffix);
+    if (hostname.len < suffix.len + 1) return false;
+    const at = hostname.len - suffix.len;
+    return hostname[at - 1] == '.' and std.mem.eql(u8, hostname[at..], suffix);
+}
+
 pub fn getHostname(raw: []const u8) []const u8 {
     const host = getHost(raw);
     const port_sep = findPortSeparator(host) orelse return host;
