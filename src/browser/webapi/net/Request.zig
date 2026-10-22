@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const http = @import("../../../network/http.zig");
+const CorsGate = @import("../../../network/CorsGate.zig");
 
 const Page = @import("../../Page.zig");
 const js = @import("../../js/js.zig");
@@ -149,6 +150,12 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .url => .cors,
         .request => |r| if (r._mode == .navigate and opts_ != null) .@"same-origin" else r._mode,
     };
+    // https://fetch.spec.whatwg.org/#dom-request
+    if (mode == .@"no-cors" and !CorsGate.isSafelistedMethod(method)) {
+        return switch (method) {
+            inline else => |m| exec.js.typeError("'" ++ @tagName(m) ++ "' is unsupported in no-cors mode"),
+        };
+    }
     const cache: Cache = opts.cache orelse switch (input) {
         .url => .default,
         .request => |r| r._cache,

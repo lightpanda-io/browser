@@ -73,14 +73,8 @@ pub const Completion = struct {
 };
 
 pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promise {
-    const resolver = exec.js.local.?.createPromiseResolver();
-
-    // A bad RequestInit (e.g. an invalid priority) must reject the promise,
-    // not throw synchronously.
-    const request = Request.init(input, options, exec) catch {
-        resolver.rejectError("fetch init error", .{ .type_error = "Failed to construct Request" });
-        return resolver.promise();
-    };
+    // Errors returned from here reject the promise (see Caller.handleError).
+    const request = try Request.init(input, options, exec);
 
     // This Request is never exposed to JS. makeRequest dupes the url/body
     // into the transfer, so nothing references it once we return.
@@ -88,10 +82,10 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     defer request.releaseRef(exec.page);
 
     if (request._mode == .navigate) {
-        resolver.rejectError("fetch request mode error", .{ .type_error = "Fetch can't be navigate" });
-        return resolver.promise();
+        return exec.js.typeError("Fetch can't be navigate");
     }
 
+    const resolver = exec.js.local.?.createPromiseResolver();
     if (request._signal) |signal| {
         if (signal._aborted) {
             resolver.reject("fetch aborted", try AbortSignal.reasonJsValue(signal._reason, exec.js.local.?));
@@ -100,10 +94,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     }
 
     const body = request.bodyBytes() catch |err| switch (err) {
-        error.TypeError => {
-            resolver.rejectError("fetch body error", .{ .type_error = "Failed to read ReadableStream body" });
-            return resolver.promise();
-        },
+        error.TypeError => return exec.js.typeError("Failed to read ReadableStream body"),
         else => return err,
     };
 

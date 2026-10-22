@@ -67,6 +67,29 @@
   }
 </script>
 
+<script id=fetch_no_cors_method type=module>
+  {
+    const state = await testing.async();
+    let error;
+    try {
+      await fetch('http://127.0.0.1:9582/xhr', { mode: 'no-cors', method: 'PUT' });
+    } catch (e) {
+      error = e.toString();
+    }
+
+    // A bad init rejects the promise; fetch() itself doesn't throw.
+    const pending = fetch('http://127.0.0.1:9582/xhr', { headers: { 'bad name': 'x' } });
+    const header_error = await pending.catch((e) => e.toString());
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual("TypeError: 'PUT' is unsupported in no-cors mode", error);
+      testing.expectEqual(true, pending instanceof Promise);
+      testing.expectEqual('TypeError: Invalid header name', header_error);
+    });
+  }
+</script>
+
 <script id=fetch_redirect type=module>
   {
     const state = await testing.async();
