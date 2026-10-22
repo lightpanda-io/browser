@@ -53,6 +53,7 @@ pub const Command = union(enum) {
     get_title,
     get_window_handle,
     get_window_handles,
+    switch_to_window: SwitchToWindow,
     close_window,
     get_window_rect,
     set_window_rect: SetWindowRect,
@@ -94,6 +95,10 @@ pub const Command = union(enum) {
 // come from the body.
 pub const ElementId = struct {
     id: []const u8,
+};
+
+pub const SwitchToWindow = struct {
+    handle: []const u8,
 };
 
 pub const ElementName = struct {
@@ -231,6 +236,7 @@ const routes = [_]Route{
     .init(.GET, "/title", .get_title),
     .init(.GET, "/window", .get_window_handle),
     .init(.GET, "/window/handles", .get_window_handles),
+    .init(.POST, "/window", .switch_to_window),
     .init(.DELETE, "/window", .close_window),
     .init(.GET, "/window/rect", .get_window_rect),
     .init(.POST, "/window/rect", .set_window_rect),
@@ -338,6 +344,7 @@ pub fn process(cmd: *BiDi.Command) !void {
         .get_title => return getTitle(cmd),
         .get_window_handle => return getWindowHandle(cmd),
         .get_window_handles => return getWindowHandles(cmd),
+        .switch_to_window => |p| return switchToWindow(cmd, p),
         .close_window => return closeWindow(cmd),
         .get_window_rect, .maximize_window, .minimize_window, .fullscreen_window => return getWindowRect(cmd),
         .set_window_rect => |p| return setWindowRect(cmd, p),
@@ -421,6 +428,17 @@ fn getWindowHandle(cmd: *BiDi.Command) !void {
 fn getWindowHandles(cmd: *BiDi.Command) !void {
     const ctx = (try currentContext(cmd)) orelse return;
     return cmd.sendResult(&[_][]const u8{&ctx.id});
+}
+
+// POST /session/{id}/window. Only the current top-level context is
+// supported; selecting it is a no-op, other handles are not valid.
+fn switchToWindow(cmd: *BiDi.Command, p: SwitchToWindow) !void {
+    const ctx = &(cmd.bidi.browsing_context orelse
+        return cmd.sendError("no such window", "unknown window handle"));
+    if (!std.mem.eql(u8, &ctx.id, p.handle)) {
+        return cmd.sendError("no such window", "unknown window handle");
+    }
+    return cmd.sendDone();
 }
 
 // DELETE /session/{id}/window
@@ -1128,6 +1146,9 @@ test "bidi.http_command: parse" {
     try testing.expect(try parse(arena, .POST, "/back", "{}") == .back);
     try testing.expect(try parse(arena, .POST, "/forward", "{}") == .forward);
     try testing.expect(try parse(arena, .GET, "/window/handles", "") == .get_window_handles);
+    try testing.expectEqual("abc", (try parse(arena, .POST, "/window", "{\"handle\":\"abc\"}")).switch_to_window.handle);
+    try testing.expectError(error.InvalidArgument, parse(arena, .POST, "/window", "{}"));
+    try testing.expectError(error.InvalidArgument, parse(arena, .POST, "/window", "{\"handle\":17}"));
     try testing.expect(try parse(arena, .DELETE, "/window", "") == .close_window);
     try testing.expect(try parse(arena, .DELETE, "/actions", "") == .release_actions);
 
