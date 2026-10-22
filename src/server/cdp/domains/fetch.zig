@@ -688,6 +688,7 @@ pub const InterceptState = struct {
             .stylesheet => .Stylesheet,
             .image => .Image,
             .text_track => .TextTrack,
+            .beacon => .Ping,
         };
     }
 

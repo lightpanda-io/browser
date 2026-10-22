@@ -36,6 +36,7 @@ pub const Skipped = enum {
     worker,
     image,
     stylesheet,
+    beacon,
 };
 
 // The sub-resources the page itself asks for, and which we load.
@@ -118,7 +119,7 @@ pub fn noteSkipped(self: *PageStatus, what: Skipped) void {
 
     const level: log.Level = switch (what) {
         .iframe, .worker => .warn,
-        .image, .stylesheet => .debug,
+        .image, .stylesheet, .beacon => .debug,
     };
 
     switch (what) {
@@ -313,5 +314,5 @@ test "PageStatus: counts serialize as an object with every tag" {
     try testing.expectEqual("{\"webgl\":2,\"canvas2d\":0}", json);
 
     const skipped = try std.json.Stringify.valueAlloc(testing.arena_allocator, status.skipped, .{});
-    try testing.expectEqual("{\"iframe\":1,\"worker\":0,\"image\":0,\"stylesheet\":0}", skipped);
+    try testing.expectEqual("{\"iframe\":1,\"worker\":0,\"image\":0,\"stylesheet\":0,\"beacon\":0}", skipped);
 }

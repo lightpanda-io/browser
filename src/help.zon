@@ -480,6 +480,10 @@
     \\          Defaults to stylesheet for mcp and agent, and to none of them
     \\          otherwise. Passing it replaces the default.
     \\          Allowed values:
+    \\             beacon      Send navigator.sendBeacon requests. When disabled,
+    \\                         sendBeacon still checks its URL and data, and
+    \\                         returns true without sending anything.
+    \\
     \\             iframe      When enabled, <iframe> elements are fully loaded.
     \\
     \\             image       <img> sources, so that load/error reflects the real

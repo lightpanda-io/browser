@@ -21,6 +21,9 @@ const builtin = @import("builtin");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const URL = @import("../URL.zig");
+const resource_load = @import("../frame/resource_load.zig");
+const BodyInit = @import("net/body_init.zig").BodyInit;
 const Execution = js.Execution;
 
 const PluginArray = @import("PluginArray.zig");
@@ -50,6 +53,9 @@ _storage: StorageManager = .{},
 _ua_data: NavigatorUAData = .{},
 _service_worker: ?*ServiceWorkerContainer = null,
 _locks: ?*LockManager = null,
+/// The bodies of this document's beacons still in flight, for the keepalive
+/// quota. Allocated in the page arena on the first sendBeacon.
+_beacon_bytes: ?*usize = null,
 
 pub const init: Navigator = .{};
 
@@ -138,10 +144,54 @@ fn javaEnabled(_: *const Navigator) bool {
     return false;
 }
 
-/// Noop, signal that the data was successfully queued
-fn sendBeacon(_: *const Navigator, url: js.Value, data: ?js.Value) bool {
-    _ = url;
-    _ = data;
+/// The keepalive quota: a document's in-flight keepalive request bodies,
+/// beacons here, can't add up to more than 64 KiB (Fetch, "HTTP-network-or-cache
+/// fetch").
+const keepalive_quota = 64 * 1024;
+
+/// https://w3c.github.io/beacon/#sec-processing-model
+/// The URL and data are always checked, and the return value reflects the
+/// keepalive quota. The request is only sent with `--load-resources beacon`;
+/// otherwise this behaves as a browser with beacons disabled would, returning
+/// true without sending anything.
+fn sendBeacon(self: *Navigator, url: []const u8, data: ?BodyInit, frame: *Frame) !bool {
+    // The URL parser, not the document's encoding: the query is UTF-8.
+    const resolved = URL.resolve(frame.local_arena, frame.base(), url, .{}) catch {
+        return frame.js.typeError("sendBeacon: invalid URL");
+    };
+    if (URL.isRemoteScheme(resolved) == false) {
+        return frame.js.typeError("sendBeacon: the URL's scheme must be http or https");
+    }
+
+    var body: []const u8 = "";
+    var content_type: ?[]const u8 = null;
+    if (data) |d| {
+        // A keepalive request can't have a ReadableStream body.
+        if (d == .stream) {
+            return frame.js.typeError("sendBeacon: a ReadableStream body is not supported");
+        }
+        const extracted = try d.extract(frame.local_arena);
+        body = extracted.bytes;
+        content_type = extracted.content_type;
+    }
+
+    // In the page arena: a beacon can outlive the iframe that sent it, and it
+    // gives its bytes back when it settles.
+    const in_flight = self._beacon_bytes orelse blk: {
+        const counter = try frame.page_arena.create(usize);
+        counter.* = 0;
+        self._beacon_bytes = counter;
+        break :blk counter;
+    };
+    if (in_flight.* + body.len > keepalive_quota) {
+        return false;
+    }
+
+    if (frame._session.load_resources.beacon == false) {
+        frame.page.status.noteSkipped(.beacon);
+        return true;
+    }
+    try resource_load.beacon(frame, in_flight, resolved, body, content_type);
     return true;
 }
 
@@ -306,4 +356,5 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Navigator" {
     try testing.htmlRunner("navigator", .{});
+    try testing.htmlRunner("beacon.html", .{ .load_resources = .{ .beacon = true, .iframe = true } });
 }

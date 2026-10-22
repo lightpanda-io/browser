@@ -794,6 +794,7 @@ fn initialPriority(resource_type: HttpClient.Request.ResourceType) []const u8 {
         .document, .stylesheet => "VeryHigh",
         .script, .worker, .xhr, .fetch, .eventsource => "High",
         .image, .text_track => "Low",
+        .beacon => "VeryLow",
     };
 }
 
