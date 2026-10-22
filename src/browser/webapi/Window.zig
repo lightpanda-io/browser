@@ -689,10 +689,17 @@ pub fn stop(self: *Window) void {
     self._frame.stopLoading();
 }
 
-pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
+// postMessage(message, targetOrigin, transfer) or postMessage(message, options).
+pub fn postMessage(self: *Window, message: js.Value, target_origin_or_options: ?js.Value, transfer: ?js.Value, frame: *Frame) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
     // In a full implementation, we would validate the origin
-    _ = target_origin;
+    var transfer_arg = transfer;
+    if (target_origin_or_options) |arg| {
+        if (arg.isObject()) {
+            transfer_arg = arg;
+        }
+    }
+    const ports = try MessagePort.transferList(transfer_arg);
 
     const target_frame = self._frame;
     const source_window = target_frame.js.getIncumbent().window;
@@ -700,27 +707,10 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8,
     const arena = try target_frame.getArena(.medium, "Window.postMessage");
     errdefer arena.release();
 
-    // StructuredSerialize runs synchronously (per spec): clone the message into
-    // the target window's realm now. The receiver gets a fresh, independent copy
-    // minted in its own realm (not the source realm's object), an unserializable
-    // value throws a DataCloneError to the caller, and the source-realm temp
-    // doesn't leak into the destination context. Mirrors Worker.postMessage.
-    const cloned = blk: {
-        var ls: js.Local.Scope = undefined;
-        target_frame.js.localScope(&ls);
-        defer ls.deinit();
-
-        // Contain any V8 exception from a failed serialization so it surfaces as
-        // a clean DataCloneError; deinit() (no rethrow) clears it.
-        var try_catch: js.TryCatch = undefined;
-        try_catch.init(&ls.local);
-        defer try_catch.deinit();
-
-        const c = message.structuredCloneTo(&ls.local) catch {
-            return error.DataClone;
-        };
-        break :blk try c.persist();
-    };
+    // Clone the message into the target window's realm now: the receiver gets
+    // a fresh copy minted in its own realm, and the transferred ports move
+    // there. Mirrors Worker.postMessage.
+    const cloned = try MessagePort.cloneMessage(message, ports, &target_frame.js.execution);
     errdefer cloned.release();
 
     // Origin should be the source window's origin (where the message came from)
@@ -732,7 +722,6 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8,
         .frame = target_frame,
         .source = source_window,
         .origin = try arena.dupe(u8, origin),
-        .ports = if (transfer) |t| try arena.dupe(*MessagePort, t) else &.{},
     };
 
     try target_frame.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
@@ -963,8 +952,7 @@ const PostMessageCallback = struct {
     source: *Window,
     arena: *lp.Arena,
     origin: []const u8,
-    message: js.Value.Global,
-    ports: []const *MessagePort,
+    message: MessagePort.Message,
 
     fn deinit(self: *PostMessageCallback) void {
         self.arena.release();
@@ -981,24 +969,39 @@ const PostMessageCallback = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
+        defer self.message.releasePorts();
 
         const frame = self.frame;
         const window = frame.window;
 
         const event_target = window.asEventTarget();
 
+        const data = self.message.data orelse {
+            if (frame._event_manager.hasDirectListeners(event_target, "messageerror")) {
+                const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
+                    .origin = self.origin,
+                    .source = .{ .window = self.source },
+                    .ports = self.message.ports,
+                    .bubbles = false,
+                    .cancelable = false,
+                }, frame.page)).asEvent();
+                try frame._event_manager.dispatchDirect(event_target, event, .{ .context = "window.postMessage" });
+            }
+            return null;
+        };
+
         // The MessageEvent takes ownership of the cloned temp and releases it on
         // teardown; if there are no listeners, release it here so it doesn't leak.
         if (!frame._event_manager.hasDirectListeners(event_target, "message")) {
-            self.message.release();
+            data.release();
             return null;
         }
 
         const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
-            .data = .{ .value = self.message },
+            .data = .{ .value = data },
             .origin = self.origin,
             .source = .{ .window = self.source },
-            .ports = self.ports,
+            .ports = self.message.ports,
             .bubbles = false,
             .cancelable = false,
         }, frame.page)).asEvent();
@@ -1267,8 +1270,8 @@ pub const JsApi = struct {
 const CrossOriginWindow = struct {
     window: *Window,
 
-    pub fn postMessage(self: *CrossOriginWindow, message: js.Value, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
-        return self.window.postMessage(message, target_origin, transfer, frame);
+    pub fn postMessage(self: *CrossOriginWindow, message: js.Value, target_origin_or_options: ?js.Value, transfer: ?js.Value, frame: *Frame) !void {
+        return self.window.postMessage(message, target_origin_or_options, transfer, frame);
     }
 
     pub fn getTop(self: *CrossOriginWindow, frame: *Frame) Access {
