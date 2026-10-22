@@ -965,9 +965,9 @@ pub fn hitTestVertical(self: *Document, y: f64, frame: *Frame) !?*Element {
 }
 
 fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool, frame: *Frame) !?*Element {
-    // DFS in flat-tree order (shadow content inside its host, slotted nodes
-    // inside their slot, as Element.calculateDocumentPosition lays them out);
-    // topmost = last visited element whose rect contains (x, y).
+    const HitTestOrder = @import("../HitTestOrder.zig");
+    // Flat-tree order supplies the tiebreak; stacking contexts determine
+    // which intersecting box is on top. Geometry remains the faux layout.
     //
     // Faux-layout shortcut: rect.top is calculateDocumentPosition × 5, which is
     // monotonically increasing in document order. So we maintain a running
@@ -978,6 +978,7 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     // Hidden subtrees still count towards the index so positions agree with
     // getBoundingClientRect; the hidden verdict just rides down the stack.
     var topmost: ?*Element = null;
+    var topmost_order: ?*const HitTestOrder = null;
 
     const root = self.asNode();
     const owner = root.ownerFrame(frame) orelse return null;
@@ -987,7 +988,14 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     const x = viewport_x + @as(f64, @floatFromInt(owner.window.getScrollX()));
     const y = viewport_y + @as(f64, @floatFromInt(owner.window.getScrollY()));
 
-    const Entry = struct { node: *Node, hidden: bool };
+    const Entry = struct {
+        node: *Node,
+        hidden: bool,
+        context: ?*const HitTestOrder = null,
+        // Positioned-auto boxes group ordinary descendants for painting,
+        // but do not contain descendant stacking contexts.
+        paint_parent: ?*const HitTestOrder = null,
+    };
     var stack: std.ArrayList(Entry) = .empty;
     try stack.append(frame.local_arena, .{ .node = root, .hidden = false });
 
@@ -997,6 +1005,8 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         const entry = stack.pop() orelse break;
         const node = entry.node;
         var hidden = entry.hidden;
+        var context = entry.context;
+        var paint_parent = entry.paint_parent;
         const pos = preorder_index * 5.0;
 
         if (pos > y) {
@@ -1007,29 +1017,43 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         preorder_index += 1;
         if (node.is(Element)) |element| {
             hidden = hidden or style_manager.hasDisplayNone(element);
+            const props = style_manager.stackingProps(element);
+            const creates_context = element == self.getDocumentElement() or props.createsContext();
+            const order: usize = @intFromFloat(preorder_index);
+            const owns_order = creates_context or props.positioned();
+            if (owns_order) {
+                const key = try frame.local_arena.create(HitTestOrder);
+                key.* = .context(context, props.level(), order);
+                if (creates_context) context = key;
+                paint_parent = key;
+            }
             // Unlike display:none, a child can opt back in, so the subtree is
             // still walked.
             if (!hidden and style_manager.isHitTestable(element)) {
                 if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
-                    if (ignore_x) {
-                        topmost = element;
-                    } else {
-                        // only bother calculating the horiziontal position for
-                        // elements contained by the vertical band
-                        const left = element.horizontalPosition(frame);
-                        if (x >= left and x <= left + element.boxAxis(frame, .width)) {
+                    // Only calculate horizontal position for candidates in
+                    // the vertical band, preserving the layout shortcut.
+                    const left = if (ignore_x) 0 else element.horizontalPosition(frame);
+                    if (ignore_x or (x >= left and x <= left + element.boxAxis(frame, .width))) {
+                        const key = if (owns_order) paint_parent.? else blk: {
+                            const key = try frame.local_arena.create(HitTestOrder);
+                            key.* = .box(paint_parent, false, order);
+                            break :blk key;
+                        };
+                        if (topmost_order == null or key.above(topmost_order.?)) {
                             topmost = element;
+                            topmost_order = key;
                         }
                     }
                 }
             }
         }
 
-        // Push the children, then reverse them so they pop in flat-tree order
+        // Push the children, then reverse them so they pop in flat-tree order.
         const first = stack.items.len;
         var children: TreeWalker.FlatChildren = .init(node, .{ .frame = frame });
         while (children.next()) |c| {
-            try stack.append(frame.local_arena, .{ .node = c, .hidden = hidden });
+            try stack.append(frame.local_arena, .{ .node = c, .hidden = hidden, .context = context, .paint_parent = paint_parent });
         }
         std.mem.reverse(Entry, stack.items[first..]);
     }
@@ -1949,4 +1973,45 @@ test "Document: isRelaxableTo" {
     // Unrelated domain, and the empty string.
     try testing.expectEqual(false, isRelaxableTo("a.example.com", "example.org"));
     try testing.expectEqual(false, isRelaxableTo("a.example.com", ""));
+}
+
+test "Document: stacking order routes trusted mouse input" {
+    const input = @import("../frame/user_input.zig");
+    const page = try testing.pageTest("input_stacking.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun(
+        \\document.body.innerHTML = '<div style="position:absolute;width:0;height:0"><button id="cover" style="position:absolute;width:100px;height:100px;z-index:2">Cover</button></div><div id="underParent" style="position:absolute;width:0;height:0"><button id="under" style="position:absolute;width:100px;height:100px;z-index:1">Under</button></div>';
+        \\window.clicks = [];
+        \\document.addEventListener('click', e => clicks.push({id:e.target.id, trusted:e.isTrusted}));
+    , null);
+    const cover = frame.document.getElementById("cover", frame).?;
+    const under = frame.document.getElementById("under", frame).?;
+    const c = cover.boundingClientRectValues(frame);
+    const u = under.boundingClientRectValues(frame);
+    const left = @max(c.x, u.x);
+    const right = @min(c.x + c.width, u.x + u.width);
+    const top = @max(c.y, u.y);
+    const bottom = @min(c.y + c.height, u.y + u.height);
+    try testing.expect(right > left and bottom > top);
+    const x = (left + right) / 2;
+    const y = top + @min(10, (bottom - top) / 2);
+    try input.triggerMouseMove(frame, x, y);
+    try input.triggerMousePress(frame, x, y, input.mouse_button.main, 1);
+    try input.triggerMouseRelease(frame, x, y, input.mouse_button.main, 1);
+    try testing.expectEqual("[{\"id\":\"cover\",\"trusted\":true}]", try (try ls.local.compileAndRun("JSON.stringify(clicks)", null)).toZig([]const u8));
+
+    // A very high descendant must stay behind the higher ancestor context.
+    _ = try ls.local.compileAndRun("document.getElementById('under').style.zIndex = '999'; document.getElementById('underParent').style.zIndex = '0'; clicks = []", null);
+    try input.triggerMousePress(frame, x, y, input.mouse_button.main, 1);
+    try input.triggerMouseRelease(frame, x, y, input.mouse_button.main, 1);
+    try testing.expect((try ls.local.compileAndRun("clicks.length === 1 && clicks[0].id === 'cover' && clicks[0].trusted", null)).isTrue());
+
+    _ = try ls.local.compileAndRun("document.getElementById('cover').style.pointerEvents = 'none'; clicks = []", null);
+    try input.triggerMousePress(frame, x, y, input.mouse_button.main, 1);
+    try input.triggerMouseRelease(frame, x, y, input.mouse_button.main, 1);
+    try testing.expect((try ls.local.compileAndRun("clicks.length === 1 && clicks[0].id === 'under' && clicks[0].trusted", null)).isTrue());
 }

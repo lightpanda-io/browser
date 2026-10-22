@@ -59,6 +59,7 @@ geometry: Group(Geometry) = .{},
 touch_action: Group(TouchAction) = .{},
 text: Group(Text) = .{},
 flow: Group(Flow) = .{},
+stacking: Group(Stacking) = .{},
 
 widths: WidthMemo = .{},
 
@@ -692,6 +693,14 @@ pub fn isHitTestable(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return true;
     const p = self.visibilityProps(el);
     return !p.visibility_hidden and !p.pointer_events_none;
+}
+
+/// Cascaded paint-order inputs; shares normal inline/stylesheet priority and
+/// the style-version memo invalidation used by the other layout properties.
+pub fn stackingProps(self: *StyleManager, el: *Element) Stacking.Computed {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{};
+    return self.stacking.ownProps(self.arena.allocator(), el, self.frame);
 }
 
 /// Computed text-transform, which inherits: the nearest of `el` and its
@@ -1899,16 +1908,83 @@ const Flow = struct {
     };
 };
 
+/// Paint-order inputs for the renderless hit tester. This is not a CSS renderer:
+/// geometry, floats, flex/grid order, top-layer and 3D painting remain approximate.
+const Stacking = struct {
+    const Position = enum { static, relative, absolute, fixed, sticky };
+    const Declared = struct {
+        const names = [_][]const u8{ "position", "z-index", "opacity", "transform", "isolation" };
+        position: ?Position = null,
+        // Outer null: undeclared/invalid. Inner null: the explicit auto value.
+        z_index: ??i32 = null,
+        opacity_context: ?bool = null,
+        transform_context: ?bool = null,
+        isolation_context: ?bool = null,
+
+        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
+            if (std.ascii.eqlIgnoreCase(name, "position")) {
+                if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) self.position = .static;
+                inline for (@typeInfo(Position).@"enum".field_names) |field| {
+                    if (std.ascii.eqlIgnoreCase(value, field)) self.position = @field(Position, field);
+                }
+            } else if (std.ascii.eqlIgnoreCase(name, "z-index")) {
+                if (std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) {
+                    self.z_index = @as(?i32, null);
+                } else if (std.fmt.parseInt(i32, value, 10)) |z| {
+                    self.z_index = @as(?i32, z);
+                } else |_| {}
+            } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
+                if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) self.opacity_context = false;
+                if (std.fmt.parseFloat(f64, value)) |opacity| {
+                    if (std.math.isFinite(opacity)) self.opacity_context = opacity < 1;
+                } else |_| {}
+            } else if (std.ascii.eqlIgnoreCase(name, "transform")) {
+                if (std.ascii.eqlIgnoreCase(value, "none") or std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) {
+                    self.transform_context = false;
+                } else if (std.mem.indexOfScalar(u8, value, '(') != null) {
+                    self.transform_context = true;
+                }
+            } else if (std.ascii.eqlIgnoreCase(name, "isolation")) {
+                if (std.ascii.eqlIgnoreCase(value, "isolate")) self.isolation_context = true;
+                if (std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) self.isolation_context = false;
+            }
+        }
+    };
+
+    const Computed = struct {
+        position: Position = .static,
+        z_index: ?i32 = null,
+        opacity_context: bool = false,
+        transform_context: bool = false,
+        isolation_context: bool = false,
+
+        pub fn positioned(self: Computed) bool {
+            return self.position != .static;
+        }
+
+        pub fn createsContext(self: Computed) bool {
+            return (self.positioned() and self.z_index != null) or
+                self.position == .fixed or self.position == .sticky or
+                self.opacity_context or self.transform_context or self.isolation_context;
+        }
+
+        pub fn level(self: Computed) i32 {
+            return if (self.positioned()) self.z_index orelse 0 else 0;
+        }
+    };
+};
+
 /// Every group's share of one declaration block, so a sheet's block is folded
 /// once. Field names match the StyleManager's group fields.
 const Declarations = struct {
-    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names ++ Flow.Declared.names;
+    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names ++ Flow.Declared.names ++ Stacking.Declared.names;
 
     visibility: Visibility.Declared = .{},
     geometry: Geometry.Declared = .{},
     touch_action: TouchAction.Declared = .{},
     text: Text.Declared = .{},
     flow: Flow.Declared = .{},
+    stacking: Stacking.Declared = .{},
 
     fn apply(self: *Declarations, name: []const u8, value: []const u8) void {
         inline for (group_fields) |field| {
@@ -2570,8 +2646,8 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .visibility = .{ .display = .none } },
         .{ .visibility = .{ .display = .other, .box = .block_level } },
         .{ .visibility = .{ .display = .none, .visibility_hidden = true } },
-        .{ .visibility = .{ .opacity_zero = true, .pointer_events_none = true } },
-        .{ .visibility = .{ .opacity_zero = false, .pointer_events_none = true } },
+        .{ .visibility = .{ .opacity_zero = true, .pointer_events_none = true }, .stacking = .{ .opacity_context = true } },
+        .{ .visibility = .{ .opacity_zero = false, .pointer_events_none = true }, .stacking = .{ .opacity_context = false } },
         .{ .visibility = .{ .visibility_hidden = true } },
         .{},
         .{},
@@ -2588,8 +2664,8 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .geometry = .{ .width = .{} } },
         .{ .visibility = .{ .display = .flex, .box = .block_level } },
         .{ .visibility = .{ .display = .grid, .box = .inline_level } },
-        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = true, .floated = true } },
-        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = false, .floated = false } },
+        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = true, .floated = true }, .stacking = .{ .position = .absolute } },
+        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = false, .floated = false }, .stacking = .{ .position = .relative } },
     };
 
     var i: usize = 0;
@@ -2602,6 +2678,7 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         try std.testing.expectEqual(expected[i].visibility, inlineDeclared(Visibility.Declared, el, frame).props(.any));
         try std.testing.expectEqual(expected[i].geometry, inlineDeclared(Geometry.Declared, el, frame).props(.any));
         try std.testing.expectEqual(expected[i].flow, inlineDeclared(Flow.Declared, el, frame).props(.any));
+        try std.testing.expectEqual(expected[i].stacking, inlineDeclared(Stacking.Declared, el, frame).props(.any));
         // scanning never creates the style object
         try testing.expectEqual(null, el.existingStyle(frame));
         const materialized = extractDeclared(Declarations, try el.getOrCreateStyle(frame)).props(.any);

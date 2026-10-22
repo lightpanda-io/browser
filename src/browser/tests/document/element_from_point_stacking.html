@@ -1,0 +1,94 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<body></body>
+<script>
+// Use intersection of the existing faux-layout rectangles: this tests paint
+// order, not CSS positioning/layout fidelity. Zero-size parents do not clip.
+window.overlap = (coverStyle, underStyle, coverParent = '', underParent = '') => {
+  document.body.innerHTML = `<div id="coverParent" style="position:absolute;width:0;height:0;${coverParent}"><button id="cover" style="position:absolute;width:100px;height:100px;${coverStyle}">Cover</button></div><div id="underParent" style="position:absolute;width:0;height:0;${underParent}"><button id="under" style="position:absolute;width:100px;height:100px;${underStyle}">Under</button></div>`;
+  const c = document.getElementById('cover').getBoundingClientRect();
+  const u = document.getElementById('under').getBoundingClientRect();
+  const left = Math.max(c.left, u.left), right = Math.min(c.right, u.right);
+  const top = Math.max(c.top, u.top), bottom = Math.min(c.bottom, u.bottom);
+  testing.expectTrue(right > left && bottom > top);
+  window.point = [(left + right) / 2, top + Math.min(10, (bottom - top) / 2)];
+  return document.elementFromPoint(...point)?.id;
+};
+</script>
+<script id="higher_positive_z">
+testing.expectEqual('cover', overlap('z-index:2', 'z-index:1'));
+</script>
+<script id="auto_and_equal_dom_order">
+testing.expectEqual('under', overlap('z-index:auto', 'z-index:auto'));
+testing.expectEqual('under', overlap('z-index:2', 'z-index:2'));
+</script>
+<script id="nested_context_is_atomic">
+testing.expectEqual('cover', overlap('z-index:1', 'z-index:999', '', 'z-index:0'));
+testing.expectEqual('under', overlap('z-index:999', 'z-index:1', 'z-index:0', ''));
+</script>
+<script id="auto_parent_does_not_isolate">
+testing.expectEqual('cover', overlap('z-index:2', 'z-index:1', 'z-index:auto', 'z-index:auto'));
+</script>
+<script id="negative_context_order">
+overlap('z-index:999', 'z-index:999', 'z-index:-1', 'z-index:-2');
+// Keep the body background behind its negative child contexts.
+document.body.style.cssText = 'position:relative;z-index:0';
+testing.expectEqual('cover', document.elementFromPoint(...point)?.id);
+document.body.style.cssText = '';
+</script>
+<script id="opacity_context_is_atomic">
+testing.expectEqual('cover', overlap('z-index:1', 'z-index:999', '', 'opacity:0.5'));
+</script>
+<script id="transform_context_is_atomic">
+testing.expectEqual('cover', overlap('z-index:1', 'z-index:999', '', 'transform:translateX(0)'));
+</script>
+<script id="static_z_index_is_ignored">
+testing.expectEqual('under', overlap('position:static;z-index:999', 'z-index:1'));
+</script>
+<script id="pointer_filter_remains_effective">
+testing.expectEqual('under', overlap('z-index:2;pointer-events:none', 'z-index:1'));
+testing.expectEqual('cover', overlap('z-index:2', 'z-index:1;pointer-events:none'));
+</script>
+<script id="style_mutation_reorders">
+overlap('z-index:2', 'z-index:1');
+document.getElementById('under').style.zIndex = '3';
+testing.expectEqual('under', document.elementFromPoint(...point)?.id);
+document.getElementById('under').style.zIndex = '0';
+testing.expectEqual('cover', document.elementFromPoint(...point)?.id);
+</script>
+<script id="negative_child_below_normal_flow_sibling">
+testing.expectEqual('cover', overlap('position:static;z-index:auto', 'z-index:-1', 'position:static'));
+</script>
+<script id="stylesheet_priority_and_mutation">
+overlap('z-index:2', 'z-index:1');
+const sheet = document.createElement('style');
+sheet.textContent = '#under {z-index: 5 !important}';
+document.head.appendChild(sheet);
+testing.expectEqual('under', document.elementFromPoint(...point)?.id);
+sheet.sheet.deleteRule(0);
+sheet.sheet.insertRule('#under {z-index: 0 !important}', 0);
+testing.expectEqual('cover', document.elementFromPoint(...point)?.id);
+sheet.remove();
+</script>
+<script id="isolation_context_is_atomic">
+testing.expectEqual('cover', overlap('z-index:1', 'z-index:999', '', 'isolation:isolate'));
+</script>
+
+<script id="positioned_auto_paint_group">
+document.body.innerHTML = '<div style="position:relative;width:0;height:0"><div style="width:0;height:0"><button id="positioned" style="position:relative;width:100px;height:100px">Positioned</button></div><div style="width:0;height:0"><button id="normal" style="position:static;width:100px;height:100px">Normal</button></div></div>';
+const b = document.getElementById('positioned').getBoundingClientRect();
+const c = document.getElementById('normal').getBoundingClientRect();
+const y = Math.max(b.top, c.top) + 1;
+const x = Math.max(b.left, c.left) + 1;
+testing.expectTrue(x < Math.min(b.right, c.right) && y < Math.min(b.bottom, c.bottom));
+testing.expectEqual('positioned', document.elementFromPoint(x, y)?.id);
+</script>
+<script id="fixed_and_sticky_contexts">
+testing.expectEqual('cover', overlap('z-index:1', 'z-index:999', '', 'position:fixed'));
+testing.expectEqual('cover', overlap('z-index:1', 'z-index:999', '', 'position:sticky'));
+</script>
+<script id="non_context_controls">
+testing.expectEqual('under', overlap('z-index:1', 'z-index:999', '', 'opacity:1'));
+testing.expectEqual('under', overlap('z-index:1', 'z-index:999', '', 'transform:none'));
+testing.expectEqual('under', overlap('z-index:1', 'z-index:999', '', 'isolation:auto'));
+</script>
