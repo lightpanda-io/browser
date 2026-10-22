@@ -205,18 +205,11 @@
 }
 
 // An invalid header name throws a TypeError.
-{
-  let threw = false;
-  try { new Headers([["a b", "x"]]); } catch (e) { threw = e instanceof TypeError; }
-  testing.expectEqual(true, threw);
-}
+testing.expectError('TypeError: Invalid header name', () => new Headers([["a b", "x"]]));
+testing.expectError('TypeError: Invalid header name', () => new Headers({ "a b": "x" }));
 
 // A value with a forbidden byte (here an interior newline) throws a TypeError.
-{
-  let threw = false;
-  try { new Headers([["x", "a\nb"]]); } catch (e) { threw = e instanceof TypeError; }
-  testing.expectEqual(true, threw);
-}
+testing.expectError('TypeError: Invalid header value', () => new Headers([["x", "a\nb"]]));
 
 // A value with a code point above U+00FF cannot be a byte string: TypeError.
 {
