@@ -27,6 +27,7 @@ const AXNode = @import("../server/cdp/AXNode.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
+const popover = @import("webapi/element/popover.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -36,6 +37,19 @@ const InteractivityType = enum {
     contenteditable,
     listener,
     focusable,
+};
+
+/// Whether a control sits in something drawn over the page.
+const Overlay = struct {
+    /// In a `position: fixed` box.
+    fixed: bool = false,
+    /// In an open `<dialog>`, a `role=dialog`/`alertdialog` subtree, an
+    /// `aria-modal` one, or an open popover.
+    dialog: bool = false,
+
+    fn any(self: Overlay) bool {
+        return self.fixed or self.dialog;
+    }
 };
 
 const InteractiveElement = struct {
@@ -55,6 +69,7 @@ const InteractiveElement = struct {
     value: ?[]const u8,
     element_name: ?[]const u8,
     placeholder: ?[]const u8,
+    overlay: Overlay,
 
     pub fn jsonStringify(self: *const InteractiveElement, jw: anytype) !void {
         try jw.beginObject();
@@ -88,6 +103,11 @@ const InteractiveElement = struct {
         if (self.disabled) {
             try jw.objectField("disabled");
             try jw.write(true);
+        }
+
+        if (self.overlay.any()) {
+            try jw.objectField("overlay");
+            try jw.write(self.overlay);
         }
 
         try jw.objectField("tabIndex");
@@ -274,6 +294,7 @@ fn walkInteractive(
             .value = getInputValue(el),
             .element_name = el.getName(),
             .placeholder = el.getAttributeInterned("placeholder"),
+            .overlay = overlayOf(el, owner),
         });
 
         if (filter.max) |m| {
@@ -400,6 +421,35 @@ pub fn isContentRole(role: []const u8) bool {
         .{ "rowheader", {} },
     });
     return content_roles.has(lowered);
+}
+
+/// The `position` half comes from the cascade, which resolves it down the
+/// tree; the dialog half walks up, since a dialog is a subtree and not a
+/// style.
+fn overlayOf(el: *Element, owner: *Frame) Overlay {
+    var out: Overlay = .{ .fixed = owner._style_manager.inFixedBox(el) };
+    var current: ?*Element = el;
+    while (current) |ancestor| : (current = ancestor.asNode().flatTreeParentElement(owner)) {
+        if (isDialog(ancestor, owner)) {
+            out.dialog = true;
+            break;
+        }
+    }
+    return out;
+}
+
+fn isDialog(el: *Element, frame: *Frame) bool {
+    if (el.is(Element.Html.Dialog)) |dialog| {
+        return dialog.getOpen();
+    }
+    if (popover.isOpen(el, frame)) {
+        return true;
+    }
+    if (explicitRole(el)) |role| {
+        if (std.ascii.eqlIgnoreCase(role, "dialog") or std.ascii.eqlIgnoreCase(role, "alertdialog")) return true;
+    }
+    const modal = el.getAttributeSafe(comptime .wrap("aria-modal")) orelse return false;
+    return std.ascii.eqlIgnoreCase(std.mem.trim(u8, modal, &std.ascii.whitespace), "true");
 }
 
 // ARIA `role` is a space-separated fallback list; the first token wins.
@@ -765,4 +815,51 @@ test "browser.interactive: visibility:hidden elements are skipped" {
     try testing.expectEqual(2, elements.len);
     try testing.expectEqual("Visible again", elements[0].name.?);
     try testing.expectEqual("Transparent", elements[1].name.?);
+}
+
+test "browser.interactive: a control in a fixed box is in an overlay" {
+    defer testing.test_session.closeAllPages();
+    const elements = try testInteractive(
+        \\<div style="position: fixed"><div><button>Accept</button></div></div>
+        \\<div style="position: sticky"><button>Menu</button></div>
+        \\<div style="position: absolute"><button>Tooltip</button></div>
+        \\<div style="position: relative"><button>In the page</button></div>
+        \\<button style="position: fixed">Pinned itself</button>
+    );
+
+    try testing.expectEqual(5, elements.len);
+    try testing.expect(elements[0].overlay.fixed);
+    // Only `fixed` is pinned to the viewport. A sticky box lays out in flow and
+    // an absolute one scrolls away, so neither counts.
+    try testing.expect(!elements[1].overlay.fixed);
+    try testing.expect(!elements[2].overlay.fixed);
+    try testing.expect(!elements[3].overlay.fixed);
+    try testing.expect(elements[4].overlay.fixed);
+
+    for (elements) |el| {
+        try testing.expect(!el.overlay.dialog);
+    }
+}
+
+test "browser.interactive: a control in a dialog is in an overlay" {
+    defer testing.test_session.closeAllPages();
+    const elements = try testInteractiveInBody(
+        \\<dialog open><button>Dismiss</button></dialog>
+        \\<div role="dialog"><button>Close</button></div>
+        \\<div role="alertdialog"><button>Got it</button></div>
+        \\<div aria-modal="true"><button>OK</button></div>
+        \\<div aria-modal="false"><button>Not modal</button></div>
+        \\<dialog><button>Never shown</button></dialog>
+    );
+
+    // A closed dialog is display:none, so its button is not a candidate.
+    try testing.expectEqual(5, elements.len);
+    for (elements[0..4]) |el| {
+        try testing.expect(el.overlay.dialog);
+    }
+    try testing.expect(!elements[4].overlay.dialog);
+
+    for (elements) |el| {
+        try testing.expect(!el.overlay.fixed);
+    }
 }
