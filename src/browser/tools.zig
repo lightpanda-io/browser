@@ -909,6 +909,13 @@ pub const ToolResult = struct {
     selector: ?[]const u8 = null,
     /// Set for the tools `Tool.reportsPageState` names.
     page_state: ?PageState = null,
+    /// An in-band argument diagnosis (also `is_error`): telemetry counts it
+    /// as `invalid_params`, like the bare `error.InvalidParams` it replaces.
+    invalid_params: bool = false,
+
+    fn invalidParams(text: []const u8) ToolResult {
+        return .{ .text = text, .is_error = true, .invalid_params = true };
+    }
 };
 
 /// Where a call left the page. MCP serializes it as `structuredContent` so a
@@ -999,6 +1006,7 @@ pub fn call(
 
 fn telemetryOutcome(result: ToolError!ToolResult) TelemetryTool.Outcome {
     const r = result catch |err| return errorOutcome(err);
+    if (r.invalid_params) return .invalid_params;
     return if (r.is_error) .is_error else .ok;
 }
 
@@ -1032,7 +1040,7 @@ fn callInner(
         .is_error = true,
     };
     if (diagnoseArgs(arena, arguments)) |msg|
-        return .{ .text = msg, .is_error = true };
+        return .invalidParams(msg);
     // Must run before substituteStringArgs so the `key=="value"` secret-
     // redaction check there still triggers on PascalCase keys.
     const normalized = normalizeArgKeys(arena, tool, arguments) catch |err| switch (err) {
@@ -1041,7 +1049,7 @@ fn callInner(
     };
     // After normalizeArgKeys so a PascalCase `Script` isn't reported missing.
     if (diagnoseMissingRequired(arena, tool, normalized)) |msg|
-        return .{ .text = msg, .is_error = true };
+        return .invalidParams(msg);
     const substituted = try substituteStringArgs(arena, tool, normalized);
 
     // Before dispatch, because a navigation takes the node with it. Gated on
@@ -2782,8 +2790,9 @@ const ParseArgsError = error{ OutOfMemory, InvalidParams };
 /// Names the first required argument absent from the call, so a bare
 /// `InvalidParams` from `parseValue` doesn't hide which field to add — a
 /// caller sending `{"expression": ...}` to evaluate learns about `script`.
-/// Default-true booleans (setChecked.checked) parse fine when omitted, so
-/// they don't count as missing. Runs on key-normalized arguments.
+/// An explicit `null` counts as missing: zero-filling models send it for
+/// "unset". Default-true booleans (setChecked.checked) parse fine when
+/// omitted, so they don't count. Runs on key-normalized arguments.
 fn diagnoseMissingRequired(arena: std.mem.Allocator, tool: Tool, arguments: ?std.json.Value) ?[]const u8 {
     const schemas = lp.Schema.all();
     const tool_idx = @backingInt(tool);
@@ -2797,7 +2806,7 @@ fn diagnoseMissingRequired(arena: std.mem.Allocator, tool: Tool, arguments: ?std
         else => return null,
     } else std.json.ObjectMap.empty;
     for (schema.required) |name| {
-        if (obj.get(name) != null) continue;
+        if (obj.get(name)) |v| if (v != .null) continue;
         if (schema.findField(name)) |f| {
             if (f.default_true) continue;
         }
@@ -3014,6 +3023,23 @@ test "call: unknown tool name surfaces in-band" {
     const r = try call(arena.allocator(), testing.test_session, &registry, "multi_tool_use.parallel", null, .{ .source = .user });
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
+}
+
+test "call: an argument diagnosis is in-band but counts as invalid_params" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const missing = call(arena.allocator(), testing.test_session, &registry, "evaluate", null, .{ .source = .user });
+    try std.testing.expectEqualStrings("missing required argument 'script'", (try missing).text);
+    try std.testing.expectEqual(.invalid_params, telemetryOutcome(missing));
+
+    var args: std.json.ObjectMap = .empty;
+    try args.put(arena.allocator(), "state", .{ .string = "idle" });
+    const bad_enum = call(arena.allocator(), testing.test_session, &registry, "waitForState", .{ .object = args }, .{ .source = .user });
+    try std.testing.expect((try bad_enum).is_error);
+    try std.testing.expectEqual(.invalid_params, telemetryOutcome(bad_enum));
 }
 
 test "tree and nodeDetails read the node's own frame" {
