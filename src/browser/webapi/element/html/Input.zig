@@ -123,6 +123,8 @@ _files: ?*FileList = null,
 _selection_start: u32 = 0,
 _selection_end: u32 = 0,
 _selection_direction: Selection.SelectionDirection = .none,
+// A queued selectionchange not yet fired; later changes fold into it.
+_selectionchange_pending: bool = false,
 
 pub fn asElement(self: *Input) *Element {
     return Factory.protoOf(self).asElement();

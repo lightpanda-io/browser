@@ -187,6 +187,21 @@
     return true;
   }
 
+  // Brackets messages the browser itself logs (not console.* calls, so they
+  // can't be silenced) for an expected error case. Folded into a collapsed
+  // group so a clean run in Chrome/Firefox shows nothing unexpected.
+  function beginBrowserLog(reason) {
+    if (IS_TEST_RUNNER === false) {
+      console.groupCollapsed(`expected browser logs: ${reason || _currentScriptId()}`);
+    }
+  }
+
+  function endBrowserLog() {
+    if (IS_TEST_RUNNER === false) {
+      console.groupEnd();
+    }
+  }
+
   function printTimeoutState() {
     console.warn('Pending count:', Array.from(async_pending.keys()));
   }
@@ -204,6 +219,8 @@
     withError: withError,
     withReportedErrors: withReportedErrors,
     printTimeoutState: printTimeoutState,
+    beginBrowserLog: beginBrowserLog,
+    endBrowserLog: endBrowserLog,
     onload: onload,
     IS_TEST_RUNNER: IS_TEST_RUNNER,
     HOST: '127.0.0.1',
@@ -218,7 +235,9 @@
     console.warn(`The page is not being executed in the test runner, certain behavior has been adjusted`);
     window.testing.HOST = location.hostname;
     window.testing.ORIGIN = location.origin;
-    window.testing.BASE_URL = location.origin + '/src/browser/tests/';
+    // Relative to this script, so a page served as //src/... (or from another
+    // root) still resolves relative URLs the way the test expects.
+    window.testing.BASE_URL = new URL('./', document.currentScript.src).href;
     window.addEventListener('load', testing.assertOk);
   }
 
