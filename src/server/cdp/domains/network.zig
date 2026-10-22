@@ -1258,11 +1258,13 @@ test "cdp.Network: canClearBrowserCache" {
 test "cdp.Network: setCacheDisabled" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    _ = try ctx.loadBrowserContext(.{ .id = "BID-CD1" });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-CD1" });
 
-    var cache: Cache = undefined;
-    const client = &ctx.cdp().browser.http_client;
+    var cache: Cache = .{ .kind = .noop };
+    const client = bc.session.http_client;
+    const previous_cache = client.cache;
     client.cache = &cache;
+    defer client.cache = previous_cache;
 
     try ctx.processMessage(.{
         .id = 1,
@@ -1271,17 +1273,19 @@ test "cdp.Network: setCacheDisabled" {
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
     try testing.expectEqual(null, client.cache.active());
+    try testing.expect(client.cache == &Cache.noop);
 }
 
 test "cdp.Network: configured CDP ignores setCacheDisabled" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    _ = try ctx.loadBrowserContext(.{ .id = "BID-CD2" });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-CD2" });
 
-    var cache: Cache = undefined;
-    const client = &ctx.cdp().browser.http_client;
+    var cache: Cache = .{ .kind = .noop };
+    const client = bc.session.http_client;
+    const previous_cache = client.cache;
     client.cache = &cache;
-    defer client.cache = &testing.base.test_app.network.cache;
+    defer client.cache = previous_cache;
 
     try ctx.processMessage(.{
         .id = 1,
