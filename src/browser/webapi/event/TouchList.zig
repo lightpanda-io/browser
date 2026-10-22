@@ -22,13 +22,13 @@ const Frame = @import("../../Frame.zig");
 const Touch = @import("Touch.zig");
 const TouchEvent = @import("TouchEvent.zig");
 
-// https://w3c.github.io/touch-events/#idl-def-touchlist
-//
-// Single-touch: at most one Touch.
+// One of a TouchEvent's touches, targetTouches or changedTouches. It's in the
+// event's arena and keeps the event alive; the touches live as long as their
+// frame (see Touch).
 const TouchList = @This();
 
 _event: *TouchEvent,
-_touch: ?*Touch,
+_touches: []const *Touch,
 
 pub fn acquireRef(self: *TouchList) void {
     self._event.asEvent().acquireRef();
@@ -39,14 +39,14 @@ pub fn releaseRef(self: *TouchList, page: *Page) void {
 }
 
 fn length(self: *const TouchList) u32 {
-    return if (self._touch != null) 1 else 0;
+    return @intCast(self._touches.len);
 }
 
 pub fn item(self: *TouchList, index: usize) ?*Touch {
-    if (index != 0) {
+    if (index >= self._touches.len) {
         return null;
     }
-    return self._touch;
+    return self._touches[index];
 }
 
 pub const JsApi = struct {
