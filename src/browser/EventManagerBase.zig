@@ -352,12 +352,17 @@ pub fn dispatchDirect(
         ls.deinit();
     }
 
-    // Per spec, currentTarget is only set while listeners are being invoked
-    defer event._current_target = null;
-
     // This is a slightly simplified version of what you'll find in EventManager.
     // dispatchPhase. It is simpler because, for direct dispatching, we know
     // there's no ancestors and only the single target phase.
+    event._event_phase = .at_target;
+    defer {
+        event._event_phase = .none;
+        // Per spec, currentTarget is only set while listeners are being invoked
+        event._current_target = null;
+        event._stop_propagation = false;
+        event._stop_immediate_propagation = false;
+    }
 
     // Track dispatch depth for deferred removal.
     self.dispatch_depth += 1;
