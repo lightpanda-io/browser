@@ -3063,6 +3063,61 @@ test "goto: a navigation stuck waiting for a connection is an error" {
     try std.testing.expectEqualStrings("Navigated. HTTP 200 OK.", r.text);
 }
 
+test "tools: tree exposes Chrome-matched custom ARIA states" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/ax_aria_states.html", .{});
+    defer page.close();
+
+    const result = try call(testing.arena_allocator, page.session, &registry, "tree", null, .{ .source = .user });
+    const expected = [_][]const u8{
+        "button 'Expanded details' [expanded]",
+        "button 'Collapsed details' [collapsed]",
+        "button 'Uppercase expanded' [expanded]",
+        "button 'Invalid details' [expanded]",
+        "button 'Spaced expanded' [expanded]",
+        "listitem 'Listitem expanded' [expanded]",
+        "checkbox 'Invalid state' [checked]",
+        "checkbox 'Empty checked' [unchecked]",
+        "checkbox 'Spaced checked' [checked]",
+        "option 'Option checked' [checked]",
+        "option 'Option mixed' [mixed]",
+        "treeitem 'Treeitem checked' [collapsed] [checked]",
+        "checkbox 'Padded false' [checked]",
+        "button 'Padded collapsed' [expanded]",
+        "checkbox 'Uppercase mixed' [mixed]",
+        "checkbox 'Absent checked' [unchecked]",
+        "switch 'Switch mixed' [unchecked]",
+        "menuitemcheckbox 'Menu checkbox mixed' [mixed]",
+        "button 'Custom anchor' [expanded]",
+        "checkbox 'Checked terms' [checked]",
+    };
+    for (expected) |fragment| {
+        if (std.mem.find(u8, result.text, fragment) == null) {
+            std.debug.print("missing {s} in:\n{s}\n", .{ fragment, result.text });
+            return error.MissingExpectedAriaState;
+        }
+    }
+
+    // Unsupported roles, empty expanded values, and options or tree items
+    // without aria-checked must not manufacture state.
+    const ignored = [_][]const u8{ "'Generic expanded'", "'Empty expanded'", "'Option absent'", "'Treeitem absent'" };
+    for (ignored) |name| {
+        var lines = std.mem.splitScalar(u8, result.text, '\n');
+        var found = false;
+        while (lines.next()) |line| {
+            if (std.mem.find(u8, line, name) == null) continue;
+            found = true;
+            if (std.mem.find(u8, line, " [expanded]") != null) return error.UnexpectedExpanded;
+            if (std.mem.find(u8, line, " [checked]") != null) return error.UnexpectedChecked;
+            if (std.mem.find(u8, line, " [unchecked]") != null) return error.UnexpectedUnchecked;
+        }
+        if (!found) return error.IgnoredNodeMissing;
+    }
+    try std.testing.expect(std.mem.find(u8, result.text, "'Hidden terms'") == null);
+}
+
 test "tools: goto flags an error status instead of reporting success" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();

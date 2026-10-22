@@ -7,7 +7,7 @@
 <div role="checkbox" aria-checked="true" tabindex="-1">Checked terms</div>
 <div role="checkbox" aria-checked="false">Unfocusable terms</div>
 <div role="checkbox" aria-checked="garbage" tabindex="xyz">Invalid state</div>
-<input type="checkbox" role="checkbox" checked aria-checked="true" aria-label="Native terms">
+<input type="checkbox" role="checkbox" checked aria-checked="false" aria-label="Native terms">
 <div role="checkbox" aria-checked="mixed" tabindex="0" inert>Inert terms</div>
 <div role="checkbox" aria-checked="mixed" tabindex="0" hidden>Hidden terms</div>
 <button aria-label="Uppercase expanded" aria-expanded="TRUE">Uppercase</button>
@@ -25,5 +25,19 @@
 <div role="switch" aria-label="Switch mixed" aria-checked="mixed" tabindex="0">Switch mixed</div>
 <div role="menuitemcheckbox" aria-label="Menu checkbox mixed" aria-checked="mixed" tabindex="0">Menu checkbox mixed</div>
 <div role="switch" aria-label="Expanded switch" aria-expanded="true" tabindex="0">Expanded switch</div>
+<button aria-label="Spaced expanded" aria-expanded=" true ">Spaced expanded</button>
+<button aria-label="Empty expanded" aria-expanded="">Empty expanded</button>
+<ul><li aria-label="Listitem expanded" aria-expanded="true">Listitem expanded</li></ul>
+<div role="checkbox" aria-label="Empty checked" aria-checked="" tabindex="0">Empty checked</div>
+<div role="checkbox" aria-label="Spaced checked" aria-checked=" true " tabindex="0">Spaced checked</div>
+<div role="listbox"><div role="option" aria-label="Option checked" aria-checked="true">Option checked</div><div role="option" aria-label="Option mixed" aria-checked="mixed">Option mixed</div></div>
+<div role="tree"><div role="treeitem" aria-label="Treeitem checked" aria-checked="true" aria-expanded="false">Treeitem checked</div></div>
+<button aria-label="Padded collapsed" aria-expanded=" false ">Padded collapsed</button>
+<button aria-label="Blank expanded" aria-expanded="   ">Blank expanded</button>
+<div role="checkbox" aria-label="Padded false" aria-checked=" false " tabindex="0">Padded false</div>
+<div role="checkbox" aria-label="Blank checked" aria-checked="   " tabindex="0">Blank checked</div>
+<div role="listbox"><div role="option" aria-label="Option absent">Option absent</div></div>
+<div role="tree"><div role="treeitem" aria-label="Treeitem absent">Treeitem absent</div></div>
+<select aria-label="Native select"><option>Native option</option></select>
 <a href="/target" aria-label="Plain link">Plain link</a>
 </body></html>
