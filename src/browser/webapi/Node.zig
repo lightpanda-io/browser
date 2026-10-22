@@ -1167,6 +1167,7 @@ const CloneError = error{
     JsException,
     ExecutionTerminated,
     QuotaExceeded,
+    InvalidStringLength,
 };
 pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
     return self.cloneNodeInto(deep_ orelse false, self.getDocument(frame), frame);

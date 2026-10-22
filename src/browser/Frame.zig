@@ -39,6 +39,7 @@ const IdMap = @import("IdMap.zig");
 const css_charset = @import("css/charset.zig");
 const referrer = @import("referrer.zig");
 const Blob = @import("webapi/Blob.zig");
+const FormData = @import("webapi/net/FormData.zig");
 const FileList = @import("webapi/FileList.zig");
 const MediaQueryList = @import("webapi/css/MediaQueryList.zig");
 const Node = @import("webapi/Node.zig");
@@ -68,6 +69,8 @@ const HashChangeEvent = @import("webapi/event/HashChangeEvent.zig");
 const popover = @import("webapi/element/popover.zig");
 const slotting = @import("webapi/element/slotting.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
+const OngoingNavigation = @import("webapi/navigation/root.zig").OngoingNavigation;
+const NavigateEventResult = @import("webapi/navigation/Navigation.zig").NavigateEventResult;
 
 const sys_url = @import("../sys/url.zig");
 const HttpClient = @import("../network/HttpClient.zig");
@@ -231,6 +234,9 @@ _notified_network_almost_idle: IdleNotification = .init,
 // A navigation event that happens from a script gets scheduled to run on the
 // next tick.
 _queued_navigation: ?*QueuedNavigation = null,
+
+// Only on a root frame: see Navigation.fireNavigateEvent.
+_ongoing_navigate: ?OngoingNavigation = null,
 
 // Is there a <meta http-equiv=refresh> we need to fire on "load"?
 // Exactly which we need to fire can change, so rather than keeping it in sync
@@ -662,6 +668,11 @@ pub fn getPinnedArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) 
     return self._session.getPinnedArena(size_or_bucket, debug);
 }
 
+// HTML's "completely loaded": the load event has been dispatched.
+pub fn isCompletelyLoaded(self: *const Frame) bool {
+    return self._load_state == .complete and self._load_event_in_progress == false;
+}
+
 fn sameOrigin(a: *const Frame, b: *const Frame) bool {
     const a_origin = a.origin orelse return false;
     const b_origin = b.origin orelse return false;
@@ -1074,11 +1085,29 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         // change, no hashchange and no new history entry either. It's still a
         // fragment navigation, which Chrome reports.
         if (std.mem.eql(u8, target.url, resolved_url)) {
+            var same_url_opts = opts;
+            same_url_opts.kind = .{ .replace = null };
+            const result = try fireNavigateEvent(originator, target, resolved_url, true, same_url_opts);
+            if (result == .canceled) {
+                arena.release();
+                return;
+            }
+
             session.notification.dispatch(.frame_navigated_within_document, &.{
                 .url = target.url,
                 .frame_id = target._frame_id,
                 .navigation_type = .fragment,
             });
+            arena.release();
+
+            if (result == .fired) {
+                try session.navigationFor(target).commitSameDocument(result.fired, target);
+            }
+            return;
+        }
+
+        const result = try fireNavigateEvent(originator, target, resolved_url, true, opts);
+        if (result == .canceled) {
             arena.release();
             return;
         }
@@ -1112,6 +1141,16 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
 
         // don't defer this, the caller is responsible for freeing it on error
         arena.release();
+
+        if (result == .fired) {
+            try session.navigationFor(target).commitSameDocument(result.fired, target);
+        }
+        return;
+    }
+
+    if (try fireNavigateEvent(originator, target, resolved_url, false, opts) == .canceled) {
+        // don't defer this, the caller is responsible for freeing it on error
+        arena.release();
         return;
     }
 
@@ -1131,6 +1170,8 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     // runs (processRootQueuedNavigation rebuilds the Page in-place), so
     // allocate from the QueuedNavigation arena which outlives that tear-down.
     var nav_opts = opts;
+    nav_opts.source_element = null;
+    nav_opts.form_data = null;
     const referrer_source = originator.referrerSource();
     if (std.mem.startsWith(u8, referrer_source, "http")) {
         if (nav_opts.referer == null) {
@@ -1167,6 +1208,28 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     target._queued_navigation = qn;
     try session.scheduleNavigation(target);
     target.abortedDocumentIsComplete();
+}
+
+// The navigate event of a navigation started by the page: a script, a link or
+// a form. The browser's own (CDP) don't fire it, and the Navigation API's
+// methods fire theirs.
+fn fireNavigateEvent(originator: *Frame, target: *Frame, url: [:0]const u8, same_document: bool, opts: NavigateOpts) !NavigateEventResult {
+    switch (opts.reason) {
+        .address_bar, .history, .initialFrameNavigation, .navigation => return .not_fired,
+        .anchor, .form, .script => {},
+    }
+    // Not shown to a document of another origin.
+    if (target != originator and sameOrigin(originator, target) == false) {
+        return .not_fired;
+    }
+    return target._session.navigationFor(target).fireNavigateEvent(.{
+        .navigation_type = opts.kind.toNavigationType(),
+        .url = url,
+        .same_document = same_document,
+        .source_element = opts.source_element,
+        .form_data = opts.form_data,
+        .user_initiated = opts.user_initiated,
+    }, target);
 }
 
 // A script can have multiple competing navigation events, say it starts off
@@ -1291,6 +1354,12 @@ fn neuter(self: *Frame) void {
 }
 
 pub fn stopLoading(self: *Frame) void {
+    if (self._ongoing_navigate != null) {
+        self._session.navigationFor(self).abortOngoing(self) catch |err| {
+            log.debug(.frame, "stop abort navigation", .{ .err = err });
+        };
+    }
+
     var i: usize = 0;
     while (i < self.child_frames.items.len) : (i += 1) {
         // Each frame will cancel its requests, which can fire JS callbacks
@@ -3945,6 +4014,10 @@ pub const NavigateOpts = struct {
     initiator_origin: ?[]const u8 = null,
     force: bool = false,
     kind: NavigationKind = .{ .push = null },
+    // For the navigate event, read by scheduleNavigation only.
+    source_element: ?*Element = null,
+    form_data: ?*FormData = null,
+    user_initiated: bool = false,
 };
 
 pub const NavigatedOpts = struct {
@@ -4070,6 +4143,8 @@ fn findFrameByName(frame: *Frame, name: []const u8) ?*Frame {
 
 const SubmitFormOpts = struct {
     fire_event: bool = true,
+    // Submitted by a trusted (user) event.
+    user_initiated: bool = false,
 };
 pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.Form, submit_opts: SubmitFormOpts) !void {
     const form = form_ orelse return;
@@ -4149,8 +4224,6 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
             return;
         }
     }
-
-    const FormData = @import("webapi/net/FormData.zig");
 
     // Resolved before the entry list is built: a hidden `_charset_` field
     // takes the submission encoding's name as its value.
@@ -4245,8 +4318,11 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     var opts = NavigateOpts{
         .reason = .form,
         .kind = .{ .push = null },
+        .source_element = submitter_ orelse form_element,
+        .user_initiated = submit_opts.user_initiated,
     };
     if (is_post) {
+        opts.form_data = form_data;
         opts.method = .POST;
         opts.body = buf.written();
         opts.header = switch (encoding) {
