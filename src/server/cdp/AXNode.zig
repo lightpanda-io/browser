@@ -321,12 +321,10 @@ pub const Writer = struct {
 
     pub const AriaState = enum { true, false, mixed };
 
-    // Match Chrome AX token coercion: after trimming, only "false" is false,
-    // "mixed" is tri-state, and any other nonempty token reads as true.
+    /// Like Chrome, any other token, even " false ", reads as true.
     fn parseAriaState(value: []const u8) AriaState {
-        const token = std.mem.trim(u8, value, " \t\r\n\x0b\x0c");
-        if (token.len == 0 or std.ascii.eqlIgnoreCase(token, "false")) return .false;
-        if (std.ascii.eqlIgnoreCase(token, "mixed")) return .mixed;
+        if (value.len == 0 or std.ascii.eqlIgnoreCase(value, "false")) return .false;
+        if (std.ascii.eqlIgnoreCase(value, "mixed")) return .mixed;
         return .true;
     }
 
@@ -334,6 +332,8 @@ pub const Writer = struct {
         expanded: bool = false,
         // Only tri-state roles keep aria-checked="mixed"; the rest read it as false.
         checked: ?enum { binary, tri_state } = null,
+        // Options and tree items are only checkable once aria-checked is set.
+        checked_needs_attr: bool = false,
     };
 
     fn roleStates(role: []const u8) RoleStates {
@@ -353,13 +353,13 @@ pub const Writer = struct {
             .{ "menuitem", RoleStates{ .expanded = true } },
             .{ "menuitemcheckbox", RoleStates{ .expanded = true, .checked = .tri_state } },
             .{ "menuitemradio", RoleStates{ .expanded = true, .checked = .binary } },
-            .{ "option", RoleStates{ .checked = .tri_state } },
+            .{ "option", RoleStates{ .checked = .tri_state, .checked_needs_attr = true } },
             .{ "radio", RoleStates{ .checked = .binary } },
             .{ "row", RoleStates{ .expanded = true } },
             .{ "rowheader", RoleStates{ .expanded = true } },
             .{ "switch", RoleStates{ .expanded = true, .checked = .binary } },
             .{ "tab", RoleStates{ .expanded = true } },
-            .{ "treeitem", RoleStates{ .expanded = true, .checked = .tri_state } },
+            .{ "treeitem", RoleStates{ .expanded = true, .checked = .tri_state, .checked_needs_attr = true } },
         });
         return roles.get(std.ascii.lowerString(&buf, role)) orelse .{};
     }
@@ -374,15 +374,15 @@ pub const Writer = struct {
         const states = roleStates(role);
         var props: AriaProperties = .{};
         if (states.expanded and el.getTag() != .select) {
-            if (el.getAttributeInterned("aria-expanded")) |raw| {
-                if (std.mem.trim(u8, raw, " \t\r\n\x0b\x0c").len != 0) {
-                    props.expanded = parseAriaState(raw) != .false;
-                }
-            }
+            const raw = el.getAttributeInterned("aria-expanded") orelse "";
+            if (raw.len != 0) props.expanded = parseAriaState(raw) != .false;
         }
-        if (states.checked != null and el.getTag() != .input) {
-            const state = parseAriaState(el.getAttributeSafe(.wrap("aria-checked")) orelse "false");
-            props.checked = if (state == .mixed and states.checked == .binary) .false else state;
+        if (states.checked) |kind| {
+            const raw = el.getAttributeSafe(.wrap("aria-checked")) orelse "";
+            if (el.getTag() != .input and (raw.len != 0 or !states.checked_needs_attr)) {
+                const state = parseAriaState(raw);
+                props.checked = if (state == .mixed and kind == .binary) .false else state;
+            }
         }
         return props;
     }
@@ -2413,6 +2413,13 @@ test "AXNode: custom ARIA states and tabindex focusability" {
         .{ .role = "option", .name = "Option mixed", .property = "checked", .value = .{ .string = "mixed" } },
         .{ .role = "treeitem", .name = "Treeitem checked", .property = "checked", .value = .{ .string = "true" } },
         .{ .role = "treeitem", .name = "Treeitem checked", .property = "expanded", .value = .{ .bool = false } },
+        .{ .role = "option", .name = "Option absent", .property = "checked", .value = null },
+        .{ .role = "option", .name = "Native option", .property = "checked", .value = null },
+        .{ .role = "treeitem", .name = "Treeitem absent", .property = "checked", .value = null },
+        .{ .role = "checkbox", .name = "Padded false", .property = "checked", .value = .{ .string = "true" } },
+        .{ .role = "checkbox", .name = "Blank checked", .property = "checked", .value = .{ .string = "true" } },
+        .{ .role = "button", .name = "Padded collapsed", .property = "expanded", .value = .{ .bool = true } },
+        .{ .role = "button", .name = "Blank expanded", .property = "expanded", .value = .{ .bool = true } },
         .{ .role = "checkbox", .name = "Uppercase mixed", .property = "checked", .value = .{ .string = "mixed" } },
         .{ .role = "checkbox", .name = "Absent checked", .property = "checked", .value = .{ .string = "false" } },
         .{ .role = "checkbox", .name = "Native terms", .property = "checked", .value = .{ .string = "true" } },

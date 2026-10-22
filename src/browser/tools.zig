@@ -3076,6 +3076,8 @@ test "tools: tree exposes Chrome-matched custom ARIA states" {
         "option 'Option checked' [checked]",
         "option 'Option mixed' [mixed]",
         "treeitem 'Treeitem checked' [collapsed] [checked]",
+        "checkbox 'Padded false' [checked]",
+        "button 'Padded collapsed' [expanded]",
         "checkbox 'Uppercase mixed' [mixed]",
         "checkbox 'Absent checked' [unchecked]",
         "switch 'Switch mixed' [unchecked]",
@@ -3090,8 +3092,9 @@ test "tools: tree exposes Chrome-matched custom ARIA states" {
         }
     }
 
-    // Unsupported roles and empty expanded values must not manufacture state.
-    const ignored = [_][]const u8{ "'Generic expanded'", "'Empty expanded'" };
+    // Unsupported roles, empty expanded values, and options or tree items
+    // without aria-checked must not manufacture state.
+    const ignored = [_][]const u8{ "'Generic expanded'", "'Empty expanded'", "'Option absent'", "'Treeitem absent'" };
     for (ignored) |name| {
         var lines = std.mem.splitScalar(u8, result.text, '\n');
         var found = false;
