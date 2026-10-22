@@ -274,3 +274,31 @@ test "WebApi: Console" {
     testing.expectLog(&.{ .js, .js, .js });
     try testing.htmlRunner("console", .{});
 }
+
+test "WebApi: Console escapes page values in the log" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const format = logger.opts.format;
+    defer logger.opts.format = format;
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+
+    var values = [_]js.Value{
+        try ls.local.exec("'one\\nx level=fatal'", null),
+        try ls.local.exec("'\\x1b[31m'", null),
+    };
+    logger.opts.format = .logfmt;
+    try logger.logTo(.js, .info, "console.log", .{ValueWriter{ .values = &values }}, &aw.writer);
+    try testing.expect(std.mem.endsWith(u8, aw.written(), " param.0=\"one\\nx level=fatal\" param.1=G1szMW0\n"));
+
+    aw.clearRetainingCapacity();
+    logger.opts.format = .pretty;
+    try logger.logTo(.js, .info, "console.log", .{ValueWriter{ .values = &values }}, &aw.writer);
+    try testing.expect(std.mem.endsWith(u8, aw.written(), "\n  arg(1): one\nx level=fatal\n  arg(2): \\x1b[31m\n\n"));
+}
