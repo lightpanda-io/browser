@@ -19,6 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const truncateUtf8 = @import("string.zig").truncateUtf8;
+
 threadlocal var current_page: ?*PageContext = null;
 
 pub const Scope = enum {
@@ -425,16 +427,6 @@ pub const KV = struct {
 const Colored = struct {
     code: []const u8,
     text: []const u8,
-
-    pub fn logFmt(self: Colored, key: []const u8, writer: LogFormatWriter) !void {
-        return writer.write(key, self.text);
-    }
-
-    pub fn format(self: Colored, writer: *std.Io.Writer) !void {
-        try writeColor(self.code, writer);
-        try writer.writeAll(self.text);
-        try clearColor(writer);
-    }
 };
 
 pub fn red(text: []const u8) Colored {
@@ -453,6 +445,7 @@ const Value = union(enum) {
     float32: f32,
     float64: f64,
     boolean: bool,
+    colored: *const Colored,
     formatter: Formatter,
     log_fmt: LogFmt,
 
@@ -489,6 +482,10 @@ const Value = union(enum) {
 
     fn initRuntime(vp: anytype) Value {
         const T = @TypeOf(vp.*);
+
+        if (comptime T == Colored) {
+            return .{ .colored = vp };
+        }
 
         if (comptime std.meta.hasMethod(T, "logFmt")) {
             const Thunk = struct {
@@ -582,9 +579,45 @@ fn writeErased(format: Format, value: Value, writer: *std.Io.Writer) !void {
         .float32 => |n| return writer.print("{d}", .{n}),
         .float64 => |n| return writer.print("{d}", .{n}),
         .boolean => |b| return writer.writeAll(if (b) "true" else "false"),
-        .formatter => |f| return f.writeFn(f.ptr, writer),
-        .log_fmt => |f| return f.writeFn(f.ptr, writer),
+        .colored => |c| {
+            if (format == .logfmt) {
+                return writeString(format, c.text, writer);
+            }
+            try writeColor(c.code, writer);
+            try writeString(format, c.text, writer);
+            return clearColor(writer);
+        },
+        .formatter => |f| return writeFormatted(format, f.ptr, f.writeFn, writer),
+        .log_fmt => |f| return writeFormatted(format, f.ptr, f.writeFn, writer),
     }
+}
+
+// Formatted values can hold page text (console arguments, URLs, exception
+// messages), so they're rendered and then escaped like any other string.
+const max_value_len = 8 * 1024;
+const truncated_marker = "...[truncated]";
+
+fn writeFormatted(
+    format: Format,
+    ptr: *const anyopaque,
+    writeFn: *const fn (ptr: *const anyopaque, writer: *std.Io.Writer) anyerror!void,
+    writer: *std.Io.Writer,
+) !void {
+    var buf: [max_value_len + truncated_marker.len]u8 = undefined;
+    // One byte over the cap, so truncateUtf8 can tell whether the cut splits a code point.
+    var fixed: std.Io.Writer = .fixed(buf[0 .. max_value_len + 1]);
+    writeFn(ptr, &fixed) catch |e| {
+        if (e != error.WriteFailed) {
+            return e;
+        }
+    };
+    const value = fixed.buffered();
+    if (value.len <= max_value_len) {
+        return writeString(format, value, writer);
+    }
+    const kept = truncateUtf8(value, max_value_len).len;
+    @memcpy(buf[kept..][0..truncated_marker.len], truncated_marker);
+    return writeString(format, buf[0 .. kept + truncated_marker.len], writer);
 }
 
 fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void {
@@ -640,7 +673,7 @@ fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void 
 
 // Control characters other than \n and \t are written as \xNN, so a logged
 // value can't emit terminal escape sequences.
-pub fn writePrettyString(value: []const u8, writer: *std.Io.Writer) !void {
+fn writePrettyString(value: []const u8, writer: *std.Io.Writer) !void {
     var start: usize = 0;
     for (value, 0..) |b, i| {
         if (!std.ascii.isControl(b) or b == '\n' or b == '\t') {
@@ -834,6 +867,38 @@ test "log: string escape" {
         try writeValue(.pretty, "a\x1b[31mb\x07\r\n\tc\x7f", &aw.writer);
         try testing.expectEqual("a\\x1b[31mb\\x07\\x0d\n\tc\\x7f", aw.written());
     }
+}
+
+test "log: formatted values are escaped and capped" {
+    const Text = struct {
+        text: []const u8,
+        pub fn format(self: @This(), writer: *std.Io.Writer) !void {
+            return writer.writeAll(self.text);
+        }
+    };
+
+    opts.format = .logfmt;
+    defer opts.format = .pretty;
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+
+    try logTo(.app, .err, "test", .{ .v = Text{ .text = "one\nx level=fatal" }, .esc = Text{ .text = "\x1b[31m" } }, &aw.writer);
+    try testing.expectEqual("$time=1739795092929 $scope=app $level=error $msg=\"test\" v=\"one\\nx level=fatal\" esc=G1szMW0\n", aw.written());
+
+    aw.clearRetainingCapacity();
+    try writeValue(.pretty, Text{ .text = "a\x1b[31mb" }, &aw.writer);
+    try testing.expectEqual("a\\x1b[31mb", aw.written());
+
+    // The cut keeps whole code points: 'a' + two-byte ones.
+    aw.clearRetainingCapacity();
+    const es: [max_value_len / 2 + 10][2]u8 = @splat("\u{e9}".*);
+    const long = try std.mem.concat(testing.allocator, u8, &.{ "a", std.mem.sliceAsBytes(&es) });
+    defer testing.allocator.free(long);
+    try writeValue(.pretty, Text{ .text = long }, &aw.writer);
+    const out = aw.written();
+    try testing.expectEqual(long[0 .. max_value_len - 1], out[0 .. out.len - truncated_marker.len]);
+    try testing.expectEqual(truncated_marker, out[out.len - truncated_marker.len ..]);
 }
 
 test "log: page context" {
