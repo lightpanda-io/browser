@@ -46,10 +46,12 @@ const ChoiceEntry = zenai.typesafe.ChoiceEntry;
 pub const none_key = "none";
 const none_description = "Nothing on this page does that";
 
-/// How many options a question may offer. The API's limit is 255, and the
+/// How many options a question may offer. The API's limit is 255, but the
 /// vendor documents that detail unrelated to the decision distracts the
-/// model, so a page with more controls than this offers the first of them.
-pub const max_options = 200;
+/// model, and the options are the bulk of the request: 200 of them run to
+/// 13 KB against an 8 KB state. Over the budget, `overlay` decides who keeps
+/// a place.
+pub const max_options = 50;
 
 /// Longest accessible name worth sending: the model reads the whole of it in
 /// the state anyway.
@@ -70,7 +72,10 @@ pub const Candidate = struct {
     info: std.json.Value,
 };
 
-/// Every interactive element under `root`, in document order.
+/// Every interactive element under `root`, in document order, up to
+/// `max_options`. Over the budget, an element drawn over the page keeps its
+/// place and one behind it gives way. Nothing is reordered, so an option's
+/// place in the question still means nothing.
 pub fn collect(
     arena: std.mem.Allocator,
     root: *DOMNode,
@@ -79,12 +84,23 @@ pub fn collect(
 ) ![]const Candidate {
     const elements = try interactive.collectInteractiveElements(root, arena, frame);
 
+    var pinned: usize = 0;
+    for (elements) |*el| {
+        if (!el.disabled and el.overlay.any()) pinned += 1;
+    }
+    // What is left of the budget once everything over the page has a place.
+    var others: usize = max_options -| pinned;
+
     var out: std.ArrayList(Candidate) = try .initCapacity(arena, @min(elements.len, max_options));
     for (elements) |el| {
         // Not a decision: a disabled control cannot be clicked at all.
         if (el.disabled) continue;
         if (out.items.len == max_options) break;
         const element = el.node.is(Element) orelse continue;
+        if (!el.overlay.any()) {
+            if (others == 0) continue;
+            others -= 1;
+        }
         const node = try registry.register(element.asNode());
         out.appendAssumeCapacity(.{
             .key = try arena.print("{d}", .{node.id}),
@@ -304,4 +320,26 @@ fn answerFixture(
         .confidence = 0.9,
     } } };
     return .{ .answers = .init(answers) };
+}
+
+test "browser.choose: over the budget, a control over the page keeps its place" {
+    defer testing.test_session.closeAllPages();
+
+    var html: std.ArrayList(u8) = .empty;
+    defer html.deinit(std.testing.allocator);
+    for (0..max_options + 10) |i| {
+        try html.print(std.testing.allocator, "<button>page {d}</button>", .{i});
+    }
+    try html.appendSlice(std.testing.allocator,
+        \\<div style="position: fixed"><button>Accept</button><button>Reject</button></div>
+    );
+
+    const candidates = try testCollect(html.items);
+
+    try testing.expectEqual(max_options, candidates.len);
+    try testing.expectEqual("Accept", candidates[max_options - 2].name);
+    try testing.expectEqual("Reject", candidates[max_options - 1].name);
+    // Document order is untouched.
+    try testing.expectEqual("page 0", candidates[0].name);
+    try testing.expectEqual("page 1", candidates[1].name);
 }
