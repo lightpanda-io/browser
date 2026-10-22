@@ -33,6 +33,8 @@ const URL = @import("URL.zig");
 const Page = @import("Page.zig");
 const Frame = @import("Frame.zig");
 const Browser = @import("Browser.zig");
+const Geolocation = @import("webapi/geolocation/Geolocation.zig");
+const PermissionState = @import("webapi/Permissions.zig").State;
 pub const Runner = @import("Runner.zig");
 const Notification = @import("../Notification.zig");
 const QueuedNavigation = Frame.QueuedNavigation;
@@ -50,6 +52,8 @@ const ArenaPool = App.ArenaPool;
 const Session = @This();
 
 browser: *Browser,
+permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
+geolocation_override: ?Geolocation.Override = null,
 arena: *lp.Arena,
 // Session history, one per top-level browsing context, keyed by its root
 // frame id. Outlives the Page: a root navigation's replacement Page reuses the
@@ -178,6 +182,24 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     errdefer self._console_messages.deinit();
 }
 
+pub fn setPermission(self: *Session, name: []const u8, state: PermissionState) !void {
+    const allocator = self.browser.allocator;
+    const gop = try self.permissions.getOrPut(allocator, name);
+    if (!gop.found_existing) {
+        gop.key_ptr.* = allocator.dupe(u8, name) catch |err| {
+            _ = self.permissions.remove(name);
+            return err;
+        };
+    }
+    gop.value_ptr.* = state;
+}
+
+pub fn clearPermissions(self: *Session) void {
+    var it = self.permissions.keyIterator();
+    while (it.next()) |key| self.browser.allocator.free(key.*);
+    self.permissions.clearRetainingCapacity();
+}
+
 pub fn deinit(self: *Session) void {
     if (self._console_capture) {
         self.notification.unregister(.console_message, self);
@@ -199,6 +221,8 @@ pub fn deinit(self: *Session) void {
     }
 
     self.cookie_jar.deinit();
+    self.clearPermissions();
+    self.permissions.deinit(self.browser.allocator);
 
     {
         // Every context is disposed; this GC must not arm a termination.
@@ -1235,4 +1259,27 @@ test "Session: console capture runs no page JS" {
     try testing.expectEqualSlices(u8, "[log] head [object Object] 10n Symbol(s)\n", session.drainConsoleMessages());
     const probed = try ls.local.exec("globalThis.probed", null);
     try testing.expectEqual(0, try probed.toF64());
+}
+
+test "Session: permission and coordinate overrides belong to their session" {
+    const browser = testing.test_session.browser;
+    const first_notification = try Notification.init(testing.allocator);
+    defer first_notification.deinit();
+    const second_notification = try Notification.init(testing.allocator);
+    defer second_notification.deinit();
+    var first: Session = undefined;
+    try first.init(browser, first_notification);
+    defer first.deinit();
+    var second: Session = undefined;
+    try second.init(browser, second_notification);
+    defer second.deinit();
+    try first.setPermission("geolocation", .granted);
+    try second.setPermission("geolocation", .denied);
+    first.geolocation_override = .{ .latitude = 1, .longitude = 2, .accuracy = 3 };
+    second.geolocation_override = .{ .latitude = 4, .longitude = 5, .accuracy = 6 };
+    first.clearPermissions();
+    try testing.expectEqual(null, first.permissions.get("geolocation"));
+    try testing.expectEqual(.denied, second.permissions.get("geolocation").?);
+    try testing.expectEqual(1, first.geolocation_override.?.latitude);
+    try testing.expectEqual(4, second.geolocation_override.?.latitude);
 }

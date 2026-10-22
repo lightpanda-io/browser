@@ -50,7 +50,7 @@ pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution)
     const arena = try exec.getArena(.tiny, "PermissionStatus");
     errdefer arena.release();
 
-    const state = exec.session.browser.permissions.get(qd.name) orelse .prompt;
+    const state = exec.session.permissions.get(qd.name) orelse .prompt;
     const status = try exec._factory.eventTargetWithAllocator(arena.allocator(), PermissionStatus{
         ._arena = arena,
         ._proto = undefined,
