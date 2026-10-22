@@ -233,7 +233,7 @@ fn resetPermissions(cmd: *CDP.Command) !void {
             if (!std.mem.eql(u8, bid, bc.id)) return error.UnknownBrowserContextId;
         }
     }
-    (cmd.browser_context orelse try cmd.createBrowserContext()).session.clearPermissions();
+    if (cmd.browser_context) |bc| bc.session.clearPermissions();
     return cmd.sendResult(null, .{});
 }
 
@@ -499,6 +499,20 @@ test "cdp.browser: permission setup works before the first target" {
         try testing.expectEqual(expected, session.permissions.get("geolocation") orelse .prompt);
         try testing.expect(session.hasPage());
     }
+}
+
+test "cdp.browser: resetting absent permissions leaves context creation available" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Browser.resetPermissions", .params = .{} });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expectEqual(null, ctx.cdp().browser_context);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createBrowserContext", .params = .{} });
+    const bc = ctx.cdp().browser_context orelse return error.MissingBrowserContext;
+    try ctx.expectSentResult(.{ .browserContextId = bc.id }, .{ .id = 2 });
+    try testing.expectEqual(@as(usize, 0), bc.session.permissions.count());
 }
 
 test "cdp.browser: unknown permission context does not create a context" {
