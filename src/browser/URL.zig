@@ -203,6 +203,12 @@ pub fn isCompleteHTTPUrl(url: []const u8) bool {
     return true;
 }
 
+/// Whether the URL has a userinfo part, which libcurl sends as Basic
+/// authentication.
+pub fn hasCredentials(raw: [:0]const u8) bool {
+    return getUserInfo(raw) != null;
+}
+
 pub fn getUsername(raw: [:0]const u8) []const u8 {
     const user_info = getUserInfo(raw) orelse return "";
     const pos = std.mem.findScalarPos(u8, user_info, 0, ':') orelse return user_info;
@@ -726,6 +732,14 @@ fn parseAuthority(raw: []const u8) ?AuthorityInfo {
 }
 
 const testing = @import("../testing.zig");
+test "URL: hasCredentials" {
+    try testing.expectEqual(true, hasCredentials("http://u:p@example.com/"));
+    try testing.expectEqual(true, hasCredentials("http://u@example.com/a"));
+    try testing.expectEqual(false, hasCredentials("http://example.com/a@b"));
+    try testing.expectEqual(false, hasCredentials("http://example.com/?q=u:p@x"));
+    try testing.expectEqual(false, hasCredentials("about:blank"));
+}
+
 test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(true, isCompleteHTTPUrl("http://example.com/about"));
     try testing.expectEqual(true, isCompleteHTTPUrl("HttP://example.com/about"));
