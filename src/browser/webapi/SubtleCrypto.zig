@@ -124,7 +124,14 @@ pub fn importKey(
     try checkFormat(format, local);
     // keyData converts first (a JWK's members are read then), but a buffer's
     // bytes are only read after the algorithm is normalized (bufferBytes).
-    var key_data = local.jsValueToZig(algorithm.KeyData, key_data_value) catch |err| {
+    // Any ArrayBuffer or view is the BufferSource (a Uint16Array too, which
+    // KeyData's Uint8Array wouldn't take); a shared one is one that fails its
+    // conversion (TypeError), not a JsonWebKey. Any other object is a JWK.
+    const is_buffer = key_data_value.isArrayBuffer() or key_data_value.isArrayBufferView() or key_data_value.isSharedArrayBuffer();
+    var key_data: algorithm.KeyData = if (is_buffer) blk: {
+        try checkBufferSource(key_data_value, local);
+        break :blk .{ .bytes = .{ .values = &.{} } };
+    } else local.jsValueToZig(algorithm.KeyData, key_data_value) catch |err| {
         return algorithm.conversionError(err, local, "keyData is neither a BufferSource nor a JsonWebKey");
     };
     const algo = try algorithm.Import.fromJs(algo_value, local);
@@ -642,17 +649,20 @@ fn checkFormat(format: []const u8, local: *const js.Local) !void {
 /// normalizing runs the page's getters, which can transfer the buffer, and
 /// its bytes must then read as the now-empty buffer rather than through a
 /// pointer into a moved backing store.
+///
+/// None of SubtleCrypto's BufferSource arguments is [AllowShared]: a
+/// SharedArrayBuffer, or a view onto one, is a TypeError.
 fn checkBufferSource(value: js.Value, local: *const js.Local) !void {
-    if (!value.isArrayBuffer() and !value.isArrayBufferView()) {
+    if (!value.isBufferSource()) {
         return local.typeError("expected an ArrayBuffer or ArrayBufferView");
     }
 }
 
 fn bufferBytes(value: js.Value, local: *const js.Local) ![]const u8 {
-    const buffer = local.jsValueToZig(js.TypedArray(u8), value) catch |err| {
+    const buffer = local.jsValueToZig(js.BufferSource, value) catch |err| {
         return algorithm.conversionError(err, local, "expected an ArrayBuffer or ArrayBufferView");
     };
-    return buffer.values;
+    return buffer.bytes;
 }
 
 /// What `cryptBytes` is for, which decides the direction and the usage the key
@@ -813,7 +823,7 @@ const DigestInput = union(enum) {
 };
 
 /// Generates a digest of the given data, using the specified hash function.
-pub fn digest(_: *const SubtleCrypto, algo: DigestInput, data: js.TypedArray(u8), exec: *const Execution) !js.Promise {
+pub fn digest(_: *const SubtleCrypto, algo: DigestInput, data: js.BufferSource, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
 
     const algo_name = algo.name() orelse {
@@ -826,7 +836,7 @@ pub fn digest(_: *const SubtleCrypto, algo: DigestInput, data: js.TypedArray(u8)
     const normalized = try std.ascii.allocUpperString(exec.local_arena, algo_name);
     const digest_type = crypto.findDigest(normalized) catch return error.NotSupported;
 
-    const bytes = data.values;
+    const bytes = data.bytes;
     var out: [crypto.EVP_MAX_MD_SIZE]u8 = undefined;
     var out_size: c_uint = 0;
     const result = crypto.EVP_Digest(bytes.ptr, bytes.len, &out, &out_size, digest_type, null);

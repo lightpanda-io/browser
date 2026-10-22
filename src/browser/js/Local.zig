@@ -798,14 +798,11 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             return .{ .values = arr };
         },
         js.BufferSource => {
-            if (v8.v8__Value__IsSharedArrayBuffer(js_val.handle)) {
+            if (js_val.isSharedArrayBuffer()) {
                 return error.TypeError;
             }
-            if (js_val.isArrayBufferView()) {
-                const view: *const v8.ArrayBufferView = @ptrCast(js_val.handle);
-                if (js.arrayBufferIsShared(v8.v8__ArrayBufferView__Buffer(view).?)) {
-                    return error.TypeError;
-                }
+            if (js_val.isArrayBufferView() and !js_val.isBufferSource()) {
+                return error.TypeError;
             }
             const bytes = (try jsValueToArrayBufferSlice(u8, true, js_val)) orelse return null;
             return .{ .bytes = bytes };
