@@ -2944,7 +2944,7 @@
   results["aes spki"] = await outcome(() => subtle.exportKey("spki", aes));
   results["wrap aes locked"] = await outcome(() => subtle.wrapKey("raw", aesLocked, kw, "AES-KW"));
   // An unknown format is a TypeError before anything else; a raw-* one of the
-  // Modern Algorithms draft is a known format, but not supported here.
+  // Modern Algorithms draft is a known format, which an algorithm may not take.
   results["export bogus"] = await outcome(() => subtle.exportKey("bogus", aesLocked));
   results["export Raw"] = await outcome(() => subtle.exportKey("Raw", aes));
   results["export bogus hkdf"] = await outcome(() => subtle.exportKey("bogus", hkdf));
@@ -2982,10 +2982,10 @@
       "export bogus hkdf": "TypeError",
       "import bogus": "TypeError",
       "import raw-public aes": "NotSupportedError",
-      // Chrome supports raw-secret for AES, and raw-public for EC keys.
-      "export raw-secret aes": "NotSupportedError",
-      "export raw-public ec": "NotSupportedError",
-      "import raw-public ec": "NotSupportedError",
+      // raw-secret is raw for AES, raw-public for an EC public key.
+      "export raw-secret aes": "bytes:16",
+      "export raw-public ec": "bytes:65",
+      "import raw-public ec": "object",
       "import raw-private ec": "NotSupportedError",
       "wrap bogus": "TypeError",
       "unwrap bogus": "TypeError",
@@ -3275,4 +3275,95 @@
       testing.expectEqual(true, keyFromThere);
     });
   }
+</script>
+
+<script id=raw-format-aliases type=module>
+  // The Modern Algorithms draft's raw-* formats: raw-secret is raw for the
+  // symmetric algorithms, raw-public is raw for an EC or OKP public key.
+  const state = await testing.async();
+  const subtle = crypto.subtle;
+  const hex = (b) => Array.from(new Uint8Array(b), (x) => x.toString(16).padStart(2, "0")).join("");
+  const outcome = async (fn) => {
+    try {
+      const r = await fn();
+      return r instanceof ArrayBuffer ? `bytes:${r.byteLength}` : r instanceof CryptoKey ? `${r.type}:${r.algorithm.name}` : typeof r;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const bytes16 = crypto.getRandomValues(new Uint8Array(16));
+  const gcm = { name: "AES-GCM", iv: new Uint8Array(12) };
+  const wrapper = await subtle.generateKey({ name: "AES-GCM", length: 128 }, false, ["wrapKey", "unwrapKey"]);
+  const results = {};
+
+  for (const [algo, usages, extractable] of [
+    ["AES-CTR", ["encrypt"], true], ["AES-CBC", ["encrypt"], true], ["AES-GCM", ["encrypt"], true], ["AES-KW", ["wrapKey"], true],
+    [{ name: "HMAC", hash: "SHA-256" }, ["sign"], true], ["HKDF", ["deriveBits"], false], ["PBKDF2", ["deriveBits"], false],
+  ]) {
+    const name = algo.name || algo;
+    const key = await subtle.importKey("raw-secret", bytes16, algo, extractable, usages);
+    results[`import ${name}`] = `${key.type}:${key.algorithm.name}`;
+    if (extractable) {
+      results[`export ${name}`] = hex(await subtle.exportKey("raw-secret", key)) === hex(bytes16);
+      const wrapped = await subtle.wrapKey("raw-secret", key, wrapper, gcm);
+      results[`unwrap ${name}`] = await outcome(() => subtle.unwrapKey("raw-secret", wrapped, wrapper, gcm, algo, true, usages));
+    }
+  }
+
+  for (const [algo, usages, publicUsages] of [
+    [{ name: "ECDSA", namedCurve: "P-256" }, ["sign", "verify"], ["verify"]],
+    [{ name: "ECDH", namedCurve: "P-384" }, ["deriveBits"], []],
+    ["Ed25519", ["sign", "verify"], ["verify"]],
+    ["X25519", ["deriveBits"], []],
+  ]) {
+    const name = algo.name || algo;
+    const pair = await subtle.generateKey(algo, true, usages);
+    const raw = await subtle.exportKey("raw", pair.publicKey);
+    results[`export ${name}`] = hex(await subtle.exportKey("raw-public", pair.publicKey)) === hex(raw);
+    results[`import ${name}`] = await outcome(() => subtle.importKey("raw-public", raw, algo, true, publicUsages));
+    const wrapped = await subtle.wrapKey("raw-public", pair.publicKey, wrapper, gcm);
+    results[`unwrap ${name}`] = await outcome(() => subtle.unwrapKey("raw-public", wrapped, wrapper, gcm, algo, true, publicUsages));
+    // Only a public key has a raw-public form.
+    results[`private ${name}`] = await outcome(() => subtle.exportKey("raw-public", pair.privateKey));
+  }
+
+  // A raw-* format the algorithm doesn't take is NotSupportedError.
+  const ec = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const ecRaw = await subtle.exportKey("raw", ec.publicKey);
+  const aes = await subtle.importKey("raw", bytes16, "AES-GCM", true, ["encrypt"]);
+  const rsa = await subtle.generateKey({ name: "RSA-PSS", hash: "SHA-256", modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]) }, true, ["sign", "verify"]);
+  results["export raw-secret ec"] = await outcome(() => subtle.exportKey("raw-secret", ec.publicKey));
+  results["import raw-secret ec"] = await outcome(() => subtle.importKey("raw-secret", ecRaw, { name: "ECDSA", namedCurve: "P-256" }, true, ["verify"]));
+  results["export raw-public aes"] = await outcome(() => subtle.exportKey("raw-public", aes));
+  results["export raw-public rsa"] = await outcome(() => subtle.exportKey("raw-public", rsa.publicKey));
+  results["import raw-public rsa"] = await outcome(() => subtle.importKey("raw-public", ecRaw, { name: "RSA-PSS", hash: "SHA-256" }, true, ["verify"]));
+  // raw-public is a public key: a private usage is a SyntaxError, as for raw.
+  results["import raw-public ec sign"] = await outcome(() => subtle.importKey("raw-public", ecRaw, { name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]));
+  // HKDF and PBKDF2 still have no export operation.
+  const hkdf = await subtle.importKey("raw-secret", bytes16, "HKDF", false, ["deriveBits"]);
+  results["export raw-secret hkdf"] = await outcome(() => subtle.exportKey("raw-secret", hkdf));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual({
+      "import AES-CTR": "secret:AES-CTR", "export AES-CTR": true, "unwrap AES-CTR": "secret:AES-CTR",
+      "import AES-CBC": "secret:AES-CBC", "export AES-CBC": true, "unwrap AES-CBC": "secret:AES-CBC",
+      "import AES-GCM": "secret:AES-GCM", "export AES-GCM": true, "unwrap AES-GCM": "secret:AES-GCM",
+      "import AES-KW": "secret:AES-KW", "export AES-KW": true, "unwrap AES-KW": "secret:AES-KW",
+      "import HMAC": "secret:HMAC", "export HMAC": true, "unwrap HMAC": "secret:HMAC",
+      "import HKDF": "secret:HKDF",
+      "import PBKDF2": "secret:PBKDF2",
+      "export ECDSA": true, "import ECDSA": "public:ECDSA", "unwrap ECDSA": "public:ECDSA", "private ECDSA": "InvalidAccessError",
+      "export ECDH": true, "import ECDH": "public:ECDH", "unwrap ECDH": "public:ECDH", "private ECDH": "InvalidAccessError",
+      "export Ed25519": true, "import Ed25519": "public:Ed25519", "unwrap Ed25519": "public:Ed25519", "private Ed25519": "InvalidAccessError",
+      "export X25519": true, "import X25519": "public:X25519", "unwrap X25519": "public:X25519", "private X25519": "InvalidAccessError",
+      "export raw-secret ec": "NotSupportedError",
+      "import raw-secret ec": "NotSupportedError",
+      "export raw-public aes": "NotSupportedError",
+      "export raw-public rsa": "NotSupportedError",
+      "import raw-public rsa": "NotSupportedError",
+      "import raw-public ec sign": "SyntaxError",
+      "export raw-secret hkdf": "NotSupportedError",
+    }, results);
+  });
 </script>
