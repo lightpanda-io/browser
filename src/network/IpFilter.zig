@@ -114,6 +114,11 @@ const PRIVATE_V4 = [_]CidrV4{
     makeCidrV4("172.16.0.0", 12), // RFC1918
     makeCidrV4("192.168.0.0", 16), // RFC1918
     makeCidrV4("169.254.0.0", 16), // link-local
+    makeCidrV4("100.64.0.0", 10), // shared address space, RFC 6598
+    makeCidrV4("192.0.0.0", 24), // IETF protocol assignments, RFC 6890
+    makeCidrV4("198.18.0.0", 15), // benchmarking, RFC 2544
+    makeCidrV4("224.0.0.0", 4), // multicast
+    makeCidrV4("240.0.0.0", 4), // reserved, incl. 255.255.255.255 broadcast
 };
 
 const PRIVATE_V6 = [_]CidrV6{
@@ -125,6 +130,11 @@ const PRIVATE_V6 = [_]CidrV6{
     makeCidrV6(.{ 0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 10),
     // fc00::/7 — ULA
     makeCidrV6(.{ 0xfc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 7),
+    // fec0::/10 — site-local, deprecated by RFC 3879
+    makeCidrV6(.{ 0xfe, 0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 10),
+    // 64:ff9b:1::/48 — local-use NAT64, RFC 8215. Blocked whole: the IPv4
+    // offset depends on the network's prefix length (RFC 6052).
+    makeCidrV6(.{ 0, 0x64, 0xff, 0x9b, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 48),
 };
 
 // ── Runtime IP parsing ───────────────────────────────────────────────────────
@@ -161,6 +171,14 @@ fn isIpv4Mapped(addr: Ipv6Addr) ?Ipv4Addr {
     const prefix = [12]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
     if (!std.mem.eql(u8, addr[0..12], &prefix)) return null;
     return addr[12..16].*;
+}
+
+/// Return the IPv4 address embedded in a NAT64 well-known-prefix address
+/// (64:ff9b::/96, RFC 6052).
+fn nat64Ipv4(addr: Ipv6Addr) ?Ipv4Addr {
+    const nat64_prefix = [12]u8{ 0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0 };
+    if (std.mem.eql(u8, addr[0..12], &nat64_prefix)) return addr[12..16].*;
+    return null;
 }
 
 /// Check if IPv4 address falls within a CIDR range.
@@ -257,7 +275,7 @@ pub fn parseCidrList(
 }
 
 // Create a IpFilter. Set block_private to block outbound requests to RFC1918,
-// localhost, link-local, and ULA ranges. Pass parsed CIDRs for additional
+// localhost, link-local, ULA and other special-purpose ranges. Pass parsed CIDRs for additional
 // custom block/allow ranges; the filter takes ownership of the Cidrs and will
 // free them on deinit.
 pub fn init(
@@ -302,6 +320,11 @@ fn isBlockedV4(self: *const IpFilter, addr: Ipv4Addr) bool {
 }
 
 fn isBlockedV6(self: *const IpFilter, addr: Ipv6Addr) bool {
+    // NAT64 traffic is delivered to the embedded IPv4 address.
+    if (nat64Ipv4(addr)) |v4| {
+        if (self.isBlockedV4(v4)) return true;
+    }
+
     if (self.cidrs) |c| {
         for (c.allow_v6) |cidr| {
             if (matchesCidrV6(addr, cidr)) {
@@ -377,6 +400,25 @@ test "IpFilter: IPv4 CIDR matching: private group boundaries" {
     try testing.expect(filter.testBlocked("169.254.1.1"));
     try testing.expect(!filter.testBlocked("169.255.0.0"));
 
+    // Shared address space 100.64.0.0/10 (RFC 6598)
+    try testing.expect(!filter.testBlocked("100.63.255.255"));
+    try testing.expect(filter.testBlocked("100.64.0.0"));
+    try testing.expect(filter.testBlocked("100.127.255.255"));
+    try testing.expect(!filter.testBlocked("100.128.0.0"));
+
+    // IETF protocol assignments 192.0.0.0/24, benchmarking 198.18.0.0/15
+    try testing.expect(filter.testBlocked("192.0.0.170"));
+    try testing.expect(!filter.testBlocked("192.0.1.0"));
+    try testing.expect(!filter.testBlocked("198.17.255.255"));
+    try testing.expect(filter.testBlocked("198.18.0.0"));
+    try testing.expect(filter.testBlocked("198.19.255.255"));
+    try testing.expect(!filter.testBlocked("198.20.0.0"));
+
+    // Multicast 224.0.0.0/4, reserved 240.0.0.0/4
+    try testing.expect(!filter.testBlocked("223.255.255.255"));
+    try testing.expect(filter.testBlocked("224.0.0.1"));
+    try testing.expect(filter.testBlocked("255.255.255.255"));
+
     // Public IP — must NOT be blocked
     try testing.expect(!filter.testBlocked("8.8.8.8"));
     try testing.expect(!filter.testBlocked("1.1.1.1"));
@@ -392,6 +434,9 @@ test "IpFilter: IPv6 CIDR matching: private group" {
     try testing.expect(filter.testBlocked("fe80::1")); // link-local
     try testing.expect(filter.testBlocked("fc00::1")); // ULA
     try testing.expect(filter.testBlocked("fd00::1")); // ULA (fd is fc00::/7)
+    try testing.expect(filter.testBlocked("fec0::1")); // site-local
+    try testing.expect(filter.testBlocked("64:ff9b:1::1")); // local-use NAT64
+    try testing.expect(!filter.testBlocked("64:ff9b:2::1"));
     try testing.expect(!filter.testBlocked("2001:db8::1")); // documentation range — public
     try testing.expect(!filter.testBlocked("2606:4700::1111")); // Cloudflare
 }
@@ -406,6 +451,14 @@ test "IpFilter: IPv4-mapped IPv6 bypass prevention" {
     try testing.expect(filter.testBlocked("::ffff:10.0.0.1"));
     // ::ffff:8.8.8.8 must NOT be blocked (maps to public)
     try testing.expect(!filter.testBlocked("::ffff:8.8.8.8"));
+}
+
+test "IpFilter: NAT64 addresses are checked by their embedded IPv4 address" {
+    const filter = IpFilter.init(true, null);
+    defer filter.deinit(testing.allocator);
+
+    try testing.expect(filter.testBlocked("64:ff9b::a00:1")); // 10.0.0.1
+    try testing.expect(!filter.testBlocked("64:ff9b::808:808")); // 8.8.8.8
 }
 
 test "IpFilter: fail-closed: unknown address family blocked by isBlockedSockaddr" {
@@ -432,6 +485,7 @@ test "IpFilter: custom CIDR ranges" {
     try testing.expect(filter.testBlocked("203.0.113.255")); // in custom range
     try testing.expect(!filter.testBlocked("203.0.114.0")); // outside custom range
     try testing.expect(!filter.testBlocked("8.8.8.8")); // not in range
+    try testing.expect(filter.testBlocked("64:ff9b::cb00:7101")); // NAT64 203.0.113.1
 }
 
 test "IpFilter: private group blocks cloud metadata IP via link-local" {
@@ -470,6 +524,7 @@ test "IpFilter: allow list exempts from private blocking" {
     // Allowed IPs pass through despite being in private ranges
     try testing.expect(!filter.testBlocked("10.0.0.42"));
     try testing.expect(!filter.testBlocked("fc00::1"));
+    try testing.expect(!filter.testBlocked("64:ff9b::a00:2a")); // NAT64 10.0.0.42
 
     // Other private IPs still blocked
     try testing.expect(filter.testBlocked("10.0.0.43"));
