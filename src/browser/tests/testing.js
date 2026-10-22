@@ -187,6 +187,21 @@
     return true;
   }
 
+  // Brackets messages the browser itself logs (not console.* calls, so they
+  // can't be silenced) for an expected error case. Folded into a collapsed
+  // group so a clean run in Chrome/Firefox shows nothing unexpected.
+  function beginBrowserLog(reason) {
+    if (IS_TEST_RUNNER === false) {
+      console.groupCollapsed(`expected browser logs: ${reason || _currentScriptId()}`);
+    }
+  }
+
+  function endBrowserLog() {
+    if (IS_TEST_RUNNER === false) {
+      console.groupEnd();
+    }
+  }
+
   function printTimeoutState() {
     console.warn('Pending count:', Array.from(async_pending.keys()));
   }
@@ -204,6 +219,8 @@
     withError: withError,
     withReportedErrors: withReportedErrors,
     printTimeoutState: printTimeoutState,
+    beginBrowserLog: beginBrowserLog,
+    endBrowserLog: endBrowserLog,
     onload: onload,
     IS_TEST_RUNNER: IS_TEST_RUNNER,
     HOST: '127.0.0.1',

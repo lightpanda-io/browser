@@ -203,7 +203,6 @@ pub const JsApi = struct {
 
     pub const disabled = reflect.boolean("disabled");
     pub const name = reflect.string("name");
-    pub const required = reflect.boolean("required");
     pub const form = bridge.accessor(Button.getForm, null, .{});
     pub const formAction = bridge.accessor(Button.getFormAction, Button.setFormAction, .{ .ce_reactions = true });
     pub const formEnctype = bridge.accessor(Button.getFormEnctype, Button.setFormEnctype, .{ .ce_reactions = true });
