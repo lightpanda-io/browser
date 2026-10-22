@@ -156,7 +156,7 @@ pub fn getLocation(self: *const Document) ?*Location {
 fn setLocation(self: *Document, url: [:0]const u8) !void {
     if (self._type != .html) return;
     const frame = self._frame orelse return;
-    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
+    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = Location.historyHandling(frame) }, .{ .script = frame });
 }
 
 // Approximation of quirks mode: an HTML document without a doctype is in quirks mode.

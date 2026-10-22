@@ -1188,6 +1188,17 @@ pub fn queueResizeDelivery(self: *Context) !void {
     }.run);
 }
 
+pub fn queueNavigateSuccess(self: *Context) !void {
+    self.enqueueMicrotask(struct {
+        fn run(ctx: *Context) void {
+            switch (ctx.global) {
+                .frame => |frame| frame._session.navigationFor(frame).finishSameDocument(frame),
+                .worker => unreachable,
+            }
+        }
+    }.run);
+}
+
 pub fn queueCustomElementBackupDrain(self: *Context) !void {
     self.enqueueMicrotask(struct {
         fn run(ctx: *Context) void {

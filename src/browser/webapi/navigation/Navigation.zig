@@ -25,8 +25,13 @@ const Frame = @import("../../Frame.zig");
 const Factory = @import("../../Factory.zig");
 
 const Event = @import("../Event.zig");
+const Element = @import("../Element.zig");
 const EventTarget = @import("../EventTarget.zig");
+const AbortSignal = @import("../AbortSignal.zig");
+const DOMException = @import("../DOMException.zig");
+const FormData = @import("../net/FormData.zig");
 const ErrorEvent = @import("../event/ErrorEvent.zig");
+const NavigateEvent = @import("../event/NavigateEvent.zig");
 
 const log = lp.log;
 
@@ -35,12 +40,15 @@ const Navigation = @This();
 
 pub const Proto = EventTarget;
 
+const NavigationType = @import("root.zig").NavigationType;
 const NavigationKind = @import("root.zig").NavigationKind;
 const NavigationActivation = @import("NavigationActivation.zig");
 const NavigationTransition = @import("root.zig").NavigationTransition;
 const NavigationState = @import("root.zig").NavigationState;
+const OngoingNavigation = @import("root.zig").OngoingNavigation;
 
 const NavigationHistoryEntry = @import("NavigationHistoryEntry.zig");
+const NavigationDestination = @import("NavigationDestination.zig");
 const NavigationCurrentEntryChangeEvent = @import("../event/NavigationCurrentEntryChangeEvent.zig");
 
 _proto: *EventTarget,
@@ -99,7 +107,11 @@ const NavigationReturn = struct {
     finished: js.Promise.Global,
 };
 
-pub fn back(self: *Navigation, frame: *Frame) !NavigationReturn {
+const NavigationOptions = struct {
+    info: ?js.Value = null,
+};
+
+pub fn back(self: *Navigation, _opts: ?NavigationOptions, frame: *Frame) !NavigationReturn {
     if (!self.getCanGoBack()) {
         return error.InvalidStateError;
     }
@@ -107,14 +119,15 @@ pub fn back(self: *Navigation, frame: *Frame) !NavigationReturn {
     const new_index = self._index - 1;
     const next_entry = self._entries.items[new_index];
 
-    return self.navigateInner(next_entry._url, .{ .traverse = new_index }, frame);
+    const opts = _opts orelse NavigationOptions{};
+    return self.navigateInner(next_entry._url, .{ .traverse = new_index }, .{ .info = opts.info }, frame);
 }
 
 pub fn entries(self: *const Navigation) []*NavigationHistoryEntry {
     return self._entries.items;
 }
 
-pub fn forward(self: *Navigation, frame: *Frame) !NavigationReturn {
+pub fn forward(self: *Navigation, _opts: ?NavigationOptions, frame: *Frame) !NavigationReturn {
     if (!self.getCanGoForward()) {
         return error.InvalidStateError;
     }
@@ -122,7 +135,8 @@ pub fn forward(self: *Navigation, frame: *Frame) !NavigationReturn {
     const new_index = self._index + 1;
     const next_entry = self._entries.items[new_index];
 
-    return self.navigateInner(next_entry._url, .{ .traverse = new_index }, frame);
+    const opts = _opts orelse NavigationOptions{};
+    return self.navigateInner(next_entry._url, .{ .traverse = new_index }, .{ .info = opts.info }, frame);
 }
 
 pub fn updateEntries(
@@ -303,6 +317,221 @@ pub fn replaceEntry(
     return entry;
 }
 
+pub const NavigateEventParams = struct {
+    navigation_type: NavigationType,
+    url: [:0]const u8,
+    same_document: bool,
+    // The entry a traversal goes to.
+    entry: ?*NavigationHistoryEntry = null,
+    // Serialized state given to navigation.navigate() or reload().
+    state: ?[]const u8 = null,
+    info: ?js.Value = null,
+    source_element: ?*Element = null,
+    // The entry list of a POST form submission.
+    form_data: ?*FormData = null,
+    user_initiated: bool = false,
+    // pushState/replaceState: never a hashChange, even for a fragment-only URL.
+    classic_history: bool = false,
+    // The promises of a Navigation API method.
+    committed: ?js.PromiseResolver = null,
+    finished: ?js.PromiseResolver = null,
+};
+
+pub const NavigateEventResult = union(enum) {
+    // Don't navigate: a listener canceled the event, or started a navigation
+    // that aborted this one.
+    canceled,
+    // No event: an iframe, the initial about:blank, or nothing could observe it.
+    not_fired,
+    // Navigate. A same-document navigation then calls commitSameDocument.
+    fired: *AbortSignal,
+};
+
+// Fires `navigate` at a navigation about to happen in `frame`, aborting the
+// ongoing one first.
+// https://html.spec.whatwg.org/multipage/nav-history-apis.html#inner-navigate-event-firing-algorithm
+pub fn fireNavigateEvent(self: *Navigation, params: NavigateEventParams, frame: *Frame) !NavigateEventResult {
+    // A page has one Navigation, shared by its iframes. An iframe's own
+    // navigations must not show up on it.
+    if (frame.parent != null) {
+        return .not_fired;
+    }
+    // The initial about:blank has "entries and events disabled".
+    if (self._initial_entry) {
+        return .not_fired;
+    }
+
+    try self.abortOngoing(frame);
+
+    const target = self.asEventTarget();
+    if (params.finished == null and
+        frame.hasDirectListeners(target, "navigate") == false and
+        frame.hasDirectListeners(target, "navigateerror") == false and
+        frame.hasDirectListeners(target, "navigatesuccess") == false)
+    {
+        return .not_fired;
+    }
+
+    const destination = try frame.page_arena.create(NavigationDestination);
+    destination.* = .{
+        ._url = try frame.page_arena.dupe(u8, params.url),
+        ._same_document = params.same_document,
+        ._state = params.state,
+    };
+    if (params.entry) |entry| {
+        destination._entry = entry;
+        destination._state = entry.navigationState();
+    }
+
+    // A fragment change: the URLs differ only by their fragment.
+    const hash_change = params.same_document and
+        params.classic_history == false and
+        URL.eqlDocument(frame.url, params.url) and
+        std.mem.eql(u8, frame.url, params.url) == false;
+
+    const signal = try AbortSignal.init(&frame.js.execution);
+    const event = try NavigateEvent.initTrusted(.{
+        // A traversal to another document can't be canceled.
+        .cancelable = params.navigation_type != .traverse or params.same_document,
+        .navigationType = @tagName(params.navigation_type),
+        .destination = destination,
+        .userInitiated = params.user_initiated,
+        .hashChange = hash_change,
+        .signal = signal,
+        .formData = params.form_data,
+        .info = if (params.info) |info| try info.persist() else null,
+        .sourceElement = params.source_element,
+    }, frame);
+    event.acquireRef();
+    defer event.releaseRef(frame.page);
+
+    frame._ongoing_navigate = .{
+        .signal = signal,
+        .event = event,
+        .committed = if (params.committed) |c| try c.persist() else null,
+        .finished = if (params.finished) |f| try f.persist() else null,
+    };
+
+    {
+        errdefer if (ongoingFor(signal, frame)) |ongoing| {
+            ongoing.event = null;
+        };
+        try self.dispatch(event.asEvent(), frame);
+    }
+
+    // Gone when a listener started a navigation, which aborted this one.
+    const ongoing = ongoingFor(signal, frame) orelse return .canceled;
+    ongoing.event = null;
+
+    if (event.asEvent().getDefaultPrevented()) {
+        try self.abortOngoing(frame);
+        return .canceled;
+    }
+
+    if (params.same_document == false) {
+        // The promises of a navigation to another document never settle: this
+        // document goes away. It stays ongoing until then, so that a newer
+        // navigation or window.stop() still aborts it.
+        ongoing.releasePromises();
+    }
+    return .{ .fired = signal };
+}
+
+fn ongoingFor(signal: *AbortSignal, frame: *Frame) ?*OngoingNavigation {
+    if (frame._ongoing_navigate) |*ongoing| {
+        if (ongoing.signal == signal) {
+            return ongoing;
+        }
+    }
+    return null;
+}
+
+// https://html.spec.whatwg.org/multipage/nav-history-apis.html#abort-the-ongoing-navigation
+pub fn abortOngoing(self: *Navigation, frame: *Frame) !void {
+    var ongoing = frame._ongoing_navigate orelse return;
+    frame._ongoing_navigate = null;
+    defer ongoing.releasePromises();
+
+    if (ongoing.event) |event| {
+        // Aborted by one of its own listeners: the event is now canceled.
+        event.asEvent()._prevent_default = true;
+    }
+
+    // One instance, so the signal's reason, navigateerror's error and the
+    // rejections are the same object. The message matches Chrome's.
+    const dom = try frame.page_arena.create(DOMException);
+    dom.* = .init("Navigation was aborted", "AbortError");
+    try ongoing.signal.abort(.{ .dom = dom }, &frame.js.execution);
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const err = try local.zigValueToJs(dom, .{});
+    try self.fireNavigateError(err, frame);
+
+    if (ongoing.committed) |c| {
+        c.local(local).rejectValue(err) catch |e| {
+            log.debug(.event, "Navigation.abort committed", .{ .err = e });
+        };
+    }
+    if (ongoing.finished) |f| {
+        f.local(local).rejectValue(err) catch |e| {
+            log.debug(.event, "Navigation.abort finished", .{ .err = e });
+        };
+    }
+}
+
+// A same-document navigation updated the URL and entries: the committed
+// promise resolves now, navigatesuccess and the finished promise follow in a
+// microtask.
+pub fn commitSameDocument(_: *Navigation, signal: *AbortSignal, frame: *Frame) !void {
+    // Gone when the commit steps (currententrychange, popstate) started a
+    // navigation that aborted this one.
+    resolveCommitted(signal, frame);
+    const ongoing = ongoingFor(signal, frame) orelse return;
+    ongoing.committed_same_document = true;
+    try frame.js.queueNavigateSuccess();
+}
+
+// Before the entry update: its currententrychange listeners can start a
+// navigation that aborts this one, which mustn't reject the committed promise.
+fn resolveCommitted(signal: *AbortSignal, frame: *Frame) void {
+    const ongoing = ongoingFor(signal, frame) orelse return;
+    const committed = ongoing.committed orelse return;
+    ongoing.committed = null;
+    defer committed.release();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    committed.local(&ls.local).resolve("navigation committed", {});
+}
+
+// The microtask queued by commitSameDocument.
+pub fn finishSameDocument(self: *Navigation, frame: *Frame) void {
+    var ongoing = frame._ongoing_navigate orelse return;
+    if (ongoing.committed_same_document == false) {
+        // A newer navigation replaced it
+        return;
+    }
+
+    frame._ongoing_navigate = null;
+    defer ongoing.releasePromises();
+
+    self.fireNavigateSuccess(frame) catch |err| {
+        log.debug(.event, "Navigation.navigatesuccess", .{ .err = err });
+    };
+
+    if (ongoing.finished) |f| {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        f.local(&ls.local).resolve("navigation finished", {});
+    }
+}
+
 fn fireNavigateSuccess(self: *Navigation, frame: *Frame) !void {
     if (!frame.hasDirectListeners(self.asEventTarget(), "navigatesuccess")) {
         return;
@@ -318,6 +547,20 @@ fn fireNavigateSuccess(self: *Navigation, frame: *Frame) !void {
     };
 
     try self.dispatch(event, frame);
+}
+
+fn fireNavigateError(self: *Navigation, err: js.Value, frame: *Frame) !void {
+    if (!frame.hasDirectListeners(self.asEventTarget(), "navigateerror")) {
+        return;
+    }
+
+    const event = try ErrorEvent.initTrusted(.wrap("navigateerror"), .{
+        .@"error" = try err.persist(),
+        .message = "AbortError: Navigation was aborted",
+        .filename = frame.url,
+    }, frame.page);
+
+    try self.dispatch(event.asEvent(), frame);
 }
 
 fn fireCurrentEntryChangeEvent(
@@ -346,26 +589,26 @@ fn fireCurrentEntryChangeEvent(
     try self.dispatch(event.asEvent(), frame);
 }
 
-fn resolveFinished(
-    self: *Navigation,
-    resolver: js.PromiseResolver,
-    comptime source: []const u8,
-    frame: *Frame,
-) !void {
-    resolver.resolve(source, {});
-    try self.fireNavigateSuccess(frame);
-}
-
 const NavigateOptions = struct {
     history: ?[]const u8 = null,
     info: ?js.Value = null,
     state: ?js.Value = null,
 };
 
+// The options of a Navigation API method, for its navigate event.
+const ApiOptions = struct {
+    info: ?js.Value = null,
+    // Serialized, reload()'s. navigate()'s is in its NavigationKind.
+    state: ?[]const u8 = null,
+    // false for history.back()/forward()/go(), which return no promises.
+    api_method: bool = true,
+};
+
 pub fn navigateInner(
     self: *Navigation,
     _url: ?[:0]const u8,
     kind: NavigationKind,
+    api: ApiOptions,
     frame: *Frame,
 ) !NavigationReturn {
     const arena = frame._session.arena;
@@ -378,14 +621,17 @@ pub fn navigateInner(
     const local = frame.js.local.?;
     const committed = local.createPromiseResolver();
     const finished = local.createPromiseResolver();
+    // Per spec, a rejection is reported through the committed promise only.
+    finished.promise().markAsHandled();
 
     var new_url = try URL.resolve(arena.allocator(), frame.url, url, .{});
     const is_same_url = URL.eqlDocument(new_url, frame.url);
     // navigate() stays in the document only for a fragment change, but a
     // traversal stays in it whenever the entry belongs to it, whatever URL
-    // pushState gave the entry.
+    // pushState gave the entry. A reload never does.
     const is_same_document = switch (kind) {
         .traverse => |index| self._entries.items[index].sameDocument(frame),
+        .reload => false,
         else => is_same_url,
     };
 
@@ -396,13 +642,39 @@ pub fn navigateInner(
         new_url = try arena.dupeSentinel(u8, new_url, 0);
     }
 
+    const result = try self.fireNavigateEvent(.{
+        .navigation_type = kind.toNavigationType(),
+        .url = new_url,
+        .same_document = is_same_document,
+        .entry = switch (kind) {
+            .traverse => |index| self._entries.items[index],
+            else => null,
+        },
+        .state = switch (kind) {
+            .push, .replace => |state| state,
+            // reload() without a state keeps the current entry's
+            .reload => api.state orelse self.getCurrentEntry().navigationState(),
+            .traverse => null,
+        },
+        .info = api.info,
+        .committed = if (api.api_method) committed else null,
+        .finished = if (api.api_method) finished else null,
+    }, frame);
+
+    const signal: ?*AbortSignal = switch (result) {
+        // aborting the navigation rejected the promises
+        .canceled => return returnPromises(committed, finished),
+        .not_fired => null,
+        .fired => |signal| signal,
+    };
+
     // Captured before a same-document navigation overwrites frame.url; used
     // to queue the hashchange once below.
     const old_url = frame.url;
 
     const previous = self.getCurrentEntry();
 
-    if (is_same_document and kind != .reload) {
+    if (is_same_document) {
         frame.url = new_url;
 
         frame._session.notification.dispatch(.frame_navigated_within_document, &.{
@@ -410,25 +682,27 @@ pub fn navigateInner(
             .frame_id = frame._frame_id,
             .navigation_type = .fragment,
         });
+
+        if (signal) |s| {
+            resolveCommitted(s, frame);
+        } else {
+            committed.resolve("navigation committed", {});
+        }
     }
 
     switch (kind) {
         .push => |state| {
             if (is_same_document) {
-                committed.resolve("navigation push", {});
-                // todo: Fire navigate event
                 _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, frame, true);
-                try self.resolveFinished(finished, "navigation push", frame);
+                try self.settleSameDocument(finished, signal, frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
         },
         .replace => |state| {
             if (is_same_document) {
-                committed.resolve("navigation replace", {});
-                // todo: Fire navigate event
                 _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, frame, true);
-                try self.resolveFinished(finished, "navigation replace", frame);
+                try self.settleSameDocument(finished, signal, frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
@@ -441,15 +715,17 @@ pub fn navigateInner(
                 // `:target` matches off the fragment, which might have just changed.
                 frame.styleChanged();
 
-                committed.resolve("navigation traverse", {});
-                // todo: Fire navigate event
                 try self.fireCurrentEntryChangeEvent(previous, kind, frame);
-                try self.resolveFinished(finished, "navigation traverse", frame);
+                try self.settleSameDocument(finished, signal, frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
         },
         .reload => {
+            if (api.state) |state| {
+                previous._state = .{ .source = .navigation, .value = state };
+                try self.fireCurrentEntryChangeEvent(previous, .reload, frame);
+            }
             try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
         },
     }
@@ -458,8 +734,24 @@ pub fn navigateInner(
         try frame.queueHashChange(old_url, new_url);
     }
 
-    _ = try committed.persist();
-    _ = try finished.persist();
+    return returnPromises(committed, finished);
+}
+
+fn settleSameDocument(
+    self: *Navigation,
+    finished: js.PromiseResolver,
+    signal: ?*AbortSignal,
+    frame: *Frame,
+) !void {
+    if (signal) |s| {
+        return self.commitSameDocument(s, frame);
+    }
+    // No navigate event fired, nothing can abort it.
+    finished.resolve("navigation finished", {});
+    try self.fireNavigateSuccess(frame);
+}
+
+fn returnPromises(committed: js.PromiseResolver, finished: js.PromiseResolver) !NavigationReturn {
     return .{
         .committed = try committed.promise().persist(),
         .finished = try finished.promise().persist(),
@@ -476,7 +768,7 @@ pub fn navigate(self: *Navigation, _url: [:0]const u8, _opts: ?NavigateOptions, 
     else
         .{ .push = json };
 
-    return try self.navigateInner(_url, kind, frame);
+    return try self.navigateInner(_url, kind, .{ .info = opts.info }, frame);
 }
 
 const ReloadOptions = struct {
@@ -488,31 +780,16 @@ pub fn reload(self: *Navigation, _opts: ?ReloadOptions, frame: *Frame) !Navigati
     const arena = frame._session.arena;
 
     const opts = _opts orelse ReloadOptions{};
-    const entry = self.getCurrentEntry();
-    if (opts.state) |state| {
-        const previous = entry;
-        entry._state = .{
-            .source = .navigation,
-            .value = state.toJson(arena.allocator()) catch return error.DataClone,
-        };
-        try self.fireCurrentEntryChangeEvent(previous, .reload, frame);
-    }
+    const state = if (opts.state) |state| state.toJson(arena.allocator()) catch return error.DataClone else null;
 
-    return self.navigateInner(entry._url, .reload, frame);
+    return self.navigateInner(self.getCurrentEntry()._url, .reload, .{ .info = opts.info, .state = state }, frame);
 }
 
-const TraverseToOptions = struct {
-    info: ?js.Value = null,
-};
-
-pub fn traverseTo(self: *Navigation, key: []const u8, _opts: ?TraverseToOptions, frame: *Frame) !NavigationReturn {
-    if (_opts != null) {
-        log.debug(.not_implemented, "Navigation.traverseTo", .{ .has_options = true });
-    }
-
+pub fn traverseTo(self: *Navigation, key: []const u8, _opts: ?NavigationOptions, frame: *Frame) !NavigationReturn {
+    const opts = _opts orelse NavigationOptions{};
     for (self._entries.items, 0..) |entry, i| {
         if (std.mem.eql(u8, key, entry._key)) {
-            return try self.navigateInner(entry._url, .{ .traverse = i }, frame);
+            return try self.navigateInner(entry._url, .{ .traverse = i }, .{ .info = opts.info }, frame);
         }
     }
 
@@ -560,6 +837,7 @@ pub const JsApi = struct {
     pub const traverseTo = bridge.function(Navigation.traverseTo, .{});
     pub const updateCurrentEntry = bridge.function(Navigation.updateCurrentEntry, .{});
 
+    pub const onnavigate = EventTarget.handlerAccessor(Navigation, "navigate");
     pub const oncurrententrychange = EventTarget.handlerAccessor(Navigation, "currententrychange");
     pub const onnavigatesuccess = EventTarget.handlerAccessor(Navigation, "navigatesuccess");
     pub const onnavigateerror = EventTarget.handlerAccessor(Navigation, "navigateerror");
@@ -619,4 +897,8 @@ test "Navigation: reload on empty stack seeds an entry" {
         "Navigation.test",
     );
     try testing.expect(result.isTrue());
+}
+
+test "WebApi: NavigateEvent" {
+    try testing.htmlRunner("navigation", .{});
 }

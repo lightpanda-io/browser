@@ -1284,14 +1284,15 @@ const JavascriptUrlTask = struct {
 // target is the element that's being activated. Imagine a span inside an anchor
 // the span is clicked (event_target), but it's the anchor that we're activating
 // (target).
-pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
+// user_initiated: a trusted click, for the navigate event it can start.
+pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node, user_initiated: bool) !void {
     // TODO: Also support <area> elements when implement
     const element = target.is(Element) orelse return;
 
     if (element.is(Element.Svg.Graphics.A) != null) {
         const href = element.svgAnchorHref() orelse return;
         const target_name = element.getAttributeInterned("target") orelse "";
-        return followLink(frame, target, element, href, target_name);
+        return followLink(frame, target, element, href, target_name, user_initiated);
     }
 
     const html_element = element.is(Element.Html) orelse return;
@@ -1300,7 +1301,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
         .anchor => {
             const anchor = html_element.subtype(Element.Html.Anchor);
             const href = element.getAttributeInterned("href") orelse return;
-            return followLink(frame, target, element, href, anchor.getTarget());
+            return followLink(frame, target, element, href, anchor.getTarget(), user_initiated);
         },
         .input => {
             const input = html_element.subtype(Element.Html.Input);
@@ -1315,7 +1316,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
                 if (element.isDisabled()) {
                     return;
                 }
-                return frame.submitForm(element, input.getForm(), .{});
+                return frame.submitForm(element, input.getForm(), .{ .user_initiated = user_initiated });
             }
             if (input._input_type == .reset) {
                 if (element.isDisabled()) {
@@ -1331,7 +1332,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
                 if (element.isDisabled()) {
                     return;
                 }
-                return frame.submitForm(element, button.getForm(), .{});
+                return frame.submitForm(element, button.getForm(), .{ .user_initiated = user_initiated });
             }
             if (std.mem.eql(u8, button.getType(), "reset")) {
                 if (element.isDisabled()) {
@@ -1380,7 +1381,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
 }
 
 // Follow a link on activation. Shared by HTML <a> and SVG <a>.
-fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8, target_name: []const u8) !void {
+fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8, target_name: []const u8, user_initiated: bool) !void {
     if (href.len == 0) {
         return;
     }
@@ -1410,6 +1411,8 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
     try owner.scheduleNavigation(href, .{
         .reason = .script,
         .kind = .{ .push = null },
+        .source_element = element,
+        .user_initiated = user_initiated,
     }, .{ .anchor = target_frame });
 }
 
@@ -1495,6 +1498,8 @@ pub fn textForKey(keyboard_event: *const KeyboardEvent) ?[]const u8 {
 /// `keypress` on `target` and, unless a listener cancels it, performs the
 /// text edit it stands for.
 pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text: []const u8) !void {
+    // read before dispatch, which can free the event
+    const user_initiated = keypress.asEvent()._is_trusted;
     if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), keypress.asEvent())) {
         return;
     }
@@ -1506,7 +1511,7 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
     if (target.is(Element.Html.Input)) |input| {
         if (is_enter) {
             try input.dispatchChangeIfEdited(frame);
-            return implicitFormSubmission(frame, input);
+            return implicitFormSubmission(frame, input, user_initiated);
         }
         _ = try applyEdit(frame, input, .{ .insert = text });
     } else if (target.is(Element.Html.TextArea)) |textarea| {
@@ -1518,7 +1523,7 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
 /// its activation submits the form with it as the submitter; otherwise the
 /// form submits itself (SubmitEvent.submitter is null).
 /// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission
-fn implicitFormSubmission(frame: *Frame, input: *Element.Html.Input) !void {
+fn implicitFormSubmission(frame: *Frame, input: *Element.Html.Input, user_initiated: bool) !void {
     const form = input.getForm() orelse return;
     if (form.getDefaultButton(frame)) |button| {
         if (button.isDisabled()) {
@@ -1529,7 +1534,7 @@ fn implicitFormSubmission(frame: *Frame, input: *Element.Html.Input) !void {
     if (!form.canSubmitImplicitly(input, frame)) {
         return;
     }
-    return frame.submitForm(form.asElement(), form, .{});
+    return frame.submitForm(form.asElement(), form, .{ .user_initiated = user_initiated });
 }
 
 fn keypressFor(frame: *Frame, keydown: *const KeyboardEvent) !*KeyboardEvent {
