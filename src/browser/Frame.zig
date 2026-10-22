@@ -1800,6 +1800,7 @@ fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
     const session = self._session;
     switch (session.download_behavior) {
         .allow, .allow_and_name => {},
+        .@"lp-stream-over-cdp" => return false, // TODO
         .deny => return false,
     }
 
@@ -1862,6 +1863,7 @@ fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
         .filename = suggested_filename,
         .received = 0,
         .total = total,
+        .session = self._session,
     } };
 
     if (session.download_events_enabled) {
@@ -1973,6 +1975,7 @@ pub fn downloadLink(self: *Frame, href: []const u8, file_name_hint: []const u8) 
         .request_mode = .navigate,
         .credentials_mode = .include,
         .resource_type = .download,
+        .streaming = true,
         .header_callback = Ctx.headerCallback,
         .data_callback = Ctx.dataCallback,
         .done_callback = Ctx.doneCallback,
@@ -2157,7 +2160,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
         },
         .raw, .image => |*buf| try buf.appendSlice(self.page_arena, data),
         .download => |*download| {
-            download.file.writeStreamingAll(lp.io, data) catch |err| {
+            download.file.?.writeStreamingAll(lp.io, data) catch |err| {
                 // TODO(#2701 follow-up): surface the write failure properly. We
                 // can't set `_parse_state = .err` here because the next chunk
                 // would then hit the `.err => unreachable` branch below, and we
@@ -2281,7 +2284,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
             self.documentIsComplete();
         },
         .download => |*download| {
-            download.file.close(lp.io);
+            download.file.?.close(lp.io);
 
             // Capture before invalidating the union below.
             const guid = download.guid;
@@ -3981,7 +3984,7 @@ const ParseState = union(enum) {
             // Only reached when a frame is torn down mid-download (the normal
             // completion path in frameDoneCallback already closes the file and
             // transitions to .complete).
-            .download => |*download| download.file.close(lp.io),
+            .download => |*download| download.file.?.close(lp.io),
             else => {},
         }
     }
@@ -3993,12 +3996,14 @@ const ParseState = union(enum) {
 const Download = struct {
     // uuidv4, arena-owned. Matches the guid reported in the CDP events.
     guid: []const u8,
-    file: std.Io.File,
+    /// `null` if session's `download_behavior` set for streaming over CDP.
+    file: ?std.Io.File,
     // suggested filename surfaced to the client, arena-owned.
     filename: []const u8,
     received: u64,
     // from Content-Length, when the response advertised one.
     total: ?u64,
+    session: *Session,
 
     /// Initializes a `Download` for a given `url`. `maybe_suggestion` is the
     /// caller's sanitized pick; `null` falls back to the `guid`.
@@ -4013,10 +4018,6 @@ const Download = struct {
             log.warn(.frame, "downloads are denied", .{ .url = url });
             return error.DownloadDenied;
         }
-        const download_path = session.download_path orelse {
-            log.warn(.frame, "download without downloadPath", .{ .url = url });
-            return error.WithoutDownloadPath;
-        };
 
         // `guid` is the CDP "Global Unique Identifier" which helps us find
         // where to dispatch events on.
@@ -4033,18 +4034,24 @@ const Download = struct {
         else
             try latin1ToUtf8(frame.page_arena, name);
 
-        const on_disk_name = switch (session.download_behavior) {
-            // Stores the file under its guid.
-            .allow_and_name => guid,
-            else => filename,
+        const maybe_file: ?std.Io.File = switch (session.download_behavior) {
+            .allow, .allow_and_name => blk: {
+                const download_path = session.download_path orelse {
+                    log.warn(.frame, "download without downloadPath", .{ .url = url });
+                    return error.WithoutDownloadPath;
+                };
+                // allowAndName stores the file under its guid.
+                const on_disk_name = if (session.download_behavior == .allow_and_name) guid else filename;
+
+                const cwd = std.Io.Dir.cwd();
+                try cwd.createDirPath(lp.io, download_path);
+                var dir = try cwd.openDir(lp.io, download_path, .{});
+                defer dir.close(lp.io);
+                break :blk try dir.createFile(lp.io, on_disk_name, .{ .truncate = true });
+            },
+            .deny => unreachable,
+            .@"lp-stream-over-cdp" => null,
         };
-
-        const cwd = std.Io.Dir.cwd();
-        try cwd.createDirPath(lp.io, download_path);
-        var dir = try cwd.openDir(lp.io, download_path, .{});
-        defer dir.close(lp.io);
-
-        const file = try dir.createFile(lp.io, on_disk_name, .{ .truncate = true });
 
         if (session.download_events_enabled) {
             session.notification.dispatch(.download_will_begin, &.{
@@ -4063,32 +4070,45 @@ const Download = struct {
 
         return .{
             .guid = guid,
-            .file = file,
+            .file = maybe_file,
             .filename = filename,
             .received = 0,
             .total = maybe_total,
+            .session = session,
         };
     }
 
     /// Feeds the download via bytes.
     fn feed(self: *Download, bytes: []const u8) !void {
-        self.file.writeStreamingAll(lp.io, bytes) catch |err| {
-            log.err(.frame, "download write", .{ .err = err, .guid = self.guid });
-            return err;
-        };
+        const session = self.session;
+
+        if (self.file) |file| {
+            file.writeStreamingAll(lp.io, bytes) catch |err| {
+                log.err(.frame, "download write", .{ .err = err, .guid = self.guid });
+                return err;
+            };
+        } else {
+            if (session.download_events_enabled) {
+                session.notification.dispatch(.download_data, &.{ .guid = self.guid, .data = bytes });
+            }
+        }
         self.received += bytes.len;
     }
 
     // The body was fully received.
     fn finish(self: *Download, frame: *Frame) void {
-        self.file.close(lp.io);
-        self.report(frame, .completed);
+        defer self.report(frame, .completed);
+        if (self.file) |file| {
+            file.close(lp.io);
+        }
     }
 
     // The transfer failed partway. The partial file stays on disk for now.
     fn cancel(self: *Download, frame: *Frame) void {
-        self.file.close(lp.io);
-        self.report(frame, .canceled);
+        defer self.report(frame, .canceled);
+        if (self.file) |file| {
+            file.close(lp.io);
+        }
     }
 
     // Playwright only settles a download on a `completed` or `canceled`

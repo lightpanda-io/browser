@@ -102,6 +102,7 @@ const EventListeners = struct {
     cookie_changed: List = .{},
     download_will_begin: List = .{},
     download_progress: List = .{},
+    download_data: List = .{},
 };
 
 const Events = union(enum) {
@@ -136,6 +137,7 @@ const Events = union(enum) {
     cookie_changed: *const CookieChanged,
     download_will_begin: *const DownloadWillBegin,
     download_progress: *const DownloadProgress,
+    download_data: *const DownloadData,
 };
 pub const EventType = std.meta.FieldEnum(Events);
 
@@ -343,6 +345,11 @@ pub const DownloadProgress = struct {
         completed,
         canceled,
     };
+};
+
+pub const DownloadData = struct {
+    guid: []const u8,
+    data: []const u8,
 };
 
 pub const DialogResponse = struct {
