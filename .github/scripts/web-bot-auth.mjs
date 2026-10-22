@@ -89,11 +89,19 @@ async function listen(server) {
   return server.address().port;
 }
 
-async function connect(port, child, output) {
+async function connect(child, output) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     assert.equal(child.exitCode, null, `Lightpanda exited before CDP was ready:\n${output()}`);
     assert.equal(child.signalCode, null, `Lightpanda was killed before CDP was ready:\n${output()}`);
+    // --port 0 lets Lightpanda bind its own ephemeral port without a
+    // reserve-close-bind race. Read the bound address from its startup log.
+    const address = /\$msg="server running" address=127\.0\.0\.1:(\d+)\s/.exec(output());
+    if (!address) {
+      await delay(50);
+      continue;
+    }
+    const port = Number(address[1]);
     let socket;
     try {
       const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
@@ -192,13 +200,10 @@ const server = createServer((request, response) => {
 
 try {
   const port = await listen(server);
-  const portReservation = createServer();
-  const cdpPort = await listen(portReservation);
-  await new Promise((resolve) => portReservation.close(resolve));
   const keyFile = join(directory, "rfc8037-test-key.pem");
   await writeFile(keyFile, privateKey.export({ format: "pem", type: "pkcs8" }));
   child = spawn(resolve(process.argv[2] ?? "zig-out/bin/lightpanda"), [
-    "serve", "--host", "127.0.0.1", "--port", String(cdpPort),
+    "serve", "--host", "127.0.0.1", "--port", "0", "--log-format", "logfmt",
     "--web-bot-auth-key-file", keyFile,
     "--web-bot-auth-keyid", keyid,
     "--web-bot-auth-domain", "wba.example",
@@ -209,7 +214,7 @@ try {
   child.stdout.on("data", (data) => { output += data; });
   child.stderr.on("data", (data) => { output += data; });
   await once(child, "spawn");
-  socket = await connect(cdpPort, child, () => output);
+  socket = await connect(child, () => output);
   const send = cdp(socket);
   const { targetId } = await send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
