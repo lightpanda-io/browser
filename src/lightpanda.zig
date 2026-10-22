@@ -45,6 +45,11 @@ pub const SemanticTree = @import("SemanticTree.zig");
 pub const NodeRegistry = @import("NodeRegistry.zig");
 pub const crash_handler = @import("crash_handler.zig");
 
+// for `zig build test-server`
+pub const test_routes = @import("test_routes.zig");
+pub const TestWSServer = @import("TestWSServer.zig");
+pub const TestHTTPServer = @import("TestHTTPServer.zig");
+
 pub const Network = @import("network/Network.zig");
 pub const HttpClient = @import("network/HttpClient.zig");
 

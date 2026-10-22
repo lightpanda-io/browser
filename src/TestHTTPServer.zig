@@ -25,14 +25,16 @@ const URL = @import("browser/URL.zig");
 
 const TestHTTPServer = @This();
 
+port: u16,
 shutdown: std.atomic.Value(bool),
 listener: ?std.Io.net.Server,
 handler: Handler,
 
 const Handler = *const fn (req: *std.http.Server.Request) anyerror!void;
 
-pub fn init(handler: Handler) TestHTTPServer {
+pub fn init(handler: Handler, port: u16) TestHTTPServer {
     return .{
+        .port = port,
         .shutdown = .init(true),
         .listener = null,
         .handler = handler,
@@ -54,7 +56,7 @@ pub fn stop(self: *TestHTTPServer) void {
 }
 
 pub fn run(self: *TestHTTPServer, wg: *lp.WaitGroup) !void {
-    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", self.port);
 
     self.listener = try address.listen(lp.io, .{ .reuse_address = true });
     var listener = &self.listener.?;
@@ -143,7 +145,7 @@ pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
 
 fn getContentType(file_path: []const u8) []const u8 {
     if (std.mem.endsWith(u8, file_path, ".js")) {
-        return "application/json";
+        return "text/javascript";
     }
 
     if (std.mem.endsWith(u8, file_path, ".GB2312.html")) {
@@ -181,7 +183,7 @@ fn getContentType(file_path: []const u8) []const u8 {
 
     if (std.mem.endsWith(u8, file_path, ".mjs")) {
         // mjs are ECMAScript modules
-        return "application/json";
+        return "text/javascript";
     }
 
     std.debug.print("TestHTTPServer asked to serve an unknown file type: {s}\n", .{file_path});
