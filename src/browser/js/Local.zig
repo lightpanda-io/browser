@@ -58,10 +58,10 @@ handle: *const v8.Context,
 isolate: Isolate,
 call_arena: std.mem.Allocator,
 
-pub fn newString(self: *const Local, str: []const u8) js.String {
+pub fn newString(self: *const Local, str: []const u8) !js.String {
     return .{
         .local = self,
-        .handle = self.isolate.initStringHandle(str),
+        .handle = try self.isolate.initStringHandle(str),
     };
 }
 
@@ -80,7 +80,7 @@ pub fn newDate(self: *const Local, time_ms: f64) !js.Value {
 // StringToBigInt semantics: arbitrary precision, sign-aware, and it never
 // consults the page's globals. Fails on non-numeric digits.
 pub fn newBigInt(self: *const Local, digits: []const u8) !js.Value {
-    const str: *const v8.Value = @ptrCast(self.isolate.initStringHandle(digits));
+    const str: *const v8.Value = @ptrCast(try self.isolate.initStringHandle(digits));
     const handle = v8.v8__Value__ToBigInt(str, self.handle) orelse return error.JsException;
     return .{ .local = self, .handle = @ptrCast(handle) };
 }
@@ -149,12 +149,12 @@ pub fn compileFunction(
     extensions: []const *const v8.Object,
 ) !js.Function {
     // TODO: Make configurable.
-    const script_name = self.isolate.initStringHandle("anonymous");
-    const script_source = if (@TypeOf(src) == js.String) src.handle else try self.isolate.newString(src);
+    const script_name = try self.isolate.initStringHandle("anonymous");
+    const script_source = if (@TypeOf(src) == js.String) src.handle else try self.isolate.initStringHandle(src);
 
     var parameter_list: [parameter_names.len]*const v8.String = undefined;
     inline for (0..parameter_names.len) |i| {
-        parameter_list[i] = self.isolate.initStringHandle(parameter_names[i]);
+        parameter_list[i] = try self.isolate.initStringHandle(parameter_names[i]);
     }
 
     // Create `ScriptOrigin`.
@@ -204,8 +204,8 @@ const CompileResult = struct {
 // Like compile, but takes an optional cached_data which is a previously
 // compiled and serialized script (see Script.Unbound.createCodeCache)
 pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, cached_data: ?[]const u8) !CompileResult {
-    const script_name = self.isolate.initStringHandle(name orelse "anonymous");
-    const script_source = try self.isolate.newString(src);
+    const script_name = try self.isolate.initStringHandle(name orelse "anonymous");
+    const script_source = try self.isolate.initStringHandle(src);
 
     // Create ScriptOrigin
     var origin: v8.ScriptOrigin = undefined;
@@ -533,10 +533,10 @@ fn zigJsonToJs(self: *const Local, value: std.json.Value) !js.Value {
     const isolate = self.isolate;
 
     switch (value) {
-        .bool => |v| return .{ .local = self, .handle = js.simpleZigValueToJs(isolate, v, true, false) },
-        .float => |v| return .{ .local = self, .handle = js.simpleZigValueToJs(isolate, v, true, false) },
-        .integer => |v| return .{ .local = self, .handle = js.simpleZigValueToJs(isolate, v, true, false) },
-        .string => |v| return .{ .local = self, .handle = js.simpleZigValueToJs(isolate, v, true, false) },
+        .bool => |v| return .{ .local = self, .handle = try js.simpleZigValueToJs(isolate, v, true, false) },
+        .float => |v| return .{ .local = self, .handle = try js.simpleZigValueToJs(isolate, v, true, false) },
+        .integer => |v| return .{ .local = self, .handle = try js.simpleZigValueToJs(isolate, v, true, false) },
+        .string => |v| return .{ .local = self, .handle = try js.simpleZigValueToJs(isolate, v, true, false) },
         .null => return .{ .local = self, .handle = isolate.initNull() },
 
         // TODO handle number_string.
@@ -881,7 +881,7 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
                 if (comptime std.mem.eql(u8, name, dictionary_group_marker)) {
                     continue;
                 }
-                const key = isolate.initStringHandle(name);
+                const key = try isolate.initStringHandle(name);
                 if (js_obj.has(key)) {
                     const member = try js_obj.get(key);
                     const default_for_undefined = comptime attrs.defaultValue(FieldType);
@@ -1573,7 +1573,7 @@ pub fn createPromiseResolver(self: *const Local) js.PromiseResolver {
 
 // == Misc ==
 pub fn parseJSON(self: *const Local, json: []const u8) !js.Value {
-    const string_handle = try self.isolate.newString(json);
+    const string_handle = try self.isolate.initStringHandle(json);
     const value_handle = v8.v8__JSON__Parse(self.handle, string_handle) orelse return error.JsException;
     return .{
         .local = self,

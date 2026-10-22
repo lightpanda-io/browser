@@ -391,12 +391,12 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
         .float, .comptime_float => return @ptrCast(isolate.initNumber(value).handle),
         .pointer => |ptr| {
             if (ptr.size == .slice and ptr.child == u8) {
-                return @ptrCast(try isolate.newString(value));
+                return @ptrCast(try isolate.initStringHandle(value));
             }
             if (ptr.size == .one) {
                 const one_info = @typeInfo(ptr.child);
                 if (one_info == .array and one_info.array.child == u8) {
-                    return @ptrCast(try isolate.newString(value));
+                    return @ptrCast(try isolate.initStringHandle(value));
                 }
             }
         },
@@ -412,8 +412,8 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
         },
         .@"struct" => {
             switch (@TypeOf(value)) {
-                string.String => return @ptrCast(try isolate.newString(value.str())),
-                String.OneByte => return @ptrCast(try isolate.newOneByteString(value.bytes)),
+                string.String => return @ptrCast(try isolate.initStringHandle(value.str())),
+                String.OneByte => return @ptrCast(try isolate.initOneByteStringHandle(value.bytes)),
                 ArrayBuffer => {
                     const values = value.values;
                     const len = values.len;
@@ -623,6 +623,8 @@ test "js: a string longer than V8 accepts fails with RangeError instead of crash
         const res = try driver_fn.call([]const u8, .{local.newCallback(State.text, &state)});
         try testing.expectEqual("RangeError: Invalid string length", res);
 
+        // Nothing handles the rejection.
+        testing.expectLog(&.{.page_error});
         const promise = try local.resolvePromise(str);
         try testing.expectEqual(.rejected, promise.state());
         try testing.expectEqual("RangeError: Invalid string length", try promise.result().toStringSmart());
