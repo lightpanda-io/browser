@@ -2115,6 +2115,8 @@ const Ask = struct {
     /// question that can turn on it; `acceptCookies` and `login` cannot, and
     /// a page of tracking URLs would crowd out the text that decides them.
     link_urls: bool = true,
+    /// Number the nodes, for a question whose options are node ids.
+    ids: bool = false,
 };
 
 fn askPage(
@@ -2124,7 +2126,7 @@ fn askPage(
     ask: Ask,
 ) ToolError!Asked {
     const page = try requireFrame(session);
-    const state = lp.classify.buildState(arena, page, ask.node, registry, .{ .link_urls = ask.link_urls }) catch |err| switch (err) {
+    const state = lp.classify.buildState(arena, page, ask.node, registry, .{ .link_urls = ask.link_urls, .ids = ask.ids }) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return ToolError.InternalError,
     };
@@ -2217,20 +2219,22 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
     }
 
     const page = try requireFrame(session);
-    const set = lp.choose.collect(arena, page.document.asNode(), page, lp.consent.filter) catch |err| switch (err) {
+    const candidates = lp.choose.collect(arena, page.document.asNode(), page, registry) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return ToolError.InternalError,
     };
-    if (set.keyword_matches == 0) {
-        return verdict(arena, &outcome, "no control on this page is named like a consent banner's");
+    if (candidates.len == 0) {
+        return verdict(arena, &outcome, "no control on this page could be clicked");
     }
+    outcome.candidates = candidates.len;
 
-    const questions = try lp.consent.questions(arena, set.candidates, args.prefer);
+    const questions = try lp.consent.questions(arena, candidates, args.prefer);
     var response = switch (try askPage(arena, session, registry, .{
         .tool = .acceptCookies,
         .questions = questions,
         .node = page.document.asNode(),
         .link_urls = false,
+        .ids = true,
     })) {
         .failed => |result| return result,
         .ok => |ok| ok,
@@ -2242,7 +2246,7 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
         return verdict(arena, &outcome, "those controls are not a consent banner");
     }
 
-    const order = lp.choose.ranked(arena, set.candidates, response.value, questions, lp.consent.control_key) catch |err| switch (err) {
+    const order = lp.choose.ranked(arena, candidates, response.value, questions, lp.consent.control_key) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return unusableAnswer(arena, .acceptCookies, err),
     };
@@ -2309,6 +2313,9 @@ const LoginParams = struct {
     usernameSelector: ?[]const u8 = null,
     passwordSelector: ?[]const u8 = null,
     submitSelector: ?[]const u8 = null,
+    /// Report which fields would be used and type nothing, so the picks can
+    /// be scored on a real page without sending credentials.
+    decideOnly: bool = false,
 };
 
 /// Which element plays which part on the page as it stands, and where it is.
@@ -2322,6 +2329,7 @@ const Decided = union(enum) {
         user: ?[]const u8 = null,
         password: ?[]const u8 = null,
         submit: ?[]const u8 = null,
+        candidates: usize = 0,
     },
     failed: ToolResult,
 };
@@ -2337,31 +2345,32 @@ fn decideLogin(
     outcome: *lp.login.Outcome,
 ) ToolError!Decided {
     const page = try requireFrame(session);
-    const plan = lp.login.Plan.collect(arena, page.document.asNode(), page) catch |err| switch (err) {
+    const candidates = lp.choose.collect(arena, page.document.asNode(), page, registry) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return ToolError.InternalError,
     };
-
-    const questions = try lp.login.questions(arena, plan, wanted);
-    var picks = lp.login.rulePicks(plan);
-    if (questions.count() > 0) {
-        var response = switch (try askPage(arena, session, registry, .{
-            .tool = .login,
-            .questions = questions,
-            .node = page.document.asNode(),
-            .link_urls = false,
-        })) {
-            .failed => |result| return .{ .failed = result },
-            .ok => |ok| ok,
-        };
-        defer response.deinit();
-        outcome.calls += 1;
-
-        picks = lp.login.picks(arena, plan, questions, response.value) catch |err| switch (err) {
-            error.OutOfMemory => return ToolError.OutOfMemory,
-            else => return .{ .failed = try unusableAnswer(arena, .login, err) },
-        };
+    if (candidates.len == 0) {
+        return .{ .failed = try verdict(arena, outcome, "nothing on this page can be filled in") };
     }
+
+    const questions = try lp.login.questions(arena, candidates, wanted);
+    var response = switch (try askPage(arena, session, registry, .{
+        .tool = .login,
+        .questions = questions,
+        .node = page.document.asNode(),
+        .link_urls = false,
+        .ids = true,
+    })) {
+        .failed => |result| return .{ .failed = result },
+        .ok => |ok| ok,
+    };
+    defer response.deinit();
+    outcome.calls += 1;
+
+    const picks = lp.login.picks(arena, candidates, questions, response.value) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => return .{ .failed = try unusableAnswer(arena, .login, err) },
+    };
 
     return .{ .ok = .{
         .page = page,
@@ -2369,6 +2378,7 @@ fn decideLogin(
         .user = if (picks.user) |field| selectorFor(arena, page, field.element) else null,
         .password = if (picks.password) |field| selectorFor(arena, page, field.element) else null,
         .submit = submitSelector(arena, page, picks),
+        .candidates = candidates.len,
     } };
 }
 
@@ -2404,10 +2414,28 @@ fn execLogin(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
     if (args.username != null and decided.picks.user == null) {
         return verdict(arena, &outcome, "could not tell which field takes the username");
     }
+    outcome.candidates = decided.candidates;
+    // Not the model's decision to make, whatever it picked.
+    if (decided.picks.password) |field| {
+        if (!lp.login.isPasswordField(field.element)) {
+            return verdict(arena, &outcome, "the field picked for the password is not an input[type=password]");
+        }
+    }
+    if (decided.picks.user) |field| {
+        if (lp.login.isPasswordField(field.element)) {
+            return verdict(arena, &outcome, "the field picked for the username is a password input");
+        }
+    }
     if (decided.picks.password orelse decided.picks.user) |field| {
         if (lp.login.insecureAction(decided.page, field.element)) {
             return verdict(arena, &outcome, "this form posts to a plaintext http:// URL; refusing to send credentials");
         }
+    }
+    if (args.decideOnly) {
+        outcome.usernameSelector = decided.user;
+        outcome.passwordSelector = decided.password;
+        outcome.submitSelector = decided.submit;
+        return verdict(arena, &outcome, "decided only, nothing was typed or submitted");
     }
     if (decided.picks.password == null and !decided.picks.multi_step) {
         return verdict(arena, &outcome, "no password field, and the page does not ask for one on a later step");
@@ -4376,11 +4404,11 @@ test "markdown: a same-url page whose navigation failed is navigated again" {
     try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{ .source = .user })).is_error);
 }
 
-test "acceptCookies: a page with nothing like a banner costs no model call" {
+test "acceptCookies: a page with nothing to click costs no model call" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
-    var page = try testing.pageTest("login_form.html", .{});
+    var page = try testing.pageTest("markdown_alternate_plain.html", .{});
     defer page.close();
 
     const aa = testing.arena_allocator;
@@ -4388,7 +4416,7 @@ test "acceptCookies: a page with nothing like a banner costs no model call" {
     try std.testing.expect(!result.is_error);
     // No TYPESAFE_API_KEY is set in the test environment, so reaching the
     // model at all would have said so here.
-    try std.testing.expect(std.mem.find(u8, result.text, "named like a consent banner") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "could be clicked") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "\"dismissed\":false") != null);
 }
 

@@ -18,10 +18,13 @@
 
 //! Picking one element on the page with TypeSafe System One (Jev).
 //!
-//! The candidates are the question's options, so the answer is always an
-//! element the page offers: the model writes no text, and the state it reads
-//! carries no node ids (`classify.buildState`), so an option id we mint here
-//! is the only way it can point at anything.
+//! The candidates are the question's options, keyed by the node id the state
+//! carries too. The model writes no text, so an option id is the only way it
+//! can point at an element, and `none` the only way it can point at nothing.
+//!
+//! An option carries its own description as well as its id: `buildState`
+//! truncates the tree at `max_state_bytes`, and a candidate below that cut
+//! would otherwise be an option the model cannot resolve.
 
 const std = @import("std");
 const lp = @import("../lightpanda.zig");
@@ -30,7 +33,9 @@ const zenai = @import("zenai");
 const Element = @import("webapi/Element.zig");
 const DOMNode = @import("webapi/Node.zig");
 const Frame = lp.Frame;
+const NodeRegistry = lp.NodeRegistry;
 const interactive = @import("interactive.zig");
+const truncateUtf8 = @import("../string.zig").truncateUtf8;
 
 const Question = zenai.typesafe.Question;
 const ChoiceEntry = zenai.typesafe.ChoiceEntry;
@@ -41,16 +46,21 @@ const ChoiceEntry = zenai.typesafe.ChoiceEntry;
 pub const none_key = "none";
 const none_description = "Nothing on this page does that";
 
-/// Longest accessible name worth offering: a paragraph-length name is body
-/// text that happens to listen for clicks, not a control.
-const max_name_bytes = 80;
+/// How many options a question may offer. The API's limit is 255, and the
+/// vendor documents that detail unrelated to the decision distracts the
+/// model, so a page with more controls than this offers the first of them.
+pub const max_options = 200;
+
+/// Longest accessible name worth sending: the model reads the whole of it in
+/// the state anyway.
+const max_name_bytes = 120;
 
 /// Longest `href` worth sending to the model. A tracking URL is several
 /// hundred bytes of detail unrelated to the decision.
 const max_href_bytes = 120;
 
 pub const Candidate = struct {
-    /// The option id, `c0`, `c1`, … — ours, not the page's.
+    /// The element's node id, which the state carries too.
     key: []const u8,
     element: *Element,
     /// Its accessible name, empty when only a placeholder or a `name`
@@ -60,102 +70,45 @@ pub const Candidate = struct {
     info: std.json.Value,
 };
 
-pub const Filter = struct {
-    /// Roles a candidate may have, unless its name matched a keyword. An
-    /// element the accessibility tree gives no role at all never passes.
-    roles: []const []const u8,
-    /// Case-insensitive substrings that mark a candidate as likely. Matches
-    /// come first and `Set.keyword_matches` counts them.
-    keywords: []const []const u8 = &.{},
-    /// `input` types a candidate may have, for a question about form fields.
-    /// A missing `type` counts as `text`, as the HTML parser treats it.
-    input_types: ?[]const []const u8 = null,
-    /// How many options to offer. The vendor documents that detail unrelated
-    /// to the decision distracts the model, so a page with 200 controls must
-    /// not become a 200-option question.
-    max: usize = 40,
-};
-
-pub const Set = struct {
-    candidates: []const Candidate,
-    /// How many matched `Filter.keywords`. They sort first, so these are
-    /// `candidates[0..keyword_matches]`.
-    keyword_matches: usize,
-};
-
-/// The interactive elements under `root` that `filter` offers the model,
-/// keyword matches first, capped at `filter.max`.
+/// Every interactive element under `root`, in document order.
 pub fn collect(
     arena: std.mem.Allocator,
     root: *DOMNode,
     frame: *Frame,
-    filter: Filter,
-) !Set {
-    return select(arena, try interactive.collectInteractiveElements(root, arena, frame), filter);
-}
+    registry: *NodeRegistry,
+) ![]const Candidate {
+    const elements = try interactive.collectInteractiveElements(root, arena, frame);
 
-/// `collect` over elements already walked, so several questions about one page
-/// cost one walk between them — the walk resolves an accessible name per
-/// element, which is the expensive part.
-pub fn select(
-    arena: std.mem.Allocator,
-    elements: []const interactive.InteractiveElement,
-    filter: Filter,
-) !Set {
-    var matched: std.ArrayList(Candidate) = .empty;
-    var rest: std.ArrayList(Candidate) = .empty;
+    var out: std.ArrayList(Candidate) = try .initCapacity(arena, @min(elements.len, max_options));
     for (elements) |el| {
+        // Not a decision: a disabled control cannot be clicked at all.
         if (el.disabled) continue;
-        const role = el.role orelse continue;
-        if (filter.input_types) |types| {
-            if (!matchesAny(types, el.input_type orelse "text")) continue;
-        }
-        const name = std.mem.trim(u8, el.name orelse "", &std.ascii.whitespace);
-        if (name.len > max_name_bytes) continue;
-        // Something has to tell one candidate from another. A field often has
-        // no accessible name at all — an unlabelled password box — and then
-        // its placeholder or its `name` attribute is what a reader goes by.
-        if (name.len == 0 and el.placeholder == null and el.element_name == null) continue;
-
-        // A keyword match is offered whatever its role: the keywords are the
-        // question's own vocabulary, and a banner built out of clickable divs
-        // still has an Accept.
-        const keyword = hasKeyword(name, filter.keywords);
-        if (!keyword and !matchesAny(filter.roles, role)) continue;
-
-        const list = if (keyword) &matched else &rest;
-        // Past the cap the rest would only be dropped below, undescribed.
-        if (list.items.len == filter.max) continue;
+        if (out.items.len == max_options) break;
         const element = el.node.is(Element) orelse continue;
-        try list.append(arena, .{
-            .key = "",
+        const node = try registry.register(element.asNode());
+        out.appendAssumeCapacity(.{
+            .key = try arena.print("{d}", .{node.id}),
             .element = element,
-            .name = name,
-            .info = try describe(arena, el, role, name),
+            .name = name(el),
+            .info = try describe(arena, el),
         });
     }
-
-    const total = @min(matched.items.len + rest.items.len, filter.max);
-    const candidates = try arena.alloc(Candidate, total);
-    for (candidates, 0..) |*slot, i| {
-        slot.* = if (i < matched.items.len) matched.items[i] else rest.items[i - matched.items.len];
-        slot.key = try arena.print("c{d}", .{i});
-    }
-    return .{ .candidates = candidates, .keyword_matches = @min(matched.items.len, total) };
+    return out.items;
 }
 
-/// All the model is told about a candidate. Keys follow the
-/// `interactiveElements` tool's, so one vocabulary describes an element
-/// whoever is reading.
-fn describe(
-    arena: std.mem.Allocator,
-    el: interactive.InteractiveElement,
-    role: []const u8,
-    name: []const u8,
-) !std.json.Value {
+fn name(el: interactive.InteractiveElement) []const u8 {
+    return std.mem.trim(u8, el.name orelse "", &std.ascii.whitespace);
+}
+
+/// Keys follow the `interactiveElements` tool's, so one vocabulary describes
+/// an element whoever is reading.
+fn describe(arena: std.mem.Allocator, el: interactive.InteractiveElement) !std.json.Value {
     var obj: std.json.ObjectMap = .empty;
-    try obj.put(arena, "role", .{ .string = role });
-    if (name.len > 0) try obj.put(arena, "name", .{ .string = name });
+    if (el.role) |role| try obj.put(arena, "role", .{ .string = role });
+    const label = name(el);
+    if (label.len > 0) {
+        try obj.put(arena, "name", .{ .string = truncateUtf8(label, max_name_bytes) });
+    }
     if (el.input_type) |t| try obj.put(arena, "inputType", .{ .string = t });
     if (el.placeholder) |p| try obj.put(arena, "placeholder", .{ .string = p });
     if (el.element_name) |n| try obj.put(arena, "elementName", .{ .string = n });
@@ -219,24 +172,10 @@ fn moreProbable(_: void, a: Scored, b: Scored) bool {
     return a.probability > b.probability;
 }
 
-fn matchesAny(haystack: []const []const u8, needle: []const u8) bool {
-    for (haystack) |candidate| {
-        if (std.ascii.eqlIgnoreCase(candidate, needle)) return true;
-    }
-    return false;
-}
-
-fn hasKeyword(name: []const u8, keywords: []const []const u8) bool {
-    for (keywords) |keyword| {
-        if (std.ascii.findIgnoreCase(name, keyword) != null) return true;
-    }
-    return false;
-}
-
 const testing = @import("../testing.zig");
 
 /// Attached to the document, so `<label for>` resolves for field candidates.
-fn testCollect(html: []const u8, filter: Filter) !Set {
+fn testCollect(html: []const u8) ![]const Candidate {
     const frame = try testing.createFrame();
     errdefer testing.test_session.closeAllPages();
 
@@ -245,53 +184,46 @@ fn testCollect(html: []const u8, filter: Filter) !Set {
     _ = try doc.asNode().appendChild(div.asNode(), frame);
     try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
 
-    return collect(frame.call_arena, div.asNode(), frame, filter);
+    // The option ids are copied into the arena, so the registry that minted
+    // them is done once `collect` returns.
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+    return collect(frame.call_arena, div.asNode(), frame, &registry);
 }
 
-test "browser.choose: collect keeps named controls, keyword matches first" {
+test "browser.choose: collect offers every interactive element by node id" {
     defer testing.test_session.closeAllPages();
-    const set = try testCollect(
-        \\<button>Save</button>
+    const candidates = try testCollect(
         \\<button>Accept all cookies</button>
         \\<button disabled>Accept and close</button>
+        \\<div onclick="go()">A clickable div with no role at all</div>
         \\<a href="/privacy">Privacy policy</a>
         \\<p>Accept all cookies</p>
-    , .{
-        .roles = &.{ "button", "link" },
-        .keywords = &.{"cookie"},
-    });
-
-    // The disabled button and the paragraph are not offered; the keyword match
-    // leads.
-    try testing.expectEqual(3, set.candidates.len);
-    try testing.expectEqual(1, set.keyword_matches);
-    try std.testing.expectEqualStrings("c0", set.candidates[0].key);
-    try std.testing.expectEqualStrings("Accept all cookies", set.candidates[0].info.object.get("name").?.string);
-    try std.testing.expectEqualStrings("Accept all cookies", set.candidates[0].name);
-}
-
-test "browser.choose: collect caps the options it offers" {
-    defer testing.test_session.closeAllPages();
-    const set = try testCollect(
-        "<button>one</button><button>two</button><button>three</button>",
-        .{ .roles = &.{"button"}, .max = 2 },
     );
-    try testing.expectEqual(2, set.candidates.len);
+
+    // The role-less div is offered too: what it is, is the model's call.
+    try testing.expectEqual(3, candidates.len);
+    try std.testing.expectEqualStrings("Accept all cookies", candidates[0].name);
+    try std.testing.expectEqualStrings("Accept all cookies", candidates[0].info.object.get("name").?.string);
+    try testing.expect(std.fmt.parseInt(NodeRegistry.Id, candidates[0].key, 10) catch null != null);
 }
 
-test "browser.choose: collect filters fields by input type" {
+test "browser.choose: collect describes a field with no label of its own" {
     defer testing.test_session.closeAllPages();
-    const set = try testCollect(
-        \\<label for="u">Username</label><input id="u">
-        \\<label for="p">Password</label><input id="p" type="password">
-        \\<input type="checkbox" aria-label="Remember me">
-    , .{
-        .roles = &.{"textbox"},
-        .input_types = &.{ "text", "email" },
-    });
+    const candidates = try testCollect(
+        \\<input name="pw" type="password">
+        \\<input placeholder="you@example.com">
+    );
 
-    try testing.expectEqual(1, set.candidates.len);
-    try std.testing.expectEqualStrings("Username", set.candidates[0].info.object.get("name").?.string);
+    try testing.expectEqual(2, candidates.len);
+    const pw = candidates[0].info.object;
+    try std.testing.expectEqualStrings("password", pw.get("inputType").?.string);
+    try std.testing.expectEqualStrings("pw", pw.get("elementName").?.string);
+    try testing.expectEqual(null, pw.get("name"));
+    try std.testing.expectEqualStrings(
+        "you@example.com",
+        candidates[1].info.object.get("placeholder").?.string,
+    );
 }
 
 test "browser.choose: question offers every candidate plus none" {
@@ -300,14 +232,14 @@ test "browser.choose: question offers every candidate plus none" {
     const aa = arena.allocator();
 
     const candidates = [_]Candidate{
-        .{ .key = "c0", .element = undefined, .name = "a", .info = .{ .string = "a" } },
-        .{ .key = "c1", .element = undefined, .name = "b", .info = .{ .string = "b" } },
+        .{ .key = "11", .element = undefined, .name = "a", .info = .{ .string = "a" } },
+        .{ .key = "12", .element = undefined, .name = "b", .info = .{ .string = "b" } },
     };
     const extra = [_]ChoiceEntry{.{ .key = "enter", .value = .{ .text = "Press Enter" } }};
     const q = try question(aa, "Which one?", &candidates, &extra);
 
     try testing.expectEqual(4, q.choice.criteria.count());
-    try testing.expect(q.choice.criteria.has("c0"));
+    try testing.expect(q.choice.criteria.has("11"));
     try testing.expect(q.choice.criteria.has("enter"));
     try testing.expect(q.choice.criteria.has(none_key));
     try std.testing.expectEqualStrings("Which one?", q.choice.instructions.text);
@@ -319,25 +251,25 @@ test "browser.choose: ranked drops the options none outranks" {
     const aa = arena.allocator();
 
     const candidates = [_]Candidate{
-        .{ .key = "c0", .element = undefined, .name = "a", .info = .{ .string = "a" } },
-        .{ .key = "c1", .element = undefined, .name = "b", .info = .{ .string = "b" } },
-        .{ .key = "c2", .element = undefined, .name = "c", .info = .{ .string = "c" } },
+        .{ .key = "11", .element = undefined, .name = "a", .info = .{ .string = "a" } },
+        .{ .key = "12", .element = undefined, .name = "b", .info = .{ .string = "b" } },
+        .{ .key = "13", .element = undefined, .name = "c", .info = .{ .string = "c" } },
     };
     const q = try question(aa, "Which one?", &candidates, &.{});
     const questions: zenai.typesafe.Questions = .init(&.{.{ .key = "pick", .value = q }});
 
-    const response = try answerFixture(aa, "pick", "c1", &.{
-        .{ .key = "c0", .value = 0.05 },
-        .{ .key = "c1", .value = 0.6 },
-        .{ .key = "c2", .value = 0.25 },
+    const response = try answerFixture(aa, "pick", "12", &.{
+        .{ .key = "11", .value = 0.05 },
+        .{ .key = "12", .value = 0.6 },
+        .{ .key = "13", .value = 0.25 },
         .{ .key = none_key, .value = 0.1 },
     });
 
     const order = try ranked(aa, &candidates, response, questions, "pick");
-    // c0 scored below "nothing here does that", so it is not a second guess.
+    // 11 scored below "nothing here does that", so it is not a second guess.
     try testing.expectEqual(2, order.len);
-    try std.testing.expectEqualStrings("c1", order[0].candidate.key);
-    try std.testing.expectEqualStrings("c2", order[1].candidate.key);
+    try std.testing.expectEqualStrings("12", order[0].candidate.key);
+    try std.testing.expectEqualStrings("13", order[1].candidate.key);
 }
 
 test "browser.choose: ranked rejects an answer that is not the argmax" {
@@ -346,13 +278,13 @@ test "browser.choose: ranked rejects an answer that is not the argmax" {
     const aa = arena.allocator();
 
     const candidates = [_]Candidate{
-        .{ .key = "c0", .element = undefined, .name = "a", .info = .{ .string = "a" } },
+        .{ .key = "11", .element = undefined, .name = "a", .info = .{ .string = "a" } },
     };
     const q = try question(aa, "Which one?", &candidates, &.{});
     const questions: zenai.typesafe.Questions = .init(&.{.{ .key = "pick", .value = q }});
 
-    const response = try answerFixture(aa, "pick", "c0", &.{
-        .{ .key = "c0", .value = 0.2 },
+    const response = try answerFixture(aa, "pick", "11", &.{
+        .{ .key = "11", .value = 0.2 },
         .{ .key = none_key, .value = 0.8 },
     });
     try std.testing.expectError(error.ChoiceNotArgmax, ranked(aa, &candidates, response, questions, "pick"));
