@@ -27,7 +27,7 @@ const WebBotAuth = @This();
 
 pkey: *crypto.EVP_PKEY,
 keyid: []const u8,
-origin: [:0]const u8,
+signature_agent: [:0]const u8,
 
 pub const Config = struct {
     key_file: []const u8,
@@ -73,18 +73,18 @@ pub fn fromConfig(allocator: std.mem.Allocator, config: *const Config) !WebBotAu
     const pkey = try parsePemPrivateKey(pem);
     errdefer crypto.EVP_PKEY_free(pkey);
 
-    const origin = try allocator.printSentinel(
-        "https://{s}",
+    const signature_agent = try allocator.printSentinel(
+        "\"https://{s}\"",
         .{config.domain},
         0,
     );
-    errdefer allocator.free(origin);
+    errdefer allocator.free(signature_agent);
 
     return .{
         .pkey = pkey,
         // Owned by the Config so it's okay.
         .keyid = config.keyid,
-        .origin = origin,
+        .signature_agent = signature_agent,
     };
 }
 
@@ -103,7 +103,6 @@ pub fn signRequest(
     // Match Cloudflare's reference signer: standard padded base64.
     var nonce_encoded: [std.base64.standard.Encoder.calcSize(nonce_bytes.len)]u8 = undefined;
     const nonce = std.base64.standard.Encoder.encode(&nonce_encoded, &nonce_bytes);
-    const signature_agent = try arena.print("\"{s}\"", .{self.origin});
 
     // build the signature-input value (without the sig1= label)
     const sig_input_value = try arena.print(
@@ -114,7 +113,7 @@ pub fn signRequest(
     // build the canonical string to sign
     const canonical = try arena.print(
         "\"@authority\": {s}\n\"signature-agent\": {s}\n\"@signature-params\": {s}",
-        .{ authority, signature_agent, sig_input_value },
+        .{ authority, self.signature_agent, sig_input_value },
     );
 
     // sign it
@@ -126,14 +125,14 @@ pub fn signRequest(
     const encoded = try arena.alloc(u8, encoded_len);
     _ = std.base64.standard.Encoder.encode(encoded, &sig);
 
-    try transfer.setHeader("Signature-Agent", signature_agent, .{});
+    try transfer.setHeader("Signature-Agent", self.signature_agent, .{});
     try transfer.setHeader("Signature-Input", try arena.print("sig1={s}", .{sig_input_value}), .{});
     try transfer.setHeader("Signature", try arena.print("sig1=:{s}:", .{encoded}), .{});
 }
 
 pub fn deinit(self: WebBotAuth, allocator: std.mem.Allocator) void {
     crypto.EVP_PKEY_free(self.pkey);
-    allocator.free(self.origin);
+    allocator.free(self.signature_agent);
 }
 
 test "parsePemPrivateKey: valid Ed25519 PKCS#8 PEM" {
@@ -237,7 +236,7 @@ test "signRequest: origin, fresh nonces and verifiable signatures" {
         .domain = "example.com",
     });
     defer auth.deinit(allocator);
-    try std.testing.expectEqualStrings("https://example.com", auth.origin);
+    try std.testing.expectEqualStrings("\"https://example.com\"", auth.signature_agent);
 
     var pool = ArenaPool.init(allocator, .{});
     defer pool.deinit();
