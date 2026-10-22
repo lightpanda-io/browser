@@ -536,6 +536,8 @@ pub const BrowserContext = struct {
     intercept_state: InterceptState,
     fetch_session_id: ?[]const u8 = null,
 
+    download_session_id: ?[]const u8 = null,
+
     // Request bodies retained for Network.getRequestPostData, which can be
     // called after the transfer is gone. Capped at max_post_data_size.
     captured_requests: std.AutoHashMapUnmanaged(CapturedKey, []const u8),
@@ -995,11 +997,13 @@ pub const BrowserContext = struct {
     pub fn downloadEventsEnable(self: *BrowserContext) !void {
         try self.notification.register(.download_will_begin, self, onDownloadWillBegin);
         try self.notification.register(.download_progress, self, onDownloadProgress);
+        try self.notification.register(.download_data, self, onDownloadData);
     }
 
     pub fn downloadEventsDisable(self: *BrowserContext) void {
         self.notification.unregister(.download_will_begin, self);
         self.notification.unregister(.download_progress, self);
+        self.notification.unregister(.download_data, self);
     }
 
     fn onDownloadWillBegin(ctx: *anyopaque, msg: *const Notification.DownloadWillBegin) !void {
@@ -1010,6 +1014,11 @@ pub const BrowserContext = struct {
     fn onDownloadProgress(ctx: *anyopaque, msg: *const Notification.DownloadProgress) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/browser.zig").downloadProgress(self, msg);
+    }
+
+    fn onDownloadData(ctx: *anyopaque, msg: *const Notification.DownloadData) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/lp.zig").downloadData(self, msg);
     }
 
     pub fn webmcpEnable(self: *BrowserContext) !void {

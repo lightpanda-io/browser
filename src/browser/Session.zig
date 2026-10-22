@@ -141,6 +141,9 @@ pub const DownloadBehavior = enum {
     // The CDP `default` behavior is mapped to `deny`: we don't write downloads
     // to disk unless the driver explicitly opts in with `allow`/`allowAndName`.
     deny,
+    /// LP extension to `DownloadBehavior`; instead of writing files to disk,
+    /// they are streamed over CDP.
+    @"lp-stream-over-cdp",
 };
 
 const CancelHook = struct {

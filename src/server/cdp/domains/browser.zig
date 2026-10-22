@@ -93,6 +93,8 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
         }
     }
 
+    const events_enabled = params.eventsEnabled orelse false;
+
     // `default` defers the choice to the browser; we map it to `deny` (no
     // download is written unless a driver explicitly opts in).
     const behavior: Session.DownloadBehavior = if (std.mem.eql(u8, params.behavior, "allow"))
@@ -101,6 +103,9 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
         .allow_and_name
     else if (std.mem.eql(u8, params.behavior, "deny") or std.mem.eql(u8, params.behavior, "default"))
         .deny
+    else if (std.mem.eql(u8, params.behavior, "lp-stream-over-cdp") and events_enabled == true)
+        // Our extension to download behavior.
+        .@"lp-stream-over-cdp"
     else
         return error.InvalidParams;
 
@@ -119,7 +124,10 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
     // downloadPath comes from the (transient) command arena; persist it on the
     // session arena since Frame reads it on later navigations.
     session.download_path = if (params.downloadPath) |p| try session.arena.dupe(u8, p) else null;
-    session.download_events_enabled = params.eventsEnabled orelse false;
+    session.download_events_enabled = events_enabled;
+    // resolveSessionId returns the CDP-owned copy; the command's string
+    // doesn't outlive the message.
+    bc.download_session_id = if (cmd.input.session_id) |sid| cmd.cdp.resolveSessionId(sid) else null;
 
     if (session.download_events_enabled) {
         try bc.downloadEventsEnable();
@@ -140,7 +148,7 @@ pub fn downloadWillBegin(bc: *CDP.BrowserContext, event: *const Notification.Dow
         .guid = event.guid,
         .url = event.url,
         .suggestedFilename = event.suggested_filename,
-    }, .{});
+    }, .{ .session_id = bc.download_session_id });
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Browser/#event-downloadProgress
@@ -155,7 +163,7 @@ pub fn downloadProgress(bc: *CDP.BrowserContext, msg: *const Notification.Downlo
             .completed => "completed",
             .canceled => "canceled",
         },
-    }, .{});
+    }, .{ .session_id = bc.download_session_id });
 }
 
 fn getWindowForTarget(cmd: *CDP.Command) !void {
