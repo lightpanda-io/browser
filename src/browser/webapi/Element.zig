@@ -1538,6 +1538,11 @@ pub fn isVisible(self: *Element, frame: *Frame) bool {
     return !owner._style_manager.isHidden(self, .{});
 }
 
+fn computedPosition(self: *Element, frame: *Frame) StyleManager.Position {
+    const owner = self.ownerFrame(frame) orelse return .static;
+    return owner._style_manager.position(self);
+}
+
 const CheckVisibilityOpts = struct {
     checkOpacity: bool = false,
     checkVisibilityCSS: bool = false,
@@ -2040,11 +2045,10 @@ pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
         else => {},
     }
 
-    const self_position = self.positionStyle(frame);
-    if (std.mem.eql(u8, self_position, "fixed")) {
+    const self_position = self.computedPosition(frame);
+    if (self_position == .fixed) {
         return null;
     }
-    const self_static = self_position.len == 0 or std.mem.eql(u8, self_position, "static");
 
     var node: ?*Node = self.asNode()._parent;
     while (node) |n| {
@@ -2059,21 +2063,15 @@ pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
         if (tag == .body) {
             return ancestor;
         }
-        const position = ancestor.positionStyle(frame);
-        if (position.len > 0 and !std.mem.eql(u8, position, "static")) {
+        if (ancestor.computedPosition(frame) != .static) {
             return ancestor;
         }
-        if (self_static and (tag == .td or tag == .th or tag == .table)) {
+        if (self_position == .static and (tag == .td or tag == .th or tag == .table)) {
             return ancestor;
         }
         node = n._parent;
     }
     return null;
-}
-
-fn positionStyle(self: *Element, frame: *Frame) []const u8 {
-    const style = self.inlineStyle(frame) orelse return "";
-    return style.asCSSStyleDeclaration().getPropertyValue("position", frame);
 }
 
 pub fn getClientTop(_: *Element) f64 {
