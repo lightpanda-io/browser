@@ -211,8 +211,11 @@
     });
     input.setSelectionRange(1, 4);
 
+    // Fires asynchronously, and changes before it fires fold into one event.
+    testing.expectEqual(0, eventCount);
+
     testing.onload(() => {
-      testing.expectEqual(5, eventCount);
+      testing.expectEqual(1, eventCount);
       testing.expectEqual('selectionchange', lastEvent.type);
       testing.expectEqual(input, lastEvent.target);
       testing.expectEqual(true, lastEvent.bubbles);
@@ -551,7 +554,10 @@
     input.value = 'hello';
     testing.expectEqual(5, input.selectionStart);
     testing.expectEqual(5, input.selectionEnd);
-    testing.expectEqual('none', input.selectionDirection);
+    // Platforms without a "none" direction report "forward" (Chrome on Linux).
+    const probe = document.createElement('input');
+    probe.setSelectionRange(0, 0, 'none');
+    testing.expectEqual(probe.selectionDirection, input.selectionDirection);
 
     // The caret follows the _sanitized_ value: a text input strips CR/LF.
     input.value = 'a\nb';
@@ -628,7 +634,8 @@
     let selects = 0;
     email.addEventListener('select', () => selects++);
     email.select();
-    testing.expectEqual(1, selects);
+    // select is queued, not fired synchronously
+    testing.expectEqual(0, selects);
     testing.expectError('InvalidStateError', () => email.setSelectionRange(0, 1));
 
     const date = document.createElement('input');
@@ -637,7 +644,11 @@
     let date_selects = 0;
     date.addEventListener('select', () => date_selects++);
     date.select();
-    testing.expectEqual(0, date_selects);
+
+    testing.onload(() => {
+      testing.expectEqual(1, selects);
+      testing.expectEqual(0, date_selects);
+    });
   }
 </script>
 

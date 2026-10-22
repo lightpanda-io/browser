@@ -218,7 +218,9 @@
     console.warn(`The page is not being executed in the test runner, certain behavior has been adjusted`);
     window.testing.HOST = location.hostname;
     window.testing.ORIGIN = location.origin;
-    window.testing.BASE_URL = location.origin + '/src/browser/tests/';
+    // Relative to this script, so a page served as //src/... (or from another
+    // root) still resolves relative URLs the way the test expects.
+    window.testing.BASE_URL = new URL('./', document.currentScript.src).href;
     window.addEventListener('load', testing.assertOk);
   }
 

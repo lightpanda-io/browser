@@ -367,8 +367,11 @@
     });
     textarea.setSelectionRange(1, 4);
     
+    // Fires asynchronously, and changes before it fires fold into one event.
+    testing.expectEqual(0, eventCount);
+
     testing.onload(() => {
-      testing.expectEqual(5, eventCount);
+      testing.expectEqual(1, eventCount);
       testing.expectEqual('selectionchange', lastEvent.type);
       testing.expectEqual(textarea, lastEvent.target);
       testing.expectEqual(true, lastEvent.bubbles);
@@ -394,7 +397,10 @@
     textarea.value = 'hello';
     testing.expectEqual(5, textarea.selectionStart);
     testing.expectEqual(5, textarea.selectionEnd);
-    testing.expectEqual('none', textarea.selectionDirection);
+    // Platforms without a "none" direction report "forward" (Chrome on Linux).
+    const probe = document.createElement('textarea');
+    probe.setSelectionRange(0, 0, 'none');
+    testing.expectEqual(probe.selectionDirection, textarea.selectionDirection);
 
     // Re-assigning the same value leaves the selection alone
     // (WPT textfieldselection/selection-after-content-change.html).

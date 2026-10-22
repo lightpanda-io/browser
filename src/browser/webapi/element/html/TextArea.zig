@@ -48,6 +48,8 @@ _value_before_edit: ?[]const u8 = null,
 _selection_start: u32 = 0,
 _selection_end: u32 = 0,
 _selection_direction: Selection.SelectionDirection = .none,
+// A queued selectionchange not yet fired; later changes fold into it.
+_selectionchange_pending: bool = false,
 
 _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,

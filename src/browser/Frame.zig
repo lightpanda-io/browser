@@ -2596,7 +2596,7 @@ pub const QueuedEvent = struct {
     element: *Element.Html,
     generation: u32 = 0, // Image/Link request generation
 
-    pub const Kind = enum { load, @"error" };
+    pub const Kind = enum { load, @"error", select, selectionchange };
 };
 
 pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
@@ -2841,11 +2841,11 @@ fn fireIFrameLoad(self: *Frame, iframe: *IFrame) !void {
     defer if (child_doc) |doc| {
         doc._iframe_load_in_progress = false;
     };
-    try self.fireElementEvent(iframe.asElement(), comptime .wrap("load"));
+    try self.fireElementEvent(iframe.asElement(), comptime .wrap("load"), .{});
 }
 
-fn fireElementEvent(self: *Frame, el: *Element, name: String) !void {
-    const event = try Event.initTrusted(name, .{}, self.page);
+fn fireElementEvent(self: *Frame, el: *Element, name: String, opts: Event.Options) !void {
+    const event = try Event.initTrusted(name, opts, self.page);
     try self._event_manager.dispatch(el.asEventTarget(), event);
 }
 
@@ -2880,13 +2880,22 @@ fn dispatchQueuedEvents(self: *Frame) !void {
                     if (html_element.is(IFrame)) |iframe| {
                         try self.fireIFrameLoad(iframe);
                     } else {
-                        try self.fireElementEvent(element, comptime .wrap("load"));
+                        try self.fireElementEvent(element, comptime .wrap("load"), .{});
                     }
                 }
             },
             .@"error" => {
                 // errors are rare; not worth a listener-presence check
-                try self.fireElementEvent(element, comptime .wrap("error"));
+                try self.fireElementEvent(element, comptime .wrap("error"), .{});
+            },
+            .select => try self.fireElementEvent(element, comptime .wrap("select"), .{ .bubbles = true }),
+            .selectionchange => {
+                if (html_element.is(Element.Html.Input)) |input| {
+                    input._selectionchange_pending = false;
+                } else if (html_element.is(Element.Html.TextArea)) |textarea| {
+                    textarea._selectionchange_pending = false;
+                }
+                try self.fireElementEvent(element, .wrap("selectionchange"), .{ .bubbles = true });
             },
         }
     }
