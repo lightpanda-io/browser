@@ -110,7 +110,7 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
 
     // The override is stored on the Browser so it persists across page
     // navigations for the whole CDP connection.
-    const browser = &cmd.cdp.browser;
+    const browser = (cmd.browser_context orelse return error.BrowserContextNotLoaded).session;
 
     // CDP convention: a 0 width/height means "don't override that dimension",
     // so keep the current value for any dimension passed as 0.
@@ -129,7 +129,7 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
 }
 
 fn clearDeviceMetricsOverride(cmd: *CDP.Command) !void {
-    cmd.cdp.browser.setViewportOverride(null);
+    (cmd.browser_context orelse return error.BrowserContextNotLoaded).session.setViewportOverride(null);
     return cmd.sendResult(null, .{});
 }
 
@@ -515,8 +515,8 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
 
     // The override lives on the Browser, so it persists across page
     // navigations rather than being lost with the page.
-    try testing.expectEqual(375, bc.session.browser.getViewport().width);
-    try testing.expectEqual(812, bc.session.browser.getViewport().height);
+    try testing.expectEqual(375, bc.session.getViewport().width);
+    try testing.expectEqual(812, bc.session.getViewport().height);
 
     try ctx.processMessage(.{
         .id = 9,

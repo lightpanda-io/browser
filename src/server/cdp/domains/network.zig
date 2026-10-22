@@ -1822,7 +1822,7 @@ test "cdp.Network: worker requests emit network events" {
 
     const cdp = ctx.cdp();
     _ = try cdp.createBrowserContext();
-    var bc = &cdp.browser_context.?;
+    var bc = cdp.browser_context.?;
     bc.id = "BID-NW";
     _ = try bc.attachPrimarySession("SID-NW");
     bc.target_id = "TID-NW-0000000".*;

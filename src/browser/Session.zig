@@ -33,6 +33,7 @@ const URL = @import("URL.zig");
 const Page = @import("Page.zig");
 const Frame = @import("Frame.zig");
 const Browser = @import("Browser.zig");
+const Viewport = @import("Viewport.zig");
 const HttpClient = @import("../network/HttpClient.zig");
 const Geolocation = @import("webapi/geolocation/Geolocation.zig");
 const PermissionState = @import("webapi/Permissions.zig").State;
@@ -56,6 +57,7 @@ browser: *Browser,
 http_client: *HttpClient,
 permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
 geolocation_override: ?Geolocation.Override = null,
+viewport_override: ?Viewport = null,
 arena: *lp.Arena,
 // Session history, one per top-level browsing context, keyed by its root
 // frame id. Outlives the Page: a root navigation's replacement Page reuses the
@@ -183,6 +185,15 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .experimental_features = browser.app.config.experimentalFeatures(),
     };
     errdefer self._console_messages.deinit();
+}
+
+pub fn getViewport(self: *const Session) Viewport {
+    return self.viewport_override orelse self.browser.getViewport();
+}
+
+pub fn setViewportOverride(self: *Session, viewport: ?Viewport) void {
+    self.viewport_override = viewport;
+    for (self.pages.items) |page| page.viewportChanged();
 }
 
 // The client is borrowed and must outlive the session. Install it before

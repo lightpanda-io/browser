@@ -90,10 +90,12 @@ fn configureCDP(cmd: *CDP.Command) !void {
         cmd.cdp.disable_set_cache_disabled = value;
     }
     if (params.obeyRobots) |value| {
-        try cmd.httpClient().obeyRobots(value);
+        try cmd.cdp.browser.http_client.obeyRobots(value);
+        for (cmd.cdp.browser_contexts.items) |bc| try bc.session.http_client.obeyRobots(value);
     }
     if (params.httpVersion) |value| {
-        cmd.httpClient().setHttpVersion(value);
+        cmd.cdp.browser.http_client.setHttpVersion(value);
+        for (cmd.cdp.browser_contexts.items) |bc| bc.session.http_client.setHttpVersion(value);
     }
 
     return cmd.sendResult(null, .{});
@@ -200,7 +202,7 @@ fn dump(cmd: anytype) !void {
             if (params.maxBytes != null) {
                 return error.InvalidParams;
             }
-            const opts: lp.screenshot.Opts = .fromViewport(cmd.cdp.browser.getViewport(), true);
+            const opts: lp.screenshot.Opts = .fromViewport(frame.page.getViewport(), true);
             const prepared = try lp.screenshot.preparePng(cmd.arena, state, opts, frame);
             return cmd.sendResult(.{ .format = params.format, .content = prepared }, .{});
         },

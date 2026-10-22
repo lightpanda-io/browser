@@ -203,6 +203,11 @@ pub fn tick(self: *Runner, timeout_ms: u32, conditions: []WaitCondition) !TickRe
     return self._tick(false, timeout_ms, conditions);
 }
 
+pub fn tickCDP(self: *Runner, timeout_ms: u32) !void {
+    var conditions: [0]WaitCondition = .{};
+    _ = try self._tick(true, timeout_ms, &conditions);
+}
+
 fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []WaitCondition) !TickResult {
     const session = self.session;
     const browser = self.browser;

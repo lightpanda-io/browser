@@ -252,7 +252,7 @@ destroying: bool = false,
 // across page navigations; delegate to it here, keeping a single read path for
 // every viewport consumer.
 pub fn getViewport(self: *const Page) Viewport {
-    return self.session.browser.getViewport();
+    return self.session.getViewport();
 }
 
 pub fn viewportChanged(self: *Page) void {

@@ -80,7 +80,10 @@ browser_context_id_gen: BrowserContextIdGen = .{},
 // outlives any browser context.
 browser_session_id: ?[]const u8 = null,
 
-browser_context: ?BrowserContext,
+browser_context: ?*BrowserContext,
+browser_contexts: std.ArrayList(*BrowserContext) = .empty,
+retired_contexts: std.ArrayList(*BrowserContext) = .empty,
+next_group_id: js.Inspector.GroupId = 1,
 disable_set_cache_disabled: bool = false,
 
 // Re-used arena for processing a message. Works because we strictly process
@@ -90,13 +93,6 @@ message_arena: std.heap.ArenaAllocator,
 // Retained until the outermost notification handler returns.
 notification_arena: std.heap.ArenaAllocator,
 notification_depth: u32 = 0,
-
-// Valid for 1 frame navigation (what CDP calls a "renderer")
-frame_arena: std.heap.ArenaAllocator,
-
-// Valid for the entire lifetime of the BrowserContext. Should minimize
-// (or altogether eliminate) our use of this.
-browser_context_arena: std.heap.ArenaAllocator,
 
 // Files handed out as IO stream handles (Page.printToPDF ReturnAsStream).
 streams: @import("domains/io.zig").Streams,
@@ -114,10 +110,8 @@ pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox) !void 
             .browser = undefined,
             .allocator = allocator,
             .browser_context = null,
-            .frame_arena = std.heap.ArenaAllocator.init(allocator),
             .message_arena = std.heap.ArenaAllocator.init(allocator),
             .notification_arena = std.heap.ArenaAllocator.init(allocator),
-            .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
             .streams = .{ .allocator = allocator },
         };
     }
@@ -130,14 +124,13 @@ pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox) !void 
 }
 
 pub fn deinit(self: *CDP) void {
-    if (self.browser_context) |*bc| {
-        bc.deinit();
-    }
+    while (self.browser_context != null) self.disposeBrowserContext();
+    self.reapContexts();
+    self.browser_contexts.deinit(self.allocator);
+    self.retired_contexts.deinit(self.allocator);
     self.browser.deinit();
-    self.frame_arena.deinit();
     self.message_arena.deinit();
     self.notification_arena.deinit();
-    self.browser_context_arena.deinit();
     self.streams.deinit();
     self.link.deinit();
 }
@@ -161,7 +154,7 @@ pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
 
     const arena = &self.message_arena;
     defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
-    return self.dispatchParsed(arena.allocator(), .{ .cdp = self }, c.raw, c.input);
+    return self.dispatchParsed(arena.allocator(), .{ .cdp = self }, c.raw, c.input, null);
 }
 
 // Parse + dispatch a raw JSON CDP message. Used by tests (which
@@ -193,16 +186,20 @@ pub fn sendJSON(self: *CDP, message: anytype, opts: SendJSONOpts) !void {
 // once on the Network thread and reaches dispatchParsed directly via
 // onMessage.
 pub fn dispatch(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8) !void {
+    return self.dispatchForContext(arena, sender, str, null);
+}
+
+pub fn dispatchForContext(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8, context: ?*BrowserContext) !void {
     const input = json.parseFromSliceLeaky(InputMessage, arena, str, .{
         .ignore_unknown_fields = true,
     }) catch return error.InvalidJSON;
-    return self.dispatchParsed(arena, sender, str, input);
+    return self.dispatchParsed(arena, sender, str, input, context);
 }
 
 // Dispatch a pre-parsed CDP message. The caller is responsible for
 // keeping `str` and the backing storage for `input`'s string slices
 // alive for the duration of the call.
-fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8, input: InputMessage) !void {
+fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8, input: InputMessage, context: ?*BrowserContext) !void {
     lp.metrics.serve_commands.incr(.cdp);
 
     var command = Command{
@@ -216,8 +213,36 @@ fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []c
         .cdp = self,
         .arena = arena,
         .sender = sender,
-        .browser_context = if (self.browser_context) |*bc| bc else null,
+        .browser_context = context orelse self.browser_context,
     };
+
+    if (command.input.session_id) |sid| {
+        for (self.browser_contexts.items) |bc| {
+            if (bc.attached_sessions.contains(sid)) {
+                command.browser_context = bc;
+                break;
+            }
+        }
+    }
+    if (command.params(struct { browserContextId: ?[]const u8 = null, targetId: ?[]const u8 = null, sessionId: ?[]const u8 = null }) catch null) |params| {
+        if (params.browserContextId) |bid| {
+            command.browser_context = self.findBrowserContext(bid) orelse command.browser_context;
+        } else if (params.targetId) |tid| {
+            for (self.browser_contexts.items) |bc| {
+                if (bc.target_id != null and std.mem.eql(u8, &bc.target_id.?, tid)) {
+                    command.browser_context = bc;
+                    break;
+                }
+            }
+        } else if (params.sessionId) |sid| {
+            for (self.browser_contexts.items) |bc| {
+                if (bc.attached_sessions.contains(sid)) {
+                    command.browser_context = bc;
+                    break;
+                }
+            }
+        }
+    }
 
     // See dispatchStartupCommand for more info on this.
     var is_startup = false;
@@ -351,33 +376,72 @@ pub fn resolveSessionId(self: *const CDP, input_session_id: []const u8) ?[]const
             return browser_session_id;
         }
     }
-    const browser_context = if (self.browser_context) |*bc| bc else return null;
-    return browser_context.attached_sessions.getKey(input_session_id);
+    for (self.browser_contexts.items) |bc| {
+        if (bc.attached_sessions.getKey(input_session_id)) |sid| return sid;
+    }
+    return null;
 }
 
 fn isValidSessionId(self: *const CDP, input_session_id: []const u8) bool {
     return self.resolveSessionId(input_session_id) != null;
 }
 
-pub fn createBrowserContext(self: *CDP) ![]const u8 {
-    if (self.browser_context != null) {
-        return error.AlreadyExists;
+pub fn findBrowserContext(self: *CDP, id: []const u8) ?*BrowserContext {
+    for (self.browser_contexts.items) |bc| {
+        if (std.mem.eql(u8, id, bc.id)) return bc;
     }
+    return null;
+}
+
+pub fn createBrowserContext(self: *CDP) ![]const u8 {
+    const bc = try self.allocator.create(BrowserContext);
+    errdefer self.allocator.destroy(bc);
     const id = self.browser_context_id_gen.next();
-
-    self.browser_context = @as(BrowserContext, undefined);
-    const browser_context = &self.browser_context.?;
-
-    try BrowserContext.init(browser_context, id, self);
-    return id;
+    try BrowserContext.init(bc, id, self);
+    errdefer {
+        bc.deinit();
+        bc.destroy();
+    }
+    try self.browser_contexts.append(self.allocator, bc);
+    if (self.browser_context == null) self.browser_context = bc;
+    return bc.id;
 }
 
 pub fn disposeBrowserContext(self: *CDP) void {
-    const bc = &(self.browser_context orelse return);
+    self.disposeContext(self.browser_context orelse return);
+}
+
+pub fn disposeContext(self: *CDP, bc: *BrowserContext) void {
+    // A dispose command may arrive inside the context's HttpClient.tick.
+    // Keep its client and receiver allocation alive until dispatch unwinds.
+    self.retired_contexts.append(self.allocator, bc) catch @panic("retire context");
+    for (self.browser_contexts.items, 0..) |entry, index| {
+        if (entry == bc) {
+            _ = self.browser_contexts.orderedRemove(index);
+            break;
+        }
+    }
+    self.browser_context = if (self.browser_contexts.items.len > 0) self.browser_contexts.items[0] else null;
+    bc.active = false;
     bc.deinit();
-    self.browser.closeSession();
-    self.browser_context = null;
-    _ = self.browser_context_arena.reset(.{ .retain_with_limit = 1024 * 16 });
+}
+
+pub fn reapContexts(self: *CDP) void {
+    for (self.retired_contexts.items) |bc| bc.destroy();
+    self.retired_contexts.clearRetainingCapacity();
+}
+
+pub fn tick(self: *CDP) !void {
+    self.reapContexts();
+    const contexts = try self.allocator.dupe(*BrowserContext, self.browser_contexts.items);
+    defer self.allocator.free(contexts);
+    for (contexts) |bc| {
+        if (!bc.active) continue;
+        bc.session.processDestroyQueues();
+        var runner = bc.session.runner(.{});
+        try runner.tickCDP(0);
+    }
+    _ = try self.browser.http_client.tick(if (self.browser_contexts.items.len == 0) 200 else 5);
 }
 
 const SendEventOpts = struct {
@@ -459,6 +523,11 @@ pub const BrowserContext = struct {
     // our Session more or less maps to a BrowserContext. THIS HAS ZERO
     // RELATION TO SESSION_ID
     session: *Session,
+    group_id: js.Inspector.GroupId,
+    active: bool = true,
+    context_arena: std.heap.ArenaAllocator,
+    context_frame_arena: std.heap.ArenaAllocator,
+    http_client: HttpClient,
 
     // Tied to the lifetime of the BrowserContext
     arena: Allocator,
@@ -572,10 +641,11 @@ pub const BrowserContext = struct {
         const notification = try Notification.init(allocator);
         errdefer notification.deinit();
 
-        const session = try cdp.browser.newSession(notification);
-        if (cdp.app.config.cookieFile()) |cookie_path| {
-            lp.cookies.loadFromFile(session, cookie_path);
-        }
+        const session = try allocator.create(Session);
+        errdefer allocator.destroy(session);
+        try Session.init(session, &cdp.browser, notification);
+        errdefer session.deinit();
+        if (cdp.app.config.cookieFile()) |cookie_path| lp.cookies.loadFromFile(session, cookie_path);
 
         var registry = NodeRegistry.init(allocator);
         errdefer registry.deinit();
@@ -586,22 +656,43 @@ pub const BrowserContext = struct {
             .target_id = null,
             .session_id = null,
             .session = session,
+            .group_id = cdp.next_group_id,
+            .context_arena = std.heap.ArenaAllocator.init(allocator),
+            .context_frame_arena = std.heap.ArenaAllocator.init(allocator),
+            .http_client = undefined,
             .security_origin = URL_BASE,
             .secure_context_type = "Secure", // TODO = enum
             .page_life_cycle_events = false, // TODO; Target based value
             .node_registry = registry,
             .node_search_list = undefined,
             .isolated_worlds = .empty,
-            .frame_arena = cdp.frame_arena.allocator(),
-            .arena = cdp.browser_context_arena.allocator(),
+            .frame_arena = undefined,
+            .arena = undefined,
             .notification_arena = cdp.notification_arena.allocator(),
             .intercept_state = try InterceptState.init(allocator),
             .captured_requests = .empty,
             .captured_responses = .empty,
             .notification = notification,
         };
+        errdefer self.context_arena.deinit();
+        errdefer self.context_frame_arena.deinit();
+        self.arena = self.context_arena.allocator();
+        self.frame_arena = self.context_frame_arena.allocator();
+        self.id = try self.arena.dupe(u8, id);
+        cdp.next_group_id += 1;
+        try self.http_client.init(cdp.app);
+        errdefer {
+            session.http_client = &cdp.browser.http_client;
+            self.http_client.deinit();
+        }
+        self.http_client.http_version = cdp.browser.http_client.http_version;
+        self.http_client.obey_robots = cdp.browser.http_client.obey_robots;
+        self.http_client.tls_verify = cdp.browser.http_client.tls_verify;
+        session.setHttpClient(&self.http_client);
         self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
-        errdefer self.deinit();
+        errdefer self.node_search_list.deinit();
+        errdefer self.intercept_state.deinit();
+        errdefer notification.unregisterAll(self);
 
         try notification.register(.frame_remove, self, onFrameRemove);
         try notification.register(.frame_created, self, onFrameCreated);
@@ -618,13 +709,13 @@ pub const BrowserContext = struct {
     }
 
     pub fn deinit(self: *BrowserContext) void {
-        const browser = &self.cdp.browser;
-        const env = &browser.env;
+        const env = &self.cdp.browser.env;
+        const allocator = self.cdp.allocator;
 
         // resetContextGroup detach the inspector from all contexts.
         // It appends async tasks, so we make sure we run the message loop
         // before deinit it.
-        env.inspector.?.resetContextGroup();
+        env.inspector.?.resetContextGroup(self.group_id);
         self.detachAllSessions();
 
         // abort all intercepted requests before closing the session/page
@@ -661,7 +752,8 @@ pub const BrowserContext = struct {
         // If the session has a frame, we need to clear it first. The page
         // context is always nested inside of the isolated world context,
         // so we need to shutdown the page one first.
-        browser.closeSession();
+        self.session.deinit();
+        allocator.destroy(self.session);
 
         self.node_registry.deinit();
         self.node_search_list.deinit();
@@ -672,18 +764,15 @@ pub const BrowserContext = struct {
         // notification off any ownerless CorsGate/RobotsGate transfers.
         self.notification.deinit();
 
-        if (self.http_proxy_changed) {
-            // has to be called after browser.closeSession, since it won't
-            // work if there are active connections.
-            http_client.changeProxy(null) catch |err| {
-                log.warn(.http, "changeProxy", .{ .err = err });
-            };
-        }
-        if (self.user_agent_changed) {
-            http_client.clearUserAgentOverride();
-        }
-        http_client.clearAcceptLanguageOverride();
         self.intercept_state.deinit();
+    }
+
+    fn destroy(self: *BrowserContext) void {
+        const allocator = self.cdp.allocator;
+        self.http_client.deinit();
+        self.context_frame_arena.deinit();
+        self.context_arena.deinit();
+        allocator.destroy(self);
     }
 
     pub fn reset(self: *BrowserContext) void {
@@ -1278,7 +1367,7 @@ pub const BrowserContext = struct {
             .bc = self,
             .inspector_session = undefined,
         };
-        attached.inspector_session.init(self.inspector(), attached);
+        attached.inspector_session.init(self.inspector(), self.group_id, attached);
         errdefer attached.inspector_session.deinit();
 
         try self.attached_sessions.put(allocator, attached.id, attached);
@@ -1559,8 +1648,8 @@ pub const Command = struct {
     }
 
     pub fn createBrowserContext(self: *Command) !*BrowserContext {
-        _ = try self.cdp.createBrowserContext();
-        self.browser_context = &(self.cdp.browser_context.?);
+        const id = try self.cdp.createBrowserContext();
+        self.browser_context = self.cdp.findBrowserContext(id);
         return self.browser_context.?;
     }
 
