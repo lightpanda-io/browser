@@ -23,9 +23,12 @@ const Frame = @import("Frame.zig");
 const URL = @import("URL.zig");
 const HttpClient = @import("../network/HttpClient.zig");
 
+const sys_url = @import("../sys/url.zig");
 const uuidv4 = @import("../id.zig").uuidv4;
+const latin1ToUtf8 = @import("../string.zig").latin1ToUtf8;
 
 const log = lp.log;
+const Allocator = std.mem.Allocator;
 
 const Download = @This();
 // UUIDv4.
@@ -43,24 +46,35 @@ total: ?usize = null,
 frame: *Frame,
 
 /// Prefer `from*` variants to initialize.
-fn init(frame: *Frame, url: []const u8, status: u16, filename: []const u8, maybe_total: ?usize) !Download {
+/// `maybe_suggestion` is the caller's sanitized pick; `null` falls back to the `guid`.
+fn init(frame: *Frame, transfer: *HttpClient.Transfer, maybe_suggestion: ?[]const u8) !Download {
     const session = frame._session;
+    // The final URL, after any redirects.
+    const url = transfer.req.url;
 
     // `guid` is the CDP "Global Unique Identifier" which helps us find
     // where to dispatch events on.
     var guid: [36]u8 = undefined;
     uuidv4(&guid);
 
-    const succeeded = isSuccessStatus(status);
+    // The suggestion may point into the response headers, which don't
+    // outlive the transfer. Content-Disposition filenames can be in a
+    // legacy encoding (e.g. Shift_JIS) but must yield valid UTF-8.
+    const name = maybe_suggestion orelse &guid;
+    const filename = if (std.unicode.utf8ValidateSlice(name))
+        try frame.page_arena.dupe(u8, name)
+    else
+        try latin1ToUtf8(frame.page_arena, name);
+
+    const succeeded = isSuccessStatus(transfer.responseStatus() orelse 0);
     const maybe_file: ?std.Io.File = if (succeeded == false) null else switch (session.download_behavior) {
-        inline .allow, .allow_and_name => blk: {
+        inline .allow, .allow_and_name => |behavior| blk: {
             const download_path = session.download_path orelse {
                 log.warn(.frame, "download without downloadPath", .{ .url = url });
                 return error.WithoutDownloadPath;
             };
             // allowAndName stores the file under its guid.
-            //const on_disk_name = if (comptime behavior == .allow_and_name) @as([]const u8, guid) else filename;
-            const on_disk_name = filename;
+            const on_disk_name: []const u8 = if (comptime behavior == .allow_and_name) &guid else filename;
 
             const cwd = std.Io.Dir.cwd();
             try cwd.createDirPath(lp.io, download_path);
@@ -79,6 +93,7 @@ fn init(frame: *Frame, url: []const u8, status: u16, filename: []const u8, maybe
             .guid = &guid,
             .url = url,
             .suggested_filename = filename,
+            .content_type = transfer.contentType(),
         });
     }
 
@@ -89,7 +104,7 @@ fn init(frame: *Frame, url: []const u8, status: u16, filename: []const u8, maybe
         .received = 0,
         // Like Chrome, a failed download reports 0/0 bytes, whatever the
         // response advertised.
-        .total = if (succeeded) maybe_total else null,
+        .total = if (succeeded) transfer.getContentLength() else null,
         .frame = frame,
     };
 }
@@ -101,15 +116,7 @@ pub fn fromTransfer(frame: *Frame, transfer: *HttpClient.Transfer) !Download {
         return error.Denied;
     }
 
-    // Find `Content-Disposition`.
-    const disposition: HttpClient.Header = blk: {
-        for (transfer.responseHeaders()) |header| {
-            if (std.mem.eql(u8, header.name, "content-disposition")) {
-                break :blk header;
-            }
-        }
-        return error.MissingHeader;
-    };
+    const disposition = contentDisposition(transfer) orelse return error.MissingHeader;
     if (std.ascii.eqlIgnoreCase(disposition.firstValue(), "attachment") == false) {
         return error.MissingHeader;
     }
@@ -120,9 +127,15 @@ pub fn fromTransfer(frame: *Frame, transfer: *HttpClient.Transfer) !Download {
         return error.UnexpectedHttpStatus;
     }
 
-    // TODO: Find filename correctly.
-    const filename = "dummy.txt";
-    return init(frame, frame.url, status, filename, transfer.getContentLength());
+    const maybe_suggestion = dispositionFilename(disposition) orelse (try urlBasename(frame.page_arena, frame.url));
+    return init(frame, transfer, maybe_suggestion) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        // As before, a download we can't write renders the response instead.
+        else => {
+            log.err(.frame, "download init", .{ .err = err, .url = frame.url });
+            return error.Unwritable;
+        },
+    };
 }
 
 /// Try to initialize an asynchronous `Download` from a href. In order to
@@ -139,8 +152,9 @@ pub fn fromHref(frame: *Frame, href: []const u8, filename_hint: []const u8) !voi
     const download = try frame._factory.create(Download{
         // Let `init` initialize this at `headerCallback`.
         .guid = undefined,
-        // Pass-in hint, `headerCallback` will change this, though.
-        .filename = filename_hint,
+        // Pass-in hint, `headerCallback` will change this, though. Duped,
+        // since the attribute can change before the response arrives.
+        .filename = try frame.page_arena.dupe(u8, filename_hint),
         .frame = frame,
     });
     // `transfer.deinit()` fires no callbacks, so this is still ours on error.
@@ -227,9 +241,20 @@ fn headerCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.HeaderRes
     // The final URL, after any redirects.
     const final_url = transfer.req.url;
 
+    // setDownloadBehavior can change while the fetch is in-flight.
+    if (frame._session.download_behavior == .deny) {
+        log.info(.frame, "download denied", .{ .url = final_url });
+        return .abort;
+    }
+
     const status = transfer.responseStatus() orelse return .abort;
 
-    download.* = init(frame, final_url, status, "dummy.txt", transfer.getContentLength()) catch |err| {
+    // A Content-Disposition filename wins over the `download` attribute.
+    const disposition_name = if (contentDisposition(transfer)) |disposition| dispositionFilename(disposition) else null;
+    const maybe_suggestion = disposition_name orelse
+        sanitizeFilename(download.filename) orelse (try urlBasename(frame.page_arena, final_url));
+
+    download.* = init(frame, transfer, maybe_suggestion) catch |err| {
         log.err(.frame, "download init", .{ .err = err });
         return .abort;
     };
@@ -298,4 +323,94 @@ fn fromRaw(ptr: *anyopaque) struct { *Download, bool } {
 // request, which we never send.
 inline fn isSuccessStatus(status: u16) bool {
     return status >= 200 and status <= 203;
+}
+
+fn contentDisposition(transfer: *HttpClient.Transfer) ?HttpClient.Header {
+    for (transfer.responseHeaders()) |header| {
+        if (std.mem.eql(u8, header.name, "content-disposition")) {
+            return header;
+        }
+    }
+    return null;
+}
+
+// Extracts the filename from a Content-Disposition header, handling the quoted,
+// unquoted, and RFC 5987 (filename*=charset''value) forms. Path components are
+// stripped so the result is always a bare basename.
+fn dispositionFilename(disposition: HttpClient.Header) ?[]const u8 {
+    // Prefer the extended filename*= form when present, per RFC 6266.
+    if (disposition.param("filename*")) |ext| {
+        // charset'lang'value — take everything after the second quote.
+        if (std.mem.findScalar(u8, ext, '\'')) |first| {
+            if (std.mem.findScalarPos(u8, ext, first + 1, '\'')) |second| {
+                return sanitizeFilename(ext[second + 1 ..]);
+            }
+        }
+        return sanitizeFilename(ext);
+    }
+    if (disposition.param("filename")) |name| {
+        return sanitizeFilename(name);
+    }
+    return null;
+}
+
+// Strips any directory components, guarding against path traversal. Content-
+// Disposition can carry Windows separators, so backslashes are stripped too,
+// regardless of the host platform.
+fn sanitizeFilename(name: []const u8) ?[]const u8 {
+    var out = std.fs.path.basename(name);
+    if (std.mem.findScalarLast(u8, out, '\\')) |i| {
+        out = out[i + 1 ..];
+    }
+    if (out.len == 0 or std.mem.eql(u8, out, ".") or std.mem.eql(u8, out, "..")) {
+        return null;
+    }
+    return out;
+}
+
+// Derives a filename from a URL's last path segment. The path is taken from a
+// real URL parse (rust-url) so query/fragment and percent-encoding are handled
+// the same way the rest of the browser handles URLs. The result is duped into
+// `arena`, since the parsed URL is freed before this returns.
+fn urlBasename(arena: Allocator, url: []const u8) !?[]const u8 {
+    var err: i32 = 0;
+    const u = sys_url.url_parse(url.ptr, url.len, &err) orelse return null;
+    defer sys_url.url_free(u);
+
+    var ptr: [*]const u8 = undefined;
+    var len: usize = undefined;
+    sys_url.url_get_path(u, &ptr, &len);
+
+    const name = sanitizeFilename(ptr[0..len]) orelse return null;
+    return try arena.dupe(u8, name);
+}
+
+const testing = @import("../testing.zig");
+
+fn dispositionHeader(value: []const u8) HttpClient.Header {
+    return .{ .name = "content-disposition", .value = value };
+}
+
+test "Download: dispositionFilename" {
+    try testing.expectEqualSlices(u8, "report.csv", dispositionFilename(dispositionHeader("attachment; filename=\"report.csv\"")).?);
+    try testing.expectEqualSlices(u8, "report.csv", dispositionFilename(dispositionHeader("attachment; filename=report.csv")).?);
+    try testing.expectEqualSlices(u8, "r e.csv", dispositionFilename(dispositionHeader("attachment; filename=\"r e.csv\"")).?);
+    // RFC 5987 extended form is preferred over the plain filename when present
+    // (the value is taken verbatim after the charset'lang' prefix).
+    try testing.expectEqualSlices(u8, "extended.txt", dispositionFilename(dispositionHeader("attachment; filename=\"fallback.txt\"; filename*=UTF-8''extended.txt")).?);
+    try testing.expect(dispositionFilename(dispositionHeader("attachment")) == null);
+    // Path components are stripped to guard against traversal.
+    try testing.expectEqualSlices(u8, "evil.sh", dispositionFilename(dispositionHeader("attachment; filename=\"../../evil.sh\"")).?);
+    try testing.expectEqualSlices(u8, "evil.sh", dispositionFilename(dispositionHeader("attachment; filename=\"..\\..\\evil.sh\"")).?);
+    try testing.expect(dispositionFilename(dispositionHeader("attachment; filename=\"..\"")) == null);
+}
+
+test "Download: urlBasename" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    try testing.expectEqualSlices(u8, "report.csv", (try urlBasename(a, "http://x.com/a/b/report.csv")).?);
+    try testing.expectEqualSlices(u8, "report.csv", (try urlBasename(a, "http://x.com/report.csv?v=1#x")).?);
+    try testing.expect((try urlBasename(a, "http://x.com/")) == null);
 }

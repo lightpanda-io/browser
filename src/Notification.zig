@@ -329,6 +329,8 @@ pub const DownloadWillBegin = struct {
     guid: []const u8,
     url: []const u8,
     suggested_filename: []const u8,
+    // The response's Content-Type, if it had one.
+    content_type: ?[]const u8,
 };
 
 // Emitted by Frame as a download is written to disk: once when it starts
