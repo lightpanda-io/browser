@@ -72,6 +72,7 @@ pub const RenderTree = @import("browser/RenderTree.zig");
 pub const interactive = @import("browser/interactive.zig");
 pub const structured_data = @import("browser/structured_data.zig");
 pub const classify = @import("browser/classify.zig");
+pub const jev = @import("browser/jev.zig");
 pub const login = @import("browser/login.zig");
 pub const GlobalScope = @import("browser/global_scope.zig").GlobalScope;
 
