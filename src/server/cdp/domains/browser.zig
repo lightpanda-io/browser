@@ -103,9 +103,9 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
         .allow_and_name
     else if (std.mem.eql(u8, params.behavior, "deny") or std.mem.eql(u8, params.behavior, "default"))
         .deny
-    else if (std.mem.eql(u8, params.behavior, "lp-stream-over-cdp") and events_enabled == true)
+    else if (std.mem.eql(u8, params.behavior, "stream") and events_enabled == true)
         // Our extension to download behavior.
-        .@"lp-stream-over-cdp"
+        .stream
     else
         return error.InvalidParams;
 
@@ -126,7 +126,7 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
     session.download_path = if (params.downloadPath) |p| try session.arena.dupe(u8, p) else null;
     session.download_events_enabled = events_enabled;
     bc.download_session_id = blk: {
-        if (behavior != .@"lp-stream-over-cdp") break :blk null;
+        if (behavior != .stream) break :blk null;
         const sid = cmd.input.session_id orelse break :blk null;
         break :blk cmd.cdp.resolveSessionId(sid);
     };
@@ -150,6 +150,9 @@ pub fn downloadWillBegin(bc: *CDP.BrowserContext, event: *const Notification.Dow
         .guid = event.guid,
         .url = event.url,
         .suggestedFilename = event.suggested_filename,
+        // Not in Chrome's event; clients can't otherwise get the type of a
+        // download, e.g. one streamed as LP.downloadData (issue #3861).
+        .contentType = event.content_type,
     }, .{ .session_id = bc.download_session_id });
 }
 
@@ -470,6 +473,7 @@ test "cdp.browser: setDownloadBehavior writes an attachment to disk and emits ev
     try ctx.expectSentEvent("Browser.downloadWillBegin", .{
         .url = "http://127.0.0.1:9582/download/report.csv",
         .suggestedFilename = "report.csv",
+        .contentType = "text/csv",
     }, .{});
     try ctx.expectSentEvent("Browser.downloadProgress", .{
         .state = "completed",
@@ -482,6 +486,79 @@ test "cdp.browser: setDownloadBehavior writes an attachment to disk and emits ev
     try testing.expectEqualSlices(u8, "col1,col2\nhello,world\n42,1337\n", written);
 }
 
+test "cdp.browser: stream behavior streams an attachment navigation as LP.downloadData" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL" });
+
+    try ctx.processMessage(.{
+        .id = 38,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "stream", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 38 });
+
+    const frame = (try bc.session.createPage()).frame().?;
+    try frame.navigate("http://127.0.0.1:9582/download/report.csv", .{});
+    try testing.waitForPage(bc);
+
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
+        .url = "http://127.0.0.1:9582/download/report.csv",
+        .suggestedFilename = "report.csv",
+        .contentType = "text/csv",
+    }, .{});
+    try ctx.expectSentEvent("LP.downloadData", .{
+        // "col1,col2\nhello,world\n42,1337\n"
+        .data = "Y29sMSxjb2wyCmhlbGxvLHdvcmxkCjQyLDEzMzcK",
+    }, .{});
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "completed",
+        .totalBytes = 30,
+        .receivedBytes = 30,
+    }, .{});
+
+    // The body went over CDP, so it isn't rendered as a page.
+    try ctx.processMessage(.{ .id = 39, .method = "Runtime.evaluate", .params = .{
+        .expression = "document.body.textContent",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "" } }, .{ .id = 39 });
+}
+
+test "cdp.browser: a failed attachment navigation renders instead of downloading" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const download_path = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(download_path);
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL" });
+
+    try ctx.processMessage(.{
+        .id = 40,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{
+            .behavior = "allow",
+            .downloadPath = download_path,
+            .eventsEnabled = true,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 40 });
+
+    // Like Chrome, which shows an error page rather than downloading a 404.
+    const frame = (try bc.session.createPage()).frame().?;
+    try frame.navigate("http://127.0.0.1:9582/download/missing.csv", .{});
+    try testing.waitForPage(bc);
+
+    try ctx.processMessage(.{ .id = 41, .method = "Runtime.evaluate", .params = .{
+        .expression = "document.body.textContent",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "not found" } }, .{ .id = 41 });
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "missing.csv", .{}));
+}
+
 // Clicks a link of cdp/download_link.html, then waits for the network to go
 // idle, which includes the download.
 fn clickDownloadLink(ctx: *testing.TestContext, bc: *CDP.BrowserContext, message_id: usize, comptime link: []const u8) !void {
@@ -491,7 +568,7 @@ fn clickDownloadLink(ctx: *testing.TestContext, bc: *CDP.BrowserContext, message
     try testing.waitForPage(bc);
 }
 
-test "cdp.browser: setDownloadBehavior lp-stream-over-cdp requires eventsEnabled" {
+test "cdp.browser: setDownloadBehavior stream requires eventsEnabled" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -501,7 +578,7 @@ test "cdp.browser: setDownloadBehavior lp-stream-over-cdp requires eventsEnabled
     try ctx.processMessage(.{
         .id = 42,
         .method = "Browser.setDownloadBehavior",
-        .params = .{ .behavior = "lp-stream-over-cdp" },
+        .params = .{ .behavior = "stream" },
     });
     try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 42 });
     try testing.expectEqual(.deny, bc.session.download_behavior);
@@ -509,10 +586,10 @@ test "cdp.browser: setDownloadBehavior lp-stream-over-cdp requires eventsEnabled
     try ctx.processMessage(.{
         .id = 43,
         .method = "Browser.setDownloadBehavior",
-        .params = .{ .behavior = "lp-stream-over-cdp", .eventsEnabled = true },
+        .params = .{ .behavior = "stream", .eventsEnabled = true },
     });
     try ctx.expectSentResult(null, .{ .id = 43 });
-    try testing.expectEqual(.@"lp-stream-over-cdp", bc.session.download_behavior);
+    try testing.expectEqual(.stream, bc.session.download_behavior);
     try testing.expect(bc.session.download_path == null);
 }
 
@@ -547,6 +624,7 @@ test "cdp.browser: setDownloadBehavior writes an <a download> to disk and emits 
     try ctx.expectSentEvent("Browser.downloadWillBegin", .{
         .url = "data:text/csv,name%2Cvalue%0Aexample%2C42",
         .suggestedFilename = "report.csv",
+        .contentType = "text/csv",
     }, .{});
     try ctx.expectSentEvent("Browser.downloadProgress", .{
         .state = "completed",
@@ -568,7 +646,45 @@ test "cdp.browser: setDownloadBehavior writes an <a download> to disk and emits 
     try testing.expectEqualSlices(u8, "x", evil);
 }
 
-test "cdp.browser: lp-stream-over-cdp streams an <a download> as LP.downloadData" {
+test "cdp.browser: a failed <a download> is canceled and nothing is written" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const download_path = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(download_path);
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL", .url = "cdp/download_link.html" });
+
+    try ctx.processMessage(.{
+        .id = 49,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{
+            .behavior = "allow",
+            .downloadPath = download_path,
+            .eventsEnabled = true,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 49 });
+
+    // Like Chrome: the 404 is announced, then canceled with 0/0 bytes, even
+    // though its body advertised a Content-Length.
+    try clickDownloadLink(&ctx, bc, 50, "missing");
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
+        .url = "http://127.0.0.1:9582/download/missing.csv",
+        .suggestedFilename = "missing.csv",
+    }, .{});
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "canceled",
+        .totalBytes = 0,
+        .receivedBytes = 0,
+    }, .{});
+
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "missing.csv", .{}));
+}
+
+test "cdp.browser: stream behavior streams an <a download> as LP.downloadData" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -579,7 +695,7 @@ test "cdp.browser: lp-stream-over-cdp streams an <a download> as LP.downloadData
         .id = 47,
         .method = "Browser.setDownloadBehavior",
         .sessionId = "SID-DL",
-        .params = .{ .behavior = "lp-stream-over-cdp", .eventsEnabled = true },
+        .params = .{ .behavior = "stream", .eventsEnabled = true },
     });
     try ctx.expectSentResult(null, .{ .id = 47 });
 
@@ -588,6 +704,7 @@ test "cdp.browser: lp-stream-over-cdp streams an <a download> as LP.downloadData
     try ctx.expectSentEvent("Browser.downloadWillBegin", .{
         .url = "http://127.0.0.1:9582/download/report.csv",
         .suggestedFilename = "report.csv",
+        .contentType = "text/csv",
     }, .{ .session_id = "SID-DL" });
     try ctx.expectSentEvent("LP.downloadData", .{
         // "col1,col2\nhello,world\n42,1337\n"

@@ -143,7 +143,7 @@ pub const DownloadBehavior = enum {
     deny,
     /// LP extension to `DownloadBehavior`; instead of writing files to disk,
     /// they are streamed over CDP.
-    @"lp-stream-over-cdp",
+    stream,
 };
 
 const CancelHook = struct {

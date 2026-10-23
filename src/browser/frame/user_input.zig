@@ -1394,7 +1394,7 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
     const maybe_download = try element.getAttribute(comptime .wrap("download"), frame);
     if (URL.isJavascriptUrl(href) == false and maybe_download != null) {
         const download = maybe_download orelse unreachable;
-        return owner.downloadLink(href, download.str());
+        return @import("../Download.zig").fromHref(owner, href, download.str());
     }
 
     const target_frame = blk: {

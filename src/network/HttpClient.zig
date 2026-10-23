@@ -2742,7 +2742,7 @@ pub const Transfer = struct {
         return switch (self.req.resource_type) {
             // The owner of a document request is the frame being navigated.
             .document => if (self.owner != null and self.owner.?.parent != null) "iframe" else "document",
-            .xhr, .fetch, .eventsource, .beacon => "empty",
+            .xhr, .fetch, .eventsource, .beacon, .download => "empty",
             .script => "script",
             .stylesheet => "style",
             .image => "image",
