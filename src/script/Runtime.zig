@@ -1155,7 +1155,6 @@ test "agent script runtime: page.classify missing API key throws" {
     defer testing.test_session.closeAllPages();
 
     // Drop the cached clients so the key is resolved again.
-    testing.test_app.dropTypesafeClients();
     _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
 
     var registry = NodeRegistry.init(testing.allocator);

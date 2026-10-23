@@ -4531,7 +4531,6 @@ test "acceptCookies: a missing key is reported so the REPL can ask a model inste
     defer page.close();
 
     const aa = testing.arena_allocator;
-    testing.test_app.dropTypesafeClients();
     _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
 
     const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
