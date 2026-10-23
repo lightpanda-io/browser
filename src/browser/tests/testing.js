@@ -1,6 +1,9 @@
 (() => {
   let failed = false;
   let observed_ids = {};
+  // includes observations no script could be attributed to (e.g. a module
+  // after an await, where currentScript is null)
+  let observation_count = 0;
   let eventuallies = [];
   let async_capture = null;
   let current_script_id = null;
@@ -10,6 +13,15 @@
 
   // runner will wait until this is empty (or timeout)
   let async_pending = new Set();
+
+
+  let module_asyncs_done = 0;
+  let module_asyncs_started = 0;
+  let parsed_module_asyncs = 0;
+
+  document.addEventListener('DOMContentLoaded', () => {
+    parsed_module_asyncs = _moduleAsyncCount();
+  });
 
   // A script that throws after an expect* passed would otherwise count as ok.
   // Checked in assertOk, once dispatch is over: a test that expects the error
@@ -107,9 +119,14 @@
   }
 
   async function async() {
-    // currentScript is null while a module runs in FF/Chrome (the test runner
-    // does set it), which leaves us with no way to attribute the observations.
-    const script_id = document.currentScript ? document.currentScript.id : 'cannot track module id in FF/Chrome';
+    // currentScript is null while a module runs (Lightpanda sets it, against
+    // the spec).
+    const script = document.currentScript;
+    const is_module = script === null || script.type === 'module';
+    if (is_module) {
+      module_asyncs_started += 1;
+    }
+    const script_id = script ? script.id : _moduleAsyncName(module_asyncs_started);
 
     if (async_seen.has(script_id) && IS_TEST_RUNNER) {
       throw new Error(`testing.async() called more than once for script '${script_id}'. A script may only register one async block (the runner can declare success in the gap between two of them); split the test into separate <script> tags.`);
@@ -127,6 +144,9 @@
       done: async function(cb) {
         const res = await this.promise;
         async_pending.delete(script_id);
+        if (is_module) {
+          module_asyncs_done += 1;
+        }
         async_capture = this.capture;
         try {
           cb(res);
@@ -160,21 +180,36 @@
       return false;
     }
 
+    const module_asyncs = _moduleAsyncCount();
+    if (module_asyncs_done < module_asyncs) {
+      // a module hasn't reached its testing.async() (yet)
+      return false;
+    }
+    if (module_asyncs_done > module_asyncs) {
+      throw new Error(`${module_asyncs_done} testing.async() blocks completed outside of a classic script, but only ${module_asyncs} inline module scripts call testing.async()`);
+    }
+
+    if (observation_count === 0 && eventuallies.length === 0) {
+      // A script may still be waiting on something (a module's await) without
+      // having registered a testing.async() block.
+      return false;
+    }
+
     for (let e of eventuallies) {
       current_script_id = e.script_id;
       e.callback();
       current_script_id = null;
     }
 
-    const script_ids = Object.keys(observed_ids);
-    if (script_ids.length === 0) {
+    if (observation_count === 0) {
       throw new Error('no test observations were recorded');
     }
 
     const scripts = document.getElementsByTagName('script');
     for (let script of scripts) {
       const script_id = script.id;
-      if (!script_id) {
+      if (!script_id || script.type === 'module') {
+        // modules are counted instead, above
         continue;
       }
 
@@ -203,7 +238,16 @@
   }
 
   function printTimeoutState() {
-    console.warn('Pending count:', Array.from(async_pending.keys()));
+    if (observation_count === 0) {
+      console.warn('no test observations were recorded');
+    }
+    if (async_pending.size > 0) {
+      console.warn(`Pending async scripts: ${Array.from(async_pending.keys()).join(', ')}`);
+    }
+    const module_asyncs = _moduleAsyncCount();
+    if (module_asyncs_done < module_asyncs) {
+      console.warn(`${module_asyncs_done} of ${module_asyncs} module testing.async() blocks completed, ${module_asyncs_started} started`);
+    }
   }
 
   const IS_TEST_RUNNER = window.navigator.userAgent.startsWith("Lightpanda/");
@@ -232,13 +276,15 @@
     // The page is running in a different browser. Probably a developer making sure
     // a test is correct. There are a few tweaks we need to do to make this a
     // seamless, namely around adapting paths/urls.
-    console.warn(`The page is not being executed in the test runner, certain behavior has been adjusted`);
     window.testing.HOST = location.hostname;
     window.testing.ORIGIN = location.origin;
-    // Relative to this script, so a page served as //src/... (or from another
-    // root) still resolves relative URLs the way the test expects.
-    window.testing.BASE_URL = new URL('./', document.currentScript.src).href;
-    window.addEventListener('load', testing.assertOk);
+
+    window.testing.BASE_URL = location.origin + '/src/browser/tests/';
+    // An external runner (../demo/browser-tests) polls assertOk itself.
+    if (window.__lp_external_runner !== true) {
+      console.warn(`The page is not being executed in the test runner, certain behavior has been adjusted`);
+      window.addEventListener('load', testing.assertOk);
+    }
   }
 
 
@@ -284,8 +330,26 @@
     return true;
   }
 
+  function _moduleAsyncScripts() {
+    return Array.from(document.querySelectorAll('script[type=module]:not([src])'))
+      .filter((script) => script.text.includes('testing.async('));
+  }
+
+  function _moduleAsyncCount() {
+    return Math.max(_moduleAsyncScripts().length, parsed_module_asyncs);
+  }
+
+  // Inline modules start in document order, so the nth testing.async() from a
+  // module is the nth such script, as long as each one calls it before its
+  // first other await.
+  function _moduleAsyncName(n) {
+    const script = _moduleAsyncScripts()[n - 1];
+    return script?.id ? `module #${n} (${script.id})` : `module #${n}`;
+  }
+
   function _registerObservation(status, opts) {
-    script_id = opts?.script_id || _currentScriptId();
+    observation_count += 1;
+    const script_id = opts?.script_id || _currentScriptId();
     if (!script_id) {
       return;
     }
