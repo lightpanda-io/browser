@@ -778,6 +778,9 @@ pub const Jar = struct {
     // the least recently accessed, non-Secure ones first, until `purge`
     // fewer are left, counting the one being added.
     fn evict(self: *Jar, domain: ?[]const u8, max: usize, purge: usize) void {
+        // A site can't be at `max` before the jar is.
+        if (self.cookies.items.len < max) return;
+
         var count: usize = 0;
         for (self.cookies.items) |*c| {
             if (domain == null or areHostsSameSite(c.domain, domain.?)) count += 1;
