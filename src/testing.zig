@@ -556,8 +556,8 @@ pub const MockJev = struct {
     }
 };
 
-extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
-extern fn unsetenv(name: [*:0]u8) c_int;
+pub extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
+pub extern fn unsetenv(name: [*:0]u8) c_int;
 
 pub var test_config: Config = undefined;
 
