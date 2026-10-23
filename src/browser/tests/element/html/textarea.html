@@ -467,3 +467,25 @@
     testing.expectEqual(2, el.selectionStart);
   }
 </script>
+
+<script id="selection_setters_keep_order">
+  {
+    // Setting one end past the other drags the other along (start <= end).
+    const el = document.createElement('textarea');
+    el.value = 'hello';
+    el.setSelectionRange(1, 2, 'backward');
+    el.selectionStart = 4;
+    testing.expectEqual(4, el.selectionStart);
+    testing.expectEqual(4, el.selectionEnd);
+    testing.expectEqual('backward', el.selectionDirection);
+
+    el.setSelectionRange(3, 4);
+    el.selectionEnd = 1;
+    testing.expectEqual(1, el.selectionStart);
+    testing.expectEqual(1, el.selectionEnd);
+
+    el.selectionStart = 10;
+    testing.expectEqual(5, el.selectionStart);
+    testing.expectEqual(5, el.selectionEnd);
+  }
+</script>

@@ -618,6 +618,28 @@
   }
 </script>
 
+<script id="selection_setters_keep_order">
+  {
+    // Setting one end past the other drags the other along (start <= end).
+    const el = document.createElement('input');
+    el.value = 'hello';
+    el.setSelectionRange(1, 2, 'backward');
+    el.selectionStart = 4;
+    testing.expectEqual(4, el.selectionStart);
+    testing.expectEqual(4, el.selectionEnd);
+    testing.expectEqual('backward', el.selectionDirection);
+
+    el.setSelectionRange(3, 4);
+    el.selectionEnd = 1;
+    testing.expectEqual(1, el.selectionStart);
+    testing.expectEqual(1, el.selectionEnd);
+
+    el.selectionStart = 10;
+    testing.expectEqual(5, el.selectionStart);
+    testing.expectEqual(5, el.selectionEnd);
+  }
+</script>
+
 <script id="select_without_selection_api">
   {
     // select() never throws, even where the selection APIs don't apply.

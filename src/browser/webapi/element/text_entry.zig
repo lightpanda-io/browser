@@ -290,24 +290,16 @@ pub fn TextEntry(comptime T: type) type {
             if (self.selectionAvailable() == false) {
                 return error.InvalidStateError;
             }
+            // Spec: the end is raised to the new start, then set-range runs.
             const start = selectionOffsetFromJs(self, value);
-            if (start == self._selection_start) {
-                return;
-            }
-            self._selection_start = start;
-            try scheduleSelectionChange(self, frame);
+            return applySelectionRange(self, start, @max(start, self._selection_end), self._selection_direction, frame);
         }
 
         pub fn setSelectionEnd(self: *T, value: u32, frame: *Frame) !void {
             if (self.selectionAvailable() == false) {
                 return error.InvalidStateError;
             }
-            const end = selectionOffsetFromJs(self, value);
-            if (end == self._selection_end) {
-                return;
-            }
-            self._selection_end = end;
-            try scheduleSelectionChange(self, frame);
+            return applySelectionRange(self, self._selection_start, selectionOffsetFromJs(self, value), self._selection_direction, frame);
         }
 
         pub fn setSelectionRange(
