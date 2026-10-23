@@ -97,7 +97,7 @@ fn init(frame: *Frame, transfer: *HttpClient.Transfer, maybe_suggestion: ?[]cons
         });
     }
 
-    return .{
+    const download: Download = .{
         .guid = guid,
         .file = maybe_file,
         .filename = filename,
@@ -107,6 +107,12 @@ fn init(frame: *Frame, transfer: *HttpClient.Transfer, maybe_suggestion: ?[]cons
         .total = if (succeeded) transfer.getContentLength() else null,
         .frame = frame,
     };
+    // Like Chrome, downloadWillBegin is followed by an inProgress
+    // downloadProgress. A failed download is canceled at once instead.
+    if (succeeded) {
+        download.report(.in_progress);
+    }
+    return download;
 }
 
 /// Try to initialize a `Download` from a `Transfer`. It's up to caller to

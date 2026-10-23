@@ -333,8 +333,8 @@ pub const DownloadWillBegin = struct {
     content_type: ?[]const u8,
 };
 
-// Emitted by Frame as a download is written to disk: once when it starts
-// (`.in_progress`) and once when the body is fully written (`.completed`).
+// Emitted by Download: once when it starts (`.in_progress`) and once when it
+// ends (`.completed`, or `.canceled` if it failed).
 // The CDP browser domain turns this into a `Browser.downloadProgress` event.
 pub const DownloadProgress = struct {
     guid: []const u8,

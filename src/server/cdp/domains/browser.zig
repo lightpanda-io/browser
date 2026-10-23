@@ -476,6 +476,11 @@ test "cdp.browser: setDownloadBehavior writes an attachment to disk and emits ev
         .contentType = "text/csv",
     }, .{});
     try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "inProgress",
+        .totalBytes = 30,
+        .receivedBytes = 0,
+    }, .{});
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
         .state = "completed",
         .totalBytes = 30,
         .receivedBytes = 30,
@@ -715,4 +720,30 @@ test "cdp.browser: stream behavior streams an <a download> as LP.downloadData" {
         .totalBytes = 30,
         .receivedBytes = 30,
     }, .{ .session_id = "SID-DL" });
+}
+
+test "cdp.browser: download events leave a detached stream session" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL" });
+
+    try ctx.processMessage(.{
+        .id = 51,
+        .method = "Browser.setDownloadBehavior",
+        .sessionId = "SID-DL",
+        .params = .{ .behavior = "stream", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 51 });
+    try testing.expectEqualSlices(u8, "SID-DL", bc.download_session_id.?);
+
+    // Events must not keep going to a sessionId the client dropped.
+    try ctx.processMessage(.{
+        .id = 52,
+        .method = "Target.detachFromTarget",
+        .params = .{ .sessionId = "SID-DL" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 52 });
+    try testing.expect(bc.download_session_id == null);
+    try testing.expectEqual(.stream, bc.session.download_behavior);
 }
