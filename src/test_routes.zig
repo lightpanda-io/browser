@@ -1016,6 +1016,9 @@ fn systemOne(req: *std.http.Server.Request, arena: std.mem.Allocator) !void {
     ;
 
     const no_verify = bearer(req, no_verify_key);
+    // Long enough that a caller blocking on the answer visibly stops its own
+    // page, and short enough not to slow the suite down.
+    if (bearer(req, slow_key)) lp.io.sleep(.fromMilliseconds(400), .awake) catch {};
 
     var body_buf: [64 * 1024]u8 = undefined;
     const body = if (req.head.method.requestHasBody())
@@ -1146,6 +1149,9 @@ const banner_label = "Cookie notice";
 /// The API key a test sets to fail the verification re-read, while the
 /// decision before it is answered as usual.
 pub const no_verify_key = "test-key-no-verify";
+
+/// The API key a test sets to answer slowly.
+pub const slow_key = "test-key-slow";
 
 fn bearer(req: *std.http.Server.Request, key: []const u8) bool {
     var it = req.iterateHeaders();
