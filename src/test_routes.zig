@@ -987,6 +987,5 @@ pub fn handle(req: *std.http.Server.Request) !void {
         return req.respond("", .{ .status = .not_found });
     }
 
-    std.debug.print("TestHTTPServer was asked to serve an unknown file: {s}\n", .{path});
     return req.respond("not found", .{ .status = .not_found });
 }

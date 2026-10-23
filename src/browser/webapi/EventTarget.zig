@@ -493,4 +493,6 @@ test "WebApi: EventTarget" {
     // (fine to go up to 8, since it'll always be padded to that)
     try testing.expectEqual(1, @sizeOf(EventTarget));
     try testing.htmlRunner("events.html", .{});
+    try testing.htmlRunner("event/listener_removal.html", .{});
+    try testing.htmlRunner("event/message_multiple_listeners.html", .{});
 }
