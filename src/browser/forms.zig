@@ -302,6 +302,20 @@ test "browser.forms: login form" {
     try testing.expectEqual("password", forms[0].fields[1].name.?);
 }
 
+test "browser.forms: password value is redacted only when set" {
+    const forms = try testForms(
+        \\<form>
+        \\  <input type="password" name="empty">
+        \\  <input type="password" name="filled" value="secret">
+        \\</form>
+    );
+    defer testing.test_session.closeAllPages();
+
+    try testing.expectEqual(2, forms[0].fields.len);
+    try testing.expectEqual("", forms[0].fields[0].value.?);
+    try testing.expectEqual("*****", forms[0].fields[1].value.?);
+}
+
 test "browser.forms: form with select" {
     const forms = try testForms(
         \\<form>
