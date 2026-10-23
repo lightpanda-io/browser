@@ -2665,7 +2665,7 @@ pub const QueuedEvent = struct {
     element: *Element.Html,
     generation: u32 = 0, // Image/Link request generation
 
-    pub const Kind = enum { load, @"error", select, selectionchange };
+    pub const Kind = enum { load, @"error", select, selectionchange, close };
 };
 
 pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
@@ -2966,6 +2966,7 @@ fn dispatchQueuedEvents(self: *Frame) !void {
                 }
                 try self.fireElementEvent(element, .wrap("selectionchange"), .{ .bubbles = true });
             },
+            .close => try self.fireElementEvent(element, comptime .wrap("close"), .{}),
         }
     }
 
@@ -4266,15 +4267,9 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     // both reloads the page and leaves the dialog open forever.
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-algorithm
     if (std.mem.eql(u8, method, "dialog")) {
-        // A submit button always has a value (empty when unset); with no
-        // submitter at all the dialog's existing returnValue is left untouched.
-        const result: ?[]const u8 = if (submit_button) |s| blk: {
-            if (s.is(Element.Html.Form.Input)) |input| {
-                break :blk input.getValue();
-            }
-            // if not an Input, it has to be a Button (checked above by isSubmitButton)
-            break :blk s.as(Element.Html.Form.Button).getValue();
-        } else null;
+        // The submitter's optional value: its value attribute, else null. A
+        // null result leaves the dialog's returnValue untouched.
+        const result: ?[]const u8 = if (submit_button) |s| s.getAttributeSafe(comptime .wrap("value")) else null;
 
         var ancestor: ?*Element = form_element;
         while (ancestor) |el| : (ancestor = el.parentElement()) {
