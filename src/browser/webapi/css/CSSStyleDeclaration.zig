@@ -90,8 +90,9 @@ fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapp
 
     // Computed styles must reflect stylesheet rules, not just the element's
     // inline `style=` attribute. Limited to display/visibility — what aria
-    // tree builders (Playwright ariaSnapshot) consult on every element — and
-    // pointer-events and text-transform, which innerText applies.
+    // tree builders (Playwright ariaSnapshot) consult on every element —
+    // pointer-events and text-transform, which innerText applies, and
+    // position, which offsetParent consults.
     if (self._is_computed) {
         if (self._element) |element| {
             if (element.ownerFrame(frame)) |owner| {
@@ -111,6 +112,8 @@ fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapp
                 } else if (wrapped.eqlSlice("text-transform")) {
                     // Inherited: the nearest declaration up the tree wins.
                     return style_manager.textTransform(element).keyword();
+                } else if (wrapped.eqlSlice("position")) {
+                    return style_manager.position(element).keyword();
                 }
             }
         }
