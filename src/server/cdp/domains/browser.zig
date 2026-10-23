@@ -109,6 +109,11 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
     else
         return error.InvalidParams;
 
+    // These write to disk, so they need to know where.
+    if ((behavior == .allow or behavior == .allow_and_name) and params.downloadPath == null) {
+        return error.InvalidParams;
+    }
+
     // Drivers (notably Playwright) send Browser.setDownloadBehavior at the
     // browser level during connection setup, before any target/context has
     // been created. Chromium accepts this; we have nowhere to store the config
@@ -596,6 +601,29 @@ test "cdp.browser: setDownloadBehavior stream requires eventsEnabled" {
     try ctx.expectSentResult(null, .{ .id = 43 });
     try testing.expectEqual(.stream, bc.session.download_behavior);
     try testing.expect(bc.session.download_path == null);
+}
+
+test "cdp.browser: setDownloadBehavior allow requires downloadPath" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DLP" });
+
+    // With nowhere to write, every download would fail unannounced.
+    try ctx.processMessage(.{
+        .id = 54,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "allow", .eventsEnabled = true },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 54 });
+
+    try ctx.processMessage(.{
+        .id = 55,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "allowAndName" },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 55 });
+    try testing.expectEqual(.deny, bc.session.download_behavior);
 }
 
 test "cdp.browser: setDownloadBehavior writes an <a download> to disk and emits events" {
