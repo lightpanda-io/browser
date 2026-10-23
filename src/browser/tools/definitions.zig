@@ -27,7 +27,7 @@ const zenai = @import("zenai");
 const tools = @import("../tools.zig");
 const Tool = tools.Tool;
 const minify = tools.minify;
-const search_cascade_prose = tools.search_cascade_prose;
+const cascade_prose = @import("search.zig").cascade_prose;
 const inline_image_max_width = tools.inline_image_max_width;
 const inline_image_max_height = tools.inline_image_max_height;
 
@@ -74,7 +74,7 @@ pub fn of(tool: Tool) Definition {
             ),
         },
         .search => .{
-            .description = "Run a web search and return results as markdown: a numbered list of {title, url, snippet}. Search " ++ search_cascade_prose ++ ". Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS). The browser does not navigate — to open a result, use `goto` with its URL.",
+            .description = "Run a web search and return results as markdown: a numbered list of {title, url, snippet}. Search " ++ cascade_prose ++ ". Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS). The browser does not navigate — to open a result, use `goto` with its URL.",
             .summary = "Web search, results as markdown",
             .input_schema = minify(
                 \\{

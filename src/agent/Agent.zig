@@ -319,18 +319,18 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credential.provider else null);
     const verbosity = settings.resolveVerbosity(opts, remembered);
     const stream_enabled = settings.resolveStream(remembered);
-    browser_tools.search_engine = opts.search_engine orelse settings.resolveSearchEngine(remembered);
+    browser_tools.search.engine = opts.search_engine orelse settings.resolveSearchEngine(remembered);
     // A keyless engine over its cap fails every search; silence reads as a bad
     // agent rather than a missing key.
-    if (browser_tools.searchKeyStatus(browser_tools.search_engine)) |key| switch (key.state) {
+    if (browser_tools.search.keyStatus(browser_tools.search.engine)) |key| switch (key.state) {
         .set => {},
         .keyless => log.info(.app, "keyless search endpoint", .{ .env_var = key.env_var, .limit = "rate-limited per client IP" }),
-        .missing => log.warn(.app, "search key missing", .{ .env_var = key.env_var, .engine = @tagName(browser_tools.search_engine) }),
+        .missing => log.warn(.app, "search key missing", .{ .env_var = key.env_var, .engine = @tagName(browser_tools.search.engine) }),
     };
 
     if (resolved) |r| {
         if (r.source == .picked) {
-            settings.saveRemembered(.{ .provider = r.credential.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled, .search_engine = browser_tools.search_engine }) catch {};
+            settings.saveRemembered(.{ .provider = r.credential.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled, .search_engine = browser_tools.search.engine }) catch {};
         }
         // provider/model now live in the status bar; just space before the help
         std.debug.print("\n", .{});
@@ -861,9 +861,9 @@ fn handleStream(self: *Agent, rest: []const u8) void {
 /// `/searchEngine`: bare prints the current engine; an argument sets and
 /// persists it, warning when the chosen engine's API key is unset.
 fn handleSearchEngine(self: *Agent, rest: []const u8) void {
-    self.setEnumOption("searchEngine", &browser_tools.search_engine, rest);
-    const selected = std.meta.stringToEnum(browser_tools.SearchEngine, rest) orelse return;
-    const key = browser_tools.searchKeyStatus(selected) orelse return;
+    self.setEnumOption("searchEngine", &browser_tools.search.engine, rest);
+    const selected = std.meta.stringToEnum(browser_tools.search.Engine, rest) orelse return;
+    const key = browser_tools.search.keyStatus(selected) orelse return;
     switch (key.state) {
         .set => {},
         .keyless => self.terminal.printInfo("{s} is not set; using the keyless endpoint (rate-limited per client IP)", .{key.env_var}),
@@ -991,7 +991,7 @@ fn reportSaved(self: *Agent, label: []const u8, value: []const u8) void {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
         return;
     }
-    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity, .stream = self.stream_enabled, .search_engine = browser_tools.search_engine })) {
+    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity, .stream = self.stream_enabled, .search_engine = browser_tools.search.engine })) {
         self.terminal.printInfo("{s}: {s} (saved to {s})", .{ label, value, settings.remembered_path });
     } else |_| {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
@@ -1610,8 +1610,8 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 .{},
             ),
             .searchEngine => self.terminal.printInfo(
-                "/searchEngine " ++ Config.tagHint(browser_tools.SearchEngine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' " ++ browser_tools.search_cascade_prose ++ "; an explicit engine is used alone. Bare /searchEngine prints the engine.",
-                .{ @tagName(browser_tools.search_engine), settings.remembered_path },
+                "/searchEngine " ++ Config.tagHint(browser_tools.search.Engine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' " ++ browser_tools.search.cascade_prose ++ "; an explicit engine is used alone. Bare /searchEngine prints the engine.",
+                .{ @tagName(browser_tools.search.engine), settings.remembered_path },
             ),
         }
         return;
