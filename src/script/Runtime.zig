@@ -1107,13 +1107,8 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
 test "agent script runtime: page.classify executes presets, categories and structured questions" {
     defer testing.test_session.closeAllPages();
 
-    _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast("test-key"), 1);
-    defer _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
-
-    // zenai talks std.http, which libcurl's test port remap doesn't reach.
-    const base_url = try testing.arena_allocator.printSentinel("http://127.0.0.1:{d}", .{testing.testHttpPort()}, 0);
-    _ = setenv(@constCast(zenai.typesafe.base_url_env_var_name), base_url, 1);
-    defer _ = unsetenv(@constCast(zenai.typesafe.base_url_env_var_name));
+    const jev = try testing.MockJev.start(testing.arena_allocator);
+    defer jev.stop();
 
     var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();

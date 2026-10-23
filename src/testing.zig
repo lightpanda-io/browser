@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const zenai = @import("zenai");
 const http = @import("network/http.zig");
 const sys_net = @import("sys/net.zig");
 const libcurl = @import("sys/libcurl.zig");
@@ -536,6 +537,31 @@ var test_ws_server_thread: ?std.Thread = null;
 pub fn testHttpPort() u16 {
     return test_http_server.?.listener.?.socket.address.getPort();
 }
+
+/// Point the TypeSafe client at the test server's `/v1/systemone` mock, so a
+/// tool that asks Jev runs its real path without reaching the real API. The
+/// base URL is needed because zenai talks `std.http`, which libcurl's test
+/// port remap does not reach.
+pub const MockJev = struct {
+    /// A pooled client keeps the key and base URL it was built with, so the
+    /// idle ones have to go before and after.
+    pub fn start(arena: std.mem.Allocator) !MockJev {
+        test_app.dropTypesafeClients();
+        _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast("test-key"), 1);
+        const base_url = try arena.printSentinel("http://127.0.0.1:{d}", .{testHttpPort()}, 0);
+        _ = setenv(@constCast(zenai.typesafe.base_url_env_var_name), base_url, 1);
+        return .{};
+    }
+
+    pub fn stop(_: MockJev) void {
+        _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
+        _ = unsetenv(@constCast(zenai.typesafe.base_url_env_var_name));
+        test_app.dropTypesafeClients();
+    }
+};
+
+extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
+extern fn unsetenv(name: [*:0]u8) c_int;
 
 pub var test_config: Config = undefined;
 

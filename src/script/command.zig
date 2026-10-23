@@ -29,14 +29,6 @@ pub const ParseError = Schema.ParseError || error{
     NotASlashCommand,
 };
 
-const logout_prompt =
-    \\Log out of the current site. Find the logout control — often a link or
-    \\button labeled "Log out", "Logout", or "Sign out", possibly inside an
-    \\account or user menu you must open first — and click it. Handle any
-    \\confirmation prompt, then verify the logged-out state (e.g. a login link
-    \\reappears).
-;
-
 const login_prompt =
     \\Find the login form on the current page. Fill in the credentials using
     \\$LP_* placeholders — the substitution happens inside the Lightpanda
@@ -54,6 +46,14 @@ const login_prompt =
     \\Handle any cookie banners or popups first, then submit the form by
     \\clicking its submit button or pressing Enter in a filled field — there
     \\is no dedicated submit tool.
+;
+
+const logout_prompt =
+    \\Log out of the current site. Find the logout control — often a link or
+    \\button labeled "Log out", "Logout", or "Sign out", possibly inside an
+    \\account or user menu you must open first — and click it. Handle any
+    \\confirmation prompt, then verify the logged-out state (e.g. a login link
+    \\reappears).
 ;
 
 const accept_cookies_prompt =
@@ -190,10 +190,6 @@ pub const Command = union(enum) {
         }
     }
 
-    /// `arguments` must outlive the returned Command. Callers that hand the
-    /// Command to anything past the args' arena lifetime (e.g. heal, which
-    /// reuses cmds after `RunToolsResult.deinit`) must deep-copy the arguments
-    /// into their own arena before calling this.
     /// How a model would drive a tool that asks Jev instead, for the REPL to
     /// fall back to when there is no TypeSafe key. Not `LlmCommand` values:
     /// the slash name has to reach the tool, and `parseDiag` resolves
@@ -206,6 +202,10 @@ pub const Command = union(enum) {
         };
     }
 
+    /// `arguments` must outlive the returned Command. Callers that hand the
+    /// Command to anything past the args' arena lifetime (e.g. heal, which
+    /// reuses cmds after `RunToolsResult.deinit`) must deep-copy the arguments
+    /// into their own arena before calling this.
     pub fn fromToolCall(tool: BrowserTool, arguments: ?std.json.Value) Command {
         return .{ .tool_call = .{ .tool = tool, .args = arguments } };
     }
@@ -404,7 +404,7 @@ test "parse: /logout is an LLM command, /login and /acceptCookies are tools" {
     try testing.expectEqual(BrowserTool.acceptCookies, cookies.tool_call.tool);
     const login = try Command.parse(aa, "/login password=$LP_PASSWORD");
     try testing.expectEqual(BrowserTool.login, login.tool_call.tool);
-    try std.testing.expectEqualStrings("$LP_PASSWORD", login.tool_call.args.?.object.get("password").?.string);
+    try testing.expectString("$LP_PASSWORD", login.tool_call.args.?.object.get("password").?.string);
 }
 
 test "parse: /goto positional" {

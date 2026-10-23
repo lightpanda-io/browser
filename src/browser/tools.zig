@@ -2170,10 +2170,7 @@ fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     };
     defer response.deinit();
 
-    const formatted = lp.classify.formatResponse(arena, response.value, prepared) catch |err| switch (err) {
-        error.OutOfMemory => return ToolError.OutOfMemory,
-        else => return ToolError.InternalError,
-    };
+    const formatted = lp.classify.formatResponse(arena, response.value, prepared) catch |err| return internalUnlessOom(err);
 
     return .{ .text = formatted };
 }
@@ -2209,10 +2206,7 @@ fn askPage(
     ask: Ask,
 ) ToolError!Asked {
     const page = try requireFrame(session);
-    const state = lp.classify.buildState(arena, page, ask.node, registry, .{ .link_urls = ask.link_urls, .ids = ask.ids }) catch |err| switch (err) {
-        error.OutOfMemory => return ToolError.OutOfMemory,
-        else => return ToolError.InternalError,
-    };
+    const state = lp.classify.buildState(arena, page, ask.node, registry, .{ .link_urls = ask.link_urls, .ids = ask.ids }) catch |err| return internalUnlessOom(err);
 
     var detail: Failure = .{};
     const response = session.browser.app.askTypesafe(arena, state, ask.questions, .{}, &detail) catch |err| switch (err) {
@@ -2225,6 +2219,11 @@ fn askPage(
         else => return .{ .failed = try apiFailed(arena, @tagName(ask.tool), err, detail) },
     };
     return .{ .ok = response };
+}
+
+/// Anything but OOM out of one of these helpers is a bug, not a user error.
+fn internalUnlessOom(err: anyerror) ToolError {
+    return if (err == error.OutOfMemory) ToolError.OutOfMemory else ToolError.InternalError;
 }
 
 /// An answer we cannot read back — not one of the options we offered, or not
@@ -2303,10 +2302,7 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
     }
 
     const page = try requireFrame(session);
-    const candidates = lp.choose.collect(arena, page.document.asNode(), page, registry) catch |err| switch (err) {
-        error.OutOfMemory => return ToolError.OutOfMemory,
-        else => return ToolError.InternalError,
-    };
+    const candidates = lp.choose.collect(arena, page.document.asNode(), page, registry) catch |err| return internalUnlessOom(err);
     if (candidates.len == 0) {
         return verdict(arena, &outcome, "no control on this page could be clicked");
     }
@@ -2429,10 +2425,7 @@ fn decideLogin(
     outcome: *lp.login.Outcome,
 ) ToolError!Decided {
     const page = try requireFrame(session);
-    const candidates = lp.choose.collect(arena, page.document.asNode(), page, registry) catch |err| switch (err) {
-        error.OutOfMemory => return ToolError.OutOfMemory,
-        else => return ToolError.InternalError,
-    };
+    const candidates = lp.choose.collect(arena, page.document.asNode(), page, registry) catch |err| return internalUnlessOom(err);
     if (candidates.len == 0) {
         return .{ .failed = try verdict(arena, outcome, "nothing on this page can be filled in") };
     }
@@ -5004,14 +4997,8 @@ test "acceptCookies: the control Jev picks is clicked and the re-read verifies i
     defer page.close();
 
     const aa = testing.arena_allocator;
-    testing.test_app.dropTypesafeClients();
-    defer testing.test_app.dropTypesafeClients();
-    _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast("test-key"), 1);
-    defer _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
-    // zenai talks std.http, which libcurl's test port remap doesn't reach.
-    const base_url = try aa.printSentinel("http://127.0.0.1:{d}", .{testing.testHttpPort()}, 0);
-    _ = setenv(@constCast(zenai.typesafe.base_url_env_var_name), base_url, 1);
-    defer _ = unsetenv(@constCast(zenai.typesafe.base_url_env_var_name));
+    const jev = try testing.MockJev.start(aa);
+    defer jev.stop();
 
     const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
     try std.testing.expect(!result.is_error);
@@ -5034,13 +5021,8 @@ test "login: Jev picks the identifier, the password field and the submit control
     defer page.close();
 
     const aa = testing.arena_allocator;
-    testing.test_app.dropTypesafeClients();
-    defer testing.test_app.dropTypesafeClients();
-    _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast("test-key"), 1);
-    defer _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
-    const base_url = try aa.printSentinel("http://127.0.0.1:{d}", .{testing.testHttpPort()}, 0);
-    _ = setenv(@constCast(zenai.typesafe.base_url_env_var_name), base_url, 1);
-    defer _ = unsetenv(@constCast(zenai.typesafe.base_url_env_var_name));
+    const jev = try testing.MockJev.start(aa);
+    defer jev.stop();
 
     // decideOnly, so nothing is typed and the decoy newsletter form is the
     // only thing that could have been picked by mistake.
