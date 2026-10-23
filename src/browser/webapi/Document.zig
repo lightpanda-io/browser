@@ -1932,11 +1932,12 @@ test "Document: a non-secure document can't set or overwrite a Secure cookie" {
 
     frame.url = "http://victim.example/";
     _ = try doc.setCookie("s=1; Secure", frame);
-    try testing.expectEqual(0, jar.cookies.items.len);
+    try testing.expectEqual(0, jar.len);
 
     try jar.populateFromResponse("https://victim.example/", "s=1; Secure");
     _ = try doc.setCookie("s=2", frame);
-    try testing.expectEqual("1", jar.cookies.items[0].value);
+    var it = jar.iterator();
+    try testing.expectEqual("1", it.next().?.value);
 }
 
 test "Document: isRelaxableTo" {

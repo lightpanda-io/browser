@@ -2626,8 +2626,8 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
     const Params = struct { url: ?[]const u8 = null, all: bool = false };
     const args = try parseArgsOrDefault(Params, arena, arguments);
 
-    const cookies = session.cookie_jar.cookies.items;
-    if (cookies.len == 0) return "No cookies.";
+    const jar = &session.cookie_jar;
+    if (jar.len == 0) return "No cookies.";
 
     const filter_url: ?[:0]const u8 = blk: {
         if (args.all) break :blk null;
@@ -2640,7 +2640,8 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
     var aw: std.Io.Writer.Allocating = .init(arena);
     const writer = &aw.writer;
     var count: usize = 0;
-    for (cookies) |*cookie| {
+    var it = jar.iterator();
+    while (it.next()) |cookie| {
         if (host) |h| if (!cookie.matchesHost(h)) continue;
         writer.print("{s}={s}", .{ cookie.name, cookie.value }) catch return ToolError.InternalError;
         writer.print("; domain={s}; path={s}", .{ cookie.domain, cookie.path }) catch return ToolError.InternalError;

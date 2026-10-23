@@ -280,20 +280,28 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
 
 const Cookie = @import("../../../browser/webapi/storage/storage.zig").Cookie;
 
-// Only matches the cookie on provided parameters
-fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, path: ?[]const u8) bool {
-    if (!std.mem.eql(u8, cookie.name, name)) return false;
+// Only matches the cookie on provided parameters. We do not want to use
+// Cookie.appliesTo here, as a Cookie with a shorter path would match. Similar
+// to deduplicating with areCookiesEqual, except domain and path are optional.
+const CookieMatch = struct {
+    name: []const u8,
+    domain: ?[]const u8,
+    path: ?[]const u8,
 
-    if (domain) |domain_| {
-        const c_no_dot = if (std.mem.startsWith(u8, cookie.domain, ".")) cookie.domain[1..] else cookie.domain;
-        const d_no_dot = if (std.mem.startsWith(u8, domain_, ".")) domain_[1..] else domain_;
-        if (!std.mem.eql(u8, c_no_dot, d_no_dot)) return false;
+    fn matches(self: *const CookieMatch, cookie: *const Cookie) bool {
+        if (!std.mem.eql(u8, cookie.name, self.name)) return false;
+
+        if (self.domain) |domain_| {
+            const c_no_dot = if (std.mem.startsWith(u8, cookie.domain, ".")) cookie.domain[1..] else cookie.domain;
+            const d_no_dot = if (std.mem.startsWith(u8, domain_, ".")) domain_[1..] else domain_;
+            if (!std.mem.eql(u8, c_no_dot, d_no_dot)) return false;
+        }
+        if (self.path) |path_| {
+            if (!std.mem.eql(u8, cookie.path, path_)) return false;
+        }
+        return true;
     }
-    if (path) |path_| {
-        if (!std.mem.eql(u8, cookie.path, path_)) return false;
-    }
-    return true;
-}
+};
 
 fn deleteCookies(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
@@ -311,21 +319,12 @@ fn deleteCookies(cmd: *CDP.Command) !void {
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const cookies = &bc.session.cookie_jar.cookies;
-
-    var index = cookies.items.len;
-    while (index > 0) {
-        index -= 1;
-        const cookie = &cookies.items[index];
-        const domain = try Cookie.parseDomain(cmd.arena, params.url, params.domain);
-        const path = try Cookie.parsePath(cmd.arena, params.url, params.path);
-
-        // We do not want to use Cookie.appliesTo here. As a Cookie with a shorter path would match.
-        // Similar to deduplicating with areCookiesEqual, except domain and path are optional.
-        if (cookieMatches(cookie, params.name, domain, path)) {
-            cookies.orderedRemove(index).deinit();
-        }
-    }
+    const match: CookieMatch = .{
+        .name = params.name,
+        .domain = try Cookie.parseDomain(cmd.arena, params.url, params.domain),
+        .path = try Cookie.parsePath(cmd.arena, params.url, params.path),
+    };
+    bc.session.cookie_jar.removeWhere(&match, CookieMatch.matches);
     return cmd.sendResult(null, .{});
 }
 
@@ -401,7 +400,7 @@ fn getCookies(cmd: *CDP.Command) !void {
 
     var jar = &bc.session.cookie_jar;
     jar.removeExpired(null);
-    const writer = CdpStorage.CookieWriter{ .cookies = jar.cookies.items, .urls = urls.items };
+    const writer = CdpStorage.CookieWriter{ .jar = jar, .urls = urls.items };
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
@@ -413,7 +412,7 @@ fn getAllCookies(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     var jar = &bc.session.cookie_jar;
     jar.removeExpired(null);
-    const writer = CdpStorage.CookieWriter{ .cookies = jar.cookies.items };
+    const writer = CdpStorage.CookieWriter{ .jar = jar };
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
