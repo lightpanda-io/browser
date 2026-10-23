@@ -266,84 +266,9 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
             heap.* = value;
             return self.mapZigInstanceToJs(js_obj_handle, heap);
         },
-        .pointer => |ptr| {
-            const resolved = resolveValue(value);
-
-            const resolved_ptr_id = @intFromPtr(resolved.ptr);
-            const gop = try ctx.addIdentity(resolved_ptr_id);
-            if (gop.found_existing) {
-                // we've seen this instance before, return the same object
-                return .{
-                    .local = self,
-                    .handle = @ptrCast(v8.v8__Global__Get(gop.value_ptr, self.isolate.handle)),
-                };
-            }
-
-            const isolate = self.isolate;
-            const JsApi = bridge.Struct(ptr.child).JsApi;
-
-            // Sometimes we're creating a new Object, like when
-            // we're returning a value from a function. In those cases
-            // we have to get the object template, and we can get an object
-            // by calling initInstance its InstanceTemplate.
-            // Sometimes though we already have the Object to bind to
-            // for example, when we're executing a constructor, v8 has
-            // already created the "this" object.
-            const js_obj = js.Object{
-                .local = self,
-                .handle = js_obj_handle orelse blk: {
-                    const function_template_handle = ctx.templates[resolved.class_id];
-                    const object_template_handle = v8.v8__FunctionTemplate__InstanceTemplate(function_template_handle).?;
-                    break :blk v8.v8__ObjectTemplate__NewInstance(object_template_handle, self.handle).?;
-                },
-            };
-
-            if (!@hasDecl(JsApi.Meta, "empty_with_no_proto")) {
-                // The TAO tells us the Zig instance and its type, so that
-                // we can map back from JS. See TaggedOpaque for details.
-                try resolved.tagged.store(js_obj.handle, ctx.identity_arena);
-            } else {
-                // If the struct is empty, we don't need to do all
-                // the TOA stuff and setting the internal data.
-                // When we try to map this from JS->Zig, in
-                // TaggedOpaque, we'll also know there that
-                // the type is empty and can create an empty instance.
-            }
-
-            // dont' use js_obj.persist(), because we don't want to track this in
-            // context.global_objects, we want to track it in context.identity_map.
-            v8.v8__Global__New(isolate.handle, js_obj.handle, gop.value_ptr);
-            if (resolved.finalizer) |finalizer| {
-                const finalizer_ptr_id = finalizer.ptr_id;
-
-                const page = ctx.page;
-                const session = page.session;
-                const finalizer_gop = try page.finalizer_callbacks.getOrPut(page.arena, finalizer_ptr_id);
-                if (finalizer_gop.found_existing == false) {
-                    // This is the first context (and very likely only one) to
-                    // see this Zig instance. We need to create the FinalizerCallback
-                    // so that we can cleanup on Page teardown if v8 doesn't finalize.
-                    errdefer _ = page.finalizer_callbacks.remove(finalizer_ptr_id);
-                    finalizer.acquire_ref(finalizer_ptr_id);
-                    finalizer_gop.value_ptr.* = createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.release_ref_from_zig);
-                }
-                const fc = finalizer_gop.value_ptr;
-                const browser = session.browser;
-                const identity_finalizer = try browser.fc_identity_pool.create(browser.allocator);
-                identity_finalizer.* = .{
-                    .browser = browser,
-                    .page = page,
-                    .identity = ctx.identity,
-                    .finalizer_ptr_id = finalizer_ptr_id,
-                    .resolved_ptr_id = resolved_ptr_id,
-                    .next = fc.identities,
-                };
-                fc.identities = identity_finalizer;
-                fc.identity_count += 1;
-
-                v8.v8__Global__SetWeakFinalizer(gop.value_ptr, identity_finalizer, finalizer.release_ref, v8.kParameter);
-            }
-            return js_obj;
+        .pointer => return .{
+            .local = self,
+            .handle = try self.wrapMostSpecific(js_obj_handle, value),
         },
         else => @compileError("Expected a struct or pointer, got " ++ @typeName(T) ++ " (constructors must return struct or pointers)"),
     }
@@ -1355,10 +1280,14 @@ const Resolved = struct {
         release_ref_from_zig: *const fn (ptr_id: usize, page: *Page) void,
     };
 };
-fn resolveValue(value: anytype) Resolved {
+// Walks value's _type chain down to the most specific type (see Resolved) and
+// returns that instance's JS object, creating it on first use. The identity
+// lookup happens at the leaf, so a hit costs one walk and never builds a
+// Resolved. Only the small handle travels back up the chain.
+fn wrapMostSpecific(self: *const Local, js_obj_handle: ?*const v8.Object, value: anytype) !*const v8.Object {
     const T = bridge.Struct(@TypeOf(value));
     if (!@hasField(T, "_type")) {
-        return resolveT(T, value);
+        return self.wrapLeaf(js_obj_handle, T, value);
     }
 
     // A bare-tag _type means the subtypes are chain members, not payloads
@@ -1370,15 +1299,15 @@ fn resolveValue(value: anytype) Resolved {
                 if (S == T) {
                     // A tag can map to the type itself (e.g. Media.generic);
                     // the value is already the most specific type.
-                    return resolveT(T, value);
+                    return self.wrapLeaf(js_obj_handle, T, value);
                 }
-                return resolveValue(value.subtype(S));
+                return self.wrapMostSpecific(js_obj_handle, value.subtype(S));
             },
         }
     }
 
     if (comptime @typeInfo(@TypeOf(value._type)) != .@"union") {
-        return resolveT(T, value);
+        return self.wrapLeaf(js_obj_handle, T, value);
     }
 
     const U = @typeInfo(@TypeOf(value._type)).@"union";
@@ -1390,20 +1319,102 @@ fn resolveValue(value: anytype) Resolved {
                 .void => {
                     // Unusual case, but the Event (and maybe others) can be
                     // returned as-is. In that case, it has a dummy void type.
-                    return resolveT(T, value);
+                    return self.wrapLeaf(js_obj_handle, T, value);
                 },
                 else => @compileError(@typeName(field_type) ++ " has an unsupported _type field"),
             };
-            return resolveValue(child);
+            return self.wrapMostSpecific(js_obj_handle, child);
         }
     }
     unreachable;
 }
 
-fn resolveT(comptime T: type, value: *T) Resolved {
+fn wrapLeaf(self: *const Local, js_obj_handle: ?*const v8.Object, comptime T: type, value: *T) !*const v8.Object {
     if (comptime lp.IS_DEBUG) {
         assertChainContiguity(T, value);
     }
+    const gop = try self.ctx.addIdentity(@intFromPtr(value));
+    if (gop.found_existing) {
+        // we've seen this instance before, return the same object
+        return @ptrCast(v8.v8__Global__Get(gop.value_ptr, self.isolate.handle));
+    }
+    const resolved = resolveT(T, value);
+    const store_tagged = comptime !@hasDecl(T.JsApi.Meta, "empty_with_no_proto");
+    return self.wrapNew(js_obj_handle, &resolved, gop.value_ptr, store_tagged);
+}
+
+// The first time an instance goes to JS. Kept out of line: wrapLeaf is
+// instantiated once per concrete type.
+noinline fn wrapNew(self: *const Local, js_obj_handle: ?*const v8.Object, resolved: *const Resolved, global: *v8.Global, store_tagged: bool) !*const v8.Object {
+    const ctx = self.ctx;
+    const resolved_ptr_id = @intFromPtr(resolved.ptr);
+    const isolate = self.isolate;
+
+    // Sometimes we're creating a new Object, like when
+    // we're returning a value from a function. In those cases
+    // we have to get the object template, and we can get an object
+    // by calling initInstance its InstanceTemplate.
+    // Sometimes though we already have the Object to bind to
+    // for example, when we're executing a constructor, v8 has
+    // already created the "this" object.
+    const js_obj = js.Object{
+        .local = self,
+        .handle = js_obj_handle orelse blk: {
+            const function_template_handle = ctx.templates[resolved.class_id];
+            const object_template_handle = v8.v8__FunctionTemplate__InstanceTemplate(function_template_handle).?;
+            break :blk v8.v8__ObjectTemplate__NewInstance(object_template_handle, self.handle).?;
+        },
+    };
+
+    if (store_tagged) {
+        // The TAO tells us the Zig instance and its type, so that
+        // we can map back from JS. See TaggedOpaque for details.
+        try resolved.tagged.store(js_obj.handle, ctx.identity_arena);
+    } else {
+        // If the struct is empty, we don't need to do all
+        // the TOA stuff and setting the internal data.
+        // When we try to map this from JS->Zig, in
+        // TaggedOpaque, we'll also know there that
+        // the type is empty and can create an empty instance.
+    }
+
+    // dont' use js_obj.persist(), because we don't want to track this in
+    // context.global_objects, we want to track it in context.identity_map.
+    v8.v8__Global__New(isolate.handle, js_obj.handle, global);
+    if (resolved.finalizer) |finalizer| {
+        const finalizer_ptr_id = finalizer.ptr_id;
+
+        const page = ctx.page;
+        const session = page.session;
+        const finalizer_gop = try page.finalizer_callbacks.getOrPut(page.arena, finalizer_ptr_id);
+        if (finalizer_gop.found_existing == false) {
+            // This is the first context (and very likely only one) to
+            // see this Zig instance. We need to create the FinalizerCallback
+            // so that we can cleanup on Page teardown if v8 doesn't finalize.
+            errdefer _ = page.finalizer_callbacks.remove(finalizer_ptr_id);
+            finalizer.acquire_ref(finalizer_ptr_id);
+            finalizer_gop.value_ptr.* = createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.release_ref_from_zig);
+        }
+        const fc = finalizer_gop.value_ptr;
+        const browser = session.browser;
+        const identity_finalizer = try browser.fc_identity_pool.create(browser.allocator);
+        identity_finalizer.* = .{
+            .browser = browser,
+            .page = page,
+            .identity = ctx.identity,
+            .finalizer_ptr_id = finalizer_ptr_id,
+            .resolved_ptr_id = resolved_ptr_id,
+            .next = fc.identities,
+        };
+        fc.identities = identity_finalizer;
+        fc.identity_count += 1;
+
+        v8.v8__Global__SetWeakFinalizer(global, identity_finalizer, finalizer.release_ref, v8.kParameter);
+    }
+    return js_obj.handle;
+}
+
+fn resolveT(comptime T: type, value: *T) Resolved {
     const Meta = T.JsApi.Meta;
     return .{
         .ptr = value,

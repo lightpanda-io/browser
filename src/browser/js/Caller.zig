@@ -202,10 +202,6 @@ fn _constructor(self: *Caller, func: anytype, info: FunctionCallbackInfo, compti
 pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
-    var hs: js.HandleScope = undefined;
-    hs.init(local.isolate);
-    defer hs.deinit();
-
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getIndex(T, local, func, idx, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info);
@@ -228,10 +224,6 @@ fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, inf
 pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
-    var hs: js.HandleScope = undefined;
-    hs.init(local.isolate);
-    defer hs.deinit();
-
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getNamedIndex(T, local, func, name, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info);
@@ -253,10 +245,6 @@ fn _getNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
 
 pub fn setIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, js_value: *const v8.Value, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
-
-    var hs: js.HandleScope = undefined;
-    hs.init(local.isolate);
-    defer hs.deinit();
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _setIndex(T, local, func, idx, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
@@ -281,10 +269,6 @@ fn _setIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, js_
 pub fn deleteOrDefineIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
-    var hs: js.HandleScope = undefined;
-    hs.init(local.isolate);
-    defer hs.deinit();
-
     const info = PropertyCallbackInfo{ .handle = handle };
     return _deleteOrDefineIndex(T, local, func, idx, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info);
@@ -306,10 +290,6 @@ fn _deleteOrDefineIndex(comptime T: type, local: *const Local, func: anytype, id
 
 pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, js_value: *const v8.Value, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
-
-    var hs: js.HandleScope = undefined;
-    hs.init(local.isolate);
-    defer hs.deinit();
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _setNamedIndex(T, local, func, name, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
@@ -334,10 +314,6 @@ fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
 pub fn deleteOrDefineNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
-    var hs: js.HandleScope = undefined;
-    hs.init(local.isolate);
-    defer hs.deinit();
-
     const info = PropertyCallbackInfo{ .handle = handle };
     return _deleteOrDefineNamedIndex(T, local, func, name, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info);
@@ -360,10 +336,6 @@ fn _deleteOrDefineNamedIndex(comptime T: type, local: *const Local, func: anytyp
 pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
-    var hs: js.HandleScope = undefined;
-    hs.init(local.isolate);
-    defer hs.deinit();
-
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getEnumerator(T, local, func, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info);
@@ -385,10 +357,6 @@ fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: Pr
 pub fn getIndexQuery(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo) u32 {
     const local = &self.local;
 
-    var hs: js.HandleScope = undefined;
-    hs.init(local.isolate);
-    defer hs.deinit();
-
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getIndexQuery(T, local, func, idx, info) catch |err| {
         handleError(T, @TypeOf(func), local, err, info);
@@ -409,10 +377,6 @@ fn _getIndexQuery(comptime T: type, local: *const Local, func: anytype, idx: u32
 
 pub fn getNamedQuery(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo) u32 {
     const local = &self.local;
-
-    var hs: js.HandleScope = undefined;
-    hs.init(local.isolate);
-    defer hs.deinit();
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getNamedQuery(T, local, func, name, info) catch |err| {
