@@ -3066,6 +3066,12 @@ pub const Transfer = struct {
     // to end a transfer. Don't reach for kill() or requestFailed() directly —
     // they're internal helpers.
     pub fn abort(self: *Transfer, err: anyerror) void {
+        if (self.state == .aborted) {
+            // Already detached mid-delivery (e.g. the owner was torn down from
+            // inside a callback); deliver() does the teardown.
+            return;
+        }
+
         const page_scope = self.logScope();
         defer page_scope.exit();
 
