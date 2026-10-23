@@ -984,6 +984,9 @@ pub const ToolResult = struct {
     page_state: ?PageState = null,
     /// Implies `is_error`; telemetry counts it as `invalid_params`.
     invalid_params: bool = false,
+    /// Implies `is_error`. The REPL reads it to fall back to a chat model for
+    /// the tools that have a prompt form; every other caller just reports it.
+    needs_api_key: bool = false,
 
     fn invalidParams(text: []const u8) ToolResult {
         return .{ .text = text, .is_error = true, .invalid_params = true };
@@ -2136,6 +2139,7 @@ fn askPage(
         error.MissingApiKey => return .{ .failed = .{
             .text = arena.print("{s}: " ++ zenai.typesafe.env_var_name ++ " environment variable is not set", .{@tagName(ask.tool)}) catch return ToolError.OutOfMemory,
             .is_error = true,
+            .needs_api_key = true,
         } },
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return .{ .failed = try apiFailed(arena, @tagName(ask.tool), err, detail) },
