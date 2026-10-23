@@ -45,7 +45,7 @@ pub fn init(session: *Session, _: Opts) Runner {
     return .{
         .session = session,
         .browser = session.browser,
-        .http_client = &session.browser.http_client,
+        .http_client = session.http_client,
     };
 }
 
@@ -204,6 +204,11 @@ pub fn tick(self: *Runner, timeout_ms: u32, conditions: []WaitCondition) !TickRe
     return self._tick(false, timeout_ms, conditions);
 }
 
+pub fn tickCDP(self: *Runner, timeout_ms: u32) !void {
+    var conditions: [0]WaitCondition = .{};
+    _ = try self._tick(true, timeout_ms, &conditions);
+}
+
 fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []WaitCondition) !TickResult {
     const session = self.session;
     const browser = self.browser;
@@ -215,7 +220,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
 
     // Arms the watchdog (and proves liveness): a stall anywhere in this tick
     // ages this stamp until the watchdog fires.
-    http_client.heartbeat.touch();
+    http_client.watchdogHeartbeat().touch();
 
     // Drain queued navigations across every live page (one page per call)
     // A navigation can swap a frame pointer or the page set,
@@ -260,8 +265,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     if ((comptime is_cdp) == false and network_idle and browser.hasBackgroundTasks()) {
         // We _are_ calling into v8, but these background tasks are v8-specific,
         // meaning v8 is working, not stuck. We don't want the watchdog to kill this.
-        http_client.heartbeat.enterWait();
-        defer http_client.heartbeat.exitWait();
+        http_client.watchdogHeartbeat().enterWait();
+        defer http_client.watchdogHeartbeat().exitWait();
         browser.waitForBackgroundTasks();
         return .{ .ok = 0 };
     }
@@ -681,7 +686,7 @@ test "Runner: idle notifications advance past a resolved condition" {
 
 test "Runner: waits out a throttled navigation" {
     const session = testing.test_session;
-    const http_client = &session.browser.http_client;
+    const http_client = session.http_client;
 
     // Enable the per-host navigation throttle for this test only, and spend
     // 127.0.0.1's slot so the navigation below has to wait ~100ms.

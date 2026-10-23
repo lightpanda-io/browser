@@ -59,11 +59,11 @@ _beacon_bytes: ?*usize = null,
 pub const init: Navigator = .{};
 
 pub fn getUserAgent(_: *const Navigator, exec: *const Execution) []const u8 {
-    return exec.session.browser.http_client.getUserAgent();
+    return exec.session.http_client.getUserAgent();
 }
 
 pub fn getLanguages(_: *const Navigator, exec: *const Execution) []const []const u8 {
-    return exec.session.browser.http_client.getLanguages();
+    return exec.session.http_client.getLanguages();
 }
 
 fn getDoNotTrack(_: *const Navigator) ?[]const u8 {

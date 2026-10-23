@@ -82,6 +82,7 @@ handles: http.Handles,
 // tell "parked, waiting for work" from "stuck between waits". Registered
 // with App.watchdog by Browser.init.
 heartbeat: Watchdog.Heartbeat = .{},
+heartbeat_override: ?*Watchdog.Heartbeat = null,
 
 // Use to generate the next request ID
 next_request_id: u32 = 0,
@@ -203,6 +204,10 @@ http_version: lp.Config.HttpVersion,
 robots: RobotsGate,
 cors: CorsGate,
 url_blocklist: ?UrlBlocklist,
+
+pub fn watchdogHeartbeat(self: *Client) *Watchdog.Heartbeat {
+    return self.heartbeat_override orelse &self.heartbeat;
+}
 
 pub fn init(self: *Client, app: *lp.App) !void {
     const config = app.config;
@@ -818,8 +823,8 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
         // waiting for dispatch. We need to wait for I/O.
         if (running > 0 or self.driver != null or self.delayed_queue.first != null) {
             {
-                self.heartbeat.enterWait();
-                defer self.heartbeat.exitWait();
+                self.watchdogHeartbeat().enterWait();
+                defer self.watchdogHeartbeat().exitWait();
                 // The network layer will wake this up if there's acticity.
                 try self.handles.poll(&.{}, @intCast(self.clampToDelayed(timeout_ms)));
             }

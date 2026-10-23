@@ -187,7 +187,7 @@ pub fn init(url: []const u8, protocols_: ?Protocols, exec: *const Execution) !*W
         return error.SyntaxError;
     };
 
-    const http_client = &exec.session.browser.http_client;
+    const http_client = exec.session.http_client;
 
     const self = try exec._factory.eventTargetWithAllocator(arena.allocator(), WebSocket{
         ._exec = exec,

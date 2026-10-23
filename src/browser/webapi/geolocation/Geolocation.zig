@@ -161,17 +161,17 @@ const Request = struct {
             return null;
         }
 
-        const browser = self.exec.session.browser;
+        const session = self.exec.session;
 
         // Headless Chrome can't answer a permission prompt, so anything short of
         // an explicit grant is a denial - which is why Puppeteer and Playwright
         // both send Browser.grantPermissions alongside setGeolocationOverride.
-        if (browser.permissions.get("geolocation") orelse .prompt != .granted) {
+        if (session.permissions.get("geolocation") orelse .prompt != .granted) {
             self.deliverError(.permission_denied);
             return null;
         }
 
-        const override = browser.geolocation_override orelse {
+        const override = session.geolocation_override orelse {
             self.deliverError(.position_unavailable);
             return null;
         };
