@@ -43,7 +43,7 @@ total: ?usize = null,
 frame: *Frame,
 
 /// Prefer `from*` variants to initialize.
-fn init(frame: *Frame, url: []const u8, filename: []const u8, maybe_total: ?usize) !Download {
+fn init(frame: *Frame, url: []const u8, status: u16, filename: []const u8, maybe_total: ?usize) !Download {
     const session = frame._session;
 
     // `guid` is the CDP "Global Unique Identifier" which helps us find
@@ -51,7 +51,8 @@ fn init(frame: *Frame, url: []const u8, filename: []const u8, maybe_total: ?usiz
     var guid: [36]u8 = undefined;
     uuidv4(&guid);
 
-    const maybe_file: ?std.Io.File = switch (session.download_behavior) {
+    const succeeded = isSuccessStatus(status);
+    const maybe_file: ?std.Io.File = if (succeeded == false) null else switch (session.download_behavior) {
         inline .allow, .allow_and_name => blk: {
             const download_path = session.download_path orelse {
                 log.warn(.frame, "download without downloadPath", .{ .url = url });
@@ -86,7 +87,9 @@ fn init(frame: *Frame, url: []const u8, filename: []const u8, maybe_total: ?usiz
         .file = maybe_file,
         .filename = filename,
         .received = 0,
-        .total = maybe_total,
+        // Like Chrome, a failed download reports 0/0 bytes, whatever the
+        // response advertised.
+        .total = if (succeeded) maybe_total else null,
         .frame = frame,
     };
 }
@@ -119,7 +122,7 @@ pub fn fromTransfer(frame: *Frame, transfer: *HttpClient.Transfer) !Download {
 
     // TODO: Find filename correctly.
     const filename = "dummy.txt";
-    return init(frame, frame.url, filename, transfer.getContentLength());
+    return init(frame, frame.url, status, filename, transfer.getContentLength());
 }
 
 /// Try to initialize an asynchronous `Download` from a href. In order to
@@ -225,16 +228,19 @@ fn headerCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.HeaderRes
     const final_url = transfer.req.url;
 
     const status = transfer.responseStatus() orelse return .abort;
-    if (isSuccessStatus(status) == false) {
-        return .abort;
-    }
 
-    download.* = init(frame, final_url, "dummy.txt", transfer.getContentLength()) catch |err| {
+    download.* = init(frame, final_url, status, "dummy.txt", transfer.getContentLength()) catch |err| {
         log.err(.frame, "download init", .{ .err = err });
         return .abort;
     };
     // Later callbacks read `req.ctx` at call time, so they see the tag.
     transfer.req.ctx = @ptrFromInt(@intFromPtr(download) | announced_bit);
+
+    if (isSuccessStatus(status) == false) {
+        // Announced, so `errorCallback` reports it canceled.
+        log.info(.frame, "download failed", .{ .status = status, .url = final_url });
+        return .abort;
+    }
     return .proceed;
 }
 
