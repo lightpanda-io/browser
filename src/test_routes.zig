@@ -971,6 +971,17 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/download/missing.csv")) {
+        // A download the server fails: its body must not be written.
+        return req.respond("not found", .{
+            .status = .not_found,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Content-Disposition", .value = "attachment; filename=\"missing.csv\"" },
+            },
+        });
+    }
+
     if (std.mem.startsWith(u8, path, "/src/browser/tests/")) {
         if (std.mem.find(u8, path, "delay_ms=")) |pos| {
             const digits_start = pos + "delay_ms=".len;

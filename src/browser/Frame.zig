@@ -72,8 +72,8 @@ const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const OngoingNavigation = @import("webapi/navigation/root.zig").OngoingNavigation;
 const NavigateEventResult = @import("webapi/navigation/Navigation.zig").NavigateEventResult;
 
-const sys_url = @import("../sys/url.zig");
 const HttpClient = @import("../network/HttpClient.zig");
+const Download = @import("Download.zig");
 const GlobalScope = @import("global_scope.zig").GlobalScope;
 
 const framing = @import("frame/framing.zig");
@@ -1784,263 +1784,14 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     // If the response is a file download, stream its body to disk instead of
     // parsing it as a page. This sets _parse_state to .download, which the
     // data/done callbacks below special-case.
-    _ = try self.maybeStartDownload(transfer);
-
+    const download = Download.fromTransfer(self, transfer) catch |err| switch (err) {
+        // Download cannot be initialized from transfer.
+        error.Denied, error.MissingHeader, error.UnexpectedHttpStatus, error.Unwritable => return .proceed,
+        // Some other error.
+        else => return err,
+    };
+    self._parse_state = .{ .download = download };
     return .proceed;
-}
-
-// Returns true when the response was set up as a file download. A response is
-// treated as a download when Browser.setDownloadBehavior opted in
-// (allow/allowAndName) and the response carries Content-Disposition: attachment.
-// See issue #2701.
-fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
-    const uuidv4 = @import("../id.zig").uuidv4;
-    const latin1ToUtf8 = @import("../string.zig").latin1ToUtf8;
-
-    const session = self._session;
-    switch (session.download_behavior) {
-        .allow, .allow_and_name => {},
-        .@"lp-stream-over-cdp" => return false, // TODO
-        .deny => return false,
-    }
-
-    const disposition: HttpClient.Header = blk: {
-        for (transfer.responseHeaders()) |hdr| {
-            if (std.mem.eql(u8, hdr.name, "content-disposition")) {
-                break :blk hdr;
-            }
-        }
-        return false;
-    };
-    if (std.ascii.eqlIgnoreCase(disposition.firstValue(), "attachment") == false) {
-        return false;
-    }
-
-    const download_path = session.download_path orelse {
-        log.warn(.frame, "download without downloadPath", .{ .url = self.url });
-        return false;
-    };
-
-    // `guid` is the CDP "Global Unique Identifier" that ties the
-    // downloadWillBegin / downloadProgress events to one download.
-    var guid_buf: [36]u8 = undefined;
-    uuidv4(&guid_buf);
-    const guid = try self.page_arena.dupe(u8, &guid_buf);
-
-    // Content-Disposition filenames can be in a legacy encoding (e.g.
-    // Shift_JIS) but must yield valid UTF-8
-    const suggested = dispositionFilename(disposition) orelse (try urlBasename(self.page_arena, self.url)) orelse guid;
-    const suggested_filename = if (std.unicode.utf8ValidateSlice(suggested))
-        try self.page_arena.dupe(u8, suggested)
-    else
-        try latin1ToUtf8(self.page_arena, suggested);
-
-    // allowAndName stores the file under its guid; allow uses the suggested name.
-    const on_disk_name = switch (session.download_behavior) {
-        .allow_and_name => guid,
-        else => suggested_filename,
-    };
-
-    std.Io.Dir.cwd().createDirPath(lp.io, download_path) catch |err| {
-        log.err(.frame, "download makePath", .{ .err = err, .path = download_path });
-        return false;
-    };
-    var dir = std.Io.Dir.cwd().openDir(lp.io, download_path, .{}) catch |err| {
-        log.err(.frame, "download openDir", .{ .err = err, .path = download_path });
-        return false;
-    };
-    defer dir.close(lp.io);
-    const file = dir.createFile(lp.io, on_disk_name, .{ .truncate = true }) catch |err| {
-        log.err(.frame, "download createFile", .{ .err = err, .name = on_disk_name });
-        return false;
-    };
-
-    const total: ?u64 = if (transfer.getContentLength()) |cl| cl else null;
-
-    self._parse_state = .{ .download = .{
-        .guid = guid,
-        .file = file,
-        .filename = suggested_filename,
-        .received = 0,
-        .total = total,
-        .session = self._session,
-    } };
-
-    if (session.download_events_enabled) {
-        session.notification.dispatch(.download_will_begin, &.{
-            .frame_id = self._frame_id,
-            .guid = guid,
-            .url = self.url,
-            .suggested_filename = suggested_filename,
-        });
-        session.notification.dispatch(.download_progress, &.{
-            .guid = guid,
-            .total_bytes = total orelse 0,
-            .received_bytes = 0,
-            .state = .in_progress,
-        });
-    }
-
-    return true;
-}
-
-/// Downloads from a link asynchronously. In order to download to finish,
-/// contrary to Chrome, `Frame` must live throughout the download process.
-/// The function may or may not use `file_name_hint`, hence it's a _hint_.
-pub fn downloadLink(self: *Frame, href: []const u8, file_name_hint: []const u8) !void {
-    // Return an error?
-    if (self._session.download_behavior == .deny) {
-        return;
-    }
-
-    const url = try URL.resolve(self.page_arena, self.navigationBase(), href, .{ .encoding = self.charset });
-    // Wraps everything `Transfer` of this function needs.
-    const Ctx = struct {
-        frame: *Frame,
-        /// Owned by `page_arena`, not used after `headerCallback`.
-        hint: []const u8,
-        /// Set by `headerCallback`; null until then, and if it aborts.
-        download: ?Download = null,
-
-        fn headerCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.HeaderResult {
-            const ctx: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
-            const frame = ctx.frame;
-            // The final URL, after any redirects.
-            const final_url = transfer.req.url;
-
-            const disposition_name: ?[]const u8 = blk: {
-                for (transfer.responseHeaders()) |header| {
-                    if (std.mem.eql(u8, header.name, "content-disposition")) {
-                        break :blk dispositionFilename(header);
-                    }
-                }
-                break :blk null;
-            };
-
-            const maybe_suggestion = disposition_name orelse
-                sanitizeFilename(ctx.hint) orelse (try urlBasename(frame.page_arena, final_url));
-            const maybe_download_size: ?u64 = if (transfer.getContentLength()) |cl| cl else null;
-
-            ctx.download = Download.init(frame, final_url, maybe_suggestion, maybe_download_size) catch |err| {
-                log.err(.frame, "download init", .{ .err = err });
-                return .abort;
-            };
-            return .proceed;
-        }
-
-        fn dataCallback(transfer: *HttpClient.Transfer, bytes: []const u8) !void {
-            const ctx: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
-            return ctx.download.?.feed(bytes);
-        }
-
-        // This must not fail! A `done_callback` error is routed to
-        // `error_callback`, which would destroy `ctx` a second time.
-        fn doneCallback(raw_ctx: *anyopaque) !void {
-            const ctx: *@This() = @ptrCast(@alignCast(raw_ctx));
-            defer ctx.frame._factory.destroy(ctx);
-            ctx.download.?.finish(ctx.frame);
-        }
-
-        fn errorCallback(raw_ctx: *anyopaque, err: anyerror) void {
-            const ctx: *@This() = @ptrCast(@alignCast(raw_ctx));
-            defer ctx.frame._factory.destroy(ctx);
-            log.warn(.frame, "link download", .{ .err = err });
-            // This is null when it failed at or before the headers.
-            // No downloadWillBegin was sent, so there's nothing to cancel.
-            if (ctx.download) |*download| download.cancel(ctx.frame);
-        }
-
-        // Frame teardown or a superseding navigation. Unlike Chrome, downloads
-        // don't outlive their `Frame`, so report it canceled. Must not run JS.
-        fn shutdownCallback(raw_ctx: *anyopaque) void {
-            const ctx: *@This() = @ptrCast(@alignCast(raw_ctx));
-            defer ctx.frame._factory.destroy(ctx);
-            if (ctx.download) |*download| download.cancel(ctx.frame);
-        }
-    };
-
-    const ctx = try self._factory.create(Ctx{
-        .frame = self,
-        .hint = try self.page_arena.dupe(u8, file_name_hint),
-    });
-    // `transfer.deinit()` fires no callbacks, so this is still ours on error.
-    errdefer self._factory.destroy(ctx);
-
-    const transfer = try self.newRequest(.{
-        .ctx = ctx,
-        .url = url,
-        .method = .GET,
-        .origin = self.origin,
-        .initiator_origin = self.origin,
-        .request_mode = .navigate,
-        .credentials_mode = .include,
-        .resource_type = .download,
-        .streaming = true,
-        .header_callback = Ctx.headerCallback,
-        .data_callback = Ctx.dataCallback,
-        .done_callback = Ctx.doneCallback,
-        .error_callback = Ctx.errorCallback,
-        .shutdown_callback = Ctx.shutdownCallback,
-    });
-    errdefer transfer.deinit();
-    try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
-    // Set common headers.
-    try self.headersForRequest(transfer, .{});
-
-    transfer.submit() catch |err| {
-        log.debug(.frame, "link download", .{ .err = err, .url = url });
-    };
-}
-
-// Extracts the filename from a Content-Disposition header, handling the quoted,
-// unquoted, and RFC 5987 (filename*=charset''value) forms. Path components are
-// stripped so the result is always a bare basename.
-fn dispositionFilename(disposition: HttpClient.Header) ?[]const u8 {
-    // Prefer the extended filename*= form when present, per RFC 6266.
-    if (disposition.param("filename*")) |ext| {
-        // charset'lang'value — take everything after the second quote.
-        if (std.mem.findScalar(u8, ext, '\'')) |first| {
-            if (std.mem.findScalarPos(u8, ext, first + 1, '\'')) |second| {
-                return sanitizeFilename(ext[second + 1 ..]);
-            }
-        }
-        return sanitizeFilename(ext);
-    }
-    if (disposition.param("filename")) |name| {
-        return sanitizeFilename(name);
-    }
-    return null;
-}
-
-// Strips any directory components, guarding against path traversal. Content-
-// Disposition can carry Windows separators, so backslashes are stripped too,
-// regardless of the host platform.
-fn sanitizeFilename(name: []const u8) ?[]const u8 {
-    var out = std.fs.path.basename(name);
-    if (std.mem.findScalarLast(u8, out, '\\')) |i| {
-        out = out[i + 1 ..];
-    }
-    if (out.len == 0 or std.mem.eql(u8, out, ".") or std.mem.eql(u8, out, "..")) {
-        return null;
-    }
-    return out;
-}
-
-// Derives a filename from a URL's last path segment. The path is taken from a
-// real URL parse (rust-url) so query/fragment and percent-encoding are handled
-// the same way the rest of the browser handles URLs. The result is duped into
-// `arena`, since the parsed URL is freed before this returns.
-fn urlBasename(arena: Allocator, url: []const u8) !?[]const u8 {
-    var err: i32 = 0;
-    const u = sys_url.url_parse(url.ptr, url.len, &err) orelse return null;
-    defer sys_url.url_free(u);
-
-    var ptr: [*]const u8 = undefined;
-    var len: usize = undefined;
-    sys_url.url_get_path(u, &ptr, &len);
-
-    const name = sanitizeFilename(ptr[0..len]) orelse return null;
-    return try arena.dupe(u8, name);
 }
 
 fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
@@ -2159,17 +1910,12 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
             }
         },
         .raw, .image => |*buf| try buf.appendSlice(self.page_arena, data),
-        .download => |*download| {
-            download.file.?.writeStreamingAll(lp.io, data) catch |err| {
-                // TODO(#2701 follow-up): surface the write failure properly. We
-                // can't set `_parse_state = .err` here because the next chunk
-                // would then hit the `.err => unreachable` branch below, and we
-                // should also emit a `canceled` downloadProgress and remove the
-                // partial file on disk. For now we just log and keep going.
-                log.err(.frame, "download write", .{ .err = err, .guid = download.guid });
-                return;
-            };
-            download.received += data.len;
+        .download => |*download| download.feed(data) catch {
+            // TODO(#2701 follow-up): surface the write failure properly. We
+            // can't set `_parse_state = .err` here because the next chunk
+            // would then hit the `.err => unreachable` branch below, and we
+            // should also emit a `canceled` downloadProgress and remove the
+            // partial file on disk. For now `feed` logs and we keep going.
         },
         .pre => unreachable,
         .complete => unreachable,
@@ -2284,26 +2030,12 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
             self.documentIsComplete();
         },
         .download => |*download| {
-            download.file.?.close(lp.io);
-
-            // Capture before invalidating the union below.
-            const guid = download.guid;
-            const received = download.received;
-            const total = download.total orelse download.received;
+            // Before invalidating the union below.
+            download.finish();
             self._parse_state = .complete;
 
-            const session = self._session;
-            if (session.download_events_enabled) {
-                session.notification.dispatch(.download_progress, &.{
-                    .guid = guid,
-                    .total_bytes = total,
-                    .received_bytes = received,
-                    .state = .completed,
-                });
-            }
-
-            // The body went to disk; commit an empty document so the frame
-            // navigation still completes cleanly (mirrors the .raw path).
+            // The body went to disk or over CDP; commit an empty document so
+            // the frame navigation still completes cleanly (mirrors the .raw path).
             parser.parse("<html><head><meta charset=\"utf-8\"></head><body></body></html>");
             self.documentIsComplete();
         },
@@ -3984,144 +3716,8 @@ const ParseState = union(enum) {
             // Only reached when a frame is torn down mid-download (the normal
             // completion path in frameDoneCallback already closes the file and
             // transitions to .complete).
-            .download => |*download| download.file.?.close(lp.io),
+            .download => |*download| if (download.file) |file| file.close(lp.io),
             else => {},
-        }
-    }
-};
-
-// An in-flight file download (Content-Disposition: attachment under an
-// allow/allowAndName Browser.setDownloadBehavior). The response body is
-// streamed straight to `file` rather than parsed as a page. See issue #2701.
-const Download = struct {
-    // uuidv4, arena-owned. Matches the guid reported in the CDP events.
-    guid: []const u8,
-    /// `null` if session's `download_behavior` set for streaming over CDP.
-    file: ?std.Io.File,
-    // suggested filename surfaced to the client, arena-owned.
-    filename: []const u8,
-    received: u64,
-    // from Content-Length, when the response advertised one.
-    total: ?u64,
-    session: *Session,
-
-    /// Initializes a `Download` for a given `url`. `maybe_suggestion` is the
-    /// caller's sanitized pick; `null` falls back to the `guid`.
-    fn init(frame: *Frame, url: []const u8, maybe_suggestion: ?[]const u8, maybe_total: ?u64) !Download {
-        const uuidv4 = @import("../id.zig").uuidv4;
-        const latin1ToUtf8 = @import("../string.zig").latin1ToUtf8;
-
-        const session = frame._session;
-        // setDownloadBehavior can change while an `<a download>` fetch is
-        // in-flight.
-        if (session.download_behavior == .deny) {
-            log.warn(.frame, "downloads are denied", .{ .url = url });
-            return error.DownloadDenied;
-        }
-
-        // `guid` is the CDP "Global Unique Identifier" which helps us find
-        // where to dispatch events on.
-        var guid_buf: [36]u8 = undefined;
-        uuidv4(&guid_buf);
-        const guid = try frame.page_arena.dupe(u8, &guid_buf);
-
-        // The suggestion may point into the response headers, which don't
-        // outlive the transfer. Content-Disposition filenames can be in a
-        // legacy encoding (e.g. Shift_JIS) but must yield valid UTF-8.
-        const name = maybe_suggestion orelse guid;
-        const filename = if (std.unicode.utf8ValidateSlice(name))
-            try frame.page_arena.dupe(u8, name)
-        else
-            try latin1ToUtf8(frame.page_arena, name);
-
-        const maybe_file: ?std.Io.File = switch (session.download_behavior) {
-            .allow, .allow_and_name => blk: {
-                const download_path = session.download_path orelse {
-                    log.warn(.frame, "download without downloadPath", .{ .url = url });
-                    return error.WithoutDownloadPath;
-                };
-                // allowAndName stores the file under its guid.
-                const on_disk_name = if (session.download_behavior == .allow_and_name) guid else filename;
-
-                const cwd = std.Io.Dir.cwd();
-                try cwd.createDirPath(lp.io, download_path);
-                var dir = try cwd.openDir(lp.io, download_path, .{});
-                defer dir.close(lp.io);
-                break :blk try dir.createFile(lp.io, on_disk_name, .{ .truncate = true });
-            },
-            .deny => unreachable,
-            .@"lp-stream-over-cdp" => null,
-        };
-
-        if (session.download_events_enabled) {
-            session.notification.dispatch(.download_will_begin, &.{
-                .frame_id = frame._frame_id,
-                .guid = guid,
-                .url = url,
-                .suggested_filename = filename,
-            });
-            session.notification.dispatch(.download_progress, &.{
-                .guid = guid,
-                .total_bytes = maybe_total orelse 0,
-                .received_bytes = 0,
-                .state = .in_progress,
-            });
-        }
-
-        return .{
-            .guid = guid,
-            .file = maybe_file,
-            .filename = filename,
-            .received = 0,
-            .total = maybe_total,
-            .session = session,
-        };
-    }
-
-    /// Feeds the download via bytes.
-    fn feed(self: *Download, bytes: []const u8) !void {
-        const session = self.session;
-
-        if (self.file) |file| {
-            file.writeStreamingAll(lp.io, bytes) catch |err| {
-                log.err(.frame, "download write", .{ .err = err, .guid = self.guid });
-                return err;
-            };
-        } else {
-            if (session.download_events_enabled) {
-                session.notification.dispatch(.download_data, &.{ .guid = self.guid, .data = bytes });
-            }
-        }
-        self.received += bytes.len;
-    }
-
-    // The body was fully received.
-    fn finish(self: *Download, frame: *Frame) void {
-        defer self.report(frame, .completed);
-        if (self.file) |file| {
-            file.close(lp.io);
-        }
-    }
-
-    // The transfer failed partway. The partial file stays on disk for now.
-    fn cancel(self: *Download, frame: *Frame) void {
-        defer self.report(frame, .canceled);
-        if (self.file) |file| {
-            file.close(lp.io);
-        }
-    }
-
-    // Playwright only settles a download on a `completed` or `canceled`
-    // downloadProgress; without one, download.path() and friends never return.
-    fn report(self: *const Download, frame: *Frame, state: lp.Notification.DownloadProgress.State) void {
-        const session = frame._session;
-        if (session.download_events_enabled) {
-            session.notification.dispatch(.download_progress, &.{
-                .guid = self.guid,
-                .total_bytes = self.total orelse self.received,
-                .received_bytes = self.received,
-                .state = state,
-            });
         }
     }
 };
@@ -4574,34 +4170,6 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 }
 
 const testing = @import("../testing.zig");
-
-fn dispositionHeader(value: []const u8) HttpClient.Header {
-    return .{ .name = "content-disposition", .value = value };
-}
-
-test "Frame: dispositionFilename" {
-    try testing.expectEqualSlices(u8, "report.csv", dispositionFilename(dispositionHeader("attachment; filename=\"report.csv\"")).?);
-    try testing.expectEqualSlices(u8, "report.csv", dispositionFilename(dispositionHeader("attachment; filename=report.csv")).?);
-    try testing.expectEqualSlices(u8, "r e.csv", dispositionFilename(dispositionHeader("attachment; filename=\"r e.csv\"")).?);
-    // RFC 5987 extended form is preferred over the plain filename when present
-    // (the value is taken verbatim after the charset'lang' prefix).
-    try testing.expectEqualSlices(u8, "extended.txt", dispositionFilename(dispositionHeader("attachment; filename=\"fallback.txt\"; filename*=UTF-8''extended.txt")).?);
-    try testing.expect(dispositionFilename(dispositionHeader("attachment")) == null);
-    // Path components are stripped to guard against traversal.
-    try testing.expectEqualSlices(u8, "evil.sh", dispositionFilename(dispositionHeader("attachment; filename=\"../../evil.sh\"")).?);
-    try testing.expectEqualSlices(u8, "evil.sh", dispositionFilename(dispositionHeader("attachment; filename=\"..\\..\\evil.sh\"")).?);
-    try testing.expect(dispositionFilename(dispositionHeader("attachment; filename=\"..\"")) == null);
-}
-
-test "Frame: urlBasename" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    try testing.expectEqualSlices(u8, "report.csv", (try urlBasename(a, "http://x.com/a/b/report.csv")).?);
-    try testing.expectEqualSlices(u8, "report.csv", (try urlBasename(a, "http://x.com/report.csv?v=1#x")).?);
-    try testing.expect((try urlBasename(a, "http://x.com/")) == null);
-}
 
 test "WebApi: Frame" {
     testing.silenceLog(&.{.http});
