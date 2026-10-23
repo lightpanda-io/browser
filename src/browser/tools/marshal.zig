@@ -154,10 +154,6 @@ pub fn normalizeArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value
     return .{ .object = new_obj };
 }
 
-/// Resolve `$LP_*` placeholders in every string arg before the tool runs.
-/// `fill.value` is the one exception: `execFill` resolves it internally and
-/// echoes the original placeholder so the credential never surfaces in the
-/// result text. Co-located with `execFill` so both halves of the carve-out
 /// Walks `std.c.environ` (live) and dupes names into `arena` — `setenv`
 /// can free both the environ array and its entry strings, so a captured
 /// `std.os.environ` slice or name pointers into entries would dangle.
@@ -196,7 +192,10 @@ pub fn lookupLpEnv(name: []const u8) ?[:0]const u8 {
     return std.mem.span(value);
 }
 
-/// live in one file.
+/// Resolve `$LP_*` placeholders in every string arg before the tool runs.
+/// `fill.value` is the one exception: `execFill` resolves it internally and
+/// echoes the original placeholder so the credential never surfaces in the
+/// result text.
 pub fn substituteStringArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
     const v = args orelse return null;
     if (v != .object) return v;
