@@ -525,16 +525,23 @@ test "MCP - missing required argument is named in the error" {
     try router.handleMessage(server, testing.arena_allocator,
         \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"setChecked","arguments":{"selector":"#chk"}}}
     );
-    try testing.expect(std.mem.indexOf(u8, out.written(), "missing required argument") == null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\"error\"") == null);
+    try testing.expectJson(.{ .id = 4, .result = .{ .isError = false } }, out.written());
     out.clearRetainingCapacity();
 
     // PascalCase keys normalize before the check, so `Url` is not "missing".
     try router.handleMessage(server, testing.arena_allocator,
         \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"goto","arguments":{"Url":"about:blank"}}}
     );
-    try testing.expect(std.mem.indexOf(u8, out.written(), "missing required argument") == null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\"error\"") == null);
+    try testing.expectJson(.{ .id = 5, .result = .{ .isError = false } }, out.written());
+    out.clearRetainingCapacity();
+
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":null}}}
+    );
+    try testing.expectJson(.{ .id = 6, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "missing required argument 'script'" }},
+    } }, out.written());
 }
 
 test "MCP - evaluate: top-level return runs in an async wrapper" {

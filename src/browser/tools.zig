@@ -909,6 +909,12 @@ pub const ToolResult = struct {
     selector: ?[]const u8 = null,
     /// Set for the tools `Tool.reportsPageState` names.
     page_state: ?PageState = null,
+    /// Implies `is_error`; telemetry counts it as `invalid_params`.
+    invalid_params: bool = false,
+
+    fn invalidParams(text: []const u8) ToolResult {
+        return .{ .text = text, .is_error = true, .invalid_params = true };
+    }
 };
 
 /// Where a call left the page. MCP serializes it as `structuredContent` so a
@@ -999,6 +1005,7 @@ pub fn call(
 
 fn telemetryOutcome(result: ToolError!ToolResult) TelemetryTool.Outcome {
     const r = result catch |err| return errorOutcome(err);
+    if (r.invalid_params) return .invalid_params;
     return if (r.is_error) .is_error else .ok;
 }
 
@@ -1032,16 +1039,16 @@ fn callInner(
         .is_error = true,
     };
     if (diagnoseArgs(arena, arguments)) |msg|
-        return .{ .text = msg, .is_error = true };
+        return .invalidParams(msg);
     // Must run before substituteStringArgs so the `key=="value"` secret-
     // redaction check there still triggers on PascalCase keys.
-    const normalized = normalizeArgKeys(arena, tool, arguments) catch |err| switch (err) {
+    const normalized = normalizeArgs(arena, tool, arguments) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.DuplicateField => return error.InvalidParams,
     };
-    // After normalizeArgKeys so a PascalCase `Script` isn't reported missing.
+    // After normalizeArgs so a PascalCase `Script` or a `null` isn't missed.
     if (diagnoseMissingRequired(arena, tool, normalized)) |msg|
-        return .{ .text = msg, .is_error = true };
+        return .invalidParams(msg);
     const substituted = try substituteStringArgs(arena, tool, normalized);
 
     // Before dispatch, because a navigation takes the node with it. Gated on
@@ -2783,7 +2790,7 @@ const ParseArgsError = error{ OutOfMemory, InvalidParams };
 /// `InvalidParams` from `parseValue` doesn't hide which field to add — a
 /// caller sending `{"expression": ...}` to evaluate learns about `script`.
 /// Default-true booleans (setChecked.checked) parse fine when omitted, so
-/// they don't count as missing. Runs on key-normalized arguments.
+/// they don't count as missing. Runs on normalized arguments.
 fn diagnoseMissingRequired(arena: std.mem.Allocator, tool: Tool, arguments: ?std.json.Value) ?[]const u8 {
     const schemas = lp.Schema.all();
     const tool_idx = @backingInt(tool);
@@ -2870,12 +2877,10 @@ pub fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.jso
     return parseValue(T, arena, arguments orelse return error.InvalidParams);
 }
 
-/// Resolve `$LP_*` placeholders in every string arg before the tool runs.
-/// `fill.value` is the one exception: `execFill` resolves it internally and
-/// echoes the original placeholder so the credential never surfaces in the
-/// result text. Co-located with `execFill` so both halves of the carve-out
-/// live in one file.
-pub fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value) !?std.json.Value {
+/// Renames keys to the schema's casing and drops `null` values, which
+/// zero-filling models send for "unset" but `std.json` rejects for a
+/// non-optional field.
+pub fn normalizeArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value) !?std.json.Value {
     const v = args orelse return null;
     if (v != .object) return v;
 
@@ -2886,6 +2891,7 @@ pub fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
 
     var it = v.object.iterator();
     while (it.next()) |entry| {
+        if (entry.value_ptr.* == .null) break;
         const field = schema.findField(entry.key_ptr.*) orelse continue;
         if (!std.mem.eql(u8, field.name, entry.key_ptr.*)) break;
     } else return v;
@@ -2894,6 +2900,7 @@ pub fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
     try new_obj.ensureTotalCapacity(arena, v.object.count());
     it = v.object.iterator();
     while (it.next()) |entry| {
+        if (entry.value_ptr.* == .null) continue;
         const canonical = if (schema.findField(entry.key_ptr.*)) |f| f.name else entry.key_ptr.*;
         const gop = try new_obj.getOrPut(arena, canonical);
         if (gop.found_existing) return error.DuplicateField;
@@ -2902,6 +2909,11 @@ pub fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
     return .{ .object = new_obj };
 }
 
+/// Resolve `$LP_*` placeholders in every string arg before the tool runs.
+/// `fill.value` is the one exception: `execFill` resolves it internally and
+/// echoes the original placeholder so the credential never surfaces in the
+/// result text. Co-located with `execFill` so both halves of the carve-out
+/// live in one file.
 fn substituteStringArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
     const v = args orelse return null;
     if (v != .object) return v;
@@ -3014,6 +3026,22 @@ test "call: unknown tool name surfaces in-band" {
     const r = try call(arena.allocator(), testing.test_session, &registry, "multi_tool_use.parallel", null, .{ .source = .user });
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
+}
+
+test "call: an argument diagnosis is in-band but counts as invalid_params" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const missing = call(arena.allocator(), testing.test_session, &registry, "evaluate", null, .{ .source = .user });
+    try std.testing.expectEqualStrings("missing required argument 'script'", (try missing).text);
+    try std.testing.expectEqual(.invalid_params, telemetryOutcome(missing));
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), "{\"state\":\"idle\"}", .{});
+    const bad_enum = call(arena.allocator(), testing.test_session, &registry, "waitForState", args, .{ .source = .user });
+    try std.testing.expect((try bad_enum).is_error);
+    try std.testing.expectEqual(.invalid_params, telemetryOutcome(bad_enum));
 }
 
 test "tree and nodeDetails read the node's own frame" {
@@ -3340,6 +3368,20 @@ test "parseValue: empty optional url treated as omitted" {
         \\{"url":"https://example.com"}
     , .{});
     try std.testing.expectEqualStrings("https://example.com", (try parseValue(Params, aa, real)).url.?);
+}
+
+test "normalizeArgs: a null field takes its default" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const Params = struct { selector: []const u8, checked: bool = true };
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"Selector":"#x","checked":null}
+    , .{});
+    const parsed = try parseValue(Params, aa, (try normalizeArgs(aa, .setChecked, args)).?);
+    try std.testing.expectEqualStrings("#x", parsed.selector);
+    try std.testing.expect(parsed.checked);
 }
 
 test "substituteEnvVars resolves LP_* vars" {

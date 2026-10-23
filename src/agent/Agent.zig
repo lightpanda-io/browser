@@ -1874,7 +1874,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 if (tool == .extract and idx != i) continue;
             }
             const ca = self.conversation.arena.allocator();
-            const args = browser_tools.normalizeArgKeys(ca, tool, tc.arguments) catch tc.arguments;
+            const args = browser_tools.normalizeArgs(ca, tool, tc.arguments) catch tc.arguments;
             // Fall back to the navigation a read tool performed, so a
             // markdown/tree-driven turn isn't lost from `/save`.
             const saved: SavedCall = if (i < self.save_calls.items.len) self.save_calls.items[i] else .{};
