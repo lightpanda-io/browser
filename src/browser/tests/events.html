@@ -964,7 +964,9 @@
 
     // The flags are cleared once dispatch ends.
     target.dispatchEvent(ev);
-    testing.expectEqual(2, calls);
+    testing.diverges("Chrome doesn't clear the stop flags after dispatching", () => {
+      testing.expectEqual(2, calls);
+    });
   }
 </script>
 
