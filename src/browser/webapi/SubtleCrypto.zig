@@ -144,7 +144,7 @@ pub fn importKey(
 /// importKey, once its algorithm is normalized: unwrapKey normalizes the
 /// unwrapped key's algorithm itself, before unwrapping.
 fn importNormalized(
-    format: []const u8,
+    requested_format: []const u8,
     key_data: algorithm.KeyData,
     algo: algorithm.Import,
     extractable: bool,
@@ -153,6 +153,10 @@ fn importNormalized(
 ) !js.Promise {
     const local = exec.js.local.?;
     const name = algo.algoName();
+    const symmetric = AES.canonicalName(name) != null or eqlIgnoreCase(name, "HMAC") or
+        eqlIgnoreCase(name, "HKDF") or eqlIgnoreCase(name, "PBKDF2");
+    const raw_public = EC.canonicalName(name) != null or OKP.curveOf(name) != null;
+    const format = rawAlias(requested_format, symmetric, raw_public);
 
     // Asymmetric algorithms (EC, OKP). Usage validation runs first (bad/empty
     // usages → SyntaxError) so the failure-path tests pass regardless of whether
@@ -360,7 +364,7 @@ const Jwk = union(enum) {
 };
 
 /// The "export key" steps shared by exportKey and wrapKey.
-fn exportAs(format: []const u8, key: *CryptoKey, exec: *const Execution) !Exported {
+fn exportAs(requested_format: []const u8, key: *CryptoKey, exec: *const Execution) !Exported {
     // HKDF and PBKDF2 have no export operation: that's a NotSupportedError,
     // checked before the extractable flag (their keys never are).
     if (key._type == .derive) {
@@ -369,6 +373,10 @@ fn exportAs(format: []const u8, key: *CryptoKey, exec: *const Execution) !Export
     if (!key.canExportKey()) {
         return error.InvalidAccessError;
     }
+
+    const symmetric = key._type == .aes or key._type == .hmac;
+    const raw_public = key._type == .ec or key._type == .ed25519 or key._type == .x25519;
+    const format = rawAlias(requested_format, symmetric, raw_public);
 
     if (std.mem.eql(u8, format, "raw")) {
         // RSA keys live in `_vary.pkey`; there's no raw form.
@@ -403,8 +411,21 @@ fn exportAs(format: []const u8, key: *CryptoKey, exec: *const Execution) !Export
         return error.NotSupported;
     }
 
-    // A raw-* format of the Modern Algorithms draft.
+    // raw-private or raw-seed, or a raw-* format the key's algorithm doesn't
+    // take (see rawAlias).
     return error.NotSupported;
+}
+
+/// The Modern Algorithms draft's raw-* formats, for the algorithms here:
+/// "raw-secret" is "raw" for a symmetric algorithm, and "raw-public" is "raw"
+/// for an EC or OKP one (a public key's point). Any other format stays as it
+/// is, so a raw-* one the algorithm doesn't take (raw-public on AES, raw-secret
+/// on ECDSA, any raw-* on RSA, raw-private, raw-seed) is NotSupportedError.
+/// https://wicg.github.io/webcrypto-modern-algos/#subtlecrypto-interface-keyformat
+fn rawAlias(format: []const u8, symmetric: bool, raw_public: bool) []const u8 {
+    if (symmetric and std.mem.eql(u8, format, "raw-secret")) return "raw";
+    if (raw_public and std.mem.eql(u8, format, "raw-public")) return "raw";
+    return format;
 }
 
 /// The JSON Web Key returned for symmetric ("oct") keys. Members are listed
@@ -629,10 +650,9 @@ pub fn unwrapKey(
     return importNormalized(format, key_data, unwrapped_key_algo, extractable, key_usages, exec);
 }
 
-/// A KeyFormat, including the raw-* ones of the Modern Algorithms draft. None
-/// is supported here, so they're NotSupportedError later (Chrome takes
-/// raw-public for EC/OKP keys and raw-secret for symmetric ones). Any other string fails the WebIDL enum conversion of the format
-/// argument, a TypeError before any other step.
+/// A KeyFormat, including the raw-* ones of the Modern Algorithms draft (see
+/// rawAlias for the ones supported here). Any other string fails the WebIDL
+/// enum conversion of the format argument, a TypeError before any other step.
 fn checkFormat(format: []const u8, local: *const js.Local) !void {
     const formats = [_][]const u8{ "raw", "spki", "pkcs8", "jwk", "raw-public", "raw-private", "raw-seed", "raw-secret" };
     for (formats) |known| {
