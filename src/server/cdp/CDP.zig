@@ -1325,6 +1325,11 @@ pub const BrowserContext = struct {
     }
 
     fn destroySession(self: *BrowserContext, attached: *AttachedSession) void {
+        if (self.download_session_id) |download_session_id| {
+            if (std.mem.eql(u8, download_session_id, attached.id)) {
+                self.download_session_id = null;
+            }
+        }
         self.notification.unregisterAll(attached);
         attached.inspector_session.deinit();
         self.cdp.allocator.destroy(attached);
