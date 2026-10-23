@@ -104,6 +104,7 @@ pub fn initFromHandle(self: *Caller, handle: ?*const v8.FunctionCallbackInfo) bo
 pub fn deinit(self: *Caller) void {
     const ctx = self.local.ctx;
     const call_depth = ctx.call_depth - 1;
+    ctx.call_depth = call_depth;
 
     // Because of callbacks, calls can be nested. Because of this, we
     // can't clear the call_arena after _every_ call. Imagine we have
@@ -116,7 +117,13 @@ pub fn deinit(self: *Caller) void {
     //
     // Therefore, we keep a call_depth, and only reset the call_arena
     // when a top-level (call_depth == 0) function ends.
-    if (call_depth == 0) {
+    //
+    // Another context of the same global (an isolated world) can be mid-call
+    // underneath us, e.g. a DOM change made by the world delivers main-world
+    // MutationObservers. That Zig code allocates from frame.call_arena, which
+    // is this (the main) context's call_arena, but only the world's
+    // call_depth was raised.
+    if (call_depth == 0 and self.prev_context.call_depth == 0) {
         const arena: *ArenaAllocator = @ptrCast(@alignCast(ctx.call_arena.ptr));
         _ = arena.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
     }
@@ -131,7 +138,6 @@ pub fn deinit(self: *Caller) void {
         _ = local_arena.reset(if (comptime lp.IS_DEBUG) .free_all else .{ .retain_with_limit = LOCAL_ARENA_RETAIN });
     }
 
-    ctx.call_depth = call_depth;
     ctx.local = self.prev_local;
     ctx.global.setJs(self.prev_context);
 }
