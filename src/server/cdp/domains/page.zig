@@ -1468,6 +1468,50 @@ test "cdp.frame: createIsolatedWorld targets the requested frame" {
     try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Parent jobs" } }, .{ .id = 37 });
 }
 
+// A DOM change made from an isolated world queues the MutationObserver
+// delivery while the world's context is the frame's current one. The
+// main-world callbacks then call natives, and must not reset the frame's
+// call_arena, which holds the delivery's snapshot of observers and records.
+test "cdp.frame: isolated world mutation delivers main-world observers" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-IW", .url = "hi.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const root_id = id.toFrameId(root._frame_id);
+
+    try ctx.processMessage(.{ .id = 1, .method = "Runtime.evaluate", .params = .{
+        .expression =
+        \\ window.calls = [];
+        \\ for (const name of ['a', 'b', 'c']) {
+        \\   new MutationObserver((records) => {
+        \\     for (let i = 0; i < 50; i++) {
+        \\       document.getElementById(name.repeat(64) + i);
+        \\     }
+        \\     calls.push(name + records.length);
+        \\   }).observe(document.body, {attributes: true});
+        \\ }
+        ,
+    } });
+
+    try ctx.processMessage(.{ .id = 2, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = &root_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    const world_ctx = try isolatedWorldContextId(bc, root);
+
+    try ctx.processMessage(.{ .id = 3, .method = "Runtime.evaluate", .params = .{
+        .expression = "document.body.setAttribute('data-x', '1')",
+        .contextId = world_ctx,
+    } });
+
+    try ctx.processMessage(.{ .id = 4, .method = "Runtime.evaluate", .params = .{
+        .expression = "calls.join(',')",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "a1,b1,c1" } }, .{ .id = 4 });
+}
+
 // Chrome only puts a world in a frame on an explicit trigger. A world the
 // client asked for on the root must not appear in a sibling frame just
 // because that frame navigated afterwards.
