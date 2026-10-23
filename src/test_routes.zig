@@ -1090,11 +1090,11 @@ pub fn handle(req: *std.http.Server.Request) !void {
     return req.respond("not found", .{ .status = .not_found });
 }
 
-// A stand-in for TypeSafe System One. `classify` asserts exact answers for
-// names it knows, so those come from a fixed body that deliberately leaves
-// most presets unanswered. `acceptCookies` and `login` cannot: their choices
-// are keyed by registry node ids, which differ per run, so an answer has to be
-// built from the request that asked.
+/// A stand-in for TypeSafe System One. `classify` asserts exact answers for
+/// names it knows, so those come from a fixed body that deliberately leaves
+/// most presets unanswered. `acceptCookies` and `login` cannot: their choices
+/// are keyed by registry node ids, which differ per run, so an answer has to
+/// be built from the request that asked.
 fn systemOne(req: *std.http.Server.Request, arena: std.mem.Allocator) !void {
     const classify_answers =
         \\{
@@ -1184,8 +1184,7 @@ fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bo
             try jw.objectField("choice");
             try jw.write(pick);
             // Rejected unless the probabilities cover exactly the options
-            // offered and sum to 1, with the choice as their argmax. `share`
-            // is only read when there are two or more.
+            // offered and sum to 1, with the choice as their argmax.
             const chosen: f64 = if (options.count() < 2) 1 else 0.9;
             const share: f64 = if (options.count() < 2) 0 else (1 - chosen) / @as(f64, @floatFromInt(options.count() - 1));
             try jw.objectField("probabilities");
@@ -1227,17 +1226,17 @@ fn hintFor(key: []const u8) ?[]const u8 {
 
 /// The first option whose description mentions the hint — a stand-in for the
 /// model's judgment, so the test exercises the question and answer plumbing
-/// rather than a canned node id.
+/// rather than a canned node id. When nothing matches, the answer is `none`:
+/// a reworded fixture then fails the test that asked rather than quietly
+/// picking something else.
 fn pickOption(arena: std.mem.Allocator, options: std.json.ObjectMap, hint: ?[]const u8) ?[]const u8 {
-    var fallback: ?[]const u8 = null;
     var it = options.iterator();
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
         if (std.mem.eql(u8, key, lp.choose.none_key) or std.mem.eql(u8, key, lp.login.enter_key)) continue;
-        if (fallback == null) fallback = key;
         const wanted = hint orelse return key;
         const described = std.json.Stringify.valueAlloc(arena, entry.value_ptr.*, .{}) catch continue;
         if (std.ascii.findIgnoreCase(described, wanted) != null) return key;
     }
-    return fallback;
+    return null;
 }

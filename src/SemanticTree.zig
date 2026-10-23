@@ -30,6 +30,7 @@ const AXNode = @import("server/cdp/AXNode.zig");
 
 const NodeRegistry = @import("NodeRegistry.zig");
 const isAllWhitespace = @import("string.zig").isAllWhitespace;
+const isOneOf = @import("string.zig").isOneOf;
 
 const log = lp.log;
 const Frame = lp.Frame;
@@ -860,30 +861,19 @@ const structural_roles = std.StaticStringMap(enum { wrapper, anchor }).initCompt
     .{ "region", .anchor },
 });
 
-/// Where a link goes, for a reader judging it: the resolved href without
-/// its query or fragment, and only the path when it stays on this site.
+/// Resolved href, query and fragment stripped; path alone when it stays on
+/// this site.
 fn linkTarget(self: Self, node: *Node) ?[]const u8 {
     const el = node.is(Element) orelse return null;
     const raw = el.getAttributeInterned("href") orelse return null;
     const frame = self.frame;
-    const resolved = lp.URL.resolve(self.arena, frame.base(), raw, .{ .encoding = frame.charset }) catch raw;
-    const end = std.mem.findAny(u8, resolved, "?#") orelse resolved.len;
-    const target = resolved[0..end];
-
-    const origin = originOf(frame.url);
-    if (origin.len > 0 and std.mem.startsWith(u8, target, origin)) {
-        const path = target[origin.len..];
-        if (path.len == 0 or path[0] == '/') return if (path.len == 0) "/" else path;
+    const resolved = node.resolveURL(raw, frame, .{ .allocator = self.arena }) catch return raw;
+    if (lp.URL.isSameOrigin(resolved, frame.url)) {
+        const path = lp.URL.getPathname(resolved);
+        return if (path.len == 0) "/" else path;
     }
-    return target;
-}
-
-/// `scheme://host[:port]` of an absolute URL, or empty when it has none.
-fn originOf(url: []const u8) []const u8 {
-    const scheme_end = std.mem.find(u8, url, "://") orelse return "";
-    const host_start = scheme_end + 3;
-    const host_end = std.mem.findAnyPos(u8, url, host_start, "/?#") orelse url.len;
-    return url[0..host_end];
+    const end = std.mem.findAny(u8, resolved, "?#") orelse resolved.len;
+    return resolved[0..end];
 }
 
 const Walk = enum {
@@ -909,12 +899,17 @@ fn textName(node: *Node, data: *const NodeData) ?[]const u8 {
 }
 
 fn isTextOnly(data: *const NodeData) bool {
-    return std.mem.eql(u8, data.role, "StaticText") or std.mem.eql(u8, data.role, "none") or std.mem.eql(u8, data.role, "generic");
+    return isOneOf(data.role, &.{ "StaticText", "none", "generic" });
+}
+
+fn contentful(node: *Node, data: *const NodeData) bool {
+    if (textName(node, data) != null) return true;
+    if (data.value) |v| if (v.len > 0) return true;
+    return data.checked != null or data.aria.expanded != null or data.aria.checked != null;
 }
 
 fn isBlankLine(node: *Node, data: *const NodeData) bool {
-    const has_value = if (data.value) |v| v.len > 0 else false;
-    return isTextOnly(data) and textName(node, data) == null and !has_value and data.checked == null and data.options == null;
+    return isTextOnly(data) and data.options == null and !contentful(node, data);
 }
 
 fn writeTextLine(self: Self, writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine {
@@ -988,7 +983,7 @@ fn writeTextLine(self: Self, writer: *std.Io.Writer, node: *Node, data: *NodeDat
         try writer.writeAll("]");
         return .{ .children = .none, .contentful = true }; // Native handling complete, do not walk children
     }
-    const contentful = name_to_print != null or (if (data.value) |v| v.len > 0 else false) or data.checked != null or data.aria.expanded != null or data.aria.checked != null;
+    const has_content = contentful(node, data);
 
     // A named one already says what its children say, but a heading or
     // code can still wrap a link.
@@ -1001,7 +996,7 @@ fn writeTextLine(self: Self, writer: *std.Io.Writer, node: *Node, data: *NodeDat
         .controls
     else
         .all;
-    return .{ .children = children, .contentful = contentful };
+    return .{ .children = children, .contentful = has_content };
 }
 
 /// Each node is one line: a newline in a name would start another.

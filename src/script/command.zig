@@ -323,8 +323,7 @@ fn writeJsValue(
     }
 }
 
-/// A string field holding JSON is written as the object or array it encodes;
-/// anything else stays a string literal.
+/// Anything that is not a JSON object or array stays a string literal.
 fn writeJsonSource(
     arena: std.mem.Allocator,
     writer: *std.Io.Writer,
