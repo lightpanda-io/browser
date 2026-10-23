@@ -1910,13 +1910,10 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
             }
         },
         .raw, .image => |*buf| try buf.appendSlice(self.page_arena, data),
-        .download => |*download| download.feed(data) catch {
-            // TODO(#2701 follow-up): surface the write failure properly. We
-            // can't set `_parse_state = .err` here because the next chunk
-            // would then hit the `.err => unreachable` branch below, and we
-            // should also emit a `canceled` downloadProgress and remove the
-            // partial file on disk. For now `feed` logs and we keep going.
-        },
+        // A write failure fails the transfer, so no further chunk arrives;
+        // `frameErrorCallback` then reports the download canceled, as the
+        // `<a download>` path does. The partial file stays on disk for now.
+        .download => |*download| try download.feed(data),
         .pre => unreachable,
         .complete => unreachable,
         .err => unreachable,
@@ -3713,10 +3710,10 @@ const ParseState = union(enum) {
     fn deinit(self: *ParseState, _: *Frame) void {
         switch (self.*) {
             .html => |html| html.arena.release(),
-            // Only reached when a frame is torn down mid-download (the normal
-            // completion path in frameDoneCallback already closes the file and
-            // transitions to .complete).
-            .download => |*download| if (download.file) |file| file.close(lp.io),
+            .download => |*download| {
+                download.cancel();
+                self.* = .complete;
+            },
             else => {},
         }
     }
