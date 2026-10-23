@@ -765,10 +765,7 @@ fn runRepl(self: *Agent) void {
         switch (cmd) {
             .comment => continue :repl,
             .llm => |lc| {
-                var label_buf: [32]u8 = undefined;
-                const label = std.mem.print(&label_buf, "/{s}", .{@tagName(lc)}) catch "/?";
-                if (!self.requireLlm(label)) continue :repl;
-                _ = self.runTurn(.{ .prompt = lc.prompt(), .record_comment = line, .capture_for_save = true, .label = label });
+                _ = self.runPromptTurn(aa, @tagName(lc), lc.prompt(), line);
             },
             .tool_call => |tc| {
                 self.terminal.beginTool(tc.name(), slash_split.?.rest);
@@ -779,18 +776,14 @@ fn runRepl(self: *Agent) void {
                 // still do it the long way, which is what the command did
                 // before the tool existed. Asking first rather than checking
                 // the key keeps the replay path, which needs no key at all.
-                if (result.needs_api_key) {
-                    if (Command.fallbackPrompt(tc.tool)) |prompt| {
-                        var label_buf: [32]u8 = undefined;
-                        const label = std.mem.print(&label_buf, "/{s}", .{tc.name()}) catch "/?";
-                        if (self.requireLlm(label)) {
-                            self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
-                            _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .capture_for_save = true, .label = label });
-                        } else {
-                            self.printCommandResult(tc, result);
-                        }
-                        continue :repl;
+                if (result.needs_api_key) fallback: {
+                    const prompt = Command.fallbackPrompt(tc.tool) orelse break :fallback;
+                    self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
+                    if (!self.runPromptTurn(aa, tc.name(), prompt, line)) {
+                        // No model either, so say which key was missing too.
+                        self.printCommandResult(tc, result);
                     }
+                    continue :repl;
                 }
 
                 self.printCommandResult(tc, result);
@@ -949,6 +942,15 @@ const provider_off_keyword = "null";
 /// Keyless local providers (placeholder key), so reachability needs a live probe.
 /// Parallel to `local_completable`.
 const local_providers = [_]Config.AiProvider{ .ollama, .llama_cpp };
+
+/// Send a prebuilt prompt as a turn, the way `/logout` and the fallback for
+/// `/acceptCookies` and `/login` do. False when there is no model to send to.
+fn runPromptTurn(self: *Agent, arena: std.mem.Allocator, name: []const u8, prompt: []const u8, line: []const u8) bool {
+    const label = arena.print("/{s}", .{name}) catch "/?";
+    if (!self.requireLlm(label)) return false;
+    _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .capture_for_save = true, .label = label });
+    return true;
+}
 
 fn requireLlm(self: *Agent, name: []const u8) bool {
     if (self.credential == null) {

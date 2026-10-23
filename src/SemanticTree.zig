@@ -117,7 +117,6 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
     };
     var collector: LineCollector = .{
         .tree = self,
-        .arena = self.arena,
         .text = .init(self.arena),
         .focused = if (self.frame.document._active_element) |el| el.asNode() else null,
     };
@@ -189,7 +188,6 @@ const Line = struct {
 
 const LineCollector = struct {
     tree: Self,
-    arena: std.mem.Allocator,
     text: std.Io.Writer.Allocating,
     focused: ?*Node,
     lines: std.ArrayList(Line) = .empty,
@@ -231,7 +229,7 @@ const LineCollector = struct {
         const role_scope = critical_roles.get(data.role);
         const critical = inherited or role_scope != null;
         const chrome = (if (self.current) |p| self.lines.items[p].chrome_subtree else false) or chrome_roles.has(data.role);
-        try self.lines.append(self.arena, .{
+        try self.lines.append(self.tree.arena, .{
             .id = data.id,
             .start = @intCast(start),
             .end = @intCast(self.text.written().len),

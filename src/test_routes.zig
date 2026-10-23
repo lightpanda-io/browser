@@ -1014,7 +1014,6 @@ fn systemOne(req: *std.http.Server.Request, arena: std.mem.Allocator) !void {
         \\  }
         \\}
     ;
-    const json_header: []const std.http.Header = &.{.{ .name = "Content-Type", .value = "application/json" }};
 
     var body_buf: [64 * 1024]u8 = undefined;
     const body = if (req.head.method.requestHasBody())
@@ -1022,114 +1021,128 @@ fn systemOne(req: *std.http.Server.Request, arena: std.mem.Allocator) !void {
     else
         "";
 
-    const asked = blk: {
+    const answers = fixed: {
         const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{}) catch
-            break :blk null;
-        const questions = parsed.object.get("questions") orelse break :blk null;
-        break :blk switch (questions) {
+            break :fixed classify_answers;
+        const questions = switch (parsed.object.get("questions") orelse .null) {
             .object => |o| o,
-            else => null,
+            else => break :fixed classify_answers,
         };
-    } orelse return req.respond(classify_answers, .{ .extra_headers = json_header });
-
-    const answers = try decideLikeJev(arena, asked) orelse
-        return req.respond(classify_answers, .{ .extra_headers = json_header });
-    return req.respond(answers, .{ .extra_headers = json_header });
+        break :fixed switch (requestKind(questions)) {
+            .other => classify_answers,
+            .deciding => try answerAsked(arena, questions, true),
+            .verifying => try answerAsked(arena, questions, false),
+        };
+    };
+    return req.respond(answers, .{
+        .extra_headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+    });
 }
 
-/// The answer body for a consent or sign-in request, or null when the request
-/// is neither and the fixed body should serve it.
-fn decideLikeJev(arena: std.mem.Allocator, asked: std.json.ObjectMap) !?[]const u8 {
-    var deciding = false;
-    var verifying = true;
+/// What a request is: the one that decides, which offers page elements to
+/// choose between; the verification re-read that follows it, which asks the
+/// wall questions alone; or neither, which is `classify` asking something else.
+fn requestKind(asked: std.json.ObjectMap) enum { deciding, verifying, other } {
+    var all_walls = asked.count() > 0;
     var it = asked.iterator();
     while (it.next()) |entry| {
-        if (hintFor(entry.key_ptr.*) != null) deciding = true;
-        if (!isWallPreset(entry.key_ptr.*)) verifying = false;
+        if (hintFor(entry.key_ptr.*) != null) return .deciding;
+        if (!isWall(entry.key_ptr.*)) all_walls = false;
     }
-    // A verification re-read asks the wall presets alone, and by then the
-    // fixture has taken the banner away or signed in.
-    if (!deciding and !(verifying and asked.count() <= 2)) return null;
+    return if (all_walls) .verifying else .other;
+}
 
-    var out: std.ArrayList(u8) = .empty;
-    try out.appendSlice(arena, "{\"model\":\"jev-latest\",\"answers\":{");
-    var first = true;
-    it = asked.iterator();
+/// An answer per question asked. `deciding` is the request that offers
+/// elements; by the time the re-read asks, the fixture has taken the banner
+/// away or signed in, so its wall questions answer no.
+fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bool) ![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var jw: std.json.Stringify = .{ .writer = &out.writer };
+
+    try jw.beginObject();
+    try jw.objectField("model");
+    try jw.write("jev-latest");
+    try jw.objectField("answers");
+    try jw.beginObject();
+
+    var it = asked.iterator();
     while (it.next()) |entry| {
-        const kind = switch (entry.value_ptr.*) {
-            .object => |o| switch (o.get("type") orelse continue) {
-                .string => |s| s,
-                else => continue,
-            },
+        const question = switch (entry.value_ptr.*) {
+            .object => |o| o,
             else => continue,
         };
-        if (!first) try out.appendSlice(arena, ",");
-        first = false;
+        const kind = switch (question.get("type") orelse .null) {
+            .string => |s| s,
+            else => continue,
+        };
         const key = entry.key_ptr.*;
+        try jw.objectField(key);
+        try jw.beginObject();
+        try jw.objectField("type");
+        try jw.write(kind);
         if (std.mem.eql(u8, kind, "choice")) {
-            const criteria = entry.value_ptr.object.get("criteria");
-            const pick = pickOption(arena, criteria, hintFor(key)) orelse "none";
-            const options: std.json.ObjectMap = switch (criteria orelse .null) {
+            const options: std.json.ObjectMap = switch (question.get("criteria") orelse .null) {
                 .object => |o| o,
                 else => .empty,
             };
-            // The answer is rejected unless its probabilities cover exactly
-            // the options offered and sum to 1.
-            const chosen: f64 = if (options.count() <= 1) 1 else 0.9;
-            const share = (1 - chosen) / @as(f64, @floatFromInt(@max(options.count(), 2) - 1));
-            try out.print(arena, "\"{s}\":{{\"type\":\"choice\",\"choice\":\"{s}\",\"probabilities\":{{", .{ key, pick });
+            const pick = pickOption(arena, options, hintFor(key)) orelse lp.choose.none_key;
+            try jw.objectField("choice");
+            try jw.write(pick);
+            // Rejected unless the probabilities cover exactly the options
+            // offered and sum to 1, with the choice as their argmax. `share`
+            // is only read when there are two or more.
+            const chosen: f64 = if (options.count() < 2) 1 else 0.9;
+            const share: f64 = if (options.count() < 2) 0 else (1 - chosen) / @as(f64, @floatFromInt(options.count() - 1));
+            try jw.objectField("probabilities");
+            try jw.beginObject();
             var option = options.iterator();
-            var first_option = true;
             while (option.next()) |o| {
-                if (!first_option) try out.appendSlice(arena, ",");
-                first_option = false;
-                const p_value: f64 = if (std.mem.eql(u8, o.key_ptr.*, pick)) chosen else share;
-                try out.print(arena, "\"{s}\":{d}", .{ o.key_ptr.*, p_value });
+                try jw.objectField(o.key_ptr.*);
+                try jw.write(if (std.mem.eql(u8, o.key_ptr.*, pick)) chosen else share);
             }
-            try out.appendSlice(arena, "},\"confidence\":0.9}");
+            try jw.endObject();
+            try jw.objectField("confidence");
+            try jw.write(0.9);
         } else {
-            // Only the wall question answers yes, and only while deciding:
-            // the fixture is a single-step form, not a multi-step one.
-            const noul: f64 = if (deciding and isWallPreset(key)) 0.95 else 0.05;
-            try out.print(arena, "\"{s}\":{{\"type\":\"noul\",\"noul\":{d}}}", .{ key, noul });
+            const noul: f64 = if (deciding and isWall(key)) 0.95 else 0.05;
+            try jw.objectField(kind);
+            try jw.write(noul);
         }
+        try jw.endObject();
     }
-    try out.appendSlice(arena, "}}");
-    return out.items;
+
+    try jw.endObject();
+    try jw.endObject();
+    return out.written();
 }
 
-fn isWallPreset(key: []const u8) bool {
-    return std.mem.eql(u8, key, "isConsentWall") or std.mem.eql(u8, key, "isLoginWall") or
-        std.mem.eql(u8, key, "isErrorPage");
+fn isWall(key: []const u8) bool {
+    return std.mem.eql(u8, key, lp.consent.wall_key) or std.mem.eql(u8, key, lp.login.wall_key) or
+        std.mem.eql(u8, key, lp.login.error_key);
 }
 
 /// What a question is looking for, as a word its option's description carries.
 fn hintFor(key: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, key, "control")) return "accept";
-    if (std.mem.eql(u8, key, "userField")) return "user";
-    if (std.mem.eql(u8, key, "passwordField")) return "password";
-    if (std.mem.eql(u8, key, "submit")) return "sign";
+    if (std.mem.eql(u8, key, lp.consent.control_key)) return "accept";
+    if (std.mem.eql(u8, key, lp.login.user_key)) return "user";
+    if (std.mem.eql(u8, key, lp.login.password_key)) return "password";
+    if (std.mem.eql(u8, key, lp.login.submit_key)) return "sign";
     return null;
 }
 
 /// The first option whose description mentions the hint — a stand-in for the
 /// model's judgment, so the test exercises the question and answer plumbing
 /// rather than a canned node id.
-fn pickOption(arena: std.mem.Allocator, criteria: ?std.json.Value, hint: ?[]const u8) ?[]const u8 {
-    const options = switch (criteria orelse return null) {
-        .object => |o| o,
-        else => return null,
-    };
+fn pickOption(arena: std.mem.Allocator, options: std.json.ObjectMap, hint: ?[]const u8) ?[]const u8 {
     var fallback: ?[]const u8 = null;
     var it = options.iterator();
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
-        if (std.mem.eql(u8, key, "none") or std.mem.eql(u8, key, "enter")) continue;
+        if (std.mem.eql(u8, key, lp.choose.none_key) or std.mem.eql(u8, key, lp.login.enter_key)) continue;
         if (fallback == null) fallback = key;
         const wanted = hint orelse return key;
         const described = std.json.Stringify.valueAlloc(arena, entry.value_ptr.*, .{}) catch continue;
-        const lowered = std.ascii.allocLowerString(arena, described) catch continue;
-        if (std.mem.find(u8, lowered, wanted) != null) return key;
+        if (std.ascii.findIgnoreCase(described, wanted) != null) return key;
     }
     return fallback;
 }
