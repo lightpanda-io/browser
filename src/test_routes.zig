@@ -1032,14 +1032,14 @@ fn systemOne(req: *std.http.Server.Request, arena: std.mem.Allocator) !void {
         };
         break :fixed switch (requestKind(questions)) {
             .other => classify_answers,
-            .deciding => try answerAsked(arena, questions, true),
+            .deciding => try answerAsked(arena, questions, true, true),
             .verifying => if (no_verify)
                 return req.respond("the verification service is down", .{
                     .status = .internal_server_error,
                     .extra_headers = &.{.{ .name = "Content-Type", .value = "text/plain" }},
                 })
             else
-                try answerAsked(arena, questions, false),
+                try answerAsked(arena, questions, false, std.ascii.findIgnoreCase(body, banner_label) != null),
         };
     };
     return req.respond(answers, .{
@@ -1063,7 +1063,7 @@ fn requestKind(asked: std.json.ObjectMap) enum { deciding, verifying, other } {
 /// An answer per question asked. `deciding` is the request that offers
 /// elements; by the time the re-read asks, the fixture has taken the banner
 /// away or signed in, so its wall questions answer no.
-fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bool) ![]const u8 {
+fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bool, banner_in_state: bool) ![]const u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
     var jw: std.json.Stringify = .{ .writer = &out.writer };
 
@@ -1102,21 +1102,32 @@ fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bo
             try jw.write(pick);
             // Rejected unless the probabilities cover exactly the options
             // offered and sum to 1, with the choice as their argmax.
-            const chosen: f64 = if (options.count() < 2) 1 else 0.9;
-            const share: f64 = if (options.count() < 2) 0 else (1 - chosen) / @as(f64, @floatFromInt(options.count() - 1));
+            const n = options.count();
+            const chosen: f64 = if (n < 2) 1 else 0.7;
+            const even: f64 = if (n < 2) 0 else (1 - chosen) / @as(f64, @floatFromInt(n - 1));
+            // Where a candidate was chosen, `none` keeps a token share and the
+            // runners-up outrank it: the answer a caller can fall back on.
+            const spread = n > 2 and !std.mem.eql(u8, pick, lp.choose.none_key);
+            const none_share: f64 = if (spread) 0.05 else even;
+            const share: f64 = if (spread) (1 - chosen - none_share) / @as(f64, @floatFromInt(n - 2)) else even;
             try jw.objectField("probabilities");
             try jw.beginObject();
             var option = options.iterator();
             while (option.next()) |o| {
-                try jw.objectField(o.key_ptr.*);
-                try jw.write(if (std.mem.eql(u8, o.key_ptr.*, pick)) chosen else share);
+                const option_key = o.key_ptr.*;
+                try jw.objectField(option_key);
+                try jw.write(if (std.mem.eql(u8, option_key, pick))
+                    chosen
+                else if (std.mem.eql(u8, option_key, lp.choose.none_key))
+                    none_share
+                else
+                    share);
             }
             try jw.endObject();
             try jw.objectField("confidence");
             try jw.write(0.9);
         } else {
-            const yes = isWall(key) or (std.mem.eql(u8, key, lp.login.multi_step_key) and later_step);
-            const noul: f64 = if (deciding and yes) 0.95 else 0.05;
+            const noul: f64 = if (yesTo(key, deciding, later_step, banner_in_state)) 0.95 else 0.05;
             try jw.objectField(kind);
             try jw.write(noul);
         }
@@ -1127,6 +1138,10 @@ fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bo
     try jw.endObject();
     return out.written();
 }
+
+/// The consent fixtures label their dialog with this, so the state a request
+/// carries shows whether the banner is still on the page.
+const banner_label = "Cookie notice";
 
 /// The API key a test sets to fail the verification re-read, while the
 /// decision before it is answered as usual.
@@ -1139,6 +1154,15 @@ fn bearer(req: *std.http.Server.Request, key: []const u8) bool {
         return std.mem.endsWith(u8, h.value, key);
     }
     return false;
+}
+
+fn yesTo(key: []const u8, deciding: bool, later_step: bool, banner_in_state: bool) bool {
+    // The consent re-read is the one place the mock can see what it is asked
+    // about: the banner's label, in the state it was sent.
+    if (std.mem.eql(u8, key, lp.consent.wall_key)) return deciding or banner_in_state;
+    if (!deciding) return false;
+    if (std.mem.eql(u8, key, lp.login.multi_step_key)) return later_step;
+    return isWall(key);
 }
 
 fn isWall(key: []const u8) bool {
