@@ -27,29 +27,23 @@ const jev = @import("jev.zig");
 
 const json = zenai.typesafe.json;
 
-pub const PrepareError = json.PrepareError;
-pub const PreparedQuestions = json.Prepared;
-pub const ResponseKind = json.ResponseKind;
-
-/// The answers as JSON, shaped by what was asked.
-pub const formatResponse = json.formatAnswers;
-
-/// `questions` is the array or object itself, or a string holding its JSON.
 /// A preset can be named by key alone; an empty object asks every one of them.
-pub fn prepareQuestions(arena: std.mem.Allocator, questions: std.json.Value) PrepareError!PreparedQuestions {
-    return json.prepareQuestions(arena, questions, .{
+/// `presets` adds every preset the questions do not already ask, so a caller
+/// deciding whether a page is worth reading skips a second round trip for its
+/// own questions.
+pub fn prepareQuestions(
+    arena: std.mem.Allocator,
+    questions: std.json.Value,
+    presets: bool,
+) json.PrepareError!json.Prepared {
+    const prepared: json.Prepared = json.prepareQuestions(arena, questions, .{
         .vocabulary = jev.presetDescription,
         .category_instructions = "What kind of page is this?",
     }) catch |err| switch (err) {
         error.EmptyObject => .{ .questions = try jev.allPresetQuestions(arena), .kind = .questions_object },
-        else => err,
+        else => return err,
     };
-}
-
-/// `prepared` plus every preset it does not already ask, so one call answers
-/// both: a caller deciding whether a page is worth reading skips a second
-/// round trip for its own questions.
-pub fn addPresets(arena: std.mem.Allocator, prepared: PreparedQuestions) PrepareError!PreparedQuestions {
+    if (!presets) return prepared;
     return json.addQuestions(arena, prepared, try jev.allPresetQuestions(arena));
 }
 
@@ -59,8 +53,8 @@ test "browser.classify: a preset can be named by key alone" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
-    const prepared = try prepareQuestions(arena.allocator(), .{ .string = "{\"isBlocked\": true, \"isCaptcha\": true}" });
-    try testing.expectEqual(ResponseKind.questions_object, prepared.kind);
+    const prepared = try prepareQuestions(arena.allocator(), .{ .string = "{\"isBlocked\": true, \"isCaptcha\": true}" }, false);
+    try testing.expectEqual(json.ResponseKind.questions_object, prepared.kind);
     try testing.expectEqual(2, prepared.questions.count());
     try testing.expectString(jev.Preset.isBlocked.description(), prepared.questions.get("isBlocked").?.noul.instructions.text);
     try testing.expect(prepared.questions.has("isCaptcha"));
@@ -70,21 +64,20 @@ test "browser.classify: an empty object asks every preset" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
-    const prepared = try prepareQuestions(arena.allocator(), .{ .string = "{}" });
-    try testing.expectEqual(ResponseKind.questions_object, prepared.kind);
+    const prepared = try prepareQuestions(arena.allocator(), .{ .string = "{}" }, false);
+    try testing.expectEqual(json.ResponseKind.questions_object, prepared.kind);
     try testing.expectEqual(std.enums.values(jev.Preset).len, prepared.questions.count());
     for (std.enums.values(jev.Preset)) |preset| {
         try testing.expect(prepared.questions.has(@tagName(preset)));
     }
 }
 
-test "browser.classify: addPresets keeps the caller's own wording" {
+test "browser.classify: the presets are added beside the caller's own wording" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const prepared = try prepareQuestions(aa, .{ .string = "{\"kind\": [\"a\", \"b\"], \"isPaywall\": \"Is it paywalled?\"}" });
-    const with = try addPresets(aa, prepared);
+    const with = try prepareQuestions(aa, .{ .string = "{\"kind\": [\"a\", \"b\"], \"isPaywall\": \"Is it paywalled?\"}" }, true);
     const presets = std.enums.values(jev.Preset);
     // isPaywall was already asked, so it is not asked twice.
     try testing.expectEqual(2 + presets.len - 1, with.questions.count());
@@ -94,16 +87,15 @@ test "browser.classify: addPresets keeps the caller's own wording" {
 
     // A bare category array answers with one unkeyed choice, so there is
     // nowhere to put the presets.
-    const categories = try prepareQuestions(aa, .{ .string = "[\"a\", \"b\"]" });
-    try testing.expectError(error.InvalidQuestionFormat, addPresets(aa, categories));
+    try testing.expectError(error.InvalidQuestionFormat, prepareQuestions(aa, .{ .string = "[\"a\", \"b\"]" }, true));
 }
 
 test "browser.classify: a category array asks about the page" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
-    const prepared = try prepareQuestions(arena.allocator(), .{ .string = "[\"product\", \"catalog\"]" });
-    try testing.expectEqual(ResponseKind.single_choice, prepared.kind);
+    const prepared = try prepareQuestions(arena.allocator(), .{ .string = "[\"product\", \"catalog\"]" }, false);
+    try testing.expectEqual(json.ResponseKind.single_choice, prepared.kind);
     const question = prepared.questions.get(json.category_key).?;
     try testing.expectString("What kind of page is this?", question.choice.instructions.text);
     try testing.expect(question.choice.criteria.has("product"));

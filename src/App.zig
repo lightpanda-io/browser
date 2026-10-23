@@ -53,8 +53,8 @@ default_sanitizer: *Sanitizer,
 render_fonts: screenshot.Fonts,
 
 /// Clients for asking Jev, pooled so concurrent calls each get their own and
-/// keep its connection warm. It reads the API key itself, from the
-/// environment, whenever it has to make one.
+/// keep its connection warm. It reads the API key from the environment on
+/// every ask. Usable from any thread: it touches no browser state.
 typesafe: zenai.typesafe.Pool,
 
 pub fn init(allocator: Allocator, config: *const Config) !*App {
@@ -138,19 +138,6 @@ pub fn deinit(self: *App) void {
     self.typesafe.deinit();
 
     allocator.destroy(self);
-}
-
-/// On `error.ApiError`, `failure` gets the API's status and message, duped
-/// into `arena`. Safe to call from any thread: it touches no browser state.
-pub fn askTypesafe(
-    self: *App,
-    arena: Allocator,
-    state: zenai.typesafe.Content,
-    questions: zenai.typesafe.Questions,
-    options: zenai.typesafe.types.AskOptions,
-    failure: *zenai.http.ErrorDetail,
-) !zenai.typesafe.Client.Response(zenai.typesafe.types.AskResponse) {
-    return self.typesafe.ask(arena, state, questions, options, failure);
 }
 
 fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {

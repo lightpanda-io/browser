@@ -86,29 +86,26 @@ pub fn questions(
             ),
         });
     }
-    {
-        entries.appendAssumeCapacity(.{
-            .key = password_key,
-            .value = try choose.question(
-                arena,
-                "Which field takes the password to sign in with? A field for choosing a new password, or for confirming one, is not it.",
-                candidates,
-                &.{},
-            ),
-        });
-    }
-    {
-        const extra = [_]ChoiceEntry{.{ .key = enter_key, .value = .{ .text = enter_description } }};
-        entries.appendAssumeCapacity(.{
-            .key = submit_key,
-            .value = try choose.question(
-                arena,
-                "Which control submits the sign-in form? Creating an account, recovering a password and signing in through another service are not it.",
-                candidates,
-                &extra,
-            ),
-        });
-    }
+    entries.appendAssumeCapacity(.{
+        .key = password_key,
+        .value = try choose.question(
+            arena,
+            "Which field takes the password to sign in with? A field for choosing a new password, or for confirming one, is not it.",
+            candidates,
+            &.{},
+        ),
+    });
+
+    const extra = [_]ChoiceEntry{.{ .key = enter_key, .value = .{ .text = enter_description } }};
+    entries.appendAssumeCapacity(.{
+        .key = submit_key,
+        .value = try choose.question(
+            arena,
+            "Which control submits the sign-in form? Creating an account, recovering a password and signing in through another service are not it.",
+            candidates,
+            &extra,
+        ),
+    });
     if (wanted.multi_step) {
         entries.appendAssumeCapacity(.{
             .key = multi_step_key,
@@ -200,7 +197,6 @@ pub const Outcome = struct {
     submitSelector: ?[]const u8 = null,
     /// Set when the form had no control of its own and Enter submitted it.
     pressedEnter: bool = false,
-    /// How many elements each question offered.
     candidates: ?usize = null,
     /// The page as the verification found it, after the submit: still a
     /// sign-in wall, or an error page.
@@ -208,7 +204,6 @@ pub const Outcome = struct {
     errorPage: ?f64 = null,
     /// Model calls this took, so the cost is visible in the result.
     calls: u8 = 0,
-    /// Why nothing happened, when nothing did.
     reason: ?[]const u8 = null,
 };
 

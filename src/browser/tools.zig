@@ -624,7 +624,8 @@ pub const Tool = enum {
                     \\    "username": { "type": "string", "description": "The username, email or other identifier, as a $LP_* placeholder. Omit on a page that asks only for the password." },
                     \\    "usernameSelector": { "type": "string", "description": "Optional CSS selector of the identifier field, from an earlier call's result. Given with passwordSelector, the fields are filled with no model call." },
                     \\    "passwordSelector": { "type": "string", "description": "Optional CSS selector of the password field, from an earlier call's result. Must name an input[type=password]." },
-                    \\    "submitSelector": { "type": "string", "description": "Optional CSS selector of the control that submits the form. Without it, Enter is pressed in the filled field." }
+                    \\    "submitSelector": { "type": "string", "description": "Optional CSS selector of the control that submits the form. Without it, Enter is pressed in the filled field." },
+                    \\    "decideOnly": { "type": "boolean", "description": "Report which fields would be used and type nothing. For checking the picks on a page without sending credentials." }
                     \\  },
                     \\  "required": ["password"]
                     \\}
@@ -982,14 +983,20 @@ pub const ToolResult = struct {
     replay_args: ?[]const u8 = null,
     /// Set for the tools `Tool.reportsPageState` names.
     page_state: ?PageState = null,
-    /// Implies `is_error`; telemetry counts it as `invalid_params`.
-    invalid_params: bool = false,
-    /// Implies `is_error`. The REPL reads it to fall back to a chat model for
-    /// the tools that have a prompt form; every other caller just reports it.
-    needs_api_key: bool = false,
+    /// Set when a caller acts on an in-band failure's kind rather than only
+    /// reporting its text. Implies `is_error`.
+    failure: ?FailureKind = null,
+
+    pub const FailureKind = enum {
+        /// Telemetry counts it as `invalid_params`.
+        invalid_params,
+        /// The REPL falls back to a chat model for the tools that have a
+        /// prompt form; every other caller just reports it.
+        missing_api_key,
+    };
 
     fn invalidParams(text: []const u8) ToolResult {
-        return .{ .text = text, .is_error = true, .invalid_params = true };
+        return .{ .text = text, .is_error = true, .failure = .invalid_params };
     }
 };
 
@@ -1081,7 +1088,7 @@ pub fn call(
 
 fn telemetryOutcome(result: ToolError!ToolResult) TelemetryTool.Outcome {
     const r = result catch |err| return errorOutcome(err);
-    if (r.invalid_params) return .invalid_params;
+    if (r.failure == .invalid_params) return .invalid_params;
     return if (r.is_error) .is_error else .ok;
 }
 
@@ -1902,7 +1909,7 @@ fn execLinks(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
     }
     lp.links.registerNodes(links_list, registry) catch
         return ToolError.InternalError;
-    return renderJson(arena, links_list);
+    return renderJson(arena, links_list, .{});
 }
 
 fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1937,7 +1944,7 @@ fn execNodeDetails(arena: std.mem.Allocator, session: *lp.Session, registry: *No
         return ToolError.NodeNotFound;
     const st = lp.SemanticTree.init(arena, node.dom, registry, page, .{}) catch return ToolError.NodeNotFound;
     const details = st.nodeDetails() catch return ToolError.InternalError;
-    return renderJson(arena, &details);
+    return renderJson(arena, &details, .{});
 }
 
 fn execInteractiveElements(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1948,7 +1955,7 @@ fn execInteractiveElements(arena: std.mem.Allocator, session: *lp.Session, regis
         return ToolError.InternalError;
     lp.interactive.registerNodes(elements, registry) catch
         return ToolError.InternalError;
-    return renderJson(arena, elements);
+    return renderJson(arena, elements, .{});
 }
 
 fn execStructuredData(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1957,7 +1964,7 @@ fn execStructuredData(arena: std.mem.Allocator, session: *lp.Session, registry: 
 
     const data = lp.structured_data.collectStructuredData(page.document.asNode(), arena, page) catch
         return ToolError.InternalError;
-    return renderJson(arena, data);
+    return renderJson(arena, data, .{});
 }
 
 fn execDetectForms(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1968,7 +1975,7 @@ fn execDetectForms(arena: std.mem.Allocator, session: *lp.Session, registry: *No
         return ToolError.InternalError;
     lp.forms.registerNodes(forms_data, registry) catch
         return ToolError.InternalError;
-    return renderJson(arena, forms_data);
+    return renderJson(arena, forms_data, .{});
 }
 
 fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
@@ -2069,15 +2076,12 @@ fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
         presets: bool = false,
     };
     const args = try parseArgs(Params, arena, arguments);
-    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    const page = try requireFrame(session);
 
     const node = try resolveScope(session, registry, page, args.selector, null);
-    const prepared = prepare: {
-        const asked = lp.classify.prepareQuestions(arena, args.questions) catch |err| break :prepare err;
-        break :prepare if (args.presets) lp.classify.addPresets(arena, asked) else asked;
-    } catch |err| switch (err) {
+    const prepared = lp.classify.prepareQuestions(arena, args.questions, args.presets) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
-        else => return .{ .text = try std.fmt.allocPrint(arena, "classify: invalid questions: {s}", .{@errorName(err)}), .is_error = true },
+        else => return .{ .text = try arena.print("classify: invalid questions: {s}", .{@errorName(err)}), .is_error = true },
     };
 
     var response = switch (try askPage(arena, session, registry, .{
@@ -2090,7 +2094,7 @@ fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     };
     defer response.deinit();
 
-    const formatted = lp.classify.formatResponse(arena, response.value, prepared) catch |err| return internalUnlessOom(err);
+    const formatted = zenai.typesafe.json.formatAnswers(arena, response.value, prepared) catch |err| return internalUnlessOom(err);
 
     return .{ .text = formatted };
 }
@@ -2111,12 +2115,7 @@ const Ask = struct {
     questions: zenai.typesafe.Questions,
     /// The subtree the model is shown.
     node: *DOMNode,
-    /// Where each link goes. Worth the room it takes in the state only for a
-    /// question that can turn on it; `acceptCookies` and `login` cannot, and
-    /// a page of tracking URLs would crowd out the text that decides them.
-    link_urls: bool = true,
-    /// Number the nodes, for a question whose options are node ids.
-    ids: bool = false,
+    state: lp.jev.StateOpts = .{},
 };
 
 fn askPage(
@@ -2126,14 +2125,14 @@ fn askPage(
     ask: Ask,
 ) ToolError!Asked {
     const page = try requireFrame(session);
-    const state = lp.jev.buildState(arena, page, ask.node, registry, .{ .link_urls = ask.link_urls, .ids = ask.ids }) catch |err| return internalUnlessOom(err);
+    const state = lp.jev.buildState(arena, page, ask.node, registry, ask.state) catch |err| return internalUnlessOom(err);
 
     var detail: Failure = .{};
-    const response = session.browser.app.askTypesafe(arena, state, ask.questions, .{}, &detail) catch |err| switch (err) {
+    const response = session.browser.app.typesafe.ask(arena, state, ask.questions, .{}, &detail) catch |err| switch (err) {
         error.MissingApiKey => return .{ .failed = .{
             .text = arena.print("{s}: " ++ zenai.typesafe.env_var_name ++ " environment variable is not set", .{@tagName(ask.tool)}) catch return ToolError.OutOfMemory,
             .is_error = true,
-            .needs_api_key = true,
+            .failure = .missing_api_key,
         } },
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return .{ .failed = try apiFailed(arena, @tagName(ask.tool), err, detail) },
@@ -2155,25 +2154,17 @@ fn unusableAnswer(arena: std.mem.Allocator, tool: Tool, err: anyerror) ToolError
     };
 }
 
+/// Dropped rather than written as null, so a verdict reads as what happened
+/// rather than as every question that could have been answered.
+const compact: std.json.Stringify.Options = .{ .emit_null_optional_fields = false };
+
 /// A tool's own JSON verdict, with `reason` filled in when there is one to
-/// give. Unset fields are dropped, as the other JSON payloads drop theirs, so
-/// the verdict reads as what happened rather than as every question that
-/// could have been answered.
+/// give.
 fn verdict(arena: std.mem.Allocator, outcome: anytype, reason: ?[]const u8) ToolError!ToolResult {
     if (reason) |r| outcome.reason = r;
-    return .{ .text = try renderCompact(arena, outcome.*) };
+    return .{ .text = try renderJson(arena, outcome.*, compact) };
 }
 
-/// JSON with the unset fields left out, the way the other payloads leave
-/// theirs out.
-fn renderCompact(arena: std.mem.Allocator, value: anytype) ToolError![]const u8 {
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    std.json.Stringify.value(value, .{ .emit_null_optional_fields = false }, &aw.writer) catch
-        return ToolError.InternalError;
-    return aw.written();
-}
-
-/// How long to let the page react to a click before reading it again.
 const settle_timeout_ms: u32 = 2000;
 
 /// Let the page act on a click: a consent banner removes itself from a
@@ -2233,8 +2224,7 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
         .tool = .acceptCookies,
         .questions = questions,
         .node = page.document.asNode(),
-        .link_urls = false,
-        .ids = true,
+        .state = .{ .link_urls = false, .ids = true },
     })) {
         .failed => |result| return result,
         .ok => |ok| ok,
@@ -2264,6 +2254,7 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
         selectors.appendAssumeCapacity(selector);
     }
 
+    const verify_questions = try lp.consent.verifyQuestions(arena);
     for (tries.items, selectors.items) |scored, selector| {
         // Gone already, taken away by the click before this one.
         const target = resolveBySelector(session, selector) catch continue;
@@ -2277,9 +2268,9 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
 
         var verify = switch (try askPage(arena, session, registry, .{
             .tool = .acceptCookies,
-            .questions = try lp.consent.verifyQuestions(arena),
+            .questions = verify_questions,
             .node = (try requireFrame(session)).document.asNode(),
-            .link_urls = false,
+            .state = .{ .link_urls = false },
         })) {
             .failed => |result| return result,
             .ok => |ok| ok,
@@ -2298,11 +2289,10 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
     return consentVerdict(arena, &outcome, if (outcome.verified) null else "clicked, but the banner is still there");
 }
 
-/// The verdict, plus the control a replay should click straight away.
 fn consentVerdict(arena: std.mem.Allocator, outcome: *lp.consent.Outcome, reason: ?[]const u8) ToolError!ToolResult {
     var result = try verdict(arena, outcome, reason);
     if (outcome.selector) |selector| {
-        result.replay_args = try renderCompact(arena, .{ .selector = selector });
+        result.replay_args = try renderJson(arena, .{ .selector = selector }, compact);
     }
     return result;
 }
@@ -2355,8 +2345,7 @@ fn decideLogin(
         .tool = .login,
         .questions = questions,
         .node = page.document.asNode(),
-        .link_urls = false,
-        .ids = true,
+        .state = .{ .link_urls = false, .ids = true },
     })) {
         .failed => |result| return .{ .failed = result },
         .ok => |ok| ok,
@@ -2468,8 +2457,7 @@ fn execLogin(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
     return verifyLogin(arena, session, registry, &outcome);
 }
 
-/// Fill one field, resolved by selector, so what we did is what a replay
-/// repeats.
+/// By selector, so a replay repeats what we did.
 fn fillBySelector(
     session: *lp.Session,
     registry: *NodeRegistry,
@@ -2482,8 +2470,6 @@ fn fillBySelector(
     _ = try settleAction(session, registry, scope);
 }
 
-/// Click the sign-in control, or press Enter in the field when the form has
-/// none of its own.
 fn submitLogin(
     session: *lp.Session,
     registry: *NodeRegistry,
@@ -2522,7 +2508,7 @@ fn verifyLogin(
         .tool = .login,
         .questions = try lp.login.verifyQuestions(arena),
         .node = (try requireFrame(session)).document.asNode(),
-        .link_urls = false,
+        .state = .{ .link_urls = false },
     })) {
         .failed => |result| return result,
         .ok => |ok| ok,
@@ -2536,15 +2522,14 @@ fn verifyLogin(
     return loginVerdict(arena, outcome, if (outcome.loggedIn) null else "submitted, but the page still shows a sign-in form or an error");
 }
 
-/// The verdict, plus the fields and control a replay should use straight away.
 fn loginVerdict(arena: std.mem.Allocator, outcome: *lp.login.Outcome, reason: ?[]const u8) ToolError!ToolResult {
     var result = try verdict(arena, outcome, reason);
     if (outcome.passwordSelector != null or outcome.usernameSelector != null) {
-        result.replay_args = try renderCompact(arena, .{
+        result.replay_args = try renderJson(arena, .{
             .usernameSelector = outcome.usernameSelector,
             .passwordSelector = outcome.passwordSelector,
             .submitSelector = outcome.submitSelector,
-        });
+        }, compact);
     }
     return result;
 }
@@ -3162,7 +3147,7 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *No
 
     lp.interactive.registerNodes(matched, registry) catch
         return ToolError.InternalError;
-    return .{ .text = try renderJson(arena, matched) };
+    return .{ .text = try renderJson(arena, matched, .{}) };
 }
 
 const RegexLiteral = struct {
@@ -3309,10 +3294,8 @@ fn requireFrame(session: *lp.Session) ToolError!*lp.Frame {
     return session.currentFrame() orelse ToolError.FrameNotLoaded;
 }
 
-fn renderJson(arena: std.mem.Allocator, value: anytype) ToolError![]const u8 {
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    std.json.Stringify.value(value, .{}, &aw.writer) catch return ToolError.InternalError;
-    return aw.written();
+fn renderJson(arena: std.mem.Allocator, value: anytype, options: std.json.Stringify.Options) ToolError![]const u8 {
+    return std.json.Stringify.valueAlloc(arena, value, options) catch ToolError.InternalError;
 }
 
 fn ensurePage(session: *lp.Session, registry: *NodeRegistry, url: ?[:0]const u8, timeout: ?u32) ToolError!*lp.Frame {
@@ -4536,7 +4519,7 @@ test "acceptCookies: a missing key is reported so the REPL can ask a model inste
     const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
     try std.testing.expect(result.is_error);
     // What `/acceptCookies` reads to fall back to the prompt it used to send.
-    try std.testing.expect(result.needs_api_key);
+    try std.testing.expectEqual(.missing_api_key, result.failure);
     try std.testing.expect(std.mem.find(u8, result.text, zenai.typesafe.env_var_name) != null);
 }
 

@@ -51,7 +51,7 @@ const none_description = "Nothing on this page does that";
 /// model, and the options are the bulk of the request: 200 of them run to
 /// 13 KB against an 8 KB state. Over the budget, `overlay` decides who keeps
 /// a place.
-pub const max_options = 50;
+const max_options = 50;
 
 /// Longest accessible name worth sending: the model reads the whole of it in
 /// the state anyway.
@@ -102,11 +102,12 @@ pub fn collect(
             others -= 1;
         }
         const node = try registry.register(element.asNode());
+        const label = name(el);
         out.appendAssumeCapacity(.{
             .key = try arena.print("{d}", .{node.id}),
             .element = element,
-            .name = name(el),
-            .info = try describe(arena, el),
+            .name = label,
+            .info = try describe(arena, el, label),
         });
     }
     return out.items;
@@ -118,10 +119,9 @@ fn name(el: interactive.InteractiveElement) []const u8 {
 
 /// Keys follow the `interactiveElements` tool's, so one vocabulary describes
 /// an element whoever is reading.
-fn describe(arena: std.mem.Allocator, el: interactive.InteractiveElement) !std.json.Value {
+fn describe(arena: std.mem.Allocator, el: interactive.InteractiveElement, label: []const u8) !std.json.Value {
     var obj: std.json.ObjectMap = .empty;
     if (el.role) |role| try obj.put(arena, "role", .{ .string = role });
-    const label = name(el);
     if (label.len > 0) {
         try obj.put(arena, "name", .{ .string = truncateUtf8(label, max_name_bytes) });
     }
@@ -202,7 +202,7 @@ fn testCollect(html: []const u8) ![]const Candidate {
 
     // The option ids are copied into the arena, so the registry that minted
     // them is done once `collect` returns.
-    var registry: NodeRegistry = .init(std.testing.allocator);
+    var registry: NodeRegistry = .init(testing.allocator);
     defer registry.deinit();
     return collect(frame.call_arena, div.asNode(), frame, &registry);
 }
@@ -219,8 +219,8 @@ test "browser.choose: collect offers every interactive element by node id" {
 
     // The role-less div is offered too: what it is, is the model's call.
     try testing.expectEqual(3, candidates.len);
-    try std.testing.expectEqualStrings("Accept all cookies", candidates[0].name);
-    try std.testing.expectEqualStrings("Accept all cookies", candidates[0].info.object.get("name").?.string);
+    try testing.expectString("Accept all cookies", candidates[0].name);
+    try testing.expectString("Accept all cookies", candidates[0].info.object.get("name").?.string);
     try testing.expect(std.fmt.parseInt(NodeRegistry.Id, candidates[0].key, 10) catch null != null);
 }
 
@@ -233,17 +233,17 @@ test "browser.choose: collect describes a field with no label of its own" {
 
     try testing.expectEqual(2, candidates.len);
     const pw = candidates[0].info.object;
-    try std.testing.expectEqualStrings("password", pw.get("inputType").?.string);
-    try std.testing.expectEqualStrings("pw", pw.get("elementName").?.string);
+    try testing.expectString("password", pw.get("inputType").?.string);
+    try testing.expectString("pw", pw.get("elementName").?.string);
     try testing.expectEqual(null, pw.get("name"));
-    try std.testing.expectEqualStrings(
+    try testing.expectString(
         "you@example.com",
         candidates[1].info.object.get("placeholder").?.string,
     );
 }
 
 test "browser.choose: question offers every candidate plus none" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -258,11 +258,11 @@ test "browser.choose: question offers every candidate plus none" {
     try testing.expect(q.choice.criteria.has("11"));
     try testing.expect(q.choice.criteria.has("enter"));
     try testing.expect(q.choice.criteria.has(none_key));
-    try std.testing.expectEqualStrings("Which one?", q.choice.instructions.text);
+    try testing.expectString("Which one?", q.choice.instructions.text);
 }
 
 test "browser.choose: ranked drops the options none outranks" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -284,12 +284,12 @@ test "browser.choose: ranked drops the options none outranks" {
     const order = try ranked(aa, &candidates, response, questions, "pick");
     // 11 scored below "nothing here does that", so it is not a second guess.
     try testing.expectEqual(2, order.len);
-    try std.testing.expectEqualStrings("12", order[0].candidate.key);
-    try std.testing.expectEqualStrings("13", order[1].candidate.key);
+    try testing.expectString("12", order[0].candidate.key);
+    try testing.expectString("13", order[1].candidate.key);
 }
 
 test "browser.choose: ranked rejects an answer that is not the argmax" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -303,7 +303,7 @@ test "browser.choose: ranked rejects an answer that is not the argmax" {
         .{ .key = "11", .value = 0.2 },
         .{ .key = none_key, .value = 0.8 },
     });
-    try std.testing.expectError(error.ChoiceNotArgmax, ranked(aa, &candidates, response, questions, "pick"));
+    try testing.expectError(error.ChoiceNotArgmax, ranked(aa, &candidates, response, questions, "pick"));
 }
 
 /// A choice answer as the API would return it.
@@ -326,11 +326,11 @@ test "browser.choose: over the budget, a control over the page keeps its place" 
     defer testing.test_session.closeAllPages();
 
     var html: std.ArrayList(u8) = .empty;
-    defer html.deinit(std.testing.allocator);
+    defer html.deinit(testing.allocator);
     for (0..max_options + 10) |i| {
-        try html.print(std.testing.allocator, "<button>page {d}</button>", .{i});
+        try html.print(testing.allocator, "<button>page {d}</button>", .{i});
     }
-    try html.appendSlice(std.testing.allocator,
+    try html.appendSlice(testing.allocator,
         \\<div style="position: fixed"><button>Accept</button><button>Reject</button></div>
     );
 

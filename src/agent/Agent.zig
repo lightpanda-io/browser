@@ -776,7 +776,7 @@ fn runRepl(self: *Agent) void {
                 // still do it the long way, which is what the command did
                 // before the tool existed. Asking first rather than checking
                 // the key keeps the replay path, which needs no key at all.
-                if (result.needs_api_key) fallback: {
+                if (result.failure == .missing_api_key) fallback: {
                     const prompt = Command.fallbackPrompt(tc.tool) orelse break :fallback;
                     self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
                     if (!self.runPromptTurn(aa, tc.name(), prompt, line)) {
@@ -1194,7 +1194,6 @@ const PathAndMode = struct { path: []const u8, mode: save.Mode };
 
 const SavedCall = struct {
     selector: ?[]const u8 = null,
-    /// `ToolResult.replay_args`, kept for the recorder.
     replay_args: ?[]const u8 = null,
     navigated: bool = false,
 };

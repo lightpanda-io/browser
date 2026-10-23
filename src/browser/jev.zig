@@ -59,8 +59,9 @@ pub const Preset = enum {
 
     /// Accepts the camelCase name or its snake_case spelling.
     pub fn fromString(name: []const u8) ?Preset {
+        if (std.meta.stringToEnum(Preset, name)) |preset| return preset;
         inline for (comptime std.enums.values(Preset)) |preset| {
-            if (std.mem.eql(u8, name, @tagName(preset)) or std.mem.eql(u8, name, comptime snakeCase(@tagName(preset)))) return preset;
+            if (std.mem.eql(u8, name, comptime snakeCase(@tagName(preset)))) return preset;
         }
         return null;
     }
@@ -93,7 +94,7 @@ pub fn presetDescription(key: []const u8) ?[]const u8 {
     return preset.description();
 }
 
-/// Every preset as questions: what an empty questions object asks for.
+/// What an empty questions object asks for.
 pub fn allPresetQuestions(arena: std.mem.Allocator) error{OutOfMemory}!zenai.typesafe.Questions {
     return presetQuestions(arena, std.enums.values(Preset));
 }
@@ -122,7 +123,8 @@ pub fn presetQuestions(
     return .init(entries);
 }
 
-/// Most of the page `buildState` sends, in bytes.
+/// How much of the page `buildState` sends. The options budget in choose.zig
+/// is sized against it.
 const max_state_bytes = 8192;
 
 pub const StateOpts = struct {

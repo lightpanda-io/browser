@@ -85,9 +85,7 @@ pub const Outcome = struct {
     consentWallAfter: ?f64 = null,
     /// Controls clicked, at most 2.
     attempts: u8 = 0,
-    /// How many controls the question offered.
     candidates: ?usize = null,
-    /// Why nothing happened, when nothing did.
     reason: ?[]const u8 = null,
 };
 
