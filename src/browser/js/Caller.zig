@@ -18,7 +18,9 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
 const string = @import("../../string.zig");
+const ArenaAllocator = @import("../../ArenaAllocator.zig");
 
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
@@ -32,7 +34,6 @@ const TaggedOpaque = @import("TaggedOpaque.zig");
 
 const v8 = js.v8;
 const log = lp.log;
-const ArenaAllocator = std.heap.ArenaAllocator;
 const CALL_ARENA_RETAIN = 1024 * 16;
 const LOCAL_ARENA_RETAIN = 1024 * 16;
 
