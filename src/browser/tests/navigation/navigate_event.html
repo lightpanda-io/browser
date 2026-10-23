@@ -284,10 +284,12 @@
     navigation.addEventListener('navigatesuccess', onsuccess);
 
     const r = navigation.navigate('#n1', {info: 'I', state: {k: 1}});
+    let after;
     Promise.all([
       r.committed.then(() => order.push('committed')),
       r.finished.then(() => order.push('finished')),
     ]).then(() => {
+      after = [location.href, navigation.currentEntry.url];
       navigation.removeEventListener('navigate', onnavigate);
       navigation.removeEventListener('navigatesuccess', onsuccess);
       history.replaceState(null, '', original);
@@ -304,6 +306,8 @@
       testing.expectTrue(e.hashChange);
       testing.expectTrue(order.includes('navigatesuccess'));
       testing.expectEqual(order.indexOf('navigatesuccess') < order.indexOf('finished'), true);
+      const expected = new URL('#n1', original).href;
+      testing.expectEqual([expected, expected], after);
     });
   }
 </script>
