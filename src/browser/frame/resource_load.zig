@@ -130,8 +130,8 @@ pub fn beacon(frame: *Frame, in_flight: *usize, url: [:0]const u8, body: []const
 
     const load = try root._factory.create(BeaconLoad{
         .root = root,
-        .in_flight = in_flight,
         .size = body.len,
+        .in_flight = in_flight,
     });
     errdefer root._factory.destroy(load);
 
@@ -151,8 +151,6 @@ pub fn beacon(frame: *Frame, in_flight: *usize, url: [:0]const u8, body: []const
     }, &root._http_owner);
     {
         errdefer transfer.deinit();
-        // In the request's header list, as fetch()'s headers are, so the CORS
-        // gate weighs it for a preflight.
         if (content_type) |ct| {
             try transfer.setHeader("Content-Type", ct, .{ .source = .author });
         }
@@ -169,8 +167,8 @@ pub fn beacon(frame: *Frame, in_flight: *usize, url: [:0]const u8, body: []const
 // One in-flight beacon. Exactly one of done/error/shutdown runs.
 const BeaconLoad = struct {
     root: *Frame,
-    in_flight: *usize,
     size: usize,
+    in_flight: *usize,
 
     fn doneCallback(ctx: *anyopaque) !void {
         settle(ctx);
