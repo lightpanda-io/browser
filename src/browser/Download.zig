@@ -214,17 +214,19 @@ pub fn feed(self: *Download, bytes: []const u8) !void {
 /// The body was fully received.
 pub fn finish(self: *Download) void {
     defer self.report(.completed);
-    if (self.file) |file| {
-        file.close(lp.io);
-    }
+    self.closeFile();
 }
 
 /// The transfer failed partway. The partial file stays on disk for now.
 pub fn cancel(self: *Download) void {
     defer self.report(.canceled);
-    if (self.file) |file| {
-        file.close(lp.io);
-    }
+    self.closeFile();
+}
+
+fn closeFile(self: *Download) void {
+    const file = self.file orelse return;
+    file.close(lp.io);
+    self.file = null;
 }
 
 // Playwright only settles a download on a `completed` or `canceled`
@@ -386,8 +388,12 @@ fn urlBasename(arena: Allocator, url: []const u8) !?[]const u8 {
     var ptr: [*]const u8 = undefined;
     var len: usize = undefined;
     sys_url.url_get_path(u, &ptr, &len);
+    const path = ptr[0..len];
+    if (std.mem.startsWith(u8, path, "/") == false) {
+        return null;
+    }
 
-    const name = sanitizeFilename(ptr[0..len]) orelse return null;
+    const name = sanitizeFilename(path) orelse return null;
     return try arena.dupe(u8, name);
 }
 
@@ -419,4 +425,5 @@ test "Download: urlBasename" {
     try testing.expectEqualSlices(u8, "report.csv", (try urlBasename(a, "http://x.com/a/b/report.csv")).?);
     try testing.expectEqualSlices(u8, "report.csv", (try urlBasename(a, "http://x.com/report.csv?v=1#x")).?);
     try testing.expect((try urlBasename(a, "http://x.com/")) == null);
+    try testing.expect((try urlBasename(a, "data:text/csv,name%2Cvalue")) == null);
 }

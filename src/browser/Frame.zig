@@ -1910,10 +1910,14 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
             }
         },
         .raw, .image => |*buf| try buf.appendSlice(self.page_arena, data),
-        // A write failure fails the transfer, so no further chunk arrives;
-        // `frameErrorCallback` then reports the download canceled, as the
-        // `<a download>` path does. The partial file stays on disk for now.
-        .download => |*download| try download.feed(data),
+        .download => |*download| download.feed(data) catch {
+            // Like Chrome, a failed download doesn't fail the navigation:
+            // report it canceled, then let `done` commit the same empty
+            // document a finished download gets (see `.raw`). The partial
+            // file stays on disk for now.
+            download.cancel();
+            self._parse_state = .{ .raw = .empty };
+        },
         .pre => unreachable,
         .complete => unreachable,
         .err => unreachable,
