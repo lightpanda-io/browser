@@ -558,6 +558,14 @@ pub const MockJev = struct {
         return mock;
     }
 
+    /// Answers after a delay, so a test can see whether the caller kept its
+    /// own page running while it waited.
+    pub fn startSlow(arena: std.mem.Allocator) !MockJev {
+        const mock = try start(arena);
+        _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast(test_routes.slow_key), 1);
+        return mock;
+    }
+
     pub fn stop(_: MockJev) void {
         _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
         _ = unsetenv(@constCast(zenai.typesafe.base_url_env_var_name));

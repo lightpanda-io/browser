@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Ticking</title>
+  </head>
+  <body>
+    <h1>Headline</h1>
+    <p id="ticks">0</p>
+    <script>
+      setInterval(function () {
+        var ticks = document.getElementById("ticks");
+        ticks.textContent = String(Number(ticks.textContent) + 1);
+      }, 20);
+    </script>
+  </body>
+</html>

@@ -1218,7 +1218,12 @@ fn askPage(
     const state = lp.jev.buildState(arena, page, ask.node, registry, ask.state) catch |err| return internalUnlessOom(err);
 
     var detail: Failure = .{};
-    const response = session.browser.app.typesafe.ask(arena, state, ask.questions, .{}, &detail) catch |err| switch (err) {
+    // On a helper thread, pumping here until it answers: a blocking read on
+    // this thread stops the page's timers and leaves its transfers
+    // unserviced while curl's own timeout keeps counting against them.
+    const options: zenai.typesafe.types.AskOptions = .{};
+    const pool = &session.browser.app.typesafe;
+    const response = session.runPumped(zenai.typesafe.Pool.ask, .{ pool, arena, state, ask.questions, options, &detail }) catch |err| switch (err) {
         error.MissingApiKey => return .{ .failed = .{
             .text = arena.print("{s}: " ++ zenai.typesafe.env_var_name ++ " environment variable is not set", .{@tagName(ask.tool)}) catch return ToolError.OutOfMemory,
             .is_error = true,
@@ -1227,6 +1232,18 @@ fn askPage(
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return .{ .failed = try apiFailed(arena, @tagName(ask.tool), err, detail) },
     };
+
+    // Pumping runs the page's own scripts, and a navigation among them tears
+    // down the Page that every candidate element and node id points into (see
+    // `settleAction`). The answer describes a page that is no longer here.
+    const now = session.currentFrame();
+    if (now == null or now.? != page) {
+        registry.reset();
+        return .{ .failed = .{
+            .text = arena.print("{s}: the page navigated while the model was asked", .{@tagName(ask.tool)}) catch return ToolError.OutOfMemory,
+            .is_error = true,
+        } };
+    }
     return .{ .ok = response };
 }
 
@@ -3507,6 +3524,62 @@ test "login: Jev picks the identifier, the password field and the submit control
     try std.testing.expect(std.mem.find(u8, result.text, "\"passwordSelector\":\"#pass\"") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "\"submitSelector\":\"#submit\"") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") == null);
+}
+
+/// The counter `ticking.html` advances from a 20ms interval.
+fn tickCount(aa: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry) !u32 {
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#ticks"}
+    , .{});
+    const result = try call(aa, session, registry, "markdown", args, .{ .source = .user });
+    return std.fmt.parseInt(u32, std.mem.trim(u8, result.text, &std.ascii.whitespace), 10);
+}
+
+test "classify: the page is still serviced while the model is asked" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("ticking.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const jev = try testing.MockJev.startSlow(aa);
+    defer jev.stop();
+
+    const before = try tickCount(aa, page.session, &registry);
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"questions":{"isBlocked":true}}
+    , .{});
+    const result = try call(aa, page.session, &registry, "classify", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+
+    // Pumping gives the page a turn per quiet slice (250ms, see
+    // `Session.idleSlice`), so a 400ms answer buys it about two. Asking on
+    // this thread instead buys it none at all, whatever the interval.
+    const after = try tickCount(aa, page.session, &registry);
+    try std.testing.expect(after > before);
+}
+
+test "classify: a page that navigates while the model is asked is not answered for" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("late_redirect.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const jev = try testing.MockJev.startSlow(aa);
+    defer jev.stop();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"questions":{"isBlocked":true}}
+    , .{});
+    const result = try call(aa, page.session, &registry, "classify", args, .{ .source = .user });
+    try std.testing.expect(result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "navigated while the model was asked") != null);
+
+    const url = try call(aa, page.session, &registry, "getUrl", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, url.text, "consent_banner.html") != null);
 }
 
 test "acceptCookies: a click that moves the page stops the second guess" {
