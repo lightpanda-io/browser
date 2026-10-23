@@ -33,7 +33,13 @@ const Cookie = @This();
 
 const max_cookie_size = 4 * 1024;
 const max_cookie_header_size = 8 * 1024;
-const max_jar_size = 1024;
+
+// Chrome's limits (net/cookies/cookie_monster.cc): past `max_*` cookies in
+// the jar or for one site, `purge_*` are evicted.
+const max_cookies = 3300;
+const purge_cookies = 300;
+const max_domain_cookies = 180;
+const purge_domain_cookies = 30;
 
 arena: ArenaAllocator,
 name: []const u8,
@@ -53,6 +59,8 @@ same_site_default: bool = false,
 // replaces, so a site re-setting a cookie on every response can't keep it
 // "recently created" forever.
 creation_time: u64 = 0,
+// Seconds since the epoch. Set by Jar.add and updated by forRequest.
+last_access_time: u64 = 0,
 
 pub const SameSite = enum {
     strict,
@@ -668,14 +676,12 @@ pub const Jar = struct {
     ) !void {
         var cookie = new_cookie;
         cookie.creation_time = request_time;
+        cookie.last_access_time = request_time;
 
         // `add` takes ownership of `cookie` unconditionally on entry.
         var stored = false;
         defer if (!stored) cookie.deinit();
 
-        if (self.cookies.items.len >= max_jar_size) {
-            return error.CookieJarQuotaExceeded;
-        }
         if (cookie.value.len > max_cookie_size) {
             return error.CookieSizeExceeded;
         }
@@ -695,13 +701,7 @@ pub const Jar = struct {
             }
 
             if (is_expired) {
-                // Dispatch while c still points at the live old cookie,
-                // then free its arena, then remove from the array. After
-                // orderedRemove, items[i] holds a different (still-live)
-                // entry, so deinit must happen before that.
-                self.dispatchChange(.deleted, c);
-                c.deinit();
-                _ = self.cookies.orderedRemove(i);
+                self.remove(i);
             } else {
                 // RFC 6265bis 5.7 step 23: the replacement keeps the
                 // creation time of the cookie it replaces.
@@ -717,6 +717,13 @@ pub const Jar = struct {
         }
 
         if (!is_expired) {
+            // Chrome's CookieMonster::GarbageCollect, before the insert so the
+            // new cookie is never evicted: expired cookies go first, then the
+            // least recently accessed (RFC 6265bis 5.7).
+            self.removeExpired(request_time);
+            self.evict(cookie.domain, max_domain_cookies, purge_domain_cookies);
+            self.evict(null, max_cookies, purge_cookies);
+
             // keep it in send order: longest path then creation time.
             var pos = self.cookies.items.len;
             while (pos > 0 and sendsBefore(&cookie, &self.cookies.items[pos - 1])) {
@@ -765,6 +772,41 @@ pub const Jar = struct {
             }
         }
         return false;
+    }
+
+    // Past `max` cookies of `domain`'s site (of the jar when null), evicts
+    // the least recently accessed, non-Secure ones first, until `purge`
+    // fewer are left, counting the one being added.
+    fn evict(self: *Jar, domain: ?[]const u8, max: usize, purge: usize) void {
+        // A site can't be at `max` before the jar is.
+        if (self.cookies.items.len < max) return;
+
+        var count: usize = 0;
+        for (self.cookies.items) |*c| {
+            if (domain == null or areHostsSameSite(c.domain, domain.?)) count += 1;
+        }
+        if (count < max) return;
+        for (max - purge - 1..count) |_| {
+            var oldest: ?usize = null;
+            for (self.cookies.items, 0..) |*c, i| {
+                if (domain != null and !areHostsSameSite(c.domain, domain.?)) continue;
+                if (oldest) |o| {
+                    const b = &self.cookies.items[o];
+                    // RFC 6265bis 5.7 and Chrome: non-Secure cookies go first.
+                    const first = if (c.secure != b.secure) b.secure else c.last_access_time < b.last_access_time;
+                    if (!first) continue;
+                }
+                oldest = i;
+            }
+            self.remove(oldest.?);
+        }
+    }
+
+    fn remove(self: *Jar, index: usize) void {
+        const c = &self.cookies.items[index];
+        self.dispatchChange(.deleted, c);
+        c.deinit();
+        _ = self.cookies.orderedRemove(index);
     }
 
     fn dispatchChange(
@@ -825,6 +867,7 @@ pub const Jar = struct {
             if (!applies) {
                 continue;
             }
+            cookie.last_access_time = now;
 
             // we have a match!
             if (first) {
@@ -1097,39 +1140,104 @@ test "Jar: add limit" {
         .expires = null,
         .value = repeat("v", 4096) ++ "v",
     }, now, true));
+}
 
-    // generate unique names.
-    const names = comptime blk: {
-        @setEvalBranchQuota(max_jar_size * 10);
-        var result: [max_jar_size][]const u8 = undefined;
-        for (0..max_jar_size) |i| {
-            result[i] = repeat("v", i);
-        }
-        break :blk result;
-    };
+fn jarHas(jar: *const Jar, name: []const u8) bool {
+    for (jar.cookies.items) |*c| {
+        if (std.mem.eql(u8, c.name, name)) return true;
+    }
+    return false;
+}
 
-    // test the max number limit
-    for (names) |name| {
-        const c = Cookie{
-            .arena = std.heap.ArenaAllocator.init(testing.allocator),
-            .name = name,
-            .domain = "lightpanda.io",
-            .path = "/",
-            .expires = null,
-            .value = "v",
-        };
+test "Jar: past the limit of a site, the least recently accessed are evicted" {
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
 
-        try jar.add(c, now, true);
+    const now = lp.datetime.timestamp(.real);
+    var url_buf: [64]u8 = undefined;
+    var buf: [16]u8 = undefined;
+
+    // Another site's cookie, older than all, is not evicted for this one.
+    try jar.add(try Cookie.parse(testing.allocator, "http://lightpanda.dev/", "o=v"), now, true);
+
+    // Subdomains share lightpanda.io's limit. c1...c10 are Secure.
+    for (0..max_domain_cookies) |i| {
+        const url = try std.fmt.bufPrintSentinel(&url_buf, "http://s{d}.lightpanda.io/", .{i}, 0);
+        const set_cookie = try std.fmt.bufPrint(&buf, "c{d}=v{s}", .{ i, if (i > 0 and i <= 10) "; Secure" else "" });
+        try jar.add(try Cookie.parse(testing.allocator, url, set_cookie), now + 1 + i, true);
     }
 
-    try testing.expectError(error.CookieJarQuotaExceeded, jar.add(.{
-        .arena = std.heap.ArenaAllocator.init(testing.allocator),
-        .name = "last",
-        .domain = "lightpanda.io",
-        .path = "/",
-        .expires = null,
-        .value = "v",
-    }, now, true));
+    // Reading c0, the oldest, makes it the most recently accessed.
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try jar.forRequest("http://s0.lightpanda.io/", &aw.writer, .{
+        .is_http = true,
+        .origin_url = .{ .url = "http://s0.lightpanda.io/" },
+        .request_time = now + 1000,
+    });
+    try testing.expectEqual("c0=v", aw.written());
+
+    try jar.add(try Cookie.parse(testing.allocator, "http://lightpanda.io/", "new=v"), now + 1001, true);
+
+    // Down to 150 for lightpanda.io, the new cookie included: the 31 least
+    // recently accessed non-Secure cookies, c11...c41, go.
+    try testing.expectEqual(max_domain_cookies - purge_domain_cookies + 1, jar.cookies.items.len);
+    try testing.expectEqual(true, jarHas(&jar, "o"));
+    try testing.expectEqual(true, jarHas(&jar, "new"));
+    for (0..max_domain_cookies) |i| {
+        const name = try std.fmt.bufPrint(&buf, "c{d}", .{i});
+        try testing.expectEqual(i <= 10 or i > 41, jarHas(&jar, name));
+    }
+}
+
+test "Jar: past a limit, expired cookies are evicted first" {
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    const now = lp.datetime.timestamp(.real);
+    var buf: [32]u8 = undefined;
+
+    // The 10 most recent cookies expire first.
+    for (0..max_domain_cookies) |i| {
+        const set_cookie = try std.fmt.bufPrint(&buf, "c{d}=v{s}", .{ i, if (i >= 170) "; Max-Age=500" else "" });
+        try jar.add(try Cookie.parse(testing.allocator, test_url, set_cookie), now + i, true);
+    }
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "new=v"), now + 1000, true);
+
+    // Removing them is enough: nothing else goes.
+    try testing.expectEqual(max_domain_cookies - 10 + 1, jar.cookies.items.len);
+    for (0..max_domain_cookies) |i| {
+        const name = try std.fmt.bufPrint(&buf, "c{d}", .{i});
+        try testing.expectEqual(i < 170, jarHas(&jar, name));
+    }
+}
+
+test "Jar: past the limit of the jar, the least recently accessed are evicted" {
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    const now = lp.datetime.timestamp(.real);
+    var url_buf: [32]u8 = undefined;
+    var buf: [16]u8 = undefined;
+
+    // 100 cookies per site, under the limit of a site. c0...c9 are Secure.
+    for (0..max_cookies) |i| {
+        const url = try std.fmt.bufPrintSentinel(&url_buf, "http://d{d}.test/", .{i / 100}, 0);
+        const set_cookie = try std.fmt.bufPrint(&buf, "c{d}=v{s}", .{ i, if (i < 10) "; Secure" else "" });
+        try jar.add(try Cookie.parse(testing.allocator, url, set_cookie), now + i, true);
+    }
+
+    try jar.add(try Cookie.parse(testing.allocator, "http://new.test/", "new=v"), now + max_cookies, true);
+    try testing.expectEqual(max_cookies - purge_cookies, jar.cookies.items.len);
+    try testing.expectEqual(true, jarHas(&jar, "new"));
+    for (0..max_cookies) |i| {
+        const name = try std.fmt.bufPrint(&buf, "c{d}", .{i});
+        try testing.expectEqual(i < 10 or i > purge_cookies + 10, jarHas(&jar, name));
+    }
+
+    // Replacing a cookie evicts nothing.
+    try jar.add(try Cookie.parse(testing.allocator, "http://new.test/", "new=w"), now + max_cookies + 1, true);
+    try testing.expectEqual(max_cookies - purge_cookies, jar.cookies.items.len);
 }
 
 test "Jar: a non-secure origin can't set or overwrite a Secure cookie" {
