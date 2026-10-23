@@ -445,9 +445,7 @@ fn applySetter(current: [:0]const u8, allocator: Allocator, setter: anytype, arg
 }
 
 pub fn setProtocol(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    // The scheme ends at the first ':'
-    const scheme = value[0 .. std.mem.findScalar(u8, value, ':') orelse value.len];
-    return applySetter(current, allocator, U.url_set_scheme, .{ scheme.ptr, scheme.len });
+    return applySetter(current, allocator, U.url_set_scheme, .{ value.ptr, value.len });
 }
 
 pub fn setHost(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
@@ -458,24 +456,8 @@ pub fn setHostname(current: [:0]const u8, value: []const u8, allocator: Allocato
     return applySetter(current, allocator, U.url_set_hostname, .{ value.ptr, value.len });
 }
 
-pub fn setPort(current: [:0]const u8, value: ?[]const u8, allocator: Allocator) ![:0]const u8 {
-    const port_str = value orelse "";
-    if (port_str.len == 0) {
-        return applySetter(current, allocator, U.url_set_port_to_null, .{});
-    }
-    // Leading digits only ("8080abc" is 8080), after the URL parser's tab and
-    // newline removal; no digits or > 65535 is ignored.
-    var port: u32 = 0;
-    var digits: usize = 0;
-    for (port_str) |c| {
-        if (c == '\t' or c == '\n' or c == '\r') continue;
-        if (!std.ascii.isDigit(c)) break;
-        port = port * 10 + (c - '0');
-        if (port > std.math.maxInt(u16)) return current;
-        digits += 1;
-    }
-    if (digits == 0) return current;
-    return applySetter(current, allocator, U.url_set_port, .{@as(u16, @intCast(port))});
+pub fn setPort(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
+    return applySetter(current, allocator, U.url_set_port, .{ value.ptr, value.len });
 }
 
 pub fn setPathname(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
