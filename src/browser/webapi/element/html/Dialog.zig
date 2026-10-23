@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
@@ -25,6 +26,7 @@ const Factory = @import("../../../Factory.zig");
 const Event = @import("../../Event.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const popover = @import("../popover.zig");
 
 const HtmlElement = @import("../Html.zig");
 
@@ -33,7 +35,8 @@ const Dialog = @This();
 
 pub const Proto = HtmlElement;
 
-_pad: bool = false,
+// internal state, not reflected to an attribute
+_return_value: []const u8 = "",
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Dialog) *Element {
@@ -55,19 +58,27 @@ pub fn show(self: *Dialog, frame: *Frame) !void {
 }
 
 /// https://html.spec.whatwg.org/multipage/interactive-elements.html#dom-dialog-showmodal
-/// Throws InvalidStateError if [open] is already set. Sets [open] otherwise.
 /// Focus trap, backdrop, and top-layer placement are no-ops — Lightpanda has
 /// no layout/compositor; [open] reflecting through to selectors is what
 /// downstream consumers rely on.
 fn showModal(self: *Dialog, frame: *Frame) !void {
-    if (self.getOpen()) return error.InvalidStateError;
-    try self.asElement().setAttributeSafe(comptime .wrap("open"), .wrap(""), frame);
-    // Only a connected dialog joins its document's top layer. That's the
-    // dialog's own document, which isn't the caller's for a cross-frame call.
     const node = self.asNode();
-    if (node.isConnected()) {
-        try node.getDocument(frame)._modal_dialogs.append(frame.page_arena, self);
+    // The dialog's own document, which isn't the caller's for a cross-frame call.
+    const modal_dialogs = &node.getDocument(frame)._modal_dialogs;
+    if (self.getOpen()) {
+        if (std.mem.findScalar(*Dialog, modal_dialogs.items, self) != null) {
+            // no-op if already opend
+            return;
+        }
+        // error if opened non-modally
+        return error.InvalidStateError;
     }
+    if (node.isConnected() == false or popover.isOpen(self.asElement(), frame)) {
+        // invalid if disconnected or showing a popover
+        return error.InvalidStateError;
+    }
+    try self.asElement().setAttributeSafe(comptime .wrap("open"), .wrap(""), frame);
+    try modal_dialogs.append(frame.page_arena, self);
 }
 
 /// https://html.spec.whatwg.org/multipage/interactive-elements.html#close-requests
@@ -101,15 +112,25 @@ fn removeModal(element: *Element, frame: *Frame) void {
 
 /// https://html.spec.whatwg.org/multipage/interactive-elements.html#dom-dialog-close
 /// If [open] is unset, return. Otherwise remove [open], optionally update
-/// returnValue, and fire a `close` event (non-bubbling, non-cancelable).
+/// returnValue, and queue a `close` event (non-bubbling, non-cancelable).
 pub fn close(self: *Dialog, return_value: ?[]const u8, frame: *Frame) !void {
     if (!self.getOpen()) return;
     try self.asElement().removeAttribute(comptime .wrap("open"), frame);
     if (return_value) |v| {
-        try self.asElement().setAttributeSafe(comptime .wrap("returnvalue"), .wrap(v), frame);
+        try self.setReturnValue(v, frame);
     }
-    const event = try Event.init("close", .{ .bubbles = false, .cancelable = false }, frame.page);
-    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
+    try frame.queueElementEvent(Factory.protoOf(self), .close);
+}
+
+pub fn getReturnValue(self: *const Dialog) []const u8 {
+    return self._return_value;
+}
+
+pub fn setReturnValue(self: *Dialog, value: []const u8, frame: *Frame) !void {
+    if (std.mem.eql(u8, self._return_value, value)) {
+        return;
+    }
+    self._return_value = try frame.page_arena.dupe(u8, value);
 }
 
 pub fn getOpen(self: *const Dialog) bool {
@@ -141,7 +162,7 @@ pub const JsApi = struct {
     const reflect = Element.Reflect(Dialog);
 
     pub const open = reflect.boolean("open");
-    pub const returnValue = reflect.string("returnvalue");
+    pub const returnValue = bridge.accessor(Dialog.getReturnValue, Dialog.setReturnValue, .{});
 
     pub const show = bridge.function(Dialog.show, .{});
     pub const showModal = bridge.function(Dialog.showModal, .{});
@@ -162,7 +183,7 @@ test "WebApi: HTML.Dialog close request" {
     defer ls.deinit();
 
     // Each step runs its script, presses a trusted Escape when `press` is set,
-    // then compares the page's state() summary.
+    // runs the queued events, then compares the page's state() summary.
     const steps = [_]struct { []const u8, bool, []const u8 }{
         // The modal dialog closes; returnValue is left unchanged.
         .{ "reset(); A.returnValue = 'keep'; A.showModal()", true, "a:false b:false rv:keep| log:cancel@a,close@a!" },
@@ -189,6 +210,8 @@ test "WebApi: HTML.Dialog close request" {
         if (press) {
             try pressEscape(frame);
         }
+        // close is a queued event
+        try frame.js.scheduler.run();
         const actual = try (try ls.local.compileAndRun("state()", null)).toStringSliceWithAlloc(testing.arena_allocator);
         try testing.expectString(expected, actual);
     }
