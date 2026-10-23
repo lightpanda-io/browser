@@ -790,6 +790,25 @@ fn runRepl(self: *Agent) void {
                 self.terminal.beginTool(tc.name(), slash_split.?.rest);
                 const result = self.runCommand(aa, tc);
                 self.terminal.endTool();
+
+                // Jev settles these in one call. Without its key a model can
+                // still do it the long way, which is what the command did
+                // before the tool existed. Asking first rather than checking
+                // the key keeps the replay path, which needs no key at all.
+                if (result.needs_api_key) {
+                    if (Command.fallbackPrompt(tc.tool)) |prompt| {
+                        var label_buf: [32]u8 = undefined;
+                        const label = std.mem.print(&label_buf, "/{s}", .{tc.name()}) catch "/?";
+                        if (self.requireLlm(label)) {
+                            self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
+                            _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .capture_for_save = true, .label = label });
+                        } else {
+                            self.printCommandResult(tc, result);
+                        }
+                        continue :repl;
+                    }
+                }
+
                 self.printCommandResult(tc, result);
                 if (!result.is_error) {
                     const replayable = Command.fromToolCall(tc.tool, replayArgs(aa, tc.args, .{

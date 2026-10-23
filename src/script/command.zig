@@ -37,6 +37,30 @@ const logout_prompt =
     \\reappears).
 ;
 
+const login_prompt =
+    \\Find the login form on the current page. Fill in the credentials using
+    \\$LP_* placeholders — the substitution happens inside the Lightpanda
+    \\subprocess so the secret never enters your context. Do NOT call getEnv
+    \\with a credential name (it would return the value).
+    \\
+    \\Call getEnv with NO `name` argument first to see which LP_* variables
+    \\are set (names only, values never included). Then pick:
+    \\- Site-prefixed form (LP_<SITE>_<FIELD>) when the list shows one for
+    \\  the current site — e.g. $LP_HN_USERNAME for news.ycombinator.com,
+    \\  $LP_GH_TOKEN for github.com.
+    \\- Otherwise fall back to the unprefixed $LP_USERNAME / $LP_PASSWORD
+    \\  (or $LP_EMAIL) form.
+    \\
+    \\Handle any cookie banners or popups first, then submit the form by
+    \\clicking its submit button or pressing Enter in a filled field — there
+    \\is no dedicated submit tool.
+;
+
+const accept_cookies_prompt =
+    \\Find and dismiss the cookie consent banner on the current page.
+    \\Look for "Accept", "Accept All", "I agree", or similar buttons and click them.
+;
+
 pub const Command = union(enum) {
     tool_call: ToolCall,
     llm: LlmCommand,
@@ -170,6 +194,18 @@ pub const Command = union(enum) {
     /// Command to anything past the args' arena lifetime (e.g. heal, which
     /// reuses cmds after `RunToolsResult.deinit`) must deep-copy the arguments
     /// into their own arena before calling this.
+    /// How a model would drive a tool that asks Jev instead, for the REPL to
+    /// fall back to when there is no TypeSafe key. Not `LlmCommand` values:
+    /// the slash name has to reach the tool, and `parseDiag` resolves
+    /// `LlmCommand` first.
+    pub fn fallbackPrompt(tool: BrowserTool) ?[]const u8 {
+        return switch (tool) {
+            .acceptCookies => accept_cookies_prompt,
+            .login => login_prompt,
+            else => null,
+        };
+    }
+
     pub fn fromToolCall(tool: BrowserTool, arguments: ?std.json.Value) Command {
         return .{ .tool_call = .{ .tool = tool, .args = arguments } };
     }
