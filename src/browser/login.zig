@@ -46,8 +46,8 @@ const QuestionEntry = zenai.typesafe.QuestionEntry;
 const ChoiceEntry = zenai.typesafe.ChoiceEntry;
 
 /// The question ids, which also key the answers.
-pub const wall_key = @tagName(lp.classify.Preset.isLoginWall);
-pub const error_key = @tagName(lp.classify.Preset.isErrorPage);
+pub const wall_key = @tagName(lp.jev.Preset.isLoginWall);
+pub const error_key = @tagName(lp.jev.Preset.isErrorPage);
 pub const user_key = "userField";
 pub const password_key = "passwordField";
 pub const submit_key = "submit";
@@ -145,7 +145,7 @@ pub fn picks(
     // or nothing at all, and both come to the same act: Enter in the field.
     out.submit = first(try choose.ranked(arena, candidates, response, asked, submit_key));
     if (asked.has(multi_step_key)) {
-        out.multi_step = (response.noul(multi_step_key) orelse 0) >= lp.classify.gate;
+        out.multi_step = (response.noul(multi_step_key) orelse 0) >= lp.jev.gate;
     }
     return out;
 }
@@ -157,7 +157,7 @@ fn first(order: []const choose.Scored) ?choose.Candidate {
 /// The page after the submit: did the sign-in wall go, and did an error take
 /// its place.
 pub fn verifyQuestions(arena: std.mem.Allocator) error{OutOfMemory}!Questions {
-    return lp.classify.presetQuestions(arena, &.{ .isLoginWall, .isErrorPage });
+    return lp.jev.presetQuestions(arena, &.{ .isLoginWall, .isErrorPage });
 }
 
 /// `input[type=password]` and nothing else: the one place a password is

@@ -34,7 +34,7 @@ const Questions = zenai.typesafe.Questions;
 const QuestionEntry = zenai.typesafe.QuestionEntry;
 
 /// The question ids, which also key the answers.
-pub const wall_key = @tagName(lp.classify.Preset.isConsentWall);
+pub const wall_key = @tagName(lp.jev.Preset.isConsentWall);
 pub const control_key = "control";
 
 pub const Prefer = enum {
@@ -58,14 +58,14 @@ pub fn questions(
     prefer: Prefer,
 ) error{OutOfMemory}!Questions {
     const entries = try arena.alloc(QuestionEntry, 2);
-    entries[0] = lp.classify.presetQuestion(.isConsentWall);
+    entries[0] = lp.jev.presetQuestion(.isConsentWall);
     entries[1] = .{ .key = control_key, .value = try choose.question(arena, prefer.instructions(), candidates, &.{}) };
     return .init(entries);
 }
 
 /// Just the banner question, for the re-read that verifies a click.
 pub fn verifyQuestions(arena: std.mem.Allocator) error{OutOfMemory}!Questions {
-    return lp.classify.presetQuestions(arena, &.{.isConsentWall});
+    return lp.jev.presetQuestions(arena, &.{.isConsentWall});
 }
 
 /// What the tool reports. `dismissed` is what we did, `verified` is whether

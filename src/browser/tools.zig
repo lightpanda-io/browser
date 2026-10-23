@@ -584,7 +584,7 @@ pub const Tool = enum {
                 ),
             },
             .classify => .{
-                .description = "Classify the page or an element subtree using TypeSafe System One (Jev). `questions` is a JSON array of categories (returns the one that fits), or a JSON object of questions keyed by the name each answer comes back under: `true` for a preset (" ++ lp.classify.Preset.names ++ "; an empty object `{}` asks all of them), a string for a yes/no question (returns its probability), `{question, options}` for a choice, or `{question, levels}` for a score on 2-10 levels ordered low to high (returns the `score` between level indices, the nearest `level`, and per-level `probabilities`). A missing answer is null.",
+                .description = "Classify the page or an element subtree using TypeSafe System One (Jev). `questions` is a JSON array of categories (returns the one that fits), or a JSON object of questions keyed by the name each answer comes back under: `true` for a preset (" ++ lp.jev.Preset.names ++ "; an empty object `{}` asks all of them), a string for a yes/no question (returns its probability), `{question, options}` for a choice, or `{question, levels}` for a score on 2-10 levels ordered low to high (returns the `score` between level indices, the nearest `level`, and per-level `probabilities`). A missing answer is null.",
                 .summary = "Classify page state using semantic questions or presets",
                 .input_schema = minify(
                     \\{
@@ -2126,7 +2126,7 @@ fn askPage(
     ask: Ask,
 ) ToolError!Asked {
     const page = try requireFrame(session);
-    const state = lp.classify.buildState(arena, page, ask.node, registry, .{ .link_urls = ask.link_urls, .ids = ask.ids }) catch |err| return internalUnlessOom(err);
+    const state = lp.jev.buildState(arena, page, ask.node, registry, .{ .link_urls = ask.link_urls, .ids = ask.ids }) catch |err| return internalUnlessOom(err);
 
     var detail: Failure = .{};
     const response = session.browser.app.askTypesafe(arena, state, ask.questions, .{}, &detail) catch |err| switch (err) {
@@ -2242,7 +2242,7 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
     defer response.deinit();
 
     outcome.consentWall = response.value.noul(lp.consent.wall_key);
-    if ((outcome.consentWall orelse 0) < lp.classify.gate) {
+    if ((outcome.consentWall orelse 0) < lp.jev.gate) {
         return verdict(arena, &outcome, "those controls are not a consent banner");
     }
 
@@ -2287,7 +2287,7 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
         defer verify.deinit();
 
         outcome.consentWallAfter = verify.value.noul(lp.consent.wall_key);
-        if ((outcome.consentWallAfter orelse 1) < lp.classify.gate) {
+        if ((outcome.consentWallAfter orelse 1) < lp.jev.gate) {
             outcome.verified = true;
             break;
         }
@@ -2532,7 +2532,7 @@ fn verifyLogin(
 
     outcome.loginWall = response.value.noul(lp.login.wall_key);
     outcome.errorPage = response.value.noul(lp.login.error_key);
-    outcome.loggedIn = (outcome.loginWall orelse 1) < lp.classify.gate and (outcome.errorPage orelse 1) < lp.classify.gate;
+    outcome.loggedIn = (outcome.loginWall orelse 1) < lp.jev.gate and (outcome.errorPage orelse 1) < lp.jev.gate;
     return loginVerdict(arena, outcome, if (outcome.loggedIn) null else "submitted, but the page still shows a sign-in form or an error");
 }
 
