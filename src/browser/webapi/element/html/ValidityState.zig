@@ -86,8 +86,7 @@ fn getRangeOverflow(self: *const ValidityState) bool {
 
 fn getStepMismatch(self: *const ValidityState) bool {
     if (self.customFlags()) |flags| return flags.stepMismatch;
-    // Step matching is not implemented yet (PR #2280 begins step rounding for
-    // <input type=range>). Returning false keeps well-formed values valid.
+    if (self._owner.is(Input)) |input| return input.suffersStepMismatch();
     return false;
 }
 

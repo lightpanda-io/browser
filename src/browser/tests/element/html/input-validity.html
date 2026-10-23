@@ -313,3 +313,59 @@
     testing.expectEqual(false, $('#date-ok').checkValidity());
   }
 </script>
+
+<script id="step_mismatch">
+  {
+    const input = (type, attrs) => {
+      const i = document.createElement('input');
+      i.type = type;
+      for (const [k, v] of Object.entries(attrs)) i.setAttribute(k, v);
+      return i;
+    };
+    const odd = input('number', {step: '2'});
+    odd.value = '3';
+    testing.expectEqual(true, odd.validity.stepMismatch);
+    testing.expectEqual(false, odd.validity.valid);
+    testing.expectEqual(false, odd.checkValidity());
+    odd.value = '4';
+    testing.expectEqual(false, odd.validity.stepMismatch);
+
+    const fraction = input('number', {});
+    fraction.value = '1.5';
+    testing.expectEqual(true, fraction.validity.stepMismatch);
+
+    // The step base is min, then the value attribute.
+    const fromMin = input('number', {min: '1', step: '2'});
+    fromMin.value = '3';
+    testing.expectEqual(false, fromMin.validity.stepMismatch);
+    testing.expectEqual(false, input('number', {step: '2', value: '3'}).validity.stepMismatch);
+
+    const any = input('number', {step: 'any'});
+    any.value = '1.5';
+    testing.expectEqual(false, any.validity.stepMismatch);
+    const tenths = input('number', {step: '0.1'});
+    tenths.value = '0.3';
+    testing.expectEqual(false, tenths.validity.stepMismatch);
+    // Float error in a large value with a fractional step is not a mismatch.
+    const cents = input('number', {step: '0.01'});
+    cents.value = '1234567.89';
+    testing.expectEqual(false, cents.validity.stepMismatch);
+    testing.expectEqual(true, cents.checkValidity());
+    cents.value = '1000000000.01';
+    testing.expectEqual(false, cents.validity.stepMismatch);
+    cents.value = '1234567.891';
+    testing.expectEqual(true, cents.validity.stepMismatch);
+
+    const date = input('date', {step: '2'});
+    date.value = '2020-01-02';
+    testing.expectEqual(true, date.validity.stepMismatch);
+    const time = input('time', {});
+    time.value = '10:00:30';
+    testing.expectEqual(true, time.validity.stepMismatch);
+
+    const empty = input('number', {step: '2'});
+    testing.expectEqual(false, empty.validity.stepMismatch);
+    testing.expectEqual(false, input('text', {step: '2', value: '3'}).validity.stepMismatch);
+  }
+</script>
+
