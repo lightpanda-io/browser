@@ -346,6 +346,15 @@
     const tenths = input('number', {step: '0.1'});
     tenths.value = '0.3';
     testing.expectEqual(false, tenths.validity.stepMismatch);
+    // Float error in a large value with a fractional step is not a mismatch.
+    const cents = input('number', {step: '0.01'});
+    cents.value = '1234567.89';
+    testing.expectEqual(false, cents.validity.stepMismatch);
+    testing.expectEqual(true, cents.checkValidity());
+    cents.value = '1000000000.01';
+    testing.expectEqual(false, cents.validity.stepMismatch);
+    cents.value = '1234567.891';
+    testing.expectEqual(true, cents.validity.stepMismatch);
 
     const date = input('date', {step: '2'});
     date.value = '2020-01-02';
