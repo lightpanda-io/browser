@@ -8,6 +8,9 @@
   let async_capture = null;
   let current_script_id = null;
 
+  // set inside a testing.diverges() block when not in Lightpanda
+  let diverging = null;
+
   // can only have 1 async test per <script>, this tracks it
   let async_seen = new Set();
 
@@ -64,7 +67,15 @@
 
   function expectEqual(expected, actual, opts) {
     if (_equal(expected, actual)) {
+      if (diverging) {
+        _divergeMatched(_displayValue(actual), opts);
+        return;
+      }
       _registerObservation('ok', opts);
+      return;
+    }
+    if (diverging) {
+      _diverged(`expected: ${_displayValue(expected)}, got: ${_displayValue(actual)}`, opts);
       return;
     }
     failed = true;
@@ -78,6 +89,10 @@
   }
 
   function fail(reason) {
+    if (diverging) {
+      _diverged(reason);
+      return;
+    }
     failed = true;
     console.error(reason);
     throw new Error('testing.fail()');
@@ -86,6 +101,10 @@
   function expectError(expected, fn) {
     withError((err) => {
       if (!err.toString().includes(expected)) {
+        if (diverging) {
+          _diverged(`expected error to contain: ${expected}, was: ${err.toString()}`);
+          return;
+        }
         console.error(`Expecte error to contains: ${expected}, was: ${err.toString()}`);
         expectEqual(true, false);
       } else {
@@ -222,6 +241,57 @@
     return true;
   }
 
+  function diverges(reason, fn) {
+    if (!reason) {
+      throw new Error('testing.diverges() needs a reason');
+    }
+    if (IS_TEST_RUNNER) {
+      return _expectSync(fn());
+    }
+    if (diverging) {
+      throw new Error('testing.diverges() blocks cannot be nested');
+    }
+
+    diverging = {reason: reason, count: 0, matched: 0};
+    const state = diverging;
+    let result = null;
+    try {
+      result = fn();
+    } catch (err) {
+      _diverged(`threw ${err}`);
+    } finally {
+      diverging = null;
+    }
+    _expectSync(result);
+    if (state.count === 0 && state.matched === 0) {
+      failed = true;
+      _registerObservation('fail');
+      console.error(`testing.diverges() block made no checks: ${reason}\n  script_id: ${_currentScriptId()}`);
+    }
+  }
+
+  function _expectSync(result) {
+    if (result instanceof Promise) {
+      throw new Error('testing.diverges() callback must be synchronous');
+    }
+  }
+
+  // An expected difference counts as a passing observation, so a script made
+  // only of diverges() blocks isn't reported as having no assertions.
+  function _diverged(detail, opts) {
+    diverging.count += 1;
+    _registerObservation('ok', opts);
+    console.info(`diverges (${diverging.reason}): ${detail}\n  script_id: ${_currentScriptId()}`);
+  }
+
+  // Doesn't throw: fn's exceptions count as differences.
+  function _divergeMatched(detail, opts) {
+    diverging.matched += 1;
+    failed = true;
+    _registerObservation('fail', opts);
+    console.error(`testing.diverges() check passed, move it out of the block (${diverging.reason}): ${detail}\n  script_id: ${_currentScriptId()}`);
+  }
+
   // Brackets messages the browser itself logs (not console.* calls, so they
   // can't be silenced) for an expected error case. Folded into a collapsed
   // group so a clean run in Chrome/Firefox shows nothing unexpected.
@@ -255,6 +325,7 @@
   window.testing = {
     fail: fail,
     async: async,
+    diverges: diverges,
     assertOk: assertOk,
     expectTrue: expectTrue,
     expectFalse: expectFalse,
