@@ -117,7 +117,7 @@ pub fn getPort(self: *Anchor, frame: *Frame) ![]const u8 {
     return port;
 }
 
-fn setPort(self: *Anchor, value: ?[]const u8, frame: *Frame) !void {
+fn setPort(self: *Anchor, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setPort(href, value, frame.call_arena);
     try setHref(self, new_href, frame);

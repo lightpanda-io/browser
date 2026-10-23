@@ -69,72 +69,18 @@ pub fn canParse(url: []const u8, maybe_base: ?[]const u8) bool {
     return U.url_can_parse(url.ptr, url.len);
 }
 
-const EncodeSet = enum { path, query, query_legacy, userinfo, fragment, component };
-
-pub fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime encode_set: EncodeSet) ![]const u8 {
-    // Check if encoding is needed
-    var needs_encoding = false;
-    for (segment) |c| {
-        if (shouldPercentEncode(c, encode_set)) {
-            needs_encoding = true;
-            break;
-        }
-    }
-    if (!needs_encoding) {
-        // Always dupe — the signature returns owned bytes, so a caller doing
-        // `defer allocator.free(out)` mustn't crash on the no-op path.
-        return allocator.dupe(u8, segment);
-    }
-
-    var buf = try std.ArrayList(u8).initCapacity(allocator, segment.len + 10);
-
-    var i: usize = 0;
-    while (i < segment.len) : (i += 1) {
-        const c = segment[i];
-
-        // For URL-canonicalization sets, preserve existing %XX sequences so
-        // already-encoded inputs round-trip cleanly. The `component` set treats
-        // input as opaque and re-encodes `%` itself, since the caller is
-        // embedding raw user data and a literal '%' must not be misread.
-        if (encode_set != .component and c == '%' and i + 2 < segment.len) {
-            const end = i + 2;
-            const h1 = segment[i + 1];
-            const h2 = segment[end];
-            if (std.ascii.isHex(h1) and std.ascii.isHex(h2)) {
-                try buf.appendSlice(allocator, segment[i .. end + 1]);
-                i = end;
-                continue;
-            }
-        }
-
-        if (shouldPercentEncode(c, encode_set)) {
-            try buf.print(allocator, "%{X:0>2}", .{c});
-        } else {
-            try buf.append(allocator, c);
-        }
-    }
-
-    return buf.items;
+/// Percent-encodes everything but the RFC 3986 unreserved characters
+/// (A-Z a-z 0-9 - . _ ~), so raw data can be embedded as a query value.
+pub fn percentEncodeComponent(allocator: Allocator, value: []const u8) ![]const u8 {
+    var aw: std.Io.Writer.Allocating = try .initCapacity(allocator, value.len);
+    try std.Uri.Component.percentEncode(&aw.writer, value, isUnreserved);
+    return aw.written();
 }
 
-fn shouldPercentEncode(c: u8, comptime encode_set: EncodeSet) bool {
+fn isUnreserved(c: u8) bool {
     return switch (c) {
-        // Unreserved characters (RFC 3986)
-        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => false,
-        // sub-delims allowed in path/query but some must be encoded in userinfo/query_legacy/component
-        '!', '$', '\'', '(', ')', '*', '+', ',' => encode_set == .component,
-        // '&' and ';' must be encoded for legacy encoding (to preserve NCRs like &#nnnnn;)
-        // and for component encoding (so a value can't break out into a new param)
-        '&', ';' => encode_set == .userinfo or encode_set == .query_legacy or encode_set == .component,
-        '=' => encode_set == .userinfo or encode_set == .component,
-        // Separators: userinfo and component must encode these
-        '/', ':', '@' => encode_set == .userinfo or encode_set == .component,
-        // '?' is allowed in queries only
-        '?' => encode_set != .query and encode_set != .query_legacy,
-        // '#' is allowed in fragments only
-        '#' => encode_set != .fragment,
-        // Everything else needs encoding (including space)
-        else => true,
+        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
+        else => false,
     };
 }
 
@@ -445,9 +391,7 @@ fn applySetter(current: [:0]const u8, allocator: Allocator, setter: anytype, arg
 }
 
 pub fn setProtocol(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    // The scheme ends at the first ':'
-    const scheme = value[0 .. std.mem.findScalar(u8, value, ':') orelse value.len];
-    return applySetter(current, allocator, U.url_set_scheme, .{ scheme.ptr, scheme.len });
+    return applySetter(current, allocator, U.url_set_scheme, .{ value.ptr, value.len });
 }
 
 pub fn setHost(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
@@ -458,24 +402,8 @@ pub fn setHostname(current: [:0]const u8, value: []const u8, allocator: Allocato
     return applySetter(current, allocator, U.url_set_hostname, .{ value.ptr, value.len });
 }
 
-pub fn setPort(current: [:0]const u8, value: ?[]const u8, allocator: Allocator) ![:0]const u8 {
-    const port_str = value orelse "";
-    if (port_str.len == 0) {
-        return applySetter(current, allocator, U.url_set_port_to_null, .{});
-    }
-    // Leading digits only ("8080abc" is 8080), after the URL parser's tab and
-    // newline removal; no digits or > 65535 is ignored.
-    var port: u32 = 0;
-    var digits: usize = 0;
-    for (port_str) |c| {
-        if (c == '\t' or c == '\n' or c == '\r') continue;
-        if (!std.ascii.isDigit(c)) break;
-        port = port * 10 + (c - '0');
-        if (port > std.math.maxInt(u16)) return current;
-        digits += 1;
-    }
-    if (digits == 0) return current;
-    return applySetter(current, allocator, U.url_set_port, .{@as(u16, @intCast(port))});
+pub fn setPort(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
+    return applySetter(current, allocator, U.url_set_port, .{ value.ptr, value.len });
 }
 
 pub fn setPathname(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
