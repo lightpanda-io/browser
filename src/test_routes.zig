@@ -166,24 +166,7 @@ pub fn handle(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.eql(u8, path, "/v1/systemone")) {
-        const mock_resp =
-            \\{
-            \\  "model": "jev-latest",
-            \\  "answers": {
-            \\    "isBlocked": {"type": "noul", "noul": 0.95},
-            \\    "isCaptcha": {"type": "noul", "noul": 0.05},
-            \\    "is_blocked": {"type": "noul", "noul": 0.95},
-            \\    "__category": {"type": "choice", "choice": "product", "probabilities": {"product": 0.95, "catalog": 0.05}, "confidence": 0.95},
-            \\    "page_type": {"type": "choice", "choice": "product", "probabilities": {"product": 0.9, "catalog": 0.1}, "confidence": 0.9},
-            \\    "completeness": {"type": "score", "score": 1.8, "legend": {"0": "empty", "1": "partial", "2": "full"}, "probabilities": {"0": 0.05, "1": 0.1, "2": 0.85}, "confidence": 0.85}
-            \\  }
-            \\}
-        ;
-        return req.respond(mock_resp, .{
-            .extra_headers = &.{
-                .{ .name = "Content-Type", .value = "application/json" },
-            },
-        });
+        return systemOne(req, req_allocator);
     }
 
     if (std.mem.eql(u8, path, "/xhr/redirect")) {
@@ -1010,4 +993,143 @@ pub fn handle(req: *std.http.Server.Request) !void {
 
     std.debug.print("TestHTTPServer was asked to serve an unknown file: {s}\n", .{path});
     return req.respond("not found", .{ .status = .not_found });
+}
+
+// A stand-in for TypeSafe System One. `classify` asserts exact answers for
+// names it knows, so those come from a fixed body that deliberately leaves
+// most presets unanswered. `acceptCookies` and `login` cannot: their choices
+// are keyed by registry node ids, which differ per run, so an answer has to be
+// built from the request that asked.
+fn systemOne(req: *std.http.Server.Request, arena: std.mem.Allocator) !void {
+    const classify_answers =
+        \\{
+        \\  "model": "jev-latest",
+        \\  "answers": {
+        \\    "isBlocked": {"type": "noul", "noul": 0.95},
+        \\    "isCaptcha": {"type": "noul", "noul": 0.05},
+        \\    "is_blocked": {"type": "noul", "noul": 0.95},
+        \\    "__category": {"type": "choice", "choice": "product", "probabilities": {"product": 0.95, "catalog": 0.05}, "confidence": 0.95},
+        \\    "page_type": {"type": "choice", "choice": "product", "probabilities": {"product": 0.9, "catalog": 0.1}, "confidence": 0.9},
+        \\    "completeness": {"type": "score", "score": 1.8, "legend": {"0": "empty", "1": "partial", "2": "full"}, "probabilities": {"0": 0.05, "1": 0.1, "2": 0.85}, "confidence": 0.85}
+        \\  }
+        \\}
+    ;
+    const json_header: []const std.http.Header = &.{.{ .name = "Content-Type", .value = "application/json" }};
+
+    var body_buf: [64 * 1024]u8 = undefined;
+    const body = if (req.head.method.requestHasBody())
+        try req.readerExpectNone(&body_buf).allocRemaining(arena, .limited(body_buf.len))
+    else
+        "";
+
+    const asked = blk: {
+        const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{}) catch
+            break :blk null;
+        const questions = parsed.object.get("questions") orelse break :blk null;
+        break :blk switch (questions) {
+            .object => |o| o,
+            else => null,
+        };
+    } orelse return req.respond(classify_answers, .{ .extra_headers = json_header });
+
+    const answers = try decideLikeJev(arena, asked) orelse
+        return req.respond(classify_answers, .{ .extra_headers = json_header });
+    return req.respond(answers, .{ .extra_headers = json_header });
+}
+
+/// The answer body for a consent or sign-in request, or null when the request
+/// is neither and the fixed body should serve it.
+fn decideLikeJev(arena: std.mem.Allocator, asked: std.json.ObjectMap) !?[]const u8 {
+    var deciding = false;
+    var verifying = true;
+    var it = asked.iterator();
+    while (it.next()) |entry| {
+        if (hintFor(entry.key_ptr.*) != null) deciding = true;
+        if (!isWallPreset(entry.key_ptr.*)) verifying = false;
+    }
+    // A verification re-read asks the wall presets alone, and by then the
+    // fixture has taken the banner away or signed in.
+    if (!deciding and !(verifying and asked.count() <= 2)) return null;
+
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(arena, "{\"model\":\"jev-latest\",\"answers\":{");
+    var first = true;
+    it = asked.iterator();
+    while (it.next()) |entry| {
+        const kind = switch (entry.value_ptr.*) {
+            .object => |o| switch (o.get("type") orelse continue) {
+                .string => |s| s,
+                else => continue,
+            },
+            else => continue,
+        };
+        if (!first) try out.appendSlice(arena, ",");
+        first = false;
+        const key = entry.key_ptr.*;
+        if (std.mem.eql(u8, kind, "choice")) {
+            const criteria = entry.value_ptr.object.get("criteria");
+            const pick = pickOption(arena, criteria, hintFor(key)) orelse "none";
+            const options: std.json.ObjectMap = switch (criteria orelse .null) {
+                .object => |o| o,
+                else => .empty,
+            };
+            // The answer is rejected unless its probabilities cover exactly
+            // the options offered and sum to 1.
+            const chosen: f64 = if (options.count() <= 1) 1 else 0.9;
+            const share = (1 - chosen) / @as(f64, @floatFromInt(@max(options.count(), 2) - 1));
+            try out.print(arena, "\"{s}\":{{\"type\":\"choice\",\"choice\":\"{s}\",\"probabilities\":{{", .{ key, pick });
+            var option = options.iterator();
+            var first_option = true;
+            while (option.next()) |o| {
+                if (!first_option) try out.appendSlice(arena, ",");
+                first_option = false;
+                const p_value: f64 = if (std.mem.eql(u8, o.key_ptr.*, pick)) chosen else share;
+                try out.print(arena, "\"{s}\":{d}", .{ o.key_ptr.*, p_value });
+            }
+            try out.appendSlice(arena, "},\"confidence\":0.9}");
+        } else {
+            // Only the wall question answers yes, and only while deciding:
+            // the fixture is a single-step form, not a multi-step one.
+            const noul: f64 = if (deciding and isWallPreset(key)) 0.95 else 0.05;
+            try out.print(arena, "\"{s}\":{{\"type\":\"noul\",\"noul\":{d}}}", .{ key, noul });
+        }
+    }
+    try out.appendSlice(arena, "}}");
+    return out.items;
+}
+
+fn isWallPreset(key: []const u8) bool {
+    return std.mem.eql(u8, key, "isConsentWall") or std.mem.eql(u8, key, "isLoginWall") or
+        std.mem.eql(u8, key, "isErrorPage");
+}
+
+/// What a question is looking for, as a word its option's description carries.
+fn hintFor(key: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, key, "control")) return "accept";
+    if (std.mem.eql(u8, key, "userField")) return "user";
+    if (std.mem.eql(u8, key, "passwordField")) return "password";
+    if (std.mem.eql(u8, key, "submit")) return "sign";
+    return null;
+}
+
+/// The first option whose description mentions the hint — a stand-in for the
+/// model's judgment, so the test exercises the question and answer plumbing
+/// rather than a canned node id.
+fn pickOption(arena: std.mem.Allocator, criteria: ?std.json.Value, hint: ?[]const u8) ?[]const u8 {
+    const options = switch (criteria orelse return null) {
+        .object => |o| o,
+        else => return null,
+    };
+    var fallback: ?[]const u8 = null;
+    var it = options.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        if (std.mem.eql(u8, key, "none") or std.mem.eql(u8, key, "enter")) continue;
+        if (fallback == null) fallback = key;
+        const wanted = hint orelse return key;
+        const described = std.json.Stringify.valueAlloc(arena, entry.value_ptr.*, .{}) catch continue;
+        const lowered = std.ascii.allocLowerString(arena, described) catch continue;
+        if (std.mem.find(u8, lowered, wanted) != null) return key;
+    }
+    return fallback;
 }
