@@ -27,15 +27,17 @@
   }
 </script>
 
-<script id=text_decoder_stream_invalid_label>
+<script id=text_decoder_stream_labels>
   {
-    let errorThrown = false;
-    try {
-      new TextDecoderStream('windows-1252');
-    } catch (e) {
-      errorThrown = true;
-    }
-    testing.expectEqual(true, errorThrown);
+    // Any encoding a TextDecoder supports, with its lowercase name.
+    testing.expectEqual('windows-1252', new TextDecoderStream('latin1').encoding);
+    testing.expectEqual('utf-16le', new TextDecoderStream('UTF-16').encoding);
+    testing.expectEqual('shift_jis', new TextDecoderStream('sjis').encoding);
+    testing.expectEqual('gbk', new TextDecoderStream('gb2312').encoding);
+
+    testing.expectError('RangeError', () => new TextDecoderStream('nope'));
+    // A label of the replacement encoding can't decode.
+    testing.expectError('RangeError', () => new TextDecoderStream('iso-2022-kr'));
   }
 </script>
 
@@ -79,4 +81,86 @@
     const result2 = await reader.read();
     testing.expectEqual(true, result2.done);
   })();
+</script>
+
+
+<script id=text_decoder_stream_chunks type=module>
+  const state = await testing.async();
+
+  // Writes the chunks, then closes: the strings read, or the error's name.
+  async function decode(chunks, label, opts) {
+    const tds = new TextDecoderStream(label, opts);
+    const writer = tds.writable.getWriter();
+    const reader = tds.readable.getReader();
+    for (const chunk of chunks) {
+      writer.write(chunk).catch(() => {});
+    }
+    writer.close().catch(() => {});
+    const out = [];
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return out;
+        out.push(value);
+      }
+    } catch (e) {
+      return e.name;
+    }
+  }
+  const bytes = (...b) => new Uint8Array(b);
+
+  const results = {
+    // A character split across chunks decodes once complete.
+    split: await decode([bytes(0xE2, 0x82), bytes(0xAC, 0x61)]),
+    // So does a BOM, which is stripped unless ignoreBOM.
+    split_bom: await decode([bytes(0xEF), bytes(0xBB, 0xBF, 0x61)]),
+    kept_bom: await decode([bytes(0xEF, 0xBB, 0xBF, 0x61)], 'utf-8', { ignoreBOM: true }),
+    // Only a leading BOM.
+    second_bom: await decode([bytes(0x61), bytes(0xEF, 0xBB, 0xBF)]),
+    utf16: await decode([bytes(0xFF, 0xFE, 0x61, 0x00, 0x62), bytes(0x00)], 'utf-16le'),
+    utf16be: await decode([bytes(0x00, 0x61, 0x00), bytes(0x62)], 'utf-16be'),
+    windows1252: await decode([bytes(0x80, 0x41)], 'windows-1252'),
+    shift_jis: await decode([bytes(0x82), bytes(0xA0)], 'shift_jis'),
+    // An ArrayBuffer and any view, of a SharedArrayBuffer too.
+    sources: await decode([bytes(0x61).buffer, new DataView(bytes(0x62).buffer), new Uint16Array([0x6463])]),
+    shared: await decode([new Uint8Array(new SharedArrayBuffer(1)).fill(0x61)]),
+    // What's left of a split character at the end is U+FFFD.
+    truncated: await decode([bytes(0x61, 0xE2, 0x82)]),
+    invalid: await decode([bytes(0x61, 0xFF, 0x62)]),
+    fatal_invalid: await decode([bytes(0x61), bytes(0xFF)], 'utf-8', { fatal: true }),
+    fatal_truncated: await decode([bytes(0xE2, 0x82)], 'utf-8', { fatal: true }),
+    fatal_split: await decode([bytes(0xE2), bytes(0x82, 0xAC)], 'utf-8', { fatal: true }),
+    string_chunk: await decode(['a']),
+    number_chunk: await decode([bytes(0x61), 1]),
+  };
+
+  // A rejected write rejects the next ones too, with the same TypeError.
+  const tds = new TextDecoderStream('utf-8', { fatal: true });
+  const writer = tds.writable.getWriter();
+  tds.readable.getReader().read().catch(() => {});
+  const first = await writer.write(bytes(0xFF)).catch((e) => e);
+  const second = await writer.write(bytes(0x61)).catch((e) => e);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['\u20ACa'], results.split);
+    testing.expectEqual(['a'], results.split_bom);
+    testing.expectEqual(['\uFEFFa'], results.kept_bom);
+    testing.expectEqual(['a', '\uFEFF'], results.second_bom);
+    testing.expectEqual(['a', 'b'], results.utf16);
+    testing.expectEqual(['a', 'b'], results.utf16be);
+    testing.expectEqual(['\u20ACA'], results.windows1252);
+    testing.expectEqual(['\u3042'], results.shift_jis);
+    testing.expectEqual(['a', 'b', 'cd'], results.sources);
+    testing.expectEqual(['a'], results.shared);
+    testing.expectEqual(['a', '\uFFFD'], results.truncated);
+    testing.expectEqual(['a\uFFFDb'], results.invalid);
+    testing.expectEqual('TypeError', results.fatal_invalid);
+    testing.expectEqual('TypeError', results.fatal_truncated);
+    testing.expectEqual(['\u20AC'], results.fatal_split);
+    testing.expectEqual('TypeError', results.string_chunk);
+    testing.expectEqual('TypeError', results.number_chunk);
+    testing.expectEqual('TypeError', first.name);
+    testing.expectEqual(true, first === second);
+  });
 </script>
