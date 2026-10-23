@@ -402,8 +402,8 @@ pub fn fireNavigateEvent(self: *Navigation, params: NavigateEventParams, frame: 
         .info = if (params.info) |info| try info.persist() else null,
         .sourceElement = params.source_element,
     }, frame);
-    event.acquireRef();
-    defer event.releaseRef(frame.page);
+    event.asEvent().acquireRef();
+    defer event.asEvent().releaseRef(frame.page);
 
     frame._ongoing_navigate = .{
         .signal = signal,

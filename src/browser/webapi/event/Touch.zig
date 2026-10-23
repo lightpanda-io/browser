@@ -17,17 +17,19 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 const EventTarget = @import("../EventTarget.zig");
 
 // https://w3c.github.io/touch-events/#idl-def-touch
 //
-// Allocated by the frame's factory, so it lives as long as the frame: a Touch
-// can be shared by any number of TouchLists, of trusted events and of events
-// the page builds, and none of them owns it.
+// Shared by any number of events (trusted or built by the page), so it's
+// reference counted: its JS wrapper and each TouchEvent list it's in hold a ref.
 const Touch = @This();
 
+_rc: lp.RC = .{},
 // EventTarget, not Element, per spec, and because dispatch retargets a trusted
 // touch's target across shadow boundaries the same way it retargets
 // Event.target (see TouchEvent.touchTargetPtr / EventManager's AdjustedTargets).
@@ -102,6 +104,18 @@ pub fn initTrusted(target: *EventTarget, point: Point, frame: *Frame) !*Touch {
         ._screen_x = point.x,
         ._screen_y = point.y,
     });
+}
+
+pub fn deinit(self: *Touch, page: *Page) void {
+    page.factory.destroy(self);
+}
+
+pub fn acquireRef(self: *Touch) void {
+    self._rc.acquire();
+}
+
+pub fn releaseRef(self: *Touch, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 fn getIdentifier(self: *const Touch) i32 {

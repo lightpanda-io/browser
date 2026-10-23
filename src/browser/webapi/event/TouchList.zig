@@ -23,8 +23,7 @@ const Touch = @import("Touch.zig");
 const TouchEvent = @import("TouchEvent.zig");
 
 // One of a TouchEvent's touches, targetTouches or changedTouches. It's in the
-// event's arena and keeps the event alive; the touches live as long as their
-// frame (see Touch).
+// event's arena and keeps the event alive, which keeps its touches alive.
 const TouchList = @This();
 
 _event: *TouchEvent,

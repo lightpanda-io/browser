@@ -172,8 +172,28 @@ pub fn acquireRef(self: *Event) void {
     self._rc.acquire();
 }
 
-pub fn deinit(self: *Event, _: *Page) void {
+pub fn deinit(self: *Event, page: *Page) void {
+    deinitSubtypes(self, page);
     self._arena.release();
+}
+
+fn deinitSubtypes(value: anytype, page: *Page) void {
+    const T = @typeInfo(@TypeOf(value)).pointer.child;
+    if (T != Event and (@hasDecl(T, "acquireRef") or @hasDecl(T, "releaseRef"))) {
+        @compileError(@typeName(T) ++ " must not define acquireRef/releaseRef: the RC is Event's; put cleanup in deinit");
+    }
+    if (@hasField(T, "_type")) {
+        switch (value._type) {
+            inline else => |child| {
+                if (@typeInfo(@TypeOf(child)) == .pointer) {
+                    deinitSubtypes(child, page);
+                }
+            },
+        }
+    }
+    if (T != Event and @hasDecl(T, "deinit")) {
+        value.deinit(page);
+    }
 }
 
 pub fn releaseRef(self: *Event, page: *Page) void {
@@ -506,3 +526,21 @@ pub const JsApi = struct {
 };
 
 // tested in event_target
+
+const testing = @import("../../testing.zig");
+test "WebApi: Event subtype cleanup runs when dispatch drops the last ref" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // onerror gets the ErrorEvent's fields, not the event, so no JS wrapper
+    // ever holds the event: the Zig side drops the last reference.
+    _ = try ls.local.exec("window.onerror = () => true;", null);
+    const before = frame.page.globals.list.items.len;
+    _ = try ls.local.exec("for (let i = 0; i < 10; i++) reportError(new Error('x'));", null);
+    try testing.expectEqual(before, frame.page.globals.list.items.len);
+}
