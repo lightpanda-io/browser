@@ -28,7 +28,6 @@ const lp = @import("../lightpanda.zig");
 const zenai = @import("zenai");
 
 const choose = @import("choose.zig");
-const Frame = lp.Frame;
 
 const Questions = zenai.typesafe.Questions;
 const QuestionEntry = zenai.typesafe.QuestionEntry;

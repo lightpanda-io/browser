@@ -29,7 +29,7 @@ const Tool = tools.Tool;
 const testing = @import("../../testing.zig");
 const log = lp.log;
 
-pub const ParseArgsError = error{ OutOfMemory, InvalidParams };
+const ParseArgsError = error{ OutOfMemory, InvalidParams };
 
 /// Names the first required argument absent from the call, so a bare
 /// `InvalidParams` from `parseValue` doesn't hide which field to add — a
