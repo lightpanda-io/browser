@@ -36,7 +36,6 @@ const zenai = @import("zenai");
 
 const choose = @import("choose.zig");
 const interactive = @import("interactive.zig");
-const DOMNode = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const Form = @import("webapi/element/html/Form.zig");
 const Frame = lp.Frame;
@@ -51,7 +50,7 @@ pub const error_key = @tagName(lp.jev.Preset.isErrorPage);
 pub const user_key = "userField";
 pub const password_key = "passwordField";
 pub const submit_key = "submit";
-pub const multi_step_key = "isMultiStep";
+const multi_step_key = "isMultiStep";
 
 /// The one submit option that is not an element.
 pub const enter_key = "enter";

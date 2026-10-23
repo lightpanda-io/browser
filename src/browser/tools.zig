@@ -48,10 +48,6 @@ const lookupLpEnv = marshal.lookupLpEnv;
 pub const search = @import("tools/search.zig");
 
 const log = lp.log;
-const tavily = zenai.search.tavily;
-const brave = zenai.search.brave;
-const exa = zenai.search.exa;
-const keenable = zenai.search.keenable;
 
 pub const driver_guidance = prompts.driver_guidance;
 pub const save_synthesis_prompt = prompts.save_synthesis_prompt;
@@ -363,7 +359,7 @@ pub const ToolResult = struct {
     /// reporting its text. Implies `is_error`.
     failure: ?FailureKind = null,
 
-    pub const FailureKind = enum {
+    const FailureKind = enum {
         /// Telemetry counts it as `invalid_params`.
         invalid_params,
         /// The REPL falls back to a chat model for the tools that have a
