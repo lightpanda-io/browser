@@ -82,7 +82,7 @@ fn getNamedCookie(_: *const WebDriver, name: []const u8, frame: *Frame) ?WebDriv
     }
 
     jar.removeExpired(null);
-    for (jar.cookies.items) |*cookie| {
+    for (jar.siteCookies(target.host)) |*cookie| {
         if (cookie.appliesTo(&target, .{ .same_site = true, .is_http = true, .kind = .navigation }) == false) {
             continue;
         }

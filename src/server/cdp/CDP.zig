@@ -1830,14 +1830,15 @@ test "cdp: --cookie-jar saves on dispose and --cookie loads it back" {
     {
         // no file yet: the context starts with an empty jar
         const bc = try ctx.loadBrowserContext(.{});
-        try testing.expectEqual(0, bc.session.cookie_jar.cookies.items.len);
+        try testing.expectEqual(0, bc.session.cookie_jar.len);
         try bc.session.cookie_jar.populateFromResponse("https://example.com/", "sid=abc; Path=/; Max-Age=3600; HttpOnly");
         ctx.cdp().disposeBrowserContext();
     }
 
     // a new context (a reconnect, or a restart) starts logged in
     const bc = try ctx.loadBrowserContext(.{});
-    const cookies = bc.session.cookie_jar.cookies.items;
-    try testing.expectEqual(1, cookies.len);
-    try testing.expectEqualSlices(u8, "abc", cookies[0].value);
+    const jar = &bc.session.cookie_jar;
+    try testing.expectEqual(1, jar.len);
+    var it = jar.iterator();
+    try testing.expectEqualSlices(u8, "abc", it.next().?.value);
 }

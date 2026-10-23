@@ -865,7 +865,7 @@ fn getAllCookies(cmd: *BiDi.Command) !void {
 
     const associated: storage.Associated = .init(frame.url, null);
     var cookies: std.ArrayList(storage.HttpCookie) = .empty;
-    for (jar.cookies.items) |*cookie| {
+    for (jar.siteCookies(associated.url.host)) |*cookie| {
         if (associated.has(cookie)) {
             try cookies.append(cmd.arena, .{ .cookie = cookie });
         }
@@ -883,7 +883,7 @@ fn getNamedCookie(cmd: *BiDi.Command, p: CookieName) !void {
     jar.removeExpired(null);
 
     const associated: storage.Associated = .init(frame.url, p.name);
-    for (jar.cookies.items) |*cookie| {
+    for (jar.siteCookies(associated.url.host)) |*cookie| {
         if (associated.has(cookie)) {
             return cmd.sendResult(storage.HttpCookie{ .cookie = cookie });
         }
@@ -936,7 +936,7 @@ fn addCookie(cmd: *BiDi.Command, p: AddCookie) !void {
 fn deleteCookies(cmd: *BiDi.Command, name: ?[]const u8) !void {
     const frame = (try currentFrame(cmd)) orelse return;
     const associated: storage.Associated = .init(frame.url, name);
-    storage.remove(&cmd.bidi.user_context.session.cookie_jar, &associated, storage.Associated.has);
+    cmd.bidi.user_context.session.cookie_jar.removeWhere(&associated, storage.Associated.has);
     return cmd.sendDone();
 }
 
