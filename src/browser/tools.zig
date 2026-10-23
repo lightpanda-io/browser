@@ -1361,7 +1361,14 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
     }
 
     const verify_questions = try lp.consent.verifyQuestions(arena);
+    const url_before = try arena.dupe(u8, page.url);
     for (tries.items, selectors.items) |scored, selector| {
+        // The runner-up was chosen on the page the first click left, and its
+        // selector was built there: a structural path can resolve on this one
+        // and name something else entirely. A banner here is a new question.
+        if (outcome.attempts > 0 and !std.mem.eql(u8, url_before, (try requireFrame(session)).url)) {
+            return consentVerdict(arena, &outcome, "clicked, and the click moved the page; ask again for the banner this one shows");
+        }
         // Gone already, taken away by the click before this one.
         const target = resolveBySelector(session, selector) catch continue;
 
@@ -3500,6 +3507,29 @@ test "login: Jev picks the identifier, the password field and the submit control
     try std.testing.expect(std.mem.find(u8, result.text, "\"passwordSelector\":\"#pass\"") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "\"submitSelector\":\"#submit\"") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") == null);
+}
+
+test "acceptCookies: a click that moves the page stops the second guess" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("consent_banner_navigates.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const jev = try testing.MockJev.start(aa);
+    defer jev.stop();
+
+    const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    // #reject exists on the page the accept link went to, so the runner-up
+    // would have resolved there and clicked a control nobody chose.
+    try std.testing.expect(std.mem.find(u8, result.text, "\"attempts\":1") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":false") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "the click moved the page") != null);
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "Reject non-essential") != null);
 }
 
 test "login: the password waits for the step that asks for it" {
