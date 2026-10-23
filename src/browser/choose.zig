@@ -169,8 +169,15 @@ pub fn ranked(
 ) Error![]const Scored {
     // Validates that the answer is one of the options we offered and is the
     // argmax of its own probabilities.
-    _ = try response.choice(id, questions);
+    const chosen = try response.choice(id, questions);
     const answer = response.answer(id) orelse return error.AnswerMissing;
+
+    // Its pick is `none` or one of the caller's `extra` options: nothing on
+    // the page is what it wants done, so the runners-up are no help either.
+    for (candidates) |candidate| {
+        if (std.mem.eql(u8, candidate.key, chosen)) break;
+    } else return &.{};
+
     const floor = answer.probability(none_key) orelse 0;
 
     var out: std.ArrayList(Scored) = .empty;

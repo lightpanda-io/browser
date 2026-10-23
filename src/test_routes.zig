@@ -1110,6 +1110,8 @@ fn systemOne(req: *std.http.Server.Request, arena: std.mem.Allocator) !void {
         \\}
     ;
 
+    const no_verify = bearer(req, no_verify_key);
+
     var body_buf: [64 * 1024]u8 = undefined;
     const body = if (req.head.method.requestHasBody())
         try req.readerExpectNone(&body_buf).allocRemaining(arena, .limited(body_buf.len))
@@ -1126,7 +1128,13 @@ fn systemOne(req: *std.http.Server.Request, arena: std.mem.Allocator) !void {
         break :fixed switch (requestKind(questions)) {
             .other => classify_answers,
             .deciding => try answerAsked(arena, questions, true),
-            .verifying => try answerAsked(arena, questions, false),
+            .verifying => if (no_verify)
+                return req.respond("the verification service is down", .{
+                    .status = .internal_server_error,
+                    .extra_headers = &.{.{ .name = "Content-Type", .value = "text/plain" }},
+                })
+            else
+                try answerAsked(arena, questions, false),
         };
     };
     return req.respond(answers, .{
@@ -1159,6 +1167,10 @@ fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bo
     try jw.write("jev-latest");
     try jw.objectField("answers");
     try jw.beginObject();
+
+    // The mock sees the questions, not the page: one that offered no field
+    // looking like a password is one that asks for it on a later step.
+    const later_step = pickFor(arena, asked, lp.login.password_key) == null;
 
     var it = asked.iterator();
     while (it.next()) |entry| {
@@ -1198,7 +1210,8 @@ fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bo
             try jw.objectField("confidence");
             try jw.write(0.9);
         } else {
-            const noul: f64 = if (deciding and isWall(key)) 0.95 else 0.05;
+            const yes = isWall(key) or (std.mem.eql(u8, key, lp.login.multi_step_key) and later_step);
+            const noul: f64 = if (deciding and yes) 0.95 else 0.05;
             try jw.objectField(kind);
             try jw.write(noul);
         }
@@ -1208,6 +1221,19 @@ fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bo
     try jw.endObject();
     try jw.endObject();
     return out.written();
+}
+
+/// The API key a test sets to fail the verification re-read, while the
+/// decision before it is answered as usual.
+pub const no_verify_key = "test-key-no-verify";
+
+fn bearer(req: *std.http.Server.Request, key: []const u8) bool {
+    var it = req.iterateHeaders();
+    while (it.next()) |h| {
+        if (!std.ascii.eqlIgnoreCase(h.name, "authorization")) continue;
+        return std.mem.endsWith(u8, h.value, key);
+    }
+    return false;
 }
 
 fn isWall(key: []const u8) bool {
@@ -1222,6 +1248,20 @@ fn hintFor(key: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, key, lp.login.password_key)) return "password";
     if (std.mem.eql(u8, key, lp.login.submit_key)) return "sign";
     return null;
+}
+
+/// How the question under `key` would be answered, or null when nothing
+/// offered fits it.
+fn pickFor(arena: std.mem.Allocator, asked: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const question = switch (asked.get(key) orelse return null) {
+        .object => |o| o,
+        else => return null,
+    };
+    const options: std.json.ObjectMap = switch (question.get("criteria") orelse .null) {
+        .object => |o| o,
+        else => return null,
+    };
+    return pickOption(arena, options, hintFor(key));
 }
 
 /// The first option whose description mentions the hint — a stand-in for the

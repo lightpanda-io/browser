@@ -50,7 +50,7 @@ pub const error_key = @tagName(lp.jev.Preset.isErrorPage);
 pub const user_key = "userField";
 pub const password_key = "passwordField";
 pub const submit_key = "submit";
-const multi_step_key = "isMultiStep";
+pub const multi_step_key = "isMultiStep";
 
 /// The one submit option that is not an element.
 pub const enter_key = "enter";

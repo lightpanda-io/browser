@@ -550,6 +550,14 @@ pub const MockJev = struct {
         return .{};
     }
 
+    /// The decision is answered as usual and the verification re-read after
+    /// it fails: the API breaking once a tool has already acted.
+    pub fn startFailingVerification(arena: std.mem.Allocator) !MockJev {
+        const mock = try start(arena);
+        _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast(test_routes.no_verify_key), 1);
+        return mock;
+    }
+
     pub fn stop(_: MockJev) void {
         _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
         _ = unsetenv(@constCast(zenai.typesafe.base_url_env_var_name));

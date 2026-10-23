@@ -1255,6 +1255,22 @@ fn verdict(arena: std.mem.Allocator, outcome: anytype, reason: ?[]const u8) Tool
     return .{ .text = try renderJson(arena, outcome.*, compact) };
 }
 
+/// A verification ask that fails leaves us knowing what we did but not whether
+/// it worked: a caller told only "ApiError" would not learn that credentials
+/// went out, so the outcome is reported with the failure as its reason.
+fn unverified(
+    arena: std.mem.Allocator,
+    outcome: anytype,
+    comptime render: fn (std.mem.Allocator, @TypeOf(outcome), ?[]const u8) ToolError!ToolResult,
+    failed: ToolResult,
+    did: []const u8,
+) ToolError!ToolResult {
+    var result = try render(arena, outcome, try arena.print("{s}: {s}", .{ did, failed.text }));
+    result.is_error = failed.is_error;
+    result.failure = failed.failure;
+    return result;
+}
+
 const settle_timeout_ms: u32 = 2000;
 
 /// Let the page act on a click: a consent banner removes itself from a
@@ -1362,7 +1378,7 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
             .node = (try requireFrame(session)).document.asNode(),
             .state = .{ .link_urls = false },
         })) {
-            .failed => |result| return result,
+            .failed => |failed| return unverified(arena, &outcome, consentVerdict, failed, "clicked it, but could not check whether the banner went"),
             .ok => |ok| ok,
         };
         defer verify.deinit();
@@ -1468,6 +1484,27 @@ fn submitSelector(arena: std.mem.Allocator, page: *lp.Frame, picks: lp.login.Pic
     return selectorFor(arena, page, control.element);
 }
 
+/// Not the model's decision to make, whatever it picked: a password goes into
+/// an `input[type=password]` on a form that posts over TLS, or nowhere.
+fn credentialRefusal(page: *lp.Frame, picks: lp.login.Picks) ?[]const u8 {
+    if (picks.password) |field| {
+        if (!lp.login.isPasswordField(field.element)) {
+            return "the field picked for the password is not an input[type=password]";
+        }
+    }
+    if (picks.user) |field| {
+        if (lp.login.isPasswordField(field.element)) {
+            return "the field picked for the username is a password input";
+        }
+    }
+    if (picks.password orelse picks.user) |field| {
+        if (lp.login.insecureAction(page, field.element)) {
+            return "this form posts to a plaintext http:// URL; refusing to send credentials";
+        }
+    }
+    return null;
+}
+
 fn execLogin(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
     const args = try parseArgs(LoginParams, arena, arguments);
     var outcome: lp.login.Outcome = .{};
@@ -1491,21 +1528,8 @@ fn execLogin(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
         return verdict(arena, &outcome, "could not tell which field takes the username");
     }
     outcome.candidates = decided.candidates;
-    // Not the model's decision to make, whatever it picked.
-    if (decided.picks.password) |field| {
-        if (!lp.login.isPasswordField(field.element)) {
-            return verdict(arena, &outcome, "the field picked for the password is not an input[type=password]");
-        }
-    }
-    if (decided.picks.user) |field| {
-        if (lp.login.isPasswordField(field.element)) {
-            return verdict(arena, &outcome, "the field picked for the username is a password input");
-        }
-    }
-    if (decided.picks.password orelse decided.picks.user) |field| {
-        if (lp.login.insecureAction(decided.page, field.element)) {
-            return verdict(arena, &outcome, "this form posts to a plaintext http:// URL; refusing to send credentials");
-        }
+    if (credentialRefusal(decided.page, decided.picks)) |reason| {
+        return verdict(arena, &outcome, reason);
     }
     if (args.decideOnly) {
         outcome.usernameSelector = decided.user;
@@ -1534,6 +1558,9 @@ fn execLogin(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
         };
         if (decided.picks.password == null) {
             return verdict(arena, &outcome, "submitted the username, but the next page shows no password field");
+        }
+        if (credentialRefusal(decided.page, decided.picks)) |reason| {
+            return verdict(arena, &outcome, reason);
         }
     }
 
@@ -1600,7 +1627,7 @@ fn verifyLogin(
         .node = (try requireFrame(session)).document.asNode(),
         .state = .{ .link_urls = false },
     })) {
-        .failed => |result| return result,
+        .failed => |failed| return unverified(arena, outcome, loginVerdict, failed, "submitted, but could not check whether the sign-in worked"),
         .ok => |ok| ok,
     };
     defer response.deinit();
@@ -1634,7 +1661,6 @@ fn replayLogin(
     args: LoginParams,
     outcome: *lp.login.Outcome,
 ) ToolError!ToolResult {
-    const page = try requireFrame(session);
     if (args.usernameSelector) |selector| {
         const username = args.username orelse {
             return verdict(arena, outcome, "usernameSelector was given without a username");
@@ -1643,12 +1669,17 @@ fn replayLogin(
         outcome.usernameSelector = selector;
     }
     if (args.passwordSelector) |selector| {
+        // A recorded identifier-first login names both fields, and the
+        // password's is not on this page yet: repeat the submit that raised it.
+        if ((resolveBySelector(session, selector) catch null) == null and outcome.usernameSelector != null) {
+            try submitLogin(session, registry, args.submitSelector, args.usernameSelector, outcome);
+        }
         const target = try resolveBySelector(session, selector);
         const element = target.node.is(Element) orelse return ToolError.InvalidParams;
         if (!lp.login.isPasswordField(element)) {
             return verdict(arena, outcome, "passwordSelector does not name an input[type=password]");
         }
-        if (lp.login.insecureAction(page, element)) {
+        if (lp.login.insecureAction(target.page, element)) {
             return verdict(arena, outcome, "this form posts to a plaintext http:// URL; refusing to send credentials");
         }
         try fillBySelector(session, registry, selector, args.password);
@@ -1656,7 +1687,10 @@ fn replayLogin(
     }
 
     try submitLogin(session, registry, args.submitSelector, args.passwordSelector orelse args.usernameSelector, outcome);
-    return loginVerdict(arena, outcome, "filled the fields given, without asking the model");
+    return loginVerdict(arena, outcome, if (args.passwordSelector == null)
+        "filled the username and submitted, without asking the model; no passwordSelector was given, so no password was typed"
+    else
+        "filled the fields given, without asking the model");
 }
 
 const eval_promise_timeout_ms: u32 = 30_000;
@@ -3466,6 +3500,109 @@ test "login: Jev picks the identifier, the password field and the submit control
     try std.testing.expect(std.mem.find(u8, result.text, "\"passwordSelector\":\"#pass\"") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "\"submitSelector\":\"#submit\"") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") == null);
+}
+
+test "login: the password waits for the step that asks for it" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_two_step.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const jev = try testing.MockJev.start(aa);
+    defer jev.stop();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"loggedIn\":true") != null);
+    // A decision per step, and the verification after them.
+    try std.testing.expect(std.mem.find(u8, result.text, "\"calls\":3") != null);
+    try std.testing.expectEqualStrings(
+        "{\"usernameSelector\":\"#user\",\"passwordSelector\":\"#pass\",\"submitSelector\":\"#signin-submit\"}",
+        result.replay_args.?,
+    );
+
+    const status = try call(aa, page.session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#status"}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, status.text, "submitted") != null);
+}
+
+test "login: a later step that asks for the password in the clear is refused" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_two_step_cleartext.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const jev = try testing.MockJev.start(aa);
+    defer jev.stop();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, result.text, "input[type=password]") != null);
+    // The identifier did go, and the verdict says so.
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"loggedIn\":false") != null);
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "hunter2") == null);
+}
+
+test "login: a recorded two-step login submits the identifier before the password" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_two_step.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2","usernameSelector":"#user","passwordSelector":"#pass","submitSelector":"#signin-submit"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "without asking the model") != null);
+    // The recorded control belongs to the second step, so the first one is
+    // submitted with Enter in the field we just filled.
+    try std.testing.expect(std.mem.find(u8, result.text, "\"pressedEnter\":true") != null);
+
+    const status = try call(aa, page.session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#status"}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, status.text, "submitted") != null);
+}
+
+test "login: a verification that fails still reports that credentials went out" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_form.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const jev = try testing.MockJev.startFailingVerification(aa);
+    defer jev.stop();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "could not check whether the sign-in worked") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "HTTP 500") != null);
+    // What we did, not only what broke.
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
+    try std.testing.expect(result.replay_args != null);
 }
 
 test "acceptCookies: a missing key is reported so the REPL can ask a model instead" {
