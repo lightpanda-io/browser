@@ -1091,6 +1091,8 @@ fn siteKey(domain: []const u8) []const u8 {
 }
 
 fn findSecondLevelDomain(host: []const u8) []const u8 {
+    // An IP address is its own site, not one per last two octets.
+    if (isIpLiteral(host)) return host;
     var i = std.mem.findScalarLast(u8, host, '.') orelse return host;
     while (true) {
         i = std.mem.findScalarLast(u8, host[0..i], '.') orelse return host;
@@ -1953,6 +1955,14 @@ test "Cookie: parse HttpOnly" {
     try expectAttribute(.{ .http_only = true }, null, "b; httpOnly=Off  ");
     try expectAttribute(.{ .http_only = true }, null, "b; httpOnly=Off  ");
     try expectAttribute(.{ .http_only = true }, null, "b;    HttpOnly=Off  ");
+}
+
+test "Cookie: an IP address is its own site" {
+    try testing.expectEqual(true, areHostsSameSite("127.0.0.1", "127.0.0.1"));
+    try testing.expectEqual(false, areHostsSameSite("127.0.0.1", "10.0.0.1"));
+    try testing.expectEqual(false, areHostsSameSite("192.168.0.1", "10.0.0.1"));
+    try testing.expectEqual(false, areHostsSameSite("10.0.0.1", "a.0.1"));
+    try testing.expectEqual(true, areHostsSameSite("a.lightpanda.io", "b.lightpanda.io"));
 }
 
 test "Cookie: parse SameSite" {
