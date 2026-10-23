@@ -543,10 +543,7 @@ pub fn testHttpPort() u16 {
 /// base URL is needed because zenai talks `std.http`, which libcurl's test
 /// port remap does not reach.
 pub const MockJev = struct {
-    /// A pooled client keeps the key and base URL it was built with, so the
-    /// idle ones have to go before and after.
     pub fn start(arena: std.mem.Allocator) !MockJev {
-        test_app.dropTypesafeClients();
         _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast("test-key"), 1);
         const base_url = try arena.printSentinel("http://127.0.0.1:{d}", .{testHttpPort()}, 0);
         _ = setenv(@constCast(zenai.typesafe.base_url_env_var_name), base_url, 1);
@@ -556,7 +553,6 @@ pub const MockJev = struct {
     pub fn stop(_: MockJev) void {
         _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
         _ = unsetenv(@constCast(zenai.typesafe.base_url_env_var_name));
-        test_app.dropTypesafeClients();
     }
 };
 

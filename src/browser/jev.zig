@@ -86,6 +86,18 @@ fn snakeCase(comptime camel: []const u8) []const u8 {
     }
 }
 
+/// The question text for a preset named by key alone, for
+/// `zenai.typesafe.json`'s `Vocabulary`. Null for a key that names no preset.
+pub fn presetDescription(key: []const u8) ?[]const u8 {
+    const preset = Preset.fromString(key) orelse return null;
+    return preset.description();
+}
+
+/// Every preset as questions: what an empty questions object asks for.
+pub fn allPresetQuestions(arena: std.mem.Allocator) error{OutOfMemory}!zenai.typesafe.Questions {
+    return presetQuestions(arena, std.enums.values(Preset));
+}
+
 /// How sure the model has to be before a caller acts on a preset answer. The
 /// midpoint and nothing finer: on our own data a calibrated-looking confidence
 /// does not order correctness across question types (two consent walls we got

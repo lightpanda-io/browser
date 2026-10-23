@@ -16,432 +16,95 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! The `classify` tool's question DSL: JSON in, Jev questions out, and the
-//! answers back as JSON. The page state those questions are asked against,
-//! and the presets they can name, are in jev.zig.
+//! The `classify` tool's end of `zenai.typesafe.json`: the page presets a
+//! caller can name instead of wording a question, and what an empty questions
+//! object means. The question shapes themselves, and the answers coming back
+//! as JSON, are zenai's.
 
 const std = @import("std");
 const zenai = @import("zenai");
-
 const jev = @import("jev.zig");
 
-const Question = zenai.typesafe.Question;
-const Content = zenai.typesafe.Content;
+const json = zenai.typesafe.json;
 
-pub const ResponseKind = enum {
-    single_choice,
-    questions_object,
-};
+pub const PrepareError = json.PrepareError;
+pub const PreparedQuestions = json.Prepared;
+pub const ResponseKind = json.ResponseKind;
 
-pub const PreparedQuestions = struct {
-    questions: zenai.typesafe.Questions,
-    kind: ResponseKind,
-};
-
-pub const PrepareError = error{
-    InvalidQuestionsJson,
-    EmptyQuestions,
-    InvalidQuestionFormat,
-    OutOfMemory,
-};
-
-const category_key = "__category";
+/// The answers as JSON, shaped by what was asked.
+pub const formatResponse = json.formatAnswers;
 
 /// `questions` is the array or object itself, or a string holding its JSON.
+/// A preset can be named by key alone; an empty object asks every one of them.
 pub fn prepareQuestions(arena: std.mem.Allocator, questions: std.json.Value) PrepareError!PreparedQuestions {
-    const parsed = switch (questions) {
-        .string => |source| std.json.parseFromSliceLeaky(std.json.Value, arena, source, .{}) catch
-            return error.InvalidQuestionsJson,
-        else => questions,
-    };
-
-    switch (parsed) {
-        .array => |arr| {
-            if (arr.items.len == 0) return error.EmptyQuestions;
-
-            // An array is always the categories of one choice question; presets
-            // go through the object form.
-            const entries = try arena.alloc(zenai.typesafe.QuestionEntry, 1);
-            entries[0] = .{
-                .key = category_key,
-                .value = .choiceText("What kind of page is this?", try stringChoices(arena, arr.items)),
-            };
-            return .{ .questions = .init(entries), .kind = .single_choice };
-        },
-        .object => |obj| {
-            if (obj.count() == 0) return preparePresets(arena);
-
-            const entries = try arena.alloc(zenai.typesafe.QuestionEntry, obj.count());
-            for (entries, obj.keys(), obj.values()) |*entry, key, val| {
-                entry.* = .{ .key = key, .value = try prepareQuestion(arena, key, val) };
-            }
-            return .{ .questions = .init(entries), .kind = .questions_object };
-        },
-        else => return error.InvalidQuestionFormat,
-    }
-}
-
-fn prepareQuestion(arena: std.mem.Allocator, key: []const u8, val: std.json.Value) PrepareError!Question {
-    switch (val) {
-        .bool => |b| {
-            if (!b) return error.InvalidQuestionFormat;
-            return .noulText(if (jev.Preset.fromString(key)) |preset| preset.description() else key);
-        },
-        .string => |s| {
-            if (s.len > 0) return .noulText(s);
-            const preset = jev.Preset.fromString(key) orelse return error.InvalidQuestionFormat;
-            return .noulText(preset.description());
-        },
-        .array => |arr| return .choiceText(key, try stringChoices(arena, arr.items)),
-        .object => |obj| return objectQuestion(arena, key, obj),
-        else => return error.InvalidQuestionFormat,
-    }
-}
-
-fn objectQuestion(arena: std.mem.Allocator, key: []const u8, obj: std.json.ObjectMap) PrepareError!Question {
-    const instructions = blk: {
-        if (obj.get("question")) |qv| if (qv == .string) break :blk qv.string;
-        if (obj.get("instructions")) |iv| if (iv == .string) break :blk iv.string;
-        break :blk key;
-    };
-
-    if (obj.get("levels")) |levels_val| {
-        if (levels_val != .array) return error.InvalidQuestionFormat;
-        const items = levels_val.array.items;
-        if (items.len < 2 or items.len > 10) return error.InvalidQuestionFormat;
-        const criteria = try arena.alloc(Content, items.len);
-        for (items, criteria) |item, *level| {
-            if (item != .string) return error.InvalidQuestionFormat;
-            level.* = .{ .text = item.string };
-        }
-        return .scoreText(instructions, criteria);
-    }
-
-    const options = obj.get("options") orelse obj.get("criteria") orelse return .noulText(instructions);
-    switch (options) {
-        .array => |arr| return .choiceText(instructions, try stringChoices(arena, arr.items)),
-        .object => |crit_obj| {
-            const choice_entries = try arena.alloc(zenai.typesafe.ChoiceEntry, crit_obj.count());
-            for (choice_entries, crit_obj.keys(), crit_obj.values()) |*entry, crit_key, crit_val| {
-                entry.* = .{
-                    .key = crit_key,
-                    .value = if (crit_val == .string) .{ .text = crit_val.string } else null,
-                };
-            }
-            return .choiceText(instructions, .init(choice_entries));
-        },
-        else => return error.InvalidQuestionFormat,
-    }
-}
-
-fn stringChoices(arena: std.mem.Allocator, items: []const std.json.Value) PrepareError!zenai.typesafe.types.ChoiceCriteria {
-    const entries = try arena.alloc(zenai.typesafe.ChoiceEntry, items.len);
-    for (items, entries) |item, *entry| {
-        if (item != .string) return error.InvalidQuestionFormat;
-        entry.* = .{ .key = item.string, .value = null };
-    }
-    return .init(entries);
-}
-
-/// Every preset, keyed by its name: what an empty questions object asks.
-fn preparePresets(arena: std.mem.Allocator) error{OutOfMemory}!PreparedQuestions {
-    return addPresets(arena, .{ .questions = .{}, .kind = .questions_object }) catch |err| switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => unreachable,
+    return json.prepareQuestions(arena, questions, .{
+        .vocabulary = jev.presetDescription,
+        .category_instructions = "What kind of page is this?",
+    }) catch |err| switch (err) {
+        error.EmptyObject => .{ .questions = try jev.allPresetQuestions(arena), .kind = .questions_object },
+        else => err,
     };
 }
 
 /// `prepared` plus every preset it does not already ask, so one call answers
 /// both: a caller deciding whether a page is worth reading skips a second
-/// round trip for its own questions. Presets need the object form, since a
-/// category array answers with one bare choice.
+/// round trip for its own questions.
 pub fn addPresets(arena: std.mem.Allocator, prepared: PreparedQuestions) PrepareError!PreparedQuestions {
-    if (prepared.kind != .questions_object) return error.InvalidQuestionFormat;
-    const presets = std.enums.values(jev.Preset);
-    var entries: std.ArrayList(zenai.typesafe.QuestionEntry) = try .initCapacity(arena, prepared.questions.count() + presets.len);
-    entries.appendSliceAssumeCapacity(prepared.questions.entries);
-    for (presets) |preset| {
-        if (prepared.questions.has(@tagName(preset))) continue;
-        entries.appendAssumeCapacity(.{ .key = @tagName(preset), .value = .noulText(preset.description()) });
-    }
-    return .{ .questions = .init(entries.items), .kind = .questions_object };
-}
-
-pub const FormatError = error{
-    OutOfMemory,
-    WriteFailed,
-} || zenai.typesafe.types.ChoiceError;
-
-pub fn formatResponse(
-    arena: std.mem.Allocator,
-    response: zenai.typesafe.types.AskResponse,
-    prepared: PreparedQuestions,
-) FormatError![]const u8 {
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    var jw: std.json.Stringify = .{ .writer = &aw.writer };
-
-    switch (prepared.kind) {
-        .single_choice => try jw.write(try response.choice(category_key, prepared.questions)),
-        .questions_object => {
-            try jw.beginObject();
-            for (prepared.questions.entries) |entry| {
-                try jw.objectField(entry.key);
-                // A missing answer is null, not a confident "no".
-                const answer = response.answer(entry.key) orelse {
-                    try jw.write(null);
-                    continue;
-                };
-                switch (answer) {
-                    .noul => |n| try jw.write(n.noul),
-                    .choice => |c| try jw.write(.{
-                        .choice = c.choice,
-                        .confidence = c.confidence,
-                        .probabilities = c.probabilities,
-                    }),
-                    .score => |s| try writeScore(&jw, s),
-                }
-            }
-            try jw.endObject();
-        },
-    }
-    return aw.written();
-}
-
-/// A score answer with its level indices swapped for the legend's labels,
-/// and `level` naming the one nearest the score.
-fn writeScore(jw: *std.json.Stringify, answer: zenai.typesafe.types.ScoreAnswer) !void {
-    try jw.beginObject();
-    try jw.objectField("score");
-    try jw.write(answer.score);
-    if (answer.nearestLevel()) |nearest| {
-        try jw.objectField("level");
-        try jw.write(levelLabel(answer, nearest.key));
-    }
-    try jw.objectField("confidence");
-    try jw.write(answer.confidence);
-    try jw.objectField("probabilities");
-    try jw.beginObject();
-    for (answer.probabilities.entries) |entry| {
-        try jw.objectField(levelLabel(answer, entry.key));
-        try jw.write(entry.value);
-    }
-    try jw.endObject();
-    try jw.endObject();
-}
-
-/// The text the legend gives level `index`, or the index itself.
-fn levelLabel(answer: zenai.typesafe.types.ScoreAnswer, index: []const u8) []const u8 {
-    const level = answer.legend.get(index) orelse return index;
-    return switch (level) {
-        .text => |text| text,
-        .json => index,
-    };
+    return json.addQuestions(arena, prepared, try jev.allPresetQuestions(arena));
 }
 
 const testing = @import("../testing.zig");
 
-test "browser.classify: prepareQuestions presets in the object form" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+test "browser.classify: a preset can be named by key alone" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
     const prepared = try prepareQuestions(arena.allocator(), .{ .string = "{\"isBlocked\": true, \"isCaptcha\": true}" });
     try testing.expectEqual(ResponseKind.questions_object, prepared.kind);
-    try testing.expectEqual(2, prepared.questions.entries.len);
-    try testing.expect(prepared.questions.entries[0].value == .noul);
-    try std.testing.expectEqualStrings("isBlocked", prepared.questions.entries[0].key);
-    try testing.expect(prepared.questions.has("isBlocked"));
+    try testing.expectEqual(2, prepared.questions.count());
+    try testing.expectString(jev.Preset.isBlocked.description(), prepared.questions.get("isBlocked").?.noul.instructions.text);
     try testing.expect(prepared.questions.has("isCaptcha"));
 }
 
-test "browser.classify: prepareQuestions empty object asks every preset" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+test "browser.classify: an empty object asks every preset" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
     const prepared = try prepareQuestions(arena.allocator(), .{ .string = "{}" });
     try testing.expectEqual(ResponseKind.questions_object, prepared.kind);
-    try testing.expectEqual(std.enums.values(jev.Preset).len, prepared.questions.entries.len);
-    for (std.enums.values(jev.Preset), prepared.questions.entries) |preset, entry| {
-        try std.testing.expectEqualStrings(@tagName(preset), entry.key);
-        try testing.expect(entry.value == .noul);
+    try testing.expectEqual(std.enums.values(jev.Preset).len, prepared.questions.count());
+    for (std.enums.values(jev.Preset)) |preset| {
         try testing.expect(prepared.questions.has(@tagName(preset)));
     }
 }
 
-test "browser.classify: addPresets asks every preset alongside the questions" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    const prepared = try prepareQuestions(arena.allocator(), .{ .string = "{\"kind\": [\"a\", \"b\"], \"isPaywall\": \"Is it paywalled?\"}" });
-    const with = try addPresets(arena.allocator(), prepared);
-    const presets = std.enums.values(jev.Preset);
-    // isPaywall is already asked, in the caller's own words.
-    try testing.expectEqual(2 + presets.len - 1, with.questions.count());
-    try testing.expect(with.questions.has("kind"));
-    for (presets) |preset| try testing.expect(with.questions.has(@tagName(preset)));
-    try std.testing.expectEqualStrings("Is it paywalled?", with.questions.get("isPaywall").?.noul.instructions.text);
-
-    const categories = try prepareQuestions(arena.allocator(), .{ .string = "[\"a\", \"b\"]" });
-    try testing.expectError(error.InvalidQuestionFormat, addPresets(arena.allocator(), categories));
-}
-
-test "browser.classify: prepareQuestions rejects an empty array" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    try testing.expectError(error.EmptyQuestions, prepareQuestions(arena.allocator(), .{ .string = "[]" }));
-}
-
-test "browser.classify: prepareQuestions takes the value or its JSON" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+test "browser.classify: addPresets keeps the caller's own wording" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
-    var obj: std.json.ObjectMap = .empty;
-    try obj.put(aa, "isBlocked", .{ .bool = true });
-    const prepared = try prepareQuestions(aa, .{ .object = obj });
-    try testing.expect(prepared.questions.get("isBlocked").? == .noul);
+    const prepared = try prepareQuestions(aa, .{ .string = "{\"kind\": [\"a\", \"b\"], \"isPaywall\": \"Is it paywalled?\"}" });
+    const with = try addPresets(aa, prepared);
+    const presets = std.enums.values(jev.Preset);
+    // isPaywall was already asked, so it is not asked twice.
+    try testing.expectEqual(2 + presets.len - 1, with.questions.count());
+    try testing.expect(with.questions.has("kind"));
+    for (presets) |preset| try testing.expect(with.questions.has(@tagName(preset)));
+    try testing.expectString("Is it paywalled?", with.questions.get("isPaywall").?.noul.instructions.text);
 
-    try testing.expectError(error.InvalidQuestionsJson, prepareQuestions(aa, .{ .string = "{isBlocked: true}" }));
-    try testing.expectError(error.InvalidQuestionFormat, prepareQuestions(aa, .{ .integer = 1 }));
+    // A bare category array answers with one unkeyed choice, so there is
+    // nowhere to put the presets.
+    const categories = try prepareQuestions(aa, .{ .string = "[\"a\", \"b\"]" });
+    try testing.expectError(error.InvalidQuestionFormat, addPresets(aa, categories));
 }
 
-test "browser.classify: prepareQuestions array of preset names is still categories" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    const prepared = try prepareQuestions(arena.allocator(), .{ .string = "[\"isBlocked\", \"isCaptcha\"]" });
-    try testing.expectEqual(ResponseKind.single_choice, prepared.kind);
-    try testing.expect(prepared.questions.has(category_key));
-}
-
-test "browser.classify: prepareQuestions category array" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    const prepared = try prepareQuestions(arena.allocator(), .{ .string = "[\"product\", \"catalog\", \"login\"]" });
-    try testing.expectEqual(ResponseKind.single_choice, prepared.kind);
-    try testing.expectEqual(1, prepared.questions.entries.len);
-    try testing.expect(prepared.questions.entries[0].value == .choice);
-    try testing.expect(prepared.questions.has(category_key));
-}
-
-test "browser.classify: prepareQuestions object with strings and options" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    const json =
-        \\{
-        \\  "is_blocked": "Is the page blocked?",
-        \\  "page_type": {
-        \\    "question": "What kind of page is this?",
-        \\    "options": ["product", "catalog"]
-        \\  }
-        \\}
-    ;
-    const prepared = try prepareQuestions(arena.allocator(), .{ .string = json });
-    try testing.expectEqual(ResponseKind.questions_object, prepared.kind);
-    try testing.expectEqual(2, prepared.questions.entries.len);
-    try testing.expect(prepared.questions.has("is_blocked"));
-    try testing.expect(prepared.questions.has("page_type"));
-}
-
-test "browser.classify: prepareQuestions score levels" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    const json =
-        \\{"content": {"question": "How complete is the main content?", "levels": ["empty", "partial", "full"]}}
-    ;
-    const prepared = try prepareQuestions(arena.allocator(), .{ .string = json });
-    try testing.expectEqual(1, prepared.questions.entries.len);
-    try testing.expect(prepared.questions.get("content").? == .score);
-    try testing.expectEqual(3, prepared.questions.entries[0].value.score.criteria.len);
-}
-
-test "browser.classify: prepareQuestions rejects too few or too many levels" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    try testing.expectError(error.InvalidQuestionFormat, prepareQuestions(arena.allocator(), .{ .string = "{\"a\": {\"levels\": [\"only\"]}}" }));
-    try testing.expectError(error.InvalidQuestionFormat, prepareQuestions(arena.allocator(), .{ .string = "{\"a\": {\"levels\": [\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\",\"9\",\"10\",\"11\"]}}" }));
-    try testing.expectError(error.InvalidQuestionFormat, prepareQuestions(arena.allocator(), .{ .string = "{\"a\": {\"levels\": [1, 2]}}" }));
-}
-
-test "browser.classify: formatResponse score names the levels" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    const prepared = try prepareQuestions(arena.allocator(), .{ .string = "{\"content\": {\"question\": \"How complete?\", \"levels\": [\"empty\", \"partial\", \"full\"]}}" });
-    const response: zenai.typesafe.types.AskResponse = .{
-        .answers = .init(&.{
-            .{ .key = "content", .value = .{ .score = .{
-                .score = 1.2,
-                .confidence = 0.8,
-                .legend = .init(&.{
-                    .{ .key = "0", .value = .{ .text = "empty" } },
-                    .{ .key = "1", .value = .{ .text = "partial" } },
-                    .{ .key = "2", .value = .{ .text = "full" } },
-                }),
-                .probabilities = .init(&.{
-                    .{ .key = "0", .value = 0.05 },
-                    .{ .key = "1", .value = 0.7 },
-                    .{ .key = "2", .value = 0.25 },
-                }),
-            } } },
-        }),
-    };
-
-    const formatted = try formatResponse(arena.allocator(), response, prepared);
-    try std.testing.expectEqualStrings(
-        \\{"content":{"score":1.2,"level":"partial","confidence":0.8,"probabilities":{"empty":0.05,"partial":0.7,"full":0.25}}}
-    , formatted);
-}
-
-test "browser.classify: formatResponse single_choice" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+test "browser.classify: a category array asks about the page" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
     const prepared = try prepareQuestions(arena.allocator(), .{ .string = "[\"product\", \"catalog\"]" });
-    const response: zenai.typesafe.types.AskResponse = .{
-        .answers = .init(&.{
-            .{ .key = "__category", .value = .{ .choice = .{
-                .choice = "product",
-                .confidence = 0.95,
-                .probabilities = .init(&.{
-                    .{ .key = "product", .value = 0.95 },
-                    .{ .key = "catalog", .value = 0.05 },
-                }),
-            } } },
-        }),
-    };
-
-    const formatted = try formatResponse(arena.allocator(), response, prepared);
-    try std.testing.expectEqualStrings("\"product\"", formatted);
-}
-
-test "browser.classify: formatResponse presets" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    const prepared = try prepareQuestions(arena.allocator(), .{ .string = "{\"isBlocked\": true, \"isCaptcha\": true}" });
-    const response: zenai.typesafe.types.AskResponse = .{
-        .answers = .init(&.{
-            .{ .key = "isBlocked", .value = .{ .noul = .{ .noul = 0.92 } } },
-            .{ .key = "isCaptcha", .value = .{ .noul = .{ .noul = 0.08 } } },
-        }),
-    };
-
-    const formatted = try formatResponse(arena.allocator(), response, prepared);
-    try std.testing.expectEqualStrings("{\"isBlocked\":0.92,\"isCaptcha\":0.08}", formatted);
-}
-
-test "browser.classify: formatResponse writes null for a missing answer" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    const prepared = try prepareQuestions(arena.allocator(), .{ .string = "{\"isBlocked\": true, \"kind\": [\"a\", \"b\"]}" });
-    const response: zenai.typesafe.types.AskResponse = .{};
-
-    const formatted = try formatResponse(arena.allocator(), response, prepared);
-    try std.testing.expectEqualStrings("{\"isBlocked\":null,\"kind\":null}", formatted);
+    try testing.expectEqual(ResponseKind.single_choice, prepared.kind);
+    const question = prepared.questions.get(json.category_key).?;
+    try testing.expectString("What kind of page is this?", question.choice.instructions.text);
+    try testing.expect(question.choice.criteria.has("product"));
 }
